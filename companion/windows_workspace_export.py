@@ -10,7 +10,8 @@ import sqlite3
 import device_protocol as protocol
 from device_artifacts import ArtifactError,from_wire_descriptor,to_wire_descriptor
 from platform_backend import PlatformError
-from windows_received_job import EXPORT,retained
+from windows_received_job import EXPORT, PROJECT_EXPORT, retained
+import windows_project_return as project_return
 from windows_workspace_read import _plain
 
 PROFILE="windows-owner-workspace-export-v1"
@@ -29,9 +30,10 @@ def project(receiver,manager,operation,row,original,grant,now):
     # Under the existing manager lock, after the existing direct operation,
     # peer/fingerprint, unlock, resource, grant, epoch and history-visible checks.
     source,accepted=original
-    value={"profile":PROFILE,"phase":"operation_only","operationId":operation,"jobId":row[1],"argumentsDigest":row[0],
+    bundle = source["toolName"] == PROJECT_EXPORT
+    value={"profile":project_return.PROFILE if bundle else PROFILE,"phase":"operation_only","operationId":operation,"jobId":row[1],"argumentsDigest":row[0],
            "taskId":accepted["localTaskId"],"requestRunId":accepted["requestRunId"],"requestExecutorEpoch":accepted["requestExecutorEpoch"]}
-    if source["toolName"]!=EXPORT or not _describe(grant,now): return value
+    if source["toolName"] not in (EXPORT, PROJECT_EXPORT) or not _describe(grant,now): return value
     try:
         if (set(accepted)!=AUDIENCE|{"argumentsDigest"} or accepted["kind"]!="operation" or accepted["objectId"]!=operation
                 or accepted["callerDeviceId"]!=accepted["originDeviceId"]): return value
@@ -40,11 +42,12 @@ def project(receiver,manager,operation,row,original,grant,now):
         wire=fixed["nativeToolResult"]
         if not protocol.resource_equal(manager.jobs[row[1]].get("nativeToolResult"),wire): return value
         descriptor=from_wire_descriptor(wire)
-        if (descriptor["kind"]!="file" or descriptor["operationId"]!=operation or descriptor["taskId"]!=accepted["localTaskId"]
+        if (descriptor["kind"] != ("project_bundle" if bundle else "file") or descriptor["operationId"]!=operation or descriptor["taskId"]!=accepted["localTaskId"]
                 or descriptor.get("requestRunId")!=accepted["requestRunId"] or descriptor.get("requestExecutorEpoch")!=accepted["requestExecutorEpoch"]
                 or "runId" in descriptor or "executorEpoch" in descriptor or descriptor["sourceDeviceId"]!=accepted["targetDeviceId"]
                 or wire["instanceId"]!=accepted["instanceId"] or descriptor["versionId"]!=descriptor["sha256"]
-                or descriptor["mimeType"]!="application/octet-stream"): return value
+                or descriptor["mimeType"] != ("application/zip" if bundle else "application/octet-stream")
+                or bundle and (descriptor["name"] != "modified-project.pocketworld.zip" or not 22 <= descriptor["bytes"] <= 20971520)): return value
         # Do not infer 'published' from a path, name/hash match, legacy cache, or
         # client-supplied descriptor. This independent row is inserted by the
         # original publisher only AFTER register_stream verified all bytes.
@@ -67,8 +70,14 @@ def project(receiver,manager,operation,row,original,grant,now):
         try: present=protocol.resource_equal(receiver.artifacts.by_artifact_id(descriptor["artifactId"]),descriptor)
         except ArtifactError: present=False
         phase="frozen_here" if present else "published_history"
-        guard=hashlib.sha256(protocol.canonical_bytes([row[0],row[1],fixed["nativeDeviceRevision"],wire,audience,phase])).hexdigest()
-        return {**value,"phase":phase,"_guard":guard,"revision":fixed["nativeDeviceRevision"],"publishedAt":audience["acceptedAt"],
+        fields = {}
+        guard_fields = [row[0], row[1], fixed["nativeDeviceRevision"], wire, audience, phase]
+        if bundle:
+            ref = project_return.verified_anchor(fixed, manager.jobs[row[1]], wire, accepted, source)
+            if ref: fields["_origin"] = ref
+            guard_fields.append(ref)
+        guard=hashlib.sha256(protocol.canonical_bytes(guard_fields)).hexdigest()
+        return {**value,**fields,"phase":phase,"_guard":guard,"revision":fixed["nativeDeviceRevision"],"publishedAt":audience["acceptedAt"],
                 "name":_plain(descriptor["name"]),"bytes":descriptor["bytes"],"sha256":descriptor["sha256"],
                 "artifactId":descriptor["artifactId"],"transferId":descriptor["transferId"]}
     except (AttributeError,KeyError,IndexError,TypeError,ValueError,OSError,UnicodeError,RecursionError,

@@ -136,6 +136,12 @@ def _confirm(base, fixed, result, witness, op):
     return value
 
 
+def same_work(source, audience):
+    return _digest([source["parentTaskId"], {k: audience[k] for k in (
+        "originDeviceId", "callerDeviceId", "targetDeviceId", "instanceId", "rootTaskId", "localTaskId",
+        "grantId", "authorizationEpoch", "resourceBinding")}])
+
+
 def project(manager, peer, op, row, original):
     source, audience = original
     base = {"profile": PROFILE, "phase": "receipt_only", "operationId": op, "jobId": row[1], "tool": source["toolName"],
@@ -152,9 +158,7 @@ def project(manager, peer, op, row, original):
         base["revision"] = fixed["nativeDeviceRevision"]
         result = fixed.get("nativeToolResult") or {}
         # Confirmation may be a DIFFERENT run/epoch, but must be the very same direct task, grant and resource.
-        base["_sameWork"] = _digest([source["parentTaskId"], {k: audience[k] for k in (
-            "originDeviceId", "callerDeviceId", "targetDeviceId", "instanceId", "rootTaskId", "localTaskId",
-            "grantId", "authorizationEpoch", "resourceBinding")}])
+        base["_sameWork"] = same_work(source, audience)
         if source["toolName"] == PROJECT_RECEIVE:
             receipt = _receive(base, peer, fixed, result, witness, detail, audience, op)
             link = fixed.get("_nativeProjectConfirmationOperation")
@@ -174,7 +178,7 @@ TITLES = {"receipt_only": "已接这次操作，项目发布结果未核实", "r
           "publication_unconfirmed": "原项目进入发布准备，没有最终交付证明", "published": "Windows 当时已发布并回读新的项目目录"}
 
 
-def show(view, receipt, current):
+def show(view, receipt, current, *, inventory=False):
     phase = receipt["phase"]
     message = "本机原接包回执。" if receipt["tool"] == PROJECT_RECEIVE else "本机原导入确认回执。这是另一笔操作，不是重复接包。"
     if phase == "receiving": message += f" 当时已收到 {receipt['offset']}/{receipt['packageBytes']} 字节；不是已经解包。"
@@ -188,9 +192,10 @@ def show(view, receipt, current):
     links = [("ids", "核对原任务、操作与版本")]
     if receipt.get("_confirm"): links.insert(0, ("link", "核对并打开这次手机确认的原回执"))
     elif receipt.get("receive"): links.insert(0, ("link", "核对并打开此确认指向的原接包回执"))
+    if inventory: links.insert(0, ("inventory", "查看原交付的文件清单\n不枚举今天的目录，不读取文件正文。"))
     choice = view._dialog(TITLES[phase], message, links, current)
     if not current(): return
-    if choice == "link": return "link"
+    if choice in ("link", "inventory"): return choice
     if choice != "ids": return
     evidence = [f"原手机任务：{receipt['phoneTask']}", f"请求轮次：{receipt['phoneRun']} · {receipt['phoneEpoch']}",
                 f"原操作：{receipt['operationId']}", f"Windows 工作：{receipt['jobId']}", f"工作区：{receipt['workspace']}"]
@@ -228,7 +233,13 @@ def walk(view, peer, item, receipt, owner_current):
     while owner_current():
         def current():
             return owner_current() and bool(local_record(view, peer, item, revision=receipt.get("revision")))
-        action = show(view, receipt, current)
+        ticket = (local_record(view, peer, item, revision=receipt.get("revision"), project_inventory="offer")
+                  if receipt["tool"] == PROJECT_RECEIVE and receipt["phase"] == "published" else None)
+        action = show(view, receipt, current, inventory=ticket is not None and ticket[4] == receipt.get("manifest"))
+        if action == "inventory" and ticket is not None and current():
+            from windows_project_inventory import browse
+            browse(view, peer, item, receipt, ticket, current)
+            continue
         if action == "back" and current(): continue
         if action != "link" or not current(): return
         try: linked = _linked(view, peer, receipt, current)

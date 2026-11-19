@@ -35,6 +35,16 @@ public final class TaskStoreDeviceTrust implements PairingCoordinator.TrustStore
         try(Cursor row=db.rawQuery("SELECT body_json,authorization_epoch,revoked FROM device_grants WHERE grant_id=?",new String[]{id})){if(!row.moveToFirst())return null;JSONObject value=new JSONObject(row.getString(0));value.put("authorizationEpoch",row.getLong(1)).put("revoked",row.getInt(2)!=0);return value;}
     }
     @Override public synchronized org.json.JSONArray grantsForPeer(String peer,int limit)throws Exception{if(limit<1||limit>16)throw new IllegalArgumentException("Invalid scoped grant limit");org.json.JSONArray values=new org.json.JSONArray();try(Cursor rows=db.rawQuery("SELECT grant_id FROM device_grants WHERE peer_device_id=? AND revoked=0 AND authorization_epoch=(SELECT authorization_epoch FROM device_peers WHERE device_id=?) ORDER BY grant_id LIMIT ?",new String[]{peer,peer,Integer.toString(limit)})){while(rows.moveToNext())values.put(grant(rows.getString(0)));}return values;}
+    /** Original locally issued grant, including revoked prior certificates. Rotation does not elect
+     * a disclosure policy. UNION de-duplicates same-key and repeated identities. The prefix probe
+     * uses the primary key and skips lineage traversal in installations with only legacy grants. */
+    public boolean hasInitialVisibilityPairing(String peer) {
+        String pattern=dev.pocketengine.features.devices.DevicePairVisibility.GRANT_PREFIX+"*";
+        String query="SELECT CASE WHEN EXISTS(SELECT 1 FROM device_grants WHERE grant_id GLOB ?) THEN EXISTS("
+                +"WITH RECURSIVE lineage(id) AS (SELECT ? UNION SELECT r.old_device_id FROM device_identity_rotations r JOIN lineage ON r.new_device_id=lineage.id WHERE r.old_device_id<>r.new_device_id) "
+                +"SELECT 1 FROM lineage JOIN device_grants g ON g.peer_device_id=lineage.id WHERE g.grant_id GLOB ?) ELSE 0 END";
+        try(Cursor row=db.rawQuery(query,new String[]{pattern,peer,pattern})) { if(!row.moveToFirst()) throw new SecurityException("Original pairing policy unavailable"); return row.getInt(0)!=0; }
+    }
     @Override public synchronized void putInvitation(JSONObject value)throws Exception{
         db.beginTransaction();try{try(Cursor active=db.rawQuery("SELECT COUNT(*) FROM device_pairing_invites WHERE state='pending' AND expires_at>?",new String[]{Long.toString(value.optLong("createdAt",System.currentTimeMillis()))})){if(active.moveToFirst()&&active.getInt(0)>=32)throw new SecurityException("Too many pending local pairing invitations");}ContentValues row=new ContentValues();row.put("invite_id",value.getString("inviteId"));row.put("token_digest",value.getString("tokenDigest"));row.put("inviter_device_id",value.getString("inviterDeviceId"));row.put("instance_id",value.getString("instanceId"));row.put("expected_peer_fingerprint",value.getString("expectedPeerFingerprint"));row.put("expires_at",value.getLong("expiresAt"));row.put("state","pending");db.insertOrThrow("device_pairing_invites",null,row);db.setTransactionSuccessful();}finally{db.endTransaction();}
     }

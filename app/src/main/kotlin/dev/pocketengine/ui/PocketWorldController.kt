@@ -1221,7 +1221,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun oneMessageLearningState(key: String): JSONObject? {
         val model = ownerComposer ?: return null
         val draft = model.active()
-        if (!model.oneMessageEligible(key) || draft.conversationId != state.conversationId) return null
+        val same = if (draft.conversationId.isEmpty()) state.conversationId.isNullOrBlank() && key.startsWith("new:") && !state.chatBusy
+            else draft.conversationId == state.conversationId
+        if (!model.oneMessageEligible(key) || !same) return null
         return JSONObject().put("excluded", model.oneMessageExcluded(key)).put("pending", model.pending().any { it.draftKey == key })
             .put("saving", writingDraftMemory == key).put("confirmed", key !in unconfirmedDraftMemory)
     }

@@ -11,9 +11,9 @@ import './project-preview.css';
 type Data = Record<string, any>;
 type Action = 'projects.preview.mode' | 'projects.preview.reload' | 'projects.preview.close' | 'projects.preview.return';
 type PackageExportTarget = Pick<PackagePreviewChoices, 'taskId' | 'operationId' | 'artifactId' | 'artifactSha256'>;
-type PackageExportState = PackageExportTarget & { kind: 'project_package_export'; requestId: string; projectId: string; status: string; message: string; exported: boolean; bytes?: number };
+type PackageExportState = PackageExportTarget & { kind: 'project_package_export'; requestId: string; projectId: string; status: string; message: string; exported: boolean; bytes?: number; targetReadback?: {protocol:string;status:string;provider:string;displayName?:string;bytes?:number;sha256?:string} };
 type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string) => void };
-const exportPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing', 'exported', 'cancelled', 'rejected', 'unknown']);
+const exportPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing', 'exported', 'written_unverified', 'cancelled', 'rejected', 'unknown']);
 const exportPendingPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing']);
 const sameExportTarget = (value: PackageExportTarget | null, target: PackageExportTarget | null) => !!value && !!target &&
   value.taskId === target.taskId && value.operationId === target.operationId && value.artifactId === target.artifactId && value.artifactSha256 === target.artifactSha256;
@@ -22,7 +22,13 @@ function packageExportState(value: unknown): PackageExportState | null {
   const source = value as Data;
   if (source.kind !== 'project_package_export' || !['taskId', 'operationId', 'artifactId', 'projectId', 'requestId'].every(key => typeof source[key] === 'string' && source[key].length > 0 && source[key].length <= 200) ||
       typeof source.artifactSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(source.artifactSha256) || !exportPhases.has(source.status) || typeof source.message !== 'string' ||
-      source.exported !== (source.status === 'exported') || source.status === 'exported' && (!Number.isSafeInteger(source.bytes) || source.bytes <= 0)) return null;
+      source.exported !== (source.status === 'exported') || source.status === 'exported' && (!Number.isSafeInteger(source.bytes) || source.bytes <= 0 || source.bytes > 20*1024*1024)) return null;
+  if(source.status==='exported'){
+    const r=source.targetReadback;
+    if(r?.protocol!=='pocketworld.package.target-sha256.v1'||r.status!=='verified'||typeof r.provider!=='string'||!r.provider||r.provider.length>160||
+       r.bytes!==source.bytes||r.sha256!==source.artifactSha256)
+      return {...source,status:'written_unverified',exported:false,message:'这条记录没有目标文件的独立回读依据；请到原保存位置核对，没有重新写入。'} as PackageExportState;
+  }
   return source as PackageExportState;
 }
 
@@ -299,7 +305,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       {view && !view.selectionAvailable && <p className="pw-muted" role="status">{view.selectionUnavailableReason || '暂未确认原来源仍可用于元素选择。'}{fixed ? ' 历史画面仍可查看，发送时还会重新核对来源。' : ''}</p>}
       {problem && <p className="pw-error" role="alert">{problem}</p>}
       {unknown && <p className="pw-muted">原操作结果待核对，没有重发。请返回后核对原预览与草稿。</p>}
-      {busy === 'package.export' ? <p className="pw-muted" role="status">正在核对原固定包…</p> : control.exportState && <p className={['unknown', 'rejected'].includes(control.exportState.status) ? 'pw-error' : 'pw-muted'} role="status">{control.exportState.message}</p>}
+      {busy === 'package.export' ? <p className="pw-muted" role="status">正在核对原固定包…</p> : control.exportState && <p className={['unknown', 'rejected', 'written_unverified'].includes(control.exportState.status) ? 'pw-error' : 'pw-muted'} role="status">{control.exportState.message}</p>}
     </MotionFeedback>
     {choosing && choices ? <section className="pw-preview-entry" aria-label="固定包入口">
       {choices.mode === 'web_output' ? <div><p className="pw-field-hint">清单声明的 HTML 入口</p><p className="pw-preview-entry-path">{choices.entryPath}</p></div> : choices.entryChoices.length ?
@@ -307,7 +313,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
         <p className="pw-muted">这份固定包包含项目源码与资源，没有可视 HTML 入口。可以导出完整包，在你选择的位置保存。</p>}
       <Accordion variant="divided"><AccordionItem id="package-preview-source" title="查看固定来源" headingLevel={4}>
         <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{choices.taskId}</dd><dt>原操作</dt><dd>{choices.operationId}</dd><dt>固定版本</dt><dd>{choices.artifactId}</dd><dt>归档摘要</dt><dd>{choices.artifactSha256}</dd><dt>工作副本</dt><dd>{choices.checkoutId}</dd></dl>
-        <p className="pw-muted">导出会重新核对这次任务、保存操作和固定包的完整文件。</p>
+        <p className="pw-muted">选好系统保存位置后，写入这次任务的固定包，再从同一位置回读核对大小和 SHA-256。只写不读的位置会注明未验证。</p>
       </AccordionItem></Accordion>
       <div className="pw-preview-actions">
         {choices.entryChoices.length > 0 && <Button variant="primary" disabled={!control.selectedEntry || working || unknown || blocked || !can('projects.package.preview.open')} onClick={control.openPackage}>{busy === 'package.open' ? '正在打开原版本…' : '打开固定预览'}</Button>}

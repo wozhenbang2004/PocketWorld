@@ -5,29 +5,30 @@ import time
 import device_protocol as protocol
 from device_pairing import validate_grant
 from windows_command_receipt import project as command_receipt
-from windows_received_job import COMMAND, EXPORT, FILE, TEXT_WRITE, PROJECT_RECEIVE, PROJECT_CONFIRM, admission
+from windows_received_job import COMMAND, EXPORT, FILE, TEXT_WRITE, PROJECT_RECEIVE, PROJECT_CONFIRM, PROJECT_EXPORT, admission
 from windows_workspace_export import PROFILE as EXPORT_PROFILE, project as workspace_export, show as show_export
 from windows_received_file import PROFILE as FILE_PROFILE, project as workspace_file
 from windows_workspace_read import PROFILE as READ_PROFILE, project as workspace_read
 import windows_read_work as read_work
+import windows_project_return as project_return
 
 BATCH = """SELECT rid,operation_id,fingerprint,updated_at,CASE WHEN
     ((json_extract(doc,'$.protocol')='native-device-command-v1' AND json_extract(doc,'$.audience.toolName')='command.run')
-     OR (json_extract(doc,'$.protocol')='native-device-tool-v1' AND json_extract(doc,'$.audience.toolName') IN ('workspace.list','workspace.read','workspace.receive','workspace.export','workspace.write','workspace.project.receive','workspace.project.confirm')))
+     OR (json_extract(doc,'$.protocol')='native-device-tool-v1' AND json_extract(doc,'$.audience.toolName') IN ('workspace.list','workspace.read','workspace.receive','workspace.export','workspace.write','workspace.project.receive','workspace.project.confirm','workspace.project.export')))
     AND json_extract(doc,'$.audience.callerDeviceId')=?
     AND json_extract(doc,'$.audience.originDeviceId')=json_extract(doc,'$.audience.callerDeviceId')
     THEN json_extract(doc,'$.audience.toolName') END FROM
     (SELECT rowid rid,operation_id,fingerprint,last_status,updated_at,CASE WHEN json_valid(details) THEN details END AS doc
      FROM operations WHERE rowid<? ORDER BY rowid DESC LIMIT 64) ORDER BY rid DESC"""
 
-TOOLS = {PROJECT_RECEIVE: "接收手机选定的项目包", PROJECT_CONFIRM: "确认导入新的项目副本", TEXT_WRITE: "写入文本文件", COMMAND: "白名单命令", FILE: "接收所选文件", EXPORT: "手机请求取走文件", "workspace.list": "查看目录", "workspace.read": "读取文本"}
+TOOLS = {PROJECT_EXPORT: "手机请求取回项目副本", PROJECT_RECEIVE: "接收手机选定的项目包", PROJECT_CONFIRM: "确认导入新的项目副本", TEXT_WRITE: "写入文本文件", COMMAND: "白名单命令", FILE: "接收所选文件", EXPORT: "手机请求取走文件", "workspace.list": "查看目录", "workspace.read": "读取文本"}
 LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动命令", "exited_zero": "原命令以 0 退出",
          "exited_nonzero": "原命令以非零码退出", "stopped": "原命令已停止，之前的影响未撤回",
          "not_started": "原执行器确认未启动进程", "unknown": "原命令的执行结果仍待核对",
          "accepted_only": "已接单，原执行文件未能核对"}
 
 
-def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None, read_root=False):
+def local_record(view, peer, item, *, read=False, revision=None, archive=False, locate=False, ticket=None, held=None, export_guard=None, work_key=False, required_work=None, read_root=False, project_inventory=None):
     # This is the unlocked receiver owner's local view, never a synthetic MTLS
     # history permission. Admit only the direct source and its still-current original read scope.
     if not view._peer_current(peer): return None
@@ -39,7 +40,7 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
         original = admission(manager, operation, row, owner_export=True, owner_text_write=True, owner_project=True)
         if not original: return None
         source, accepted = original
-        if (source["toolName"] in (PROJECT_RECEIVE, PROJECT_CONFIRM) or item[4] in (PROJECT_RECEIVE, PROJECT_CONFIRM)) and item[4] != source["toolName"]: return None
+        if (source["toolName"] in (PROJECT_RECEIVE, PROJECT_CONFIRM, PROJECT_EXPORT) or item[4] in (PROJECT_RECEIVE, PROJECT_CONFIRM, PROJECT_EXPORT)) and item[4] != source["toolName"]: return None
         work = read_work.from_original(original) if work_key or required_work is not None else None
         if (work_key and work is None) or (required_work is not None and work != required_work): return None
         now = manager.now()
@@ -55,15 +56,18 @@ def local_record(view, peer, item, *, read=False, revision=None, archive=False, 
                 and ((now < grant["expiresAt"] and "operation.get" in grant["capabilities"])
                      or (now < retention.get("expiresAt", 0) and "operation.get" in retention.get("methods", [])))):
             return None
-        if source["toolName"] in (TEXT_WRITE, PROJECT_RECEIVE, PROJECT_CONFIRM) and (source["toolName"] not in grant["toolNames"] or "sourceShareId" in accepted): return None
+        if source["toolName"] in (TEXT_WRITE, PROJECT_RECEIVE, PROJECT_CONFIRM, PROJECT_EXPORT) and (source["toolName"] not in grant["toolNames"] or "sourceShareId" in accepted): return None
         if revision is not None and manager.jobs.get(row[1], {}).get("nativeDeviceRevision") != revision:
             return None
+        if project_inventory is not None:
+            from windows_project_inventory import access
+            return access(manager, peer, operation, row, original, grant, now, revision, project_inventory, ticket)
         if read_root:
             from windows_read_root import local
             return local(manager, operation, row, original, grant, now, revision, display=read)
         if work_key: return work
-        if export_guard is not None or read and source["toolName"]==EXPORT:
-            if source["toolName"]!=EXPORT or locate or archive: return None
+        if export_guard is not None or read and source["toolName"] in (EXPORT, PROJECT_EXPORT):
+            if source["toolName"] not in (EXPORT, PROJECT_EXPORT) or locate or archive: return None
             summary=workspace_export(receiver,manager,operation,row,original,grant,now)
             return summary.get("_guard")==export_guard if export_guard is not None else summary
         if locate:
@@ -118,10 +122,11 @@ def show(view, peer, item, *, required_work=None, owning_current=lambda: True):
     if item[4] == TEXT_WRITE:
         from windows_text_write_receipt import show as show_text_write
         show_text_write(view, receipt, current); return
-    if receipt["profile"] == EXPORT_PROFILE:
+    if receipt["profile"] in (EXPORT_PROFILE, project_return.PROFILE):
         def export_current():
-            return time.monotonic()<until and bool(local_record(view,peer,item,revision=receipt.get("revision"),export_guard=receipt.get("_guard")))
-        show_export(view,receipt,export_current)
+            return owning_current() and time.monotonic()<until and bool(local_record(view,peer,item,revision=receipt.get("revision"),export_guard=receipt.get("_guard")))
+        if receipt["profile"] == project_return.PROFILE: project_return.show(view, peer, receipt, export_current)
+        else: show_export(view,receipt,export_current)
         return
     if receipt["profile"] == FILE_PROFILE:
         titles={"receipt_only":"接过这次文件投递，落盘未核实","receiving":"原传输正在等候或接收字节",

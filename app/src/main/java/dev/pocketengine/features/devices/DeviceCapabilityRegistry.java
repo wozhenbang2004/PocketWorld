@@ -19,6 +19,8 @@ public final class DeviceCapabilityRegistry {
     public static JSONArray supportedDeviceGoalToolNames()throws Exception{return new JSONArray(DEVICES);}
     public JSONObject describe(PairingCoordinator.DiscoveryPermission permission)throws Exception{
         if(permission!=null)permission.checkCurrent(System.currentTimeMillis());JSONObject current=health.snapshot(permission);long now=System.currentTimeMillis();JSONArray capabilities=new JSONArray();
+        JSONObject identityOnly=DevicePairVisibility.description(current,permission,deviceId,instanceId,now);
+        if(identityOnly!=null)return identityOnly;
         capabilities.put(capability("phone.tools.main","main_screen",current,false));capabilities.put(capability("phone.tools.background","background",current,true));
         JSONObject goal=current.optJSONObject("goalPolicy");boolean sameCaller=permission!=null&&goal!=null&&permission.callerDeviceId().equals(goal.optString("callerDeviceId"));
         boolean configured=sameCaller&&goal.optBoolean("configured"),apiReady=configured&&goal.optBoolean("apiModelReady"),reviewAvailable=current.optBoolean("goalOwnerReviewAvailable");

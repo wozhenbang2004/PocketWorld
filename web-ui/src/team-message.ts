@@ -14,7 +14,7 @@ export function teamMessageDelivery(run: Data, row: Data): string {
   // The stored title is the destination at send time, not the sender's work item or a current namesake.
   if (letter?.workItemTarget && letter.fromMemberId && letter.targetMemberId === letter.workItemTarget.memberId
     && typeof letter.peerWorkTitle === 'string' && letter.peerWorkTitle) {
-    const delivery = ({ unread: '已排队，尚未进入该分工', delivering: '已纳入该分工输入，尚未确认消费', consumed: '该分工已确认消费',
+    const delivery = ({ unread: '已排队，尚未进入该分工', delivering: '已选入该分工输入，尚未确认送达', consumed: '含此资料的原分工已结束，不代表采用', delivered: '已随原分工的模型请求送达，不代表采用',
       historical: '仅留原记录，未转给其他分工' } as Record<string,string>)[letter.status];
     if (delivery) return `发给「${letter.peerWorkTitle}」：${delivery}`;
   }

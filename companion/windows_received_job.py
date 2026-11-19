@@ -7,7 +7,7 @@ from platform_backend import PlatformError
 from windows_installation import _object
 
 COMMAND, FILE, EXPORT, TEXT_WRITE = "command.run", "workspace.receive", "workspace.export", "workspace.write"
-PROJECT_RECEIVE, PROJECT_CONFIRM = "workspace.project.receive", "workspace.project.confirm"
+PROJECT_RECEIVE, PROJECT_CONFIRM, PROJECT_EXPORT = "workspace.project.receive", "workspace.project.confirm", "workspace.project.export"
 READS = frozenset({"workspace.list", "workspace.read"})
 TOOLS = {COMMAND: "native-device-command-v1", FILE: "native-device-tool-v1", **{k: "native-device-tool-v1" for k in READS}}
 
@@ -21,7 +21,7 @@ def admission(manager, operation, row, *, owner_export=False, owner_text_write=F
         tool = (detail.get("audience") or {}).get("toolName")
         # Local-only projections must not change the peer's existing operation.get shape.
         expected = ("native-device-tool-v1" if owner_export and tool == EXPORT or owner_text_write and tool == TEXT_WRITE
-                    or owner_project and tool in (PROJECT_RECEIVE, PROJECT_CONFIRM) else TOOLS.get(tool))
+                    or owner_project and tool in (PROJECT_RECEIVE, PROJECT_CONFIRM, PROJECT_EXPORT) else TOOLS.get(tool))
         if expected is None or detail.get("protocol") != expected:
             return None
         source, accepted = detail["audience"], detail["historyAudience"]

@@ -534,8 +534,15 @@ public final class AssistantModule implements EngineModule {
         if(firstPaused&&(!Boolean.TRUE.equals(input.opt("firstMessageWithoutPersonalMemory"))||!requested.isEmpty()||projectStart!=null||!durable()))throw new SecurityException("首条个人记忆设置只适用于新私人对话的原生持久准入，未按默认发送");
         String contentFingerprint=fingerprint(text,mode,selections,selectedSources,selectedPreviews,selectedObjects);
         boolean excludeThis=input.has("excludeThisInputFromLearning");
-        if(excludeThis&&(!Boolean.TRUE.equals(input.opt("excludeThisInputFromLearning"))||requested.isEmpty()||projectStart!=null||!durable()))throw new SecurityException("单条限制只用于已有私人对话的原生持久登记，未按默认规则发送");
-        String fingerprint=firstPaused||excludeThis?dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("input",contentFingerprint).put(firstPaused?"firstMessageWithoutPersonalMemory":"excludeThisInputFromLearning",true)):contentFingerprint;
+        if(excludeThis&&(!Boolean.TRUE.equals(input.opt("excludeThisInputFromLearning"))||projectStart!=null||!durable()))throw new SecurityException("单条限制只用于普通私人输入的原生持久登记，未按默认规则发送");
+        // Single-flag identities stay byte-compatible. Both independent restrictions must be bound if both were reviewed.
+        String fingerprint;
+        if(firstPaused||excludeThis){
+            JSONObject restricted=new JSONObject().put("input",contentFingerprint);
+            if(firstPaused)restricted.put("firstMessageWithoutPersonalMemory",true);
+            if(excludeThis)restricted.put("excludeThisInputFromLearning",true);
+            fingerprint=dev.pocketengine.store.TaskStore.capabilityFingerprint(restricted);
+        }else fingerprint=contentFingerprint;
         synchronized(admission){
             if(migrationInProgress)throw new IllegalStateException("原迁移正在对账，未接收新消息");
             JSONObject prior=findSubmission(client);
@@ -590,6 +597,8 @@ public final class AssistantModule implements EngineModule {
                         JSONArray next=new JSONArray().put(conversation);for(int i=0;i<conversations.length();i++)next.put(conversations.getJSONObject(i));conversations=next;trimConversations();
                     }else conversation=find(requested);
                     JSONObject message=newMessage(cid,"user",safe,config).put("clientMessageId",client).put("requestFingerprint",fingerprint).put("inputMode",mode).put("attachments",immutableRefs);
+                    // Same insertion also covers the first USER row in a freshly created private conversation.
+                    // Never change the header for the one-message restriction. Later messages keep their existing policy.
                     if(excludeThis)message.put("personalMemoryExcluded",true);
                     if(immutableSources.length()>0)message.put("ownerSourceRefs",immutableSources);
                     if(immutablePreviews.length()>0)message.put("ownerPreviewRefs",immutablePreviews);

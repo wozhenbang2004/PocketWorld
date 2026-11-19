@@ -39,6 +39,16 @@ function ResourceScope({ resource }: { resource: Data }) {
 }
 function GrantScope({ scope }: { scope: Data }) {
   const expired = Number.isSafeInteger(scope.expiresAt) && scope.expiresAt <= Date.now();
+  // Safe display only. The native grant and original peer certificate decide whether disclosure is available.
+  const identityOnly = scope.optionId === 'pair_identity_only' || (String(scope.grantId || '').startsWith('dpv1_') &&
+    scope.capabilities?.length === 1 && scope.capabilities[0] === 'device.describe' && scope.toolNames?.length === 0);
+  if (identityOnly) {
+    const unavailable = expired || ['expired', 'revoked', 'stale_epoch', 'identity_changed'].includes(scope.state);
+    return <div className="pw-source-copy"><p>仅公开设备身份和本次授权回执。</p>
+      <p>不公开忙闲、屏幕、模型、项目或其他授权。不能读任务、调用工具、派工、安排日程或转授。</p>
+      {scope.expiresAt && <p>{unavailable ? '这份记录已失效，不能据此继续查看。' : `授权至 ${time(scope.expiresAt)}；到期或撤销后不再返回。`}</p>}
+    </div>;
+  }
   const status = ({ active: '上次核对时执行授权有效', expired: '执行授权已到期', revoked: '授权已撤销', stale_epoch: '旧授权代次，不能执行', identity_changed: '本机身份不可用，旧授权不能执行' } as Record<string, string>)[scope.state === 'active' && expired ? 'expired' : scope.state];
   return <div className="pw-source-copy">{scope.receivedScope === true ? <p>{expired ? '对方授权回执中的执行期限已过，结果读取期限另计。' : '上次收到的对端授权回执，执行时仍核对当前状态。'}</p> : status && <p>{status}</p>}{scope.budgetStatus?.budgetState === 'known' && <p>可分配给新任务：工具 {scope.budgetStatus.toolsAvailableForNewAllocations} 次 · 模型 {scope.budgetStatus.modelsAvailableForNewAllocations} 次</p>}{typeof scope.retainedToolsReservedOrUsed === 'number' && <p>已有占用：工具 {scope.retainedToolsReservedOrUsed} 次 · 模型 {scope.retainedModelsReservedOrUsed} 次，不因本次修改清零。</p>}{scope.label && <h4>{scope.label}</h4>}{scope.effectSummary && <p>{scope.effectSummary}</p>}<p>{strings(scope.capabilities).map(method => deviceMethodLabels[method] || method).join(' · ') || '可用方法尚未提供'}</p>{strings(scope.toolNames).length > 0 && <p>准确工具：{strings(scope.toolNames).join('、')}</p>}{rows(scope.resources).map((resource, index) => <ResourceScope key={index} resource={resource} />)}{scope.isolation === false && <p>执行代码可能访问该系统用户可访问的资源，项目目录不是系统沙箱。</p>}{typeof scope.toolBudget === 'number' && <p>授权期内累计：工具 {scope.toolBudget} 次 · 模型 {scope.modelBudget} 次 · 至 {time(scope.expiresAt)}</p>}{scope.historyRead ? <p>结果读取至 {time(scope.historyRead.expiresAt)} · {strings(scope.historyRead.methods).map(method => deviceMethodLabels[method] || method).join('、')}</p> : typeof scope.expiresAt === 'number' && <p>执行到期后未另行授权读取结果。</p>}{scope.allowedOrigins && <p>原发起设备：{strings(scope.allowedOrigins).join('、')}</p>}{scope.forwardingScope ? <><p>下游允许方法：{strings(scope.forwardingScope.capabilities).map(method => deviceMethodLabels[method] || method).join('、')}</p><p>下游准确工具：{strings(scope.forwardingScope.toolNames).join('、')}</p><p>下游累计：工具 {scope.forwardingScope.toolBudget} 次 · 模型 {scope.forwardingScope.modelBudget} 次</p>{rows(scope.forwardingScope.targetResources).map((target, index) => <div key={index}><p>下游设备 {target.targetDeviceId}</p><ResourceScope resource={target.resourceBinding || {}} /></div>)}</> : scope.allowDelegation === true ? <p>仅允许列明来源转交，不继续委派。</p> : <p>未授权转交来源或继续委派。</p>}</div>;
 }
@@ -46,6 +56,7 @@ function GrantScope({ scope }: { scope: Data }) {
 function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean; confirm: (args: Data) => void }) {
   const [draft, setDraft] = useState<Data>(grantDraft), [error, setError] = useState('');
   const view = review.view, options = rows(view.grantOptions), option = options.find(row => row.optionId === draft.optionId);
+  const identityOnly = option?.optionId === 'pair_identity_only';
   const [filter, setFilter] = useState('');
   const matches = options.filter(row => String(row.label || row.optionId).toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()));
   const update = (key: string, value: any) => setDraft(old => ({ ...old, [key]: value }));
@@ -55,19 +66,20 @@ function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean
     {view.currentGrant && <Accordion><AccordionItem id="current" title="当前权限"><GrantScope scope={view.currentGrant} /></AccordionItem></Accordion>}
     {options.length > 8 && <SearchField aria-label="筛选本机可授予的范围" placeholder="搜索应用、项目或能力" value={filter} isDisabled={busy} onChange={value => { setFilter(value); setDraft(grantDraft()); setError(''); }} />}
     <SelectField label="允许对方在这台手机使用什么" value={draft.optionId} placeholder="明确选择一个范围" options={matches.map(row => ({ id: row.optionId, label: row.label || row.optionId }))} onChange={id => { const chosen = matches.find(row => row.optionId === id); if (chosen) { setDraft({ ...grantDraft(), optionId: id, toolBudget: String(Math.max(chosen.toolBudgetMin || 0, Math.min(12, chosen.toolBudgetMax))), modelBudget: String(Math.max(chosen.modelBudgetMin || 0, Math.min(3, chosen.modelBudgetMax))) }); setError(''); } }} isDisabled={busy || !matches.length} />
+    {view.workScopesUnavailable === true && <p>暂时无法核对其他工作权限，不影响只交换身份。</p>}
     {!!options.length && !matches.length && <p>没有匹配的本机范围，请更换或清除搜索词。</p>}
     {!options.length && <p>{view.grantOptionsUnavailableReason || '当前没有可授予的原生范围，请先核对本机设置。'}</p>}
     {option && <>
       <GrantScope scope={option} />
-      <TextField label={`累计工具次数（${option.toolBudgetMin || 0}–${option.toolBudgetMax}）`} value={draft.toolBudget} onChange={value => update('toolBudget', value)} isDisabled={busy} />
-      <TextField label={`累计模型次数（${option.modelBudgetMin || 0}–${option.modelBudgetMax}）`} value={draft.modelBudget} onChange={value => update('modelBudget', value)} isDisabled={busy} />
-      <SelectField label="执行授权期限" value={draft.durationMinutes} onChange={value => update('durationMinutes', value)} options={[{ id: '15', label: '15 分钟' }, { id: '60', label: '1 小时' }, { id: '1440', label: '1 天' }, { id: '43200', label: '30 天' }]} isDisabled={busy} hint={`原范围上限 ${time(option.expiresAtMax)}，最终期限以接下来的准确审阅为准。`} />
+      {!identityOnly && <><TextField label={`累计工具次数（${option.toolBudgetMin || 0}–${option.toolBudgetMax}）`} value={draft.toolBudget} onChange={value => update('toolBudget', value)} isDisabled={busy} />
+      <TextField label={`累计模型次数（${option.modelBudgetMin || 0}–${option.modelBudgetMax}）`} value={draft.modelBudget} onChange={value => update('modelBudget', value)} isDisabled={busy} /></>}
+      <SelectField label={identityOnly ? '身份与回执可见期限' : '执行授权期限'} value={draft.durationMinutes} onChange={value => update('durationMinutes', value)} options={[{ id: '15', label: '15 分钟' }, { id: '60', label: '1 小时' }, { id: '1440', label: '1 天' }, { id: '43200', label: '30 天' }]} isDisabled={busy} hint={`原范围上限 ${time(option.expiresAtMax)}，最终期限以接下来的准确审阅为准。`} />
       {option.canGrantWholeDisplayCapture === true && <CheckboxField isSelected={draft.wholeDisplayCapture} onChange={value => update('wholeDisplayCapture', value)} isDisabled={busy}>允许整屏截图（可能包含其他应用或通知，与整屏输入分开）</CheckboxField>}
-      <Accordion>
+      {!identityOnly && <Accordion>
         {strings(option.historyReadMethods).length > 0 && <AccordionItem id="history" title="执行到期后的结果读取">{strings(option.historyReadMethods).map(method => <CheckboxField key={method} isSelected={strings(draft.historyReadMethods).includes(method)} onChange={value => toggle('historyReadMethods', method, value)} isDisabled={busy}>{deviceMethodLabels[method] || method}</CheckboxField>)}<SelectField label="结果读取期限" value={draft.historyDays} onChange={value => update('historyDays', value)} options={[{ id: '1', label: '1 天' }, { id: '7', label: '7 天' }, { id: '30', label: '30 天' }]} isDisabled={busy || !draft.historyReadMethods.length} hint="只有勾选的方法获得读取权限，不延长执行期限。" /></AccordionItem>}
         <AccordionItem id="origins" title={`转交来源 · 已选 ${draft.additionalOriginOptionIds.length} 台`}><p>直接来自本次配对设备的任务已包含。其他原发起设备需要逐一明确选择。</p>{rows(view.originOptions).map(origin => <CheckboxField key={origin.optionId} isSelected={draft.additionalOriginOptionIds.includes(origin.optionId)} onChange={value => toggle('additionalOriginOptionIds', origin.optionId, value)} isDisabled={busy}>{origin.label || origin.optionId}</CheckboxField>)}{!rows(view.originOptions).length && <p>没有其他已认证来源。</p>}</AccordionItem>
         {option.allowDelegation === true && <AccordionItem id="forwarding" title={`继续委派 · 已选 ${draft.forwardingOptionIds.length} 个范围`}>{rows(view.forwardingOptions).map(target => <div key={target.optionId}><CheckboxField isSelected={draft.forwardingOptionIds.includes(target.optionId)} onChange={value => toggle('forwardingOptionIds', target.optionId, value)} isDisabled={busy}>{target.label || target.optionId}</CheckboxField><ResourceScope resource={target.resourceBinding || {}} /></div>)}{draft.forwardingOptionIds.length > 0 && <><TextField label="下游累计工具次数" value={draft.forwardingToolBudget} onChange={value => update('forwardingToolBudget', value)} isDisabled={busy} /><TextField label="下游累计模型次数" value={draft.forwardingModelBudget} onChange={value => update('forwardingModelBudget', value)} isDisabled={busy} /><p>发起任务时仍需分配互不重复的份额，原生会核对每个下游的真实上限。</p></>}</AccordionItem>}
-      </Accordion>
+      </Accordion>}
     </>}
     {error && <p role="alert">{error}</p>}<Button disabled={busy || !option} onClick={() => { try { confirm(deviceGrantInput(review, draft)); } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); } }}>核对准确权限{review.kind === 'pair' ? '与双端身份' : '修改'}</Button>
   </>;
@@ -982,6 +994,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <AccordionItem id="capabilities" title="能力与两端权限" description="查看范围，调整本机授予的权限" icon={IconShieldCheck}>
               {!retired(peer) && <>{!phoneAccess && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>向这台设备更新能力记录</Button>}{!deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}</>}
               <p>上次能力记录：{time(peer.capabilitySnapshot?.capturedAt)}</p>
+              {peer.capabilitySnapshot?.metadata?.disclosureScope === 'pair_identity_only' &&
+                peer.capabilitySnapshot.deviceId === peer.deviceId && peer.capabilitySnapshot.instanceId === peer.instanceId &&
+                peer.capabilitySnapshot.capabilities?.length === 0 &&
+                <p>上次对方只公开了设备身份和这一份授权回执，未公布工具或忙闲。不代表对方离线。</p>}
               {rows(peer.capabilitySnapshot?.capabilities).filter(cap => !phoneAccess || !['phone.tools.main', 'phone.tools.background'].includes(cap.id)).map(cap => <p key={cap.id}>{cap.id} · {capabilityCaveat || (cap.ready === true && cap.authorized === true ? '上次核对时可用' : cap.reason || '上次未报告就绪')}</p>)}
               <h4>允许这台设备在本机使用</h4>{rows(peer.grantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
               <h4>本机可在对端使用</h4>{rows(peer.receivedGrantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}

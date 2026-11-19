@@ -1314,7 +1314,7 @@ class JobManager:
                 raise
 
     def _public(self, job):
-        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeProjectConfirmationOperation", "_nativeInputChunks", "_nativeInputPeer", "_piSession", "_harnessHello"}}
+        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeProjectConfirmationOperation", "_nativeProjectReturnOrigin", "_nativeInputChunks", "_nativeInputPeer", "_piSession", "_harnessHello"}}
         if job.get("worker") == gemini_acp_profile.WORKER:
             result["backendSelection"] = json.loads(json.dumps(job["backendSelection"]))
         if job.get("worker") == "codex_app_server" and job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest")):

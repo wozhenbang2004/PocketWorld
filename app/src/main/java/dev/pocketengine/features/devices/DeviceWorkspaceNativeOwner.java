@@ -566,9 +566,15 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         return info != null && (info.getCapabilities() & android.accessibilityservice.AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT) != 0;
     }
     JSONObject reviewLocalGrantFor(String peerId, NativeDeviceWorkspaceHost.GrantChoice selected) throws Exception {
-        DeviceIdentity.LocalIdentity local = existingIdentity(); if (local == null) throw new SecurityException("本机设备身份不存在，请先明确开始配对"); JSONObject source = null; JSONArray options = localGrantOptions();
-        for (int i = 0; i < options.length(); i++) if (selected.optionId.equals(options.getJSONObject(i).getString("optionId"))) source = options.getJSONObject(i);
-        long now = System.currentTimeMillis();
+        DeviceIdentity.LocalIdentity local = existingIdentity(); if (local == null) throw new SecurityException("本机设备身份不存在，请先明确开始配对"); long now = System.currentTimeMillis();
+        boolean visibilityOnly = DevicePairVisibility.OPTION.equals(selected.optionId); JSONObject source = null;
+        if (visibilityOnly) {
+            if (trust.peer(peerId) != null) throw new SecurityException("仅配对范围只能在首次配对时选择");
+            DevicePairVisibility.requireChoice(selected); source = DevicePairVisibility.option(now);
+        } else {
+            JSONArray options = localGrantOptions();
+            for (int i = 0; i < options.length(); i++) if (selected.optionId.equals(options.getJSONObject(i).getString("optionId"))) source = options.getJSONObject(i);
+        }
         if (source == null || selected.toolBudget < source.getInt("toolBudgetMin") || selected.modelBudget < source.getInt("modelBudgetMin") || selected.toolBudget > source.getInt("toolBudgetMax") || selected.modelBudget > source.getInt("modelBudgetMax")
                 || selected.expiresAt <= now || selected.expiresAt > source.getLong("expiresAtMax") || selected.allowDelegation)
             throw new SecurityException("所选权限、资源或次数已经变化，请重新选择");
@@ -578,7 +584,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             resources.getJSONObject(0).put("allowWholeDisplayCapture", true);
             source.getJSONArray("capabilities").put("artifact.describe").put("artifact.readChunk");
         }
-        JSONObject grant = new JSONObject().put("grantId", UUID.randomUUID().toString()).put("peerDeviceId", peerId).put("localDeviceId", local.deviceId()).put("authorizationEpoch", 1)
+        JSONObject grant = new JSONObject().put("grantId", visibilityOnly ? DevicePairVisibility.newGrantId() : UUID.randomUUID().toString()).put("peerDeviceId", peerId).put("localDeviceId", local.deviceId()).put("authorizationEpoch", 1)
                 .put("issuedAt", now).put("expiresAt", selected.expiresAt).put("capabilities", source.getJSONArray("capabilities")).put("toolNames", source.getJSONArray("toolNames"))
                 .put("resources", resources).put("allowedOrigins", new JSONArray().put(peerId)).put("allowDelegation", false).put("maxDelegationDepth", 0)
                 .put("toolBudget", selected.toolBudget).put("modelBudget", selected.modelBudget);
@@ -591,6 +597,7 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
     }
     JSONObject localGrantView(JSONObject grant) throws Exception {
         JSONObject view = new JSONObject(grant.toString()).put("digest", DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(grant))).put("allowedOriginSummary", "来源：本次配对的设备");
+        if (DevicePairVisibility.identityOnly(grant)) return DevicePairVisibility.grantView(view);
         JSONArray options = localGrantOptions();
         for (int i = 0; i < options.length(); i++) {
             JSONObject option = options.getJSONObject(i);
@@ -642,6 +649,8 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         }
     }
     private JSONObject health(PairingCoordinator.DiscoveryPermission permission) throws Exception {
+        JSONObject identityOnly = DevicePairVisibility.scopedSnapshot(this, permission);
+        if (identityOnly != null) return identityOnly; // Before reading screens, busy state, modules or model settings.
         JSONObject readiness = app.phoneReadiness(), result = new JSONObject().put("receiverEnabled", network.ownerEnabled()).put("busy", app.activePhoneRunCount()>0).put("goalExecutorBusy",!backgroundGoalCapacity())
                 .put("goalOwnerReviewAvailable", true).put("scopedProjectPortInstalled", app.features.module("local") instanceof LocalModule).put("nativeDeviceRoutesReady", app.hasOriginalDeviceSourceRoutes())
                 .put("scheduleDraftsInstalled",app.features.module("automation") instanceof dev.pocketengine.features.automation.AutomationModule).put("scheduleDraftsAuthorized",false);

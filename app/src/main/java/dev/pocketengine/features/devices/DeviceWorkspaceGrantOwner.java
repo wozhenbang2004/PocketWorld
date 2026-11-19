@@ -44,15 +44,30 @@ final class DeviceWorkspaceGrantOwner {
         }
     }
     JSONObject inputs(String peerId) throws Exception {
-        Catalog catalog = catalog(peerId); JSONArray options = owner.localGrantOptions();
+        boolean firstPair = owner.trust.peer(peerId) == null, workScopesUnavailable = false;
+        Catalog catalog; JSONArray options;
+        try { catalog = catalog(peerId); options = owner.localGrantOptions(); }
+        catch (Exception unavailable) {
+            if (!firstPair) throw unavailable;
+            // No application, forwarding, model or screen catalogue may be required for identity-only pairing.
+            catalog = new Catalog(); options = new JSONArray(); workScopesUnavailable = true;
+        }
         for (int i = 0; i < options.length(); i++) {
             JSONObject option = options.getJSONObject(i); boolean goal = PairingCoordinator.contains(option.getJSONArray("capabilities"), "task.submitGoal");
             option.put("allowDelegation", goal && !catalog.forwards.isEmpty()).put("maxDelegationDepth", "schedule_drafts".equals(option.optString("optionId"))?0:2);
         }
+        // Only a fresh mutual pairing may elect the identity-only profile; no old authorization changes.
+        if (firstPair) {
+            JSONArray first = new JSONArray().put(DevicePairVisibility.option(System.currentTimeMillis()));
+            for (int i = 0; i < options.length(); i++) first.put(options.getJSONObject(i));
+            options = first;
+        }
         JSONArray origins = new JSONArray(), forwards = new JSONArray();
         for (Map.Entry<String, JSONObject> entry : catalog.origins.entrySet()) { JSONObject peer = entry.getValue(); origins.put(new JSONObject().put("optionId", entry.getKey()).put("deviceId", peer.getString("deviceId")).put("label", label(peer.getString("deviceId"))).put("certificateFingerprint", peer.getString("fingerprint"))); }
         for (Map.Entry<String, Forward> entry : catalog.forwards.entrySet()) { Forward item = entry.getValue(); forwards.put(new JSONObject().put("optionId", entry.getKey()).put("targetDeviceId", item.grant.targetDeviceId()).put("label", label(item.grant.targetDeviceId())).put("resourceBinding", item.resource).put("toolNames", item.tools).put("capabilities", item.capabilities).put("toolBudgetMax", item.grant.grant().getLong("toolBudget")).put("modelBudgetMax", item.grant.grant().getLong("modelBudget")).put("expiresAtMax", item.grant.deadline())); }
-        return new JSONObject().put("grantOptions", options).put("originOptions", origins).put("forwardingOptions", forwards).put("hasMoreOriginOptions", catalog.partialOrigins).put("hasMoreForwardingOptions", catalog.partialForwards);
+        JSONObject result = new JSONObject().put("grantOptions", options).put("originOptions", origins).put("forwardingOptions", forwards).put("hasMoreOriginOptions", catalog.partialOrigins).put("hasMoreForwardingOptions", catalog.partialForwards);
+        if (workScopesUnavailable) result.put("workScopesUnavailable", true);
+        return result;
     }
     JSONObject decorate(JSONObject view, String peerId) throws Exception { JSONObject inputs = inputs(peerId); for (String key : DeviceProtocol.objectKeys(inputs)) view.put(key, inputs.get(key)); return view; }
     private Catalog catalog(String peerId) throws Exception {
@@ -81,6 +96,12 @@ final class DeviceWorkspaceGrantOwner {
         return result;
     }
     Review review(String peerId, NativeDeviceWorkspaceHost.GrantChoice choice) throws Exception {
+        if (DevicePairVisibility.OPTION.equals(choice.optionId)) {
+            DevicePairVisibility.requireChoice(choice);
+            JSONObject grant = owner.reviewLocalGrantFor(peerId, choice);
+            if (!DevicePairVisibility.identityOnly(grant)) throw new SecurityException("仅配对的准确范围已变化");
+            return new Review(this, grant, java.util.Collections.emptyMap(), java.util.Collections.emptyList());
+        }
         // Local resource/options resolve independently; extras below cannot create local capability.
         NativeDeviceWorkspaceHost.GrantChoice local = new NativeDeviceWorkspaceHost.GrantChoice(choice.optionId, choice.toolBudget, choice.modelBudget, choice.expiresAt, false, 0, choice.historyReadExpiresAt, choice.historyReadMethods, java.util.Collections.emptyList(), java.util.Collections.emptyList(), 0, 0, choice.wholeDisplayCapture);
         JSONObject grant = owner.reviewLocalGrantFor(peerId, local); Catalog catalog = catalog(peerId); Map<String, JSONObject> origins = new LinkedHashMap<>(); JSONArray allowed = grant.getJSONArray("allowedOrigins");

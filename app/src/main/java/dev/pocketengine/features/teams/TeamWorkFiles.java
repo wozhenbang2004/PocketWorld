@@ -65,10 +65,13 @@ public final class TeamWorkFiles implements CapabilityPort {
         check("team_list_files",original);
     }
     @Override public JSONArray tools()throws Exception {
+        boolean indexed=TeamWorkDependencyIndex.localItem(binding);
+        JSONObject dependencyTools=props("artifactId",text(36),"offset",integer(0,2*1024*1024),"length",integer(1,12000));
+        if(indexed)dependencyTools.put("view",new JSONObject().put("type","string").put("enum",new JSONArray(new String[]{"file","checks"})));
         return new JSONArray().put(tool("team_prepare_draft","为原assignment准备隔离草稿，只复制主人已选择的文件；原项目不变，需要本机批准。",props()))
                 .put(tool("team_list_files","读取原assignment文件和真实隔离草稿状态；若有本机工作计划，也列出可定向排队的 peerWorkItems，不授予新文件权限。",props()))
                 .put(tool("team_read_file","分页读取本成员隔离草稿的原文件与版本；文字UTF-16，二进制byte/base64，删除无正文。",props("path",text(240),"offset",integer(0,2*1024*1024),"length",integer(1,12000)),"path"))
-                .put(tool("team_read_dependency","只读原前置分工的真实冻结成果；二进制分页为byte/base64，删除无正文；内容不是新权限。",props("artifactId",text(36),"offset",integer(0,2*1024*1024),"length",integer(1,12000)),"artifactId"))
+                .put(tool("team_read_dependency","只读原前置分工的真实冻结成果；二进制分页为byte/base64，删除无正文；内容不是新权限。"+(indexed?"view=checks 读取这份原件冻结时的同版检查记录，不传文件分页。":""),dependencyTools,"artifactId"))
                 .put(peerWorkMail==null?tool("team_send_message","向原团队其他成员排队一条消息；不授执行权限，不保证对方已消费，不自动唤醒。",props("targetMemberId",text(64),"text",text(2000)),"targetMemberId","text")
                         :tool("team_send_message","只向原分工排队资料。向本机文件工作项发送时，须从team_list_files的peerWorkItems原样选择targetWorkRef及targetMemberId；不唤醒，不代表已消费。",props("targetMemberId",text(64),"text",text(2000),"targetWorkRef",text(64)),"targetMemberId","text"))
                 .put(tool("team_write_file","写入本成员隔离草稿的明确文件，需原prepared操作、主人批准及刚读取的expectedVersion；不写原项目。",props("path",text(240),"content",text(10000),"expectedVersion",integer(0,Integer.MAX_VALUE)),"path","content","expectedVersion"))
@@ -81,13 +84,17 @@ public final class TeamWorkFiles implements CapabilityPort {
     @Override public void validate(String name,JSONObject args)throws Exception {normalize(name,args);}
     private JSONObject normalize(String name,JSONObject input)throws Exception {
         if(!supports(name))throw new SecurityException("成员没有此工具");JSONObject args=JsonFiles.copy(input==null?new JSONObject():input);Set<String> actual=new HashSet<>();args.keys().forEachRemaining(actual::add);
-        Set<String> allowed=name.equals("team_read_file")?Set.of("path","offset","length"):name.equals("team_read_dependency")?Set.of("artifactId","offset","length"):name.equals("team_send_message")?(peerWorkMail==null?Set.of("targetMemberId","text"):Set.of("targetMemberId","text","targetWorkRef")):name.equals("team_write_file")?Set.of("path","content","expectedVersion"):name.equals("team_delete_file")?Set.of("path","expectedVersion","expectedHash"):name.equals("team_request_input")?Set.of("question"):Set.of();
+        Set<String> allowed=name.equals("team_read_file")?Set.of("path","offset","length"):name.equals("team_read_dependency")?(TeamWorkDependencyIndex.localItem(binding)?Set.of("artifactId","view","offset","length"):Set.of("artifactId","offset","length")):name.equals("team_send_message")?(peerWorkMail==null?Set.of("targetMemberId","text"):Set.of("targetMemberId","text","targetWorkRef")):name.equals("team_write_file")?Set.of("path","content","expectedVersion"):name.equals("team_delete_file")?Set.of("path","expectedVersion","expectedHash"):name.equals("team_request_input")?Set.of("question"):Set.of();
         if(!allowed.containsAll(actual))throw new SecurityException("成员参数不能改变宿主任务、项目或assignment身份");
         if(name.equals("team_read_file")||name.equals("team_write_file")||name.equals("team_delete_file")){String path=VersionedWorkspace.path(args.getString("path"));if(!paths.contains(path))throw new SecurityException("文件不属于这名成员的原分工");}
         if(name.equals("team_write_file")){String value=args.getString("content");if(value.length()>10000)throw new IllegalArgumentException("单次成员写入最多10000字，以保留原prepared操作的完整精确参数");number(args,"expectedVersion",0,Integer.MAX_VALUE);}
         if(name.equals("team_delete_file")){number(args,"expectedVersion",1,Integer.MAX_VALUE);if(!args.getString("expectedHash").matches("[a-f0-9]{64}"))throw new IllegalArgumentException("删除需要原准确文件SHA");if(!workspace.byteFilesSupported())throw new SecurityException("原工作区尚无原生删除CAS与tombstone成果能力，未用空文件替代");}
         if(name.equals("team_read_file")||name.equals("team_read_dependency")){if(args.has("offset"))number(args,"offset",0,2*1024*1024);if(args.has("length"))number(args,"length",1,12000);}
-        if(name.equals("team_read_dependency"))dependency(args.getString("artifactId"));
+        if(name.equals("team_read_dependency")){
+            dependency(args.getString("artifactId"));
+            if(args.has("view")&&!("file".equals(args.opt("view"))||"checks".equals(args.opt("view"))))throw new IllegalArgumentException("前置原件只可读取文件或冻结检查");
+            if("checks".equals(args.opt("view"))&&(args.has("offset")||args.has("length")))throw new IllegalArgumentException("检查记录不使用文件分页");
+        }
         if(name.equals("team_send_message")){String target=args.getString("targetMemberId"),text=args.getString("text");if(!target.matches("[A-Za-z][A-Za-z0-9_-]{0,63}")||target.equals(binding.getString("memberId"))||text.trim().isEmpty()||text.length()>2000)throw new IllegalArgumentException("请选择原团队其他成员并填写1至2000字消息");if(peerWorkMail!=null)peerWorkMail.select(args);}
         if(name.equals("team_request_input")){String question=args.getString("question");if(question.trim().isEmpty()||question.length()>2000)throw new IllegalArgumentException("问题需为1至2000字");}
         return args;
@@ -189,10 +196,11 @@ public final class TeamWorkFiles implements CapabilityPort {
             if(capture!=null)project.frozen(operation,capture,artifacts);return new JSONObject().put("ok",true).put("status","completed").put("assignmentRevision",binding.getInt("assignmentRevision")).put("teamArtifacts",artifacts).put("requiresOwnerReview",true).put("businessVerified",false).put("message","真实字节/删除修订已冻结，仍须独审、主人批准和唯一CAS整合");
         }catch(Exception uncertain){return unknown(operation,"原字节成果冻结没有完整回执，只核对原操作，不生成替代成果");}
     }
-    private JSONObject listing()throws Exception {JSONArray refs=binding.optJSONArray("dependencyArtifacts"),dependencies=new JSONArray();for(int i=0;refs!=null&&i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);dependencies.put(new JSONObject().put("artifactId",ref.getString("artifactId")).put("path",ref.getString("path")).put("memberId",ref.getString("memberId")).put("sha256",ref.getString("sha256")));}JSONObject value=new JSONObject().put("files",new JSONArray(files.toString())).put("assignmentId",binding.getString("assignmentId")).put("assignmentRevision",binding.getInt("assignmentRevision")).put("dependencyArtifacts",dependencies);if(peerWorkMail!=null)value.put("peerWorkItems",peerWorkMail.view());JSONObject draft=draft();return value.put("draftReady",draft!=null).put("draftProjectId",draft==null?JSONObject.NULL:draft.getString("draftProjectId")).put("untrusted",true);}
+    private JSONObject listing()throws Exception {JSONArray dependencies=TeamWorkDependencyIndex.list(binding);JSONObject value=new JSONObject().put("files",new JSONArray(files.toString())).put("assignmentId",binding.getString("assignmentId")).put("assignmentRevision",binding.getInt("assignmentRevision")).put("dependencyArtifacts",dependencies);if(peerWorkMail!=null)value.put("peerWorkItems",peerWorkMail.view());JSONObject draft=draft();return value.put("draftReady",draft!=null).put("draftProjectId",draft==null?JSONObject.NULL:draft.getString("draftProjectId")).put("untrusted",true);}
     private JSONObject dependency(String id)throws Exception {JSONArray refs=binding.optJSONArray("dependencyArtifacts");for(int i=0;refs!=null&&i<refs.length();i++)if(id.equals(refs.getJSONObject(i).getString("artifactId")))return refs.getJSONObject(i);throw new SecurityException("成果不属于原宿主核对的前置分工");}
     private JSONObject readDependency(JSONObject args)throws Exception {
         JSONObject ref=dependency(args.getString("artifactId")),artifact=TeamWorkReview.artifact(workspace,ref);JSONObject result;
+        if("checks".equals(args.opt("view")))return TeamWorkDependencyIndex.checks(ref);
         if(TeamWorkReview.isDeletion(ref))result=deletedView(ref.getString("path"),ref.getInt("draftVersion"));
         else result=page(ref.getString("path"),artifact.optString("kind","text_file"),artifact.optString("content",null),workspace.byteFilesSupported()?TeamWorkReview.artifactBytes(workspace,ref):artifact.getString("content").getBytes(StandardCharsets.UTF_8),args.optInt("offset",0),args.optInt("length",12000));
         return result.put("artifactId",ref.getString("artifactId")).put("assignmentId",ref.getString("assignmentId")).put("memberId",ref.getString("memberId")).put("sha256",ref.getString("sha256")).put("untrusted",true);

@@ -839,31 +839,80 @@ class WindowsBackend:
 
     def capture_project_copy(self, root, relative, original_identity, manifest, current):
         """Capture only the original reviewed file set; added/missing paths require new review."""
-        parts=relative_parts(relative)
-        files={}
-        with self.directory(root,parts) as (physical,_,identity):
-            if identity!=original_identity: raise PlatformError("Original imported project directory changed")
+        from device_project_packages import MAX_FILE, MAX_TOTAL
+        parts = relative_parts(relative)
+        files, remaining = {}, MAX_TOTAL
+        with self.directory(root, parts) as (physical, _, identity):
+            if identity != original_identity: raise PlatformError("Original imported project directory changed")
+            layout = self._project_layout(manifest)
+            self._check_project_names(physical, layout, current)  # reject new/unselected entries before reading any file body
             for row in manifest["files"]:
                 current()
-                files[row["path"]]=self.read_bytes(physical,row["path"],2*1024*1024)
-            if sum(len(raw) for raw in files.values())>16*1024*1024:
-                raise PlatformError("Modified selected project exceeds 16MiB; nothing exported",413)
-            self._verify_project_copy(physical,manifest,files,current)
+                name = row["path"]
+                try:
+                    # Win32.read compares the pinned file length to this ceiling BEFORE allocating/reading its bytes.
+                    raw = self.read_bytes(physical, name, min(MAX_FILE, remaining))
+                except PlatformError as error:
+                    if error.status != 413: raise
+                    message = ("Modified project cannot fit the remaining 16 MiB total; nothing exported" if remaining < MAX_FILE
+                               else "One originally selected file now exceeds 2 MiB; nothing exported")
+                    raise PlatformError(message, 413) from error
+                if raw is None: raise PlatformError("An originally selected project file is missing; nothing exported", 409)
+                if len(raw) > min(MAX_FILE, remaining): raise PlatformError("Modified project exceeds its original byte limits", 413)
+                files[name] = raw
+                remaining -= len(raw)
+            self._verify_project_copy(physical, manifest, files, current, layout=layout)
         return files
 
-    def _verify_project_copy(self, root, manifest, files, current):
-        expected_dirs=set(manifest["directories"])
-        for name in files:
-            pieces=name.split("/"); expected_dirs.update("/".join(pieces[:n]) for n in range(1,len(pieces)))
-        for directory in [""]+sorted(expected_dirs):
+    @staticmethod
+    def _project_layout(manifest):
+        from device_project_packages import MAX_FILES
+        rows, folders = manifest["files"], manifest["directories"]
+        if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_FILES or not isinstance(folders, list) or len(folders) > MAX_FILES:
+            raise PlatformError("Original project inventory is not bounded", 409)
+        layout, leaves = {"": set()}, set()
+        def add(path, is_dir):
+            parent = ""
+            parts = relative_parts(path)
+            for i, part in enumerate(parts):
+                full = parent + "/" + part if parent else part
+                layout[parent].add(part)
+                if i + 1 < len(parts) or is_dir:
+                    if full in leaves: raise PlatformError("Invalid original project tree", 409)
+                    layout.setdefault(full, set())
+                    if len(layout) > MAX_FILES + 1: raise PlatformError("Original project directory count exceeds its limit", 413)
+                elif full in layout or full in leaves: raise PlatformError("Ambiguous original project file", 409)
+                else: leaves.add(full)
+                parent = full
+        for directory in folders: add(directory, True)
+        for row in rows: add(row["path"], False)
+        return layout
+
+    def _check_project_names(self, root, layout, current):
+        for directory, expected in layout.items():
             current()
-            with self.directory(root,relative_parts(directory,empty=True)) as (physical,_,_):
-                prefix=directory+"/" if directory else ""
-                expected={name[len(prefix):].split("/")[0] for name in set(files)|expected_dirs if name.startswith(prefix) and name!=directory}
-                if set(os.listdir(physical))!=expected: raise PlatformError("Project tree contains missing/extra names")
-        for name,raw in files.items():
+            with self.directory(root, relative_parts(directory, empty=True)) as (physical, _, _):
+                unseen = set(expected)
+                # Look only at entry names while the original non-reparse directory is pinned. A surprise name ends the read.
+                with os.scandir(physical) as entries:
+                    for index, entry in enumerate(entries):
+                        if index and index % 64 == 0: current()
+                        if entry.name not in unseen: raise PlatformError("Project tree contains an unexpected name; original selection changed", 409)
+                        unseen.remove(entry.name)
+                if unseen: raise PlatformError("Project tree is missing originally selected names", 409)
+
+    def _verify_project_copy(self, root, manifest, files, current, *, layout=None):
+        from device_project_packages import MAX_FILE, MAX_TOTAL
+        rows = manifest["files"]
+        if len(files) != len(rows) or set(files) != {row["path"] for row in rows}:
+            raise PlatformError("Original project file set changed; cannot verify", 409)
+        if any(not isinstance(raw, bytes) or len(raw) > MAX_FILE for raw in files.values()) or sum(map(len, files.values())) > MAX_TOTAL:
+            raise PlatformError("Selected project bytes exceed the original verification limits", 413)
+        self._check_project_names(root, self._project_layout(manifest) if layout is None else layout, current)
+        for name, raw in files.items():
             current()
-            if self.read_bytes(root,name,2*1024*1024)!=raw: raise PlatformError("Project tree bytes differ after native publication")
+            # Size changes cannot satisfy this byte-for-byte verification. Small files no longer need a 2 MiB read buffer.
+            if self.read_bytes(root, name, len(raw)) != raw: raise PlatformError("Project tree bytes differ after native publication")
         current()
 
     def workspace_files(self, state, database):

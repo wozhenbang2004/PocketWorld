@@ -221,16 +221,18 @@ internal class ProjectPackageCoordinator(
     fun closePreview() { state = state.copy(preview = null) }
     fun previewError(message: String) { state = state.copy(error = message.take(500)) }
     fun exportSnapshot(): JSONObject? = state.exportStatus?.let { JSONObject(it.toString()) }
-    private fun taskExportStatus(selected: TaskExport, phase: String, message: String, bytes: Long? = null) {
+    private fun taskExportStatus(selected: TaskExport, phase: String, message: String, bytes: Long? = null, target: JSONObject? = null) {
         if (taskExport !== selected) return
-        selected.phase = phase
         val pin = selected.pin
+        if(phase=="exported")check(bytes!=null&&ProjectPackageDocument.verified(target,bytes,pin.getString("sha256"))) { "没有原系统目标的完整回读，不确认导出" }
+        selected.phase = phase
         val result = JSONObject().put("kind", "project_package_export").put("requestId", pin.getString("requestId"))
             .put("taskId", pin.getString("taskId")).put("operationId", pin.getString("operationId"))
             .put("artifactId", pin.getString("artifactId")).put("artifactSha256", pin.getString("sha256"))
             .put("projectId", pin.getString("projectId")).put("status", phase).put("message", message)
             .put("exported", phase == "exported")
         if (bytes != null) result.put("bytes", bytes)
+        if (target != null) result.put("targetReadback",target)
         state = state.copy(exportStatus = result, notice = message)
     }
     private fun completeTaskExport(selected: TaskExport, result: JSONObject?, error: String?) {
@@ -323,7 +325,7 @@ internal class ProjectPackageCoordinator(
         fun reject(message: String) { state = state.copy(error = message); if (selected != null) taskExportStatus(selected, "rejected", message) }
         val currentSelection = if (selected == null) !pin.has("taskId") && matches(pin) else taskExportCurrent(selected)
         if (restoredPicker || !currentSelection) { reject("原导出入口已变化。请重读原固定成果，再明确选择目标；未写入所选位置。"); return }
-        if (uri.scheme != "content" || uri.authority.isNullOrBlank()) { reject("系统未授予可用 content 文件引用，未读取或写入其他路径"); return }
+        if (!ProjectPackageDocument.allowed(app,uri)) { reject("没有取得系统选定的外部文档，未读取或写入其他位置"); return }
         if (selected != null) taskExportStatus(selected, "writing", "正在导出所选固定包，请等待保存结果。")
         work(ownerCurrent = selected?.let { original -> { taskExportCurrent(original) } }, onFailure = selected?.let { original -> { failure: Exception ->
             if (original.phase == "writing") taskExportStatus(original, if (original.writeStarted) "unknown" else "rejected",
@@ -332,10 +334,17 @@ internal class ProjectPackageCoordinator(
             val source = selected?.let(::requireTaskExportSource)
             val artifact = local().handle("project.package.get", JSONObject().put("artifactId", pin.getString("artifactId")).put("sha256", pin.getString("sha256")))
             if (source != null) dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(source, artifact)
-            fun requireCurrent() { c.check(); if (selected != null) check(taskExportCurrent(selected)) { "原固定包导出窗口已变化" } }
+            val expected=pin.getString("sha256");val size=artifact.getLong("sizeBytes")
+            check(size in 1..dev.pocketengine.features.local.project.ProjectPackageArchive.MAX_ARCHIVE_BYTES.toLong()&&artifact.getString("sha256")==expected){"原固定包摘要或字节数不可核对，未写入"}
+            fun requireCurrent() {
+                c.check()
+                check(if(selected!=null)taskExportCurrent(selected) else foreground&&matches(pin)&&state.artifact?.let {it.opt("id")==pin.opt("artifactId")&&it.opt("sha256")==expected}==true){"原固定包导出窗口已变化"}
+            }
             if (selected != null) requireTaskExportSource(selected)
+            requireCurrent(); val displayName=ProjectPackageDocument.name(app,uri,c,::requireCurrent)
             requireCurrent(); if (selected != null) selected.writeStarted = true
-            val opened = app.contentResolver.openOutputStream(uri, "wt") ?: error("所选位置无法写入")
+            val opened = try {app.contentResolver.openOutputStream(uri, "wt") ?: error("所选位置无法写入")}
+                catch(failure:Exception){throw IllegalStateException("系统目标未返回写入回执，可能已创建或截断；请核对原位置，没有自动重写",failure)}
             val cancel = Runnable { runCatching { opened.close() } }; c.onCancel(cancel)
             val bytes = try { opened.use { raw ->
                 val checked = object : java.io.FilterOutputStream(raw) {
@@ -347,10 +356,20 @@ internal class ProjectPackageCoordinator(
                 requireCurrent(); raw.flush(); copied
             } } catch (failure: Exception) { throw IllegalStateException("导出未完整确认，所选目标可能已有部分内容；请核对原成果和目标", failure) }
             finally { c.removeCancelAction(cancel) }
+            check(bytes==size){"原固定包的写入字节数不符；目标可能已有内容，未重新写入"}
+            requireCurrent();val target=ProjectPackageDocument.readBack(app,uri,displayName,bytes,expected,c,::requireCurrent)
+            val finalArtifact=local().handle("project.package.get",JSONObject().put("artifactId",pin.getString("artifactId")).put("sha256",expected))
+            check(finalArtifact.opt("id")==pin.opt("artifactId")&&finalArtifact.opt("sha256")==expected&&finalArtifact.optLong("sizeBytes",-1)==size){"原固定包来源已变化；请核对目标，没有恢复写入"}
+            if(selected!=null)dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(requireTaskExportSource(selected),finalArtifact)
+            requireCurrent();val verified=ProjectPackageDocument.verified(target,bytes,expected)
             return@work {
-                val message = "已导出原固定项目包（$bytes 字节）。"
-                state = state.copy(notice = message)
-                if (selected != null) taskExportStatus(selected, "exported", message, bytes)
+                val place=target.optString("displayName").takeIf {it.isNotBlank()}?.let {"「$it」"}?:target.getString("provider")
+                val message=if(verified)"已在所选位置回读 $place：$bytes 字节、SHA-256 与原固定包一致。"
+                    else if(target.opt("status")=="destination_changed")"写入已返回，但所选文档名称发生变化；请核对原位置，没有自动重写。"
+                    else if(target.opt("status")=="content_mismatch")"写入已返回，但所选位置回读不符；请核对原文件，没有自动重写。"
+                    else "写入已返回，但所选位置无法回读；不能确认已保存完整包，没有自动重写。"
+                state=state.copy(notice=message)
+                if(selected!=null)taskExportStatus(selected,if(verified)"exported" else "written_unverified",message,bytes,target)
             }
         }
     }
@@ -728,6 +747,7 @@ internal class ProjectPackageCoordinator(
                     if (status.optString("status") in setOf("checking", "document_requested", "selection_returned", "writing")) {
                         status.put("status", "unknown").put("exported", false).put("message", "原导出结果尚未确认；请核对所选文件，没有恢复写入或重新打开选择器。")
                     }
+                    ProjectPackageDocument.restore(status)
                     state = state.copy(exportStatus = status)
                 }
             }

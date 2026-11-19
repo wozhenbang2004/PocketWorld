@@ -588,7 +588,7 @@ class CompanionDeviceReceiver:
             self.manager._save(source)
             raise
 
-    def _export_project(self, envelope, permission):
+    def _export_project(self, envelope, permission, export_job=None):
         from device_project_packages import write_modified
         args=envelope.arguments["arguments"]
         if envelope.arguments["effect"]!="read" or set(args)!={"receiveOperationId"}:
@@ -611,7 +611,11 @@ class CompanionDeviceReceiver:
         reference=self._file_reference(envelope,"modified-project.pocketworld.zip",len(raw),hashlib.sha256(raw).hexdigest())
         reference.update(kind="project_bundle",mimeType="application/zip")
         fixed=self.artifacts.register_stream(io.BytesIO(raw),reference)
-        return self.artifacts.wire_descriptor(fixed,instance_id=self.identity.instance_id,revision=1)
+        wire = self.artifacts.wire_descriptor(fixed,instance_id=self.identity.instance_id,revision=1)
+        if export_job is not None and self.manager.platform.name == "windows":
+            from windows_project_return import bind
+            bind(export_job, envelope, source, manifest, wire)
+        return wire
 
     def _release_input(self, transfer):
         item = self._inputs.get(transfer)
@@ -768,7 +772,7 @@ class CompanionDeviceReceiver:
                     result, root_seal = same_read(self, envelope, permission, original_environment, operation, job)
                 else:
                     result = (self._confirm_project(envelope, permission, job) if envelope.arguments["toolName"] == "workspace.project.confirm"
-                              else self._export_project(envelope, permission) if envelope.arguments["toolName"] == "workspace.project.export"
+                              else self._export_project(envelope, permission, job) if envelope.arguments["toolName"] == "workspace.project.export"
                               else self._workspace(envelope, permission))
             self._current(permission)
             with self.manager.lock:

@@ -9,6 +9,8 @@ import org.json.JSONObject;
 
 /** Domain metering around the ORIGINAL capability port. No tool loop, store or permission is added. */
 public final class TeamBudgetPort implements CapabilityPort {
+    private TeamWorkPeerDelivery peerDelivery;
+    void bindWorkPeerDelivery(TeamWorkPeerDelivery value){if(roundParent||peerDelivery!=null)throw new IllegalStateException("原成员来信不能转挂其他执行");peerDelivery=java.util.Objects.requireNonNull(value);}
     private final CapabilityPort original;private final TaskStore tasks;private final JSONObject binding;private boolean roundParent;private RunControl roundControl;private java.util.Set<String> allowedRoundTools;
     public TeamBudgetPort(CapabilityPort original,TaskStore tasks,JSONObject binding)throws Exception{this.original=original;this.tasks=tasks;this.binding=new JSONObject(binding.toString());}
     public static CapabilityPort forRoundParent(CapabilityPort original,TaskStore tasks,String task,String run,int epoch,RunControl live)throws Exception {
@@ -19,12 +21,12 @@ public final class TeamBudgetPort implements CapabilityPort {
     @Override public void beginRun(String goal,RunControl control)throws Exception{original.beginRun(goal,control);}
     @Override public void prepareTurnSurface(RunControl control)throws Exception{original.prepareTurnSurface(control);}
     @Override public void admitCapabilities(CapabilitySnapshot snapshot,RunControl control)throws Exception{original.admitCapabilities(snapshot,control);}
-    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{return original.prepareTurn(query,round,steps,control);}
+    @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception{JSONObject turn=original.prepareTurn(query,round,steps,control);return peerDelivery==null?turn:peerDelivery.prepare(turn,control);}
     @Override public boolean responseCurrent(RunControl control)throws Exception{return original.responseCurrent(control);}
     @Override public boolean stepReadSourceCurrent(String tool,JSONObject receipt,RunControl control)throws Exception{return allowed(tool)&&(!roundParent||control==roundControl)&&original.stepReadSourceCurrent(tool,receipt,control);}
-    @Override public void beforeModelRequest(String request,JSONArray messages,RunControl control)throws Exception{original.beforeModelRequest(request,messages,control);}
-    @Override public JSONObject afterModelResponse(String request,String answer,RunControl control)throws Exception{return original.afterModelResponse(request,answer,control);}
-    @Override public void modelRequestAbandoned(String request)throws Exception{original.modelRequestAbandoned(request);}
+    @Override public void beforeModelRequest(String request,JSONArray messages,RunControl control)throws Exception{original.beforeModelRequest(request,messages,control);if(peerDelivery!=null)peerDelivery.started(request,messages,control);}
+    @Override public JSONObject afterModelResponse(String request,String answer,RunControl control)throws Exception{JSONObject result=original.afterModelResponse(request,answer,control);if(peerDelivery!=null)peerDelivery.responded(request,answer,control);return result;}
+    @Override public void modelRequestAbandoned(String request)throws Exception{try{original.modelRequestAbandoned(request);}finally{if(peerDelivery!=null)peerDelivery.abandoned(request);}}
     @Override public JSONObject beforeTool(String name,JSONObject arguments,RunControl control)throws Exception{return original.beforeTool(name,arguments,control);}
     @Override public void afterTool(String name,JSONObject arguments,JSONObject receipt,RunControl control)throws Exception{original.afterTool(name,arguments,receipt,control);}
     @Override public void endRun(RunControl control)throws Exception{original.endRun(control);}
@@ -33,7 +35,7 @@ public final class TeamBudgetPort implements CapabilityPort {
     @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String tool,String operation,RunControl live)throws Exception{return original.takeToolObservation(tool,operation,live);}
     @Override public dev.pocketengine.core.NativeToolPlan takeToolPlan(String tool,String operation,RunControl live)throws Exception{return original.takeToolPlan(tool,operation,live);}
     @Override public dev.pocketengine.core.NativeReadContextRepair nativeReadContextRepair(JSONArray messages,RunControl live)throws Exception{return original.nativeReadContextRepair(messages,live);}
-    @Override public void close(){original.close();}
+    @Override public void close(){try{original.close();}finally{if(peerDelivery!=null)peerDelivery.close();}}
     @Override public JSONArray tools()throws Exception{JSONArray tools=original.tools();if(allowedRoundTools==null)return tools;JSONArray selected=new JSONArray();for(int i=0;i<tools.length();i++)if(allowed(tools.getJSONObject(i).getJSONObject("function").getString("name")))selected.put(tools.getJSONObject(i));return selected;}
     @Override public boolean supports(String name){return allowed(name)&&original.supports(name);}
     @Override public boolean sideEffecting(String name){return original.sideEffecting(name);}

@@ -464,7 +464,7 @@ export default function App(){
  const newMemoryScope=!state.conversationId&&draftKey.startsWith('new:')&&typeof composer.firstMessageMemory?.paused==='boolean'&&can('composer.firstMemory.save');
  const newMemoryBlocked=newMemoryScope&&(composer.firstMessageMemory.saving||composer.firstMessageMemory.confirmed!==true);
  const memoryPausedHere=newMemoryScope?composer.firstMessageMemory.confirmed===true&&composer.firstMessageMemory.paused:!!conversationMemoryMode&&conversationMemoryMode.conversationId===state.conversationId&&!conversationMemoryMode.enabled;
- const singleLearningScope=intent==='chat'&&!!state.conversationId&&composer.conversationId===state.conversationId&&can('composer.oneLearning.save')&&typeof composer.oneMessageLearning?.excluded==='boolean';
+ const singleLearningScope=intent==='chat'&&((newMemoryScope&&composer.conversationId==='')|| (!!state.conversationId&&composer.conversationId===state.conversationId))&&can('composer.oneLearning.save')&&typeof composer.oneMessageLearning?.excluded==='boolean';
  const singleLearningArmed=singleLearningScope&&composer.oneMessageLearning.excluded===true;
  const singleLearningBlocked=singleLearningScope&&(composer.oneMessageLearning.saving||composer.oneMessageLearning.confirmed!==true||singleLearningArmed&&composer.oneMessageLearning.pending===true);
  const canEditMemoryHere=!!(state.conversationId&&can('profile.conversation.read'))||newMemoryScope;
@@ -2018,7 +2018,7 @@ export default function App(){
  {routeReferenceTarget&&<RouteReference key={`${routeReferenceTarget.taskId}:${routeReferenceTarget.runId}:${routeReferenceTarget.epoch}`} target={routeReferenceTarget} onClose={()=>setRouteReferenceTarget(null)}/>}
  {skillDraftTarget&&<SkillDraftReview key={`${skillDraftTarget.runId}:${skillDraftTarget.operationId}`} target={skillDraftTarget} onClose={()=>setSkillDraftTarget(null)}/>}
  {!preparationInline&&preparationDetail}
- {isChatSurface&&newMemoryScope&&<NewConversationMemory key={draftKey+':'+draftEpoch} composer={composer} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} registerBack={registerConversationMemoryBack}/>}
+ {isChatSurface&&newMemoryScope&&<NewConversationMemory key={draftKey+':'+draftEpoch} composer={composer} allowSingle={singleLearningScope} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} registerBack={registerConversationMemoryBack}/>}
  {isChatSurface&&state.conversationId&&can('profile.conversation.read')&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} composer={singleLearningScope?composer:undefined} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryMode} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}/>}
  {memoryDraftTarget&&<MemoryDraftReview key={`${memoryDraftTarget.runId}:${memoryDraftTarget.operationId}`} target={memoryDraftTarget} onOpenMemory={target=>{setMemoryDraftTarget(null);openPersonalMemory({view:'memory',...target})}} onClose={()=>setMemoryDraftTarget(null)}/>}
  {state.quickPanelVoice&&<QuickPanelVoiceDraft key={state.quickPanelVoice.handoffId} handoff={state.quickPanelVoice} input={obj(state.voiceInput)} run={act}/>}

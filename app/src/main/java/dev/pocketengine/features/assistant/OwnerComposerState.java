@@ -178,10 +178,11 @@ public final class OwnerComposerState {
         if(paused)firstMessagePaused.add(key);else firstMessagePaused.remove(key);
         drafts.put(key,next);revision=nextRevision;return next;
     }
-    /** A restriction for the next accepted input of this original private conversation, not a conversation policy. */
-    public synchronized boolean oneMessageEligible(String key){
-        Draft d=drafts.get(key);return d!=null&&key.equals(activeKey)&&!d.conversationId.isEmpty()&&key.equals(conversationKey(d.conversationId));
+    /** The restriction belongs to one ordinary owner input, not to a task, a project or the conversation created later. */
+    private static boolean oneMessageTarget(Draft d){
+        return d!=null&&(d.conversationId.isEmpty()?d.key.startsWith("new:")&&uuid(d.key.substring(4)):d.key.equals(conversationKey(d.conversationId)));
     }
+    public synchronized boolean oneMessageEligible(String key){return activeKey.equals(key)&&oneMessageTarget(drafts.get(key));}
     public synchronized boolean oneMessageExcluded(String key){return oneMessageExcluded.contains(key);}
     public synchronized Draft setOneMessageExcluded(String key,long expected,boolean excluded)throws Exception {
         Draft prior=require(key,expected);
@@ -261,7 +262,7 @@ public final class OwnerComposerState {
             JSONArray restrictions=json.getJSONArray("oneMessageExcluded");
             if(restrictions.length()<1||restrictions.length()>drafts.length())throw new IllegalArgumentException("单条记忆限制无法核对");
             for(int i=0;i<restrictions.length();i++){Object raw=restrictions.get(i);Draft d=raw instanceof String?state.drafts.get(raw):null;
-                if(d==null||d.conversationId.isEmpty()||!d.key.equals(conversationKey(d.conversationId))||!state.oneMessageExcluded.add(d.key))throw new IllegalArgumentException("单条记忆限制不属于原私人对话");}
+                if(!oneMessageTarget(d)||!state.oneMessageExcluded.add(d.key))throw new IllegalArgumentException("单条记忆限制不属于原私人对话");}
         }
         if(!state.drafts.containsKey(state.activeKey)||isWorkKey(state.activeKey))throw new IllegalArgumentException("原活动对话草稿不存在");
         for(int i=0;i<pending.length();i++){JSONObject row=pending.getJSONObject(i);Pending p=new Pending(row.getString("clientId"),row.getString("draftKey"),integer(row,"draftRevision",1,Long.MAX_VALUE),row.getString("fingerprint"),row.getString("conversationId"),row.getString("mode"),row.getJSONObject("originalTarget"));Draft d=state.drafts.get(p.draftKey);if(d==null||!d.conversationId.equals(p.conversationId)||p.draftRevision>d.revision||state.pending.put(p.clientId,p)!=null)throw new IllegalArgumentException("待核对输入不属于原草稿版本");}
