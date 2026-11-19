@@ -34,7 +34,10 @@ public final class ProjectOwnerWorkflows {
     public JSONObject sourceForOwner(String project,String checkout)throws Exception {
         ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);
         if(!project.equals(row.getString("projectId"))||!ordinaryCheckout(row))throw new SecurityException("请选择此项目的普通私人副本");
-        JSONObject source=ProjectSources.describe(local.handle("export",new JSONObject().put("checkoutId",checkout)));source.remove("files");return source;
+        JSONObject snapshot=local.handle("export",new JSONObject().put("checkoutId",checkout)),source=ProjectSources.describe(snapshot);
+        JSONObject wrapper=ProjectAndroidPreflight.ownerWrapper(snapshot,source);source.remove("files");
+        if(wrapper!=null)source.put("androidGradleWrapper",wrapper);
+        return source;
     }
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
     private void requireOrdinaryFileOwner(String project,String checkout)throws Exception {

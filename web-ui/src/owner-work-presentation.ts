@@ -95,6 +95,8 @@ export function ownerWorkPresentation(value: unknown) {
     : needsAttention ? '核对管家汇报' : resultAvailable || reportMessageId ? '查看结果' : '查看详情';
   return {
     state, handlingLabel, actionLabel, reason, reportMessageId, resultAvailable, receiptReconciliation,
+    // A paused/unknown outcome or child recovery is not an explicit request to the owner.
+    ownerDecision: available ? ownerDecision : null,
     teams, teamActive, teamNeedsAttention, teamsUnavailable, waitingForChildren,
     conversationId: text(work.conversationId) || text(raw.conversationId),
     waitingForButler: available && !ownerDecision && !waitingForChildren && ['pending', 'running'].includes(state),

@@ -536,8 +536,11 @@ public final class AgentRunner {
                     recovery=RecoveryProjection.fromJournalWithRedaction(taskId,live.optJSONArray("operationResults"),config::containsSensitive);
                     if(!liveFeedback.equals(lastFeedback)){
                     stepRouting.ownerBoundary();
-                    if(!hasRecallFeedback(history,clean(liveFeedback,config)))history.put(new JSONObject().put("role","user").put("content","机主的新补充要求：\n"+clean(liveFeedback,config)).put("ownerRecallFeedback",true));
-                    recallIntent=!lastFeedback.isEmpty()&&liveFeedback.startsWith(lastFeedback+"\n")?liveFeedback.substring(lastFeedback.length()+1):liveFeedback;lastFeedback=liveFeedback;
+                    // A note was scoped to the preceding original pause. Its expiry is not a new empty owner message.
+                    if(!liveFeedback.isBlank()){
+                        if(!hasRecallFeedback(history,clean(liveFeedback,config)))history.put(new JSONObject().put("role","user").put("content","机主的新补充要求：\n"+clean(liveFeedback,config)).put("ownerRecallFeedback",true));
+                        recallIntent=!lastFeedback.isEmpty()&&liveFeedback.startsWith(lastFeedback+"\n")?liveFeedback.substring(lastFeedback.length()+1):liveFeedback;
+                    }lastFeedback=liveFeedback;
                 }}
                 // The restoration boundary was reclaimed before initial observation. Later polls
                 // accept only the original current-turn native steer until its next real boundary.
@@ -582,7 +585,7 @@ public final class AgentRunner {
                     }
                     nativePlanningReference=clean(meaning+currentPlanning,config);
                 }
-                boolean boundedToolCatalog=false;
+                boolean boundedToolCatalog=false, privatePreferencesProvided=false;
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&DeferredPhoneSession.adaptive(phone))addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
@@ -595,8 +598,10 @@ public final class AgentRunner {
                     JSONArray extra=prepared.getJSONArray("tools");java.util.Set<String> names=new java.util.HashSet<>();for(int i=0;i<tools.length();i++)names.add(tools.getJSONObject(i).getJSONObject("function").getString("name"));
                     for(int i=0;i<extra.length();i++){JSONObject tool=extra.getJSONObject(i);if(PhoneRouteSession.supports(tool.getJSONObject("function").getString("name"))||!names.add(tool.getJSONObject("function").getString("name")))throw new SecurityException("能力工具与原生手机工具名称冲突");tools.put(tool);}
                     JSONObject reference=prepared.optJSONObject("reference");if(reference==null)reference=new JSONObject();
-                    memoryDependency=dev.pocketengine.features.memory.TaskMemoryHistory.dependency(reference.optJSONObject("referenceValidation"));
-                    refreshReferenceHistory(history,reference.optJSONObject("referenceValidation"));
+                    JSONObject validation=reference.optJSONObject("referenceValidation");
+                    privatePreferencesProvided=dev.pocketengine.features.memory.TaskMemoryHistory.privatePreferencesProvided(validation);
+                    memoryDependency=dev.pocketengine.features.memory.TaskMemoryHistory.dependency(validation);
+                    refreshReferenceHistory(history,validation);
                     String context=clean(reference.optString("context"),config);
                     if(!context.isEmpty())nativeReference=context+(nativeReference.isEmpty()?"":"\n\n"+nativeReference);
                 }
@@ -633,7 +638,7 @@ public final class AgentRunner {
                 boolean nativeApprovedResponse=approvedCall!=null;
                 if(nativeApprovedResponse){response=approvedCall.take(history,control);approvedCall=null;}
                 else {
-                final RequestHistoryProjection materializedHistory=RequestHistoryProjection.prepare(requestProjection,nativeProvenance,config,control);
+                final RequestHistoryProjection materializedHistory=RequestHistoryProjection.prepare(requestProjection,nativeProvenance,config,control,privatePreferencesProvided);
                 requestHistory=materializedHistory.messages();
                 contextBudget.projected(nativeProvenance,requestHistory);
                 RunContextBudget.Projection projection;

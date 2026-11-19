@@ -48,7 +48,7 @@ public final class CompactionPlan {
         java.util.IdentityHashMap<JSONObject,Integer> rows=new java.util.IdentityHashMap<>();
         for(int i=0;i<liveHistory.length();i++){
             JSONObject actual=liveHistory.getJSONObject(i),stored=raw.getJSONObject(i);
-            if(!sameProtocolIdentity(actual,stored))throw new Unavailable("raw_projection_mismatch");rows.put(actual,i);
+            if(!sameProtocolIdentity(actual,stored,false))throw new Unavailable("raw_projection_mismatch");rows.put(actual,i);
         }
         List<Integer> result=new ArrayList<>();for(int i=0;i<nativeRequest.length();i++)result.add(rows.getOrDefault(nativeRequest.getJSONObject(i),-1));return result;
     }
@@ -91,7 +91,7 @@ public final class CompactionPlan {
         Set<Integer> seen=new HashSet<>();int previousIndex=-1;
         for(int i=0;i<sourceMap.size();i++){
             int index=sourceMap.get(i);if(index==-1)continue;
-            if(index<0||index>=raw.length()||index<=previousIndex||!seen.add(index)||!sameProtocolIdentity(raw.getJSONObject(index),visible.getJSONObject(i)))throw new Unavailable("raw_projection_mismatch");previousIndex=index;
+            if(index<0||index>=raw.length()||index<=previousIndex||!seen.add(index)||!sameProtocolIdentity(raw.getJSONObject(index),visible.getJSONObject(i),true))throw new Unavailable("raw_projection_mismatch");previousIndex=index;
         }
         if(seen.size()!=raw.length())throw new Unavailable("raw_projection_mismatch");
         boolean[] retain=new boolean[raw.length()];
@@ -109,7 +109,12 @@ public final class CompactionPlan {
                 end+=calls.length();boolean pinned=retain[i];
                 // The shared raw reader deliberately excludes derived-reference receipts. Keep
                 // that whole call/result batch verbatim instead of claiming a recoverable source.
-                for(int j=0;j<calls.length();j++)pinned|=TaskStoreMemoryReader.isDerivedReferenceTool(calls.getJSONObject(j).getJSONObject("function").optString("name"));
+                // A revocable preference receipt must never become a separately sent SUMMARY
+                // input, even if the owner turns it off between planning and that physical call.
+                for(int j=0;j<calls.length();j++){
+                    String name=calls.getJSONObject(j).getJSONObject("function").optString("name");
+                    pinned|=TaskStoreMemoryReader.isDerivedReferenceTool(name)||TaskMemoryHistory.isPrivatePreferenceTool(name);
+                }
                 for(int j=i+1;j<end;j++){pinned|=retain[j];if(unresolved(raw.getJSONObject(j).optString("content")))unsettledAt=Math.min(unsettledAt,i);}
                 if(pinned)for(int j=i;j<end;j++)retain[j]=true;
             }
@@ -234,16 +239,27 @@ public final class CompactionPlan {
                     ||value.has("unresolvedOperationId")||value.has("accepted")&&value.isNull("accepted");
         }catch(Exception unclassified){return true;}
     }
-    private static boolean sameProtocolIdentity(JSONObject a,JSONObject b)throws Exception{
+    private static boolean sameProtocolIdentity(JSONObject a,JSONObject b,boolean comparingWire)throws Exception{
         if(!a.optString("role").equals(b.optString("role"))||!a.optString("tool_call_id").equals(b.optString("tool_call_id")))return false;
         if(String.valueOf(a.opt("tool_calls")).equals(String.valueOf(b.opt("tool_calls"))))return true;
-        if(!"assistant".equals(a.optString("role"))||!Boolean.TRUE.equals(a.opt("memoryContextRetired")))return false;
-        // Only the exact native retirement projection may differ from the original calls.
-        // It retains call pairing while withholding stale argument/body carriers. A changed
+        boolean retired=Boolean.TRUE.equals(a.opt("memoryContextRetired"));
+        if(!"assistant".equals(a.optString("role"))||!retired&&!comparingWire)return false;
+        // Only exact native retirement / private-preference projections may differ in arguments.
+        // They retain call pairing while withholding stale argument/body carriers. A changed
         // provider call type, injected field, or any other projection remains a mismatch.
-        JSONArray calls=a.optJSONArray("tool_calls");for(int i=0;calls!=null&&i<calls.length();i++)if(!"function".equals(calls.getJSONObject(i).optString("type")))return false;
-        JSONObject retired=TaskMemoryHistory.wireMessages(new JSONArray().put(a)).getJSONObject(0);
-        return fingerprint(retired).equals(fingerprint(b));
+        boolean missingType=false;JSONArray calls=a.optJSONArray("tool_calls");
+        for(int i=0;calls!=null&&i<calls.length();i++){
+            JSONObject call=calls.getJSONObject(i);if(!call.has("type"))missingType=true;else if(!"function".equals(call.opt("type")))return false;
+        }
+        // Generic legacy retirement writes type=function; never accept that as proof of an
+        // originally unspecified type. Only the preference projection preserves an omission.
+        if(retired&&missingType)return false;
+        String expected=fingerprint(b);JSONArray original=new JSONArray().put(a);
+        String ordinary=fingerprint(TaskMemoryHistory.wireMessages(original).getJSONObject(0));
+        if(retired&&ordinary.equals(expected))return true;
+        if(!comparingWire)return false;
+        String withheld=fingerprint(TaskMemoryHistory.wireMessages(original,false).getJSONObject(0));
+        return !ordinary.equals(withheld)&&withheld.equals(expected);
     }
     private static boolean sameWireContent(JSONObject stored,JSONObject visible)throws Exception{
         JSONObject wire=dev.pocketengine.features.memory.TaskMemoryHistory.withoutOutputCarrier(stored);

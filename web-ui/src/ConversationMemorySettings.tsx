@@ -46,7 +46,7 @@ export function ConversationMemorySettings({conversationId,isOpen,onClose,onChan
     {pending&&!controls&&<ShimmerText>正在读取此对话设置…</ShimmerText>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
     {controls&&<StretchSwitch label="使用我的资料、偏好和记忆" description="关闭后，此对话不引用个人资料与记忆，也不自动整理记忆候选。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save(enabled);}}/>}
-    <p className="pw-muted">对话消息仍按正常方式保存。已发出的请求不能撤回；新设置在后续请求中生效。项目明确选用的资料保持原范围。</p>
+    <p className="pw-muted">关闭后，后续请求不再带上过去查询或修改默认偏好时读到的设置值。你自己写的消息仍会保留，也仍可用于对话。已经发出的请求不能撤回。明确选用的项目资料保持原范围。</p>
     {notice&&<p role="status">{notice}</p>}
     <div className="pw-action-row"><Button variant="ghost" disabled={pending} onClick={()=>{void load();}}>读取当前设置</Button><Button variant="ghost" disabled={pending} onClick={()=>{close();onManage();}}>管理我的记忆</Button></div>
   </SettingsDialog>;

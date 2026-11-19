@@ -4,6 +4,7 @@ import { Popover, PopoverTrigger } from './shell-library';
 import { IconChevronRight, IconMonitor, IconMore, IconPauseCircle, IconPlay, IconStop } from './icons';
 import { ProgressCircle } from './library';
 import { phoneRunIdentity } from './phone-start';
+import { isPrivateLocalPhone } from './PhonePauseInstruction';
 import { conversationInlineAttention } from './conversation-work';
 import { workCollectionPresentation } from './work-collection';
 import './phone-task-status.css';
@@ -41,6 +42,8 @@ export function PhoneTaskStatus({ task, can, onOpen, onControl }: Props) {
         <div className="pw-phone-activity-actions">
           {canPause && <Button variant="ghost" leadingIcon={IconPauseCircle} onClick={() => control('phone.pause')}>暂停任务</Button>}
           {canResume && <Button variant="ghost" leadingIcon={IconPlay} onClick={() => control('phone.resume')}>继续任务</Button>}
+          {canResume && can('tasks.open') && can('phone.pauseNote.read') && isPrivateLocalPhone(task) &&
+            <Button variant="ghost" onClick={() => { setMenuOpen(false); onOpen(); }}>打开原任务补充后继续</Button>}
           {can('tasks.open') && <Button variant="ghost" leadingIcon={IconMonitor} onClick={() => { setMenuOpen(false); onOpen(); }}>查看任务详情</Button>}
         </div>
       </Popover>

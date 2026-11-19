@@ -31,3 +31,14 @@
 源码级回读涵盖新流与原 Book 的 EOF→metadata→pause-revision commit 顺序、原 Local admission、v1 兼容、Skills 调用及未知回执。未编译、未执行程序、未测试、未安装依赖、未构建/签名/安装 APK。
 
 API 研究来源：[PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller)、[Session.commit](https://developer.android.com/reference/android/content/pm/PackageInstaller.Session#commit(android.content.IntentSender))、[SessionInfo](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionInfo)。它们证明平台提供接口，不证明本补丁实现了安装功能。
+
+## 2026-11-19：先找到本次构建后的文件，再单独收集
+
+以前 `project_list_files` / `project_search` 特意不进入根 `dist` 和 `build`，但 `project_collect_plan` 又必须收到完整文件名。即使同一 managed build 已有成功回执，带内容哈希的文件也可能只能猜，或被迫再次申请执行命令。本次不放开普通源码工具：同一收集能力可显式用 `listDirectory: "."` 列出实际存在的这两个输出根，再用返回的相对目录逐层读取名称与大小；下一页要带回同一目录的原 cursor。空结果只覆盖此范围，超过 20 MiB、隐藏、凭据、特殊文件及链接不列为候选。
+
+这一步沿原私有任务的 SQL 操作、成功构建回执、所选副本、源码版本、工具环境与构建顺序核对，不读输出正文、不计算文件 SHA、不生成计划、不固定附件。目录中现存的文件不能证明由这次构建产生。另传明确的 `path` 才创建原有单文件审阅计划；最终收集仍受原 prepared 与主人批准约束。Termux 接口不变。没有增加远程执行、离线推理或通用 Android APK 构建能力。
+
+三个源码参照（仅比较机制，不复制代码或继承权限）：
+- [DSH-Go 引擎安装](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/runtime/RuntimeInstaller.kt#L59-L106)从 APK 资产按清单安装，先看可用空间、比对可用的摘要再解包；[工作区](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/session/workspace_files.dart#L21-L52)区分已经交付的会话成果与当前目录。PocketWorld 不把候选文件名当成交付物，也不照搬其可访问工作区外文件的边界。
+- [AndCode 固定工作区克隆](https://github.com/yuga-hashimoto/and-code/blob/244a7e098951e75110fbd9f132b19db3646dbaa0/app/src/main/java/com/yugahashimoto/andcode/runtime/local/GitCloneRepository.kt#L25-L96)、[冲突检查后原子保存](https://github.com/yuga-hashimoto/and-code/blob/244a7e098951e75110fbd9f132b19db3646dbaa0/app/src/main/java/com/yugahashimoto/andcode/runtime/local/WorkspaceFileWriter.kt#L33-L49)以及[从实际后端列目录](https://github.com/yuga-hashimoto/and-code/blob/244a7e098951e75110fbd9f132b19db3646dbaa0/app/src/main/java/com/yugahashimoto/andcode/feature/workspace/WorkspaceExplorerViewModel.kt#L138-L164)：实际目录发现和选定文件操作各有独立证据，不从命名惯例推断存在。
+- [Operit 文件浏览](https://github.com/AAswordman/Operit/blob/7a39941bad80209973c535046a18195c5da9e647/app/src/main/java/com/ai/assistance/operit/ui/features/chat/webview/workspace/FileManager.kt#L200-L222)从当前环境的 list_files 取实际类型/大小；[工作区](https://github.com/AAswordman/Operit/blob/7a39941bad80209973c535046a18195c5da9e647/app/src/main/java/com/ai/assistance/operit/ui/features/chat/webview/workspace/WorkspaceManager.kt#L452-L475)另行写入，命令执行（774 行）和导出（1009 行）也独立。本次只借鉴区分“观察”和“操作”，不赋予终端或更大的目录权限。

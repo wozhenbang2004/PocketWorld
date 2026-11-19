@@ -1804,17 +1804,36 @@ public final class EngineApplication extends Application implements dev.pocketen
             finally{ownerActionActive=false;}
         }
     }
+    public JSONObject reviewPrivatePhonePauseNote(String id,String run,int epoch)throws Exception {
+        RunControl original=originalPhoneControl(id,run,epoch,false);
+        if(!original.phoneSurfaceActive())throw new SecurityException("请先回原任务交还手机执行");
+        return tasks.reviewOrSavePrivatePhonePauseNote(id,run,epoch,original,original.pauseRevision(),-1,null);
+    }
+    /** Never enter continuePhoneTask's cold-start/new-attempt branch. The note is NOT an authority grant. */
+    public JSONObject continuePrivatePhonePauseWithNote(String id,String run,int epoch,long pause,long scope,String note,java.util.function.BooleanSupplier ownerWindow)throws Exception {
+        if(pause<1||scope<1||note==null||note.trim().isEmpty()||ownerWindow==null)throw new IllegalArgumentException("请先核对这次暂停和补充");
+        return resumeOriginalPhoneRun(id,run,epoch,note,pause,scope,ownerWindow);
+    }
     private JSONObject resumeOriginalPhoneRun(String id,String run,int epoch,String feedback)throws Exception {
+        return resumeOriginalPhoneRun(id,run,epoch,feedback,-1,-1,null);
+    }
+    private JSONObject resumeOriginalPhoneRun(String id,String run,int epoch,String feedback,long reviewedPause,long scope,java.util.function.BooleanSupplier ownerWindow)throws Exception {
         RunControl original=originalPhoneControl(id,run,epoch,false);long pause=original.pauseRevision();PhonePort port;
         synchronized(this){port=control(id)==original?phonePort(id):null;if(ownerActionActive)throw new IllegalStateException("请等待原人工动作回执");}
         if(!original.phoneSurfaceActive())throw new SecurityException("请在原网页工作区交还，未恢复手机输入");
         if(port instanceof dev.pocketengine.phone.display.BackgroundPhonePort&&((dev.pocketengine.phone.display.BackgroundPhonePort)port).ownerHandoffActive())throw new SecurityException("请先将原应用交还副屏");
-        original.check();tasks.requireOriginalPhoneResume(id,run,epoch,original,pause,feedback);
+        original.check();
+        if(ownerWindow!=null){
+            if(!ownerWindow.getAsBoolean()||pause!=reviewedPause)throw new SecurityException("原任务窗口或暂停次数已变化，没有恢复其他执行");
+            tasks.reviewOrSavePrivatePhonePauseNote(id,run,epoch,original,pause,scope,feedback);
+            if(!ownerWindow.getAsBoolean())throw new SecurityException("本次补充已记录；窗口已离开，未从此处继续");
+        }else tasks.requireOriginalPhoneResume(id,run,epoch,original,pause,feedback);
         original.resumeAtPauseRevision(pause);
         try{tasks.recordOriginalPhoneResumed(id,run,epoch,original,pause);}catch(Exception changed){original.pause();throw changed;}
         // A delayed wake cannot select the same task's replacement run.
         startService(new Intent(this,PhoneRunService.class).setAction(PhoneRunService.CONTINUE).putExtra("taskId",id).putExtra("phoneRunId",run).putExtra("phoneEpoch",epoch));
-        pushTask(id);return json("taskId",id,"runId",run,"epoch",epoch,"controlRequested",true,"cleanupComplete",false,"budgetIncreased",false,"continuedOriginalRun",true);
+        pushTask(id);JSONObject result=json("taskId",id,"runId",run,"epoch",epoch,"controlRequested",true,"cleanupComplete",false,"budgetIncreased",false,"continuedOriginalRun",true);
+        return ownerWindow==null?result:result.put("pauseRevision",pause).put("scopeRevision",scope).put("noteRecorded",true).put("modelConsumptionConfirmed",false);
     }
     /** Capture native child owners before cancellation, never while holding the SQL monitor. */
     private FeatureHost.RelatedTaskCancellation captureOriginalRelatedStops(String id,String run,int epoch)throws Exception{

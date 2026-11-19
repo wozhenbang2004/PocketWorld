@@ -10937,6 +10937,35 @@ public final class TaskStore {
         if(scope!=null&&(scope.getInt("toolsUsed")>=scope.getInt("toolLimit")||scope.getInt("modelCallsUsed")>=scope.getInt("modelCallLimit")))throw new SecurityException("原累计预算已用尽；继续不会自动增加额度");
         if(feedback!=null&&!feedback.isBlank())feedback(id,feedback.trim());
     }
+    /** One private local pause, not permission to create an attempt or change its apps or budget.
+     * The private note is for this run/epoch/pause only: never append it to task-wide feedback inherited by future attempts. */
+    public synchronized JSONObject reviewOrSavePrivatePhonePauseNote(String id,String run,int epoch,RunControl original,long pause,long expectedScope,String note)throws Exception {
+        boolean saving=note!=null;
+        if(saving)db.beginTransaction();
+        try{
+            requireExecutionEnabled();
+            JSONObject t=originalPhoneAttempt(id,run,epoch,true);
+            if(!"owner".equals(t.optString("actorId"))||!"private".equals(t.optString("spaceId"))||!t.isNull("origin")||!t.isNull("parentTaskId")||
+                !"paused".equals(t.optString("status"))||!Set.of("main_screen","background").contains(t.optString("executionMode"))||!t.isNull("ownerPhoneControl")||!t.isNull("ownerDeviceWork"))throw new SecurityException("仅可补充本人暂停的本机手机任务");
+            JSONObject scope=t.getJSONObject("executionScope");long scopeRevision=TaskExecutionScope.exactLong(scope,"revision",1,Long.MAX_VALUE);
+            if(saving&&expectedScope!=scopeRevision)throw new SecurityException("原任务授权范围有变化，请重新核对本次暂停");
+            JSONArray approvals=t.optJSONArray("approvals");
+            for(int i=0;approvals!=null&&i<approvals.length();i++) {JSONObject a=approvals.getJSONObject(i);
+                if(run.equals(a.optString("runId"))&&"pending".equals(a.optString("state",a.optString("status")))&&a.optLong("expiresAt",Long.MAX_VALUE)>System.currentTimeMillis())throw new SecurityException("请先在原任务处理待审授权");}
+            requireOriginalPhoneResume(id,run,epoch,original,pause,"");
+            JSONObject prior=t.optJSONObject("_localPhonePauseInput");boolean recorded=prior!=null&&run.equals(prior.optString("runId"))&&epoch==prior.optInt("epoch",-1)&&pause==prior.optLong("pauseRevision",-1);
+            if(saving) {
+                String text=note.trim();if(text.isEmpty()||text.length()>8000||text.indexOf(0)>=0)throw new IllegalArgumentException("补充须为 1 至 8000 字的文字");
+                String digest=capabilityFingerprint(new JSONObject().put("note",text));
+                if(recorded&&!digest.equals(prior.getString("digest")))throw new SecurityException("这次暂停已有另一份补充，不覆盖；请先核对原任务");
+                if(!recorded){t.put("_localPhonePauseInput",new JSONObject().put("runId",run).put("epoch",epoch).put("pauseRevision",pause)
+                        .put("scopeRevision",scopeRevision).put("digest",digest).put("text",text));write(t);}
+                db.setTransactionSuccessful();
+            }
+            return new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("pauseRevision",pause)
+                    .put("scopeRevision",scopeRevision).put("noteRecorded",recorded||saving);
+        }finally{if(saving)db.endTransaction();}
+    }
     public synchronized void recordOriginalPhoneResumed(String id,String run,int epoch,RunControl original,long pause)throws Exception {
         db.beginTransaction();try{
             JSONObject task=originalPhoneAttempt(id,run,epoch,true);
@@ -12656,7 +12685,13 @@ public final class TaskStore {
         // Restore needs the original operation ledger, not a display copy with all audit
         // events and screenshot maintenance. Keep the native run/unknown fences above
         // the ledger read; raw checkpoint history and its fingerprints stay unchanged.
-        public JSONObject restore()throws Exception{synchronized(TaskStore.this){journalFence(reviewedClaim,id,runId,epoch,control,false);if(hasUnresolved(id)&&(control==null||!control.hasHostRun()||!control.matchesHostRun(id,runId,epoch)||!onlyOwnedProjectPending(id,runId,epoch,"")))throw new IllegalStateException("动作结果仍待核对，不能重放");JSONObject restored=TaskStore.this.checkpoint(runId).put("feedback",required(id).optString("feedback")).put("operationResults",TaskOperationProjection.forTask(db,id));ExecutionPlanning planning=planning();if(planning!=null)restored.put("executionPlanningControlled",true).put("executionPlanningScope",new JSONObject(required(id).getJSONObject("executionScope").toString()));return restored;}}
+        public JSONObject restore()throws Exception{synchronized(TaskStore.this){journalFence(reviewedClaim,id,runId,epoch,control,false);if(hasUnresolved(id)&&(control==null||!control.hasHostRun()||!control.matchesHostRun(id,runId,epoch)||!onlyOwnedProjectPending(id,runId,epoch,"")))throw new IllegalStateException("动作结果仍待核对，不能重放");JSONObject source=required(id);JSONObject restored=TaskStore.this.checkpoint(runId).put("feedback",source.optString("feedback")).put("operationResults",TaskOperationProjection.forTask(db,id));
+            JSONObject note=source.optJSONObject("_localPhonePauseInput"),scope=source.optJSONObject("executionScope");
+            if(note!=null&&scope!=null&&control!=null&&control.matchesHostRun(id,runId,epoch)&&!control.isPaused()&&!control.isCancelled()&&control.phoneSurfaceActive()&&
+                    runId.equals(note.optString("runId"))&&epoch==note.optInt("epoch",-1)&&control.pauseRevision()==note.optLong("pauseRevision",-1)&&scope.optLong("revision",-1)==note.optLong("scopeRevision",-2))
+                // Both afterPause (before a new observation) and the next model turn consume this scoped projection.
+                restored.put("feedback",(source.optString("feedback").isEmpty()?"":source.getString("feedback")+"\n")+"本次手机暂停补充（暂停版本 "+note.getLong("pauseRevision")+"）：\n"+note.getString("text"));
+            ExecutionPlanning planning=planning();if(planning!=null)restored.put("executionPlanningControlled",true).put("executionPlanningScope",new JSONObject(required(id).getJSONObject("executionScope").toString()));return restored;}}
         @Override public boolean hasNativeProjectRunningAck(String operationId,JSONObject deliveredReceipt)throws Exception {
             if(control==null||!control.hasHostRun()||!control.matchesHostRun(id,runId,epoch))return false;control.check();synchronized(TaskStore.this){journalFence(reviewedClaim,id,runId,epoch,null,false);JSONObject row=ownedServiceRow(id,runId,epoch,operationId),args=row.getJSONObject("arguments"),plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(args.getJSONObject("plan")),backend=row.getJSONObject("receipt").getJSONObject("executionReceipt"),deliveredBinding=deliveredReceipt.optJSONObject("binding");
                 if(deliveredBinding==null||!id.equals(deliveredBinding.optString("taskId"))||!runId.equals(deliveredBinding.optString("runId"))||epoch!=deliveredBinding.optInt("coordinatorEpoch")||!operationId.equals(deliveredBinding.optString("operationId")))return false;
@@ -15245,7 +15280,7 @@ public final class TaskStore {
     public synchronized JSONObject getForUi(String id,boolean image)throws Exception{
         JSONObject result;boolean limited;
         try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=262144 THEN document END,ui_header,length(CAST(document AS BLOB)) FROM tasks WHERE task_id=?",new String[]{id})){
-            if(!row.moveToFirst())return null;limited=row.isNull(0);result=new JSONObject(row.getString(limited?1:0));
+            if(!row.moveToFirst())return null;limited=row.isNull(0);result=new JSONObject(row.getString(limited?1:0));result.remove("_localPhonePauseInput");
             if(!limited&&"needs_confirmation".equals(result.optString("status")))result.put("resultReviewDigest",resultReviewDigest(result));
             result.put("taskCoreBytes",row.getLong(2)).put("taskCoreReadLimited",limited);
         }
@@ -15691,7 +15726,7 @@ public final class TaskStore {
         // Never delete an old file while a caller can still roll its replacement pointer back.
         String issue="";if(!db.inTransaction())try{maintainScreenshot(t,System.currentTimeMillis(),image);}catch(Exception unavailable){issue="unreadable";}
         JSONObject result=new JSONObject(t.toString());if(OwnerWorkTask.isOwnerWork(t))result.put("taskId",t.getString("id")).put("runId",t.optString("runId")).put("epoch",t.optInt("coordinatorEpoch")).put("controls",checkedOwnerControls==null?ownerWorkControls(t):new JSONObject(checkedOwnerControls.toString()));if("needs_confirmation".equals(t.optString("status")))result.put("resultReviewDigest",resultReviewDigest(t));
-        projectOwnerWorkPreparationHeader(t,result);result.remove("ownerWorkPreparations");
+        projectOwnerWorkPreparationHeader(t,result);result.remove("ownerWorkPreparations");result.remove("_localPhonePauseInput");
         projectResultImageIdentity(t,result);JSONObject evidence=result.optJSONObject("evidence");if(evidence==null)return result;
         evidence.remove("imageDataUrl");JSONObject record=evidence.optJSONObject("screenshot");
         if(record==null&&evidence.optString("imageFile").equals(t.getString("id")+".jpg")){evidence.put("screenshot",new JSONObject().put("imageId","legacy:"+t.getString("id")).put("state",issue.isEmpty()?"migration_pending":"migration_unavailable").put("encrypted",false).put("legacyRetained",true).put("expiresAt",0L));return result;}

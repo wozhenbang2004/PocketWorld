@@ -12,7 +12,7 @@ internal object PocketWebState {
     private val hidden = setOf(
         "apikey", "password", "passphrase", "privatekey", "clientsecret", "accesstoken",
         "refreshtoken", "idtoken", "bearer", "bearertoken", "authorization", "secret",
-        "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl"
+        "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput"
     )
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
 

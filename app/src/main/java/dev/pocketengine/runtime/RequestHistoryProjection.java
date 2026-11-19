@@ -15,21 +15,25 @@ final class RequestHistoryProjection {
     private final AgentRunner.RequestProjection source;
     private final JSONArray provenance;
     private final JSONArray messages;
+    // Rematerialize the same view for equality; the native capability port still
+    // rechecks live admission before each physical MAIN request, including retries.
+    private final boolean privatePreferencesProvided;
 
     private RequestHistoryProjection(AgentRunner.RequestProjection source, JSONArray provenance,
-                                     JSONArray messages) {
+                                     JSONArray messages, boolean privatePreferencesProvided) {
         this.source = source;
         this.provenance = provenance;
         this.messages = messages;
+        this.privatePreferencesProvided = privatePreferencesProvided;
     }
 
     static RequestHistoryProjection prepare(AgentRunner.RequestProjection source, JSONArray history,
-                                            ModelConfig config, RunControl control) throws Exception {
+                                            ModelConfig config, RunControl control, boolean privatePreferencesProvided) throws Exception {
         JSONArray materialized = history;
         if (source != null) materialized = source.project(history, config, control);
         else if (hasContentReferences(history))
             throw new IllegalStateException("附件或原文请求投影未安装，不能把引用冒充真实内容");
-        return new RequestHistoryProjection(source, history, TaskMemoryHistory.wireMessages(materialized));
+        return new RequestHistoryProjection(source, history, TaskMemoryHistory.wireMessages(materialized, privatePreferencesProvided), privatePreferencesProvided);
     }
 
     JSONArray provenance() { return provenance; }
@@ -38,7 +42,7 @@ final class RequestHistoryProjection {
     /** Re-materialize, never reuse an earlier authorization or a cached comparison result. */
     boolean current(ModelConfig config, RunControl control) throws Exception {
         if (source == null) return true;
-        JSONArray current = TaskMemoryHistory.wireMessages(source.project(provenance, config, control));
+        JSONArray current = TaskMemoryHistory.wireMessages(source.project(provenance, config, control), privatePreferencesProvided);
         return CompactionPlan.fingerprint(messages).equals(CompactionPlan.fingerprint(current));
     }
 

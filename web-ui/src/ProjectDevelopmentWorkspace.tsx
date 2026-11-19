@@ -25,6 +25,25 @@ const ownerWindow = () => { const view = bridge.getState().view as Data; return 
 const unresolved = (value: Data | null) => !!value && ['pending', 'unknown', 'unconfirmed'].includes(value.status);
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : String(failure);
 
+/** Read-only preparation evidence, never a claim that the selected phone can produce an APK. */
+function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: Data | undefined }) {
+  const observed = new Set(rows(runtime?.tools).filter(tool => tool.probeVerified === true || tool.hashVerified === true).map(tool => tool.name));
+  const missing = ['java', 'javac', 'gradle'].filter(name => !observed.has(name));
+  let pin = '声明的摘要不在本次 Gradle 8.9 对照范围。';
+  if (wrapper.state === 'invalid_properties' || wrapper.state === 'unreadable_properties') pin = '副本中的 Wrapper 配置无法读取。';
+  else if (wrapper.state === 'properties_too_large') pin = 'Wrapper 配置超过本次读取范围，未解析其声明。';
+  else if (wrapper.distributionPinState === 'not_declared') pin = '这个副本没有声明分发包 SHA-256。';
+  else if (wrapper.distributionPinState === 'invalid_format') pin = '分发包 SHA-256 格式无效。';
+  else if (wrapper.distributionPinState === 'conflicts_with_official_declaration') pin = '地址声明的版本或包型与已知官方摘要不一致。';
+  else if (wrapper.distributionPinState === 'matches_published_reference') pin = `项目声明与 Gradle 8.9 ${wrapper.pinReferenceKind === 'all' ? '完整版' : '二进制版'}官方 SHA-256 相同。`;
+  return <dl className="pw-facts" aria-label="Android 构建准备">
+    <div><dt>项目内 Wrapper JAR</dt><dd>{wrapper.wrapperJarVerified === true ? '副本内文件的字节摘要与 Gradle 8.9 官方 JAR 一致。' : wrapper.wrapperJarState === 'not_in_snapshot' ? '这个副本没有标准路径的 Wrapper JAR。' : '文件存在，未命中 Gradle 8.9 基准；不代表文件损坏。'}</dd></div>
+    <div><dt>分发包声明</dt><dd>{pin}{wrapper.distribution === 'unrecognized_or_dynamic_url_not_exposed' && ' 下载地址未核验。'}</dd></div>
+    <div><dt>本机 Gradle 分发包</dt><dd>这次没有读取或下载 ZIP，不能据此认定已安装。</dd></div>
+    <div><dt>手机编译工具</dt><dd>{missing.length ? `所选环境未观察到已登记的 ${missing.join('、')}。` : '已观察到 Java 和 Gradle 工具名，版本兼容性未核验。'} Android SDK 与 ARM64 构建工具也未核验。</dd></div>
+  </dl>;
+}
+
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
 export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
@@ -178,6 +197,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     setSubmission(marker); setReview(null); activeReview.current = null;
     void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, receipt => applySubmission(receipt, marker));
   };
+  const androidWrapper = source?.projectId === projectId && source.checkoutId === checkout && source.androidGradleWrapper?.sourceDigest === source.sourceDigest ? source.androidGradleWrapper : null;
   return <section hidden={!active} className="pw-project-development pw-local-workspace pw-settings-section" aria-label="使用默认模型开发项目">
     <header className="pw-development-intro"><h3>让模型接手开发</h3><p>在私人副本中工作，结果由你审阅后导回项目。</p></header>
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
@@ -212,11 +232,11 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
       </div>
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !!review || filesOpen || !checkout || !can('projects.development.files.open')} onClick={() => setFilesOpen(true)}>编辑这份私人副本的文件</Button></div>
       {view.model?.configured !== true && <p className="pw-local-inline-notice">需要先连接默认模型。项目与已保存草稿保留。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
-      <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={view.runtime?.canExecute === true ? '这台手机的基础运行条件已具备' : '可以先讨论或编辑，运行命令前需准备工具'}>
+      <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : view.runtime?.canExecute === true ? '这台手机的基础运行条件已具备' : '可以先讨论或编辑，运行命令前需准备工具'}>
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
-        <p>Web / Node.js / Python 的安装、构建与启动仍需核对具体命令。基础工具不包含 Android SDK、JDK 或 Gradle，不代表所有项目都能运行。</p>
+        {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>Web / Node.js / Python 的安装、构建与启动仍需核对具体命令。基础工具不包含 Android SDK、JDK 或 Gradle，不代表所有项目都能运行。</p>}
         <p>模型调用需要相应网络；已有文件和副本不会因离线而删除。退出页面不等于停止任务，重开请查看原任务。</p>
-        <Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onPrepareTools}>查看工具准备</Button>
+        <Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onPrepareTools}>{androidWrapper ? '查看手机基础工具（不安装 SDK）' : '查看工具准备'}</Button>
         {source && <dl className="pw-facts"><div><dt>原项目</dt><dd>{projectId}</dd></div><div><dt>私人副本</dt><dd>{checkout}</dd></div><div><dt>已读取版本</dt><dd>{source.sourceDigest}</dd></div></dl>}
       </AccordionItem></Accordion>
     </>}

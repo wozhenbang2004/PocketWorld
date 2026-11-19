@@ -3201,6 +3201,26 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         } } catch (error: Exception) { state = state.copy(error = message(error)); completed?.invoke(null, message(error)) }
     }
+    /** This route can only resume the already-live original pause. Unlike a generic continuation it cannot start a replacement attempt. */
+    internal fun privatePhonePauseNote(task: UiTask, pause: Long, scope: Long, note: String?, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val id = task.id; val run = task.raw.getString("runId"); val epoch = task.raw.getInt("coordinatorEpoch"); val window = webWindowTicket()
+        fun valid() = !closed && webPrivateOwnerVisible() && webWindowTicket() == window && current()
+        try { controls.execute {
+            val result = runCatching {
+                check(valid()) { "原手机任务窗口已变化" }
+                if (note == null) app.reviewPrivatePhonePauseNote(id, run, epoch)
+                else app.continuePrivatePhonePauseWithNote(id, run, epoch, pause, scope, note, ::valid)
+            }
+            main.post {
+                if (!valid()) done(null, "原任务窗口已变化，请核对原记录；没有自动重发补充")
+                else result.fold({ receipt ->
+                    done(receipt, null)
+                    if (note != null && receipt.optBoolean("continuedOriginalRun") && task.executionMode == "main_screen") moveOriginalPhoneToBackground(receipt)
+                }, { done(null, message(it)) })
+                if (!closed && note != null) getTask(id)
+            }
+        } } catch (failure: Exception) { done(null, message(failure)) }
+    }
     private fun moveOriginalPhoneToBackground(receipt: JSONObject) {
         val id = receipt.optString("taskId"); val run = receipt.optString("runId"); val epoch = receipt.optInt("epoch", -1)
         if (id.isBlank() || run.isBlank() || epoch < 1) return

@@ -1,0 +1,8 @@
+.pw-project-git-body { display: grid; gap: 12px; min-width: 0; }
+.pw-project-git-body :is(h3,p,dl,dd) { margin: 0; overflow-wrap: anywhere; }
+.pw-project-git-body dl { display: grid; gap: 8px; }
+.pw-project-git-body dl div { display: grid; gap: 2px; }
+.pw-project-git-body dt { color: var(--pw-muted); font-size: .85em; }
+.pw-project-git-body :is(dd,.pw-project-git-address) { font-variant-numeric: tabular-nums; }
+.pw-project-library-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.pw-project-empty .pw-project-library-actions { justify-content: flex-start; }

@@ -1,0 +1,87 @@
+import { useEffect, useRef, useState } from 'react';
+import { Button, TextAreaField } from './forms-library';
+import { IconEdit, IconRefresh } from './icons';
+import { bridge } from './bridge';
+import { phoneRunIdentity } from './phone-start';
+
+type Row = Record<string, any>;
+type Original = { taskId: string; runId: string; epoch: number };
+type Pause = Original & { pauseRevision: number; scopeRevision: number };
+type Review = Pause & { reviewHandle: string; noteRecorded: boolean };
+type Draft = { target: Original; pause?: Pause; text: string };
+const same = (a?: Original | null, b?: Original | null) => !!a && !!b && a.taskId === b.taskId && a.runId === b.runId && a.epoch === b.epoch;
+const samePause = (a: Pause, b: Pause) => same(a,b) && a.pauseRevision === b.pauseRevision && a.scopeRevision === b.scopeRevision;
+export function isPrivateLocalPhone(task: Row) {
+  const row=task.raw;
+  return !!row && row.id===task.id && row.kind==='phone' && row.actorId==='owner' && row.spaceId==='private' &&
+    row.origin==null && row.parentTaskId==null && row.ownerPhoneControl==null && row.ownerDeviceWork==null &&
+    ['main_screen','background'].includes(task.executionMode || row.executionMode) && !!phoneRunIdentity(task);
+}
+
+/** Only the mounted private task holds its unsent draft. Text does not enter the original run until the explicit final click. */
+export function PhonePauseInstruction({ task, visible, run }: {task:Row;visible:boolean;run:(action:string,args:Row)=>Promise<any>}) {
+  const id=phoneRunIdentity(task), [draft,setDraft]=useState<Draft|null>(null), [review,setReview]=useState<Review|null>(null);
+  const [busy,setBusy]=useState(false), [error,setError]=useState(''), [notice,setNotice]=useState(''), [expanded,setExpanded]=useState(false);
+  const life=useRef(true), flight=useRef(false), ticket=useRef(0), info=useRef({id,visible,status:task.status}); info.current={id,visible,status:task.status};
+  const input=useRef<Draft|null>(draft);input.current=draft;
+  useEffect(()=>{life.current=true;return()=>{life.current=false;ticket.current++}},[]);
+  useEffect(()=>{
+    const lose=()=>{ticket.current++;flight.current=false;setBusy(false);setReview(null)};
+    if(!visible)lose();
+    const hide=()=>{if(document.hidden)lose()};
+    document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide);
+  },[visible]);
+  const origin=(target:Original)=>life.current && info.current.visible && !document.hidden && same(info.current.id,target);
+  const paused=task.status==='paused', draftElsewhere=!!draft && !same(draft.target,id);
+  const ready=!!review && !!draft && !!draft.pause && samePause(review,draft.pause) && !review.noteRecorded && same(review,id) && paused;
+  const read=async()=>{
+    if(!id || flight.current || !origin(id) || !paused || draftElsewhere)return;
+    const original=id, serial=++ticket.current, epoch=bridge.getDocumentEpoch();
+    flight.current=true;setBusy(true);setExpanded(true);setReview(null);setError('');setNotice('');
+    if(!input.current){const next={target:original,text:''};input.current=next;setDraft(next)}
+    const accepts=()=>serial===ticket.current && origin(original) && info.current.status==='paused' && bridge.getDocumentEpoch()===epoch;
+    try {
+      const r=await run('phone.pauseNote.read',original);
+      if(!accepts())return;
+      if(!same(r,original)||!r.reviewHandle||!Number.isSafeInteger(r.pauseRevision)||r.pauseRevision<1||!Number.isSafeInteger(r.scopeRevision)||r.scopeRevision<1||typeof r.noteRecorded!=='boolean')throw Error('未取得这次暂停和原授权范围的完整记录。');
+      const old=input.current;
+      if(!old||!same(old.target,original))return;
+      if(old.pause&&!samePause(old.pause,r)&&old.text.trim())throw Error('暂停或授权范围已变化。原稿还在这里，没有转交给下一次执行。');
+      const next={...old,pause:{...original,pauseRevision:r.pauseRevision,scopeRevision:r.scopeRevision}};
+      input.current=next;setDraft(next);setReview(r);
+      if(r.noteRecorded)setNotice('这次暂停已记录过补充，不会再次添加。可在原任务核对状态，或使用普通继续。');
+    }catch(failure){if(accepts())setError(failure instanceof Error?failure.message:'未取得原暂停，草稿仍在。')}
+    finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
+  };
+  const send=async()=>{
+    const original=review, pending=input.current, note=pending?.text.trim()||'';
+    if(!original||!pending||!pending.pause||!samePause(original,pending.pause)||!origin(original)||info.current.status!=='paused'||!ready||flight.current||!note||note.length>8000)return;
+    const serial=++ticket.current, epoch=bridge.getDocumentEpoch();flight.current=true;setBusy(true);setReview(null);setError('');setNotice('');
+    const accepts=()=>serial===ticket.current && origin(original) && bridge.getDocumentEpoch()===epoch;
+    try {
+      const r=await run('phone.pauseNote.continue',{...pending.target,reviewHandle:original.reviewHandle,confirmed:true,note});
+      if(!accepts())return;
+      if(!samePause(original,r)||r.noteRecorded!==true||r.continuedOriginalRun!==true||r.budgetIncreased!==false||r.modelConsumptionConfirmed!==false)throw Error('没有取得这次补充和原执行的完整回执。');
+      input.current=null;setDraft(null);setExpanded(false);
+      setNotice('补充已记入，原执行已恢复。模型是否已读到，要等下一轮；这不是任务完成回执。');
+    }catch(failure){if(accepts())setError((failure instanceof Error?failure.message:'补充或恢复结果待核对')+'。原稿保留；请先核对这次暂停，不要重复提交。')}
+    finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
+  };
+  const discard=()=>{if(busy)return;input.current=null;setDraft(null);setReview(null);setError('');setNotice('');setExpanded(false)};
+  if(!id||!isPrivateLocalPhone(task)||(!paused&&!draft&&!notice))return null;
+  return <section className="pw-work-supplement" aria-label="本次本机任务补充">
+    {!expanded?<>{paused&&<Button variant="secondary" leadingIcon={IconEdit} disabled={!visible||busy} onClick={()=>{setExpanded(true);if(!draftElsewhere)void read()}}>{draft?.text?'打开本次补充草稿':'补充后继续…'}</Button>}{!paused&&draft&&<Button variant="ghost" onClick={()=>setExpanded(true)}>查看未确认的补充草稿</Button>}</>:<>
+      <h4>补充后继续</h4>
+      <p className="pw-field-hint">只给这次已暂停的本机任务及其模型。本来的可用应用、权限、额度和截止时间不变。写字不会恢复任务。</p>
+      <TextAreaField label="给本次执行补充什么？" value={draft?.text||''} onChange={value=>{const old=input.current;if(!old||busy)return;const next={...old,text:value};input.current=next;setDraft(next)}} maxLength={8000} rows={3} showCount isDisabled={busy||draftElsewhere||!paused||!draft?.pause}/>
+      {(draftElsewhere||!paused)&&<p role="status">原执行或暂停状态已变化，草稿没有转交给新执行。</p>}
+      <div className="pw-action-row">
+        {ready&&<Button variant="primary" disabled={busy||!visible||!draft?.text.trim()} onClick={()=>void send()}>提交补充并继续原执行</Button>}
+        {!ready&&paused&&!draftElsewhere&&<Button variant="secondary" leadingIcon={IconRefresh} disabled={busy||!visible} onClick={()=>void read()}>核对这次暂停</Button>}
+        <Button variant="ghost" disabled={busy} onClick={()=>setExpanded(false)}>收起</Button>
+        {draft&&<Button variant="ghost" disabled={busy} onClick={discard}>舍弃本页草稿</Button>}
+      </div>
+    </>}
+    {busy&&<p role="status">正在等原任务回执…</p>}{error&&<p className="pw-error" role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
+  </section>;
+}

@@ -80,3 +80,6 @@
 @media (prefers-reduced-motion: reduce) {
   .pw-butler-scroll { scroll-behavior: auto; }
 }
+
+.pw-butler-scope { margin: 0 0 4px; color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
+.pw-butler-recent-heading { margin: 16px 0 4px; color: var(--pw-copy); font: 500 14px/22px var(--pw-font); }

@@ -20,9 +20,10 @@ const targetStateLabels: Record<string, string> = { queued: '等待执行', prep
 const contractOf = (value: Data | null) => value?.contract && typeof value.contract.goal === 'string' && ['constraints', 'deliverable', 'completionCriteria'].every(key => value.contract[key] === undefined || typeof value.contract[key] === 'string') ? value.contract as { goal: string; constraints?: string; deliverable?: string; completionCriteria?: string } : undefined;
 
 /** The retained ConversationWork rows, backed by the durable proposal index. */
-export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, representedTaskIds, active, refreshKey, can, run, onOpen, onPresenceChange }: Shared & {
+export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, representedTaskIds, representedHomeRuns, active, refreshKey, can, run, onOpen, onPresenceChange }: Shared & {
   conversationId?: string; sourceTaskId?: string; active: boolean; refreshKey: string; onOpen: (target: ButlerPreparationTarget, trigger: HTMLButtonElement) => void;
   representedTaskIds?: ReadonlySet<string>;
+  representedHomeRuns?: ReadonlySet<string>;
   onPresenceChange?: (present: boolean) => void;
 }) {
   const [entries, setEntries] = useState<Data[]>([]), [cursor, setCursor] = useState(''), [more, setMore] = useState(false);
@@ -51,7 +52,9 @@ export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, re
     if (sourceTaskId) return row.sourceTaskId === sourceTaskId;
     const target = row.target;
     if (!target?.taskId) return !['dismissed', 'unavailable'].includes(row.state);
-    if (target.runId && representedTaskIds?.has(target.taskId)) return false;
+    // On Home a collapsed row or another execution of the same task is not a
+    // route to this preparation. Suppress only an actually represented run.
+    if (target.runId && (representedHomeRuns ? representedHomeRuns.has(JSON.stringify([target.taskId,target.runId,target.epoch])) : representedTaskIds?.has(target.taskId))) return false;
     return !target.runId || target.hasUnresolvedOperations !== false || !['completed', 'cancelled', 'canceled', 'stopped'].includes(target.status);
   });
   const visible = expanded ? relevant : relevant.slice(0, 3);

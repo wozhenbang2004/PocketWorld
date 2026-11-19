@@ -776,13 +776,40 @@ public final class LocalModule implements EngineModule {
         checkProjectControl(original,admission,nativeBinding,pauseRevision);
         ProjectRuntime selected=runtime(runtimeId(request));return selected.dispatch(new RuntimeInvocation(request,nativeBinding,snapshot,original,admission,runtimeWorkspace(checkout))).json();
     }
-    /** Native producer for one exact managed build result, not a generic raw-file model tool. */
+    private record OriginalManagedBuild(JSONObject plan, JSONObject binding, String checkout, ManagedProjectRuntime runtime, RuntimeExecutionRef ref) {}
+    private OriginalManagedBuild originalManagedBuild(JSONObject request, RunControl original, dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding admission)throws Exception {
+        if(closed)throw new IllegalStateException("原项目模块已关闭");
+        JSONObject plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(request.getJSONObject("plan")),binding=request.getJSONObject("binding");
+        if(!original.matchesHostRun(admission.taskId,admission.runId,admission.epoch)||!admission.taskId.equals(binding.getString("taskId"))||!admission.projectId.equals(plan.getString("projectId"))||!"build".equals(request.getString("stepId")))throw new SecurityException("请选择本任务原build执行；当前read scope不能替换");
+        original.check();development.handle("project.poll",ProjectSources.copy(request));String checkout=plan.getString("checkoutId");
+        requireIdle(checkout);requireCheckoutWritable(checkout);ManagedProjectRuntime runtime=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID);
+        if(!plan.getString("runtimeIdentity").equals(runtime.identity()))throw new SecurityException("原构建工具环境已变化");
+        JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,"build"));
+        return new OriginalManagedBuild(plan,binding,checkout,runtime,RuntimeExecutionRef.fromHost(exact,binding));
+    }
+    /** The existing byte-review and publication flow remains separate from directory observation. */
     public synchronized JSONObject managedOutputSelectionForHost(JSONObject originalBuild,String path,RunControl original,dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding currentAdmission)throws Exception {
-        if(closed)throw new IllegalStateException("原项目模块已关闭");JSONObject plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(originalBuild.getJSONObject("plan")),binding=originalBuild.getJSONObject("binding");
-        if(!original.matchesHostRun(currentAdmission.taskId,currentAdmission.runId,currentAdmission.epoch)||!currentAdmission.taskId.equals(binding.getString("taskId"))||!currentAdmission.projectId.equals(plan.getString("projectId"))||!"build".equals(originalBuild.getString("stepId")))throw new SecurityException("请选择本任务原build执行；当前read scope不能替换");
-        original.check();development.handle("project.poll",ProjectSources.copy(originalBuild));String checkout=plan.getString("checkoutId");requireIdle(checkout);requireCheckoutWritable(checkout);ManagedProjectRuntime runtime=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID);if(!plan.getString("runtimeIdentity").equals(runtime.identity()))throw new SecurityException("原构建工具环境已变化");
-        JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,"build")),actual=runtime.query(RuntimeExecutionRef.fromHost(exact,binding)).json();
-        JSONObject selected=dev.pocketengine.features.local.project.ProjectManagedOutput.prepare(runtimeWorkspace(checkout),export(checkout),plan,binding,actual,runtime.currentCheckoutSequence(checkout),path,original);requireManagedOutputCurrent(selected,original);return selected;
+        OriginalManagedBuild b=originalManagedBuild(originalBuild,original,currentAdmission);
+        JSONObject selected=dev.pocketengine.features.local.project.ProjectManagedOutput.prepare(runtimeWorkspace(b.checkout),export(b.checkout),b.plan,b.binding,b.runtime.query(b.ref).json(),b.runtime.currentCheckoutSequence(b.checkout),path,original);
+        requireManagedOutputCurrent(selected,original);return selected;
+    }
+    private JSONObject currentManagedBuildProof(OriginalManagedBuild b,RunControl original,long pause)throws Exception{
+        original.check();if(original.isPaused()||pause!=original.pauseRevision())throw new SecurityException("原任务的暂停状态已变化");
+        requireIdle(b.checkout);requireCheckoutWritable(b.checkout);
+        ManagedProjectRuntime runtime=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID);
+        if(runtime!=b.runtime||!b.plan.getString("runtimeIdentity").equals(runtime.identity()))throw new SecurityException("原构建工具环境已变化");
+        JSONObject source=ProjectSources.describe(export(b.checkout));
+        if(!b.checkout.equals(source.getString("checkoutId"))||!b.plan.getString("projectId").equals(source.getString("projectId"))||!b.plan.getString("sourceDigest").equals(source.getString("sourceDigest")))throw new SecurityException("原构建与当前源码版本不同，未列出其他版本的输出");
+        return dev.pocketengine.features.local.project.ProjectManagedOutput.build(b.plan,b.binding,runtime.query(b.ref).json(),runtime.currentCheckoutSequence(b.checkout));
+    }
+    public synchronized JSONObject managedOutputDirectoryForHost(JSONObject request,String checkout,String directory,JSONObject cursor,RunControl original,dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding currentAdmission)throws Exception{
+        long pause=original.pauseRevision();OriginalManagedBuild b=originalManagedBuild(request,original,currentAdmission);
+        if(!checkout.equals(b.checkout))throw new SecurityException("原构建不属于当前选定副本");
+        JSONObject proof=currentManagedBuildProof(b,original,pause);
+        JSONObject page=dev.pocketengine.features.local.project.ProjectBuildOutputs.list(runtimeWorkspace(checkout),directory,cursor,proof,original);
+        JSONObject still=currentManagedBuildProof(b,original,pause);
+        if(!proof.getString("receiptIdentity").equals(still.getString("receiptIdentity"))||proof.getLong("checkoutSequence")!=still.getLong("checkoutSequence"))throw new SecurityException("原构建回执或副本顺序已变化");
+        return page;
     }
     private JSONObject requireManagedOutputCurrent(JSONObject supplied,RunControl original)throws Exception {
         JSONObject selected=dev.pocketengine.features.local.project.ProjectManagedOutput.verified(supplied),plan=selected.getJSONObject("buildPlan");String checkout=selected.getString("checkoutId");requireIdle(checkout);requireCheckoutWritable(checkout);original.check();

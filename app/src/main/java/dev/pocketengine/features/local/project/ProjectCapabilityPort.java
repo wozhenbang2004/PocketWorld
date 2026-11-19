@@ -88,7 +88,15 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         if(allowWrites&&(catalogOnly||runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)))add("project_stop",props("executionId",text(80)),"executionId");
         if(catalogOnly||runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)){add("project_live_preview",props("executionId",text(80)),"executionId");add("project_wait_input",props("executionId",text(80),"maxSeconds",integer(1,15),"afterMessageId",text(80)),"executionId");}
         boolean collects=false;JSONArray phases=runtimeFacts.optJSONArray("phases");if(phases!=null)for(int i=0;i<phases.length();i++)collects|="COLLECT".equals(phases.optString(i));
-        if(catalogOnly||runtimeId.equals("termux")&&collects||runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)&&runtimeFacts.optBoolean("managedOutputCollectionAvailable")){add("project_collect_plan",props("executionId",text(80),"path",text(240)),"executionId","path");add("project_generated_artifact",props("executionId",text(80)),"executionId");}
+        boolean managedOutputs=catalogOnly||runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)&&runtimeFacts.optBoolean("managedOutputCollectionAvailable");
+        if(managedOutputs||runtimeId.equals("termux")&&collects){
+            JSONObject collect=props("executionId",text(80),"path",text(240));
+            if(managedOutputs){
+                collect.put("listDirectory",text(240)).put("cursor",new JSONObject().put("type","object").put("properties",props("listingId",text(64),"afterPath",text(240))).put("required",new JSONArray(new String[]{"listingId","afterPath"})).put("additionalProperties",false));
+                add("project_collect_plan",collect,"executionId");
+            }else add("project_collect_plan",collect,"executionId","path");
+            add("project_generated_artifact",props("executionId",text(80)),"executionId");
+        }
         add("project_changes",props("changedOnly",new JSONObject().put("type","boolean"),"limit",integer(1,ProjectChanges.MAX_ENTRIES),"cursor",new JSONObject().put("type","object").put("properties",props("checkoutId",text(80),"projectId",text(80),"sourceDigest",text(64),"baselineIdentity",text(64),"changedOnly",new JSONObject().put("type","boolean"),"offset",integer(0,ProjectSources.MAX_FILES*2))).put("required",new JSONArray(new String[]{"checkoutId","projectId","sourceDigest","baselineIdentity","changedOnly","offset"})).put("additionalProperties",false)));add("project_review_file",props("path",text(240)),"path");
         add("project_preview",props("entryPath",text(240),"expectedSourceDigest",text(64)),"entryPath","expectedSourceDigest");add("project_preview_log",props());
         }
@@ -113,7 +121,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         case "project_wait_input"->"原dev-watch或已批准PTY存活时最多等15秒观察本run新增主人输入；不消费正文/不创建调度器/不延长服务寿命。未给afterMessageId时以本次调用开始的实际最后消息为baseline；有新输入后下一原模型回合照旧读取mailbox。无输入正常timedOut，取消或代次变化退出。";
         case "project_stop"->"明确停止本轮原owned_service计划启动的那个executionId，不取消整个模型任务。原启动批准已包含此原job的停止权限；真实退出和资源释放前普通写入仍禁止；仅原dev-watch明确批准的既有源码CAS例外。";
         case "project_artifact"->"读取已确认成功构建关联的实际源码文件；不把源码伪称生成产物。";
-        case "project_collect_plan"->"为本任务原成功build的单个真实生成路径创建不可变planRef。managed支持原字节含二进制最多2MiB，核同源码/runtime/实际job顺序和两次原文件SHA；Termux保旧UTF-8上限。执行仍需原prepared/主人批准；不拉依赖、秘密配置或源码，不据文件名证明业务成功。";
+        case "project_collect_plan"->"指定本任务原成功 build 的 executionId。managed 不知道产物名称时，先只传 listDirectory 为点号（.），查看存在的 build/dist，再传其中的目录路径逐层查看真实名称、大小；有 nextCursor 传回同目录继续。不读输出正文、不建方案、不收集，不证明文件由本次构建产生。要保存时改传单个确切 path（不可混用），另建不可变 planRef；managed 沿原来源、工具环境、成功任务顺序和原文件 SHA 核对，单件最多20MiB。Termux 仅支持原有明确 path 与 UTF-8 上限，不提供目录查询。实际收集仍需原 prepared / 主人批准；不拉依赖、私有配置或源码。";
         case "project_generated_artifact"->"读取原collect执行实际固定的产物与原build关联；managed返原附件ID/SHA/bytes，可由原成果页按同版查看/分享，不返回私有路径或重收当前文件。Termux保旧有界文本合同；这不是业务效果验证。";
         case "project_preview"->"从同一活跃项目树读取HTML及其CSS/JS/图片/字体等真实资源，生成可在原任务打开的多文件预览。返回资源摘要；不冒充构建成功。";
         case "project_preview_log"->"读取当前原任务预览实际产生的有界console/错误；无日志不代表预览已运行或没有错误。";
@@ -134,6 +142,14 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     @Override public void validate(String name,JSONObject args)throws Exception {if(schemas.containsKey(name))normalize(name,args);else{if(existing==null)throw new SecurityException("项目工具未挂载");existing.validate(name,args);}}
     private JSONObject normalize(String name,JSONObject raw)throws Exception {
         JSONObject args=new JSONObject((raw==null?new JSONObject():raw).toString());if(args.toString().length()>30000)throw new IllegalArgumentException("项目方案超过本次参数上限，请缩小项目或修改内容");PluginRules.validateArguments(args,schemas.get(name));
+        if(name.equals("project_collect_plan")){
+            boolean browse=args.has("listDirectory");
+            if(browse==args.has("path")||!browse&&args.has("cursor"))throw new IllegalArgumentException("请二选一：只读查看 listDirectory，或用准确 path 审阅单个文件。cursor 只用于继续原目录。");
+            if(browse){
+                if(!runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID))throw new SecurityException("仅原 managed 构建支持查看输出目录");
+                ProjectBuildOutputs.requireDirectory(args.getString("listDirectory"));
+            }
+        }
         if(name.equals("project_view_image")){
             Set<String> keys=new java.util.HashSet<>();args.keys().forEachRemaining(keys::add);
             if(keys.equals(Set.of("checkout","path","expectedSha"))){if(!checkout.equals(args.getString("checkout")))throw new SecurityException("图片只能来自当前原选定工作副本");dev.pocketengine.features.workspace.VersionedWorkspace.path(args.getString("path"));if(!args.getString("expectedSha").matches("[a-f0-9]{64}"))throw new IllegalArgumentException("图片需要准确文件SHA");}
@@ -251,7 +267,14 @@ public final class ProjectCapabilityPort implements CapabilityPort {
                 }
                 case "project_log":{JSONObject prior=originalExecution(args.getString("executionId")),plan=prior.getJSONObject("plan");JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,prior.getString("stepId")));result=local.projectLogForHost(exact,prior.getJSONObject("binding"),args.optLong("cursor",0),8192).put("code","project_service_log_observation").put("status","observed").put("ok",true).put("accepted",true).put("queryComplete",true);break;}
                 case "project_collect_plan":{
-                    JSONObject prior=(runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)?tasks.originalManagedOutputRequestForTask(binding.taskId,binding.runId,binding.epoch,original,name,args.getString("executionId")):originalExecution(args.getString("executionId"))).put("path",args.getString("path"));JSONObject selection=runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID)?local.managedOutputSelectionForHost(prior,args.getString("path"),original,binding):local.handle("project.generatedArtifactPlan",prior);
+                    boolean managed=runtimeId.equals(ManagedProjectRuntime.RUNTIME_ID);
+                    JSONObject prior=managed?tasks.originalManagedOutputRequestForTask(binding.taskId,binding.runId,binding.epoch,original,name,args.getString("executionId")):originalExecution(args.getString("executionId"));
+                    if(!checkout.equals(prior.getJSONObject("plan").getString("checkoutId")))throw new SecurityException("所选原构建不属于当前工作副本");
+                    if(args.has("listDirectory")){
+                        result=local.managedOutputDirectoryForHost(prior,checkout,args.getString("listDirectory"),args.optJSONObject("cursor"),original,binding);
+                        break; // Metadata is not a collect plan and is never registered as one.
+                    }
+                    String path=args.getString("path");JSONObject selection=managed?local.managedOutputSelectionForHost(prior,path,original,binding):local.handle("project.generatedArtifactPlan",prior.put("path",path));
                     JSONObject plan=ProjectBuildPlan.verified(local.handle("project.plan",new JSONObject().put("checkoutId",checkout).put("intent","collect").put("expectedSourceDigest",selection.getString("sourceDigest")).put("artifactSelection",selection)));
                     result=tasks.recordProjectPlan(binding.taskId,binding.runId,binding.epoch,original,plan);nativeSuccessCode="project_collect_plan_ready";break;
                 }
