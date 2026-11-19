@@ -1658,7 +1658,7 @@ const COMMON_SETTINGS = [
   { id: 'phone:execution', title: '系统权限', detail: '界面读取、任务通知与无线调试', icon: IconShieldCheck },
   { id: 'phone:observation', title: '观察与隐私', detail: '本地取图、OCR 与截图留存', icon: IconPrivacy },
   { id: 'background', title: '后台运行', detail: '助手连接、独立屏幕与音频', icon: IconPhone },
-  { id: 'usage', title: '用量统计', detail: '每日 Token、缓存与调用明细', icon: IconFileText },
+  { id: 'usage', title: '用量统计', detail: '每日用量、调用明细、预算与模型诊断', icon: IconFileText },
   { id: 'archives', title: '备份与迁移', detail: '导出或恢复原数据', icon: IconArchive },
   { id: 'storage', title: '项目存储', detail: '占用与清理审阅', icon: IconStorage },
   { id: 'updates', title: '应用更新', detail: '检查新版本与管理下载', icon: IconRefresh },
@@ -1798,7 +1798,8 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
   const phoneView = page.startsWith('phone:') ? page.slice('phone:'.length) : phonePresentation.current;
   const workspace = workspaceForRoute(page);
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
-  const hostSection = page === 'proxy' ? 'proxy' : isModelPage ? entryChanged ? 'models' : modelHostSection : domain?.id;
+  // Usage keeps its own route and Back stack; its budgets and diagnostics belong to the native models section.
+  const hostSection = page === 'usage' ? 'models' : page === 'proxy' ? 'proxy' : isModelPage ? entryChanged ? 'models' : modelHostSection : domain?.id;
   const canEnter = supported('connections.enter'), canLeave = supported('connections.leave');
   useLayoutEffect(() => {
     if (!hostSection || !canEnter) return;
@@ -1874,6 +1875,12 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
   const back = () => { if (!consumeBack()) onBack(); };
   const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof IconKey }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={IconChevronRight} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else if (item.id === 'setup') onOpenSetup?.(); else navigate(item.id); }}><span className="pw-settings-row-copy" data-inline-status={!!item.detail && item.detail.length <= 12}><span>{item.title}</span>{item.detail && <small>{item.detail}</small>}</span></Button>)}</div>;
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
+  const renderUsage = (registerBack: BackHandlerRegistration) => <UsageWorkspace
+    supported={supported} registerTransientBack={registerBack}
+    records={<HistoryPage usage supported={supported} run={run}/>}
+    renderBudget={(onEditingChange, registerBudgetBack) => <TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBudgetBack} onEditingChange={onEditingChange}/>}
+    diagnostics={supported('modelDiagnostics.open') ? <ModelDiagnosticsWorkspace state={state} supported={supported}/> : undefined}
+  />;
   const content = <div className="pw-secondary-scroll" ref={scroll}>
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
@@ -1890,12 +1897,12 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
                 return <ModelSettings key={draftKey} state={state} connection={row} preset={preset} supported={supported} run={run} adding={!row} onInspect={close} onSaved={saved} registerTransientBack={registerBack} registerBeforeLeave={registerFormBeforeLeave} />;
               }}
               renderAccounts={(accountId, adding, registerBack) => <AccountsWorkspace key={accountId || 'new-account'} state={state} data={{ ...object(object(state.features).accounts), ...object(object(state.ownerSnapshots).accounts) }} supported={supported} run={run} registerTransientBack={registerBack} onlyAccountId={accountId} startAdding={adding} />}
-              renderTools={registerBack => <UsageWorkspace supported={supported} registerTransientBack={registerBack} records={<HistoryPage usage supported={supported} run={run}/>} renderBudget={(onEditingChange, registerBudgetBack) => <TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBudgetBack} onEditingChange={onEditingChange}/>} diagnostics={<ModelDiagnosticsWorkspace state={state} supported={supported}/>}/>}
+              renderTools={renderUsage}
               renderProxy={registerBack => <ProxyWorkspace state={state} run={run} registerTransientBack={registerBack} />} />
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
           : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
           : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : '手机能力'} registerTransientBack={registerTransientBack} />
-          : page === 'usage' ? <UsageWorkspace supported={supported} registerTransientBack={registerTransientBack} records={<HistoryPage usage supported={supported} run={run}/>} renderBudget={(onEditingChange, registerBudgetBack) => <TokenBudgetsWorkspace supported={supported} registerTransientBack={registerBudgetBack} onEditingChange={onEditingChange}/>}/>
+          : page === 'usage' ? renderUsage(registerTransientBack)
           : page === 'history' ? <HistoryPage key={page} usage={false} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
           : domain ? <DomainPage teamRunFocus={teamRunFocus} onTeamRunFocusConsumed={onTeamRunFocusConsumed} onAskButlerForTeam={onAskButlerForTeam} onOpenTeamOwnerWork={onOpenTeamOwnerWork} registerFormBeforeLeave={registerFormBeforeLeave} onOpenConnections={() => navigate('channels')} onTeamAttentionConsumed={onTeamAttentionConsumed} teamAttentionFocus={teamAttentionFocus} key={page === 'local' ? page + ':' + (navigationRevision || 0) : page} domain={page} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} candidateTarget={candidateTarget} onReviewCandidate={target => navigate('memoryReview', target)} onOpenModels={() => navigate('model-settings')} onNavigate={navigate} onPrepareTools={onOpenSetup?()=>onOpenSetup('tools'):undefined} onOpenProjects={onOpenProjects} initialProjectId={initialProjectId} localDraft={localDraft} onLocalDraftChange={onLocalDraftChange} alreadyShownError={error || domainError} />
