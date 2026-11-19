@@ -17,7 +17,9 @@ import { TeamStartReview } from './TeamStartReview';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
 import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
-import { teamAttentionItems, teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel, type TeamAttentionItem } from './team-presentation';
+import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
+import { teamFollowUpFocus, teamFollowUps, teamResultReading, type TeamFollowUp } from './team-result-reading';
+import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamButlerRequest, TeamOwnerWorkLink, TeamRunFocus } from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
@@ -106,6 +108,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const materialBeforeLeave = useRef<((leave: () => void) => void) | null>(null);
   useEffect(() => { registerBeforeLeave?.(leave => formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); }))))); return () => registerBeforeLeave?.(null); }, [registerBeforeLeave, formDraft.guard, startDraft.guard, messageDraft.guard, memberFormDraft.guard]);
   const [materialBusy, setMaterialBusy] = useState(false);
+  const [resultSource, setResultSource] = useState<{ runId: string; key: string; scroll: number } | null>(null);
+  const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
+  const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
   const handledRunFocus = useRef('');
   const workspaceActive = state.webWorkspaceSection === 'teams' && !state.webWorkspaceTaskOpen;
@@ -161,7 +166,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const acceptReading = (next: Data) => {
     rememberView();
-    if (next.kind !== 'run' || next.run?.id !== currentReading.current?.run?.id) setMemberDraft(null);
+    if (next.kind !== 'run' || next.run?.id !== currentReading.current?.run?.id) { setMemberDraft(null); setResultSource(null); }
     release(currentReading.current); setReading(next);
     if (next.kind === 'run' && pendingMemberChange.current === next.run?.id) {
       pendingMemberChange.current = null; setMemberDraft(null);
@@ -203,7 +208,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     handledRunFocus.current = requestId;
     void invoke('teams.readRun', { runId }, result => {
       if (result.reading?.run?.id !== runId) throw new Error('原协作记录身份不匹配，请从原工作重新打开。');
-      setEditor(null); setMemberDraft(null); closeReview(); closePhoneSelection();
+      setEditor(null); setMemberDraft(null); setResultSource(null); closeReview(); closePhoneSelection();
       acceptReading(result.reading);
       setRunSections(old => ({ ...old, [runId]: 'progress' }));
       setComposeOpen(false);
@@ -218,7 +223,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       .filter(key => attentionFocus?.[key] !== undefined).map(key => [key, attentionFocus![key]]));
     void invoke('teams.readAttention', locator, result => {
       if (result.reading?.run?.id !== locator.runId) throw new Error('原团队待处理身份不匹配，请刷新通知。');
-      acceptReading(result.reading);
+      setResultSource(null); acceptReading(result.reading);
       const focus = object(result.focus), id = result.reading.run.id;
       setRunSections(old => ({ ...old, [id]: focus.kind === 'question' || focus.kind === 'workItem' ? 'details' : 'progress' }));
       if (focus.kind === 'question') setDetailSections(old => ({ ...old, [id]: [...new Set([...(old[id] || []), 'conversation'])] }));
@@ -309,7 +314,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide);
     return () => { document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
   });
-  useEffect(() => { registerTransientBack(() => { if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const current = reading?.kind === 'run' ? object(reading.run) : null;
@@ -526,17 +531,72 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     workItems.map(item => [item.workItemId, item.status]), !!current?.summary,
     expandedMembers[String(current?.id || '')] || [], expandedItems[String(current?.id || '')] || [],
   ]), { active: workspaceActive && catalogReady && (!reading || !!reading.viewHandle) && !editor && !memberDraft && !review && !phoneSelection });
-  const pendingQuestions = messages.filter(isCurrentQuestion);
-  const attentionItems = teamAttentionItems(current, reading?.attention);
-  const openAssignment = (item: TeamAttentionItem) => {
-    if (item.taskId) { openRelatedTask(item.taskId); return; }
-    chooseRunSection(item.workItemId ? 'details' : 'progress', () => {
-      if (item.workItemId) setExpandedItems(old => ({ ...old, [current!.id]: [...new Set([...(old[current!.id] || []), item.workItemId!])] }));
-      else setExpandedMembers(old => ({ ...old, [current!.id]: [...new Set([...(old[current!.id] || []), item.memberId])] }));
+  const teamResult = teamResultReading(current, messages);
+  const followUps = teamFollowUps(current, reading?.attention);
+  const resultOrigin = (key = '') => current ? { runId: String(current.id), key, scroll: root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0 } : null;
+  resultBack.current = () => {
+    if (!resultSource || resultSource.runId !== current?.id || !workspaceActive || !ownsNativeWindow()) return false;
+    const original = resultSource;
+    chooseRunSection('result', () => {
+      if (currentReading.current?.run?.id !== original.runId || !ownsNativeWindow()) return;
+      setResultSource(null);
+      const result = root.current?.querySelector<HTMLElement>('.pw-team-result');
+      const row = Array.from(result?.querySelectorAll<HTMLElement>('[data-team-follow-up]') || []).find(v => v.dataset.teamFollowUp === original.key);
+      const target = row || result?.querySelector<HTMLElement>('[data-team-result-heading]');
+      const scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
+      if (scroll) scroll.scrollTop = original.scroll;
+      target?.focus({ preventScroll: true });
+    }); return true;
+  };
+  const openFollowUp = (item: TeamFollowUp) => {
+    const original = currentReading.current;
+    if (!canRead || materialBusy || !ownsNativeWindow() || original?.run?.id !== item.locator.runId || !original.viewHandle) return;
+    const origin = runSection === 'result' ? resultOrigin(item.key) : null;
+    void invoke('teams.readAttention', item.locator, reply => {
+      const next = reply.reading;
+      if (currentReading.current?.viewHandle !== original.viewHandle || !ownsNativeWindow()) { release(next); return; }
+      if (next?.kind !== 'run' || !next.viewHandle || next.run?.id !== item.locator.runId) { release(next); throw new Error('没有核对到原协作，未转到其他工作。'); }
+      const focus = teamFollowUpFocus(next, object(reply.focus), item.locator);
+      acceptReading(next);
+      if (focus.kind === 'changed') { setNotice(focus.message || '这项原事项已变化。'); return; }
+      setResultSource(origin);
+      const id = item.locator.runId;
+      setRunSections(old => ({ ...old, [id]: focus.kind === 'member' ? 'progress' : 'details' }));
+      if (focus.kind === 'question') {
+        setMemberFilters(old => ({ ...old, [id]: '' }));
+        setDetailSections(old => ({ ...old, [id]: [...new Set([...(old[id] || []), 'conversation'])] }));
+      }
+      if (focus.kind === 'workItem') setExpandedItems(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.workItemId!])] }));
+      if (focus.kind === 'member') setExpandedMembers(old => ({ ...old, [id]: [...new Set([...(old[id] || []), focus.memberId!])] }));
       requestAnimationFrame(() => {
-        const selector = item.workItemId ? `[data-work-item-id="${CSS.escape(item.workItemId)}"]` : `[data-team-member-id="${CSS.escape(item.memberId)}"]`;
+        if (currentReading.current?.viewHandle !== next.viewHandle || !ownsNativeWindow()) return;
+        const selector = focus.kind === 'question' ? `[data-message-id="${CSS.escape(focus.messageId!)}"]`
+          : focus.kind === 'workItem' ? `[data-work-item-id="${CSS.escape(focus.workItemId!)}"]` : `[data-team-member-id="${CSS.escape(focus.memberId!)}"]`;
         const target = root.current?.querySelector<HTMLElement>(selector);
-        target?.scrollIntoView({ block: 'start' }); target?.querySelector<HTMLElement>(item.workItemId ? 'button[aria-expanded]' : '[aria-controls^="team-member-detail-"]')?.focus({ preventScroll: true });
+        const exactChild = focus.taskId ? target?.querySelector<HTMLElement>(`[data-team-source-task="${CSS.escape(focus.taskId)}"]`) : null;
+        if (focus.taskId && !exactChild) setNotice('已定位原分工，当前记录没有这份子任务的独立入口。未转到其他轮次。');
+        const control = exactChild || (focus.kind === 'question' ? target : target?.querySelector<HTMLElement>(focus.kind === 'member' ? '[aria-controls^="team-member-detail-"]' : 'button[aria-expanded]'));
+        control?.focus({ preventScroll: true }); (control || target)?.scrollIntoView({ block: 'center' });
+      });
+    });
+  };
+  const openAwaitingReview = () => {
+    const original = currentReading.current, owner = original?.taskId, id = current?.id;
+    if (!canRead || materialBusy || !id || !owner || original?.run?.id !== id || current.status !== 'awaiting_review') return;
+    leaveWithDrafts(() => {
+      if (!ownsNativeWindow() || currentReading.current?.viewHandle !== original.viewHandle) return;
+      void invoke('teams.readRun', { runId: id }, reply => {
+        const next = reply.reading;
+        if (!ownsNativeWindow() || currentReading.current?.viewHandle !== original.viewHandle) { release(next); return; }
+        if (next?.kind !== 'run' || !next.viewHandle || next.run?.id !== id) { release(next); throw new Error('未能核对原协作。'); }
+        acceptReading(next);
+        if (next.run.status !== 'awaiting_review' || next.taskId !== owner) { setNotice('原协作的审阅状态或任务关联已变化，没有打开其他任务。'); return; }
+        // This is the already-authorized private owner task, even outside the
+        // recent task list. Opening its record neither approves nor resumes it.
+        void run('tasks.open', { id: owner, searchQuery: '' }).catch(failure => {
+          if (alive.current && !backgrounded.current && ownsNativeWindow() && currentReading.current?.run?.id === id)
+            setError(failure instanceof Error ? failure.message : '原协作任务暂不可读取。');
+        });
       });
     });
   };
@@ -660,15 +720,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </div>
       {ownerWorkLink && !ownerWorkLink.currentRun && <p className="pw-team-context-note">这是原工作较早一次执行的协作记录，可查看当时进展与成果。</p>}
       {reading?.taskLookupNotice && <p className="pw-field-hint" role="status">{reading.taskLookupNotice}</p>}
-      <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'result' || value === 'details') chooseRunSection(value); }} className="pw-team-workbench">
+      <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'result' || value === 'details') chooseRunSection(value, () => setResultSource(null)); }} className="pw-team-workbench">
         <div className="pw-team-workbench-bar pw-material-navigation"><TabList aria-label="这次协作"><Tab id="progress" isDisabled={materialBusy}>进展</Tab><Tab id="result" isDisabled={materialBusy}>成果</Tab><Tab id="details">详情</Tab></TabList></div>
+        {resultSource?.runId === current.id && runSection !== 'result' && <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy || materialBusy}
+          onClick={() => resultBack.current()}>返回协作成果</Button>}
         <TabPanel id="progress">
-          {(pendingQuestions.length > 0 || attentionItems.length > 0) && <section className="pw-team-action-list" aria-label="需要你处理"><header className="pw-collaboration-group-heading"><h3>需要你处理</h3><span>{pendingQuestions.length + attentionItems.length} 项</span></header>
-            {pendingQuestions.map(question => <Button key={question.messageId} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight} disabled={materialBusy} onClick={() => focusMessage(question.messageId)}><span className="pw-team-attention-copy"><strong>{teamGoalTitle(question.content, '查看成员问题')}</strong><small>{teamMessageAuthor(question, members)} · 等待回答</small></span></Button>)}
-            {attentionItems.map(item => <Button key={item.id} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openAssignment(item)}><span className="pw-team-attention-copy"><strong>{teamGoalTitle(item.title)}</strong><small>{item.detail}</small></span></Button>)}
-          </section>}
+          <TeamFollowUps items={followUps} read={openFollowUp} disabled={!canRead || materialBusy}/>
           {current.phase === 'intervention' && !hasWorkPlan && <div className="pw-collaboration-attention" role="status"><div><strong>新要求已保存</strong><span>受影响成员已暂停。继续协作后处理，沿用剩余额度。</span></div></div>}
-          {!!current.summary && <section className="pw-team-result-overview" aria-label={current.summaryStale ? '上一版成果摘要' : '当前成果摘要'}><h3>{current.summaryStale ? '上一版成果 · 待更新' : '已有成果'}</h3><p>{String(current.summary).slice(0, 360)}{String(current.summary).length > 360 ? '…' : ''}</p><Button variant="ghost" className="pw-team-result-link" trailingIcon={IconChevronRight} onClick={() => chooseRunSection('result')}>阅读完整成果</Button></section>}
+          {!!teamResult.body && <section className="pw-team-result-overview" aria-label={teamResult.previous ? '上次汇总摘要' : '本轮汇总摘要'}><h3>{teamResult.previous ? '上次保存的共同汇总' : '已有共同汇总'}</h3><p>{teamResult.body.slice(0, 360)}{teamResult.body.length > 360 ? '…' : ''}</p><Button variant="ghost" className="pw-team-result-link" trailingIcon={IconChevronRight} onClick={() => chooseRunSection('result')}>阅读完整汇总</Button></section>}
 
       <section className="pw-team-overview" data-team-section="members" tabIndex={-1} aria-label="成员与当前工作">
         <header className="pw-team-members-heading"><h3 className="pw-team-section-title">成员 <span>{currentMembers.length} 名参与{members.length > currentMembers.length ? ` · ${members.length - currentMembers.length} 名已退出` : ''}</span></h3></header>
@@ -688,7 +747,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
               {latestRound?.nativeErrorMessage && <p className="pw-team-member-error">{latestRound.nativeErrorMessage}</p>}
               {member.text && <p className="pw-team-output-preview">{String(member.text).slice(0, 240)}{String(member.text).length > 240 ? '…' : ''}</p>}
               {!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <p className="pw-team-member-pending">{pendingCount(member)} 条消息待处理</p>}
-              <div className="pw-team-member-primary-actions"><Button variant="ghost" onClick={() => { chooseMemberFilter(member.id); jumpToRunSection('messages'); }}>沟通</Button>{memberTaskId && <Button variant="ghost" trailingIcon={IconExternalLink} onClick={() => openRelatedTask(memberTaskId)}>打开任务</Button>}<Button variant="secondary" aria-expanded={expanded} aria-controls={`team-member-detail-${member.id}`} onClick={() => setExpandedMembers(old => ({ ...old, [current.id]: expanded ? (old[current.id] || []).filter(id => id !== member.id) : [...(old[current.id] || []), member.id] }))}>{expanded ? '收起详情' : '产出与管理'}</Button></div>
+              <div className="pw-team-member-primary-actions"><Button variant="ghost" onClick={() => { chooseMemberFilter(member.id); jumpToRunSection('messages'); }}>沟通</Button>{memberTaskId && <Button variant="ghost" trailingIcon={IconExternalLink} data-team-source-task={memberTaskId} onClick={() => openRelatedTask(memberTaskId)}>打开任务</Button>}<Button variant="secondary" aria-expanded={expanded} aria-controls={`team-member-detail-${member.id}`} onClick={() => setExpandedMembers(old => ({ ...old, [current.id]: expanded ? (old[current.id] || []).filter(id => id !== member.id) : [...(old[current.id] || []), member.id] }))}>{expanded ? '收起详情' : '产出与管理'}</Button></div>
               <div id={`team-member-detail-${member.id}`} hidden={!expanded}>
               {expanded && <div className="pw-team-expanded-copy">
                 {member.id === current.leaderId && <p className="pw-field-hint">{teamRoleLabel(current)}</p>}<p>{member.assignment || member.role}</p>
@@ -698,7 +757,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                 {isTeamHarness(member.runner || '') && <><p className="pw-muted">执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p>{member.externalSession?.sessionId && <p className="pw-muted">原会话：{member.externalSession.sessionId}</p>}</>}
                 {model && <p className="pw-muted">模型：{model}</p>}</AccordionItem></Accordion>
                 {researchRecords.length > 0 && <section aria-label="原研究记录"><h4>原研究记录</h4><p className="pw-field-hint">查看完整产出、待处理事项和执行过程；打开不会继续工作，最新状态以原任务为准。</p>
-                  <div className="pw-form-actions">{researchRecords.filter(record => !record.historical).map(record => <Button key={`${record.round}:${record.taskId}`} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段记录{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div>
+                  <div className="pw-form-actions">{researchRecords.filter(record => !record.historical).map(record => <Button key={`${record.round}:${record.taskId}`} data-team-source-task={record.taskId} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段记录{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div>
                   {researchRecords.some(record => record.historical) && <Accordion variant="divided"><AccordionItem id="research-history" title="历史研究版本"><p className="pw-field-hint">这些版本已被后续输入替代，不代表当前成果，也不会转移给新成员。</p><div className="pw-form-actions">{researchRecords.filter(record => record.historical).map(record => <Button key={`${record.round}:${record.taskId}:${record.version}`} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段 · 旧版本 {record.version}{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div></AccordionItem></Accordion>}
                 </section>}
                 {member.text && <section className="pw-team-member-output" aria-label="已保存的成员产出"><h4>已保存的成员产出</h4>{outputIdentity && <TeamMemberIdentity member={outputIdentity} name={teamMessageAuthor(outputMessage!, members)} detail={outputIdentity.name !== member.name ? `原名称 · ${member.id}` : undefined} size={24} />}<AIAnswer text={String(member.text)} /></section>}
@@ -713,11 +772,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <section className="pw-team-result" aria-label="本次协作成果">
-            <header className="pw-team-result-heading"><h3>{current.summaryStale ? '上一版汇总' : current.status === 'completed' ? '本轮成果' : '当前汇总'}</h3>{current.summaryStale && <span className="pw-team-result-stale">待更新</span>}</header>
-            {current.summaryStale && <p className="pw-team-result-caption">要求、成员或资料发生了变化，以下内容保留供核对，尚未反映最新情况。</p>}
-            {current.summary ? <AIAnswer text={current.summary} /> : <div className="pw-team-result-empty"><p>{current.status === 'cancelled' ? '协作已停止，已有产出和沟通记录保留。' : '还没有共同汇总。可以先看成员分工、已保存产出与需要处理的事项。'}</p><Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => jumpToRunSection('members')}>查看分工与产出</Button></div>}
-          </section>
+          <TeamResultHandoff result={teamResult} stopped={current.status === 'cancelled'}
+            actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
+              toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}
+            openOriginalReview={current.status === 'awaiting_review' && reading?.taskId ? openAwaitingReview : undefined}
+            openMembers={() => { setResultSource(resultOrigin('members')); jumpToRunSection('members'); }}
+            openMessage={id => { setResultSource(resultOrigin('summary-original')); focusMessage(id); }}/>
         </TabPanel>
         <TabPanel id="details" shouldForceMount data-team-details-active={runSection === 'details'}>
           {hasWorkPlan && <p className="pw-team-panel-caption">分工按计划推进，展开可查看原任务、审批与已保存产出。</p>}
@@ -728,7 +788,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           {workItems.map(item => <AccordionItem key={item.workItemId} id={item.workItemId} className="pw-team-work-item" data-work-item-id={item.workItemId} data-motion-key={`work-item:${item.workItemId}`}
             title={<span className="pw-team-item-heading"><span>{item.title}</span><small className="pw-team-state" data-state={item.status}>{status(item.status)}</small></span>}
             description={<TeamMemberIdentity member={members.find(member => member.id === item.memberId) || { id: item.memberId }} name={name(item.memberId)} size={24} />}>
-            <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.message && <p>{item.message}</p>}{item.nativeErrorMessage && <p className="pw-field-hint">{item.nativeErrorMessage}</p>}{item.assignmentTask?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} onClick={() => openRelatedTask(item.assignmentTask.taskId)}>查看此分工与审批</Button>}{item.acceptance && <p>验收：{item.acceptance}</p>}
+            <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.message && <p>{item.message}</p>}{item.nativeErrorMessage && <p className="pw-field-hint">{item.nativeErrorMessage}</p>}{item.assignmentTask?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} data-team-source-task={item.assignmentTask.taskId} onClick={() => openRelatedTask(item.assignmentTask.taskId)}>查看此分工与审批</Button>}{item.acceptance && <p>验收：{item.acceptance}</p>}
               {!!rows(item.dependsOn).length && <p>前置：{item.dependsOn.map((id: string) => workItems.find(prior => prior.workItemId === id)?.title || id).join('、')}</p>}
             </div>
           </AccordionItem>)}

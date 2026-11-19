@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { IconAdd, IconArrowLeft, IconArrowRight, IconChevronRight, IconFile, IconImage, IconRefresh, IconSettings } from './icons';
+import { IconAdd, IconArrowLeft, IconArrowRight, IconChevronRight, IconFile, IconImage, IconMusic, IconRefresh, IconSettings } from './icons';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField, TextField, formatFileSize } from './forms-library';
 import { AIAnswer, ProgressBar } from './library';
 import './media-workspace.css';
@@ -24,6 +24,8 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [kind, setKind] = useState('image'), [text, setText] = useState(''), [graph, setGraph] = useState('');
   const [imageId, setImageId] = useState(''), [maskId, setMaskId] = useState(''), [observe, setObserve] = useState(true), [mediaFilter, setMediaFilter] = useState('all');
   const [preparedTask, setPreparedTask] = useState(''), [submittedTask, setSubmittedTask] = useState(''), [submissionUnknown, setSubmissionUnknown] = useState(false);
+  const [speechInput, setSpeechInput] = useState<{view:string;hash:string;text:string}|null>(null);
+  const returnFile = useRef<{task:string;id:string;sha:string;opened:boolean;trigger:HTMLElement}|null>(null);
   const acknowledgement = useRef(false);
   const alive = useRef(true), pending = useRef(false), generation = useRef(0), selected = useRef<Data | null>(null), reviewRef = useRef<Data | null>(null);
   const resumed = useRef(state.webWorkspaceResumeRevision), backgrounded = useRef(document.visibilityState !== 'visible'), nativeOpened = useRef(!!state.webWorkspaceTaskOpen);
@@ -31,7 +33,8 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
   const latest = useRef({ state, panel, settingsOpen, settings, submittedTask }); latest.current = { state, panel, settingsOpen, settings, submittedTask }; selected.current = reading; reviewRef.current = review;
   const config = object(snapshot.configuration), comfy = config.provider === 'comfyui';
   const presentation = panel === 'task' ? 'task:' + (reading?.taskId || '') : panel;
-  const available = () => alive.current && !pending.current && !backgrounded.current && !latest.current.state.webWorkspaceTaskOpen;
+  const fileOpen = () => object(latest.current.state.attachmentWorkspace).open === true;
+  const available = () => alive.current && !pending.current && !backgrounded.current && !latest.current.state.webWorkspaceTaskOpen && !fileOpen();
   const release = (value: Data | null, key: string) => { if (value?.[key]) void run('media.closeReading', { [key]: value[key] }).catch(() => {}); };
   const releaseReading = (value: Data | null) => { release(value, 'viewHandle'); release(value?.submissionReview, 'reviewHandle'); };
   const remember = () => {
@@ -41,7 +44,7 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
   };
   const move = (next: Panel) => { remember(); setPanel(next); };
   const clearView = () => {
-    const original = selected.current; releaseReading(original);
+    const original = selected.current; releaseReading(original); setSpeechInput(null);
     const retained = original ? { ...original, viewHandle: '', retainedInput: original.submissionReview?.input || original.retainedInput, submissionReview: undefined } : null;
     selected.current = retained; setReading(retained);
   };
@@ -65,7 +68,7 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
     if (!value.viewHandle || value.taskId !== taskId || value.task?.id !== taskId) {
       releaseReading(value); throw new Error('原媒体任务回执身份不匹配。');
     }
-    releaseReading(selected.current); selected.current = value; setReading(value);
+    releaseReading(selected.current); selected.current = value; setReading(value); setSpeechInput(null);
     if (taskId === latest.current.submittedTask && (value.submissionReview || !unknownReceipt(object(value.receipt)))) setSubmissionUnknown(false);
   };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void | Promise<void>) => {
@@ -75,7 +78,10 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
       const value = object(await run(action, args));
       if (alive.current && generation.current === ticket && !backgrounded.current && !latest.current.state.webWorkspaceTaskOpen) await accept?.(value);
       else { releaseReading(value); release(value, 'reviewHandle'); }
-    } catch (failure) { if (alive.current && generation.current === ticket) setError(failure instanceof Error ? failure.message : String(failure)); }
+    } catch (failure) { if (alive.current && generation.current === ticket) {
+      if (action==='media.openResult') returnFile.current=null;
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } }
     finally { if (generation.current === ticket) { pending.current = false; if (alive.current) setBusy(false); } }
   };
   const acceptSnapshot = (value: Data) => { setSnapshot(value); setSnapshotReady(true); };
@@ -203,14 +209,64 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
       setNotice(value.result?.message || '已取得原操作回执。'); await refreshReading(original.taskId);
     });
   };
-  const openResult = (file: Data) => {
+  const openResult = (file: Data, trigger: HTMLElement) => {
     const original = selected.current;
-    if (!available() || latest.current.panel !== 'task' || !original?.viewHandle || original.taskId !== reading?.taskId || original.viewHandle !== reading?.viewHandle || reviewRef.current || latest.current.settingsOpen || !file.id || !file.sha256 || !rows(object(original.receipt).attachments).some(item => item.id === file.id && item.sha256 === file.sha256)) return;
-    void invoke('media.openResult', { viewHandle: original.viewHandle, fileId: file.id, sha256: file.sha256 });
+    if (!available() || latest.current.panel !== 'task' || !original?.viewHandle || original.taskId !== reading?.taskId || original.viewHandle !== reading?.viewHandle || reviewRef.current || latest.current.settingsOpen || !file.id || !file.sha256 || !rows(original.savedFiles).some(item => item.id === file.id && item.sha256 === file.sha256)) return;
+    remember(); returnFile.current = {task:original.taskId,id:file.id,sha:file.sha256,opened:false,trigger};
+    void invoke('media.openResult', { viewHandle: original.viewHandle, fileId: file.id, sha256: file.sha256 }, value => {
+      if (value.openingOriginal !== true || value.taskId !== original.taskId || value.fileId !== file.id || value.sha256 !== file.sha256) {
+        returnFile.current = null; throw new Error('原件入口尚未确认，请在此记录核对。');
+      }
+    });
+  };
+  const attachment = object(state.attachmentWorkspace);
+  useEffect(() => {
+    const pin = returnFile.current;
+    if (!pin) return;
+    if (panel !== 'task' || selected.current?.taskId !== pin.task || state.webWorkspaceTaskOpen) { returnFile.current = null; return; }
+    if (attachment.open) {
+      if (attachment.taskId && attachment.taskId !== pin.task) { returnFile.current=null; return; }
+      const shown=object(attachment.file);
+      if (shown.id && (shown.id!==pin.id || shown.sha256!==pin.sha)) { returnFile.current=null; return; }
+      pin.opened=true; return;
+    }
+    if (!pin.opened || document.hidden) return;
+    // Refresh the same local media record; the old reading handle may have expired in the viewer.
+    const frame = requestAnimationFrame(() => {
+      if (returnFile.current !== pin || !available() || latest.current.panel !== 'task' || selected.current?.taskId !== pin.task) return;
+      returnFile.current=null; clearView();
+      void invoke('media.readTask',{taskId:pin.task},value=>{
+        if (fileOpen() || latest.current.panel!=='task' || selected.current?.taskId!==pin.task) { releaseReading(value); return; }
+        acceptReading(value,pin.task);
+        requestAnimationFrame(()=>{
+          if (!alive.current || fileOpen() || document.hidden || latest.current.panel!=='task' || selected.current?.viewHandle!==value.viewHandle) return;
+          if (pin.trigger.isConnected && !pin.trigger.matches(':disabled')) pin.trigger.focus({preventScroll:true});
+          else root.current?.querySelector<HTMLElement>('[data-media-panel="task"] [data-media-heading]')?.focus({preventScroll:true});
+        });
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [panel, busy, reading?.taskId, attachment.open, attachment.taskId, attachment.file?.id, attachment.file?.sha256, state.webWorkspaceTaskOpen]);
+  const readSpeech = () => {
+    const original=selected.current;
+    if (!available() || panel!=='task' || !original?.viewHandle || !original.speechInputHash || reviewRef.current || latest.current.settingsOpen) return;
+    void invoke('media.readSpeechInput',{viewHandle:original.viewHandle},value=>{
+      if (fileOpen() || selected.current?.viewHandle!==original.viewHandle || latest.current.panel!=='task') return;
+      if (value.taskId!==original.taskId || value.requestHash!==original.speechInputHash || typeof value.text!=='string' || !value.text) throw new Error('原输入文字与这次合成不一致。');
+      setSpeechInput({view:original.viewHandle,hash:value.requestHash,text:value.text});
+    });
   };
   const change = (key: string, value: any) => setSettings(old => old ? { ...old, [key]: value, ...(key === 'provider' || key === 'baseUrl' ? { apiKey: '' } : {}) } : null);
   const field = (key: string, label: string, secret = false) => <TextField key={key} label={label} type={secret ? 'password' : 'text'} autoComplete={secret ? 'new-password' : undefined} value={settings?.[key] || ''} onChange={value => change(key, value)} isDisabled={busy} />;
-  const operation = object(reading?.operation), receipt = object(reading?.receipt), files = rows(receipt.attachments);
+  const operation = object(reading?.operation), receipt = object(reading?.receipt), files = rows(reading?.savedFiles);
+  const speech = operation.tool==='media_synthesize_speech' || reading?.submissionReview?.command==='synthesizeSpeech';
+  const sourceText = speechInput && speechInput.view===reading?.viewHandle && speechInput.hash===reading?.speechInputHash ? speechInput.text : null;
+  const knownPrepared = !operation.operationId && !!reading?.submissionReview;
+  const listComplete = reading?.fileListComplete===true;
+  const fileNote = files.length ? listComplete ? '' : '本次结果或文件清单尚未核对完整，已列出的版本仍可打开。'
+    : knownPrepared ? '这次输入尚未提交，没有生成输出。'
+    : listComplete ? '本次回执明确列出 0 个已保存的输出文件。'
+    : '当前回执没有完整的输出清单，不能据此判断是否保存过文件。可回原任务核对。';
   const serviceName = snapshot.configured ? comfy ? 'ComfyUI' : '兼容媒体服务' : snapshotReady ? '尚未配置媒体服务' : '媒体服务待读取';
   const reviewInput = object(review?.input), submissionReview = !!review && submissions.has(review.command);
   const reviewStale = submissionReview && !!reviewInput.configurationRevision && reviewInput.configurationRevision !== snapshot.configurationRevision;
@@ -253,12 +309,28 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
       <Button variant="ghost" className="pw-media-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={goBack}>返回媒体任务</Button>
       <div className="pw-media-panel-heading"><h3 tabIndex={-1} data-media-heading>{reading.task.goal || '原媒体任务'}</h3><p>{taskState(reading.task.status)}</p></div>
       {!reading.viewHandle && <p className="pw-media-feedback" role="status">原读取权限需要重新核对。内容只作保留记录，不代表仍可执行。</p>}
-      <div className="pw-form-actions pw-media-task-actions"><Button variant="secondary" leadingIcon={IconRefresh} disabled={busy} onClick={() => readTask(reading.taskId)}>重新读取原任务</Button><Button variant="ghost" trailingIcon={IconArrowRight} disabled={busy} onClick={() => { if (available() && selected.current?.taskId === reading.taskId) void run('tasks.open', { id: reading.taskId }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); }}>打开原任务与审批</Button></div>
-      <section className="pw-media-results" aria-label="已保存产物"><div className="pw-media-section-heading"><h4>已保存产物</h4>{files.length > 0 && <small>{files.length} 个文件</small>}</div>{files.length ? <div className="pw-media-file-list">{files.map(file => { const opening = object(state.attachmentOpens)[`${file.id}:${file.sha256}`]; return <div key={`${file.id}:${file.sha256}`}><Button variant="ghost" className="pw-media-file-row" leadingIcon={IconFile} trailingIcon={IconChevronRight} disabled={busy || !reading.viewHandle || !file.id || !file.sha256 || opening?.checking} onClick={() => openResult(file)}><span className="pw-media-row-copy"><strong>{file.name || file.mimeType || '原产物'}</strong><small>{opening?.checking ? '正在核对原文件' : !file.id || !file.sha256 ? '原文件身份待核对' : `${file.mimeType || '文件'} · ${formatFileSize(Number(file.size) || 0)} · 打开原产物`}</small></span></Button>{opening?.error && <p role="alert" className="pw-media-note">{opening.error}</p>}</div>; })}</div> : <p className="pw-media-note">原记录尚无已保存文件。服务有结果后，可取回同一原操作的产物。</p>}</section>
+      <div className="pw-form-actions pw-media-task-actions"><Button variant="secondary" leadingIcon={IconRefresh} disabled={busy} onClick={() => readTask(reading.taskId)}>重新读取原任务</Button><Button variant="ghost" trailingIcon={IconArrowRight} disabled={busy} onClick={() => { if (available() && selected.current?.taskId === reading.taskId) void run('tasks.open', { id: reading.taskId }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); }}>查看原任务与文件</Button></div>
+      <section className="pw-media-results" aria-label="已保存输出文件">
+        <div className="pw-media-section-heading"><h4>已保存输出</h4>{files.length>0&&<small>{files.length} 个文件</small>}</div>
+        {fileNote&&<p className="pw-media-note" role="status">{fileNote}</p>}
+        {!!files.length&&<div className="pw-media-file-list">{files.map(file=>{
+          const audio=String(file.mimeType||'').startsWith('audio/');
+          const kind=audio?(speech?'合成语音':'音频文件'):String(file.mimeType||'').startsWith('image/')?'图片':String(file.mimeType||'').startsWith('video/')?'视频':'文件';
+          return <Button key={file.id+':'+file.sha256} variant="ghost" className="pw-media-file-row" leadingIcon={audio?IconMusic:IconFile} trailingIcon={IconChevronRight}
+            disabled={busy||!reading.viewHandle} onClick={event=>openResult(file,event.currentTarget)}>
+            <span className="pw-media-row-copy"><strong>{file.name||kind}</strong><small>{kind} · {formatFileSize(file.size)} · 查看这份原件</small></span>
+          </Button>;
+        })}</div>}
+      </section>
+      {speech&&operation.operationId&&<section className="pw-media-receipt" aria-label="语音合成原文"><h4>合成原文</h4>
+        <p className="pw-media-note">这次输入是文字，不是原声录音或通话转录。{!reading.speechInputHash&&'当前记录没有可核对的原文版本。'}</p>
+        {sourceText!==null?<><p className="pw-reading-copy" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{sourceText}</p><Button variant="ghost" onClick={()=>setSpeechInput(null)}>收起原文</Button></>
+        :reading.speechInputHash&&<Button variant="secondary" disabled={busy||!reading.viewHandle} onClick={readSpeech}>查看本次合成原文</Button>}
+      </section>}
       {operation.operationId ? <>
         <section className="pw-media-receipt" aria-label="原服务回执"><h4>{receipt.providerStatus || receipt.status || '原服务状态待核对'}</h4><p>{receipt.message || '尚未取得可说明实际效果的服务回执。'}</p><p className="pw-media-note">受理不代表生成完成。这里只查询和取回原操作，不重新生成。</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy || !reading.viewHandle} onClick={() => operate('media.query')}>查询原操作</Button><Button variant="secondary" disabled={busy || !reading.viewHandle} onClick={() => operate('media.fetchResults')}>取回原产物</Button></div></section>
         {(receipt.ownerResultDownloadReviewAvailable || receipt.resultStatus === 'owner_download_policy_required') && <section className="pw-media-submission"><div><strong>原结果等待一次性下载许可</strong><p>先核对原服务与结果来源，只取回这次原响应。</p></div><Button variant="secondary" disabled={busy || !reading.viewHandle} onClick={() => operate('media.reviewDownload')}>核对一次性结果下载</Button></section>}
-      </> : <section className="pw-media-receipt" aria-label="原媒体输入"><h4>{reading.submissionReview ? '原输入已保存，尚未提交到服务' : '原输入与提交状态待读取'}</h4>{!reading.submissionReview && reading.retainedInput && <><p className="pw-media-note">原输入仍保留，请重新读取这项原任务的提交状态。</p><AIAnswer text={inputText(object(reading.retainedInput))} /></>}{reading.submissionReview && <><p className="pw-media-note">下面是这项原任务保存的输入，不会使用创作区的其他草稿。</p><AIAnswer text={inputText(object(reading.submissionReview.input))} /><Button disabled={busy || !reading.viewHandle} onClick={() => { const current = selected.current; if (available() && latest.current.panel === 'task' && current?.viewHandle && current.submissionReview) receiveReview(current.submissionReview); }}>核对原输入并提交</Button></>}</section>}
+      </> : <section className="pw-media-receipt" aria-label="原媒体输入"><h4>{reading.submissionReview ? '原输入已保存，尚未提交到服务' : '原输入与提交状态待读取'}</h4>{reading.originalInputUnavailable&&<p className="pw-media-note">原任务记录仍在，但未能读回这份输入。没有重新提交到服务。</p>}{!reading.submissionReview && reading.retainedInput && <><p className="pw-media-note">原输入仍保留，请重新读取这项原任务的提交状态。</p><AIAnswer text={inputText(object(reading.retainedInput))} /></>}{reading.submissionReview && <><p className="pw-media-note">下面是这项原任务保存的输入，不会使用创作区的其他草稿。</p><AIAnswer text={inputText(object(reading.submissionReview.input))} /><Button disabled={busy || !reading.viewHandle} onClick={() => { const current = selected.current; if (available() && latest.current.panel === 'task' && current?.viewHandle && current.submissionReview) receiveReview(current.submissionReview); }}>核对原输入并提交</Button></>}</section>}
 
       <Accordion className="pw-media-disclosures"><AccordionItem id="media-source-details" title="任务来源与服务记录"><dl className="pw-media-source-details"><dt>原任务</dt><dd>{reading.taskId}</dd>{operation.operationId && <><dt>原服务操作</dt><dd>{operation.operationId}</dd></>}{receipt.providerJobId && <><dt>服务任务</dt><dd>{receipt.providerJobId}</dd></>}<dt>服务地址</dt><dd>{config.baseUrl}</dd></dl>{reading.task.summary && <AIAnswer text={reading.task.summary}/>}</AccordionItem></Accordion>
       {operation.operationId && <Accordion className="pw-media-disclosures"><AccordionItem id="media-waiting" title="等待与取消" description="停止本地等待与取消远端任务是不同操作"><p className="pw-media-note">停止本地等待不会撤回服务请求，也不代表远端任务已停止。远端取消仍需单独核对。</p><div className="pw-form-actions"><Button disabled={busy || !reading.viewHandle} variant="secondary" onClick={() => operate('media.stopWaiting')}>停止本地等待</Button><Button disabled={busy || !reading.viewHandle} variant="ghost" onClick={() => operate('media.reviewCancel')}>请求取消原服务任务</Button></div></AccordionItem></Accordion>}

@@ -53,6 +53,61 @@ export function reminderRuleState(rule: Data, now: number) {
     canReschedule: exhausted && sourceCurrent && !Object.hasOwn(rule, 'nativeOrigin') && rule.manualOriginVersion === 1,
   };
 }
+
+const deliveryStates: Record<string, string> = {
+  notified: '已向系统提交通知', awaiting_user: '已向系统提交通知', blocked_notifications: '通知未能发出',
+  delivery_unknown: '是否发出仍待核对', dispatching: '正在投递，尚无回执', deferred: '已延后投递',
+  expired: '已过期，未投递', missed_window: '错过有效时间，未投递', missed_schedule: '已跳过错过的安排',
+  coalesced: '已合并到另一次安排', overlap_skipped: '与原任务重叠，已跳过', cancelled: '已取消',
+  budget_exhausted: '次数已用完，未投递',
+};
+const phoneStates: Record<string, string> = {
+  running: '手机任务执行中', failed: '手机任务执行失败', cancelled: '手机任务已取消', paused: '手机任务已暂停',
+  stopping: '手机任务正在停止', reconciling: '原任务结果仍在核对', waiting_user: '原任务需要你处理',
+  awaiting_user: '原任务需要你处理', awaiting_authorization: '原任务等待核对或授权', unverified_result: '原任务已结束，结果尚未核实',
+};
+type OccurrenceAction = { kind: 'prepare'; label: string } | { kind: 'open'; label: string; taskId: string; round?: { expectedRunId: string; expectedEpoch: number } };
+type Occurrence = { delivery: string; task?: string; action?: OccurrenceAction; attention: boolean; sourceHeld?: boolean };
+
+/** Delivery describes that notification, while goalState is a fresh, original-occurrence TaskStore read. Neither authorizes execution. */
+export function reminderOccurrence(receipt: Data, rule: Data | undefined, now: number): Occurrence {
+  const delivery = Object.hasOwn(deliveryStates, receipt.status) ? deliveryStates[receipt.status] : '投递状态待核对';
+  const transportIssue = receipt.status === 'delivery_unknown' || receipt.status === 'blocked_notifications';
+  const view: Occurrence = { delivery, attention: transportIssue };
+  if (receipt.sourceInvalidated || rule?.sourceInvalidated) return { delivery: '原提醒来源已失效', sourceHeld: true, attention: false };
+  if (!rule || rule.id !== receipt.ruleId || receipt.sourceCheckPending || rule.sourceCheckPending)
+    return { delivery: '原提醒来源待核对', sourceHeld: true, attention: false };
+  if (receipt.kind !== 'phone_goal') return view;
+
+  const goal = receipt.goalState;
+  if (!receipt.id || !goal || goal.authority !== 'TaskStore' || goal.executionAuthorized !== false || goal.occurrenceId !== receipt.id ||
+      ['evidence_mismatch', 'host_evidence_unavailable'].includes(goal.state)) {
+    return { ...view, task: '本次手机任务记录尚未核对', attention: transportIssue || receipt.status === 'awaiting_user' };
+  }
+  if (typeof goal.taskId === 'string' && goal.taskId.trim() && goal.taskId.length <= 240 && typeof goal.taskStatus === 'string' && goal.taskStatus) {
+    const verified = goal.state === 'succeeded' && goal.taskStatus === 'completed' &&
+      ['owner_confirmation', 'task_result'].includes(goal.evidenceRef?.kind) && typeof goal.evidenceRef?.id === 'string' && !!goal.evidenceRef.id.trim();
+    const round = typeof goal.runId === 'string' && goal.runId.trim() && goal.runId.length <= 80 &&
+      Number.isInteger(goal.coordinatorEpoch) && goal.coordinatorEpoch > 0 && goal.coordinatorEpoch <= 2147483647
+      ? { expectedRunId: goal.runId, expectedEpoch: goal.coordinatorEpoch as number } : undefined;
+    const task = verified ? '手机任务已确认完成' : Object.hasOwn(phoneStates, goal.state) ? phoneStates[goal.state] : '原任务结果待核对';
+    // Prepared tasks do not yet have an execution round. Open the original task,
+    // never claim a particular execution result without a checked round.
+    return { delivery, task, action: { kind: 'open', taskId: goal.taskId, round, label: verified && round ? '查看这次任务结果' : '查看原手机任务' },
+      attention: receipt.status === 'delivery_unknown' || !verified && !['running', 'cancelled', 'stopping'].includes(goal.state) };
+  }
+  if (goal.taskId !== undefined || goal.state === 'succeeded') return { ...view, task: '原任务身份尚未核对', attention: true };
+  if (goal.state !== 'awaiting_user' || !['awaiting_user', 'blocked_notifications'].includes(receipt.status))
+    return { ...view, task: '未读取到本次手机任务' };
+  if (rule.revision !== receipt.revision || rule.taskRequestsRevoked === true || rule.kind !== 'phone_goal' || rule.goal !== receipt.goal)
+    return { ...view, task: '原安排已变化，不能从这次记录准备任务', attention: false };
+  if (rule.enabled !== true && rule.schedule?.type !== 'once') return { ...view, task: '提醒已暂停，不能准备本次任务', attention: false };
+  if (!Number.isFinite(receipt.validUntil) || !Number.isFinite(receipt.occurrenceAt) || now < receipt.occurrenceAt)
+    return { ...view, task: '本次任务的有效时间待核对' };
+  if (now >= receipt.validUntil) return { ...view, task: '已过有效时间，未读取到本次手机任务', attention: false };
+  return { ...view, task: '尚未准备手机任务，准备后仍需你确认开始', action: { kind: 'prepare', label: '准备手机任务（不执行）' }, attention: true };
+}
+
 /** An accepted bridge receipt is not a saved rule. Only the matching original feature result is. */
 export function reminderSubmissionResult(state: Data, submission: ReminderSubmission): { kind: 'waiting' | 'failed' | 'saved' | 'updated' | 'deleted'; message: string } {
   const key = 'automation.' + submission.command;

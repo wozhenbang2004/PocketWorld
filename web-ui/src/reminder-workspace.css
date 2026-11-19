@@ -48,7 +48,9 @@
 }
 .pw-reminder-workspace .pw-reminder-result {
   padding: var(--pw-gap-content) 0;
+  overflow-wrap: anywhere;
 }
+.pw-reminder-workspace .pw-reminder-result .pw-reminder-outcome { margin-top: var(--pw-gap-related); font-weight: 550; }
 .pw-reminder-workspace .pw-reminder-result header {
   gap: var(--pw-gap-related) var(--pw-gap-control);
 }
@@ -61,8 +63,7 @@
   font-size: 12px;
   line-height: 23px;
 }
-.pw-reminder-workspace .pw-reminder-result .pw-reminder-result-message,
-.pw-reminder-workspace .pw-reminder-result .pw-reminder-result-goal {
+.pw-reminder-workspace .pw-reminder-result .pw-reminder-result-message {
   margin-top: var(--pw-gap-related);
   font-size: 14px;
   line-height: 22px;

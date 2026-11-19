@@ -1,6 +1,7 @@
 import { memo, useId, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { IconArrowLeft, IconCopy } from './icons';
+import { ReadingQuoteAction } from './ReadingQuoteAction';
 import { MarkdownBody } from './library/MarkdownBody';
 import { ReadingContext, type ReadingDocument } from './reading-context';
 import './reading.css';
@@ -13,6 +14,7 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active }: {
   const toolsId = useId();
   const [textSize, setTextSize] = useState<'normal' | 'large' | 'larger'>('normal');
   const [selected, setSelected] = useState('');
+  const [bounds,setBounds]=useState({start:0,end:0});
   const [feedback, setFeedback] = useState('');
   const [copying, setCopying] = useState(false);
   const body = useRef<HTMLDivElement>(null), original = useRef<HTMLTextAreaElement>(null);
@@ -30,7 +32,11 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active }: {
   }, [active, mode]);
   const selectText = () => {
     const field = original.current;
-    if (field) setSelected(field.value.slice(field.selectionStart, field.selectionEnd));
+    if (field) {
+      const start=field.selectionStart,end=field.selectionEnd;
+      setSelected(field.value.slice(start,end));
+      if(bounds.start!==start||bounds.end!==end){setBounds({start,end});setFeedback('')}
+    }
   };
   const copy = async (text: string) => {
     if (copying) throw new Error('正在复制，请稍后再试。');
@@ -60,6 +66,7 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active }: {
       <span className="pw-reading-tool-space" />
       <button type="button" aria-label={`文字大小：${textSize === 'normal' ? '标准' : textSize === 'large' ? '大' : '更大'}，点击切换`} title="切换文字大小" onClick={() => setTextSize(size => size === 'normal' ? 'large' : size === 'large' ? 'larger' : 'normal')}>Aa</button>
       {mode === 'select' && <button type="button" onClick={() => { original.current?.focus({ preventScroll: true }); original.current?.select(); selectText(); }}>全选</button>}
+      {snapshot.kind==='message'&&snapshot.quoteSource&&<ReadingQuoteAction source={snapshot.quoteSource} text={snapshot.text} field={original} start={bounds.start} end={bounds.end} visible={active&&mode==='select'&&toolsVisible} report={setFeedback}/>}
       <button type="button" disabled={copying} aria-label={selected ? '复制选中文字' : snapshot.kind === 'table' ? '复制表格' : '复制全文'}
         onPointerDown={event => event.preventDefault()}
         onClick={() => { void copy(selected || (mode === 'select' ? snapshot.text : snapshot.copyText ?? snapshot.text)).catch(() => {}); }}>

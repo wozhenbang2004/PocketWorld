@@ -1735,6 +1735,14 @@ DSH-Go 确有 Claude OAuth 桥接：[固定版本的 AuthBridge](https://github.
 
 个人快照继续投影原 MemoryBook，新增 history、complete、topic 展示元数据及根级 policy。policy 为 `{reading:{enabled,revision},learning:{revision,enabled,maxUserSourcesPerTask,candidateAcceptance}}`；保留历史自动提炼四字段投影，使旧任务原授权校验不因阅读开关改变。网页不能自选 owner、project、subject 或来源证明。聊天保存、原请求引用与撤销均保留原任务/操作身份，不能靠相同正文伪造回执。
 
+### 2026-11-19 · 采纳与原文是两回事
+
+个人记忆页继续用原生已授权的本人记录。待选建议、已经采纳、已经忽略、已失效分别写清；“已保存”表示可以作为个人记忆参考，不替它背书。手工记录不冒充原话，没有原文清单与清单为空分开表示。只在用户点选时读取该项的原来源；任务确认附带的当前摘要不冒充当时的正文快照。
+
+- **来源不是第二本记忆。** 现有 `profile.memory.source` 仍只接受原阅读句柄、原数组下标和片段位置。回执沿原 `SourceRef`（文件还核对原版本及范围）和本片段身份核对，并带回原生句柄已有的到期时间，不续期、不补授权。一次只显示本次返回的一段，前后翻段重新读；切换来源、原生记忆修订变化、阅读票过期、窗口隐藏、退出、读取被拒或收到空正文时不保留上一段。没有后台轮询或模型调用；没有变更通知时，不把曾读片段标为实时证据。
+- **返回不经过无关的首页。** 从聊天等入口直接管理个人记忆，在入口层返回沿既有父页回调，不检索或切换对话；编辑仍先处理未保存的草稿。嵌套列表仍回到本层原行，从记忆转去明确偏好后先回记忆列表。精确回答气泡并未随入口传入，本页不声称恢复其抽屉或焦点。
+- **局部体验验收。** [审美库](https://chatgpt.com/space/page_6c522c5579c08191944bb585f4bf5708)中的内容文案、导航、状态与恢复影响本次实现；依据既有个人中心批准稿保留原布局、灰阶、字号、44px 触控和披露组件，不加新视觉层。参考 [Claude 的个人记忆与原聊天来源](https://support.claude.com/en/articles/11817273-use-claude-s-chat-search-and-memory-to-build-on-previous-context)和 [Gemini 对已记信息的纠正](https://support.google.com/gemini/answer/16598625)的区分，不引入它们的跨会话检索。个人页 TypeScript 已作局部类型核对；Kotlin 来源生命周期已作源码核对。尚未观察 Android 上来源被撤回、过期、分段失败和返回时的焦点，不以旧截图或模拟数据代替。
+
 ### 本批完成证据
 
 2026-11-10 07:50 UTC：全部三个阶段已写入正式模块，已完成首轮 `npm run build --prefix web-ui`、`:app:buildAndroidRuntime :app:buildDisplayHelper`、`:app:compileDebugKotlin :app:compileDebugJavaWithJavac`，均退出 0。随后只读交叉审查发现并修正了后台私人原文工具的读取漏口、全画像兜底召回、摘录省略第三方主语、手工记录与逐字原话重复，以及明确默认偏好重复进入记忆的问题；已合入主线 `bf6a0edf`，整合后再次完成 Web 生产构建（222项打包资源）与 Android Kotlin/Java 编译，均退出 0；保留同期聊天记录、侧栏与手机执行修复。私人聊天原系统提示也已改为优先本轮语言要求，其次保存的语言偏好，避免固定中文压过已保存设置。没有新增或执行测试。

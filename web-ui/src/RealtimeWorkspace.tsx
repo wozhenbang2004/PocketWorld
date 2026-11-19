@@ -164,7 +164,7 @@ export function RealtimeWorkspace({ state, run, registerTransientBack }: { state
 
     <div className="pw-realtime-context" data-has-transcript={!!hasTranscript}>
       {hasTranscript && <section className="pw-realtime-transcript" aria-label="本次转录">
-        <header className="pw-realtime-section-heading"><div><h3>{transcript.retained ? '本次保留的转录' : '本次通话字幕'}</h3><p>逐字复核最终文字后才能保存目标。转录来源标记不能证明说话人身份。</p></div></header>
+        <header className="pw-realtime-section-heading"><div><h3>{transcript.retained ? '本次保留的转录' : '本次通话字幕'}</h3><p>这里是文字，没有可核对或回放的原音文件。请复核最终文字；来源标记不能证明说话人身份。</p></div></header>
         {!turns.length && <p className="pw-realtime-empty">尚未收到最终输入转录。自然语音服务需要配置其实际支持的输入转录模型。</p>}
         {(expanded || visibleTurns.length < turns.length) && <Button variant="ghost" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? '只看最近字幕' : `查看全部 ${turns.length} 段`}</Button>}
         <div className="pw-realtime-turns">{visibleTurns.map(turn => <article className="pw-realtime-turn" key={turn.id} data-turn-id={turn.id}>

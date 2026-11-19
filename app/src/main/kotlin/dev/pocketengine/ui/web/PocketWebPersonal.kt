@@ -137,19 +137,23 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
             }
             "profile.memory.source" -> {
                 fields(args, "readHandle", "index", "offset")
-                val original = selected(reads, text(args, "readHandle"))
+                val handle = text(args, "readHandle")
+                val original = selected(reads, handle)
+                val expires = reads.getValue(handle).expires
                 val refs = row(original).optJSONArray("sourceRefs") ?: JSONArray()
                 val index = args.opt("index")
                 require(index is Int && index in 0 until refs.length()) { "请选择这条个人记忆的原来源" }
                 val offset = args.opt("offset")
                 require(offset is Int && offset >= 0) { "原来源位置无效" }
                 callMemory("openSource", refs.getJSONObject(index), original, done) { result ->
+                    check(reads[handle]?.expires == expires && System.currentTimeMillis() <= expires) { "原个人记忆阅读窗口已关闭或过期，请重新读取" }
                     val content = result.getString("text")
                     require(offset <= content.length && (offset == content.length || !Character.isLowSurrogate(content[offset]))) { "原来源位置已变化" }
                     var end = minOf(offset + 8000, content.length)
                     if (end < content.length && end > offset && Character.isHighSurrogate(content[end - 1])) end--
                     result.put("text", content.substring(offset, end)).put("index", index).put("offset", offset)
                         .put("nextOffset", end).put("totalChars", content.length).put("hasMore", end < content.length)
+                        .put("readExpiresAt", expires)
                 }
             }
             "profile.memory.review" -> {

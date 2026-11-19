@@ -306,7 +306,7 @@ public final class AutomationBook {
     public JSONArray receipts()throws Exception{
         JSONArray values;synchronized(lock){values=read().getJSONArray("receipts");}
         // TaskStore callbacks are deliberately outside the rule lock.
-        for(int i=0;i<values.length();i++){JSONObject receipt=values.getJSONObject(i);if("phone_goal".equals(receipt.optString("kind")))receipt.put("goalState",goalState(receipt));}
+        for(int i=0;i<values.length();i++){JSONObject receipt=values.getJSONObject(i);if("phone_goal".equals(receipt.optString("kind")))receipt.put("goalState",goalState(receipt,true));}
         return values;
     }
     public JSONObject goalState(String occurrenceId)throws Exception {
@@ -335,7 +335,8 @@ public final class AutomationBook {
         return new JSONObject().put("rules",summary).put("recentGoalStates",goals).put("goalStatesTruncated",totalGoals>20)
                 .put("nextWakeAt",next<0?JSONObject.NULL:next).put("timing","inexact_best_effort").put("executionAuthorized",false);
     }
-    private JSONObject goalState(JSONObject receipt)throws Exception {
+    private JSONObject goalState(JSONObject receipt)throws Exception {return goalState(receipt,false);}
+    private JSONObject goalState(JSONObject receipt,boolean forReceiptRead)throws Exception {
         JSONObject result=new JSONObject().put("occurrenceId",receipt.getString("id")).put("executionAuthorized",false).put("authority","TaskStore");
         if(goalTasks==null)return result.put("state","host_evidence_unavailable");
         JSONObject task;
@@ -347,6 +348,13 @@ public final class AutomationBook {
             return result.put("state","evidence_mismatch");
         String status=task.optString("status");
         result.put("taskId",task.getString("taskId")).put("taskStatus",status).put("authorizationValid",Boolean.TRUE.equals(task.opt("authorizationValid")));
+        // A receipt can outlive a particular run. Bind read navigation to the observed
+        // TaskStore round without changing goal admission, scheduling or overlap checks.
+        if(forReceiptRead&&!receipt.optBoolean("sourceCheckPending")&&!receipt.optBoolean("sourceInvalidated")){
+            Object run=task.opt("runId");int epoch=task.optInt("coordinatorEpoch",0);
+            if(run instanceof String&&!((String)run).trim().isEmpty()&&((String)run).length()<=80&&epoch>0&&sameInteger(task.opt("coordinatorEpoch"),epoch))
+                result.put("runId",run).put("coordinatorEpoch",epoch);
+        }
         if("completed".equals(status)){
             JSONObject evidence=task.optJSONObject("evidenceRef");
             if(!Boolean.TRUE.equals(task.opt("resultVerified"))||evidence==null||!evidence.optString("kind").matches("owner_confirmation|task_result")||evidence.optString("id").trim().isEmpty())return result.put("state","unverified_result");

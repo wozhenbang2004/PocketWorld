@@ -118,6 +118,34 @@ export class DeviceRequestScope {
 export type DeviceRequestTicket = { generation: number; sequence: number; lane: string };
 // A native observation is not a live promise. DEGRADED still had an authenticated control channel.
 export const deviceChannelWasConnected = (peer: DeviceData): boolean => !peer.revoked && (peer.connection?.state === 'ONLINE' || peer.connection?.state === 'DEGRADED');
+/** A readable index of the two original grant lists, not a new capability or execution decision. */
+export function deviceRecordedScopes(peer: DeviceData, fromPeer: boolean, now: number) {
+  const scopes = deviceRows(fromPeer ? peer.receivedGrantScopes : peer.grantScopes);
+  const current = scopes.filter(scope => peer.revoked !== true && peer.connection?.state !== 'REVOKED'
+    && (fromPeer ? scope.receivedScope === true : scope.state === 'active')
+    && positiveInteger(scope.expiresAt) && scope.expiresAt > now);
+  const labels = new Set<string>();
+  for (const scope of current) {
+    const methods = deviceStrings(scope.capabilities), tools = deviceStrings(scope.toolNames);
+    if (methods.includes('desktop.viewer')) labels.add('查看指定桌面或窗口');
+    if (methods.includes('task.submitGoal')) labels.add('提交目标');
+    if (methods.includes('tool.invoke') && tools.length) {
+      for (const binding of deviceRows(scope.resources)) {
+        if (binding.screenMode === 'main_screen') labels.add('指定主屏工具');
+        else if (binding.screenMode === 'background') labels.add('指定独立屏工具');
+        else if (binding.projectId && binding.checkoutId) labels.add('指定项目工具');
+        else if (tools.includes('automation_propose_schedule')) labels.add('提交定时草稿');
+        else if (binding.kind === 'desktop') labels.add('指定电脑工具');
+        else labels.add('指定工具');
+      }
+    }
+  }
+  const names = [...labels];
+  const workRecorded = current.some(scope => deviceStrings(scope.capabilities).includes('task.submitGoal')
+    || deviceStrings(scope.capabilities).includes('tool.invoke') && deviceStrings(scope.toolNames).some(tool => !['automation_propose_schedule', 'automation_get_schedule_draft'].includes(tool)));
+  return { count: current.length, workRecorded, text: names.length ? names.slice(0, 3).join('、') + (names.length > 3 ? `等 ${names.length} 类` : '')
+    : current.length ? '有范围记录，详见准确方法' : scopes.length ? '本页未见仍在有效期内的范围' : fromPeer ? '尚未读到对方给本机的范围' : '本页未读到给对方的范围' };
+}
 export const deviceConnectionLabel = (peer: DeviceData): string => peer.revoked === true ? '本机已撤销信任' : ({ CONNECTING: '正在建立加密连接', ONLINE: '加密通道已连接', DEGRADED: '已连接，但不稳定', OFFLINE: '离线', REVOKED: '连接已撤销', INCOMPATIBLE: '协议不兼容，未自动重试' } as Record<string, string>)[peer.connection?.state] || '连接状态待核对';
 export const deviceOperationLabels: Record<string, string> = { 'receiver.enable': '启用本机设备接收', 'receiver.disable': '停用本机设备接收', 'peer.connect': '连接原设备', 'peer.disconnect': '停止主动连接', 'peer.revoke': '撤销本机设备信任', 'relay.remove': '移除临时中继租约', 'task.stop': '请求原任务停止', 'task.pause': '请求原任务暂停', 'task.resume': '继续同一次执行', 'task.cancelPending': '取消本机未启动目标' };
 export const deviceMethodLabels: Record<string, string> = { 'tool.invoke': '调用明确工具', 'task.submitGoal': '委派目标并使用已授权模型', 'task.cancel': '请求原任务停止', 'operation.cancel': '请求原操作停止', 'task.pause': '请求原任务暂停', 'task.get': '读取任务结果', 'task.events': '读取任务进展', 'operation.get': '读取操作回执', 'artifact.describe': '读取成果说明', 'artifact.readChunk': '读取成果内容', 'task.acquireControl': '申请原任务控制租约' };

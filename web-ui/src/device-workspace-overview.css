@@ -21,6 +21,12 @@
 .pw-devices-reading .pw-device-observation { border-radius: 14px; background: var(--pw-inset); margin: 0 0 var(--pw-gap-section); }
 .pw-devices-reading .pw-device-observation .pw-device-connection-heading { align-items: center; }
 .pw-devices-reading .pw-device-observation p > svg { vertical-align: -.12em; }
+.pw-device-scope-directions { display: grid; gap: 5px; margin: var(--pw-gap-control) 0 0; }
+.pw-device-scope-directions > div { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: var(--pw-gap-control); align-items: baseline; }
+.pw-device-scope-directions dt { color: var(--pw-copy); font-size: .8125rem; }
+.pw-device-scope-directions dd { min-width: 0; margin: 0; color: var(--pw-ink); font-size: .875rem; overflow-wrap: anywhere; }
+.pw-device-pair-roles [role="radiogroup"] { display: flex; flex-wrap: wrap; gap: var(--pw-gap-control); }
+.pw-device-pair-roles .pw-radio-option { flex: 1 1 9rem; min-width: 0; min-height: var(--pw-control-target,44px); }
 .pw-devices-reading .pw-device-tasks .pw-device-task-list { padding: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .pw-devices-reading .pw-device-task-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .pw-devices-reading[data-device-view="list"] { container: device-directory / inline-size; }

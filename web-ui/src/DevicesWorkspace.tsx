@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
-import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
-import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
+import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceRecordedScopes, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { DeviceTaskPreparation } from './DeviceTaskPreparation';
 import { PhoneControlPreparation } from './PhoneControlPreparation';
@@ -20,6 +20,7 @@ const time = (value: any) => typeof value === 'number' && value > 0 ? new Date(v
 const available = (value: any) => value?.available === true;
 const unreadSource = (task: Data) => task.summaryOnly === true || task.raw?.contextAvailable === false || task.raw?.sourceCurrentReadRequired === true || task.raw?.taskProjection === 'source_unavailable';
 const retired = (peer: Data) => peer.revoked === true || peer.connection?.state === 'REVOKED';
+const platformIcon = (peer: Data) => /android|ios|phone/i.test(peer.platform || '') ? IconPhone : /windows|macos|linux|desktop/i.test(peer.platform || '') ? IconMonitor : IconDevices;
 const fingerprint = (value: any) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value.match(/.{1,8}/g)?.join(' ') : '未取得完整指纹';
 const grantDraft = () => ({ optionId: '', toolBudget: '', modelBudget: '', durationMinutes: '15', historyDays: '7', historyReadMethods: [] as string[], additionalOriginOptionIds: [] as string[], forwardingOptionIds: [] as string[], forwardingToolBudget: '', forwardingModelBudget: '', wholeDisplayCapture: false });
 
@@ -28,19 +29,24 @@ function ResourceScope({ resource }: { resource: Data }) {
   return <dl className="pw-facts">{Object.entries(resource).map(([key, value]) => <div key={key}><dt>{labels[key] || key}</dt><dd>{typeof value === 'boolean' ? value ? '允许' : '不允许' : Array.isArray(value) ? value.join('、') : typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>;
 }
 function GrantScope({ scope }: { scope: Data }) {
-  const status = ({ active: '执行授权有效', expired: '执行授权已到期', revoked: '授权已撤销', stale_epoch: '旧授权代次，不能执行', identity_changed: '本机身份不可用，旧授权不能执行' } as Record<string, string>)[scope.state];
-  return <div className="pw-source-copy">{scope.receivedScope === true ? <p>上次收到的对端授权回执，执行时仍核对当前状态。</p> : status && <p>{status}</p>}{scope.budgetStatus?.budgetState === 'known' && <p>可分配给新任务：工具 {scope.budgetStatus.toolsAvailableForNewAllocations} 次 · 模型 {scope.budgetStatus.modelsAvailableForNewAllocations} 次</p>}{typeof scope.retainedToolsReservedOrUsed === 'number' && <p>已有占用：工具 {scope.retainedToolsReservedOrUsed} 次 · 模型 {scope.retainedModelsReservedOrUsed} 次，不因本次修改清零。</p>}{scope.label && <h4>{scope.label}</h4>}{scope.effectSummary && <p>{scope.effectSummary}</p>}<p>{strings(scope.capabilities).map(method => deviceMethodLabels[method] || method).join(' · ') || '可用方法尚未提供'}</p>{strings(scope.toolNames).length > 0 && <p>准确工具：{strings(scope.toolNames).join('、')}</p>}{rows(scope.resources).map((resource, index) => <ResourceScope key={index} resource={resource} />)}{scope.isolation === false && <p>执行代码可能访问该系统用户可访问的资源，项目目录不是系统沙箱。</p>}{typeof scope.toolBudget === 'number' && <p>授权期内累计：工具 {scope.toolBudget} 次 · 模型 {scope.modelBudget} 次 · 至 {time(scope.expiresAt)}</p>}{scope.historyRead ? <p>结果读取至 {time(scope.historyRead.expiresAt)} · {strings(scope.historyRead.methods).map(method => deviceMethodLabels[method] || method).join('、')}</p> : typeof scope.expiresAt === 'number' && <p>执行到期后未另行授权读取结果。</p>}{scope.allowedOrigins && <p>原发起设备：{strings(scope.allowedOrigins).join('、')}</p>}{scope.forwardingScope ? <><p>下游允许方法：{strings(scope.forwardingScope.capabilities).map(method => deviceMethodLabels[method] || method).join('、')}</p><p>下游准确工具：{strings(scope.forwardingScope.toolNames).join('、')}</p><p>下游累计：工具 {scope.forwardingScope.toolBudget} 次 · 模型 {scope.forwardingScope.modelBudget} 次</p>{rows(scope.forwardingScope.targetResources).map((target, index) => <div key={index}><p>下游设备 {target.targetDeviceId}</p><ResourceScope resource={target.resourceBinding || {}} /></div>)}</> : scope.allowDelegation === true ? <p>仅允许列明来源转交，不继续委派。</p> : <p>未授权转交来源或继续委派。</p>}</div>;
+  const expired = Number.isSafeInteger(scope.expiresAt) && scope.expiresAt <= Date.now();
+  const status = ({ active: '上次核对时执行授权有效', expired: '执行授权已到期', revoked: '授权已撤销', stale_epoch: '旧授权代次，不能执行', identity_changed: '本机身份不可用，旧授权不能执行' } as Record<string, string>)[scope.state === 'active' && expired ? 'expired' : scope.state];
+  return <div className="pw-source-copy">{scope.receivedScope === true ? <p>{expired ? '对方授权回执中的执行期限已过，结果读取期限另计。' : '上次收到的对端授权回执，执行时仍核对当前状态。'}</p> : status && <p>{status}</p>}{scope.budgetStatus?.budgetState === 'known' && <p>可分配给新任务：工具 {scope.budgetStatus.toolsAvailableForNewAllocations} 次 · 模型 {scope.budgetStatus.modelsAvailableForNewAllocations} 次</p>}{typeof scope.retainedToolsReservedOrUsed === 'number' && <p>已有占用：工具 {scope.retainedToolsReservedOrUsed} 次 · 模型 {scope.retainedModelsReservedOrUsed} 次，不因本次修改清零。</p>}{scope.label && <h4>{scope.label}</h4>}{scope.effectSummary && <p>{scope.effectSummary}</p>}<p>{strings(scope.capabilities).map(method => deviceMethodLabels[method] || method).join(' · ') || '可用方法尚未提供'}</p>{strings(scope.toolNames).length > 0 && <p>准确工具：{strings(scope.toolNames).join('、')}</p>}{rows(scope.resources).map((resource, index) => <ResourceScope key={index} resource={resource} />)}{scope.isolation === false && <p>执行代码可能访问该系统用户可访问的资源，项目目录不是系统沙箱。</p>}{typeof scope.toolBudget === 'number' && <p>授权期内累计：工具 {scope.toolBudget} 次 · 模型 {scope.modelBudget} 次 · 至 {time(scope.expiresAt)}</p>}{scope.historyRead ? <p>结果读取至 {time(scope.historyRead.expiresAt)} · {strings(scope.historyRead.methods).map(method => deviceMethodLabels[method] || method).join('、')}</p> : typeof scope.expiresAt === 'number' && <p>执行到期后未另行授权读取结果。</p>}{scope.allowedOrigins && <p>原发起设备：{strings(scope.allowedOrigins).join('、')}</p>}{scope.forwardingScope ? <><p>下游允许方法：{strings(scope.forwardingScope.capabilities).map(method => deviceMethodLabels[method] || method).join('、')}</p><p>下游准确工具：{strings(scope.forwardingScope.toolNames).join('、')}</p><p>下游累计：工具 {scope.forwardingScope.toolBudget} 次 · 模型 {scope.forwardingScope.modelBudget} 次</p>{rows(scope.forwardingScope.targetResources).map((target, index) => <div key={index}><p>下游设备 {target.targetDeviceId}</p><ResourceScope resource={target.resourceBinding || {}} /></div>)}</> : scope.allowDelegation === true ? <p>仅允许列明来源转交，不继续委派。</p> : <p>未授权转交来源或继续委派。</p>}</div>;
 }
 
 function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean; confirm: (args: Data) => void }) {
   const [draft, setDraft] = useState<Data>(grantDraft), [error, setError] = useState('');
   const view = review.view, options = rows(view.grantOptions), option = options.find(row => row.optionId === draft.optionId);
+  const [filter, setFilter] = useState('');
+  const matches = options.filter(row => String(row.label || row.optionId).toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()));
   const update = (key: string, value: any) => setDraft(old => ({ ...old, [key]: value }));
   const toggle = (key: string, id: string, selected: boolean) => update(key, selected ? [...strings(draft[key]), id] : strings(draft[key]).filter(value => value !== id));
   return <>
     <p>{review.kind === 'grant' ? '选择将替换本机授予对端的范围。已有用量不会清零。' : '明确选择另一台设备能在这里做什么。双方分别决定各自的授权。'}</p>
     {view.currentGrant && <Accordion><AccordionItem id="current" title="当前权限"><GrantScope scope={view.currentGrant} /></AccordionItem></Accordion>}
-    <SelectField label="应用、项目或本机能力范围" value={draft.optionId} options={options.map(row => ({ id: row.optionId, label: row.label || row.optionId }))} onChange={id => { const chosen = options.find(row => row.optionId === id); if (chosen) { setDraft({ ...grantDraft(), optionId: id, toolBudget: String(Math.max(chosen.toolBudgetMin || 0, Math.min(12, chosen.toolBudgetMax))), modelBudget: String(Math.max(chosen.modelBudgetMin || 0, Math.min(3, chosen.modelBudgetMax))) }); setError(''); } }} isDisabled={busy} />
+    {options.length > 8 && <SearchField aria-label="筛选本机可授予的范围" placeholder="搜索应用、项目或能力" value={filter} isDisabled={busy} onChange={value => { setFilter(value); setDraft(grantDraft()); setError(''); }} />}
+    <SelectField label="允许对方在这台手机使用什么" value={draft.optionId} placeholder="明确选择一个范围" options={matches.map(row => ({ id: row.optionId, label: row.label || row.optionId }))} onChange={id => { const chosen = matches.find(row => row.optionId === id); if (chosen) { setDraft({ ...grantDraft(), optionId: id, toolBudget: String(Math.max(chosen.toolBudgetMin || 0, Math.min(12, chosen.toolBudgetMax))), modelBudget: String(Math.max(chosen.modelBudgetMin || 0, Math.min(3, chosen.modelBudgetMax))) }); setError(''); } }} isDisabled={busy || !matches.length} />
+    {!!options.length && !matches.length && <p>没有匹配的本机范围，请更换或清除搜索词。</p>}
     {!options.length && <p>{view.grantOptionsUnavailableReason || '当前没有可授予的原生范围，请先核对本机设置。'}</p>}
     {option && <>
       <GrantScope scope={option} />
@@ -74,7 +80,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const busy = workBusy || controlBusy;
   const alive = useRef(true), scope = useRef(new DeviceRequestScope()), handle = useRef(''), selectedPeer = useRef(peerId), resumed = useRef(state.webWorkspaceResumeRevision), nativeRevision = useRef(state.deviceWorkspaceRevision);
   const acceptSnapshot = (value: any) => { const actual = deviceSnapshot(value); setSnapshot(old => !old || actual.capturedAt >= old.capturedAt ? actual : old); };
-  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void, lane = 'work') => {
+  const invoke = async (action: string, args: Data = {}, accept?: (value: Data, snapshot?: Data | null) => void, lane = 'work') => {
     if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending(lane)) return;
     if (lane === 'control' && action !== 'devices.confirm') {
       scope.current.invalidate(true); setWorkBusy(false); setReview(null); handle.current = ''; setInvitation(''); setForm(''); setRaw('');
@@ -87,7 +93,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       const response = await run(action, args);
       if (alive.current && scope.current.owns(ticket)) {
         if (action === 'devices.openTask' || action === 'devices.discard') accept?.(response);
-        else { const receipt = deviceReceipt(response); if (receipt.snapshot) acceptSnapshot(receipt.snapshot); accept?.(receipt.value); }
+        else { const receipt = deviceReceipt(response); if (receipt.snapshot) acceptSnapshot(receipt.snapshot); accept?.(receipt.value, receipt.snapshot); }
       } else if (typeof response?.value?.viewHandle === 'string') {
         void run('devices.discard', { viewHandle: response.value.viewHandle }).catch(() => {});
       }
@@ -111,10 +117,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     setPeerId(next);
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
-  const clearSensitive = (enabled = false) => {
+  const clearSensitive = (enabled = false, keepPairEntry = false) => {
     setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation('');
-    setForm(''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
+    setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
   };
   useEffect(() => { if (document.visibilityState === 'visible') { try { acceptSnapshot(data); } catch { /* A summary is not a native device snapshot. */ } } }, [data]);
@@ -122,10 +128,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh();
     return () => { alive.current = false; scope.current.invalidate(false); handle.current = ''; void run('devices.discard', {}).catch(() => {}); };
   }, []);
-  useEffect(() => { if (resumed.current === state.webWorkspaceResumeRevision) return; resumed.current = state.webWorkspaceResumeRevision; clearSensitive(document.visibilityState === 'visible'); refresh(); }, [state.webWorkspaceResumeRevision]);
+  useEffect(() => { if (resumed.current === state.webWorkspaceResumeRevision) return; resumed.current = state.webWorkspaceResumeRevision; clearSensitive(document.visibilityState === 'visible', true); refresh(); }, [state.webWorkspaceResumeRevision]);
   useEffect(() => {
-    const changed = () => { clearSensitive(document.visibilityState === 'visible'); if (document.visibilityState === 'visible') refresh(); };
-    const hidden = () => clearSensitive(false);
+    const changed = () => { clearSensitive(document.visibilityState === 'visible', true); if (document.visibilityState === 'visible') refresh(); };
+    const hidden = () => clearSensitive(false, true);
     document.addEventListener('visibilitychange', changed); window.addEventListener('pagehide', hidden);
     return () => { document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); };
   }, []);
@@ -166,6 +172,23 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   }, [peerId, desktopOpen]);
   const peers = rows(snapshot?.peers).filter(row => typeof row.deviceId === 'string' && row.deviceId.trim());
   const peer = peerId ? peers.find(row => row.deviceId === peerId) : undefined, local = snapshot?.local || {}, actions = snapshot?.actions || {};
+  const PeerIcon = peer ? platformIcon(peer) : IconDevices;
+  const pairingEntry = form === 'add' || form === 'invite';
+  const inviteAddresses = strings(actions.localAddresses);
+  const inviteAddress = address ? inviteAddresses.includes(address) ? address : '' : inviteAddresses.length === 1 ? inviteAddresses[0] : '';
+  const openPairEntry = (side: 'add' | 'invite') => { setRaw(''); setAddress(''); setError(''); setNotice(''); setForm(side); };
+  const reportPair = (candidate: Data, receipt: Data | null | undefined) => {
+    const here = receipt?.local;
+    const localKnown = typeof here?.deviceId === 'string' && !!here.deviceId && typeof here.certificateFingerprint === 'string' && /^[a-f0-9]{64}$/.test(here.certificateFingerprint);
+    const other = localKnown && here.deviceId === candidate.inviterDeviceId && here.certificateFingerprint === candidate.inviterFingerprint ? 'joiner'
+      : localKnown && here.deviceId === candidate.joinerDeviceId && here.certificateFingerprint === candidate.joinerFingerprint ? 'inviter' : '';
+    const otherId = other && candidate[other + 'DeviceId'], otherFingerprint = other && candidate[other + 'Fingerprint'];
+    const match = typeof otherId === 'string' && otherId.length > 0 && typeof otherFingerprint === 'string' && /^[a-f0-9]{64}$/.test(otherFingerprint)
+      && rows(receipt?.peers).find(item => !retired(item) && item.deviceId === otherId && item.certificateFingerprint === otherFingerprint);
+    if (match) { rememberReadingPosition('list'); selectPeer(match.deviceId); setNotice('本机已读到同一身份的配对伙伴。查看双方授权范围，再决定是否开始工作。'); }
+    else setNotice(other === 'joiner' ? '本机已确认。请回到加入邀请的设备，选「继续原配对」完成双端握手。'
+      : other === 'inviter' ? '原配对尚未读到已保存的伙伴。请对方核对指纹与范围，再从这台手机继续原配对。' : '配对请求已有回执，尚未核对到同一身份的伙伴。请查看原配对记录。');
+  };
   const tasks = deviceTaskRows(state.tasks, snapshot, peerId);
   const readPeerCapabilities = () => {
     if (!peer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
@@ -173,20 +196,31 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     void invoke('devices.snapshot', { deviceId: peer.deviceId }, () => setNotice('已收到读取回执，以下方能力记录的时间为准。'));
   };
   const phoneCapabilities = rows(peer?.capabilitySnapshot?.capabilities).filter(item => ['phone.tools.main', 'phone.tools.background', 'agent.goal'].includes(item.id));
-  const validUntil = peer?.capabilitySnapshot?.validUntil;
-  const capabilityCaveat = !Number.isSafeInteger(validUntil) || validUntil <= 0 ? '尚未核实有效期限' : validUntil <= Date.now() ? '上次读取已过期' : '';
+  const now = Date.now(), validUntil = peer?.capabilitySnapshot?.validUntil;
+  const received = peer && deviceRecordedScopes(peer, true, now), given = peer && deviceRecordedScopes(peer, false, now);
+  // Repaint a recorded expiry while the page is open; never poll or contact the partner here.
+  const nextExpiry = Math.min(...[validUntil, ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
+    .filter(t => Number.isSafeInteger(t) && t > now));
+  const [clockRevision, tickClock] = useState(0);
+  useEffect(() => {
+    if (!Number.isFinite(nextExpiry)) return;
+    const timer = window.setTimeout(() => tickClock(value => value + 1), Math.min(2_147_483_647, Math.max(1, nextExpiry - Date.now())));
+    return () => window.clearTimeout(timer);
+  }, [nextExpiry, clockRevision]);
+  const capabilityCaveat = !Number.isSafeInteger(validUntil) || validUntil <= 0 ? '尚未核实有效期限' : validUntil <= now ? '上次读取已过期' : '';
   const phonePeer = /android|phone/i.test(peer?.platform || '') || phoneCapabilities.some(item => String(item.id).startsWith('phone.'));
   const desktopPeer = desktopScopes(peer || {}).length > 0 || /windows/i.test(peer?.platform || '') || rows(peer?.capabilitySnapshot?.capabilities).some(item => String(item.id).startsWith('desktop.'));
   const localPhone = rows(state.phoneReadiness?.groups);
   const phoneStatus = (id: string) => { const value = localPhone.find(row => row.id === id); return ({ ready: '本机检查可用', blocked: '需要准备', unsupported: '本机不支持', unknown: '尚未核实' } as Record<string,string>)[value?.state] || '尚未核实'; };
-  const openPhoneSetup = (section: 'accessibility' | 'background') => { if (busy) return; clearSensitive(true); void run('settings.openSystem', { section }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); };
+  const openPhoneSetup = (section: 'accessibility' | 'background' | 'notifications') => { if (busy) return; clearSensitive(true, form === 'invite'); void run('settings.openSystem', { section }).catch(async failure => { await invoke('devices.snapshot'); if (alive.current && document.visibilityState === 'visible') setError(failure instanceof Error ? failure.message : String(failure)); }); };
   const actionReview = (operation: string, extra: Data = {}) => { void invoke('devices.reviewAction', { operation, ...extra }, acceptReview, operation.startsWith('task.') ? 'control' : 'work'); };
   const confirmReview = (extra: Data = {}) => {
     const original = review; if (!original || !ack || busy) return;
     handle.current = ''; setReview(null);
-    void invoke('devices.confirm', { viewHandle: original.viewHandle, acknowledged: true, ...(original.kind === 'goal' ? { useForFutureGoals: future } : {}), ...extra }, value => {
+    void invoke('devices.confirm', { viewHandle: original.viewHandle, acknowledged: true, ...(original.kind === 'goal' ? { useForFutureGoals: future } : {}), ...extra }, (value, actual) => {
       if (value.nativeCallReturned !== true || value.kind !== original.kind) throw new Error('原设备操作尚未取得匹配回执，请刷新核对。');
-      setNotice(original.kind === 'pair' ? '本机指纹与权限确认已提交。等待双端完成握手，以原配对状态为准。' : original.kind === 'resume' ? extra.approved === true ? '已处理这次原执行的恢复请求，实际进展以原任务回执为准。' : '已拒绝这次恢复请求，原任务未因本次拒绝而继续。' : original.kind === 'action' && original.view.operation?.startsWith('task.') ? '已发出原任务控制请求。实际暂停、继续或停止以原任务回执为准。' : '原生处理已返回，请核对下方实际状态。');
+      if (original.kind === 'pair') { reportPair(original.view, actual); return; }
+      setNotice(original.kind === 'resume' ? extra.approved === true ? '已处理这次原执行的恢复请求，实际进展以原任务回执为准。' : '已拒绝这次恢复请求，原任务未因本次拒绝而继续。' : original.kind === 'action' && original.view.operation?.startsWith('task.') ? '已发出原任务控制请求。实际暂停、继续或停止以原任务回执为准。' : '原生处理已返回，请核对下方实际状态。');
     }, original.kind === 'resume' || original.kind === 'action' && original.view.operation?.startsWith('task.') ? 'control' : 'work');
   };
   const openHistory = (taskId: string, link: Data) => {
@@ -339,6 +373,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               </AccordionItem>
               <AccordionItem id="receiver" title="本机接收服务" description={receiverLabel} icon={IconPhone}>
                 <p>本机接收、双端身份与每项授权分别核对。连接状态不代表任务已经停止或完成。</p>
+                {local.certificateFingerprint && <p className="pw-source-copy">本机完整指纹：<bdi>{fingerprint(local.certificateFingerprint)}</bdi></p>}
                 {local.receiverReason && <p>{local.receiverReason}</p>}
                 <Button variant="secondary" disabled={busy || !available(actions[local.receiverEnabled ? 'disable' : 'enable'])} onClick={() => actionReview(local.receiverEnabled ? 'receiver.disable' : 'receiver.enable')}>{local.receiverEnabled ? '核对并停用接收' : '核对并启用接收'}</Button>
                 {!available(actions[local.receiverEnabled ? 'disable' : 'enable']) && <p>{actions[local.receiverEnabled ? 'disable' : 'enable']?.reason}</p>}
@@ -372,10 +407,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           {pairings.length > 0 && <section className="pw-device-section" aria-label="等待核对的原配对">
             <WorkspaceSectionHeading title="配对待确认" description={`${pairings.length} 项`} />
             <div className="pw-device-attention">
-              {pairings.map(candidate => <article className="pw-device-pairing" key={candidate.candidateId || candidate.inviteId} data-motion-key={`pairing:${candidate.candidateId || candidate.inviteId}`}>
-                <div><h4>{candidate.label || '原设备配对'}</h4><p>{candidate.state === 'waiting_remote_confirmation' ? '等待另一台设备确认' : candidate.state === 'confirmed_for_mtls' ? '身份已确认，等待完成握手' : candidate.state === 'paired' ? '配对回执已产生，请核对当前信任' : '等待本机核对'}</p></div>
-                <Button variant="secondary" disabled={busy || candidate.advanceAvailable !== true && candidate.reviewAvailable !== true && !['', 'pending_owner_confirmation'].includes(candidate.state || '')} onClick={() => { void invoke(candidate.advanceAvailable ? 'devices.advancePairing' : 'devices.reviewPairing', { candidateId: candidate.candidateId || candidate.inviteId }, candidate.advanceAvailable ? () => setNotice('已查询原配对状态，未重新发起配对。') : acceptReview); }}>{candidate.advanceAvailable ? '查询原配对进度' : '审阅范围与双端身份'}</Button>
-              </article>)}
+              {pairings.map(candidate => {
+                const id = candidate.candidateId || candidate.inviteId, advance = candidate.advanceAvailable === true;
+                const other = local.deviceId && (local.deviceId === candidate.inviterDeviceId ? candidate.joinerDeviceId : local.deviceId === candidate.joinerDeviceId ? candidate.inviterDeviceId : '');
+                return <article className="pw-device-pairing" key={id} data-motion-key={`pairing:${id}`}>
+                  <div><h4>{candidate.label || (typeof other === 'string' && other ? `设备 ${other.slice(-4)}` : '原设备配对')}</h4>
+                    <p>{advance ? '等对方确认后，在这里继续。双方均确认时会完成握手、保存配对并尝试连接；不会启动任务。'
+                      : candidate.reviewAvailable === true ? '在这台设备核对权限与两个完整指纹。' : candidate.state === 'confirmed_for_mtls' ? '本机已确认，接下来由加入邀请的一方继续配对。' : '请重读本机记录核对进展。'}</p></div>
+                  {advance ? <Button variant="secondary" disabled={busy || !id || !supported('devices.advancePairing')} onClick={() => { void invoke('devices.advancePairing', { candidateId: id }, (value, actual) => {
+                    if (value.queriedOriginalPairing !== true) throw new Error('尚未收到这次原配对的回执，请重读本机记录。');
+                    reportPair(candidate, actual);
+                  }); }}>继续原配对</Button> : candidate.reviewAvailable === true ? <Button variant="secondary" disabled={busy || !id || !supported('devices.reviewPairing')} onClick={() => { void invoke('devices.reviewPairing', { candidateId: id }, acceptReview); }}>核对权限与身份</Button> : null}
+                </article>;
+              })}
             </div>
           </section>}
           <section className="pw-device-section" aria-label="设备配对">
@@ -383,18 +427,18 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               description={trusted.length ? `${snapshot.hasMorePeers ? '本页' : '已配对'} ${trusted.length} 台 · 按上次检查分组` : snapshot.hasMorePeers ? '当前读取页没有有效配对' : peers.length ? '目前没有有效配对' : '尚未配对其他设备'}
               actions={<>
                 <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新设备状态" title="刷新设备状态" disabled={busy} onClick={refresh} />
-                <Button variant={pairings.length || trusted.length ? 'secondary' : 'primary'} leadingIcon={IconAdd} disabled={busy} onClick={() => { setForm('add'); setRaw(''); setAddress(''); }}>配对设备</Button>
+                <Button variant={pairings.length || trusted.length ? 'secondary' : 'primary'} leadingIcon={IconAdd} disabled={busy} onClick={() => openPairEntry('add')}>配对设备</Button>
               </>} />
-            {!trusted.length && !snapshot.hasMorePeers && <p className="pw-device-pair-note">{pairings.length ? '已有配对等待核对，无需重新发起。' : '需要另一台手机或电脑时，交换短期邀请，并分别核对两端身份与范围。'}</p>}
+            {!trusted.length && !snapshot.hasMorePeers && <p className="pw-device-pair-note">{pairings.length ? '已有配对等待核对，无需重新发起。' : '已有对方的邀请可直接加入；从这台手机发邀请才需要先开本机接收。'}</p>}
             {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
             {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
-              {section.peers.map(row => <Button key={row.deviceId} data-peer-entry={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={/android|ios|phone/i.test(row.platform || '') ? IconPhone : IconMonitor} trailingIcon={IconChevronRight} disabled={busy} onClick={() => { rememberReadingPosition('list'); selectPeer(row.deviceId); }}>
+              {section.peers.map(row => <Button key={row.deviceId} data-peer-entry={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={platformIcon(row)} trailingIcon={IconChevronRight} disabled={busy} onClick={() => { rememberReadingPosition('list'); selectPeer(row.deviceId); }}>
                 <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{row.platform || (retired(row) ? '原设备' : '配对设备')} · {row.connection?.observedAt > 0 ? time(row.connection.observedAt) : '尚无检查时间'}</small></span>
               </Button>)}
             </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : null}
           </section>
           {originalWork}
-          {supported('deviceTaskScope.prepare') && <section className="pw-device-section" aria-label="准备新的设备工作">
+          {(trusted.length > 0 || snapshot.hasMorePeers) && supported('deviceTaskScope.prepare') && <section className="pw-device-section" aria-label="准备新的设备工作">
             <WorkspaceSectionHeading title="准备新工作" actions={<>
               <Button variant="secondary" disabled={busy} onClick={() => setForm('work')}>准备交给助手</Button>
               {supported('phoneControl.prepare') && <Button variant="ghost" disabled={busy} onClick={() => setForm('manual')}>自己控制手机</Button>}
@@ -405,7 +449,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {peer && <>
           <section className="pw-device-connection pw-device-observation" aria-label="这台设备上次的连接检查">
             <MotionFeedback identity={JSON.stringify([peer.deviceId, peer.connection?.state, peer.revoked])} initial={false} className="pw-device-connection-heading" role="status">
-              {phonePeer ? <IconPhone size={20} aria-hidden/> : <IconMonitor size={20} aria-hidden/>}
+              <PeerIcon size={20} aria-hidden/>
               <div><span className="pw-device-observation-label">上次连接检查</span><h3>{deviceConnectionLabel(peer)}</h3></div>
             </MotionFeedback>
             <p><IconClock size={14} aria-hidden/> {time(peer.connection?.observedAt)}</p>
@@ -414,8 +458,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               : peer.connection?.state === 'DEGRADED' ? <p>上次通道不稳定。打开本机记录不需要重新配对；读取对端最新结果需重新核对。</p>
               : !deviceChannelWasConnected(peer) ? <p>未接通不等于工作停止。先查看原记录，需要对端时再核对连接。</p>
               : <p>当时通道已接通；画面、输入和本次执行范围另行核对。</p>}
+            {!retired(peer) && <><dl className="pw-device-scope-directions">
+              <div><dt>对方给本机</dt><dd>{received?.text}</dd></div>
+              <div><dt>本机给对方</dt><dd>{given?.text}</dd></div>
+            </dl><p>这是已读授权，不是执行回执。准确应用、工具和额度见「能力与两端权限」。</p></>}
           </section>
-          {originalWork || <section className="pw-device-no-work"><h3>这台设备的原工作</h3><p>本次读取还没有关联的原工作。</p></section>}
+          {originalWork || <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p>
+            {!retired(peer) && <div className="pw-form-actions">
+              {!deviceChannelWasConnected(peer) && available(peer.actions?.connect) ? <Button variant="secondary" disabled={busy} onClick={() => actionReview('peer.connect', { deviceId: peer.deviceId })}>核对并连接这台设备</Button>
+                : !received?.count && deviceChannelWasConnected(peer) && supported('devices.snapshot') ? <Button variant="secondary" disabled={busy} onClick={readPeerCapabilities}>向对方读取能力与授权</Button>
+                : desktopScopes(peer).some(scope => scope.available) ? <Button variant="secondary" disabled={busy} onClick={() => { rememberReadingPosition('detail'); setDesktopOpen(true); }}>选择已授权桌面或窗口</Button>
+                : received?.workRecorded && supported('deviceTaskScope.prepare') ? <Button variant="secondary" disabled={busy} onClick={() => setForm('work')}>写目标，再选择设备范围</Button> : null}
+            </div>}
+          </section>}
           <Accordion className="pw-device-disclosures">
             {!retired(peer) && (desktopPeer || phonePeer || supported('deviceTaskScope.prepare')) && <AccordionItem id="peer-work-options" title="新工作与手动查看" description="新目标要重新选择设备和范围，不沿用原工作的权限" icon={IconLayers}>
               {!deviceChannelWasConnected(peer) && <p>准备目标不代表对端已接收。实际执行仍需核对原设备连接和本次授权。</p>}
@@ -450,7 +505,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {rows(peer.capabilitySnapshot?.capabilities).map(cap => <p key={cap.id}>{cap.id} · {capabilityCaveat || (cap.ready === true && cap.authorized === true ? '上次核对时可用' : cap.reason || '上次未报告就绪')}</p>)}
               <h4>允许这台设备在本机使用</h4>{rows(peer.grantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
               <h4>本机可在对端使用</h4>{rows(peer.receivedGrantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
-              {peer.hasMoreGrantScopes || peer.hasMoreReceivedGrantScopes ? <p>当前是一页已读取授权，还有未展开的记录。</p> : null}
+              {peer.hasMoreGrantScopes || peer.hasMoreReceivedGrantScopes || snapshot?.hasMoreOutgoingGrants ? <p>本次授权记录有读取上限，未列出不代表没有。</p> : null}
               {!peer.revoked && <Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.reviewPeerGrant', { deviceId: peer.deviceId }, acceptReview); }}>调整本机授予的权限</Button>}
             </AccordionItem>
             <AccordionItem id="identity" title="身份与连接设置" description="完整指纹、连接地址与信任管理">
@@ -472,23 +527,39 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     </section>
     <PhoneControlPreparation onPendingChange={setPreparingDeviceWork} open={form === 'manual'} run={run} onClose={() => setForm('')} />
     <DeviceTaskPreparation onPendingChange={setPreparingDeviceWork} open={form === 'work'} run={run} onClose={() => setForm('')} />
-    <SettingsDialog isOpen={!!form && form !== 'work' && form !== 'manual'} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对你的另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
+    <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (!pairingEntry || !!snapshot)} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       <div className="pw-device-form">
         {error && <p className="pw-device-feedback" role="alert">{error}</p>}
         <WorkingStatus active={busy}>正在读取原设备回执…</WorkingStatus>
-        {form === 'add' && <><p className="pw-device-form-intro">在要连接的手机或电脑打开 PocketWorld 接收端，启用接收并复制短期邀请。下面先读取邀请，再核对双端完整指纹和各自的权限。</p><p>手机端需先准备主屏访问或独立屏；电脑手控需提供屏幕范围。安装电脑代理不是配对或手控的前提。</p></>}
+        {pairingEntry && <RadioOptions className="pw-device-pair-roles" label="从哪台设备发出邀请？" value={form} onChange={side => { if (side === 'add' || side === 'invite') openPairEntry(side); }} isDisabled={busy}
+          options={[{id: 'add', label: '对方已发邀请'}, {id: 'invite', label: '从这台手机发出'}]} />}
         {['add', 'connection', 'relay'].includes(form) && <section className="pw-device-form-step">
-          {form === 'add' && <h3>使用另一台设备的邀请</h3>}
-          <TextAreaField label={form === 'relay' ? '已有临时租约' : '原设备短时邀请'} value={raw} onChange={setRaw} isDisabled={busy} hint="仅在当前窗口核对，离开或进入后台后清除。" />
+          {form === 'add' && <p>粘贴对方的短时邀请。加入不要求这台手机开启接收、主屏读取或独立屏。之后双方各自选择范围并核对完整指纹。</p>}
+          <TextAreaField label={form === 'relay' ? '已有临时租约' : form === 'add' ? '对方的短时邀请' : '原设备短时邀请'} value={raw} onChange={setRaw} isDisabled={busy} hint="仅在当前窗口核对，离开或进入后台后清除。" />
           <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { void invoke(form === 'relay' ? 'devices.reviewRelay' : form === 'connection' ? 'devices.reviewConnection' : 'devices.inspectInvitation', { raw, ...(form === 'connection' ? { deviceId: peerId } : {}) }, acceptReview); }}>{form === 'add' ? '核对邀请与权限' : '读取原生审阅'}</Button>
           {form === 'add' && !available(actions.join) && actions.join?.reason && <p>{actions.join.reason}</p>}
         </section>}
-        {form === 'add' && <Accordion className="pw-device-form-alternatives">
-          <AccordionItem id="create-invitation" title="从这台手机发起配对" description="创建短时邀请，交给另一台设备">
-            <SelectField label="本机地址或已配置中继" value={address} onChange={setAddress} options={strings(actions.localAddresses).map(value => ({ id: value, label: value }))} isDisabled={busy} />
-            <Button variant="secondary" disabled={busy || !address || !available(actions.invite)} onClick={() => { void invoke('devices.createInvitation', { address }, value => { if (value.displayOnce !== true || typeof value.invitation !== 'string' || !value.invitation) throw new Error('未取得原短时邀请。'); setInvitation(value.invitation); setRaw(''); setForm(''); }); }}>创建本机短时邀请</Button>
-            {!available(actions.invite) && <p>{actions.invite?.reason}</p>}
-          </AccordionItem>
+        {form === 'invite' && <section className="pw-device-form-step">
+          <h3>{receiverLabel}</h3>
+          {!available(actions.invite) ? <>
+            <p>{local.receiverEnabled ? local.receiverReason || actions.invite?.reason || '尚未取得可用的邀请地址。' : actions.enable?.reason || '先核对并开启接收，才能生成本机邀请。开启接收不会授予对方屏幕或执行权限。'}</p>
+            <div className="pw-form-actions">
+              {local.receiverEnabled === false && available(actions.enable) && <Button disabled={busy || !supported('devices.reviewAction')} onClick={() => { void invoke('devices.reviewAction', { operation: 'receiver.enable' }, value => {
+                const actual = deviceReview(value);
+                if (actual.kind !== 'action' || actual.view.operation !== 'receiver.enable') { void run('devices.discard', { viewHandle: actual.viewHandle }).catch(() => {}); throw new Error('接收服务审阅不匹配，请重新读取。'); }
+                acceptReview(actual); setForm('invite');
+              }); }}>核对并启用本机接收</Button>}
+              {local.receiverEnabled === false && !available(actions.enable) && localPhone.some(group => group.id === 'taskNotificationsForStart' && group.state === 'blocked') && supported('settings.openSystem') &&
+                <Button variant="secondary" disabled={busy} onClick={() => openPhoneSetup('notifications')}>在系统中设置任务通知</Button>}
+              <Button variant="ghost" disabled={busy} onClick={refresh}>重读本机状态</Button>
+            </div>
+          </> : <>
+            {inviteAddresses.length === 1 ? <p className="pw-source-copy">本次邀请使用 <bdi>{inviteAddresses[0]}</bdi></p>
+              : <SelectField label="本机地址或已配置中继" value={inviteAddress} onChange={setAddress} options={inviteAddresses.map(value => ({ id: value, label: value }))} isDisabled={busy} />}
+            <Button disabled={busy || !inviteAddress || !supported('devices.createInvitation')} onClick={() => { void invoke('devices.createInvitation', { address: inviteAddress }, value => { if (value.displayOnce !== true || typeof value.invitation !== 'string' || !value.invitation) throw new Error('未取得原短时邀请。'); setInvitation(value.invitation); setRaw(''); setForm(''); }); }}>创建短时邀请</Button>
+          </>}
+        </section>}
+        {pairingEntry && <Accordion className="pw-device-form-alternatives">
           <AccordionItem id="relay-invitation" title="两台设备不在同一网络" description="使用已取得的临时中继租约">
             <p>使用你已有的临时租约建立控制通道。这里不会自动注册中继账号、开放端口或启用 VPN；设备权限仍单独核对，桌面画面另需可达媒体通道。</p>
             <Button variant="secondary" disabled={busy} onClick={() => { setForm('relay'); setRaw(''); }}>接收异网连接的临时中继租约</Button>
@@ -500,7 +571,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {form === 'recoveryRead' && <><TextField label="原设备显示的数字地址或已配置中继服务" value={host} onChange={setHost} isDisabled={busy} />{!/^wss:\/\/|^https:\/\//.test(host) && <TextField label="原恢复端口" value={port} onChange={setPort} isDisabled={busy} />}<Button disabled={busy || !host || !/^wss:\/\/|^https:\/\//.test(host) && !/^\d+$/.test(port)} onClick={() => { void invoke('devices.recoverPairing', { inviteId, host, port: /^wss:\/\/|^https:\/\//.test(host) ? 0 : Number(port) }, () => { setForm(''); setNotice('已查询原已提交配对结果，未重新授权。'); }); }}>只读取原配对结果</Button></>}
       </div>
     </div></SettingsDialog>
-    <SettingsDialog isOpen={!!invitation} onClose={() => setInvitation('')} title="本机一次性短时邀请"><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace"><p>仅交给你信任的另一台设备。邀请到期后需要重新创建；接下来仍需双端指纹与准确权限审阅。</p><TextAreaField label="原邀请，选中后可复制" value={invitation} isReadOnly /><Button variant="secondary" onClick={() => setInvitation('')}>关闭并清除显示</Button></div></SettingsDialog>
+    <SettingsDialog isOpen={!!invitation} onClose={() => setInvitation('')} title="将邀请交给另一台设备"><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
+      <p>只交给你信任的设备。在对方的「配对设备 → 对方已发邀请」粘贴，两端分别核对身份和权限。回到这里时不会再次显示邀请。</p>
+      <TextAreaField label="短时邀请，选中后可复制" value={invitation} isReadOnly />
+      <p className="pw-source-copy">本机完整指纹：<bdi>{fingerprint(local.certificateFingerprint)}</bdi></p>
+      <Button variant="secondary" onClick={() => setInvitation('')}>清除显示，回到配对进度</Button>
+    </div></SettingsDialog>
     <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '用本机模型处理原目标' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? '原设备操作回执' : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       {review && <div className="pw-device-review">
         {error && <p role="alert">{error}</p>}

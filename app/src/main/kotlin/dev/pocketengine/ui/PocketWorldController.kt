@@ -4667,7 +4667,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if (failure != null) receipt.put("message", failure)
             state = state.copy(teamOwnerReceipts = (state.teamOwnerReceipts + (requestId to receipt)).entries.toList().takeLast(32).associate { it.toPair() }, moduleResultInputs = state.moduleResultInputs + (key to metadata))
         }
-        webFeatureReceipts.remove(requestId)?.invoke(if (failure == null) JSONObject(result.toString()) else null, failure)
+        val webReceipt = webFeatureReceipts.remove(requestId)
+        webReceipt?.invoke(if (failure == null) JSONObject(result.toString()) else null, failure)
+        // A private media input is for the requesting reading/review, not the shared module-result snapshot.
+        if (webReceipt != null && feature == "media" && command == "getPreparedSubmission") return
         if (failure != null) {
             if (feature == "phone_setup" || feature == "display" && command in setOf("clipboard.consent", "clipboard.restore")) native("getFeatures")
             metadata.put("_failed", true)

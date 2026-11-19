@@ -961,7 +961,7 @@ internal class PocketWebBridge(
                 commitmentPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
             }
             if (action in PocketWebMedia.COMMANDS) {
-                requireSection("media"); mediaPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
+                requireSection("media"); mediaPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown", retainValue = action != "media.readSpeechInput"); publishState() }; return
             }
             if (action in PocketWebGroups.COMMANDS) {
                 requireSection("groups"); groupPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
