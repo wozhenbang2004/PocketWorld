@@ -73,10 +73,10 @@ public final class TeamParentHost {
                 case "events":out=coordinator.parentEvents(id,args.optLong("afterEvent",0),args.optInt("limit",16));break;
                 case "message_receipt":{
                     String messageId=args.getString("messageId");
-                    JSONObject receipt=coordinator.parentMessageDelivery(source,id,messageId);
-                    if("assignment_inbox".equals(receipt.getString("source"))&&receipt.has("assignmentId"))receipt.put("state",tasks.teamParentMessageDelivery(source,id,
-                            receipt.getString("assignmentId"),receipt.getString("recipientMemberId"),messageId));
-                    out=new JSONObject().put("teamRunId",id).put("messageReceipt",receipt).put("businessVerified",false);break;
+                    JSONObject delivery=coordinator.parentMessageDelivery(source,id,messageId);
+                    if("assignment_inbox".equals(delivery.getString("source"))&&delivery.has("assignmentId"))delivery.put("state",tasks.teamParentMessageDelivery(source,id,
+                            delivery.getString("assignmentId"),delivery.getString("recipientMemberId"),messageId));
+                    out=new JSONObject().put("teamRunId",id).put("messageReceipt",delivery).put("businessVerified",false);break;
                 }
                 case "research_summary":case "member_output":{
                     if(args.optInt("offset",0)>0&&!args.has("expectedOutputHash"))throw new SecurityException("后续页必须固定原输出hash，不混不同研究版本");
