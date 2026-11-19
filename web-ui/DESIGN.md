@@ -34,6 +34,12 @@
 
 能力目录按原生系统权限、设备资源、运行时准备和注册器结果提供下一步。安装、启用、逐工具授权与当前执行资格各自显示。沿 AionUi 的状态时点与 Operit 的单工具策略组织，保留本机审阅及明确撤回。目录只读显示注册名称及来源，原执行范围不由目录决定。验收沿 05、09、12、14、15 检查未授权、核对一次、明确授权、读回与撤回，真实插件和系统权限仅在 Android 用户授权下复验。 [AionUi 服务状态](https://github.com/iOfficeAI/AionUi/blob/e108b6b56b1a6eb99a00904878d0582f657b2908/packages/desktop/src/renderer/pages/settings/ToolsSettings/McpServerHeader.tsx#L23-L88) · [Operit 按工具展示](https://github.com/AAswordman/Operit/blob/7a39941bad80209973c535046a18195c5da9e647/app/src/main/java/com/ai/assistance/operit/ui/features/settings/screens/ToolPermissionSettingsScreen.kt#L45-L85)
 
+### 常用设置目录
+
+普通设置优先提供模型与服务、账号、外观、语音和更新。第一屏有可搜索的设置目录，系统、数据和较少使用的选项集中进原分组。复用已有 BoardUI 设置行和现有主题。设置行展示已获取的状态，搜索匹配设置用途与常用词。概览通过原子页打开，沿既有保存和权限核对。
+
+沿本表 03–05、09–10、12、15 核对「搜索模型或语音 → 打开准确设置 → 返回同一筛选及焦点」，并验证「搜索与连接 → 准备中心 → 原分组 → 原设置目录」。准备中心关闭时恢复同一次导航持有的目录状态。采用已有空间规则的单列目录、原设置标题和简洁行样式。待核对窄屏长标题、大字号、深色与 Android 返回。 [空间与密度](https://uiux-library-visual-catalog.k01075888660.chatgpt.site/studies/space-density.html) · [导航与信息架构](https://uiux-library-visual-catalog.k01075888660.chatgpt.site/studies/navigation-system.html)
+
 ## 2026-11-19 · 十五个审美系统的应用重做
 
 本轮并行推进界面重做、功能重做、使用阻塞修复与成熟产品对照。按四类整页配方组织：接入与设置负责配置，首页和聊天负责交办与阅读，目录和文件负责定位对象，原工作负责当前进度、决定和成果。首批从 `ade2a76` 出发，先改共享层和「接入 → 交办 → 找到原工作 → 打开固定成果」旅程。复用当前代码中的 Affect 输入与结果承载、BoardUI 表单和操作、Vaul 抽屉及 Solar 图标，来源和批准范围见下节及既有 [导航组件来源](src/shell-library/NAVIGATION-UIUX-PROVENANCE.json)。应用数据、工作身份和执行回执继续由原生宿主持有。

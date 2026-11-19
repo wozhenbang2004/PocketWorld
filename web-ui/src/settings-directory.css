@@ -1,0 +1,31 @@
+/* The existing BoardUI settings rows stay grouped by purpose, not one card per row. */
+.pw-secondary-refactor .pw-settings-directory.pw-settings-manga {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 46rem;
+  gap: 18px;
+}
+.pw-secondary-refactor .pw-settings-directory > .pw-secondary-search { max-width: none; }
+.pw-settings-directory .pw-settings-sections { display: grid; gap: 20px; }
+.pw-secondary-refactor .pw-settings-directory .pw-workspace-section-copy > h2 {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--pw-copy);
+}
+.pw-secondary-refactor .pw-settings-directory .pw-settings-category > .pw-workspace-section-heading {
+  margin: 0 0 6px;
+  padding-inline: 4px;
+}
+.pw-secondary-refactor .pw-settings-directory .pw-settings-row-copy { gap: 1px; }
+.pw-secondary-refactor .pw-settings-directory .pw-domain-link > span { white-space: normal; text-align: start; min-width: 0; flex: 1; }
+.pw-secondary-refactor .pw-settings-directory .pw-settings-row-copy > :is(span, small) { overflow-wrap: anywhere; }
+.pw-secondary-refactor .pw-settings-directory .pw-domain-link:focus-visible { outline: 2px solid var(--pw-focus); outline-offset: 1px; }
+.pw-secondary-refactor .pw-settings-directory [data-secondary-links] > .pw-settings-category-content {
+  background: transparent;
+  box-shadow: none;
+}
+.pw-settings-directory .pw-settings-policy > .pw-settings-section { margin: 0; }
+.pw-settings-directory .pw-settings-no-match { margin: 0; padding-block: 12px; color: var(--pw-copy); }
+@media (forced-colors: active) {
+  .pw-secondary-refactor .pw-settings-directory .pw-domain-link:focus-visible { outline-color: Highlight; }
+}

@@ -1,5 +1,6 @@
 import { ModelDiagnosticsWorkspace } from './ModelDiagnosticsWorkspace';
 import { UsageWorkspace } from './UsageWorkspace';
+import { SettingsDirectory, settingsGroupFor, type SettingId, type SettingsDirectoryOrigin } from './SettingsDirectory';
 import { AICenter, type AIServicePreset, type AIEditorField } from './AICenter';
 import { aiAccountNextStep } from './ai-center-data';
 import { accountChoice, type AIChoice } from './ai-choice-receipt';
@@ -12,7 +13,7 @@ import type { PermissionLeaveGuard } from './PermissionPolicySettings';
 import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
 import ChannelsWorkspace from './ChannelsWorkspace';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { IconAccount, IconAdd, IconArchive, IconArrowLeft, IconCall, IconCheck, IconChevronRight, IconDevices, IconDownload, IconFileSettings, IconFileText, IconGoal, IconKey, IconLearning, IconLink, IconMcp, IconMedia, IconMemory, IconMicrophone, IconMonitor, IconNotification, IconObserve, IconPalette, IconPhone, IconPlugin, IconPluginCatalog, IconPrivacy, IconRefresh, IconReminder, IconReview, IconSearch, IconServer, IconSettings, IconShieldCheck, IconSkill, IconStorage, IconTeam, IconTerminal, IconUpload } from './icons';
+import { IconAccount, IconAdd, IconArchive, IconArrowLeft, IconCall, IconCheck, IconChevronRight, IconDevices, IconDownload, IconFileSettings, IconFileText, IconGoal, IconKey, IconLearning, IconLink, IconMcp, IconMedia, IconMemory, IconMicrophone, IconMonitor, IconNotification, IconObserve, IconPhone, IconPlugin, IconPluginCatalog, IconPrivacy, IconRefresh, IconReminder, IconReview, IconServer, IconSettings, IconShieldCheck, IconSkill, IconTeam, IconTerminal, IconUpload } from './icons';
 import { bridge } from './bridge';
 import type {SetupCapability} from './setup-contract';
 import ReminderWorkspace from './ReminderWorkspace';
@@ -67,7 +68,7 @@ type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
 type TeamNavigationProps = { teamRunFocus?: TeamRunFocus; onTeamRunFocusConsumed?: (requestId: string) => void; onAskButlerForTeam?: (request: TeamButlerRequest) => void; onOpenTeamOwnerWork?: (link: TeamOwnerWorkLink, intent: 'overview' | 'supplement') => void };
-type Props = TeamNavigationProps & { capabilityMemory?: CapabilityWorkspaceMemory; onStartCapability?: (purpose: CapabilityPurpose) => void; teamAttentionFocus?: Data; onTeamAttentionConsumed?:(requestId:string)=>void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void; route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability) => void; onReturnToSetup?: () => void; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
+type Props = TeamNavigationProps & { capabilityMemory?: CapabilityWorkspaceMemory; onStartCapability?: (purpose: CapabilityPurpose) => void; teamAttentionFocus?: Data; onTeamAttentionConsumed?:(requestId:string)=>void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void; route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability, origin?: SettingsDirectoryOrigin) => void; settingsRestore?: SettingsDirectoryOrigin; onReturnToSetup?: () => void; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
@@ -1675,34 +1676,11 @@ function DataManagement({ kind, ...props }: DataPageProps & { kind: 'archives' |
   return kind === 'archives' ? <ArchiveWorkspace {...props} /> : <StorageWorkspace {...props} />;
 }
 
-const SETTINGS_GROUPS = [
-  { id: 'models', title: '模型与服务', entries: ['model-settings', 'web-search', 'proxy'] },
-  { id: 'preferences', title: '使用偏好', entries: ['setup', 'phone:appearance', 'phone:speech'] },
-  { id: 'privacy', title: '权限与运行', entries: ['phone:execution', 'phone:observation', 'background'] },
-  { id: 'data', title: '数据与应用', entries: ['usage', 'storage', 'archives', 'updates'] },
-];
-const COMMON_SETTINGS = [
-  { id: 'setup', title: '准备中心', detail: '模型、手机权限、开发工具与首次使用', icon: IconCheck },
-  { id: 'model-settings', title: 'AI 接入', detail: '服务、账号、模型与调度', icon: IconKey },
-  { id: 'proxy', title: '本机 API', detail: '访问地址、客户端连接与近期调用', icon: IconServer },
-  { id: 'web-search', title: '联网搜索', detail: '选择搜索服务与实时网页来源', icon: IconSearch },
-  { id: 'accounts', title: 'ChatGPT 账号', detail: '登录、授权与套餐用量', icon: IconAccount },
-  { id: 'phone:appearance', title: '外观与字体', detail: '主题、中文、英数与代码字体', icon: IconPalette },
-  { id: 'phone:speech', title: '语音与朗读', detail: '系统听写、声音与任务播报', icon: IconMicrophone },
-  { id: 'phone:execution', title: '系统权限', detail: '界面读取、任务通知与无线调试', icon: IconShieldCheck },
-  { id: 'phone:observation', title: '观察与隐私', detail: '本地取图、OCR 与截图留存', icon: IconPrivacy },
-  { id: 'background', title: '后台运行', detail: '助手连接、独立屏幕与音频', icon: IconPhone },
-  { id: 'usage', title: '用量统计', detail: '每日用量、调用明细、预算与模型诊断', icon: IconFileText },
-  { id: 'archives', title: '备份与迁移', detail: '导出或恢复原数据', icon: IconArchive },
-  { id: 'storage', title: '项目存储', detail: '占用与清理审阅', icon: IconStorage },
-  { id: 'updates', title: '应用更新', detail: '检查新版本与管理下载', icon: IconRefresh },
-];
-
-/** Summaries describe observed host state; search keeps the original keywords. */
+/** Only observed values belong in a settings summary. The directory supplies the purpose otherwise. */
 function settingsEntryDetail(id: string, state: Data): string {
   const flag = (value: unknown) => value === true ? '已开' : value === false ? '未开' : '待核实';
   if (id === 'model-settings') {
-    if (typeof state.modelName !== 'string') return '默认模型尚未读取';
+    if (typeof state.modelName !== 'string') return '';
     return state.modelName.trim() ? `默认模型 · ${state.modelName}` : '尚未选择默认模型';
   }
   if (id === 'proxy') {
@@ -1713,15 +1691,20 @@ function settingsEntryDetail(id: string, state: Data): string {
     return proxy.running === true ? '正在运行 · 仅本机访问' : proxy.running === false ? '尚未运行' : '尚未读取服务状态';
   }
   if (id === 'accounts') {
+    if (object(state.ownerErrors).accounts || object(state.moduleErrors)['accounts.refresh']) return '账号列表待核对';
     const accounts = object(object(state.ownerSnapshots).accounts).accounts;
-    return Array.isArray(accounts) ? accounts.length ? `已保存 ${accounts.length} 个账号` : '尚未添加账号' : '账号状态尚未读取';
+    return Array.isArray(accounts) ? accounts.length ? `已保存 ${accounts.length} 个账号` : '尚未添加账号' : '';
   }
-  if (id === 'phone:appearance') return ({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)] || '尚未读取当前外观';
+  if (id === 'execution-policy' || id === 'group:privacy') {
+    const policy = object(state.ownerExecutionPolicy);
+    return Number.isSafeInteger(policy.revision) && (policy.enabled === false || policy.acceptingNewWork === false) ? '新任务已停用' : '';
+  }
+  if (id === 'phone:appearance') return ({ system: '跟随系统', light: '浅色', dark: '深色' } as Data)[text(object(state.appearance).mode)] || '';
   if (id === 'phone:speech') {
     if (state.speaking === true) return '正在朗读';
     if (object(object(state.taskAnnouncements).readout).active === true) return '正在播报任务状态';
     const speech = ({ ready: '中文朗读已就绪', initializing: '正在准备中文朗读', language_data_missing: '需安装中文语音资源', language_unsupported: '系统引擎不支持中文朗读', unavailable: '朗读引擎暂不可用', closed: '朗读窗口已关闭' } as Data)[text(object(state.systemSpeech).ttsStatus)];
-    return speech || (state.speechAvailable === true ? '系统听写可用' : state.speechAvailable === false ? '系统听写暂不可用' : '语音状态尚未读取');
+    return speech || (state.speechAvailable === true ? '系统听写可用' : state.speechAvailable === false ? '系统听写暂不可用' : '');
   }
   if (id === 'phone:execution') return `界面读取${flag(state.accessibilityEnabled)} · 通知${flag(state.notificationsEnabled)}`;
   if (id === 'phone:observation') return `取图${flag(state.localCaptureAllowed)} · OCR ${flag(state.localOcrAllowed)}`;
@@ -1734,7 +1717,7 @@ function settingsEntryDetail(id: string, state: Data): string {
   return '';
 }
 
-export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskButlerForTeam, onOpenTeamOwnerWork, capabilityMemory, onStartCapability, teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, onReturnToSetup, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
+export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskButlerForTeam, onOpenTeamOwnerWork, capabilityMemory, onStartCapability, teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, settingsRestore, onReturnToSetup, onOpenProjects, originGoal, returnLabel, initialProjectId, localDraft, onLocalDraftChange }: Props) {
   const pageLeaveGuard = useRef<PermissionLeaveGuard | null>(null);
   const registerPageLeave = useCallback((guard: PermissionLeaveGuard | null) => {
     pageLeaveGuard.current = guard; registerBeforeLeave?.(guard);
@@ -1768,10 +1751,30 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
   const modelTrail = useRef<ModelView[]>([]);
   const transientBack = useRef<(() => boolean) | null>(null);
   const registerTransientBack = useCallback<BackHandlerRegistration>(handler => { transientBack.current = handler; }, []);
-  const [query, setQuery] = useState(''), [notice, setNotice] = useState(''), [error, setError] = useState('');
-  const trail = useRef<Array<{ page: string; query: string; modelView: ModelView; modelTrail: ModelView[]; candidateTarget: LearningCandidateTarget | null }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
+  const [query, setQuery] = useState(settingsRestore?.query || ''), [notice, setNotice] = useState(''), [error, setError] = useState('');
+  const settingsReturnFocus = useRef<SettingId | undefined>(undefined);
+  const trail = useRef<Array<{ page: string; query: string; settingId?: SettingId; modelView: ModelView; modelTrail: ModelView[]; candidateTarget: LearningCandidateTarget | null }>>([]), scroll = useRef<HTMLDivElement>(null), scrollPositions = useRef(new Map<string, number>());
   const mounted = useRef(true), generation = useRef(0);
-  useLayoutEffect(() => { generation.current++; trail.current = []; modelTrail.current = []; setEntry({ route, revision: navigationRevision }); setPage(normalize(route)); setCandidateTarget(null); setModelView({ kind: 'list' }); setModelHostSection(normalize(route) === 'proxy' ? 'proxy' : 'models'); setNotice(''); setError(''); }, [route, navigationRevision]);
+  useLayoutEffect(() => {
+    const firstPage = normalize(route);
+    generation.current++; trail.current = []; modelTrail.current = [];
+    const restoring = settingsRestore?.page === firstPage ? settingsRestore : undefined;
+    settingsReturnFocus.current = restoring ? 'setup' : undefined;
+    setQuery(restoring?.query || '');
+    if (restoring) {
+      scrollPositions.current.set(firstPage, restoring.scrollTop);
+      const parent = restoring.parent;
+      if (parent) {
+        scrollPositions.current.set(parent.page, parent.scrollTop);
+        trail.current.push({ page: parent.page, query: parent.query, settingId: parent.settingId, modelView: { kind: 'list' }, modelTrail: [], candidateTarget: null });
+      }
+    } else if (firstPage === 'settings' || settingsGroupFor(firstPage)) {
+      scrollPositions.current.delete(firstPage);
+      if (scroll.current) scroll.current.scrollTop = 0;
+    }
+    setEntry({ route, revision: navigationRevision }); setPage(firstPage); setCandidateTarget(null);
+    setModelView({ kind: 'list' }); setModelHostSection(firstPage === 'proxy' ? 'proxy' : 'models'); setNotice(''); setError('');
+  }, [route, navigationRevision]);
   useEffect(() => { onNavigationPageChange?.(page); }, [page, onNavigationPageChange]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   const run: Run = async (action, args = {}) => {
@@ -1798,7 +1801,7 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
     }
   };
   const rememberScroll = () => scrollPositions.current.set(page + ((page === 'models' || page === 'model-settings') ? ':' + modelView.kind + ':' + (modelView.id || '') : ''), scroll.current?.scrollTop || 0);
-  const navigate = (next: string, candidate: LearningCandidateTarget | null = null) => leavePage(() => { rememberScroll(); generation.current++; trail.current.push({ page, query, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setModelHostSection(next === 'proxy' ? 'proxy' : 'models'); setCandidateTarget(candidate); setPage(next); });
+  const navigate = (next: string, candidate: LearningCandidateTarget | null = null, settingId?: SettingId) => leavePage(() => { rememberScroll(); generation.current++; trail.current.push({ page, query, settingId, modelView, modelTrail: [...modelTrail.current], candidateTarget }); modelTrail.current = []; setNotice(''); setError(''); setQuery(''); setModelView({ kind: 'list' }); setModelHostSection(next === 'proxy' ? 'proxy' : 'models'); setCandidateTarget(candidate); setPage(next); });
   const switchWorkspacePage = (next: string) => leavePage(() => {
     if (next === workspacePageForRoute(page)) return;
     rememberScroll(); generation.current++;
@@ -1816,6 +1819,7 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
     let index = trail.current.length - 1;
     while (index >= 0 && trail.current[index].page !== 'phone' && !trail.current[index].page.startsWith('phone:')) index--;
     const previous = index >= 0 ? trail.current.splice(index)[0] : trail.current.pop();
+    settingsReturnFocus.current = previous?.settingId;
     modelTrail.current = previous?.modelTrail || [];
     setNotice(''); setError(''); setQuery(previous?.query || '');
     setModelView(previous?.modelView || { kind: 'list' });
@@ -1864,20 +1868,24 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
   const data: Data = { ...feature, ...owner, ...specialized, ...(page === 'memory' ? { records: memoryList.records } : {}) };
   const errorPage = isAIPage ? hostSection || 'models' : dataPage;
   const domainError = text(object(state.ownerErrors)[errorPage]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(errorPage + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
-  const settingsGroup = SETTINGS_GROUPS.find(group => page === 'group:' + group.id);
+  const settingsGroup = settingsGroupFor(page);
   const connection = modelConnectionRows(data).find(row => recordId(row) === modelView.id);
   const editConnection = modelView.id ? connection : modelConnectionRows(data).find(row => recordId(row) === text(object(data.connections).selectedConnectionId));
   const modelDraftKey = modelView.kind + ':' + (modelView.kind === 'add' ? 'new' : recordId(editConnection || {}));
   const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
   const pageTitle = page === 'capabilities' ? '能力与工具' : workspace?.key === 'tools' && domain ? domain.title : isAIPage ? 'AI 接入'
     : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '用量统计' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : page === 'web-search' ? '联网搜索' : domain?.title || 'PocketWorld');
-  const settingsEntries = COMMON_SETTINGS.filter(item => item.id !== 'setup' || !!onOpenSetup).map(item => ({ ...item, searchText: item.detail, detail: settingsEntryDetail(item.id, state) }));
-  const filtered = settingsEntries.filter(item => (item.title + item.detail + item.searchText).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
   useLayoutEffect(() => {
     if (page === 'capabilities') return; // Its list/detail journey restores its own saved position.
     const element = scroll.current;
     if (element) element.scrollTop = scrollPositions.current.get(viewKey) || 0;
+    const target = settingsReturnFocus.current;
+    settingsReturnFocus.current = undefined;
+    if (target) {
+      const row = element?.querySelector<HTMLElement>(`[data-setting-entry="${target}"]:not(:disabled)`);
+      (row || element?.querySelector<HTMLElement>('.pw-settings-directory input'))?.focus({ preventScroll: true });
+    }
   }, [viewKey]);
   useSurfaceEnter(scroll, viewKey, {selector: ':scope > .pw-secondary-page', depth: trail.current.length + modelTrail.current.length, active: page !== 'devices'});
   const modelBrowseActive = ['list', 'catalog', 'model'].includes(modelView.kind);
@@ -1887,7 +1895,7 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
     rememberScroll();
     if (isModelPage && modelView.kind !== 'list') { generation.current++; setNotice(''); setError(''); setModelView(modelTrail.current.pop() || { kind: 'list' }); return true; }
     const previous = trail.current.pop();
-    if (previous) { generation.current++; setNotice(''); setError(''); setModelHostSection(previous.page === 'proxy' ? 'proxy' : 'models'); setPage(previous.page); setCandidateTarget(previous.candidateTarget); setQuery(previous.query); modelTrail.current = previous.modelTrail; setModelView(previous.modelView); return true; }
+    if (previous) { settingsReturnFocus.current = previous.settingId; generation.current++; setNotice(''); setError(''); setModelHostSection(previous.page === 'proxy' ? 'proxy' : 'models'); setPage(previous.page); setCandidateTarget(previous.candidateTarget); setQuery(previous.query); modelTrail.current = previous.modelTrail; setModelView(previous.modelView); return true; }
     if (page === normalize(route)) return false;
     if (workspace && workspaceForRoute(normalize(route))?.key === workspace.key) return false;
     if (page === 'settings' || page === 'connections') return false;
@@ -1907,7 +1915,18 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
     return () => registerBackHandler?.(null);
   }, [registerBackHandler]);
   const back = () => { if (!consumeBack()) onBack(); };
-  const settingRows = (entries: Array<{ id: string; title: string; detail: string; icon: typeof IconKey }>) => <div className="pw-settings-links">{entries.map(item => <Button key={item.id} variant="ghost" leadingIcon={item.icon} trailingIcon={IconChevronRight} className="pw-domain-link h-auto whitespace-normal" disabled={item.id === 'updates' && !supported('settings.openAppUpdates')} onClick={() => { if (item.id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); } else if (item.id === 'setup') onOpenSetup?.(); else navigate(item.id); }}><span className="pw-settings-row-copy" data-inline-status={!!item.detail && item.detail.length <= 12}><span>{item.title}</span>{item.detail && <small>{item.detail}</small>}</span></Button>)}</div>;
+  const openSetting = (id: SettingId) => {
+    if (id === 'updates') { void run('settings.openAppUpdates', {}).catch(() => {}); return; }
+    if (id === 'setup') {
+      const parent = trail.current.at(-1);
+      onOpenSetup?.(undefined, {
+        page, query, scrollTop: scroll.current?.scrollTop || 0,
+        parent: parent ? { page: parent.page, query: parent.query, settingId: parent.settingId, scrollTop: scrollPositions.current.get(parent.page) || 0 } : undefined,
+      });
+      return;
+    }
+    navigate(id === 'execution-policy' ? 'group:privacy' : id, null, id);
+  };
   const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
   const renderUsage = (registerBack: BackHandlerRegistration) => <UsageWorkspace
     supported={supported} registerTransientBack={registerBack}
@@ -1919,11 +1938,10 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
       {notice && <p className="pw-request-notice" role="status">{notice}</p>}
       {(error || domainError) && <p className="pw-field-error" role="alert">{error || domainError}</p>}
       <div className="pw-secondary-page" data-secondary-view={viewKey}>
-        {page === 'capabilities' ? <CapabilitiesWorkspace memory={capabilityMemory} onStartWork={onStartCapability} state={state} onNavigate={navigate} onPrepare={onOpenSetup} run={run} supported={supported} registerBack={registerTransientBack} registerBeforeLeave={registerPageLeave} /> : (page === 'settings' || page === 'connections') ? <div className="pw-settings-home pw-settings-preferences pw-settings-manga">
-          <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="搜索设置" placeholder="搜索设置" value={query} onChange={setQuery} shape="rounded" />
-          {query.trim() ? <section className="pw-settings-results" aria-label="匹配的设置">{settingRows(filtered)}{filtered.length === 0 && <Empty>没有匹配的设置。</Empty>}</section>
-            : <div className="pw-settings-categories">{SETTINGS_GROUPS.map(group => <section key={group.id} className="pw-settings-category" data-settings-group={group.id} aria-label={group.title}><WorkspaceSectionHeading title={group.title}/><div className="pw-settings-category-content pw-material-panel">{settingRows(group.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}{group.id === 'privacy' && <div className="pw-settings-execution" aria-label="执行控制"><ExecutionControls state={state} supported={supported} run={run}/></div>}</div></section>)}</div>}
-        </div> : settingsGroup ? <section className="pw-settings-group-page">{settingRows(settingsGroup.entries.map(id => settingsEntries.find(item => item.id === id)!).filter(Boolean))}</section>
+        {page === 'capabilities' ? <CapabilitiesWorkspace memory={capabilityMemory} onStartWork={onStartCapability} state={state} onNavigate={navigate} onPrepare={onOpenSetup} run={run} supported={supported} registerBack={registerTransientBack} registerBeforeLeave={registerPageLeave} /> : (page === 'settings' || page === 'connections' || settingsGroup) ? <SettingsDirectory
+          page={page} query={query} onQueryChange={setQuery} getStatus={id => settingsEntryDetail(id, state)} onOpen={openSetting}
+          hasSetup={!!onOpenSetup} canOpenUpdates={supported('settings.openAppUpdates')}
+          executionControls={page === 'group:privacy' ? <ExecutionControls state={state} supported={supported} run={run}/> : undefined}/>
           : page === 'web-search' ? <WebSearchSettings run={run} supported={supported} />
           : isAIPage ? <AICenter key={page + ':' + (navigationRevision || 0)} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} initialView={page === 'proxy' ? 'proxy' : 'main'} onHostSectionChange={setModelHostSection} returnToOrigin={returnLabel ? { label: returnLabel, go: onReturnToSetup || onBack } : undefined}
               renderEditor={(row, preset, close, saved, registerBack, field) => {
@@ -1935,7 +1953,7 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
               renderProxy={registerBack => <ProxyWorkspace state={state} run={run} registerTransientBack={registerBack} />} />
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
           : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
-          : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : '手机能力'} registerTransientBack={registerTransientBack} />
+          : page === 'background' ? <BackgroundSettings state={state} supported={supported} run={run} onReturn={onReturnToSetup || returnToPhone} returnLabel={onReturnToSetup ? '准备中心' : trail.current.at(-1)?.settingId === 'background' ? '设置' : '手机能力'} registerTransientBack={registerTransientBack} />
           : page === 'usage' ? renderUsage(registerTransientBack)
           : page === 'history' ? <HistoryPage key={page} usage={false} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />
@@ -1944,7 +1962,7 @@ export default function Secondary({ teamRunFocus, onTeamRunFocusConsumed, onAskB
       </div>
     </div>;
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} data-workspace={workspace?.key} aria-label={pageTitle}>
-    <header className="pw-secondary-header"><IconButton icon={IconArrowLeft} aria-label={isModelPage && hostSection === 'proxy' ? '返回 AI 接入' : isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} title={returnLabel} onClick={back} /><div><h1>{pageTitle}</h1>{originGoal && <p className="pw-workspace-origin" title={originGoal}>当前工作：{originGoal}</p>}</div>{!workspace && !['settings', 'connections', 'history', 'usage'].includes(page) && !(isAIPage && hostSection !== 'models') && <IconButton icon={IconRefresh} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
+    <header className="pw-secondary-header"><IconButton icon={IconArrowLeft} aria-label={isModelPage && hostSection === 'proxy' ? '返回 AI 接入' : isModelPage && modelView.kind !== 'list' ? modelBackLabel : '返回'} title={returnLabel} onClick={back} /><div><h1>{pageTitle}</h1>{originGoal && <p className="pw-workspace-origin" title={originGoal}>当前工作：{originGoal}</p>}</div>{!workspace && !settingsGroup && !['settings', 'connections', 'history', 'usage'].includes(page) && !(isAIPage && hostSection !== 'models') && <IconButton icon={IconRefresh} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
     {workspace && workspace.key !== 'tools' ? <Tabs className="pw-workspace-navigation" selectedKey={workspacePageForRoute(page)} onSelectionChange={key => switchWorkspacePage(String(key))}>
       <TabList aria-label={workspace.title + '工作区'}>{workspace.pages.map(item => <Tab key={item.route} id={item.route}>{item.title}</Tab>)}</TabList>
       <TabPanel id={workspacePageForRoute(page) || workspace.route} className="pw-workspace-panel">{content}</TabPanel>
