@@ -145,3 +145,15 @@
 .pw-ai-next-step h3{margin:0;font-size:17px;line-height:1.4;color:var(--pw-ink);}
 .pw-ai-next-step p{margin:0;color:var(--pw-muted);font-size:13px;line-height:1.6;max-width:56ch;}
 .pw-ai-detail-heading [data-ai-detail-heading]:focus{outline:none;}
+
+/* Setup has one working object and one next action; diagnostics stay adjacent but secondary. */
+.pw-ai-connect-next,.pw-ai-finish{display:grid;min-width:0;gap:var(--pw-gap-control);padding:clamp(1rem,4vw,1.5rem);border-radius:20px;background:var(--pw-inset);}
+.pw-ai-connect-next h3,.pw-ai-finish h2,.pw-ai-finish p,.pw-ai-connect-next p{margin:0;}
+.pw-ai-connect-next h3,.pw-ai-finish h2{color:var(--pw-ink);font-size:clamp(1.125rem,4vw,1.4rem);line-height:1.4;}
+.pw-ai-connect-next p,.pw-ai-finish p,.pw-ai-preset-destination span{color:var(--pw-copy);line-height:1.55;overflow-wrap:anywhere;}
+.pw-ai-connect-next button{justify-self:start;max-width:100%;height:auto;min-height:var(--pw-control-target);}
+.pw-ai-finish-choice,.pw-ai-preset-destination{display:grid;min-width:0;gap:4px;}
+.pw-ai-finish-choice strong,.pw-ai-preset-destination strong{color:var(--pw-ink);overflow-wrap:anywhere;}
+.pw-ai-finish-choice span,.pw-ai-preset-destination span{font-size:.8125rem;}
+.pw-ai-finish [data-ai-outcome]:focus{outline:none;}
+.pw-ai-center .pw-ai-more-settings{align-self:start;justify-self:start;color:var(--pw-muted);}

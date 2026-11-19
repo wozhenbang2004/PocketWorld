@@ -3,9 +3,10 @@ import { IconAccount, IconAdd, IconChevronRight, IconControls, IconKey, IconLink
 import { Accordion, AccordionItem, Button, SearchField, SettingsDialog, StretchSwitch, TextField } from './forms-library';
 import { Tabs, Tab, TabList, TabPanel } from './shell-library';
 import { AIModelPicker, type AIModelPickerPresentation } from './AIModelPicker';
+import { accountChoice, apiChoice, groupChoice, type AIChoice } from './ai-choice-receipt';
 import { AIModelGroups } from './AIModelGroups';
 import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
-import { aiAccountStatus, aiCatalogCurrent, aiConnections, aiConnectionSource, aiCredentialStatus, aiObject as object, aiRows as rows, aiServiceBrand, aiSourceGroups, aiSourceLabel, aiText as text } from './ai-center-data';
+import { aiAccountNextStep, aiRequiredCredentialMissing, aiAccountStatus, aiCatalogCurrent, aiConnections, aiConnectionSource, aiCredentialStatus, aiObject as object, aiRows as rows, aiServiceBrand, aiSourceGroups, aiSourceLabel, aiText as text } from './ai-center-data';
 import './ai-center.css';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
@@ -14,13 +15,15 @@ type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 type Back = (handler: (() => boolean) | null) => void;
 export type AIServicePreset = { name: string; provider: string; url: string };
-type View = { kind: 'main' | 'add' | 'api' | 'openai' | 'connection' | 'edit' | 'account' | 'tools' | 'proxy'; id?: string; preset?: AIServicePreset; adding?: boolean };
+export type AIEditorField = 'credential' | 'model';
+type View = { kind: 'main' | 'add' | 'api' | 'openai' | 'connection' | 'edit' | 'account' | 'tools' | 'proxy'; id?: string; preset?: AIServicePreset; adding?: boolean; field?: AIEditorField };
 type ViewPosition = { scroll: number; focusKey?: string };
 type Props = {
   state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: Back;
+  returnToOrigin?: { label: string; go: () => void };
   initialView?: 'main' | 'proxy'; onHostSectionChange: (section: 'models' | 'accounts' | 'proxy') => void;
-  renderEditor: (connection: Data | undefined, preset: AIServicePreset | undefined, onClose: () => void, onSaved: (value: Data) => void, registerBack: Back) => ReactNode;
-  renderAccounts: (accountId: string | undefined, adding: boolean, registerBack: Back) => ReactNode;
+  renderEditor: (connection: Data | undefined, preset: AIServicePreset | undefined, onClose: () => void, onSaved: (value: Data) => void, registerBack: Back, field?: AIEditorField) => ReactNode;
+  renderAccounts: (accountId: string | undefined, adding: boolean, registerBack: Back, onModelChoice: (choice: AIChoice) => void) => ReactNode;
   renderTools: (registerBack: Back) => ReactNode;
   renderProxy: (registerBack: Back) => ReactNode;
 };
@@ -34,11 +37,13 @@ const presets: AIServicePreset[] = [
 
 const factLabels: Record<string, string> = { CONTEXT_WINDOW: '上下文容量', OUTPUT_TOKENS: '目录输出上限', IMAGE_INPUT: '图片输入', TOOL_CALLS: '工具调用' };
 /** Product composition of the native connection, account and catalog owners. */
-export function AICenter({ state, data, supported, run, registerTransientBack, initialView = 'main', onHostSectionChange, renderEditor, renderAccounts, renderTools, renderProxy }: Props) {
+export function AICenter({ state, data, supported, run, registerTransientBack, initialView = 'main', returnToOrigin, onHostSectionChange, renderEditor, renderAccounts, renderTools, renderProxy }: Props) {
   const [tab, setTab] = useState('services'), [view, setView] = useState<View>({ kind: initialView });
   const [modelPresentation, setModelPresentation] = useState<AIModelPickerPresentation>({ query: '', filter: 'all' });
   const [accountSnapshot, setAccountSnapshot] = useState<Data>({}), [localSnapshot, setLocalSnapshot] = useState<Data | null>(null);
   const [accountsLoading, setAccountsLoading] = useState(false), [accountReadRevision, setAccountReadRevision] = useState<number | null>(null), [accountsError, setAccountsError] = useState('');
+  const [showManagement, setShowManagement] = useState(false);
+  const [completion, setCompletion] = useState<AIChoice | null>(null), pickerChoice = useRef<AIChoice | null>(null);
   const [catalog, setCatalog] = useState<Data | null>(null), [query, setQuery] = useState('');
   const [modelReview, setModelReview] = useState<Data | null>(null), [selectionUnknown, setSelectionUnknown] = useState(false);
   const [reviewOutput, setReviewOutput] = useState(''), [reviewImageReserve, setReviewImageReserve] = useState('0');
@@ -94,6 +99,7 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     onHostSectionChange(hostSection(next)); setView(next);
   };
   const back = () => {
+    if (completion) { if (returnToOrigin && !completion.accountOnly) returnToOrigin.go(); else setCompletion(null); return true; }
     // The child starts its native write before React commits the busy render.
     if (pending.current || pickerPending.current || busy) return true;
     if (childBack.current?.()) return true;
@@ -123,6 +129,25 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     catch (failure) { if (alive.current && current === generation.current) setError(failure instanceof Error ? failure.message : '操作结果待核对。'); }
     finally { if (current === generation.current) { pending.current = false; if (alive.current) setBusy(false); } }
   };
+  const completedChoice = (choice: AIChoice) => {
+    if (returnToOrigin || choice.accountOnly) setCompletion(choice);
+    else setNotice(`已选择 ${choice.source} 的 ${choice.model} 作为默认模型。`);
+  };
+  const runPicker: Run = async (action, args = {}) => {
+    const ticket = generation.current, selecting = ['models.api.select', 'models.accounts.select', 'models.groups.select'].includes(action);
+    if (selecting) pickerChoice.current = null;
+    const value = await run(action, args);
+    if (selecting && alive.current && ticket === generation.current) {
+      pickerChoice.current = action === 'models.api.select' ? apiChoice(value, connections) : action === 'models.accounts.select'
+        ? accountChoice(value, accounts) : groupChoice(value, args);
+    }
+    return value;
+  };
+  const chooseOtherSource = () => {
+    if (pending.current || pickerPending.current) return;
+    generation.current++; trail.current = []; positions.current = []; setCompletion(null); setModelReview(null); setCatalog(null);
+    setError(''); setNotice(''); setTab('services'); onHostSectionChange('models'); setView({ kind: 'main' });
+  };
   const readCatalog = (refresh: boolean) => {
     if (!connection) return;
     const original = connection;
@@ -148,12 +173,13 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     const output = Number(reviewOutput), imageReserve = strictSource ? Number(reviewImageReserve) : 0;
     if (!original || pending.current || selectionUnknown) return;
     if (!connection || connection.id !== original.originalConnectionId || connection.revision !== original.originalConnectionRevision || original.selectionRevision !== state.modelSelectionRevision || Date.now() >= original.expiresAt) { setError('这次模型核对已过期或服务已变化，请取消后重新选择。'); return; }
-    if (!/^\d+$/.test(reviewOutput) || !Number.isSafeInteger(output) || output < 128 || output > 32768 || strictSource && !/^\d+$/.test(reviewImageReserve) || !Number.isSafeInteger(imageReserve) || imageReserve < 0 || imageReserve > 2_000_000) { setError('请核对输出上限和图片预留范围。'); return; }
+    if (!/^\d+$/.test(reviewOutput) || !Number.isSafeInteger(output) || output < 128 || output > 32768 || strictSource && !/^\d+$/.test(reviewImageReserve) || !Number.isSafeInteger(imageReserve) || imageReserve < 0 || imageReserve > 2_000_000) { setError('请展开「模型能力与回复参数」，核对输出上限和图片预留范围。'); return; }
     const current = ++generation.current; pending.current = true; setBusy(true); setError(''); setModelReview(null);
     try {
       const value = await run('models.catalog.select', { reviewHandle: original.reviewHandle, options: { maxOutputTokens: output, reasoning: object(original.options).reasoning, imageTokenReserve: imageReserve } });
-      if (value?.status !== 'saved') throw new Error('默认模型的保存结果尚未确认。');
-      if (alive.current && current === generation.current) setNotice('默认模型已保存，后续新任务将使用这项选择。');
+      const choice = apiChoice(value, connections, { id: original.originalConnectionId, model: original.requestedModelId, label: text(connection.name) });
+      if (!choice) throw new Error('没有收到这项服务和模型的保存回执。');
+      if (alive.current && current === generation.current) completedChoice(choice);
     } catch (failure) { if (alive.current && current === generation.current) { setSelectionUnknown(true); setError(`${failure instanceof Error ? failure.message : '选择结果待核对。'} 请重新读取当前状态，没有自动重试。`); } }
     finally { if (current === generation.current) { pending.current = false; if (alive.current) setBusy(false); } }
   };
@@ -184,7 +210,7 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     }
     if (!text(row.id) || typeof row.revision !== 'number') { setError('无法核实保存的是哪项服务，请返回读取服务列表。'); return; }
     setLocalSnapshot(old => ({ ...(old || data), connections: { ...object((old || data).connections), connections: [...aiConnections(old || data).filter(item => item.id !== row.id), row] } }));
-    trail.current = [{ kind: 'main' }]; positions.current = [{ scroll: 0, focusKey: `connection:${row.id}` }]; setView({ kind: 'connection', id: row.id }); setCatalog(null); setNotice(value.reconciled === true ? '已核对原保存记录，这里显示服务的当前配置。' : '服务已保存。可读取模型目录，再单独选择默认模型或测试推理。');
+    trail.current = [{ kind: 'main' }]; positions.current = [{ scroll: 0, focusKey: `connection:${row.id}` }]; setView({ kind: 'connection', id: row.id }); setCatalog(null); setNotice(value.reconciled === true ? '已核对原保存记录，这里显示服务的当前配置。' : '服务已保存。下一步选择用于新工作的模型。');
   };
   const filtered = connections.filter(row => `${row.name || ''} ${row.baseUrl || ''} ${aiServiceBrand(row)} ${aiSourceLabel(row)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const filteredAccounts = accounts.filter(row => `${row.label || ''} ChatGPT OpenAI`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -198,8 +224,8 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     const manualModel = row.provider === 'bedrock_anthropic' || detailCatalog?.catalogAvailable === false;
     const canRefresh = !manualModel && row.enabled !== false && detailCatalog?.canRefresh !== false && supported('models.catalog.refresh');
     const canEdit = supported('models.connections.update');
-    const edit = (label = '编辑连接', primary = false) => <Button variant={primary ? 'primary' : 'ghost'} leadingIcon={IconControls} data-ai-return-key="edit-connection"
-      disabled={busy} onClick={() => open({ kind: 'edit', id: row.id })}>{canEdit ? label : '查看连接配置'}</Button>;
+    const edit = (label = '编辑连接', primary = false, field?: AIEditorField) => <Button variant={primary ? 'primary' : 'ghost'} leadingIcon={IconControls} data-ai-return-key="edit-connection"
+      disabled={busy} onClick={() => open({ kind: 'edit', id: row.id, field })}>{canEdit ? label : '查看连接配置'}</Button>;
     const read = (primary = true) => <Button variant={primary ? 'primary' : 'ghost'} leadingIcon={IconRefresh} disabled={busy || !canRefresh} onClick={() => readCatalog(true)}>读取模型</Button>;
     const step = (title: string, hint: string, action: ReactNode, other?: ReactNode) => <>
       <section className="pw-ai-next-step" aria-label="接下来"><h3>{title}</h3><p>{hint}</p></section>
@@ -212,19 +238,26 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
       ? step('服务已停用', '启用后允许新的请求使用这项服务，不会更改默认模型。',
         <Button disabled={busy} onClick={() => setServiceChange({ id: row.id, revision: row.revision, name: row.name, enabled: true })}>审阅启用服务</Button>, edit())
       : step('服务已停用', '当前不能更改启停状态，仍可查看已保存的配置。', edit('查看连接配置', true));
-    if (row.credentialStatus === 'expired') return step('凭据已过期', canEdit ? '在原连接中替换凭据并保存，再使用这项服务。' : '当前不能保存凭据更改，可查看原连接配置。', edit('更新凭据', true));
+    if (row.credentialStatus === 'expired') return step('凭据已过期', canEdit ? '在原连接中替换凭据并保存，再使用这项服务。' : '当前不能保存凭据更改，可查看原连接配置。', edit('更新凭据', true, 'credential'));
     if (row.credentialStatus === 'not_configured' || !row.hasApiKey && !row.hasAwsSession) {
       const source = aiConnectionSource(row).kind;
       const keyMayBeOptional = canRefresh && (source === 'local_gateway' || source === 'third_party_gateway');
       return step('尚未保存凭据', !canEdit ? '当前不能保存凭据更改，可查看原连接配置。' : keyMayBeOptional ? '需要密钥时在原连接中添加。免密网关也可以直接读取模型。' : '在原连接中填写凭据并明确保存。',
-        edit('配置凭据', true), keyMayBeOptional ? read(false) : undefined);
+        edit('配置凭据', true, 'credential'), keyMayBeOptional ? read(false) : undefined);
     }
     if (manualModel || !canRefresh) {
       const model = text(row.model).trim();
       if (model && supported('models.catalog.review')) return step('使用已配置的模型', `模型 ID：${model}。核对后再决定是否设为默认，不会发起推理。`,
         <Button disabled={busy || selectionUnknown} onClick={() => reviewModel(model)}>核对模型</Button>, edit());
-      return step('手动指定模型', !canEdit ? '当前不能刷新模型目录或保存模型 ID，可查看原连接配置。' : manualModel ? '此服务不提供模型目录，可在原连接中填写或更改模型 ID。' : '当前不能刷新模型目录，可在原连接中查看或填写模型 ID。', edit('编辑模型 ID', true));
+      return step('手动指定模型', !canEdit ? '当前不能刷新模型目录或保存模型 ID，可查看原连接配置。' : manualModel ? '此服务不提供模型目录，可在原连接中填写或更改模型 ID。' : '当前不能刷新模型目录，可在原连接中查看或填写模型 ID。', edit('编辑模型 ID', true, 'model'));
     }
+    const chosen = text(row.model).trim();
+    // A configured ID is already an explicit choice. Let the native owner review the same
+    // source first; a network refresh is useful for discovery, not a prerequisite to retry.
+    if (chosen && supported('models.catalog.review')) return step('使用已填写的模型', `${chosen} · ${row.name || '这项服务'}。确认后用于新的工作，不会发送测试消息。`,
+      <Button disabled={modelReviewBlocked} onClick={() => reviewModel(chosen)}>确认使用这个模型</Button>, <>{read(false)}{edit()}</>);
+    if (supported('models.catalog.review') && rows(detailCatalog?.models).length) return step('选择一个模型', '已保存的目录在下方。选择前可核对服务与模型；需要最新列表时再更新。',
+      <Button disabled={modelReviewBlocked} onClick={() => root.current?.querySelector<HTMLButtonElement>('.pw-ai-source-catalog .pw-ai-model-row:not(:disabled)')?.focus()}>从已有目录选择</Button>, <>{read(false)}{edit()}</>);
     return step('选择要使用的模型', '读取此服务的模型目录，再选择默认模型。读取目录不代表推理调用成功。', read(), edit());
   };
   const hasServices = connections.length + accounts.length > 0;
@@ -235,18 +268,54 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     (!!localSnapshot || !text(object(state.ownerErrors).models) && !text(object(state.moduleErrors)['models.snapshot']));
   // Only offer a first connection after both owners have actually returned an empty list.
   const firstService = connectionListRead && accountsReady && !accountsLoading && !accountsError && !hasServices && !defaultModelName && !query;
+  // Only single out a source when both local owners have answered. Multiple or
+  // partial sources stay a choice, not an implicit fallback to the first account.
+  const onlySource = !query && !defaultModelName && connectionListRead && accountsReady && !accountsLoading && !accountsError &&
+    connections.length + accounts.length === 1 ? { row: connections[0] || accounts[0], account: accounts.length === 1 } : null;
+  const nativeSelection = object(live.nativeSelection);
+  const selectedApi = nativeSelection.modelRoute === 'api_key' ? connections.find(row => row.id === object(nativeSelection.capabilityBinding).connectionId) : null;
+  const selectedAccount = nativeSelection.modelRoute === 'account' && accountsReady ? accounts.find(row => row.id === object(nativeSelection.nativeRef).accountId) : null;
+  const repair = !query && (selectedApi && (selectedApi.enabled === false || aiRequiredCredentialMissing(selectedApi)) ? { row: selectedApi, account: false }
+    : selectedAccount && aiAccountNextStep(selectedAccount) !== 'choose' ? { row: selectedAccount, account: true } : null);
+  const nextSource = repair || onlySource;
+  const sourceNext = nextSource && (() => {
+    const { row, account } = nextSource, name = text(row.name) || text(row.label) || (account ? 'ChatGPT 账号' : 'API 服务');
+    if (!text(row.id) || !Number.isSafeInteger(account ? row.version : row.revision) || (account ? row.version < 0 : row.revision < 1)) return null;
+    const credential = !account && row.enabled !== false && aiRequiredCredentialMissing(row);
+    const attention = account ? aiAccountNextStep(row) !== 'choose' : row.enabled === false || credential;
+    const kind = account ? 'account' : credential && supported('models.connections.update') ? 'edit' : 'connection';
+    return { name, status: account ? aiAccountStatus(row) : aiCredentialStatus(row), title: attention ? '先恢复这项服务' : '为新工作选择模型',
+      action: attention ? credential ? '核对连接凭据' : account ? '核对账号与授权' : '查看已停用的服务' : '选择这个服务的模型',
+      go: () => open({ kind, id: row.id, field: credential ? 'credential' : undefined }) };
+  })();
+  const minimalFirst = firstService && !showManagement && tab === 'services';
   const readingAccounts = accountsLoading || !accountsReady && !accountsError && (canReadAccounts || accountsEntryPending);
   const topLevel = view.kind === 'main';
   const accountName = accounts.find(row => row.id === view.id)?.label;
-  const motionView = JSON.stringify([view.kind, view.id, view.preset?.provider, view.adding, topLevel ? tab : null]);
+  const motionView = JSON.stringify([completion?.sourceId, completion?.model, view.kind, view.id, view.preset?.provider, view.adding, topLevel ? tab : null]);
   useSurfaceEnter(root, motionView, { selector: '', depth: topLevel ? 0 : Math.max(1, trail.current.length), active: !state.webWorkspaceTaskOpen });
   useCollectionMotion(root, JSON.stringify([motionView, query.trim(), state.webWorkspaceResumeRevision]), JSON.stringify([
     filteredAccounts.map(row => [row.id, row.status]), filtered.map(row => [row.id, row.revision, row.enabled]),
     rows(catalog?.models).map(row => row.modelId),
   ]), { active: !state.webWorkspaceTaskOpen && (topLevel ? !accountsLoading && !!live.connections : !!catalog) });
+  useLayoutEffect(() => {
+    if (completion) root.current?.querySelector<HTMLElement>('[data-ai-outcome]')?.focus({ preventScroll: true });
+  }, [completion]);
+  if (completion) return <section className="pw-ai-center" data-ai-view="selected" ref={root}>
+    <div className="pw-ai-finish" aria-labelledby="pw-ai-finish-title"><IconModel aria-hidden size={26}/>
+      <h2 id="pw-ai-finish-title" data-ai-outcome tabIndex={-1}>{completion.accountOnly ? '账号模型已记录，还不能用于管家' : '默认模型已选好'}</h2>
+      <p className="pw-ai-finish-choice"><strong>{completion.model}</strong><span>{completion.source}</span></p>
+      <p>{completion.accountOnly ? '当前版本没有接通账号推理。原默认模型没有被替换，可以改用已接入的 API 服务。' : '新工作会沿用这项默认选择；有单独模型设置的对话不变。这里没有发送测试消息。'}</p>
+      <div className="pw-ai-detail-actions">
+        {completion.accountOnly && <Button onClick={chooseOtherSource}>选择其他服务</Button>}
+        {returnToOrigin && <Button variant={completion.accountOnly ? 'secondary' : 'primary'} onClick={returnToOrigin.go}>{returnToOrigin.label}</Button>}
+        {!completion.accountOnly && <Button variant="ghost" onClick={() => setCompletion(null)}>继续管理模型</Button>}
+      </div>
+    </div>
+  </section>;
   return <section className="pw-ai-center" data-ai-view={view.kind} ref={root}>
     {topLevel ? <Tabs selectedKey={tab} isDisabled={busy} onSelectionChange={key => changeTab(String(key))} className="pw-ai-main-tabs">
-      <div className="pw-ai-toolbar"><div className="pw-ai-tabs"><TabList aria-label="AI 接入管理"><Tab id="services">服务</Tab><Tab id="models">模型</Tab><Tab id="routing">模型组</Tab></TabList></div></div>
+      <div className="pw-ai-toolbar" hidden={minimalFirst} inert={minimalFirst} style={minimalFirst ? { display: 'none' } : undefined}><div className="pw-ai-tabs"><TabList aria-label="AI 接入管理"><Tab id="services">服务</Tab><Tab id="models">模型</Tab><Tab id="routing">模型组</Tab></TabList></div></div>
       <TabPanel id={tab} className="pw-ai-tab-panel">
       {tab === 'services' && <>
         {firstService && <section className="pw-ai-first-services" aria-labelledby="pw-ai-connect-title">
@@ -257,7 +326,9 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
             {canAddApi && <Button variant={canAddAccount ? 'secondary' : 'primary'} leadingIcon={IconKey} data-ai-return-key="first-api" disabled={busy} onClick={() => open({ kind: 'api' })}>添加 API 服务</Button>}
           </div>}
         </section>}
-        {(defaultModelName || hasServices) && <section className="pw-ai-default-group" aria-label="默认模型"><h3>默认模型</h3><Button variant="ghost" className="pw-ai-service-row" onClick={() => changeTab('models')}><IconControls size={19} aria-hidden /><span className="pw-ai-row-copy"><strong>{defaultModelName || '选择默认模型'}</strong><small>用于新对话</small></span><IconChevronRight size={17} aria-hidden /></Button></section>}
+        {sourceNext && <section className="pw-ai-connect-next" aria-label={sourceNext.title}><div><h3>{sourceNext.title}</h3><p>{sourceNext.name} · {sourceNext.status}</p></div>
+          <Button trailingIcon={IconChevronRight} data-ai-return-key="source-next" onClick={sourceNext.go}>{sourceNext.action}</Button></section>}
+        {!sourceNext && (defaultModelName || hasServices) && <section className="pw-ai-default-group" aria-label="默认模型"><h3>默认模型</h3><Button variant="ghost" className="pw-ai-service-row" onClick={() => changeTab('models')}><IconControls size={19} aria-hidden /><span className="pw-ai-row-copy"><strong>{defaultModelName || '选择默认模型'}</strong><small>用于新对话</small></span><IconChevronRight size={17} aria-hidden /></Button></section>}
         {!firstService && <WorkspaceSectionHeading title="服务与账号" description={readingAccounts && <WorkingStatus active>{canReadAccounts ? '正在读取账号…' : '账号目录尚未就绪'}</WorkingStatus>}
           actions={<Button variant={hasServices ? 'secondary' : 'primary'} leadingIcon={IconAdd} data-ai-return-key="add" disabled={!canAddService} onClick={() => open({ kind: 'add' })}>添加服务</Button>} />}
         {(connections.length + accounts.length > 5 || query.length > 0) && <SearchField data-input-size="medium" aria-label="搜索服务或账号" placeholder="搜索服务或账号" value={query} onChange={setQuery} className="pw-ai-search" />}
@@ -267,9 +338,9 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
           : accountsError ? null : !connectionListRead ? <div className="pw-ai-feedback" role="status"><p>服务列表尚未确认。</p>{supported('models.snapshot') && <Button variant="ghost" disabled={busy} onClick={recoverService}>读取服务列表</Button>}</div>
           : query ? <div className="pw-ai-empty"><h3>没有匹配的服务</h3><p>试试服务或账号名称。</p><Button variant="ghost" onClick={() => setQuery('')}>清除搜索</Button></div> : null}
         {accountsError && <div className="pw-ai-feedback" role="status"><p>账号状态暂未更新。{accounts.length ? '保留上次读取的账号。' : '当前还不能确认已保存的账号。'}</p><p className="pw-field-error">{accountsError}</p><Button variant="ghost" disabled={accountsLoading || busy} onClick={() => void loadAccounts()}>重新读取账号</Button></div>}
-        <section className={firstService ? "pw-ai-utilities pw-ai-first-utilities" : "pw-ai-utilities"} aria-label="更多设置"><h3>更多设置</h3><div className="pw-ai-service-group-body"><Button variant="ghost" leadingIcon={IconServer} trailingIcon={IconChevronRight} className="pw-ai-utility-row pw-ai-proxy-link" data-ai-return-key="proxy" disabled={busy} onClick={() => open({ kind: 'proxy' })}>本机 API</Button><Button variant="ghost" leadingIcon={IconControls} trailingIcon={IconChevronRight} className="pw-ai-utility-row" data-ai-return-key="usage" onClick={() => open({ kind: 'tools' })}>用量统计</Button></div></section>
+        {minimalFirst ? <Button variant="ghost" data-ai-return-key="show-management" className="pw-ai-more-settings" onClick={() => setShowManagement(true)}>查看全部接入设置</Button> : <section className={firstService ? "pw-ai-utilities pw-ai-first-utilities" : "pw-ai-utilities"} aria-label="更多设置"><h3>更多设置</h3><div className="pw-ai-service-group-body"><Button variant="ghost" leadingIcon={IconServer} trailingIcon={IconChevronRight} className="pw-ai-utility-row pw-ai-proxy-link" data-ai-return-key="proxy" disabled={busy} onClick={() => open({ kind: 'proxy' })}>本机 API</Button><Button variant="ghost" leadingIcon={IconControls} trailingIcon={IconChevronRight} className="pw-ai-utility-row" data-ai-return-key="usage" onClick={() => open({ kind: 'tools' })}>用量统计</Button></div></section>}
       </>}
-      {tab === 'models' && <AIModelPicker state={state} can={supported} act={run} scope="default" presentationState={modelPresentation} onPresentationChange={setModelPresentation} onManage={() => changeTab('services')} onAddService={() => open({ kind: 'add' })} onSelected={() => { setNotice('默认模型已保存，新对话将使用这项选择。'); setTab('services'); }} onSelectionPending={modelSelectionPending} />}
+      {tab === 'models' && <AIModelPicker state={state} can={supported} act={runPicker} scope="default" presentationState={modelPresentation} onPresentationChange={setModelPresentation} onManage={() => changeTab('services')} onAddService={() => open({ kind: 'add' })} onSelected={() => { const choice = pickerChoice.current; pickerChoice.current = null; if (choice) completedChoice(choice); else setNotice('模型选择已返回，请核对服务和当前默认模型。'); setTab('services'); }} onSelectionPending={modelSelectionPending} />}
       {tab === 'routing' && <AIModelGroups state={state} data={live} supported={supported} run={run} registerTransientBack={registerChildBack} />}
       </TabPanel>
     </Tabs> : <>
@@ -287,8 +358,8 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
         {view.kind === 'add' && <p className="pw-ai-muted">账号登录当前支持 ChatGPT。Claude 订阅尚未开放给本应用，Claude API 可通过密钥接入。</p>}
       </div>}
       {view.kind === 'openai' && <div className="pw-ai-brand-directory"><div className="pw-ai-service-group-body"><ServiceOption title="登录 ChatGPT" detail="使用账号可用的套餐模型" icon={IconAccount} onClick={() => open({ kind: 'account', adding: true })} /><ServiceOption title="添加 API 密钥" detail="连接自己的 OpenAI API 服务" onClick={() => open({ kind: 'edit', preset: presets[0] })} /></div></div>}
-      {view.kind === 'edit' && (view.id && !connection ? <p role="alert">这项服务已变化，请返回服务列表重新核对。</p> : renderEditor(connection, view.preset, back, saved, registerChildBack))}
-      {view.kind === 'account' && renderAccounts(view.id, view.adding === true, registerChildBack)}
+      {view.kind === 'edit' && (view.id && !connection ? <p role="alert">这项服务已变化，请返回服务列表重新核对。</p> : renderEditor(connection, view.preset, back, saved, registerChildBack, view.field))}
+      {view.kind === 'account' && renderAccounts(view.id, view.adding === true, registerChildBack, completedChoice)}
       {view.kind === 'tools' && renderTools(registerChildBack)}
       {view.kind === 'proxy' && renderProxy(registerChildBack)}
       {view.kind === 'connection' && (connection ? <>
@@ -310,13 +381,14 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     <SettingsDialog isOpen={!!modelReview} title="选择默认模型" onClose={() => { if (!busy) setModelReview(null); }}>{modelReview && <div className="pw-ai-model-review">
       <header><h3>{modelReview.requestedModelId}</h3><p>{connection?.name}</p></header>
       <p>用于后续新任务；已有对话的单独选择和运行中的任务保持原样。</p>
-      <dl className="pw-ai-model-facts">{Object.keys(factLabels).map(key => {
+      <Accordion><AccordionItem id="api-choice-options" title="模型能力与回复参数" description="已采用此服务的默认值，可按需调整"><dl className="pw-ai-model-facts">{Object.keys(factLabels).map(key => {
         const fact = object(object(modelReview.facts || object(modelReview.model).facts)[key]);
         const value = fact.known === true ? typeof fact.value === 'boolean' ? fact.value ? '支持' : '不支持' : typeof fact.value === 'object' ? fact.value?.tokens || '未声明' : fact.value : '未声明';
         return <div key={key}><dt>{factLabels[key]}</dt><dd>{String(value)}</dd></div>;
       })}</dl>
       <TextField label="本次输出上限" value={reviewOutput} onChange={value => setReviewOutput(value.replace(/\D/g, '').slice(0, 5))} inputMode="numeric" hint="128–32768 tokens，且不能超出该模型声明的容量。" isDisabled={busy} />
       {object(modelReview.connection).catalogEnabled === true ? <Accordion><AccordionItem id="model-input-reserve" title="图片输入预留"><TextField label="每张图片本地预留" value={reviewImageReserve} onChange={value => setReviewImageReserve(value.replace(/\D/g, '').slice(0, 7))} inputMode="numeric" hint="0–2000000 tokens；不会改写服务商声明的容量。" isDisabled={busy} /></AccordionItem></Accordion> : <p className="pw-ai-muted">推理参数可在当前对话单独设置；服务默认高级参数需先明确启用来源能力目录。</p>}
+      </AccordionItem></Accordion>
       <p className="pw-ai-muted">仅选择模型不会发起推理；推理强度先使用服务默认。</p>{error && <p role="alert" className="pw-field-error">{error}</p>}
       <div className="pw-ai-picker-actions"><Button variant="secondary" disabled={busy} onClick={() => setModelReview(null)}>取消</Button><Button disabled={busy || modelReview.selectionRevision !== state.modelSelectionRevision || !supported('models.catalog.select')} onClick={() => void selectReviewedModel()}>设为默认模型</Button></div>
     </div>}</SettingsDialog>

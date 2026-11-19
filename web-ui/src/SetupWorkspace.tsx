@@ -325,12 +325,16 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const permissionAction = (kind: SetupPermission, value: boolean | null, label = '前往设置') => <Button variant={value === true ? 'secondary' : 'primary'} disabled={locked || !can('setup.permission')} onClick={() => permission(kind)}>{value === true ? '查看设置' : label}</Button>;
   const textIssue = modelStateCurrent && modelSelected && !textTesting && !textVerified ? data?.model.textTestIssue : undefined;
   const testAvailable = modelSelected && data?.model.selectionRevision !== undefined && can('setup.model.test');
-  const checkSettingsFirst = !textVerified && (!testAvailable || !!textIssue);
+  // Returning to a waiting first task does not require buying a separate probe.
+  // A local choice is not a successful text result: keep its real status unchanged.
+  const resumeFirstWork = onboarding && !!returnLabel && modelSelected && modelStateCurrent && !textTesting && !textIssue;
+  const optionalTest = textVerified || resumeFirstWork;
+  const checkSettingsFirst = !optionalTest && (!testAvailable || !!textIssue);
   const manageModel = <Button className={checkSettingsFirst ? 'pw-setup-model-main' : undefined} variant={checkSettingsFirst ? 'primary' : 'ghost'} trailingIcon={IconChevronRight}
     disabled={locked || !!preparation.working} onClick={() => void navigate('connections')}>
     {data?.model.availability === 'unavailable' || textIssue ? '检查模型配置' : modelSelected ? '管理模型连接' : '连接模型'}
   </Button>;
-  const testFirst = !textVerified && !checkSettingsFirst;
+  const testFirst = !optionalTest && !checkSettingsFirst;
   const testButton = <Button className={testFirst ? 'pw-setup-model-main' : undefined} variant={testFirst ? 'primary' : 'secondary'}
     aria-describedby="pw-setup-test-cost" disabled={locked || !modelStateCurrent || textTesting || !testAvailable}
     onClick={() => void command('setup.model.test', { expectedSelectionRevision: data?.model.selectionRevision })}>
@@ -343,16 +347,17 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     }</span>}/>
     {modelStateCurrent && data.model.message && <p className="pw-setup-copy" role={data.model.availability === 'unavailable' || textIssue === 'failed' ? 'alert' : 'status'}>{data.model.message}</p>}
     {textVerified && <p className="pw-setup-copy">这次只验证了文字回复，没有验证工具或图片能力。</p>}
-    {testAvailable && !textVerified && testCost}
+    {resumeFirstWork && !textVerified && <p className="pw-setup-copy">已选好模型，尚未实测回复。可以直接返回发送你的第一件事。</p>}
+    {testAvailable && !optionalTest && testCost}
     {modelSelected && !testAvailable && !textVerified && <p className="pw-setup-copy">当前入口不能测试文本连接，可前往模型设置核对。</p>}
     <div className="pw-setup-model-choices">
       {checkSettingsFirst && manageModel}
-      {testAvailable && !textVerified && testButton}
+      {testAvailable && !optionalTest && testButton}
       {!checkSettingsFirst && manageModel}
     </div>
-    {(data.model.details || (textVerified && testAvailable)) && <Accordion className="pw-setup-model-check">
+    {(data.model.details || (optionalTest && testAvailable)) && <Accordion className="pw-setup-model-check">
       {data.model.details && <AccordionItem id="setup-model-details" title="查看状态详情"><pre>{data.model.details}</pre></AccordionItem>}
-      {textVerified && testAvailable && <AccordionItem id="setup-model-check" title="再次测试"><div className="pw-setup-model-test">{testCost}{testButton}</div></AccordionItem>}
+      {optionalTest && testAvailable && <AccordionItem id="setup-model-check" title={textVerified ? '再次测试' : '单独测试文字回复'}><div className="pw-setup-model-test">{testCost}{testButton}</div></AccordionItem>}
     </Accordion>}
   </section>;
   const capabilityBody = (id: SetupCapability) => {
@@ -379,7 +384,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const title = view === 'overview' ? '能力准备' : view === 'model' ? onboarding ? '开始使用' : '模型连接' : capabilityCopy[view].title;
   const returning = returnLabel || (onboarding ? '进入管家' : '返回原页面');
   const skipLabel = `${modelSelected ? '暂不验证' : '稍后设置'}，${returning}`;
-  const leaveLabel = onboarding && canRecordProgress && !textVerified ? skipLabel : returning;
+  const leaveLabel = onboarding && canRecordProgress && !optionalTest ? skipLabel : returning;
   const parentLabel = parentView === 'model' ? '返回模型连接' : '返回能力准备';
   const headerAction = () => { if (!back.current()) void close(); };
   return <section className="pw-setup-workspace" aria-label={title} data-setup-step={viewStep(view)} data-setup-view={view} data-setup-mode={mode} data-setup-focused={focused}>
@@ -402,7 +407,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
         {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && readable && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
       </div>
       <footer className="pw-setup-footer">
-        <Button className="pw-setup-next" variant={!onboarding ? 'secondary' : canRecordProgress && textVerified ? 'primary' : 'ghost'}
+        <Button className="pw-setup-next" variant={!onboarding ? 'secondary' : canRecordProgress && optionalTest ? 'primary' : 'ghost'}
           disabled={!!working || !!preparation.working} onClick={() => void close()}>{working === 'save' ? '正在保存…' : leaveLabel}</Button>
       </footer>
     </>}

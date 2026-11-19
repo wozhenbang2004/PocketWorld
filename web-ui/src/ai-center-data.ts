@@ -48,6 +48,23 @@ export function aiAccountStatus(account: AIRecord, now = Date.now()): string {
   if (typeof account.expiresAt === 'number' && account.expiresAt > 0 && account.expiresAt <= now) return '授权待续期';
   return account.status === 'connected' ? '已登录' : '状态待刷新';
 }
+/** Choose one next user action; never infer authorization from a missing/partial row. */
+export function aiAccountNextStep(row: AIRecord, now = Date.now()): 'read' | 'enable' | 'quota' | 'login' | 'renew' | 'choose' {
+  if (!aiText(row.id) || !Number.isSafeInteger(row.version) || row.version < 0 || row.provider !== 'chatgpt_plan') return 'read';
+  if (row.enabled === false) return 'enable';
+  if (row.enabled !== true || row.error === 'REFRESH_VERIFICATION_PENDING') return 'read';
+  if (row.usageLimited === true || aiObject(aiObject(row.source).quota).state === 'limited') return 'quota';
+  if (['signed_out', 'reauthorization_required'].includes(row.status) || row.planUsageEnabled === false) return 'login';
+  if (!['connected', 'cooldown'].includes(row.status) || row.planUsageEnabled !== true) return 'read';
+  if (typeof row.cooldownUntil === 'number' && row.cooldownUntil > now) return 'read';
+  if (typeof row.expiresAt === 'number' && row.expiresAt > 0 && row.expiresAt <= now) return 'renew';
+  return 'choose';
+}
+export function aiRequiredCredentialMissing(row: AIRecord, now = Date.now()) {
+  if (row.credentialStatus === 'expired' || row.provider === 'bedrock_anthropic' && Date.parse(aiText(row.credentialExpiresAt)) <= now) return true;
+  if (!['official_api','cloud_provider'].includes(aiConnectionSource(row).kind)) return false;
+  return row.credentialStatus === 'not_configured' || (row.provider === 'bedrock_anthropic' ? row.hasAwsSession === false : row.hasApiKey === false);
+}
 export function aiCredentialStatus(connection: AIRecord): string {
   if (connection.enabled === false) return '已停用';
   if (connection.credentialStatus === 'expired') return '凭据已过期';
