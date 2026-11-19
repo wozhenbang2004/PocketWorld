@@ -127,6 +127,36 @@ public final class ProjectPackageArchive {
         validateHeader(scope);if(selected!=null)requireSelectionManifest(scope,selected);return new Frozen(scope, files);
     }
 
+    @FunctionalInterface public interface CopyCurrent {void check()throws Exception;}
+    /** Same private package materializer used by regular import and draft promotion; accepts a new, empty directory only. */
+    public static JSONArray materializeWorkspace(Frozen frozen,File files,CopyCurrent current)throws Exception{
+        current.check();if(!files.mkdir())throw new IllegalStateException("无法建立新的项目文件目录");
+        JSONObject manifest=frozen.manifest();JSONArray directories=manifest.getJSONArray("directories"),entries=manifest.getJSONArray("files"),baseline=new JSONArray();
+        for(int i=0;i<directories.length();i++){current.check();File child=NativeCommandExecutor.within(files,directories.getString(i));if(!child.isDirectory()&&!child.mkdirs())throw new IllegalStateException("无法保留项目空目录");}
+        for(int i=0;i<entries.length();i++){
+            current.check();JSONObject f=entries.getJSONObject(i);String path=f.getString("path");File target=NativeCommandExecutor.within(files,path);
+            if(!target.getParentFile().isDirectory()&&!target.getParentFile().mkdirs())throw new IllegalStateException("无法建立项目文件子目录");
+            byte[] bytes=frozen.file(path);try(var output=new java.io.FileOutputStream(target)){output.write(bytes);output.getFD().sync();}
+            if(f.getBoolean("executable")&&!target.setExecutable(true,true))throw new IllegalStateException("无法保留所选项目脚本的主人执行位");
+            if(ProjectSources.sourcePath(path))baseline.put(new JSONObject().put("path",path).put("sha256",f.getString("sha256")).put("bytes",bytes.length).put("sourceVersion",0));
+        }current.check();return baseline;
+    }
+
+    /** Reuse the captured private source policy, empty directories, binary and executable flags. No later live-tree read supplies bytes. */
+    static Frozen forPrivateDraft(Frozen original,OwnerDraftWorkCopy.Seed seed,String name)throws Exception {
+        JSONObject manifest=original.manifest();if(!"source_project".equals(manifest.opt("mode"))||manifest.getJSONObject("policy").optBoolean("generatedRootsIncluded")||
+            excluded(seed.path,false,false)!=null)throw new SecurityException("所选稿不在可独立复制的源码范围内");
+        Map<String,byte[]> files=original.files();byte[] before=files.get(seed.path),after=seed.bytes();
+        if(before==null||!ProjectSources.sha256(before).equals(seed.originalFileSha))throw new SecurityException("最初的工程原文件版本不同，未覆盖任何文件");
+        files.put(seed.path,after);Map<String,Boolean> executable=new TreeMap<>();JSONArray previous=manifest.getJSONArray("files");
+        for(int i=0;i<previous.length();i++){JSONObject f=previous.getJSONObject(i);executable.put(f.getString("path"),f.getBoolean("executable"));}
+        JSONArray entries=manifest(files,executable);String digest=ProjectSources.manifestDigest(entries);
+        manifest.put("project",new JSONObject().put("id",seed.projectId).put("name",name))
+            .put("source",new JSONObject().put("projectId",seed.projectId).put("checkoutId",seed.checkoutId).put("sourceDigest",digest))
+            .put("files",entries).put("bytes",manifest.getLong("bytes")-before.length+after.length);
+        validateHeader(manifest);return new Frozen(manifest,files);
+    }
+
     /** Exact literal relative paths, never globs or host paths; omitted means legacy whole selection. */
     public static JSONArray normalizedSelection(JSONArray values)throws Exception {
         if(values.length()<1||values.length()>MAX_FILES)throw new IllegalArgumentException("includePaths需1至2000个原相对路径；空列表不冒完整项目");java.util.TreeSet<String> paths=new java.util.TreeSet<>();for(int i=0;i<values.length();i++){if(!(values.get(i) instanceof String))throw new IllegalArgumentException("includePaths逐项需相对路径文字");String path=packagePath(values.getString(i));if(path.split("/").length>40||!paths.add(path))throw new IllegalArgumentException("所选路径重复或超过40层");}return new JSONArray(paths);

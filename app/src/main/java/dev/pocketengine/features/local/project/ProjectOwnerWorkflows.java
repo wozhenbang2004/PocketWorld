@@ -27,7 +27,7 @@ public final class ProjectOwnerWorkflows {
      * silently adopted as the owner's ordinary development workspace. */
     public JSONObject inspectForOwner(String project)throws Exception {return inspectForOwner(project,true);}
     public JSONObject inspectForOwner(String project,boolean includeRuntime)throws Exception {
-        ProjectBuildPlan.identity(project);JSONArray available=new JSONArray(),rows=local.ownerCheckoutRecords();
+        ProjectBuildPlan.identity(project);local.requireAvailableDraftProjectForOwner(project);JSONArray available=new JSONArray(),rows=local.ownerCheckoutRecords();
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!project.equals(row.optString("projectId"))||!ordinaryCheckout(row))continue;
             available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt"))
                 .put("taskPackageSource",row.optJSONObject("sourceImport")!=null&&ProjectTaskSourceOrigin.KIND.equals(row.getJSONObject("sourceImport").opt("sourceKind")))

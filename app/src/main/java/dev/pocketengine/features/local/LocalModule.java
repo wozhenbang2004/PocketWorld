@@ -268,14 +268,22 @@ public final class LocalModule implements EngineModule {
         for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i);projects.handle("write",new JSONObject().put("projectId",id).put("path",file.getString("path")).put("content",file.getString("content")).put("expectedVersion",0));}
         return prepare(id).put("template",template).put("templateFilesWritten",files.length());
     }
+    public synchronized void requireAvailableDraftProjectForOwner(String projectId)throws Exception {
+        dev.pocketengine.features.local.project.OwnerDraftCopyShelf.requireProjectNotShelved(root,projectId);
+        dev.pocketengine.features.local.project.OwnerDraftCopyPublication.requireRegisteredCopyPresent(root,projectId);
+    }
     public synchronized JSONObject openProjectForOwner(String projectId)throws Exception {
+        requireAvailableDraftProjectForOwner(projectId);
         projects.handle("export",new JSONObject().put("projectId",projectId));JSONObject latest=null;File[] entries=new File(root,"checkouts").listFiles();
         if(entries!=null)for(File entry:entries){File metadata=new File(entry,"checkout.json");if(!metadata.isFile())continue;JSONObject value=JsonFiles.read(metadata);if(!value.has("isolatedGit")&&projectId.equals(value.optString("projectId"))&&(latest==null||value.optLong("createdAt")>latest.optLong("createdAt")))latest=value;}
-        return latest==null?prepare(projectId):new JSONObject(latest.toString());
+        if(latest==null)return prepare(projectId);
+        if(latest.has(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD))dev.pocketengine.features.local.project.OwnerDraftCopyShelf.claim(dev.pocketengine.features.local.project.OwnerDraftCopyShelf.location(root,latest.getString("id"),false));
+        return new JSONObject(latest.toString());
     }
     /** Native project page: one explicit copy request, recorded in the existing
      * checkout metadata. Unknown partial copies are queried, never overwritten. */
     public synchronized JSONObject prepareDevelopmentCheckoutForOwner(String projectId,String requestId)throws Exception {
+        requireAvailableDraftProjectForOwner(projectId);
         if(closed)throw new IllegalStateException("原项目宿主已关闭");
         JSONObject prior=queryDevelopmentCheckoutForOwner(projectId,requestId);
         if(prior.optBoolean("found"))return prior.getJSONObject("checkout");
@@ -742,15 +750,18 @@ public final class LocalModule implements EngineModule {
         }
         JSONObject deviceSource=staged.optJSONObject("deviceSource");if(plan.has("deviceSourceSha256")!=(deviceSource!=null)||deviceSource!=null&&!plan.getString("deviceSourceSha256").equals(ProjectSources.digest(deviceSource)))throw new SecurityException("设备附件来源在审阅后变化，未导入");
         dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen; synchronized(projectPackageStaging){File archive=new File(packageImportRoot(),plan.getString("selectionId")+".zip");frozen=dev.pocketengine.features.local.project.ProjectPackageArchive.read(archive);if(!sha.equals(packageFileHash(archive))||!frozen.identity.equals(plan.getString("manifestIdentity")))throw new SecurityException("原项目包字节或清单不一致");}
+        return publishPrivatePackageCheckout(plan,client,sha,id,staged,sourceEvidence,deviceSource,frozen,nativeGit,gitControl,null,null);
+    }
+    private JSONObject publishPrivatePackageCheckout(JSONObject plan,String client,String sha,String id,JSONObject staged,JSONObject sourceEvidence,JSONObject deviceSource,
+            dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,dev.pocketengine.features.local.project.ProjectGitImport.Result nativeGit,RunControl gitControl,
+            dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Review draft,dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Current current)throws Exception {
         String projectId=plan.getString("mode").equals("new_project")?UUID.nameUUIDFromBytes(("project-package-import:"+client).getBytes(StandardCharsets.UTF_8)).toString():plan.getString("projectId");
         File staging=new File(root,"package-checkout-staging");if(Files.isSymbolicLink(staging.toPath())||!staging.isDirectory()&&!staging.mkdirs()||!staging.getAbsoluteFile().equals(staging.getCanonicalFile()))throw new IllegalStateException("无法建立原项目导入暂存目录");File prepared=Files.createTempDirectory(staging.toPath(),"checkout-").toFile();
         try{
-            File files=new File(prepared,"files");if(!files.mkdir())throw new IllegalStateException("无法建立项目文件目录");JSONArray directories=frozen.manifest().getJSONArray("directories");for(int i=0;i<directories.length();i++){File folder=NativeCommandExecutor.within(files,directories.getString(i));if(!folder.isDirectory()&&!folder.mkdirs())throw new IllegalStateException("无法保留项目空目录");}JSONArray originalFiles=frozen.manifest().getJSONArray("files"),baseline=new JSONArray();
-            for(int i=0;i<originalFiles.length();i++){
-                if(closed||Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("项目包导入已中止，原项目未覆盖");JSONObject file=originalFiles.getJSONObject(i);String path=file.getString("path");File target=NativeCommandExecutor.within(files,path);if(!target.getParentFile().isDirectory()&&!target.getParentFile().mkdirs())throw new IllegalStateException("无法建立项目文件子目录");byte[] bytes=frozen.file(path);
-                try(FileOutputStream output=new FileOutputStream(target)){output.write(bytes);output.getFD().sync();}if(file.getBoolean("executable")&&!target.setExecutable(true,true))throw new IllegalStateException("无法保留所选项目脚本的主人执行位");
-                if(ProjectSources.sourcePath(path))baseline.put(new JSONObject().put("path",path).put("sha256",file.getString("sha256")).put("bytes",bytes.length).put("sourceVersion",0));
-            }
+            File files=new File(prepared,"files");
+            JSONArray baseline=dev.pocketengine.features.local.project.ProjectPackageArchive.materializeWorkspace(frozen,files,()->{
+                if(closed||Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("项目包导入已中止，原项目未覆盖");
+            });
             if(nativeGit!=null)nativeGit.copyGitMetadata(files,gitControl);
             JSONObject checkout=new JSONObject().put("id",id).put("projectId",projectId).put("name",plan.getString("projectName")).put("createdAt",System.currentTimeMillis()).put("files",baseline)
                 .put("sourceImport",new JSONObject().put("clientId",client).put("packageSha256",sha).put("manifestIdentity",frozen.identity).put("mode",plan.getString("mode")).put("executionAuthorityRestored",false));
@@ -762,18 +773,88 @@ public final class LocalModule implements EngineModule {
                 dev.pocketengine.features.local.project.ProjectTaskSourceRecord.write(prepared,checkout,sourceEvidence);
             if(sourceEvidence!=null&&"host_saved_snapshot".equals(sourceEvidence.opt("sourceKind")))
                 dev.pocketengine.features.local.project.ProjectHostOrigin.write(prepared,checkout,sourceEvidence);
+            if(draft!=null){
+                var actual=dev.pocketengine.features.local.project.ProjectPackageArchive.capture(files,draft.frozen.manifest().getJSONObject("source"),"source_project","",false);
+                if(!draft.outputDigest.equals(ProjectSources.manifestDigest(actual.manifest().getJSONArray("files")))||
+                    !ProjectSources.canonical(teamProjectStructure(actual.manifest())).equals(ProjectSources.canonical(teamProjectStructure(draft.frozen.manifest()))))
+                    throw new SecurityException("暂存的工程文件、空目录或可执行位不完整，不发布为工作副本");
+                checkout.put(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD,draft.view().put("structureSha256",ProjectSources.digest(teamProjectStructure(draft.frozen.manifest()))));dev.pocketengine.features.local.project.OwnerDraftCopyShelf.markUnused(prepared);dev.pocketengine.features.local.project.OwnerDraftCopyPublication.sealStaging(prepared,draft);
+            }
             JsonFiles.write(new File(prepared,"checkout.json"),checkout);
             synchronized(this){
-                if(closed||Thread.currentThread().isInterrupted())throw new IllegalStateException("原项目模块已关闭或导入等待已取消，未发布新工作副本");JSONObject prior=existingPackageImport(id,client,sha,plan);if(prior!=null)return prior;
+                if(closed||Thread.currentThread().isInterrupted())throw new IllegalStateException("原项目模块已关闭或导入等待已取消，未发布新工作副本");
+                if(draft!=null){JSONObject priorDraft=findDraftWorkCopy(draft.seed);if(priorDraft.optBoolean("found"))return priorDraft;}
+                JSONObject prior=existingPackageImport(id,client,sha,plan);if(prior!=null)return prior;
                 File checkouts=new File(root,"checkouts");File[] saved=checkouts.listFiles();if(saved!=null&&saved.length>=40)throw new IllegalStateException("最多保留40个工作副本，原项目包仍保留");if(!checkouts.isDirectory()&&!checkouts.mkdirs())throw new IllegalStateException("无法建立工作副本目录");
                 if(deviceSource!=null)requireDevicePackageSource(deviceSource,new RunControl());
                 currentPreparedTaskSource(staged,false);
+                if(draft!=null){current.check();requireDraftCopyOriginal(draft.seed);
+                    var unchanged=capturePackage(new JSONObject().put("checkoutId",draft.seed.checkout).put("expectedSourceDigest",draft.seed.originalDigest).put("mode","source_project").put("includeGeneratedRoots",false));
+                    if(!draft.originalManifest.equals(unchanged.identity))throw new SecurityException("文件、目录或可执行标志在审阅后变化，未发布副本");
+                    current.check();dev.pocketengine.features.local.project.OwnerDraftCopyPublication.reserve(root,draft);current.check();}
                 if(plan.getString("mode").equals("new_project")){JSONObject project=packageWorkspace().createImportedProject(plan.getString("projectName"),client,sha);if(!projectId.equals(project.getString("id")))throw new SecurityException("原项目导入身份不一致");}
                 else {JSONObject actual=ProjectSources.describe(export(plan.getString("targetCheckoutId")));if(!projectId.equals(actual.getString("projectId"))||!packageHash(plan.getString("expectedTargetSourceDigest")).equals(actual.getString("sourceDigest")))throw new SecurityException("原目标副本已变化，请重新读取并核对；没有覆盖原目录");}
+                if(draft!=null)current.check(); // A withdrawn owner window can leave a resumable intent, not an opened project.
                 File destination=new File(checkouts,id);if(Files.exists(destination.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))throw new SecurityException("目标副本目录已有未确认来源，未覆盖");Files.move(prepared.toPath(),destination.toPath(),StandardCopyOption.ATOMIC_MOVE);
                 return new JSONObject(checkout.toString()).put("imported",true).put("continuedExisting",false).put("originalCheckoutUnchanged",true).put("taskOrGrantRestored",false);
             }
         }finally{if(prepared.exists())deleteOwnPackageStaging(prepared);}
+    }
+    private JSONObject requireDraftCopyOriginal(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Seed seed)throws Exception{
+        if(closed)throw new IllegalStateException("原本机工程宿主已关闭");JSONObject meta=checkout(seed.checkout);
+        if(!seed.project.equals(meta.opt("projectId"))||meta.has("teamProjectCopy")||meta.has("skillExecutionCopy")||meta.has("isolatedGit")||meta.has("nativeGitImportPending"))throw new SecurityException("原任务没有选中这个普通私人副本");
+        requireIdle(seed.checkout);requireCheckoutWritable(seed.checkout);JSONObject facts=ProjectSources.describe(export(seed.checkout));
+        dev.pocketengine.features.local.project.OwnerDraftWorkCopy.requireOriginal(seed,facts);return facts;
+    }
+    /** Local-only; the visible owner chooses the target revision before this allocates any workspace or invokes tools. */
+    public synchronized dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Review reviewDraftWorkCopy(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Seed seed)throws Exception{
+        JSONObject original=requireDraftCopyOriginal(seed);
+        var frozen=capturePackage(new JSONObject().put("checkoutId",seed.checkout).put("expectedSourceDigest",seed.originalDigest).put("mode","source_project").put("includeGeneratedRoots",false));
+        var review=dev.pocketengine.features.local.project.OwnerDraftWorkCopy.review(seed,original,frozen,checkout(seed.checkout).optString("name"));
+        dev.pocketengine.features.local.project.OwnerDraftCopyPublication.checkReview(root,review);return review;
+    }
+    /** Stable locator can reopen the actual derived workspace after process death or edits to either checkout; never rebases. */
+    public synchronized JSONObject findDraftWorkCopy(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Seed seed)throws Exception{
+        if(closed)throw new IllegalStateException("本机工程宿主已关闭");
+        File dir=dev.pocketengine.features.local.project.OwnerDraftCopyShelf.location(root,seed.checkoutId,false),held=dev.pocketengine.features.local.project.OwnerDraftCopyShelf.location(root,seed.projectId,true);
+        boolean shelved=Files.exists(held.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        if(shelved){if(Files.exists(dir.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))throw new SecurityException("活动目录与回收区同时存在，未替换任何一份");dir=held;}
+        if(!Files.exists(dir.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))return seed.view().put("found",false).put("status",dev.pocketengine.features.local.project.OwnerDraftCopyPublication.pendingFor(root,seed)?"publication_pending":"not_created");
+        if(!shelved)dev.pocketengine.features.local.project.OwnerDraftCopyPublication.requireRegisteredCopyPresent(root,seed.projectId);
+        File record=new File(dir,"checkout.json"),files=new File(dir,"files");
+        if(Files.isSymbolicLink(dir.toPath())||Files.isSymbolicLink(record.toPath())||Files.isSymbolicLink(files.toPath())||!dir.equals(dir.getCanonicalFile())||!record.isFile()||!files.isDirectory())throw new SecurityException("副本的原目录或记录不完整，未打开其他工程");
+        JSONObject checkout=JsonFiles.read(record),receipt=checkout.getJSONObject(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD),src=checkout.getJSONObject("sourceImport"),scope=seed.view();
+        for(var keys=scope.keys();keys.hasNext();){String k=keys.next();if(!ProjectSources.canonical(scope.opt(k)).equals(ProjectSources.canonical(receipt.opt(k))))throw new SecurityException("这不是从所选稿本建立的工程");}
+        String sha=receipt.getString("packageSha256");if(!seed.checkoutId.equals(checkout.opt("id"))||!seed.projectId.equals(checkout.opt("projectId"))||!seed.action.equals(src.opt("clientId"))||
+            !sha.equals(src.opt("packageSha256"))||!receipt.getString("manifestIdentity").equals(src.opt("manifestIdentity"))||!Boolean.FALSE.equals(src.opt("executionAuthorityRestored")))throw new SecurityException("不能核对原副本的实际登记");
+        JSONObject registry=packageWorkspace().sourceProjectRegistrationForOwner(seed.action,sha,receipt.getString("name"));
+        if(!registry.optBoolean("registered")||!seed.projectId.equals(registry.opt("expectedProjectId")))throw new SecurityException("副本文件和项目目录未同时登记，没有当成可打开项目");
+        boolean unused=dev.pocketengine.features.local.project.OwnerDraftCopyShelf.unused(dir);String state;
+        try{File file=NativeCommandExecutor.within(files,seed.path);var attrs=Files.readAttributes(file.toPath(),java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            state=attrs.isRegularFile()&&!attrs.isSymbolicLink()&&attrs.size()<=ProjectSources.MAX_FILE_BYTES?(receipt.getString("sha256").equals(ProjectSources.sha256(ProjectFileBytes.read(file.toPath(),attrs,ProjectSources.MAX_FILE_BYTES)))?"selected_version":"changed"):"unavailable";
+        }catch(java.nio.file.NoSuchFileException missing){state="missing";}catch(Exception changed){state="unavailable";}
+        if(unused&&!"selected_version".equals(state))throw new SecurityException("副本目录还在，但未使用稿件的实际文件无法核对；没有重建或覆盖");
+        return new JSONObject(receipt.toString()).put("found",true).put("status",shelved?"shelved":"ready").put("currentFileState",state)
+            .put("recyclable",unused).put("sourceUnchangedByCopy",true).put("executionAuthorized",false);
+    }
+    public synchronized JSONObject openDraftWorkCopy(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Seed seed,dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Current current)throws Exception {
+        JSONObject actual=findDraftWorkCopy(seed);if(!"ready".equals(actual.opt("status")))throw new SecurityException("只能打开实际在用的副本，请先在原稿还原");
+        current.check();dev.pocketengine.features.local.project.OwnerDraftCopyShelf.claim(dev.pocketengine.features.local.project.OwnerDraftCopyShelf.location(root,seed.checkoutId,false));return findDraftWorkCopy(seed);
+    }
+    public synchronized JSONObject moveUnusedDraftWorkCopy(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Seed seed,boolean toShelf,dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Current current)throws Exception{
+        JSONObject row=findDraftWorkCopy(seed);if(!row.optBoolean("found")||!row.optBoolean("recyclable")||!(toShelf?"ready":"shelved").equals(row.opt("status")))throw new SecurityException("仅能收起未投入工作的这一份；若结果不明请先查询，不重复移动");
+        if(commands.busy(seed.checkoutId)||termux.busy(seed.checkoutId))throw new SecurityException("当前副本正使用或退出未明，未移动任何目录");
+        requireCheckoutWritable(seed.checkoutId);File held=dev.pocketengine.features.local.project.OwnerDraftCopyShelf.location(root,toShelf?seed.checkoutId:seed.projectId,!toShelf);
+        var actual=dev.pocketengine.features.local.project.ProjectPackageArchive.capture(new File(held,"files"),new JSONObject().put("projectId",seed.projectId).put("checkoutId",seed.checkoutId).put("sourceDigest",row.getString("initialCopyDigest")),"source_project","",false).manifest();
+        if(!row.getString("initialCopyDigest").equals(ProjectSources.manifestDigest(actual.getJSONArray("files")))||!row.getString("structureSha256").equals(ProjectSources.digest(teamProjectStructure(actual))))throw new SecurityException("这份副本已产生新变化，先核对现有工作，没有移动");
+        current.check();dev.pocketengine.features.local.project.OwnerDraftCopyShelf.move(root,seed,toShelf);return findDraftWorkCopy(seed);
+    }
+    public JSONObject publishDraftWorkCopy(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Review draft,dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Current current)throws Exception{
+        current.check();JSONObject prior=findDraftWorkCopy(draft.seed);if(prior.getBoolean("found"))return prior;
+        JSONObject plan=verifiedPackageImportPlan(draft.plan());current.check();
+        publishPrivatePackageCheckout(plan,draft.seed.action,plan.getString("packageSha256"),draft.seed.checkoutId,new JSONObject(),null,null,draft.frozen,null,null,draft,current);
+        JSONObject actual=findDraftWorkCopy(draft.seed);if(!actual.optBoolean("found"))throw new IllegalStateException("未读回同一工程与工作副本；请从原稿查询，没有重复创建");
+        return actual;
     }
     public synchronized JSONObject findProjectPackageImportForOwner(JSONObject originalPlan)throws Exception {JSONObject plan=verifiedPackageImportPlan(originalPlan);String client=plan.getString("clientImportId"),id=UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString();JSONObject result=existingPackageImport(id,client,plan.getString("packageSha256"),plan);return result==null?new JSONObject().put("found",false).put("clientImportId",client):result.put("found",true);}
     private JSONObject existingPackageImport(String id,String client,String sha,JSONObject plan)throws Exception {
@@ -1259,6 +1340,7 @@ public final class LocalModule implements EngineModule {
         }
     }
     private JSONObject prepare(String projectId)throws Exception {
+        requireAvailableDraftProjectForOwner(projectId);
         var snapshot=packageWorkspace().projectSnapshotForHost(projectId);JSONArray entries=new JSONArray();java.util.Map<String,byte[]> files=new java.util.LinkedHashMap<>();
         for(var file:snapshot.files()){entries.put(new JSONObject().put("path",file.path).put("sourceVersion",file.version).put("sha256",file.sha256).put("binary","binary".equals(file.kind)).put("bytes",file.sizeBytes));files.put(file.path,file.bytes());}
         JSONObject checkout=new JSONObject().put("id",UUID.randomUUID().toString()).put("projectId",projectId).put("name",snapshot.definition().optString("name")).put("files",entries).put("createdAt",System.currentTimeMillis());
@@ -1280,11 +1362,14 @@ public final class LocalModule implements EngineModule {
         // Metadata is committed last: partially copied files are never offered as a ready checkout.
         JsonFiles.write(new File(directory.getParentFile(),"checkout.json"),checkout);
     }
-    private File content(String id)throws Exception {
+    private File checkoutDirectory(String id)throws Exception {
         if(!id.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("本地工作副本编号无效");
-        File checkout=new File(new File(root,"checkouts"),id);if(!new File(checkout,"checkout.json").isFile())throw new IllegalArgumentException("本地工作副本不存在");return new File(checkout,"files");
+        File dir=new File(new File(root,"checkouts"),id);if(!new File(dir,"checkout.json").isFile())throw new IllegalArgumentException("本地工作副本不存在");return dir;
     }
-    private JSONObject checkout(String id)throws Exception{return JsonFiles.read(new File(content(id).getParentFile(),"checkout.json"));}
+    private synchronized File content(String id)throws Exception {
+        File dir=checkoutDirectory(id);dev.pocketengine.features.local.project.OwnerDraftCopyShelf.requireOpenedForContent(dir);return new File(dir,"files");
+    }
+    private synchronized JSONObject checkout(String id)throws Exception{return JsonFiles.read(new File(checkoutDirectory(id),"checkout.json"));}
     private void requireIdle(String id)throws Exception {
         content(id);if(commands.busy(id)||termux.busy(id))throw new IllegalStateException("工作副本正在执行或Termux结果不明，请先停止并核对原任务");
     }

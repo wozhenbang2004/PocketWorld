@@ -12,17 +12,20 @@ import org.json.JSONObject
 /** Original private comparison plus optional owner-authored texts; no project writer or model handle. */
 internal class PocketWebProjectDraftDifference(private val context:Context,private val tasks:()->TaskStore,private val work:(Runnable)->Unit,
     private val capture:()->PocketWebWindowTicket,
-    private val accepts:(PocketWebWindowTicket)->Boolean,private val selected:()->String?) {
+    private val accepts:(PocketWebWindowTicket)->Boolean,private val local:()->dev.pocketengine.features.local.LocalModule,
+    private val openWork:(JSONObject)->Unit,private val selected:()->String?) {
     companion object {
         const val READ="projectDraft.readDifference";const val EDIT="projectDraft.editLocal"
         const val KEEP="projectDraft.keepRevision";const val CLOSE="projectDraft.closeEditor"
         const val OFFER="projectDraft.reviewFileCopy";const val SAVE="projectDraft.saveFileCopy"
-        val COMMANDS=setOf(READ,EDIT,KEEP,CLOSE,OFFER,SAVE)
+        val COMMANDS=setOf(READ,EDIT,KEEP,CLOSE,OFFER,SAVE)+PocketWebDraftWorkCopy.commands
     }
     private data class Source(val task:String,val root:String,val window:PocketWebWindowTicket,val read:Long)
     private data class Editor(val source:Source,val id:String,val parent:String)
     private data class CopyReview(val source:Source,val editor:Editor?,val token:String,val version:PrivateProjectDraftDownload.Version,val expires:Long)
     private var copyReview:CopyReview?=null
+    private val workCopy=PocketWebDraftWorkCopy(tasks,local,work,openWork)
+    fun clearWorkCopy(){workCopy.clear()}
     private var copying=false
     private val main=Handler(Looper.getMainLooper())
     @Volatile private var generation=0L
@@ -32,13 +35,14 @@ internal class PocketWebProjectDraftDifference(private val context:Context,priva
     private fun fields(args:JSONObject,vararg names:String)=require(args.keys().asSequence().toSet()==names.toSet()&&names.all{args.opt(it) is String})
     fun dispatch(action:String,args:JSONObject,done:(JSONObject?,String?)->Unit){
         val exact=action==READ&&args.has("draftId")
-        when(action){READ->if(exact)fields(args,"taskId","draftId","runId","epoch") else fields(args,"taskId");EDIT->fields(args,"taskId","draftId");KEEP->fields(args,"taskId","draftId","editHandle","parentId","text");CLOSE->fields(args,"taskId","editHandle");OFFER->fields(args,"taskId","draftId","revisionId","sha256");SAVE->fields(args,"taskId","draftId","revisionId","sha256","reviewHandle");else->error("未知原稿操作")}
+        when(action){PocketWebDraftWorkCopy.MOVE_REVIEW->fields(args,"taskId","draftId","revisionId","sha256","fromState");PocketWebDraftWorkCopy.MOVE->fields(args,"taskId","draftId","revisionId","sha256","fromState","reviewHandle");PocketWebDraftWorkCopy.FIND,PocketWebDraftWorkCopy.REVIEW,PocketWebDraftWorkCopy.OPEN->fields(args,"taskId","draftId","revisionId","sha256");PocketWebDraftWorkCopy.CREATE->fields(args,"taskId","draftId","revisionId","sha256","reviewHandle");READ->if(exact)fields(args,"taskId","draftId","runId","epoch") else fields(args,"taskId");EDIT->fields(args,"taskId","draftId");KEEP->fields(args,"taskId","draftId","editHandle","parentId","text");CLOSE->fields(args,"taskId","editHandle");OFFER->fields(args,"taskId","draftId","revisionId","sha256");SAVE->fields(args,"taskId","draftId","revisionId","sha256","reviewHandle");else->error("未知原稿操作")}
         val bound=if(exact) Triple(args.getString("draftId"),args.getString("runId"),args.getString("epoch").toIntOrNull()).also{
             require(it.first.matches(Regex("[a-f0-9]{64}"))&&it.second.isNotBlank()&&it.second.length<=240&&(it.third ?: 0)>0)
         } else null
         val task=args.getString("taskId");require(task.matches(Regex("[A-Za-z0-9_-]{1,80}")))
         val window=capture();check(current(task,window)){"请打开原先确认只出改稿的私人项目任务"}
         if(action!=SAVE)copyReview=null
+        if(action !in PocketWebDraftWorkCopy.commands){workCopy.clear();check(!workCopy.busy){"请等待本次工作副本反馈。"}}
         if(action==READ){
             source=null;editor=null;val turn=++generation
             work(Runnable{
@@ -54,6 +58,12 @@ internal class PocketWebProjectDraftDifference(private val context:Context,priva
             });return
         }
         val seen=source;check(seen!=null&&seen.task==task&&seen.window==window&&seen.read==generation){"请先重新打开这份实际差异"}
+        if(action in PocketWebDraftWorkCopy.commands){
+            check(!copying&&args.getString("draftId")==seen.root)
+            val revision=args.getString("revisionId");val held=editor
+            workCopy.dispatch(action,args,{source===seen&&generation==seen.read&&editor===held&&current(task,window)&&
+                (revision==seen.root||held!=null&&held.source===seen&&held.parent==revision)},done);return
+        }
         if(action==OFFER||action==SAVE){fileCopy(action,args,seen,done);return}
         val previous=editor
         if(action==CLOSE){if(previous!=null&&previous.source==seen&&previous.id==args.getString("editHandle"))editor=null;done(JSONObject().put("closed",true),null);return}

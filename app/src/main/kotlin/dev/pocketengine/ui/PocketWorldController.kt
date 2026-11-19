@@ -267,6 +267,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         } } catch (failure: Exception) { ownerExecutionSaving = false; done(null, message(failure)) }
     }
+    internal fun openedDraftWorkCopy(copy:JSONObject){
+        check(!closed&&webPrivateOwnerVisible()&&copy.opt("found")==true&&copy.opt("executionAuthorized")==false)
+        val project=copy.getString("projectId");val checkout=copy.getString("checkoutId")
+        projectWorkbench.selectCheckout(project,checkout,replace=true);projectWorkbench.selectView(project,1)
+        selectProject(project);developmentCheckoutId=checkout;developmentNavigationRevision++
+        state=state.copy(projectTaskReturn=UiProjectTaskReturn(project,copy.getString("taskId")),requestedProjectId=project,requestedProjectRevision=state.requestedProjectRevision+1)
+        refresh()
+    }
     internal val projectPackages = ProjectPackageCoordinator(activity, app, io, main, ::privateWorkspaceView) { checkout ->
         closeProjectPreview()
         closeProjectLivePreview()

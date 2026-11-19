@@ -12796,7 +12796,7 @@ public final class TaskStore {
         live.check();return proposal;
     }
     /** A derived receipt cannot reveal a withdrawn source through a later generation. Only compact identities are walked. */
-    private void requireStoredOwnerRevisionLineage(JSONObject target)throws Exception{
+    private JSONObject requireStoredOwnerRevisionLineage(JSONObject target)throws Exception{
         java.util.Set<String> visited=new java.util.HashSet<>();JSONObject cursor=target;
         while(cursor.getJSONObject("developmentContext").has(OWNER_REVISION)){
             if(!visited.add(cursor.getString("id"))||visited.size()>100)throw new SecurityException("旧稿关联链无法完整核对");
@@ -12807,7 +12807,7 @@ public final class TaskStore {
             try(Cursor row=db.rawQuery("SELECT 1 FROM private_project_edit_drafts d JOIN private_project_owner_draft_revisions r ON d.task_id=r.task_id WHERE d.task_id=? AND d.draft_id=? AND r.revision_id=?",new String[]{pin.getString("taskId"),pin.getString("draftId"),pin.getString("revisionId")})){
                 if(!row.moveToFirst())throw new SecurityException("已存稿不再可核对，没有读取另一份");
             }cursor=t;
-        }
+        }return cursor;
     }
     /** The actual before/after row and its root are immutable; observe revocation again at each physical request. */
     public synchronized void requireOwnerProjectRevisionRun(String id,String run,int epoch,RunControl live)throws Exception{
@@ -12833,6 +12833,15 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
     /** Explicit owner reading/editing of another private text only; no model, plan, checkout or operation grant. */
+    public synchronized dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Seed ownerDraftWorkCopySeed(String task,String draft,String revision,String sha)throws Exception {
+        db.beginTransaction();try{
+            JSONObject root=readPrivateProjectEditDraft(task);if(!root.optBoolean("available")||!draft.equals(root.opt("draftId")))throw new SecurityException("请从同一项工作已保存的原稿开始");
+            JSONObject chosen=draft.equals(revision)?PrivateProjectDraftRevisions.base(root):PrivateProjectDraftRevisions.exact(db,root,new JSONObject().put("taskId",task).put("draftId",draft).put("revisionId",revision).put("sha256",sha));
+            if(!sha.equals(chosen.opt("sha256")))throw new SecurityException("未选中这份已保存的文件版本");
+            JSONObject oldest=requireStoredOwnerRevisionLineage(required(task));JSONObject baseline=task.equals(oldest.getString("id"))?root:readPrivateProjectEditDraft(oldest.getString("id"));
+            var value=dev.pocketengine.features.local.project.OwnerDraftWorkCopy.fromRecords(root,chosen,baseline);db.setTransactionSuccessful();return value;
+        }finally{db.endTransaction();}
+    }
     public synchronized JSONObject ownerProjectDraftHead(String task,String root)throws Exception{
         JSONObject original=readPrivateProjectEditDraft(task);
         if(original.opt("available")!=Boolean.TRUE||!root.equals(original.opt("draftId")))throw new SecurityException("请先打开这一份真实差异");

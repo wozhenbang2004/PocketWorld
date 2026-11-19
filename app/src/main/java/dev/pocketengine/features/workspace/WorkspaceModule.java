@@ -7,11 +7,13 @@ import org.json.JSONObject;
 public final class WorkspaceModule implements EngineModule {
     private final VersionedWorkspace workspace;
     private final WorkspaceArtifacts artifacts;
+    private final File filesRoot;
+    private File developmentRoot()throws Exception{return new File(filesRoot.getCanonicalFile(),"local-development");}
     private volatile boolean nativeClosed;
     public WorkspaceModule(FeatureContext context){this(context.android.getFilesDir(),new android.os.Handler(android.os.Looper.getMainLooper())::post,context::emit);}
     /** Same real stores; package-local tests control delivery without replacing file IO. */
     WorkspaceModule(File files,java.util.function.Consumer<Runnable> post,java.util.function.BiConsumer<String,JSONObject> events){
-        java.util.Objects.requireNonNull(post);java.util.Objects.requireNonNull(events);
+        filesRoot=files;java.util.Objects.requireNonNull(post);java.util.Objects.requireNonNull(events);
         workspace=new VersionedWorkspace(new File(files,"workspace"),JsonFiles::write,metadata->{
             String frozen=metadata.toString();
             // EngineApplication.publish enters TaskStore before notifying UI.
@@ -75,7 +77,7 @@ public final class WorkspaceModule implements EngineModule {
     public JSONObject ownerFileArchiveForHost(String id,String sha)throws Exception{return artifacts.ownerFileArchive(id,sha);}
     public JSONObject restoreOwnerFileArchiveForHost(JSONObject record,byte[] bytes,String newProject,String nativeImportId,String sectionDigest,dev.pocketengine.core.RunControl original)throws Exception{return artifacts.restoreOwnerFileArchive(record,bytes,newProject,nativeImportId,sectionDigest,original);}
     public JSONObject queryOwnerFileArchiveForHost(JSONObject record,String newProject,String nativeImportId,String sectionDigest)throws Exception{return artifacts.queryOwnerFileArchive(record,newProject,nativeImportId,sectionDigest);}
-    @Override public JSONObject snapshot()throws Exception{return new JSONObject().put("projects",workspace.projects()).put("artifacts",artifacts.list(null)).put("runtime","files_only").put("localCompilerAvailable",false).put("commands",new org.json.JSONArray("[\"create\",\"list\",\"read\",\"write\",\"history\",\"diff\",\"removeFile\",\"export\",\"createArtifact\",\"listArtifacts\",\"readArtifact\",\"diffArtifact\",\"prepareExport\"]"));}
+    @Override public JSONObject snapshot()throws Exception{return new JSONObject().put("projects",dev.pocketengine.features.local.project.OwnerDraftCopyPublication.visibleProjects(developmentRoot(),workspace.projects())).put("artifacts",artifacts.list(null)).put("runtime","files_only").put("localCompilerAvailable",false).put("commands",new org.json.JSONArray("[\"create\",\"list\",\"read\",\"write\",\"history\",\"diff\",\"removeFile\",\"export\",\"createArtifact\",\"listArtifacts\",\"readArtifact\",\"diffArtifact\",\"prepareExport\"]"));}
     private static JSONObject completedReceipt(JSONObject nativeResult)throws Exception {
         JSONObject receipt=new JSONObject(nativeResult.toString());
         if(!receipt.has("ok"))receipt.put("ok",true);
@@ -88,6 +90,8 @@ public final class WorkspaceModule implements EngineModule {
         if(command.equals("diffArtifact"))return completedReceipt(artifacts.diff(input.getString("artifactId")));
         if(command.equals("prepareExport"))return artifacts.prepareExport(input);
         String project=JsonFiles.text(input,"projectId",80);
+        File local=developmentRoot();dev.pocketengine.features.local.project.OwnerDraftCopyPublication.requireRegisteredCopyPresent(local,project);
+        if(command.equals("write")||command.equals("removeFile")||command.equals("createArtifact"))dev.pocketengine.features.local.project.OwnerDraftCopyPublication.requireOpenedForFormalChange(local,project);
         if(command.equals("list"))return new JSONObject().put("ok",true).put("files",workspace.list(project));
         if(command.equals("export"))return workspace.export(project);
         String path=JsonFiles.text(input,"path",240);
