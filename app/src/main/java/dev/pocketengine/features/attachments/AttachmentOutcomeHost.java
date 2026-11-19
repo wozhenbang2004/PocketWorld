@@ -45,7 +45,14 @@ public final class AttachmentOutcomeHost {
                 JSONObject actual=tasks.ownerMediaOperationSource(taskId,origin.getString("operationId"));
                 if(!actual.getString("runId").equals(origin.optString("runId")))throw new SecurityException("媒体文件不属于原任务的原执行");
             }
-            if(output)results.put(row(meta,"result"));
+            if(output){
+                JSONObject result=row(meta,"result");
+                if(task!=null){
+                    String artifactRun=result.optString("sourceTaskRunId"),currentRun=task.optString("runId");
+                    result.put("runProvenance",artifactRun.isBlank()?"unrecorded":artifactRun.equals(currentRun)?"current":"earlier");
+                }
+                results.put(result);
+            }
             else if(included.add(meta.getString("id")))sources.put(row(meta,"source"));
         }
         if(task!=null){

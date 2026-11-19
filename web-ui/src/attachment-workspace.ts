@@ -21,6 +21,14 @@ export function fileBytes(value: unknown): string {
   const count = typeof value === 'number' && Number.isFinite(value) ? value : 0;
   return count >= 1048576 ? `${(count / 1048576).toFixed(1)} MiB` : count >= 1024 ? `${(count / 1024).toFixed(1)} KiB` : `${count} bytes`;
 }
+export function fileRunProvenance(value: unknown): string {
+  switch (value) {
+    case 'current': return '本轮生成';
+    case 'earlier': return '较早执行生成';
+    case 'unrecorded': return '生成轮次未记录';
+    default: return '';
+  }
+}
 /** Text edits retain every original slide, paragraph, shape and source identity. */
 export function editSlideText(draft: FileJson, slide: number, field: 'title' | 'notes' | 'paragraph' | 'shape', value: string, item?: number): FileJson {
   const next = structuredClone(draft);

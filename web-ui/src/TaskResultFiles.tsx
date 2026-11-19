@@ -1,9 +1,10 @@
 import { useEffect, useId, useState, type MouseEvent } from 'react';
+import { fileBytes, fileRunProvenance } from './attachment-workspace';
 import { bridge } from './bridge';
 import { Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 
-export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number };
+export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded' };
 
 type FilePage = { key: string; files: TaskResultFile[]; limited: boolean; error?: string };
 
@@ -56,11 +57,13 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
     <div className="pw-reading-section-heading"><h4 id={heading}>工作文件</h4></div>
     {busy && <p className="pw-reading-note" role="status">正在读取已保存的文件…</p>}
     {current?.error && <p className="pw-reading-note pw-error" role="alert">{current.error}</p>}
-    {current?.files.length ? <div className="pw-outcome-files">{current.files.map(file =>
-      <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
-        disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
-        <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>打开原件</small></span>
-      </Button>)}</div> : null}
+    {current?.files.length ? <div className="pw-outcome-files">{current.files.map(file => {
+      const metadata = `${fileRunProvenance(file.runProvenance) || '生成轮次未记录'} · ${fileBytes(file.size)}`;
+      return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
+        aria-label={`打开原件：${file.name}，${metadata}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
+        <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}</small></span>
+      </Button>;
+    })}</div> : null}
     {current?.limited && <p className="pw-reading-note" role="status">部分文件未在此处列出。</p>}
     {(!supported || current?.limited || current?.error) && <div className="pw-action-row">
       <Button variant="ghost" disabled={!active} onClick={onBrowse}>查看原工作文件</Button>

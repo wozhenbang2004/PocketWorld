@@ -214,6 +214,8 @@ public final class ModelCapabilityAdapters implements CapabilityPort {
             }
             else if(route.feature.equals("ssh"))result=ssh.liveCall.invokeForHost(route.command,moduleInput,control);
             else if(route.name.matches("attachments_transform_image|attachments_trim_media")){if(documents==null)throw new SecurityException("原任务附件来源不可核对");documents.requireReference(args.getString("attachmentId"),args.getString("expectedSha256"),control);result=((dev.pocketengine.features.attachments.AttachmentsModule)module).processFileForHost(route.command,moduleInput,control);}
+            else if(route.name.equals("attachments_create_text")&&module instanceof dev.pocketengine.features.attachments.AttachmentsModule nativeAttachments)
+                result=nativeAttachments.createTextForHost(moduleInput,binding.projectId.isEmpty()?null:binding.projectId,control);
             else if(route.name.equals("attachments_create_document")){if(args.has("parentArtifactId")){if(documents==null)throw new SecurityException("原任务附件来源不可核对");documents.requireReference(args.getString("parentArtifactId"),args.getString("parentSha256"),control);documents.requireReference(args.getString("editableSourceId"),args.getString("editableSourceSha256"),control);}result=((dev.pocketengine.features.attachments.AttachmentsModule)module).createDocumentForHost(moduleInput,control);}
             else result=module.handle(route.command,moduleInput);
             captureMetadata=recordOutput(route,outputClaim,result);

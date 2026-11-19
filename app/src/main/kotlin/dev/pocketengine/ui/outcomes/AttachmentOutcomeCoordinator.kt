@@ -16,10 +16,23 @@ import dev.pocketengine.features.attachments.creation.DocumentDraft
 import dev.pocketengine.features.attachments.creation.StructuredOfficeDraft
 import dev.pocketengine.media.jobs.results.GroupResultAccess
 import dev.pocketengine.ui.groups.GroupArtifactSelection
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executor
 
-internal data class AttachmentResultRun(val taskId:String,val runId:String,val epoch:Int)
+internal data class AttachmentResultRun(val taskId: String, val runId: String, val epoch: Int) {
+    fun files(snapshot: JSONObject): List<JSONObject> {
+        check(snapshot.optString("taskId") == taskId && snapshot.optString("taskRunId") == runId &&
+            snapshot.optInt("coordinatorEpoch") == epoch) { "原任务状态已变化，请打开当前工作核对成果" }
+        val files = snapshot.getJSONArray("artifacts").objects()
+        // An incomplete inventory or a file without a recorded run can only be reviewed in the original work.
+        check(!snapshot.getJSONObject("indexDiagnostics").getBoolean("incomplete") &&
+            files.all { it.optString("sourceTaskId") == taskId && it.optString("runProvenance") in setOf("current", "earlier") }) {
+            "部分文件的生成轮次无法完整核对，请在原工作查看全部保留文件。"
+        }
+        return files.filter { it.optString("runProvenance") == "current" }
+    }
+}
 
 internal data class AttachmentOutcomeState(
     val open:Boolean=false,val taskId:String?=null,val group:GroupResultAccess.Selection?=null,
@@ -97,9 +110,11 @@ internal class AttachmentOutcomeCoordinator(
         }){control,window -> if(group==null){
             if(resultRun!=null)requireConversationResult(resultRun,control)
             val actual=app.ownerOutcomeSnapshot(task,control)
-            if(resultRun!=null)check(actual.optString("taskRunId")==resultRun.runId&&actual.optInt("coordinatorEpoch")==resultRun.epoch){"原任务状态已变化，请打开当前工作核对成果"}
-            val artifacts=actual.optJSONArray("artifacts").objects()
-            val files=if(resultRun!=null&&showOriginal)artifacts else actual.optJSONArray("sources").objects()+artifacts
+            val files=if(resultRun!=null){
+                val fromRun=resultRun.files(actual)
+                actual.put("artifacts",JSONArray(fromRun)).put("sources",JSONArray()).put("media",JSONArray())
+                fromRun
+            }else actual.optJSONArray("sources").objects()+actual.optJSONArray("artifacts").objects()
             val file=pin?.let{selected->files.firstOrNull{it.optString("id")==selected.optString("id")&&it.optString("sha256")==selected.optString("sha256")&&it.optString("availability")=="available"}?:throw IllegalStateException("原文件版本当前不可读，请回原任务核对")}
             if(showOriginal&&file!=null)original=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),control)
             if(savedDraft!=null){

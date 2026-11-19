@@ -80,10 +80,26 @@ public final class AttachmentsModule implements EngineModule {
         catch(dev.pocketengine.features.attachments.creation.NativeDocumentCreation.NotPublished failed){return new JSONObject(failed.receipt.toString()).put("taskId",task).put("runId",run);}
     }
     public JSONObject editableDocumentForOwner(String parent,String sha,RunControl control)throws Exception{return documentCreation().readEditableSource(parent,sha,control);}
+    /** The model adapter supplies the live authority, never a run ID from tool arguments. */
+    public JSONObject createTextForHost(JSONObject input,String projectId,RunControl control)throws Exception{
+        RunControl.HostRunIdentity run=control.hostRunIdentity();
+        if(run==null)throw new SecurityException("文字保存缺少原宿主执行控制");
+        control.check();
+        return createText(input,run.taskId(),projectId,run.runId());
+    }
+    private JSONObject createText(JSONObject input,String taskId,String projectId,String runId)throws Exception{
+        String name=input.optString("name","note.txt"),mime=input.optString("mimeType","text/plain");
+        if(!java.util.Set.of("text/plain","text/markdown","text/csv","text/tab-separated-values").contains(mime)||name.toLowerCase(java.util.Locale.ROOT).matches(".*\\.(docx?|xlsx?|pptx?|pdf|png|jpe?g|webp|mp[34]|wav|apk)$"))
+            throw new IllegalArgumentException("文字保存只能创建真实文本格式；不能将文字命名为Office、PDF或媒体文件");
+        String text=input.getString("content");
+        if(text.length()>65536)throw new IllegalArgumentException("新文本附件最多65536字符");
+        JSONObject source=new JSONObject().put("kind","created_text").put("taskId",taskId).put("projectId",projectId).put("runId",runId);
+        return repository.book.importBytes(new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)),name,mime,source);
+    }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception{
         if(command.equals("list"))return ownerAttachmentInventoryForHost();
         if(command.equals("importUri"))return repository.importUri(Uri.parse(input.getString("uri")),0,input.optString("taskId"),input.optString("projectId"));
-        if(command.equals("createText")){String name=input.optString("name","note.txt"),mime=input.optString("mimeType","text/plain");if(!java.util.Set.of("text/plain","text/markdown","text/csv","text/tab-separated-values").contains(mime)||name.toLowerCase(java.util.Locale.ROOT).matches(".*\\.(docx?|xlsx?|pptx?|pdf|png|jpe?g|webp|mp[34]|wav|apk)$"))throw new IllegalArgumentException("文字保存只能创建真实文本格式；不能将文字命名为Office、PDF或媒体文件");String text=input.getString("content");if(text.length()>65536)throw new IllegalArgumentException("新文本附件最多65536字符");JSONObject source=new JSONObject().put("kind","created_text");if(input.has("taskId"))source.put("taskId",input.getString("taskId"));if(input.has("projectId"))source.put("projectId",input.getString("projectId"));return repository.book.importBytes(new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)),input.optString("name","note.txt"),input.optString("mimeType","text/plain"),source);}
+        if(command.equals("createText"))return createText(input,input.has("taskId")?input.getString("taskId"):null,input.has("projectId")?input.getString("projectId"):null,null);
         if(command.matches("createDocument|transformImage|trimMedia"))throw new SecurityException("文档生成必须沿原宿主动作和原执行控制；普通JSON不能提供身份");
         String id=input.getString("id");JSONObject selected=repository.book.get(id);ownerRecord(selected);String expectedSha256=selected.getString("sha256");
         switch(command){
