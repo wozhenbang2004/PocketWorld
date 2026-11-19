@@ -893,8 +893,8 @@ public final class TaskStoreDeviceTasks {
      * This is not a peer endpoint; it never returns wire_json, contexts, paths or credentials. */
     public JSONObject workspaceTaskLinks(int offset,int limit)throws Exception{return workspaceTaskLinks(null,offset,limit,"","");}
     public JSONObject childOverview(String parentTaskId,int limit)throws Exception{return childHistoryPage(parentTaskId,"","",limit);}
-    public JSONObject waitingPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
-        synchronized(owner){return ReceivedPhoneGoalIndex.waiting(db,here,instance,afterCaller,afterOp);}
+    public JSONObject waitingPhoneGoals(String here,String instance,String afterCaller,String afterOp,boolean results)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.waiting(db,here,instance,afterCaller,afterOp,results);}
     }
     public JSONObject receivedPhoneGoalIndex(String here,String instance,String caller,String afterTask,String afterOperation)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.read(db,here,instance,caller,afterTask,afterOperation);}

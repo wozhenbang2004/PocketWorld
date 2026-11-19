@@ -250,6 +250,8 @@ public final class TaskAuditStore {
             else if(value instanceof JSONObject){if(jsonBytes(value,8192,0)>=0)out.put(key,new JSONObject(value.toString()));else out.put("metadataLimited",true);}
         }
         JSONObject learning=task.optJSONObject("sourceLearningJob");if(learning!=null){JSONObject small=new JSONObject().put("headerOnly",true).put("inputsIncluded",false).put("executionAuthorized",false);for(String field:new String[]{"format","revision","nextIndex","reservedModelAttempts"}){Object value=learning.opt(field);if(value instanceof Number||value instanceof Boolean||value instanceof String&&((String)value).length()<=160)small.put(field,value);}out.put("sourceLearningJob",small);}
+        JSONObject pendingPhoneResult=ReceivedPhoneGoalIndex.pendingSlot(task);
+        if(pendingPhoneResult!=null)out.put("receivedPhoneResultSlot",pendingPhoneResult);
         JSONObject phoneLink=conversationPhoneLink(task);if(phoneLink!=null)out.put("conversationPhoneLink",phoneLink);
         out.put("taskProjection","summary").put("auditBodyIncluded",false).put("events",new JSONArray());
         if(utf8(out.toString())>MAX_HEADER_BYTES-2048){for(String key:new String[]{"origin","sshSelection","teamAssignment"})out.remove(key);JSONObject project=out.optJSONObject("developmentContext");if(project!=null&&project.has("deliveryContract")){project.remove("deliveryContract");project.put("deliveryContractReadState","not_loaded");}out.put("metadataLimited",true);}

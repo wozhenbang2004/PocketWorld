@@ -1,0 +1,7 @@
+.pw-draft-start-list{list-style:none;margin:.3rem 0 0;padding:0;display:grid;gap:.4rem}
+.pw-draft-start-list li{display:flex;align-items:center;gap:.65rem;justify-content:space-between}
+.pw-draft-start-list li>div{min-width:0;display:grid;gap:.1rem}
+.pw-draft-start-list strong{font-weight:550;overflow-wrap:anywhere}
+.pw-draft-start-list small{color:var(--pw-text-secondary,currentColor);line-height:1.45}
+.pw-draft-start-list button{flex:none}
+.pw-draft-start-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem}

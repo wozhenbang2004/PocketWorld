@@ -1572,7 +1572,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(!status.equals(settings.modelSelection().status())||conversationModels().snapshot(scopeKey).getLong("revision")!=preference.getLong("revision"))
             throw new IllegalStateException("草稿模型设置已变化，请重新核对手机任务");
         SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
-        JSONObject view=json("goal",goal,"mode",mode,"modelName",config.model,"provider",config.provider,"toolLimit",tools,"modelCallLimit",models,"scopeMinutes",minutes)
+        JSONObject view=json("draftRequestId",java.util.UUID.randomUUID().toString(),"goal",goal,"mode",mode,"modelName",config.model,"provider",config.provider,"toolLimit",tools,"modelCallLimit",models,"scopeMinutes",minutes)
                 .put("screenDisclosure",config.sendScreenshots?"执行时，可见文字和获准的屏幕截图会发送到本次模型。":"执行时，可见文字会发送到本次模型；当前未开启屏幕截图发送。");
         return new DraftPhoneStartReview(this,scopeKey,preference.getLong("revision"),config,status.revision(),view);
     }
@@ -1588,12 +1588,9 @@ public final class EngineApplication extends Application implements dev.pocketen
                                                    java.util.function.BooleanSupplier ownerCurrent,java.util.function.Consumer<String> allocated)throws Exception {
         if(review==null||review.issuer!=this||review.store!=tasks)throw new SecurityException("原手机任务审阅不可核对");
         if(review.attempted){
-            JSONObject saved=review.taskId==null?null:tasks.get(review.taskId,false);
-            if(saved==null)throw new IllegalStateException("原手机启动结果待核对，不会重复创建任务");
-            JSONObject receipt;
-            try{receipt=originalPhoneAdmissionReceipt(review.taskId).put("admitted",true);}
-            catch(IllegalStateException unavailable){receipt=json("taskId",review.taskId,"admitted",false);}
-            return receipt.put("accepted",true).put("duplicate",true).put("status",saved.optString("status"));
+            JSONObject receipt=tasks.draftPhoneCreation(review.scopeKey,review.view().getString("draftRequestId"));
+            if(!receipt.optBoolean("accepted"))throw new IllegalStateException("原手机启动结果待核对，不会重复创建任务");
+            return receipt.put("duplicate",true);
         }
         try{
             tasks.requireExecutionEnabled();requireDraftPhoneReviewCurrent(review,ownerCurrent);requirePhoneStartReady(review.goal,screenConsent,review.mode);
@@ -1601,11 +1598,12 @@ public final class EngineApplication extends Application implements dev.pocketen
         }catch(Exception rejected){throw new DraftPhoneStartRejected(rejected);}
         review.attempted=true;
         try{
-            JSONObject created=tasks.create(review.goal,review.mode,id->{review.taskId=id;allocated.accept(id);});
+            JSONObject created=tasks.createReviewedDraftPhone(review.view().getString("draftRequestId"),review.scopeKey,review.goal,review.mode,id->{review.taskId=id;allocated.accept(id);});
             JSONObject scope=json("deadlineAt",review.minutes==0?0L:System.currentTimeMillis()+review.minutes*60_000L,"toolLimit",review.tools,"modelCallLimit",review.models);
             initializeOwnerExecutionScope(created.getString("id"),review.config,scope);requireDraftPhoneReviewCurrent(review,ownerCurrent);
             admit(review.taskId,review.mode,review.config);
-            return originalPhoneAdmissionReceipt(review.taskId).put("accepted",true).put("admitted",true).put("status",tasks.get(review.taskId,false).optString("status"));
+            tasks.rememberInitialDraftPhoneAdmission(review.scopeKey,originalPhoneAdmissionReceipt(review.taskId));
+            return tasks.draftPhoneCreation(review.scopeKey,review.taskId);
         }catch(Exception failure){
             if(review.taskId==null)throw new DraftPhoneStartRejected(failure);
             try{JSONObject retained=tasks.get(review.taskId,false);if(retained!=null&&retained.optString("runId").isEmpty()&&"preparing".equals(retained.optString("status")))tasks.status(review.taskId,"awaiting_user","手机目标已保存，但本次尚未开始执行；请核对原任务与启动条件");}catch(Exception unconfirmed){/* Preserve the original allocation after an uncertain write. */}
@@ -1696,6 +1694,18 @@ public final class EngineApplication extends Application implements dev.pocketen
             // Admission failure may itself have ended a real run. Publish that original result too.
             if(writeEntered[0]){pushTask(id);queueConversationPhoneResults();}
         }
+    }
+    public JSONObject queryDraftPhoneStart(String scopeKey,String request)throws Exception {
+        if(!businessReady()||tasks==null)throw new IllegalStateException("原手机任务库尚不可查询");
+        return tasks.draftPhoneCreation(scopeKey,request);
+    }
+    public JSONArray recentDraftPhoneStarts(String scopeKey,boolean details)throws Exception {
+        if(!businessReady()||tasks==null)throw new IllegalStateException("原手机任务库尚不可查询");
+        return tasks.recentDraftPhoneCreations(scopeKey,details);
+    }
+    public synchronized JSONObject retireUncreatedDraftPhone(String scopeKey,String request,java.util.function.BooleanSupplier ownerCurrent)throws Exception{
+        if(!businessReady()||tasks==null||ownerCurrent==null||!ownerCurrent.getAsBoolean())throw new SecurityException("请回到发起这次请求的私人草稿");
+        return tasks.retireUncreatedDraftPhone(scopeKey,request,ownerCurrent);
     }
     public JSONObject queryConversationPhoneStart(String requestId,String conversationId)throws Exception {
         if(!businessReady()||tasks==null)throw new IllegalStateException("原手机任务库尚不可查询，请等待初始化完成");

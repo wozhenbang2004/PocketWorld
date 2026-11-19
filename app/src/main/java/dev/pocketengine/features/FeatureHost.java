@@ -716,6 +716,11 @@ public final class FeatureHost implements AutoCloseable {
         String run=input.has("runId")?input.getString("runId"):task.getString("runId");int epoch=input.has("coordinatorEpoch")?input.getInt("coordinatorEpoch"):task.getInt("coordinatorEpoch");
         return cancelOriginalRemoteTask(id,run,epoch,input.has("_profileBinding")?input.getString("_profileBinding"):null);
     }
+    private final dev.pocketengine.features.remote.PrivateHostGoalLink hostGoalLinks=new dev.pocketengine.features.remote.PrivateHostGoalLink();
+    /** Native private confirmation only. The original conversation and link are never inserted into the HTTP job payload. */
+    public String bindReviewedHostGoalForOwner(String conversation,JSONObject exactRequest)throws Exception {
+        return hostGoalLinks.bind(conversation,exactRequest);
+    }
     public void request(JSONObject request){
         request(request,()->true,false);
     }
@@ -732,6 +737,17 @@ public final class FeatureHost implements AutoCloseable {
             boolean backendAdmission=false;
             try{if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未执行排队操作");EngineModule module=module(feature);if(module==null)throw new IllegalArgumentException("此能力尚未接入");
                 JSONObject payload=request.optJSONObject("payload");JSONObject input=payload==null?new JSONObject():new JSONObject(payload.toString());
+                String sourceConversation=null;AssistantModule sourceAssistant=null;
+                boolean firstPrivateHost=nativeOwnerAdmission&&"remote".equals(feature)&&"submitJob".equals(command);
+                if(!firstPrivateHost&&input.has(dev.pocketengine.features.remote.PrivateHostGoalLink.LOCAL_ONLY))throw new SecurityException("此动作不接受本机主机来源");
+                if(firstPrivateHost){
+                    sourceConversation=hostGoalLinks.take(input);
+                    if(sourceConversation!=null){
+                        if(tasks==null||!(module("assistant") instanceof AssistantModule owner)||!owner.privateConversationExistsForHostLink(sourceConversation))
+                            throw new SecurityException("原私人对话已变化或不存在，没有将这项委托提交到其他对话");
+                        sourceAssistant=owner;
+                    }
+                }
                 JSONObject ownerTeamDraft=null;
                 if(feature.equals("teams")&&input.has("draftDefinition")){
                     if(!command.equals("start")||!nativeOwnerAdmission||tasks==null||!(module instanceof dev.pocketengine.features.teams.TeamsModule))
@@ -808,7 +824,7 @@ public final class FeatureHost implements AutoCloseable {
                         id=input.getString("taskId");admitted=tasks.resumeExternalAttempt(id,feature);
                     }else {
                         JSONObject location=nativeOwnerAdmission&&"remote".equals(feature)&&"submitJob".equals(command)&&module instanceof dev.pocketengine.features.remote.RemoteModule cloud ? cloud.observedWorkspaceForOwner(input):null;
-                        admitted=tasks.beginExternal(feature,command,id,input,teamConversationId,location);
+                        admitted=sourceAssistant!=null?sourceAssistant.registerPrivateHostTask(tasks,sourceConversation,id,input,location):tasks.beginExternal(feature,command,id,input,teamConversationId,location);
                     }
                     tracked=id;trackedRun=admitted.getString("runId");emitTask(id);
                     input.put("_operationId",trackedRun);

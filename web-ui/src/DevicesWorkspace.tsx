@@ -290,6 +290,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     void invoke('devices.confirm', { viewHandle: original.viewHandle, acknowledged: true, ...(original.kind === 'goal' ? { useForFutureGoals: future } : {}), ...extra }, (value, actual) => {
       if (value.nativeCallReturned !== true || value.kind !== original.kind) throw new Error('原设备操作尚未取得匹配回执，请刷新核对。');
       if (original.kind === 'pair') { reportPair(original.view, actual); return; }
+      if (original.kind === 'result') setWaitingPhones(page => page?.resultOnly ? { ...page,
+        rows: rows(page.rows).filter(row => row.taskId !== original.view.taskId || row.reviewRecordedAt !== original.view.recordedAt) } : page);
       setNotice(original.kind === 'resume' ? extra.approved === true ? '已处理这次原执行的恢复请求，实际进展以原任务回执为准。' : '已拒绝这次恢复请求，原任务未因本次拒绝而继续。' : original.kind === 'action' && original.view.operation?.startsWith('task.') ? '已发出原任务控制请求。实际暂停、继续或停止以原任务回执为准。' : '原生处理已返回，请核对下方实际状态。');
     }, original.kind === 'resume' || original.kind === 'action' && original.view.operation?.startsWith('task.') ? 'control' : 'work');
   };
@@ -310,10 +312,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const activeArchive = samePhoneGoalArchive(phoneArchive, peer, local) ? phoneArchive : null;
   const waitingPage = waitingPhones && waitingPhones.localDeviceId === local.deviceId && waitingPhones.localInstanceId === local.instanceId ? waitingPhones : null;
   const sourceLabel = (id: string) => { const known = peers.find(p => p.deviceId === id); return known ? name(known) : '来源设备 ' + id.slice(-6); };
-  const readWaiting = (direction?: 'older' | 'newer') => {
+  const readWaiting = (direction?: 'older' | 'newer', results = false) => {
     if (busy || selectedPeer.current || direction && !waitingPage) return;
-    void invoke('devices.readWaitingPhoneGoals', direction ? { waitingHandle: waitingPage!.waitingHandle, direction } : {}, value => {
-      if (!selectedPeer.current) setWaitingPhones(waitingPhoneGoalPage(value,local));
+    const resultLane = direction ? waitingPage!.resultOnly === true : results;
+    void invoke('devices.readWaitingPhoneGoals', direction ? { waitingHandle: waitingPage!.waitingHandle, direction } : resultLane ? { queue: 'results' } : {}, value => {
+      if (!selectedPeer.current) {
+        const page = waitingPhoneGoalPage(value,local);
+        if ((page.resultOnly === true) !== resultLane) throw new Error('原设备工作页已变化，未切换到其他记录。');
+        setWaitingPhones(page);
+      }
     });
   };
   const returnWaiting = (row: Data) => {
@@ -321,7 +328,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     void invoke('devices.returnToReceivedPhoneGoal', { taskId: row.taskId, operationId: row.operationId, waitingHandle: waitingPage.waitingHandle }, value => {
       if (selectedPeer.current) return;
       const source = receivedPhoneArchiveReturn(value,row,{ deviceId: row.sourceDeviceId },local);
-      setModelReturnFocus({ ...source, peerDetail: false }); setNotice('已找回本机接纳的原工作，以它当前的可用操作为准。没有重新启动。');
+      setModelReturnFocus({ ...source, peerDetail: false }); setNotice(waitingPage.resultOnly ? '已打开仍待核对的原执行。请查看成果后再决定是否确认；尚未交回摘要。' : '已找回本机接纳的原工作，以它当前的可用操作为准。没有重新启动。');
     });
   };
   const archiveSide: PhoneArchiveSide = activeArchive?.side === 'received' ? 'received' : 'sent';
@@ -617,13 +624,20 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               </Button>)}
             </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : null}
           </section>
-          {supported('devices.readWaitingPhoneGoals') && local.deviceId && <section className="pw-device-section" aria-label="待接手的手机目标">
-            <WorkspaceSectionHeading title="待接手" description="查其他设备交给本机、还未开始的目标" actions={<Button variant="secondary" disabled={busy} onClick={() => readWaiting()}>{waitingPage ? '重新读取' : '查本机记录'}</Button>} />
-            {waitingPage && <><p role="status">{time(waitingPage.capturedAt)} 读取。接纳不等于已同意使用模型；过期的目标只能按原记录处理。</p>
-              {!waitingPage.rows.length && <p>{waitingPage.hasMore ? '这一批没有可核对的待接手目标，可以再查较早记录。' : '这一批未发现可核对的待接手目标。'}</p>}
+          {supported('devices.readWaitingPhoneGoals') && local.deviceId && <section className="pw-device-section" aria-label="其他设备交来的原工作">
+            <WorkspaceSectionHeading title="交给本机的工作" description="查看本机接纳记录，不联系发送设备" actions={<>
+              <Button variant={waitingPage && !waitingPage.resultOnly ? 'primary' : 'secondary'} disabled={busy} onClick={() => readWaiting()}>待接手</Button>
+              <Button variant={waitingPage?.resultOnly ? 'primary' : 'secondary'} disabled={busy} onClick={() => readWaiting(undefined,true)}>待核对成果</Button>
+            </>} />
+            {waitingPage && <><p role="status">{time(waitingPage.capturedAt)} 读取。{waitingPage.resultOnly ? '以下原执行已结束，需机主核对；此处不显示或交回摘要。' : '接纳不等于已同意使用模型；过期的目标只能按原记录处理。'}</p>
+              {waitingPage.resultOnly && waitingPage.limitedCandidates > 0 && <p>另有 {waitingPage.limitedCandidates} 项旧记录超过本次读取上限，无法判断是否待核对。可从对应设备的「它交给我的」单项查看。</p>}
+              {!waitingPage.rows.length && <p>这一批没有可核对的{waitingPage.resultOnly ? '待审成果' : '待接手目标'}。{waitingPage.hasMore && '可以再查较早记录。'}</p>}
               {rows(waitingPage.rows).map(row => <div className="pw-device-history-entry" key={JSON.stringify([row.taskId,row.operationId])}>
-                <h4 dir="auto">{row.goal}</h4><p>来自 {sourceLabel(row.sourceDeviceId)} · {time(row.createdAt)}{row.waitingState === 'interrupted_before_start' && ' · 本机已中断，未启动'}</p>
-                <Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => returnWaiting(row)}>查看原工作</Button>
+                <h4 dir="auto">{row.goal}</h4><p>来自 {sourceLabel(row.sourceDeviceId)} · {waitingPage.resultOnly ? '产生结果 ' + time(row.reviewRecordedAt) : time(row.createdAt)}{row.waitingState === 'interrupted_before_start' && ' · 本机已中断，未启动'}</p>
+                <div className="pw-form-actions">{waitingPage.resultOnly && <Button disabled={busy || !supported('devices.reviewResult')} onClick={() => {
+                  void invoke('devices.reviewResult', { waitingHandle: waitingPage.waitingHandle, taskId: row.taskId, operationId: row.operationId }, acceptReview);
+                }}>核对这份成果</Button>}
+                  <Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => returnWaiting(row)}>查看原工作</Button></div>
               </div>)}
               <div className="pw-form-actions">{waitingPage.canReadNewer && <Button variant="ghost" disabled={busy} onClick={() => readWaiting('newer')}>较新记录</Button>}
                 {waitingPage.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readWaiting('older')}>查较早记录</Button>}</div>

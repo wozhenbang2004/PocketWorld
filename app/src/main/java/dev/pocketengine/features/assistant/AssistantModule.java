@@ -320,7 +320,7 @@ public final class AssistantModule implements EngineModule {
         catch(Exception notDelivered){pendingCancellations.put(control,new Cancellation(control,conversation));throw notDelivered;}
     }
     private JSONObject send(JSONObject input)throws Exception{
-        if(input.has("firstMessageWithoutPersonalMemory"))throw new IllegalStateException("未安装原生首条输入准入，未按默认个人记忆发送");
+        if(input.has("firstMessageWithoutPersonalMemory")||input.has("excludeThisInputFromLearning"))throw new IllegalStateException("未安装原生记忆限制准入，没有按默认规则发送");
         if(input.has("ownerSourceRefs")&&(input.optJSONArray("ownerSourceRefs")==null||input.getJSONArray("ownerSourceRefs").length()>0))throw new IllegalStateException("原文引用的真实原生任务投影未安装，未降级为普通文本发送");
         if(input.has("ownerPreviewRefs")&&(input.optJSONArray("ownerPreviewRefs")==null||input.getJSONArray("ownerPreviewRefs").length()>0))throw new IllegalStateException("元素引用的原生项目投影未安装，草稿未降级发送");
         if(input.has("ownerObjectRefs")&&(input.optJSONArray("ownerObjectRefs")==null||input.getJSONArray("ownerObjectRefs").length()>0))throw new IllegalStateException("对象引用的原生任务投影未安装，草稿未降级发送");
@@ -405,6 +405,7 @@ public final class AssistantModule implements EngineModule {
     private static void requireContinuationWindow(java.util.function.BooleanSupplier current){if(current==null||!current.getAsBoolean())throw new SecurityException("原项目审阅窗口已关闭，请重新核对；对话草稿未发送");}
     /** Direct owner UI ingress to an exact durable work. Does not reserve the foreground chat. */
     public JSONObject sendOwnerWorkInput(String conversation,JSONObject input)throws Exception{
+        if(input.has("excludeThisInputFromLearning"))throw new SecurityException("单条自动整理限制只用于原私聊输入，未转交其他工作");
         if(historyTasks==null||!durable()||nativeInputHost==null)throw new IllegalStateException("原私人会话存储尚未就绪");
         String text=input.optString("message").trim(),client=input.getString("clientMessageId"),mode=input.optString("mode","queue");
         if(text.isEmpty()||text.length()>12000||!client.matches("[a-fA-F0-9-]{36}")||!Set.of("queue","steer").contains(mode))throw new IllegalArgumentException("补充内容、消息身份或方式无效");
@@ -475,7 +476,9 @@ public final class AssistantModule implements EngineModule {
         boolean firstPaused=input.has("firstMessageWithoutPersonalMemory");
         if(firstPaused&&(!Boolean.TRUE.equals(input.opt("firstMessageWithoutPersonalMemory"))||!requested.isEmpty()||projectStart!=null||!durable()))throw new SecurityException("首条个人记忆设置只适用于新私人对话的原生持久准入，未按默认发送");
         String contentFingerprint=fingerprint(text,mode,selections,selectedSources,selectedPreviews,selectedObjects);
-        String fingerprint=firstPaused?dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("input",contentFingerprint).put("firstMessageWithoutPersonalMemory",true)):contentFingerprint;
+        boolean excludeThis=input.has("excludeThisInputFromLearning");
+        if(excludeThis&&(!Boolean.TRUE.equals(input.opt("excludeThisInputFromLearning"))||requested.isEmpty()||projectStart!=null||!durable()))throw new SecurityException("单条限制只用于已有私人对话的原生持久登记，未按默认规则发送");
+        String fingerprint=firstPaused||excludeThis?dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("input",contentFingerprint).put(firstPaused?"firstMessageWithoutPersonalMemory":"excludeThisInputFromLearning",true)):contentFingerprint;
         synchronized(admission){
             if(migrationInProgress)throw new IllegalStateException("原迁移正在对账，未接收新消息");
             JSONObject prior=findSubmission(client);
@@ -530,6 +533,7 @@ public final class AssistantModule implements EngineModule {
                         JSONArray next=new JSONArray().put(conversation);for(int i=0;i<conversations.length();i++)next.put(conversations.getJSONObject(i));conversations=next;trimConversations();
                     }else conversation=find(requested);
                     JSONObject message=newMessage(cid,"user",safe,config).put("clientMessageId",client).put("requestFingerprint",fingerprint).put("inputMode",mode).put("attachments",immutableRefs);
+                    if(excludeThis)message.put("personalMemoryExcluded",true);
                     if(immutableSources.length()>0)message.put("ownerSourceRefs",immutableSources);
                     if(immutablePreviews.length()>0)message.put("ownerPreviewRefs",immutablePreviews);
                     if(immutableObjects.length()>0)message.put("ownerObjectRefs",immutableObjects);
@@ -952,7 +956,7 @@ public final class AssistantModule implements EngineModule {
                 if(state==null||!"user".equals(state.optString("role"))||!actual.optString("conversationId").equals(state.optString("conversationId")))throw new SecurityException("自动提炼只能读取该原对话的真实主人发言");
                 if(!personalMemoryEnabled(state.getString("conversationId")))throw new SecurityException("此对话已关闭个人记忆，不自动提炼原话");
                 JSONObject originalMessage=durable()?historyRepository.message(state.getString("conversationId"),expected.sourceId):findMessage(find(state.getString("conversationId")),expected.sourceId);
-                if(originalMessage==null||originalMessage.optBoolean("personalMemoryExcluded"))throw new SecurityException("此消息创建时未启用个人记忆，不能在后来重新开启时自动补提炼");
+                if(originalMessage==null||originalMessage.optBoolean("personalMemoryExcluded"))throw new SecurityException("此消息已排除自动记忆整理，不能在后来补提炼");
                 JSONArray inputs=actual.optJSONArray("ownerInputs");JSONObject adopted=null;
                 for(int i=0;inputs!=null&&i<inputs.length();i++){
                     JSONObject row=inputs.getJSONObject(i);
@@ -1066,6 +1070,29 @@ public final class AssistantModule implements EngineModule {
 
     public JSONArray sourceStates(JSONObject scope)throws Exception{
         MemoryBook.Scope identity=MemoryBook.Scope.from(scope);if(durable())throw new IllegalStateException("长期历史来源请使用有限sourceRef metadata门，不能全文拉sourceStates");synchronized(storage){healthy();JSONArray result=new JSONArray();if(!privateScope(identity))return result;for(int i=0;i<sources.length();i++)result.put(sourceMetadata(sources.getJSONObject(i)));return result;}
+    }
+    /** Local navigation only. A legacy file cannot atomically register a SQLite task and its chat entry. */
+    public boolean canKeepPrivateHostReceipt(){return historyTasks!=null&&durable();}
+    public boolean privateConversationExistsForHostLink(String id)throws Exception{
+        return id!=null&&!id.isBlank()&&id.length()<=160&&sourceRead(()->durable()&&historyRepository.exists(id));
+    }
+    /** The original task and its passive source-conversation entry commit or roll back together, before any POST. */
+    public JSONObject registerPrivateHostTask(dev.pocketengine.store.TaskStore original,String conversation,String operation,JSONObject exact,JSONObject location)throws Exception{
+        if(original==null||historyTasks!=original||!operation.equals(exact.opt("operationId")))throw new SecurityException("原主机交办与本机存储不符");
+        ModelConfig config=context.model();
+        JSONObject saved=commit(()->{
+            if(!durable()||!historyRepository.exists(conversation))throw new SecurityException("原私人对话存储未就绪，未发往主机；可重新选为独立委托");
+            JSONObject chat=find(conversation);
+            JSONObject task=original.beginExternal("remote","submitJob",operation,exact,conversation,location);
+            JSONObject message=newMessage(conversation,"assistant","本机已登记这次主机委托。打开原任务可核对主机是否接单、处理确认或查看成果。",config).put("taskId",operation)
+                    .put("privateHostReceipt",new JSONObject().put("version",1).put("conversationId",conversation).put("taskId",operation));
+            chat.getJSONArray("messages").put(message);trimMessages(chat);chat.put("updatedAt",System.currentTimeMillis());
+            return task;
+        });
+        // Both records already exist. An unrelated local memory refresh must not trigger another admission.
+        try{synchronizeSources();}catch(Exception ignored){synchronizationPending=true;}
+        try{context.emit(id(),new JSONObject().put("phase","host_goal_registered").put("conversationId",conversation).put("taskId",operation));}catch(Exception ignored){}
+        return saved;
     }
     public void appendTaskResult(String conversationId,String taskId,String text)throws Exception{
         appendTaskResult(conversationId,taskId,new JSONObject().put("content",text));

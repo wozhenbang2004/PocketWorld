@@ -205,6 +205,8 @@ def _page(context, facts, notice):
             actions.insert(0, ("StopDesktop", "暂停这台电脑的远程桌面\n只请求停止本机桌面输入与观看；不取消手机或电脑上的其他工作。"))
         if status[0] in {"acknowledged", "requested", "unidentified"}:
             body += " 配对或重启不会自行恢复桌面。"
+    if facts["configured"] and facts["interactive"]:
+        actions.append(("ProjectSource", "核对一个本机 Git 项目的来源\n只从本机已登记工作区读取提交，不启动服务或项目工作。"))
     if notice: body += "\n\n" + notice
     return _dialog(heading, body, [*actions, ("Refresh", "重新读取本机状态")])
 
@@ -245,6 +247,10 @@ def open_installed_desk():
             action = _page(context, facts, notice)
             if action is None: return
             if action == "Refresh": notice = ""; continue
+            if action == "ProjectSource":
+                from windows_git_source_entry import open_source
+                open_source(context, facts["settings"])
+                notice = ""; continue
             workspace, phone_receipts = None, False
             if action == "Initialize":
                 workspace = _folder()

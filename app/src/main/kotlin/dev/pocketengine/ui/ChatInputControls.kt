@@ -7,7 +7,7 @@ import org.json.JSONObject
 internal data class UiChatAttachment(val id:String,val sha256:String,val name:String,val mimeType:String,val size:Long){fun selection():JSONObject=JSONObject().put("id",id).put("sha256",sha256)}
 internal object ChatInputRules {
  fun attachment(row:JSONObject):UiChatAttachment?=try{val id=row.getString("id");val sha=row.getString("sha256");if(!id.matches(Regex("[a-fA-F0-9-]{36}"))||!sha.matches(Regex("[a-f0-9]{64}")))null else UiChatAttachment(id,sha,row.optString("name","附件"),row.getString("mimeType"),row.getLong("size"))}catch(_:Exception){null}
- fun fingerprint(text:String,conversation:String?,mode:String,files:List<UiChatAttachment>,sourceRefs:JSONArray=JSONArray(),previewRefs:JSONArray=JSONArray(),objectRefs:JSONArray=JSONArray(),firstPaused:Boolean=false):String {
+ fun fingerprint(text:String,conversation:String?,mode:String,files:List<UiChatAttachment>,sourceRefs:JSONArray=JSONArray(),previewRefs:JSONArray=JSONArray(),objectRefs:JSONArray=JSONArray(),firstPaused:Boolean=false,excludeThis:Boolean=false):String {
   val checked=dev.pocketengine.features.assistant.OwnerSourceReferences.checked(sourceRefs)
   val previews=dev.pocketengine.features.local.preview.PreviewElementRef.checked(previewRefs)
   val input=JSONObject().put("text",text).put("conversation",conversation?:"").put("mode",mode).put("attachments",JSONArray().also{a->files.forEach{a.put(it.selection())}})
@@ -17,6 +17,7 @@ internal object ChatInputRules {
   val objects=dev.pocketengine.features.assistant.OwnerObjectReferences.checked(objectRefs)
   if(objects.length()>0)input.put("ownerObjectRefs",objects)
   if(firstPaused)input.put("firstMessageWithoutPersonalMemory",true)
+  if(excludeThis)input.put("excludeThisInputFromLearning",true)
   return TaskStore.capabilityFingerprint(input)
  }
  fun mergeReceipt(old:JSONObject?,incoming:JSONObject):JSONObject?{

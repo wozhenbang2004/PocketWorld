@@ -14,6 +14,7 @@ import org.json.JSONObject;
 public final class OwnerComposerState {
     public static final String FORMAT="pocketworld.owner-composer.v1";
     private static final String RESTRICTED_FORMAT="pocketworld.owner-composer.v1.first-message-paused";
+    private static final String ONE_MESSAGE_FORMAT="pocketworld.owner-composer.v1.one-message-learning-exclusion";
     public static final int MAX_DRAFTS=64,MAX_PENDING=64,MAX_TEXT=48_000,MAX_STATE_BYTES=1_048_576;
     public static final class Draft {
         public final String key,conversationId,text,mode,anchorMessage,observedMessage,voiceText,voiceInputId;
@@ -77,6 +78,7 @@ public final class OwnerComposerState {
     private final LinkedHashMap<String,Pending> pending=new LinkedHashMap<>();
     // Optional restriction of an original unbound draft, never a grant or a global default.
     private final java.util.LinkedHashSet<String> firstMessagePaused=new java.util.LinkedHashSet<>();
+    private final java.util.LinkedHashSet<String> oneMessageExcluded=new java.util.LinkedHashSet<>();
     private String activeKey;
     private long revision;
     private OwnerComposerState(){}
@@ -176,9 +178,28 @@ public final class OwnerComposerState {
         if(paused)firstMessagePaused.add(key);else firstMessagePaused.remove(key);
         drafts.put(key,next);revision=nextRevision;return next;
     }
+    /** A restriction for the next accepted input of this original private conversation, not a conversation policy. */
+    public synchronized boolean oneMessageEligible(String key){
+        Draft d=drafts.get(key);return d!=null&&key.equals(activeKey)&&!d.conversationId.isEmpty()&&key.equals(conversationKey(d.conversationId));
+    }
+    public synchronized boolean oneMessageExcluded(String key){return oneMessageExcluded.contains(key);}
+    public synchronized Draft setOneMessageExcluded(String key,long expected,boolean excluded)throws Exception {
+        Draft prior=require(key,expected);
+        if(!oneMessageEligible(key)||hasPending(key))
+            throw new IllegalStateException("请先核对这段私人对话的上一条输入回执");
+        if(excluded==oneMessageExcluded.contains(key))return prior;
+        Draft next=prior.content(prior.text,prior.mode,prior.attachments(),prior.voiceText,prior.voiceInputId);long nextRevision=increment(revision);
+        if(excluded)oneMessageExcluded.add(key);else oneMessageExcluded.remove(key);
+        drafts.put(key,next);revision=nextRevision;return next;
+    }
     public synchronized Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target)throws Exception {
+        return prepare(client,key,expected,fingerprint,target,false);
+    }
+    public synchronized Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target,boolean excluded)throws Exception {
+        if(excluded!=oneMessageExcluded.contains(key))throw new IllegalStateException("原草稿的单条记忆限制不适用于另一提交入口，没有发送");
         Draft draft=require(key,expected);if((blank(draft.text)&&draft.attachments().length()==0)||draft.text.trim().length()>12000)throw new IllegalArgumentException("请保留草稿并将本条输入缩至12000字内；纯附件消息必须已有真实附件选择");
         Pending duplicate=matchingPending(key,fingerprint);if(duplicate!=null)return duplicate;
+        if(excluded&&hasPending(key))throw new IllegalStateException("本条排除自动整理的原输入尚待核对，未发送第二条");
         if(pending.containsKey(client)||pending.size()>=MAX_PENDING)throw new IllegalStateException("待核对输入已达本机上限，请先查询原回执；未发送新输入");
         Pending next=new Pending(client,key,draft.revision,fingerprint,draft.conversationId,draft.mode,target);pending.put(client,next);revision=increment(revision);return next;
     }
@@ -204,6 +225,8 @@ public final class OwnerComposerState {
         Draft prior=drafts.get(p.draftKey);if(prior==null)throw new IllegalStateException("原草稿不可核对，未清除当前输入");
         String target=isWorkKey(prior.key)?prior.key:conversationKey(conversation);boolean clear=prior.revision==p.draftRevision,migrate=!prior.key.equals(target);
         Draft remaining=clear?new Draft(prior.key,prior.conversationId,increment(prior.revision),"",prior.mode,new JSONArray(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,"","",new JSONArray(),new JSONArray(),new JSONArray()):prior;
+        boolean releaseOne=oneMessageExcluded.contains(prior.key);
+        if(releaseOne&&!clear)remaining=prior.content(prior.text,prior.mode,prior.attachments(),prior.voiceText,prior.voiceInputId);
         Draft collision=drafts.get(target);
         if(migrate&&collision!=null&&collision.hasInput()&&remaining.hasInput())throw new IllegalStateException("输入已受理，但原对话另有未发送草稿；两份均保留，请回原输入核对");
         Draft next=migrate&&collision!=null&&collision.hasInput()?new Draft(target,conversation,increment(Math.max(collision.revision,remaining.revision)),collision.text,collision.mode,collision.attachments(),collision.scrollIndex,collision.scrollOffset,collision.anchorMessage,collision.observedMessage,collision.newReplies,collision.voiceText,collision.voiceInputId,collision.sourceRefs(),collision.previewRefs(),collision.objectRefs()):new Draft(target,conversation,remaining.revision,remaining.text,remaining.mode,remaining.attachments(),remaining.scrollIndex,remaining.scrollOffset,remaining.anchorMessage,remaining.observedMessage,remaining.newReplies,remaining.voiceText,remaining.voiceInputId,remaining.sourceRefs(),remaining.previewRefs(),remaining.objectRefs());
@@ -212,19 +235,21 @@ public final class OwnerComposerState {
         boolean keepOriginal=migrate&&pending.values().stream().anyMatch(other->!other.clientId.equals(client)&&other.draftKey.equals(prior.key));
         if(keepOriginal&&collision==null)makeRoom();
         if(keepOriginal)drafts.put(prior.key,remaining);else {drafts.remove(prior.key);firstMessagePaused.remove(prior.key);}
-        drafts.put(target,next);pending.remove(client);
+        drafts.put(target,next);pending.remove(client);if(releaseOne)oneMessageExcluded.remove(prior.key);
         if(activeKey.equals(prior.key))activeKey=target;
         revision=increment(revision);return new Acknowledgement(true,clear,migrate,prior.key,target);
     }
     public synchronized JSONObject toJson()throws Exception{
         JSONArray d=new JSONArray(),p=new JSONArray();for(Draft draft:drafts.values())d.put(draft.json());for(Pending item:pending.values())p.put(item.json());
-        JSONObject result=new JSONObject().put("format",firstMessagePaused.isEmpty()?FORMAT:RESTRICTED_FORMAT).put("revision",revision).put("activeKey",activeKey).put("drafts",d).put("pending",p);
+        JSONObject result=new JSONObject().put("format",!oneMessageExcluded.isEmpty()?ONE_MESSAGE_FORMAT:firstMessagePaused.isEmpty()?FORMAT:RESTRICTED_FORMAT).put("revision",revision).put("activeKey",activeKey).put("drafts",d).put("pending",p);
+        if(!oneMessageExcluded.isEmpty())result.put("oneMessageExcluded",new JSONArray(oneMessageExcluded));
         if(!firstMessagePaused.isEmpty())result.put("firstMessagePaused",new JSONArray(firstMessagePaused));
         return result;
     }
     public static OwnerComposerState fromJson(JSONObject json)throws Exception {
         String format=json.getString("format");boolean restricted=RESTRICTED_FORMAT.equals(format);
-        if(!FORMAT.equals(format)&&!restricted||restricted!=json.has("firstMessagePaused"))throw new IllegalArgumentException("草稿版本或首条记忆范围不受支持，请保留原文件");
+        boolean one=ONE_MESSAGE_FORMAT.equals(format);
+        if(!FORMAT.equals(format)&&!restricted&&!one||one!=json.has("oneMessageExcluded")||!one&&restricted!=json.has("firstMessagePaused"))throw new IllegalArgumentException("草稿版本或首条记忆范围不受支持，请保留原文件");
         OwnerComposerState state=new OwnerComposerState();state.revision=integer(json,"revision",1,Long.MAX_VALUE);state.activeKey=json.getString("activeKey");
         JSONArray drafts=json.getJSONArray("drafts"),pending=json.getJSONArray("pending");if(drafts.length()<1||drafts.length()>MAX_DRAFTS||pending.length()>MAX_PENDING)throw new IllegalArgumentException("草稿记录超出有界范围");
         for(int i=0;i<drafts.length();i++){JSONObject row=drafts.getJSONObject(i);Draft d=new Draft(row.getString("key"),row.getString("conversationId"),integer(row,"revision",1,Long.MAX_VALUE),row.getString("text"),row.getString("mode"),row.getJSONArray("attachments"),(int)integer(row,"scrollIndex",0,100000),(int)integer(row,"scrollOffset",0,1000000),row.getString("anchorMessage"),row.getString("observedMessage"),bool(row,"newReplies"),row.getString("voiceText"),row.getString("voiceInputId"),row.has("ownerSourceRefs")?row.getJSONArray("ownerSourceRefs"):new JSONArray(),row.has("ownerPreviewRefs")?row.getJSONArray("ownerPreviewRefs"):new JSONArray(),row.has("ownerObjectRefs")?row.getJSONArray("ownerObjectRefs"):new JSONArray());if(state.drafts.put(d.key,d)!=null)throw new IllegalArgumentException("草稿身份重复");}
@@ -232,13 +257,20 @@ public final class OwnerComposerState {
             JSONArray restrictions=json.getJSONArray("firstMessagePaused");if(restrictions.length()<1||restrictions.length()>drafts.length())throw new IllegalArgumentException("新草稿记忆范围不可核对");
             for(int i=0;i<restrictions.length();i++){Object raw=restrictions.get(i);if(!(raw instanceof String)||!((String)raw).startsWith("new:")||!state.drafts.containsKey(raw)||!state.drafts.get(raw).conversationId.isEmpty()||!state.firstMessagePaused.add((String)raw))throw new IllegalArgumentException("新草稿记忆范围不可核对");}
         }
+        if(json.has("oneMessageExcluded")){
+            JSONArray restrictions=json.getJSONArray("oneMessageExcluded");
+            if(restrictions.length()<1||restrictions.length()>drafts.length())throw new IllegalArgumentException("单条记忆限制无法核对");
+            for(int i=0;i<restrictions.length();i++){Object raw=restrictions.get(i);Draft d=raw instanceof String?state.drafts.get(raw):null;
+                if(d==null||d.conversationId.isEmpty()||!d.key.equals(conversationKey(d.conversationId))||!state.oneMessageExcluded.add(d.key))throw new IllegalArgumentException("单条记忆限制不属于原私人对话");}
+        }
         if(!state.drafts.containsKey(state.activeKey)||isWorkKey(state.activeKey))throw new IllegalArgumentException("原活动对话草稿不存在");
         for(int i=0;i<pending.length();i++){JSONObject row=pending.getJSONObject(i);Pending p=new Pending(row.getString("clientId"),row.getString("draftKey"),integer(row,"draftRevision",1,Long.MAX_VALUE),row.getString("fingerprint"),row.getString("conversationId"),row.getString("mode"),row.getJSONObject("originalTarget"));Draft d=state.drafts.get(p.draftKey);if(d==null||!d.conversationId.equals(p.conversationId)||p.draftRevision>d.revision||state.pending.put(p.clientId,p)!=null)throw new IllegalArgumentException("待核对输入不属于原草稿版本");}
+        for(String key:state.oneMessageExcluded)if(state.pending.values().stream().filter(item->item.draftKey.equals(key)).count()>1)throw new IllegalArgumentException("单条记忆限制不能绑定多条待核对输入");
         return state;
     }
     private Draft require(String key,long expected){Draft d=drafts.get(key);if(d==null||d.revision!=expected)throw new IllegalStateException("原草稿已变化，未覆盖新输入");return d;}
     private boolean hasPending(String key){for(Pending p:pending.values())if(p.draftKey.equals(key))return true;return false;}
-    private void makeRoom(){if(drafts.size()<MAX_DRAFTS)return;for(Draft d:new ArrayList<>(drafts.values()))if(!d.key.equals(activeKey)&&!d.hasInput()&&!hasPending(d.key)&&!firstMessagePaused.contains(d.key)){drafts.remove(d.key);return;}throw new IllegalStateException("已保留64份原草稿，请先处理已有输入；没有丢弃未发送文字或待核对身份");}
+    private void makeRoom(){if(drafts.size()<MAX_DRAFTS)return;for(Draft d:new ArrayList<>(drafts.values()))if(!d.key.equals(activeKey)&&!d.hasInput()&&!hasPending(d.key)&&!firstMessagePaused.contains(d.key)&&!oneMessageExcluded.contains(d.key)){drafts.remove(d.key);return;}throw new IllegalStateException("已保留64份原草稿，请先处理已有输入；没有丢弃未发送文字或待核对身份");}
     private static Draft blank(String key,String conversation)throws Exception{return new Draft(key,conversation,1,"","queue",new JSONArray(),0,0,"","",false,"","",new JSONArray(),new JSONArray(),new JSONArray());}
     public static boolean isWorkKey(String value){return value!=null&&value.startsWith("work:");}
     public static String workKey(String task,String run,long epoch){

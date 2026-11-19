@@ -337,12 +337,16 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
       else Object.assign(input, { prompt: goal, readOnly: worker === 'codex_app_server' && readOnly }, model.trim() ? { model: model.trim() } : {}, worker === 'codex_app_server' && effort.trim() ? { effort: effort.trim() } : {}, worker === 'codex_app_server' && model.trim() && probe?.modelOptions?.digest ? { modelOptionsDigest: probe.modelOptions.digest } : {});
       if (gemini) Object.assign(input, { backendId: geminiId, capabilityRevision: probe!.capabilityRevision, modeId: 'default', readOnly: false });
       if (configuredHarness) Object.assign(input, { harnessSelection: harnessSelection(probe, selectedWorker), externalExecutionRiskAcknowledged: true, readOnly: false, ...(modeId ? { modeId } : {}) });
+      if(mode==='ordinary'&&worker!=='command'&&returnOrigin&&goal.trim()===returnOrigin.text)input.hostGoalOrigin=returnOrigin.handle;
       const prepared = await request('remote.reviewTask', input);
       if (!formCurrent()) return;
       if (mode === 'baseline') setBaseline(prepared); else if (mode === 'inputs') setInputRequest(prepared); else setReview(prepared);
     } catch (failure) { if (alive.current) setDraftError(failure instanceof Error ? failure.message : '请核对这次任务参数。'); }
   };
   const [carriedTextOnly,setCarriedTextOnly]=useState(false);
+  const [returnOrigin,setReturnOrigin]=useState<{handle:string;text:string}|null>(null);
+  const [fromComposer,setFromComposer]=useState(false);
+  const carryGoal=(source:CloudGoal)=>{setGoal(source.text);setCarriedTextOnly(source.carriesTextOnly);setFromComposer(true);setReturnOrigin(source.originHandle?{handle:source.originHandle,text:source.text}:null);};
   const [showCloudLocation,setShowCloudLocation]=useState(false);
   const guidedAttempt = useRef('');
   const readEnvironments = (useSaved = false, carried?: CloudGoal) => {
@@ -361,7 +365,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
         // Never restore old write consent, model selection, or CLI options as part of a remembered location.
         setReadOnly(true); setModel(''); setModeId(''); setEffort('');
         if (original && carried && !draft.current.goal.trim() && !draft.current.operation) {
-          setGoal(carried.text); setCarriedTextOnly(carried.carriesTextOnly); onCloudGoalUsed?.(carried.id);
+          carryGoal(carried); onCloudGoalUsed?.(carried.id);
         }
         if (!original) setDraftError('未核对到已记住的操作库、目录和执行器。可能是服务或目录已更换，未改用同名位置；可以手动重新选择。');
       } else if (environmentId && (!environment || !catalog.some(e => e.id === environmentId && e.bindingHash === environment.bindingHash))) {
@@ -427,6 +431,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
     {unresolved.map(item => <div className="pw-selected-object" key={item.operationId}><p>此连接有原提交待核对。</p><Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: item.operationId }).then(setReceipt).catch(() => {}); }}>只读核对原提交</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }}>打开原任务</Button></div>)}
     {visible && active && sameHost && supported('remote.workspaceJobs') && supported('remote.openWorkspaceJob') && <CloudWorkspaceJobs key={JSON.stringify(sameHost)} scope={sameHost} run={run}/>}
     <div ref={composer} hidden={!!operation} className="pw-remote-composer">
+    {fromComposer&&!operation&&<div className="pw-field-hint" role="status">{returnOrigin&&worker!=='command'&&goal.trim()===returnOrigin.text?'直接交办后，手机会在原私人对话留一个原任务入口。':returnOrigin?'当前参数已改变，这次不会连回原对话。':'这次是独立主机工作，不会在聊天里补建关联。'} {returnOrigin&&<Button variant="ghost" size="small" disabled={locked||!!review} onClick={()=>changed(()=>setReturnOrigin(null))}>改为独立委托</Button>}</div>}
     {carriedTextOnly&&<p className="pw-field-hint">已带入目标文字；附件与引用仍在原对话。要使用远端原件，请在本次审阅中单独选择。</p>}
     {cloudGoal&&<section className="pw-connection-attention" aria-label="管家原目标">
       <h3>使用管家里的目标</h3>
@@ -434,7 +439,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
       {goal.trim()&&goal.trim()!==cloudGoal.text?<p>这里已有另一份草稿，不会覆盖。若要改用管家的目标，请先处理本页草稿。</p>:null}
       <Button variant="secondary" disabled={locked||!!review||!!goal.trim()&&goal.trim()!==cloudGoal.text} onClick={()=>{
         if(!nativeActive()||locked||waiting.current||review||goal.trim()&&goal.trim()!==cloudGoal.text)return;
-        changed(()=>{setGoal(cloudGoal.text);setCarriedTextOnly(cloudGoal.carriesTextOnly)});onCloudGoalUsed?.(cloudGoal.id);
+        changed(()=>carryGoal(cloudGoal));onCloudGoalUsed?.(cloudGoal.id);
       }}>填入目标，继续核对</Button>
     </section>}
     <section className="pw-connection-attention" aria-label="这次电脑工作的下一步"><h3>{nextStep.title}</h3><p>{nextStep.detail}</p>
@@ -494,13 +499,14 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
     {(error || draftError) && <p role="alert">{error || draftError}</p>}
     {operation && <div className="pw-selected-object"><p role="status">{uncertain ? '这次原提交的结果待核对。草稿与原操作已保留，不会再次确认或重发。' : '已保留这次原操作。离开页面不会重提或停止电脑任务。'}</p><Facts values={[[ '原操作', operation.operationId ]]} />
       <Accordion><AccordionItem id="original-remote-work" title="保留的原工作草稿"><Facts values={[[ '原环境', operation.environmentId ], ['原执行器', operation.worker ], ['请求模型', operation.model || '执行端默认' ]]} /><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{operation.prompt || JSON.stringify(operation.argv)}</pre></AccordionItem></Accordion>
-      <Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: operation.operationId }).then(setReceipt).catch(() => {}); }}>查询原操作</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: operation.operationId }).catch(() => {}); }}>打开原任务 · 审批、成果与继续</Button>{nativeTask && ['completed', 'failed', 'cancelled'].includes(nativeTask.status) && list(data.operations).some(item => item.operationId === operation.operationId && ['settled', 'rejected'].includes(item.status)) && <Button variant="secondary" disabled={busy || !active} onClick={() => { setOperation(null); setUncertain(false); setReceipt(null); setGoal(''); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); }}>已核对原任务，新建另一项工作</Button>}</div>}
+      <Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: operation.operationId }).then(setReceipt).catch(() => {}); }}>查询原操作</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: operation.operationId }).catch(() => {}); }}>打开原任务 · 审批、成果与继续</Button>{nativeTask && ['completed', 'failed', 'cancelled'].includes(nativeTask.status) && list(data.operations).some(item => item.operationId === operation.operationId && ['settled', 'rejected'].includes(item.status)) && <Button variant="secondary" disabled={busy || !active} onClick={() => { setOperation(null); setUncertain(false); setReceipt(null); setGoal(''); setReturnOrigin(null); setFromComposer(false); setCarriedTextOnly(false); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); }}>已核对原任务，新建另一项工作</Button>}</div>}
     <Receipt value={receipt} run={run} />
     {baseline && <RemoteProjectBaseline prepared={baseline} visible={visible && active} onClose={() => setBaseline(null)} onRegistered={captured => { draft.current = { ...draft.current, operation: captured, uncertain: true }; setOperation(captured); setUncertain(true); setReceipt(null); }} />}
     {inputRequest && <RemoteInputFlow prepared={inputRequest} visible={visible && active} close={() => setInputRequest(null)} onRegistered={captured => { draft.current = { ...draft.current, operation: captured, uncertain: true }; setOperation(captured); setUncertain(true); setReceipt(null); }} />}
     <SettingsDialog isOpen={visible && !!review} title="确认在所选电脑创建工作" onClose={() => { if (!waiting.current) dismissReview(); }}>
       <Facts values={[[ '电脑', profile.name ], ['地址', profile.baseUrl ], ['工作区', environment?.workspace ], ['执行器', review?.worker === 'gemini_acp' ? 'Gemini CLI 0.66.0 · ACP 1' : harnessWorkerLabel(selectedWorker, review?.worker) ], ['请求模型', review?.model || '执行端默认' ], ['推理强度', review?.effort || null ], ['执行模式', review?.worker === 'gemini_acp' ? '默认审批 · 仅本次私人可写工作' : review?.modeId || null ], ['时限', review?.timeoutSeconds ]]} />
-      <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review?.prompt || JSON.stringify(review?.argv)}</pre><p>{review?.worker === 'pi' ? '仅进行无工具对话。' : review?.readOnly ? '本次为 Codex 只读分析。' : '本次可能修改所选工作区；工具审批在原任务逐次核对。'}</p>
+      {review?.linksOriginalPrivateConversation===true&&<p className="pw-field-hint">确认后，原私人对话将链接手机登记的这项工作；主机是否接单以原任务回执为准。聊天记录与附件不会随目标发送。</p>}
+    <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review?.prompt || JSON.stringify(review?.argv)}</pre><p>{review?.worker === 'pi' ? '仅进行无工具对话。' : review?.readOnly ? '本次为 Codex 只读分析。' : '本次可能修改所选工作区；工具审批在原任务逐次核对。'}</p>
       {review?.worker === 'gemini_acp' && <p>已明确选择可写工作；登录、实际模型与会话模式仍须在原任务核对。不支持只读隔离，不自动登录或更换后端。</p>}
       {configuredHarness && <p>沿本次核对的执行器配置与能力启动。使用电脑端已有权限，工作目录不是操作系统沙箱；实际模型、会话和工具结果保留在原任务。</p>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismissReview}>返回修改</Button><Button disabled={locked || !environmentFresh || gemini && (!writeIntent || !geminiReady) || configuredHarness && (!writeIntent || !harnessReady)} onClick={confirm}>确认创建一次</Button></div>

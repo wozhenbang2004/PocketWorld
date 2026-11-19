@@ -71,6 +71,13 @@ public final class TeamParentHost {
             else switch(args.optString("view","status")){
                 case "status":case "members":out=status(source,id);break;
                 case "events":out=coordinator.parentEvents(id,args.optLong("afterEvent",0),args.optInt("limit",16));break;
+                case "message_receipt":{
+                    String messageId=args.getString("messageId");
+                    JSONObject receipt=coordinator.parentMessageDelivery(source,id,messageId);
+                    if("assignment_inbox".equals(receipt.getString("source"))&&receipt.has("assignmentId"))receipt.put("state",tasks.teamParentMessageDelivery(source,id,
+                            receipt.getString("assignmentId"),receipt.getString("recipientMemberId"),messageId));
+                    out=new JSONObject().put("teamRunId",id).put("messageReceipt",receipt).put("businessVerified",false);break;
+                }
                 case "research_summary":case "member_output":{
                     if(args.optInt("offset",0)>0&&!args.has("expectedOutputHash"))throw new SecurityException("后续页必须固定原输出hash，不混不同研究版本");
                     TeamCoordinator.ResearchOutput selected=coordinator.parentResearchOutput(source,args);coordinator.checkResearchOutput(selected);
@@ -82,7 +89,7 @@ public final class TeamParentHost {
                 case "question":{JSONObject question=tasks.teamParentQuestion(source,id,args.getString("assignmentId"),args.getString("questionId"));out=range(question.getString("question"),args.optInt("offset",0),args.optInt("length",4000)).put("assignmentId",args.getString("assignmentId")).put("questionId",question.getString("questionId")).put("state",question.getString("state"));break;}
                 case "review":{JSONObject review=writes.review(id,original).snapshot();out=new JSONObject().put("teamRunId",id).put("planHash",review.getString("planHash")).put("canIntegrate",review.getBoolean("canIntegrate")).put("incompleteAssignments",review.getJSONArray("incompleteAssignments")).put("files",review.getJSONObject("plan").getJSONArray("files")).put("requiresOwnerReview",true).put("businessVerified",false);break;}
                 case "integration":out=integration(id);break;
-                default:throw new IllegalArgumentException("请选择原团队status/members/events/artifacts/output/question/review/integration视图");
+                default:throw new IllegalArgumentException("请选择原团队状态、事件、补充回执、成果或审阅视图");
             }
             source.checkCurrent();receipt=new JSONObject().put("status","read_completed").put("nativeReturned",true).put("modelConsumptionVerified",false);for(String key:new String[]{"source","researchOutput","offset","endOffset","totalChars","complete","nextEvent","state","timedOut"})if(out.has(key))receipt.put(key,out.get(key));return out.put("queryOnly",true);
         }finally{tasks.finishTeamNativeRead(reservation,receipt,false);}
@@ -97,7 +104,9 @@ public final class TeamParentHost {
             JSONObject receipt=new JSONObject();for(String key:new String[]{"questionId","answerId","state","continuationState","awaitingContinuation","duplicate","reservationId","continuationReason","executionAuthorized"})if(result.has(key))receipt.put(key,result.get(key));
             changed.accept(id);return status(source,id).put("answerReceipt",receipt).put("delivery",args.optString("delivery","queue"));
         }
-        boolean wakePolicy=args.optString("delivery","queue").equals("queue")&&args.has("workItemId")&&tasks.teamWakePolicyConfigured(source,id);
+        // A work-item-only address is not a newly enabled automatic wake. Preserve the
+        // existing opt-in route only for the explicit child address that could enqueue it.
+        boolean wakePolicy=args.optString("delivery","queue").equals("queue")&&args.has("workItemId")&&args.has("assignmentId")&&tasks.teamWakePolicyConfigured(source,id);
         boolean researchWake=args.optString("delivery","queue").equals("queue")&&args.has("researchRound")&&!args.has("workItemId")&&tasks.teamWakePolicyConfigured(source,id);
         nativeInput.put("mode","queue");JSONObject sent=coordinator.sendParentMessage(source,nativeInput,input->tasks.queueTeamParentInput(source,input,wakePolicy?coordinator.wakeSource(id,args.getString("memberId"),args.getString("workItemId")):researchWake?coordinator.researchQueueWakeSource(id,args.getString("memberId"),args.getInt("researchRound"),input.getString("assignmentId")):null));
         if(args.optString("delivery","queue").equals("continue")){
@@ -110,14 +119,34 @@ public final class TeamParentHost {
                 receipt.put("continuationState",outcome.getString("continuationState")).put("budgetIncreased",false);
                 if(outcome.has("continuationReason"))receipt.put("continuationReason",outcome.getString("continuationReason"));
             }else{
-                JSONObject now=coordinator.get(id);nativeInput.put("expectedRevision",now.getLong("revision")).put("expectedGeneration",now.getInt("generation"));JSONObject slot=TeamWorkPlan.find(now.getJSONArray("members"),args.getString("memberId"));nativeInput.put("expectedMemberGeneration",slot.getInt("generation"));
-                coordinator.continueForParent(source,nativeInput,(nextRun,nextMember)->tasks.continueTeamParentItem(source,id,args.getString("workItemId"),args.getInt("itemRevision"),args.getInt("ownerGeneration"),nextRun,nextMember),models.get(),true);
-                receipt.put("continuationState","queued").put("budgetIncreased",false);
+                JSONObject bound=receipt.optJSONObject("workItemTarget");
+                if(bound==null||!args.getString("workItemId").equals(bound.getString("workItemId"))||!args.getString("memberId").equals(bound.getString("memberId"))
+                        ||args.getInt("itemRevision")!=bound.getInt("itemRevision")||args.getInt("ownerGeneration")!=bound.getInt("ownerGeneration"))
+                    throw new SecurityException("没有确认补充已存到要继续的原工作项");
+                receipt.put("budgetIncreased",false);
+                if(receipt.optBoolean("duplicate")||"historical".equals(receipt.optString("status")))
+                    receipt.put("continuationState","not_dispatched").put("continuationReason","原消息已存在或仅留历史，本次没有另起分工");
+                else {
+                    boolean[] admissionReached={false};
+                    nativeInput.put("expectedRevision",sent.getLong("revision"));
+                    try{
+                        coordinator.continueForParent(source,nativeInput,(nextRun,nextMember)->{admissionReached[0]=true;return tasks.continueTeamParentItem(source,id,
+                                bound.getString("workItemId"),bound.getInt("itemRevision"),bound.getInt("ownerGeneration"),nextRun,nextMember);},models.get(),true);
+                        receipt.put("continuationState","queued");
+                    }catch(Exception unavailable){
+                        source.checkCurrent();
+                        receipt.put("continuationState",admissionReached[0]?"unconfirmed":"not_dispatched")
+                                .put("continuationReason",admissionReached[0]?"原续接回执待核对，勿重复派发":unavailable.getMessage()==null?"原分工尚非安全继续点":unavailable.getMessage());
+                    }
+                }
             }
         }
         if(wakePolicy)sent.getJSONObject("messageReceipt").put("automaticWake",false);
-        if(wakePolicy&&!sent.getJSONObject("messageReceipt").optBoolean("duplicate")){
-            var nativeWake=coordinator.wakeSource(id,args.getString("memberId"),args.getString("workItemId"));var admission=tasks.prepareTeamParentWake(source,nativeWake);
+        if(wakePolicy&&sent.getJSONObject("messageReceipt").optBoolean("nativeAssignmentInput")&&!sent.getJSONObject("messageReceipt").optBoolean("duplicate")
+                &&!"historical".equals(sent.getJSONObject("messageReceipt").optString("status"))){
+            var nativeWake=coordinator.wakeSource(id,args.getString("memberId"),args.getString("workItemId"));
+            var admission=TeamWorkItems.sameIdentity(nativeWake.view(),sent.getJSONObject("messageReceipt").getJSONObject("workItemTarget"))
+                    ?tasks.prepareTeamParentWake(source,nativeWake):null;
             if(admission!=null){sent.getJSONObject("messageReceipt").put("wake",admission.view()).put("automaticWake",false);if(admission.hasCandidate()){
                 JSONObject now=coordinator.get(id);nativeInput.put("expectedRevision",now.getLong("revision")).put("expectedGeneration",now.getInt("generation")).put("expectedMemberGeneration",TeamWorkPlan.find(now.getJSONArray("members"),args.getString("memberId")).getInt("generation"));
                 coordinator.continueForWake(admission,nativeInput,models.get());sent.getJSONObject("messageReceipt").put("automaticWake",true).put("continuationState","queued").put("budgetIncreased",false);

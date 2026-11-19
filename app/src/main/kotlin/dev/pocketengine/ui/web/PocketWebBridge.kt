@@ -242,6 +242,7 @@ internal class PocketWebBridge(
             "models.groups.snapshot", "models.conversation.snapshot", "models.conversation.close"
         )
         val commands: Set<String> = linkedSetOf(
+            "conversation.captureHostGoal", "conversation.openHostGoal",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
@@ -256,13 +257,13 @@ internal class PocketWebBridge(
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
-            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.edit", "phone.draft.fromMessage", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
+            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.recentStarts", "phone.draft.retireUncreated", "phone.draft.edit", "phone.draft.fromMessage", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
-            "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
+            "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.discoverDirect", "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled", "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant", "learning.snapshot", "groups.snapshot",
             "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
-        ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts", "composer.firstMemory.save") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
+        ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts", "composer.firstMemory.save", "composer.oneLearning.save") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -313,7 +314,7 @@ internal class PocketWebBridge(
         voiceInput.clear()
         modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.close(); composerModels.close(); aiSources.close(); conversationModels.close(); controller.webChannels.clear(); controller.webSkills.clear()
         section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close)
-        section?.takeIf { it in ownerDomains }?.let(controller::leaveOwnerDomain)
+        section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }
         deviceWindow?.close(); deviceWindow = null
         section = null; taskReturnSection = null; taskViewId = null
         taskPage?.let(controller::leaveGroupTask); taskPage = null
@@ -351,7 +352,11 @@ internal class PocketWebBridge(
         developerLogs.clear()
         if (documentReplaced) routeReferences.clear() else routeReferences.background()
         if (documentReplaced) { controller.webChannels.clear(); controller.webSkills.clear() } else { controller.webChannels.background(); controller.webSkills.background() }
-        if (documentReplaced) { documentId = null; taskReturnSection = null }
+        if (documentReplaced) {
+            // A replacement document did not choose this project namespace. Normal backgrounding is not an exit.
+            if (section == "memory" || section == "memoryReview") { controller.leaveOwnerDomain("memoryReview"); section = null }
+            documentId = null; taskReturnSection = null
+        }
     }
 
     private fun publishState(force: Boolean = false) {
@@ -702,6 +707,15 @@ internal class PocketWebBridge(
                         })
                         return
                     }
+                    if (row.hostGoalTaskId != null) {
+                        require(taskId==row.hostGoalTaskId && args.opt("requestNavigation")==false)
+                        val current={ controller.canReadConversationWindow(reader) && controller.conversationReader?.messages?.any {
+                            it.id==row.id && it.sourceRevision==row.sourceRevision && it.hostGoalTaskId==taskId
+                        }==true }
+                        openOriginalTask(id,taskId,false,keepConversationReader=true,sourceWindowCurrent=current,
+                            checkReaderInput={ check(current()); dev.pocketengine.ui.PrivateHostReceipt.verify(it,reader.conversation,taskId) })
+                        return
+                    }
                     require(row.role == "assistant" && (row.sourceRevision > 0 || row.phoneResult != null || row.taskResult != null) &&
                         (row.taskId == taskId || row.phoneResult?.taskId == taskId || row.taskResult?.taskId == taskId)) { "任务不属于这条原回复" }
                 }
@@ -922,6 +936,14 @@ internal class PocketWebBridge(
             if (action in PocketWebExperience.COMMANDS) {
                 requireSection("learning"); experience.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
+            if (action == "composer.oneLearning.save") {
+                require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话" }
+                checkedPayload(args, setOf("key", "epoch", "revision", "excluded"))
+                val epoch = args.opt("epoch"); val revision = args.opt("revision"); val excluded = args.opt("excluded")
+                require(epoch is Int && epoch >= 0 && (revision is Int || revision is Long) && (revision as Number).toLong() > 0 && excluded is Boolean)
+                controller.setOneMessageLearning(requiredString(args, "key"), epoch, (revision as Number).toLong(), excluded) { value, error -> complete(id, value, error); publishState() }
+                return
+            }
             if (action == "composer.firstMemory.save") {
                 require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到新的私人对话" }
                 checkedPayload(args, setOf("key", "epoch", "revision", "paused"))
@@ -1091,6 +1113,20 @@ internal class PocketWebBridge(
             if (action in PocketWebTeams.COMMANDS) {
                 requireSection("teams"); teamPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
             }
+            if (action == "conversation.openHostGoal") {
+                require(args.keys().asSequence().toSet()==setOf("messageId","taskId","conversationId"))
+                val task=requiredString(args,"taskId"); val message=requiredString(args,"messageId"); val conversation=requiredString(args,"conversationId")
+                val at=controller.webWindowTicket()
+                val current={ section==null && taskViewId==null && controller.state.filePath==null && controller.webPrivateOwnerVisible() &&
+                    controller.webWindowTicket()==at && controller.state.conversationId==conversation && controller.state.messages.any { it.id==message && it.hostGoalTaskId==task } }
+                check(current()) { "请回到带出这项主机工作的原私人对话" }
+                openOriginalTask(id,task,false,sourceWindowCurrent=current,checkReaderInput={ check(current()); dev.pocketengine.ui.PrivateHostReceipt.verify(it,conversation,task) }); return
+            }
+            if (action == "conversation.captureHostGoal") {
+                check(section == null && taskViewId == null && controller.state.filePath == null && controller.webPrivateOwnerVisible()) { "请返回原私人对话的输入框" }
+                requireComposer(args)
+                complete(id,connectionPages.hostGoalOrigins.capture(args),null,retainValue=false); return
+            }
             if (action in PocketWebConnections.COMMANDS) {
                 requireSection(action.substringBefore('.'))
                 if (action == "remote.workspaceJobs") { connectionPages.cloudJobs.read(args) { row, error -> complete(id, row, error, retainValue = false) }; return }
@@ -1187,6 +1223,8 @@ internal class PocketWebBridge(
             if (action == "phone.review.settings") { complete(id, phoneComposer.openReviewedSettings(args), null); return }
             if (action == "phone.start") { phoneComposer.start(id, args); return }
             if (action == "phone.query") { phoneComposer.query(id, args); return }
+            if (action == "phone.draft.recentStarts") { phoneComposer.recentDraft(id,args); return }
+            if (action == "phone.draft.retireUncreated") { phoneComposer.query(id,args,true); return }
             if (action == "phone.ownerStep.review" || action == "phone.ownerStep.leave") {
                 val leaving = action == "phone.ownerStep.leave"
                 checkedPayload(args, if (leaving) setOf("taskId","runId","epoch","operationId","confirmed") else setOf("taskId","runId","epoch","operationId"))
@@ -1531,7 +1569,6 @@ internal class PocketWebBridge(
             "queued.editor.close" -> { requireQueuedWindow(args, editor = true, closing = true); controller.closeQueuedOwnerInputEditor() }
             "accounts.openAuthorization" -> { requireSection("accounts"); controller.openAccountAuthorization(requiredString(args, "sessionId")) }
             "accounts.manageUsage" -> { requireSection("accounts"); checkedPayload(args, emptySet()); controller.openChatGptUsage() }
-            "memory.list", "memory.search" -> { requireSection("memory"); return accepted(controller.requestFeature("memory", action.substringAfter('.'), checkedPayload(args, setOf("query", "cursor", "layer", "limit")))) }
             "memoryReview.list", "memoryReview.candidates", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource" -> {
                 requireSection("memoryReview")
                 val command = when (action) { "memoryReview.candidates" -> "listCandidates"; "memoryReview.capacity" -> "candidateCapacity"; "memoryReview.history" -> "listCandidateHistory"; else -> action.substringAfter('.') }
@@ -1875,7 +1912,6 @@ internal class PocketWebBridge(
         if (next == "memory") controller.enterOwnerDomain("memoryReview") else if (next in ownerDomains) controller.enterOwnerDomain(next) else controller.refresh()
         if (next == "models") readModelSnapshot()
         when (next) {
-            "memory" -> controller.requestFeature("memory", "list")
             "automation" -> { controller.requestFeature("automation", "list"); controller.requestFeature("automation", "receipts") }
             "commitments" -> controller.requestFeature("automation", "receipts")
             "channels" -> controller.requestFeature("channels", "inspect")

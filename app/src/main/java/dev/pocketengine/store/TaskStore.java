@@ -953,6 +953,22 @@ public final class TaskStore {
         if(allocated!=null)allocated.accept(t.getString("id"));
         write(t);return copy(t,false);
     }
+    /** Only the native, explicitly submitted blank-draft review can create a task with its reserved request ID. */
+    public synchronized JSONObject createReviewedDraftPhone(String request,String scopeKey,String goal,String mode,java.util.function.Consumer<String> allocated)throws Exception {
+        requireExecutionEnabled();
+        if(!"main_screen".equals(mode)&&!"background".equals(mode)||goal==null||goal.isBlank()||goal.length()>4000)throw new IllegalArgumentException("原手机草稿目标或执行模式无效");
+        db.beginTransaction();try{
+            if(read(request)!=null)throw new SecurityException("原手机请求已经登记，不再创建第二项工作");
+            JSONObject t=base(request,goal,"phone",mode).put("displayId","background".equals(mode)?-1:0);t.put("goalOriginClock",OwnerInputClock.capture(t.getLong("createdAt")));
+            DraftPhoneReceipts.created(db,request,scopeKey,t);allocated.accept(request);write(t);db.setTransactionSuccessful();return copy(t,false);
+        }finally{db.endTransaction();}
+    }
+    public synchronized void rememberInitialDraftPhoneAdmission(String scopeKey,JSONObject admission)throws Exception {DraftPhoneReceipts.admitted(db,scopeKey,admission);}
+    public synchronized JSONObject draftPhoneCreation(String scopeKey,String request)throws Exception {return DraftPhoneReceipts.query(db,this::read,scopeKey,request,false);}
+    public synchronized JSONArray recentDraftPhoneCreations(String scopeKey,boolean details)throws Exception {return DraftPhoneReceipts.recent(db,this::read,scopeKey,details);}
+    public synchronized JSONObject retireUncreatedDraftPhone(String scopeKey,String request,java.util.function.BooleanSupplier current)throws Exception {
+        db.beginTransaction();try{if(current==null||!current.getAsBoolean())throw new SecurityException("原草稿窗口已变化");JSONObject out=DraftPhoneReceipts.retireUncreated(db,this::read,scopeKey,request);db.setTransactionSuccessful();return out;}finally{db.endTransaction();}
+    }
     /** Native owner review only. Preparing a link allocates no task, run, grant or phone lease. */
     public static final class ConversationPhoneReview {
         private final TaskStore issuer;
@@ -8255,7 +8271,24 @@ public final class TaskStore {
     }
     public synchronized JSONObject queueTeamParentInput(TeamParentOrigin source,JSONObject input,dev.pocketengine.features.teams.TeamCoordinator.WakeSource nativeTarget)throws Exception{
         teamParentAccess(source,input.getString("runId"),true);db.beginTransaction();try{
-            JSONObject originalChild=required(input.getString("assignmentId"));JSONObject result=originalChild.optJSONObject("teamResearch")==null?queueTeamAssignmentInput(input):queueTeamResearchParentInput(source,input);JSONObject task=required(input.getString("assignmentId"));JSONArray rows=task.getJSONArray("teamConversationInputs");
+            JSONObject target=input.optJSONObject("workItemTarget"),originalChild;
+            if(target!=null){
+                String assignment=input.getString("assignmentId");
+                JSONObject item=currentTeamWorkItem(teamWriteTask(input.getString("runId")),target);
+                if(item==null||!assignment.equals(item.getString("assignmentId"))||!input.getString("recipientMemberId").equals(item.getString("memberId")))
+                    throw new SecurityException("补充不是这个原工作项的当前分工");
+                originalChild=read(assignment);
+                if(originalChild==null){
+                    // The coordinator's original inbox retains the exact work-item identity. No child,
+                    // native input or wake intent exists until that already planned item actually starts.
+                    JSONObject receipt=new JSONObject().put("messageId",input.getString("messageId")).put("assignmentId",assignment)
+                            .put("recipientMemberId",item.getString("memberId")).put("state","awaiting_original_work_item");
+                    db.setTransactionSuccessful();return receipt;
+                }
+                if(!dev.pocketengine.features.teams.TeamWorkItems.sameIdentity(item,originalChild.getJSONObject("teamAssignment")))
+                    throw new SecurityException("原工作项和实际子任务不匹配，未改投其他分工");
+            }else originalChild=required(input.getString("assignmentId"));
+            JSONObject result=originalChild.optJSONObject("teamResearch")==null?queueTeamAssignmentInput(input):queueTeamResearchParentInput(source,input);JSONObject task=required(input.getString("assignmentId"));JSONArray rows=task.getJSONArray("teamConversationInputs");
             for(int i=0;i<rows.length();i++){
                 JSONObject row=rows.getJSONObject(i);if(!input.getString("messageId").equals(row.getString("messageId")))continue;
                 if(result.optBoolean("duplicate")&&!source.task.equals(row.optString("senderParentTaskId")))throw new SecurityException("不能把主人或其他来源的原消息重标为父代理");
@@ -8323,6 +8356,26 @@ public final class TaskStore {
             claimTeamParentActionSql(source,teamRun);team=teamWriteTask(teamRun);plan=team.getJSONObject("teamWorkPlan");item=dev.pocketengine.features.teams.TeamWorkItems.find(plan.getJSONArray("items"),itemId);JSONObject owner=teamBudgetOwner(team),pool=teamBudget(owner),binding=new JSONObject().put("teamRunId",teamRun).put("runGeneration",nextRunGeneration).put("memberGeneration",nextMemberGeneration).put("childTaskId",child.getString("id")).put("childRunId",child.getString("runId")).put("childEpoch",child.getInt("coordinatorEpoch")).put("memberId",item.getString("memberId")).put("assignmentId",child.getString("id"));
             JSONObject reservation=dev.pocketengine.features.teams.TeamParentBudget.reserve(pool,binding,"member","parent_continue:"+source.operation,1,0);child.put("teamDraftContinuation",new JSONObject().put("reservationId",reservation.getString("reservationId")).put("workItemId",itemId).put("runGeneration",nextRunGeneration).put("memberGeneration",nextMemberGeneration).put("parentOperationId",source.operation));item.put("status","queued");team.put("teamWorkPlan",plan).put("status","queued");owner.put("teamReservationPool",pool);write(owner);write(child);write(team);db.setTransactionSuccessful();return teamWorkPlanSnapshot(teamRun);
         }finally{db.endTransaction();}
+    }
+    /** Query receipt state, not the content. An old child remains tied to its original team and sending parent. */
+    public synchronized String teamParentMessageDelivery(TeamParentOrigin source,String teamRun,String assignment,String member,String messageId)throws Exception{
+        JSONObject team=teamParentAccess(source,teamRun,false);
+        JSONObject args=new JSONObject().put("teamRunId",teamRun).put("view","message_receipt").put("messageId",messageId);
+        if(!"teams_get".equals(source.tool)||!source.argsHash.equals(capabilityFingerprint(args)))throw new SecurityException("此读取不是原消息回执请求");
+        JSONObject child=read(assignment);
+        if(child==null)return "unconfirmed";
+        requirePrivateOwner(child);JSONObject identity=child.optJSONObject("teamAssignment"),origin=child.optJSONObject("origin");
+        if(identity==null||origin==null||!"team_assignment".equals(origin.optString("kind"))||!team.getString("id").equals(child.optString("parentTaskId"))
+                ||!teamRun.equals(identity.optString("teamRunId"))||!assignment.equals(identity.optString("assignmentId"))||!member.equals(identity.optString("memberId")))return "unconfirmed";
+        JSONArray rows=child.optJSONArray("teamConversationInputs");JSONObject found=null;
+        for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!messageId.equals(row.optString("messageId")))continue;
+            if(found!=null||!source.task.equals(row.optString("senderParentTaskId"))||!"parent_model".equals(row.optString("senderRole"))
+                    ||!assignment.equals(row.optString("assignmentId"))||!member.equals(row.optString("recipientMemberId")))return "unconfirmed";found=row;}
+        if(found==null)return "unconfirmed";
+        String state=found.optString("state");
+        if("consumed".equals(state)&&!found.optString("consumedRunId").isEmpty())return "consumed";
+        if("included".equals(state)&&!found.optString("includedRunId").isEmpty())return "selected_for_input";
+        return state.matches("queued|historical")?state:"unconfirmed";
     }
     public synchronized JSONObject teamParentQuestion(TeamParentOrigin source,String teamRun,String assignment,String question)throws Exception{
         JSONObject team=teamParentAccess(source,teamRun,false),child=required(assignment),identity=child.optJSONObject("teamAssignment");if(identity==null||!teamRun.equals(identity.optString("teamRunId"))||!child.getJSONObject("origin").optString("kind").equals("team_assignment"))throw new SecurityException("问题不属于原父团队分工");JSONArray rows=child.optJSONArray("teamQuestions");for(int i=0;rows!=null&&i<rows.length();i++)if(question.equals(rows.getJSONObject(i).getString("questionId")))return new JSONObject(rows.getJSONObject(i).toString());throw new SecurityException("原问题不存在，不猜最近问题");

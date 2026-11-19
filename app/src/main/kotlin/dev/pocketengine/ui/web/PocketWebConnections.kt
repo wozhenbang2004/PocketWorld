@@ -15,7 +15,8 @@ import org.json.JSONObject
 
 /** Presentation only: the existing FeatureHost still owns every original task and receipt. */
 internal class PocketWebConnections(private val controller: PocketWorldController, private val inputPages: PocketWebRemoteInputs? = null) {
-    private data class Review(val domain: String, val command: String, val input: String, val expires: Long, val window: Pair<Triple<Long, Int, Long>, Long>)
+    val hostGoalOrigins = PocketWebCloudGoalOrigin(controller)
+    private data class Review(val domain: String, val command: String, val input: String, val expires: Long, val window: Pair<Triple<Long, Int, Long>, Long>, val hostGoal: PocketWebCloudGoalOrigin.Pin? = null)
     private val reviews = linkedMapOf<String, Review>()
     private val environments = mutableMapOf<String, JSONObject>()
     private val probes = mutableMapOf<String, Pair<String, JSONObject>>()
@@ -51,12 +52,12 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
         return current
     }
     private fun currentProfile(domain: String, args: JSONObject, bindingKey: String = "_profileBinding"): JSONObject = profile(domain, string(args, "profileId"), string(args, bindingKey, 64))
-    private fun review(domain: String, command: String, input: JSONObject): JSONObject {
+    private fun review(domain: String, command: String, input: JSONObject, hostGoal: PocketWebCloudGoalOrigin.Pin? = null): JSONObject {
         reviews.entries.removeAll { it.value.expires <= SystemClock.elapsedRealtime() }
         check(reviews.size < 16) { "请先关闭已有操作审阅" }
         val handle = UUID.randomUUID().toString()
-        reviews[handle] = Review(domain, command, input.toString(), SystemClock.elapsedRealtime() + 120_000, controller.webWindowTicket())
-        return JSONObject(input.toString()).put("reviewHandle", handle).put("operation", command)
+        reviews[handle] = Review(domain, command, input.toString(), SystemClock.elapsedRealtime() + 120_000, controller.webWindowTicket(),hostGoal)
+        return JSONObject(input.toString()).put("reviewHandle", handle).put("operation", command).also { if(hostGoal!=null)it.put("linksOriginalPrivateConversation",true) }
     }
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         check(controller.webPrivateOwnerVisible()) { "请在原私人工作台操作" }
@@ -129,7 +130,10 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
                 require(actual.optString("operationId") == string(args, "jobOperationId") && actual.optString("serviceBase") == string(args, "serviceBase", 2048) && actual.optString("profileBinding") == string(args, "_profileBinding", 64)) { "未沿用旧任务控制另一执行" }
             }
             "reviewTask" -> {
-                val checked = RemoteTaskRequest.firstForPrivateConnection(args)
+                val localArgs = JSONObject(args.toString())
+                val origin = if(localArgs.has("hostGoalOrigin")) string(localArgs,"hostGoalOrigin",80) else null
+                localArgs.remove("hostGoalOrigin") // Never a RemoteTaskRequest or a server/transport field.
+                val checked = RemoteTaskRequest.firstForPrivateConnection(localArgs)
                 currentProfile(domain, checked)
                 val observed = environments[checked.getString("profileId")] ?: error("请先读取这台电脑的实际环境")
                 check(observed.optString("profileBinding") == checked.getString("_profileBinding")) { "环境读取属于旧连接" }
@@ -151,7 +155,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
                 }
                 check(controller.state.feature("remote").optJSONArray("operations").objects().none { it.optString("profileId") == checked.getString("profileId") && it.optString("status") in setOf("unknown", "submitting") }) { "请先核对这台电脑尚未确认的原提交" }
                 checked.put("operationId", UUID.randomUUID().toString())
-                done(review(domain, "submitJob", checked), null); return
+                done(review(domain, "submitJob", checked,origin?.let{ hostGoalOrigins.review(it,checked) }), null); return
             }
             "reviewOperation" -> {
                 fields(args, "command", "arguments")
@@ -172,6 +176,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
                 val captured = reviews.remove(string(args, "reviewHandle")) ?: error("原操作审阅已使用或关闭")
                 check(captured.domain == domain && captured.expires > SystemClock.elapsedRealtime() && captured.window == window) { "原操作审阅已过期" }
                 input = JSONObject(captured.input); command = captured.command; currentProfile(domain, input)
+                captured.hostGoal?.let { require(domain=="remote" && command=="submitJob"); hostGoalOrigins.confirm(it,input) }
             }
             "readPty", "writePty", "resizePty", "closePty" -> {
                 fields(args, "terminalId", "hostTaskId", "runId", "cursor", "dataBase64", "cols", "rows")

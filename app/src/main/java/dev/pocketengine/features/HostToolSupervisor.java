@@ -170,7 +170,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         if(parentTeamTask){
         add("teams","$teams","teams_list","列出主人已配置团队的真实成员与工作模式。",false,new JSONObject());
         addTeamParentTool("start","teams_start","三种互斥启动：已有teamId+goal；原planRef+planHash；或独立owner_work中的goal+members（1至4个id/name/role，可带assignment/dependsOn），临时分工可选name/leaderId/mode/rounds，不需预先保存编组。临时分工只做模型分析，继承原工作模型和剩余额度；mode默认collaborate，debate使用完整两轮且无前置依赖。前台管家须先owner_work_start。准确参数经原生审批后才派发，返回真实原工作和团队身份。",true);
-        if(host.hasParentTeamOrchestration())addTeamParentTool("get","teams_get","按原父团队读取状态/事件、research_summary或member_output准确阶段的有界正文（后续页带expectedOutputHash），及制作成果；不重启，不把研究结论当文件。",false);else add("teams","get","teams_get","读取本父任务拥有的原团队，不重启。",false,props("teamRunId",text(80)),"teamRunId");
+        if(host.hasParentTeamOrchestration())addTeamParentTool("get","teams_get","按原父团队读取状态/事件、research_summary或member_output准确阶段的有界正文（后续页带expectedOutputHash），及制作成果；不重启，不把研究结论当文件。message_receipt用原messageId核对自己送过的补充：排队、选入和消费不同，不能由消费推断文件已改，不要重送以查询。",false);else add("teams","get","teams_get","读取本父任务拥有的原团队，不重启。",false,props("teamRunId",text(80)),"teamRunId");
         if(host.hasParentTeamOrchestration()){
             addTeamParentTool("$parent_plan","teams_plan","为原生已选项目和已配置成员提出1至8项互斥文字文件工作及依赖/验收/可见预算；只保存提案ref/hash，不授权或启动。",true);
             addTeamParentTool("$parent_message","teams_message","定向给原member/assignment，queue不唤醒；continue仅在原scope/剩余预算内安全续接。回答必须精确question/answer ID，父代理不是主人批准。",true);

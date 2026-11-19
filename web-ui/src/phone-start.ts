@@ -1,6 +1,8 @@
 export type PhoneStartReceipt = {
   status: 'accepted' | 'rejected' | 'unknown';
   requestId?: string;
+  draftRequestId?: string;
+  canRetire?: boolean;
   conversationId?: string;
   taskId?: string;
   runId?: string;
@@ -9,7 +11,7 @@ export type PhoneStartReceipt = {
   taskStatus?: string;
   message: string;
 };
-type ReviewedPhoneIdentity = { requestId?: string; conversationId?: string };
+type ReviewedPhoneIdentity = { requestId?: string; conversationId?: string; draftRequestId?: string };
 const identity = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined;
 
 /** Only a native receipt for this start can consume its reviewed draft. */
@@ -17,9 +19,11 @@ export function phoneStartReceipt(value: unknown, expected?: ReviewedPhoneIdenti
   const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   const requestId = identity(expected?.requestId) || identity(row.requestId);
   const conversationId = identity(expected?.conversationId) || identity(row.conversationId);
-  const original = !requestId || !!conversationId && row.requestId === requestId && row.conversationId === conversationId && row.taskId === requestId;
+  const draftRequestId = identity(expected?.draftRequestId) || identity(row.draftRequestId);
+  const original = draftRequestId ? !requestId && !conversationId && row.draftRequestId === draftRequestId && row.taskId === draftRequestId
+    : !requestId || !!conversationId && row.requestId === requestId && row.conversationId === conversationId && row.taskId === requestId;
   const taskId = original ? identity(row.taskId) : undefined;
-  const status = row.status === 'rejected' ? 'rejected'
+  const status = row.status === 'rejected' && (!draftRequestId || row.draftRequestId===draftRequestId && !identity(row.taskId)) ? 'rejected'
     : (row.status === 'accepted' || row.accepted === true) && taskId ? 'accepted' : 'unknown';
   const runId = original ? identity(row.runId) : undefined;
   const epoch = runId && Number.isSafeInteger(row.epoch) && (row.epoch as number) > 0 ? row.epoch as number : undefined;
@@ -28,7 +32,9 @@ export function phoneStartReceipt(value: unknown, expected?: ReviewedPhoneIdenti
     : status === 'accepted' ? '原手机任务已创建。'
     : status === 'rejected' ? '这次任务尚未接纳，草稿仍保留。'
     : '启动结果待核对。请先查看任务记录，避免再次提交同一目标。';
-  return { status, ...(requestId ? { requestId } : {}), ...(conversationId ? { conversationId } : {}),
+  return { status, ...(draftRequestId ? {draftRequestId} : {}),
+    ...(draftRequestId && row.draftRequestId===draftRequestId && row.canRetire===true && status==='unknown' && !taskId ? {canRetire:true} : {}),
+    ...(requestId ? { requestId } : {}), ...(conversationId ? { conversationId } : {}),
     ...(taskId ? { taskId } : {}), ...(runId && epoch ? { runId, epoch } : {}),
     ...(original && typeof row.admitted === 'boolean' ? { admitted: row.admitted } : {}),
     ...(original && taskStatus ? { taskStatus } : {}), message };
@@ -38,6 +44,7 @@ export function phoneStartFailure(error: unknown, expected?: ReviewedPhoneIdenti
   const failure = error && typeof error === 'object' ? error as Record<string, unknown> : {};
   return phoneStartReceipt({
     status: failure.code === 'not_accepted' || failure.code === 'invalid_request' || failure.code === 'not_sent' ? 'rejected' : 'unknown',
+    draftRequestId: expected?.draftRequestId,
     message: typeof failure.message === 'string' ? failure.message : undefined,
   }, expected);
 }

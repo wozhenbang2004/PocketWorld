@@ -1055,29 +1055,45 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         return original
     }
-    private val unconfirmedNewMemory = mutableSetOf<String>()
-    private var writingNewMemory: String? = null
+    private val unconfirmedDraftMemory = mutableSetOf<String>()
+    private var writingDraftMemory: String? = null
     internal fun firstMessageMemoryState(key: String): JSONObject? {
         val model = ownerComposer ?: return null
         val draft = model.active()
         if (draft.key != key || !key.startsWith("new:") || draft.conversationId.isNotEmpty()) return null
         return JSONObject().put("paused", model.firstMessagePaused(key))
-            .put("saving", writingNewMemory == key).put("confirmed", key !in unconfirmedNewMemory)
+            .put("saving", writingDraftMemory == key).put("confirmed", key !in unconfirmedDraftMemory)
+    }
+    internal fun oneMessageLearningState(key: String): JSONObject? {
+        val model = ownerComposer ?: return null
+        val draft = model.active()
+        if (!model.oneMessageEligible(key) || draft.conversationId != state.conversationId) return null
+        return JSONObject().put("excluded", model.oneMessageExcluded(key)).put("pending", model.pending().any { it.draftKey == key })
+            .put("saving", writingDraftMemory == key).put("confirmed", key !in unconfirmedDraftMemory)
+    }
+    internal fun setOneMessageLearning(key: String, epoch: Int, revision: Long, excluded: Boolean, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible() && !state.chatSubmitting && epoch == chatViewEpoch && writingDraftMemory == null && oneMessageLearningState(key) != null) { "请回到没有待提交操作的原私聊草稿" }
+        val model = ownerComposer ?: error("原草稿尚未读取")
+        val updated = model.setOneMessageExcluded(key, revision, excluded)
+        persistDraftMemoryChoice(model, key, epoch, updated.revision, "excluded", excluded, done)
     }
     internal fun setFirstMessageMemory(key: String, epoch: Int, revision: Long, paused: Boolean, done: (JSONObject?, String?) -> Unit) {
-        check(webPrivateOwnerVisible() && !state.chatSubmitting && state.conversationId.isNullOrBlank() && epoch == chatViewEpoch && writingNewMemory == null) { "请回到还未发送的原新对话" }
+        check(webPrivateOwnerVisible() && !state.chatSubmitting && state.conversationId.isNullOrBlank() && epoch == chatViewEpoch && writingDraftMemory == null) { "请回到还未发送的原新对话" }
         val model = ownerComposer ?: error("原新草稿尚未读取")
         val updated = model.setFirstMessagePaused(key, revision, paused)
+        persistDraftMemoryChoice(model, key, epoch, updated.revision, "paused", paused, done)
+    }
+    private fun persistDraftMemoryChoice(model: dev.pocketengine.features.assistant.OwnerComposerState, key: String, epoch: Int, revision: Long, field: String, choice: Boolean, done: (JSONObject?, String?) -> Unit) {
         val owner = webWindowTicket()
-        writingNewMemory = key; unconfirmedNewMemory.add(key); publishComposer()
+        writingDraftMemory = key; unconfirmedDraftMemory.add(key); publishComposer()
         persistComposer(model) { failure ->
-            writingNewMemory = null
-            if (failure == null) unconfirmedNewMemory.remove(key)
+            writingDraftMemory = null
+            if (failure == null) unconfirmedDraftMemory.remove(key)
             if (ownerComposer !== model || !webPrivateOwnerVisible() || owner != webWindowTicket() || model.activeKey() != key) {
                 done(JSONObject().put("status", "scope_changed"), null)
             } else {
-                val value = JSONObject().put("key", key).put("epoch", epoch).put("revision", updated.revision)
-                if (failure == null) done(value.put("paused", paused).put("persisted", true), null)
+                val value = JSONObject().put("key", key).put("epoch", epoch).put("revision", revision)
+                if (failure == null) done(value.put(field, choice).put("persisted", true), null)
                 else done(value.put("status", "storage_unconfirmed"), null)
             }
         }
@@ -2838,22 +2854,25 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val binding=state.chatActiveTurn
         if(state.chatBusy&&(binding==null||binding.optString("conversationId")!=state.conversationId)){state=state.copy(error="原任务绑定仍在准备或收尾，请稍后刷新；没有新建第二任务");return}
         if(state.chatBusy&&try{!app.chatInputModel(binding!!).optBoolean("available")}catch(_:Exception){true}){state=state.copy(error="原任务正在收尾，请核对原消息后再发送");return}
-        if(draft.key in unconfirmedNewMemory || writingNewMemory==draft.key){state=state.copy(error="这份新草稿的个人记忆选择尚未确认保存。请先核对，不会按默认设置发送");return}
+        if(draft.key in unconfirmedDraftMemory || writingDraftMemory==draft.key){state=state.copy(error="这份草稿的记忆选择尚未确认保存。请先核对，不会按默认规则发送");return}
         val firstPaused=model.firstMessagePaused(draft.key)
+        val excluded=model.oneMessageExcluded(draft.key)
+        if(excluded && oneMessageLearningState(draft.key)==null){state=state.copy(error="原草稿的单条自动整理限制无法核对，没有发送");return}
         if(firstPaused&&(!draft.key.startsWith("new:")||draft.conversationId.isNotEmpty()||!state.conversationId.isNullOrBlank()||state.chatBusy)){state=state.copy(error="原新草稿范围已变化，没有发送");return}
         val selected=state.selectedChatAttachments.toList();val selectedSources=draft.sourceRefs();val selectedPreviews=draft.previewRefs();val selectedObjects=draft.objectRefs()
         if(selectedPreviews.length()>0&&!composerPreviewRefsAvailable()){state=state.copy(error="原元素引用已不可用，草稿仍保留；请移除或回原预览重新选择");return}
-        val fingerprint=ChatInputRules.fingerprint(text.trim(),state.conversationId,state.chatSendMode,selected,selectedSources,selectedPreviews,selectedObjects,firstPaused)
+        val fingerprint=ChatInputRules.fingerprint(text.trim(),state.conversationId,state.chatSendMode,selected,selectedSources,selectedPreviews,selectedObjects,firstPaused,excluded)
         val unresolved=model.matchingPending(draft.key,fingerprint) ?: matchingOriginalOwnerWorkInput(model,draft.key,fingerprint)
         if(unresolved!=null){if(canRetryLocallyUnsent(unresolved.clientId))state=state.copy(notice="本进程确认这条原输入尚未派发；修复保存问题后，请明确点击原输入下的重新保存并发送")else{queryChatSubmission(unresolved.clientId);state=state.copy(notice="正在查询同一输入的原回执，没有用新消息身份重发")};return}
         val client=try{voiceInput.claimMessageId(voiceTarget(false),voiceOwnerAuthority())?:UUID.randomUUID().toString()}catch(error:Exception){state=state.copy(error=message(error));return}
         val input=JSONObject().put("message",ChatInputRules.submittedText(text,selected)).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources);if(selectedPreviews.length()>0)input.put("ownerPreviewRefs",selectedPreviews)
         if(firstPaused)input.put("firstMessageWithoutPersonalMemory",true)
+        if(excluded)input.put("excludeThisInputFromLearning",true)
         if(!state.chatBusy)input.put("executionScope",newTaskExecutionScope())
         if(selectedObjects.length()>0)input.put("ownerObjectRefs",selectedObjects)
         state.conversationId?.let{input.put("conversationId",it)}
         if(state.chatBusy)for(key in listOf("taskId","runId","epoch"))input.put(key,binding!!.get(key))
-        try{model.prepare(client,draft.key,draft.revision,fingerprint,if(state.chatBusy)binding else null);publishComposer()}
+        try{model.prepare(client,draft.key,draft.revision,fingerprint,if(state.chatBusy)binding else null,excluded);publishComposer()}
         catch(error:Exception){state=state.copy(error=message(error));return}
         submittingChatClient=client;composerSaving=true;state=state.copy(chatSubmitting=true,error=null,chatReceipts=state.chatReceipts+(client to JSONObject().put("clientMessageId",client).put("status","unconfirmed")))
         persistPreparedChat(client,input,model,false)
@@ -2963,6 +2982,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val binding = originalOwnerWorkBinding(expected, state.conversationId, state.tasks)
         val model = ownerComposer ?: error("原草稿尚未读取，未发送")
         val draft = model.active()
+        check(draft.key !in unconfirmedDraftMemory && writingDraftMemory != draft.key && !model.oneMessageExcluded(draft.key)) { "请先核对原私聊草稿的单条记忆限制，未将它转交另一项工作" }
         require(draft.conversationId == state.conversationId && text == draft.text && (text.isNotBlank() || state.selectedChatAttachments.isNotEmpty()) && text.trim().length <= 12000 && mode == draft.mode) { "原草稿或补充方式已变化，请核对保留内容" }
         require(draft.sourceRefs().length() == 0 && draft.previewRefs().length() == 0 && draft.objectRefs().length() == 0) { "本次任务补充支持文字和已选附件；关联对象、原文或预览引用仍保留，请先在管家对话中处理" }
         val selected = state.selectedChatAttachments.toList()
@@ -3229,7 +3249,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         result.exceptionOrNull()?.let { state = state.copy(error = message(it)) }
                         result.getOrNull()?.takeIf { it.optBoolean("admitted") && shown.getString("mode") == "main_screen" }?.let(::moveOriginalPhoneToBackground)
                     }
-                    completed(result.getOrNull() ?: JSONObject().also { receipt ->
+                    completed(result.getOrNull() ?: JSONObject().put("draftRequestId",shown.getString("draftRequestId")).also { receipt ->
                         allocated?.let { receipt.put("taskId", it) }
                         if (allocated == null && result.exceptionOrNull() is EngineApplication.DraftPhoneStartRejected) receipt.put("status", "rejected")
                     }, result.exceptionOrNull()?.let(::message))
@@ -3271,6 +3291,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
             true
         } catch (error: Exception) { state = state.copy(phoneSubmitting = false, error = message(error)); false }
+    }
+    internal fun lookupDraftPhone(request: String?, composer: String, retire: Boolean, details:Boolean, ownerCurrent: () -> Boolean, completed: (JSONObject?, String?) -> Unit) {
+        fun current() = !closed && webPrivateOwnerVisible() && !hasChannelPhoneOrigin && state.conversationId.isNullOrBlank() &&
+            composerDraft?.key == composer && composerDraft?.conversationId.isNullOrBlank() && ownerCurrent()
+        check(current()) { "请回到发起手机工作的原新对话草稿" }
+        val scope=conversationModelScope()
+        io.execute {
+            val result=runCatching {
+                check(current()) { "原草稿窗口已变化，没有核对其他任务" }
+                when {
+                    request==null && !retire -> JSONObject().put("composer",composer).put("rows",app.recentDraftPhoneStarts(scope,details))
+                    request!=null && retire -> app.retireUncreatedDraftPhone(scope,request,java.util.function.BooleanSupplier {current()})
+                    request!=null -> app.queryDraftPhoneStart(scope,request)
+                    else -> error("缺少原手机请求")
+                }
+            }
+            main.post { if(current())completed(result.getOrNull(),result.exceptionOrNull()?.let(::message)) else completed(null,"原手机草稿已切换，没有打开其他窗口的回执") }
+        }
     }
     internal fun queryConversationPhoneStart(request: String, conversation: String, completed: (JSONObject?, String?) -> Unit) {
         check(webPrivateOwnerVisible()) { "请在私人工作区查询原手机任务" }
@@ -4979,7 +5017,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         state = state.copy(conversations = parseConversations(state.feature("assistant").optJSONArray("conversations")))
                     }
                     // Only absent or valid empty reference arrays permit text-only staging; malformed or unknown payloads fail closed.
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), learningExcluded = originalLearningExcluded(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), learningExcluded = originalLearningExcluded(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }

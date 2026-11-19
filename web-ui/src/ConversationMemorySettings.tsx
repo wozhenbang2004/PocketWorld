@@ -11,8 +11,8 @@ function controlsOf(value:unknown,conversationId:string):Controls {
 }
 
 /** The same conversation header controls context and learning; this sheet owns no saved mode. */
-export function ConversationMemorySettings({conversationId,isOpen,onClose,onChanged,onManage,registerBack}:{
-  conversationId:string;isOpen:boolean;onClose:()=>void;onChanged:(value:Controls)=>void;onManage:()=>void;
+export function ConversationMemorySettings({conversationId,composer,isOpen,onClose,onChanged,onManage,registerBack}:{
+  conversationId:string;composer?:Record<string,any>;isOpen:boolean;onClose:()=>void;onChanged:(value:Controls)=>void;onManage:()=>void;
   registerBack:(handler:(()=>boolean)|null)=>void;
 }) {
   const [controls,setControls]=useState<Controls|null>(null),[pending,setPending]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
@@ -42,11 +42,28 @@ export function ConversationMemorySettings({conversationId,isOpen,onClose,onChan
     }catch(failure){if(alive.current&&serial===request.current){setControls(null);setError(failure instanceof Error?failure.message:String(failure));}}
     finally{writing.current=false;if(alive.current&&serial===request.current)setPending(false);}
   };
+  const single=composer?.conversationId===conversationId&&composer.key==='conversation:'+conversationId?composer.oneMessageLearning:null;
+  const setSingle=async(excluded:boolean)=>{
+    if(!isOpen||writing.current||!composer||!single||single.pending||single.saving)return;
+    const target={key:composer.key,epoch:composer.epoch,revision:composer.revision};
+    const expected=target.revision+(single.excluded===excluded?0:1);
+    const doc=bridge.getDocumentEpoch(),serial=++request.current;writing.current=true;setPending(true);setError('');setNotice('');
+    try{
+      const result=await bridge.command('composer.oneLearning.save',{...target,excluded});
+      if(!alive.current||serial!==request.current||doc!==bridge.getDocumentEpoch())return;
+      if(result.key!==target.key||result.epoch!==target.epoch||result.revision!==expected||result.excluded!==excluded||result.persisted!==true)throw new Error('原草稿的单条选择尚未确认保存，请核对后再发送。');
+      setNotice(excluded?'已保存在原草稿。本条私聊输入将排除自动整理。':'已撤销单条限制，这份草稿跟随本对话的现有规则。');
+    }catch(failure){if(alive.current&&serial===request.current)setError(failure instanceof Error?failure.message:String(failure));}
+    finally{writing.current=false;if(alive.current&&serial===request.current)setPending(false);}
+  };
   return <SettingsDialog isOpen={isOpen} title="本对话的个人记忆" onClose={close}>
     {pending&&!controls&&<ShimmerText>正在读取此对话设置…</ShimmerText>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
     {controls&&<StretchSwitch label="使用我的资料、偏好和记忆" description="关闭后，此对话不引用个人资料与记忆，也不自动整理记忆候选。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save(enabled);}}/>}
     <p className="pw-muted">关闭后，后续请求不再带上过去查询或修改默认偏好时读到的设置值。你自己写的消息仍会保留，也仍可用于对话。已经发出的请求不能撤回。明确选用的项目资料保持原范围。</p>
+    {single&&<><StretchSwitch label="只让下一条不参与自动整理" description="只限这份原私聊草稿：发送前可撤销，原输入被接收后即用完。不关闭已有偏好；消息仍保留在对话，不撤回另外保存过的内容。" checked={single.excluded===true} disabled={pending||single.saving||single.pending} busy={single.saving} onChange={value=>{void setSingle(value);}}/>
+      {single.pending&&single.excluded&&<p className="pw-muted">正在核对原输入，未把单条限制挪给另一条消息。</p>}
+      {single.confirmed===false&&!single.saving&&!single.pending&&<Button variant="secondary" disabled={pending} onClick={()=>void setSingle(single.excluded===true)}>重新保存本条选择</Button>}</>}
     {notice&&<p role="status">{notice}</p>}
     <div className="pw-action-row"><Button variant="ghost" disabled={pending} onClick={()=>{void load();}}>读取当前设置</Button><Button variant="ghost" disabled={pending} onClick={()=>{close();onManage();}}>管理我的记忆</Button></div>
   </SettingsDialog>;

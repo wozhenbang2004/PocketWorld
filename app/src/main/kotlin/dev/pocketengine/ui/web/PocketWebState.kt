@@ -15,6 +15,7 @@ internal object PocketWebState {
         "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput"
     )
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
+    private val unscopedMemoryReads = setOf("memory.list", "memory.search")
 
     /** Preserve public object structure, but never return credential values or hidden host objects. */
     fun publicValue(value: Any?, images: Boolean = false, depth: Int = 0): Any {
@@ -53,6 +54,7 @@ internal object PocketWebState {
         .also { value ->
             row.phoneResult?.let { value.put("phoneResult", it.toJson()) }
             row.replyContext?.let { value.put("replyContext", it.toJson()) }
+            row.hostGoalTaskId?.let { value.put("hostGoalTaskId",it) }
             row.readerInputWork?.let { value.put("readerInputTaskId", it.taskId) }
             if (row.learningExcluded && row.role == "user") value.put("automaticLearningExcluded", true)
             row.taskResult?.let { value.put("taskResult", it.toJson()) }
@@ -79,7 +81,13 @@ internal object PocketWebState {
     }
 
     fun snapshot(controller: PocketWorldController): JSONObject {
-        val state = controller.state
+        val raw = controller.state
+        // An old unscoped local feature receipt is not part of the selected memory workspace.
+        // Strip it before serializing, not from the owner's original native state.
+        val state = if (unscopedMemoryReads.any { it in raw.moduleResults || it in raw.moduleResultInputs || it in raw.moduleErrors || it in raw.moduleBusy })
+            raw.copy(moduleResults = raw.moduleResults - unscopedMemoryReads, moduleResultInputs = raw.moduleResultInputs - unscopedMemoryReads,
+                moduleErrors = raw.moduleErrors - unscopedMemoryReads, moduleBusy = raw.moduleBusy - unscopedMemoryReads)
+            else raw
         // Both lists expose the same task fields. Project each task once per
         // snapshot, without retaining mutable source JSON between publications.
         val tasks = JSONArray()
@@ -232,6 +240,7 @@ internal object PocketWebState {
             .put("text", draft?.text ?: "").put("mode", draft?.mode ?: state.chatSendMode)
             .put("conversationId", draft?.conversationId ?: "").put("saving", controller.composerSaving)
             .put("firstMessageMemory", draft?.let { controller.firstMessageMemoryState(it.key) } ?: JSONObject.NULL)
+            .put("oneMessageLearning", draft?.let { controller.oneMessageLearningState(it.key) } ?: JSONObject.NULL)
             .put("scrollIndex", draft?.scrollIndex ?: 0).put("scrollOffset", draft?.scrollOffset ?: 0)
             .put("anchorMessage", draft?.anchorMessage ?: "").put("observedMessage", draft?.observedMessage ?: "")
             .put("newReplies", draft?.newReplies ?: false).put("sourceRefs", publicValue(draft?.sourceRefs()))

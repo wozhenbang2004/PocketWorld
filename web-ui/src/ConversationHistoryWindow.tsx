@@ -141,12 +141,13 @@ export function ConversationHistoryWindow({page,submitting,can,act,registerBack,
     {visibleVisit?.target===message.id&&<Button variant="secondary" size="small" disabled={pending} onClick={returnFromQuote}>返回引用它的请求</Button>}
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
+     {message.role==='assistant'&&message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
      {messagePhoneResult(message)&&message.sourceRevision===1&&can('phone.result.original')&&<Button variant="secondary" size="small" disabled={!page||page.loading||!!page.error||pending} onClick={event=>{
        const r=messagePhoneResult(message),h=live.current;if(!r||!h||h.window!==shown.window||h.conversation!==shown.conversation)return;
        remember();setPhoneOriginal(phoneReportTarget(h.conversation,message.id,message.sourceRevision,r,event.currentTarget,h.window));
      }}>查看这轮原文</Button>}
-     {message.role==='assistant'&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
+     {message.role==='assistant'&&!message.hostGoalTaskId&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
       <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{message.phoneResult?'所属工作':'任务详情'}</Button>
       <Button variant="ghost" size="small" leadingIcon={IconTool} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>{message.phoneResult?'当前进展':'执行轨迹'}</Button>
      </>}
