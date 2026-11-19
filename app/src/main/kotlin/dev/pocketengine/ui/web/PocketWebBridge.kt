@@ -525,7 +525,7 @@ internal class PocketWebBridge(
                 publishState(); return
             }
             if (action in PocketWebProjectDevelopment.COMMANDS) {
-                projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS); publishState() }; return
+                projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action != "projects.development.readHostDiff"); publishState() }; return
             }
             if (action in PocketWebButlerPreparations.COMMANDS) {
                 butlerPreparations.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
@@ -606,6 +606,10 @@ internal class PocketWebBridge(
                 attachmentPages.dispatch(action, attachmentArgs, conversationResult) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebMemoryHistory.COMMANDS) {
+                if (action == "memoryHistory.open") {
+                    if (args.optString("view") == "answer") require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请在原私聊回答下核对本次提供的记忆" }
+                    else require(section == "memory" && taskViewId == null) { "请从原记忆管理页选择要查阅的范围" }
+                }
                 memoryHistory.dispatch(action, args) { result, error -> completePrivateMemoryReply(id, action, result, error); publishState() }; return
             }
             if (action in PocketWebBackground.COMMANDS) {
@@ -1001,6 +1005,14 @@ internal class PocketWebBridge(
             if (action == "groups.openTask") {
                 requireSection("groups")
                 openOriginalTask(id, groupPages.taskForNavigation(args), true, "groups")
+                return
+            }
+            if (action == "teams.openDeliveryWorker") {
+                requireSection("teams")
+                val handle=requiredString(args,"viewHandle"); val source=teamPages.taskForDeliveryNavigation(args)
+                openOriginalTask(id,source.getString("taskId"),true,"teams",expectedRunId=source.getString("runId"),expectedEpoch=source.getInt("epoch"),
+                    sourceWindowCurrent={ section=="teams" && taskViewId==null && controller.webPrivateOwnerVisible() && teamPages.retainsRunReading(handle) },
+                    checkReaderInput={ task -> require(dev.pocketengine.features.teams.TeamDeliveryWorkers.sameAttempt(source,task.raw)) { "原执行或冻结计划已改变，没有打开替代任务" } })
                 return
             }
             if (action == "teams.openResearchTask") {

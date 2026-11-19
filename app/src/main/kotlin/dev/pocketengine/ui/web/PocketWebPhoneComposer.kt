@@ -319,9 +319,9 @@ internal class PocketWebPhoneComposer(
         val absent=blank && same && error==null && result!=null && result.optString("status")=="not_found" && result.optBoolean("queryOnly")
         val accepted=error==null && task!=null && same && (!linked && !blank || result?.optBoolean("accepted")==true)
         // An allocation seen before an uncertain SQL write is not proof that a task is available to open.
-        if(blank)for(key in listOf("taskId","runId","epoch","admitted","taskStatus","canRetire"))receipt.remove(key)
-        if(same && task!=null && (!blank || accepted))receipt.put("taskId",task)
-        if(same && result!=null && (!blank || accepted)){
+        if(blank||linked)for(key in listOf("taskId","runId","epoch","admitted","taskStatus","canRetire"))receipt.remove(key)
+        if(same && task!=null && (!blank && !linked || accepted))receipt.put("taskId",task)
+        if(same && result!=null && (!blank && !linked || accepted)){
             for(key in listOf("runId","epoch","admitted"))if(result.has(key))receipt.put(key,result.get(key))
             if(result.has("status"))receipt.put("taskStatus",result.get("status"))
         }
@@ -335,7 +335,12 @@ internal class PocketWebPhoneComposer(
                 "no_run" -> "这项旧手机目标已保存，但没有执行轮次或可继续的原授权。"
                 else -> "本次手机任务已保存，未能确认原首次准入。"
             }
-            accepted && linked -> if(result?.optBoolean("admitted")==true)"手机任务已获准执行，结果会回到原对话。" else "手机任务已保存到原对话；尚未确认获准执行，请查看原任务。"
+            accepted && linked -> when(result?.optString("admissionState")){
+                "admitted" -> "Android 已接纳原私聊首次执行的服务请求；不代表已经读屏、操作或完成。"
+                "run_recorded" -> "查到原私聊的首次执行登记，尚无可核对的 Android 服务接纳回执。"
+                "no_run" -> "原私聊的手机目标已保存，但没有首次执行记录；没有重新启动。"
+                else -> "已核对原私聊的手机目标，首次准入记录仍不可确认。"
+            }
             accepted -> "原手机任务已创建。"
             absent -> "暂未查到这个请求号的任务。可以稍后再查，或关闭这个未建成的请求；不会自动重试。"
             else -> "启动结果待核对。请查询原请求，避免再次提交同一目标。"

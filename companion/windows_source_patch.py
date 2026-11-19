@@ -22,6 +22,8 @@ from windows_source_publisher import DirectoryTree, _ext
 PROFILE = "pocketworld.windows-local-single-file-patch.v1"
 ADDED_PROFILE = "pocketworld.windows-local-added-file-patch.v1"
 ADDED_BANK = 4
+REMOVED_PROFILE = "pocketworld.windows-local-missing-original-patch.v1"
+REMOVED_BANK = 4
 SET_PROFILE = "pocketworld.windows-local-selected-patch-set.v1"
 SET_BANK, SET_LIMIT, SET_FILE = 3, 2*1024*1024, "changes.patch"
 BANK, LIMIT = 8, 320*1024
@@ -165,9 +167,13 @@ def check(ctx,op,row,locked,*,show=False):
     return checked_output(ctx,op,row,locked,show=show,added=False)
 
 
-def output_names(ctx,op,rid,slot,*,added,bundle=False):
+def output_names(ctx,op,rid,slot,*,added,bundle=False,removed=False):
     if (re.fullmatch("[a-f0-9]{32}",op) is None or re.fullmatch("[a-f0-9]{32}",rid) is None
-            or type(slot) is not int or added and bundle or not 0<=slot<(SET_BANK if bundle else ADDED_BANK if added else BANK)): _bad()
+            or type(slot) is not int or sum((bool(added),bool(bundle),bool(removed)))>1
+            or not 0<=slot<(SET_BANK if bundle else REMOVED_BANK if removed else ADDED_BANK if added else BANK)): _bad()
+    if removed:
+        return (REMOVED_PROFILE,f"source-remove-v1-{op}-slot-{slot}.json","source-remove-v1-"+rid+"-result.json",
+                ntpath.join(ctx.state,"review-remove-"+rid))
     if bundle:
         return (SET_PROFILE,f"source-patchset-v1-{op}-slot-{slot}.json","source-patchset-v1-"+rid+"-result.json",
                 ntpath.join(ctx.state,"review-set-"+rid))
@@ -177,11 +183,11 @@ def output_names(ctx,op,rid,slot,*,added,bundle=False):
     return PROFILE,_slot(op,slot),_receipt(rid),_target(ctx,rid)
 
 
-def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False):
-    # The caller has checked its own immutable slot/schema. Both variants use
+def checked_output(ctx,op,row,locked,*,show,added,bundle=False,content=False,removed=False):
+    # The caller has checked its own immutable slot/schema. Single-file variants use
     # the same exact-file check and fixed safe filename but separate banks.
     rid,f=row["id"],row["fields"]
-    profile,_,receipt,base=output_names(ctx,op,rid,0,added=added,bundle=bundle)
+    profile,_,receipt,base=output_names(ctx,op,rid,0,added=added,bundle=bundle,removed=removed)
     filename=SET_FILE if bundle else FILENAME
     if row.get("format")!=profile or locked() or content and (show or bundle): _bad()
     end=_read(ctx,receipt,4096)
@@ -224,8 +230,8 @@ def save(ctx,settings,op,item,result,locked,checkpoint):
     return publish_output(ctx,op,rid,f,result["patch"],next(n for n in range(BANK) if n not in rows),current,added=False)
 
 
-def publish_output(ctx,op,rid,f,raw,slot,current,*,added,bundle=False):
-    profile,slot_file,receipt,base=output_names(ctx,op,rid,slot,added=added,bundle=bundle)
+def publish_output(ctx,op,rid,f,raw,slot,current,*,added,bundle=False,removed=False):
+    profile,slot_file,receipt,base=output_names(ctx,op,rid,slot,added=added,bundle=bundle,removed=removed)
     filename,limit=(SET_FILE,SET_LIMIT) if bundle else (FILENAME,LIMIT)
     if (not isinstance(raw,bytes) or not 0<len(raw)<=limit or len(raw)!=f["bytes"]
             or hashlib.sha256(raw).hexdigest()!=f["patchSha"]): _bad()

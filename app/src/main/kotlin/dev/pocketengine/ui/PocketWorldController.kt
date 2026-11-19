@@ -411,6 +411,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun webPluginFeatureHost() = app.features
     internal fun retainedDeviceGoalCondition(id: String): String = app.retainedDeviceGoalCondition(id)
     internal fun readOriginalDeviceTask(id: String): JSONObject = app.tasks.get(id, false)
+    internal fun readLocallyReviewedPhoneGoal(selected: JSONObject,page: Int,stamp: String): JSONObject =
+        app.tasks.deviceTasks().readLocallyReviewedPhoneGoal(selected,page,stamp)
     internal fun prepareOwnerPhoneControl(id: String, deadline: Long, tools: Int, current: () -> Boolean): JSONObject =
         app.tasks.prepareOwnerPhoneControl(id, deadline, tools) { !closed && webPrivateOwnerVisible() && current() }
     internal fun reviewOwnerPhoneControl(id: String, current: () -> Boolean) =
@@ -476,6 +478,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val handle=activityHandle(Triple(task.id,run,epoch),owner) ?: return null
         return JSONObject(row.toString()).put("activityHandle",handle)
     }
+    /** The task journal is owner-private, not searchable through a selected project memory namespace. */
+    internal fun webPrivateTaskJournalSelected() = webPrivateOwnerVisible() && ownerDomain == "memoryReview" && memoryReviewScope == MemoryReviewScope.Private
     internal fun webMemoryScopeTicket(): Any = Pair(ownerEpochs["memoryReview"] ?: 0, memoryReviewScope)
     /** Destination display/check only; a client-supplied id never becomes a project selection. */
     internal fun webProjectConventionDestination(): String {

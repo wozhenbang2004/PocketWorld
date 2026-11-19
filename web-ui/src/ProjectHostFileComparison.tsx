@@ -20,13 +20,15 @@ export function checkedHostFiles(value: unknown, count: number): HostComparedFil
   }
   return value as HostComparedFile[];
 }
-export type HostDiff = { path: string; snapshotVersion: string; before: string; after: string; evidenceDigest: string; viewHandle: string };
-export function ProjectHostDiff({ diff, close }: { diff: HostDiff; close: () => void }) {
+export type HostEditorFile = { path: string; originalSha256: string; phoneSha256: string; evidenceDigest: string };
+export type HostDiff = HostEditorFile & { snapshotVersion: string; before: string; after: string; evidenceDigest: string; viewHandle: string };
+export function ProjectHostDiff({ diff, close, edit }: { diff: HostDiff; close: () => void; edit?: () => void }) {
   return <SettingsDialog isOpen title="这一份文件改了什么" onClose={close} closeLabel="返回核对列表">
     <p><code>{diff.path}</code></p>
     <InlineDiff before={diff.before} after={diff.after} versionLabel={diff.snapshotVersion} beforeLabel="导入时的主机原件" afterLabel="刚核对的手机已保存版本" readOnly/>
     <p className="pw-field-hint">只读对照，显示这次重读的两份内容，不随之后的改动刷新。未改写文件，也未发送到主机。</p>
-    <Button variant="secondary" onClick={close}>返回核对列表</Button>
+    <div className="pw-form-actions">{edit && <Button variant="secondary" onClick={edit}>继续编辑这份本机文件</Button>}
+      <Button variant="ghost" onClick={close}>返回核对列表</Button></div>
   </SettingsDialog>;
 }
 export function checkedHostText(value: Record<string, any>, file: HostComparedFile): Pick<HostDiff, 'before' | 'after'> {

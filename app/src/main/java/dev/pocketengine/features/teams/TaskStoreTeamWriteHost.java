@@ -391,6 +391,16 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         }catch(Exception failure){if(!settled&&binding!=null&&!binding.optBoolean("inspectOnly"))try{tasks.endAttempt(binding.getString("taskId"),binding.getString("runId"),control.isCancelled()?"cancelled":"interrupted","原唯一整合者未取得确定终态，实际逐文件回执保留；未知效果只核对、不重放",new JSONObject());changed.accept(binding.getString("taskId"));}catch(Exception persistence){failure.addSuppressed(persistence);}throw failure;}
         finally{closeFence(liveFence);integrations.remove(run,control);if(binding!=null&&!binding.optString("taskId").isEmpty())integrationTasks.remove(binding.optString("taskId"),control);}
     }
+    JSONObject finalWorkers(String team)throws Exception {
+        RunControl review=reviews.get(team),integration=integrations.get(team);JSONObject sql;
+        try{sql=tasks.teamFinalWorkerTasks(team);}catch(Exception incomplete){sql=TeamDeliveryWorkers.unavailable(team);}
+        // Include controls seen on either side of the SQL read; a retiring fence must not be reported drained.
+        RunControl nowReview=reviews.get(team),nowIntegration=integrations.get(team);
+        return TeamDeliveryWorkers.observed(sql,review!=null||nowReview!=null,integration!=null||nowIntegration!=null,row->{
+            RunControl c=integrationTasks.get(row.optString("taskId"));
+            return c!=null&&(c==review||c==nowReview||c==integration||c==nowIntegration)&&c.matchesHostRun(row.optString("taskId"),row.optString("runId"),row.optInt("epoch",-1));
+        });
+    }
     public void cancel(String run){RunControl control=integrations.get(run);if(control!=null)control.cancel();control=reviews.get(run);if(control!=null)control.cancel();}
     public void pause(String run){RunControl control=integrations.get(run);if(control!=null)control.pause();control=reviews.get(run);if(control!=null)control.pause();}
     public void resume(String run){RunControl control=integrations.get(run);if(control!=null)control.resume();control=reviews.get(run);if(control!=null)control.resume();}

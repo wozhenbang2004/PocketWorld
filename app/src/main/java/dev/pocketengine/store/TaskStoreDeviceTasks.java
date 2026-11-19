@@ -924,6 +924,9 @@ public final class TaskStoreDeviceTasks {
     public JSONObject receivedPhoneGoalIndex(String here,String instance,String caller,String afterTask,String afterOperation,String searchText)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.read(db,here,instance,caller,afterTask,afterOperation,searchText);}
     }
+    public JSONObject readLocallyReviewedPhoneGoal(JSONObject selected,int page,String stamp)throws Exception{
+        synchronized(owner){return ReceivedPhoneReviewArchive.read(db,selected,page,stamp);}
+    }
     public JSONObject ownerPhoneGoalIndex(String here,String target,String instance,String parentAfter,String afterOperation)throws Exception{
         return ownerPhoneGoalIndex(here,target,instance,parentAfter,afterOperation,"");
     }

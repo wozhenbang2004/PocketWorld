@@ -1059,6 +1059,35 @@ public final class TaskStore {
             write(task);if(review.preparation!=null)review.preparation.bindPreparedTask(id,"",0);JSONObject ack=conversationPhoneCreationView(task,false);db.setTransactionSuccessful();return ack;
         }finally{db.endTransaction();}
     }
+    /** Same private source review and ordinary scope/start rules. Creation, scope and epoch one commit together. */
+    public synchronized JSONObject beginReviewedConversationPhone(ConversationPhoneReview review,long confirmedAt,int allocation,
+            java.util.function.Consumer<String> allocated,java.util.concurrent.Callable<Boolean> current)throws Exception{
+        if(review==null||review.issuer!=this||allocated==null||current==null)throw new SecurityException("需要当前原私人对话的首次启动审阅");
+        JSONObject shown=review.view(),facts=shown.getJSONObject("reviewFacts");String id=shown.getString("requestId"),mode=shown.getString("executionMode");
+        int tools=TaskExecutionScope.exactInt(facts,"toolLimit",1,TaskExecutionScope.MAX_TOOLS),models=TaskExecutionScope.exactInt(facts,"modelCallLimit",1,TaskExecutionScope.MAX_MODEL_CALLS);
+        int minutes=TaskExecutionScope.exactInt(facts,"scopeMinutes",0,120);
+        if(confirmedAt<=0||confirmedAt>System.currentTimeMillis()||minutes!=0&&minutes!=30&&minutes!=120)throw new SecurityException("原私聊审阅期限不可核对");
+        long deadline=minutes==0?0:Math.addExact(confirmedAt,minutes*60_000L);
+        db.beginTransaction();try{
+            requireExecutionEnabled();requirePhoneReviewSource(shown);
+            if(review.creationEntered||read(id)!=null||!Boolean.TRUE.equals(current.call()))throw new SecurityException("原请求已有登记或审阅已变化，没有重建或继续");
+            try(Cursor old=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? LIMIT 1",new String[]{id})){
+                if(old.moveToFirst())throw new SecurityException("原请求已有执行记录，不能按首次启动");
+            }
+            JSONObject created=createReviewedConversationPhone(review,allocated);
+            if(!created.getBoolean("created")||created.getBoolean("duplicate")||!id.equals(created.getString("taskId")))throw new SecurityException("这次审阅未创建唯一的原私聊任务");
+            configureExecutionScope(id,0,deadline,tools,models);
+            JSONObject first=startAttempt(id,mode,allocation);
+            if(!id.equals(first.getString("id"))||first.getInt("coordinatorEpoch")!=1)throw new SecurityException("原私聊没有唯一的首次轮次");
+            requireExecutionEnabled();requirePhoneReviewSource(shown);
+            if(!Boolean.TRUE.equals(current.call()))throw new SecurityException("原私聊审阅已变化，首次登记没有提交");
+            db.setTransactionSuccessful();return first;
+        }finally{db.endTransaction();}
+    }
+    public synchronized void rememberFirstConversationPhoneServiceRequest(String id,String conversation,JSONObject receipt)throws Exception{
+        db.beginTransaction();try{ConversationPhoneFirstAdmission.requested(db,required(id),conversation,receipt);db.setTransactionSuccessful();}
+        finally{db.endTransaction();}
+    }
     /** Unknown means query-only: it is never permission to allocate or start another task. */
     public synchronized JSONObject conversationPhoneCreation(String requestId,String conversationId)throws Exception {
         if(requestId==null||!requestId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("原手机关联身份无效");ConversationPhoneHandoff.nativeId(conversationId);
@@ -1069,12 +1098,7 @@ public final class TaskStore {
         return conversationPhoneCreationView(task,true).put("queryOnly",true);
     }
     private JSONObject conversationPhoneCreationView(JSONObject task,boolean duplicate)throws Exception {
-        JSONObject ack=ConversationPhoneHandoff.creation(task,duplicate);String run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");
-        if(run.isEmpty()!=(epoch==0))throw new SecurityException("原手机准入身份不完整");
-        if(!run.isEmpty())try(Cursor original=db.rawQuery("SELECT epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{task.getString("id"),run})){
-            if(!original.moveToFirst()||original.getInt(0)!=epoch||original.moveToNext())throw new SecurityException("原手机准入尚不可确认，请仅查询原任务");
-        }
-        return ack;
+        return ConversationPhoneFirstAdmission.describe(db,task,ConversationPhoneHandoff.creation(task,duplicate));
     }
 
     @FunctionalInterface public interface ConversationPhoneDeliveryWriter {JSONObject write(ConversationPhoneDelivery delivery)throws Exception;}
@@ -8272,6 +8296,51 @@ public final class TaskStore {
                 }
             }
         }return false;
+    }
+    // A reviewer interrupted before submitting may have no teamIndependentReview receipt.
+    // Match the actual complete set of frozen artifacts, not the newest reviewer by time.
+    private boolean interruptedReviewOfFrozenWork(JSONObject work,JSONObject checked)throws Exception {
+        if(work==null||checked==null)return false;
+        JSONArray items=work.getJSONArray("items"),files=checked.getJSONArray("files");
+        java.util.Map<String,String> originals=new java.util.HashMap<>();
+        for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);JSONArray refs=item.optJSONArray("artifacts");
+            if(!"completed".equals(item.opt("status"))||refs==null||refs.length()==0)return false;
+            for(int j=0;j<refs.length();j++){JSONObject ref=refs.getJSONObject(j);if(originals.put(ref.getString("artifactId"),canonical(ref))!=null)return false;}
+        }
+        if(files.length()==0||files.length()!=originals.size())return false;
+        for(int i=0;i<files.length();i++){JSONObject ref=new JSONObject(files.getJSONObject(i).toString());ref.remove("expectedVersion");ref.remove("expectedHash");
+            if(!canonical(ref).equals(originals.remove(ref.getString("artifactId"))))return false;}
+        return originals.isEmpty();
+    }
+    /** Original SQL attempts for the two post-author roles. Never search tasks by goal/title,
+     * count old failed versions as live, or infer release from the coordinator's stop flag. */
+    public synchronized JSONObject teamFinalWorkerTasks(String run)throws Exception{
+        JSONObject team=teamWriteTask(run),review=team.optJSONObject("teamIndependentReview"),approval=team.optJSONObject("teamOutputReview");
+        String host=team.getString("id");JSONArray workers=new JSONArray(),links=team.optJSONArray("relatedTasks");java.util.Map<String,String> refs=new java.util.LinkedHashMap<>();
+        boolean complete=links==null||links.length()<=32;
+        for(int i=0;links!=null&&i<Math.min(32,links.length());i++){JSONObject link=links.optJSONObject(i);if(link==null||!"team_review".equals(link.opt("feature")))continue;
+            String id=link.optString("taskId");if(!id.equals(link.opt("assignmentId"))||refs.put(id,"reviewer")!=null)complete=false;
+        }
+        if(review!=null&&!review.optString("taskId").isEmpty()&&!refs.containsKey(review.getString("taskId")))complete=false;
+        String integrator=dev.pocketengine.features.teams.TeamDeliveryWorkers.taskId(run,"integrator","");
+        if(read(integrator)!=null)refs.put(integrator,"integrator");
+        for(var e:refs.entrySet()){
+            String id=e.getKey(),role=e.getValue();JSONObject child=read(id),identity=child==null?null:child.optJSONObject("teamAssignment");String h=identity==null?"":identity.optString("planHash");
+            if(!dev.pocketengine.features.teams.TeamDeliveryWorkers.original(child,run,host,role,h)){complete=false;continue;}
+            boolean selected="reviewer".equals(role)?review!=null&&!review.optBoolean("stale")&&id.equals(review.opt("taskId"))&&h.equals(review.opt("planHash"))&&child.optString("runId").equals(review.opt("runId"))
+                    :approval!=null&&h.equals(approval.opt("planHash"))&&identity.getString("reviewId").equals(approval.opt("reviewId"));
+            boolean matchingFrozen=!selected&&"reviewer".equals(role)&&child.getString("status").matches("failed|interrupted|cancelled")&&
+                    (review==null||review.optBoolean("stale")||!"completed".equals(review.opt("status")))&&interruptedReviewOfFrozenWork(team.optJSONObject("teamWorkPlan"),identity.optJSONObject("plan"));
+            String attempt=child.optString("runId");int epoch=child.optInt("coordinatorEpoch");boolean canOpen=!attempt.isEmpty()&&epoch>0,active=false;
+            try(Cursor live=db.rawQuery("SELECT run_id,epoch FROM runs WHERE task_id=? AND status='running'",new String[]{id})){
+                while(live.moveToNext()){if(active||!attempt.equals(live.getString(0))||epoch!=live.getInt(1))canOpen=false;active=true;}
+            }
+            JSONObject row=new JSONObject().put("teamRunId",run).put("hostTaskId",host).put("role",role).put("taskId",id).put("runId",attempt).put("epoch",epoch).put("planHash",h)
+                    .put("taskStatus",child.getString("status")).put("cancelRequested",child.optBoolean("cancelRequested")).put("activeAttempt",active)
+                    .put("hasUnresolvedEffects",hasUnresolved(id)).put("selectedVersion",selected).put("sameFrozenOnly",matchingFrozen).put("canOpen",canOpen);
+            if(identity.has("reviewId"))row.put("reviewId",identity.getString("reviewId"));workers.put(row);
+        }
+        return new JSONObject().put("teamRunId",run).put("workers",workers).put("complete",complete);
     }
     public synchronized JSONObject teamParentExecutionState(TeamParentOrigin source,String teamRun)throws Exception{
         JSONObject team=teamParentAccess(source,teamRun,false),plan=team.optJSONObject("teamWorkPlan");int running=0,unknown=0;JSONArray children=new JSONArray();if(plan!=null)for(int i=0;i<plan.getJSONArray("items").length();i++){

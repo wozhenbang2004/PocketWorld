@@ -87,11 +87,15 @@ def _compare(ctx,op,locked,settings):
     if result["directoryChanged"]: counts += "\n读取期间目录仍在变化，不能宣称核对完整。"
     choices = [("inspect","选择一处修改与原提交对照")] if result["candidates"] and not result["directoryChanged"] else []
     if result["newParents"] and not result["directoryChanged"]: choices.append(("added","从原目录选一份新增源码"))
+    if result["missingCandidates"] and not result["directoryChanged"]: choices.append(("missing","核实一个未见的原路径，准备移除补丁"))
     picked=_dialog("不能判作原保存时的完整副本",counts+"\n没有读取替换/新增文件的正文，没有同步、修复或删除。",choices,retire=locked)
     if locked(): return
     if picked=="inspect": _choose_change(ctx,settings,op,result,locked)
     elif picked=="added":
         from windows_added_source_entry import choose
+        choose(ctx,settings,op,result,locked,_observe)
+    elif picked=="missing":
+        from windows_removed_source_entry import choose
         choose(ctx,settings,op,result,locked,_observe)
 
 

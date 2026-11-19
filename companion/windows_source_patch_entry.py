@@ -36,8 +36,10 @@ def detail(ctx,op,row,locked):
 def browse(ctx,op,locked,observe=None):
     from windows_added_source import records as additions
     from windows_added_source_entry import detail as added_detail
+    from windows_removed_source import records as removals
+    from windows_removed_source_entry import detail as removed_detail
     rows=[]; unavailable=False
-    for reader,kind in ((records,"tracked"),(additions,"added")):
+    for reader,kind in ((records,"tracked"),(additions,"added"),(removals,"removed")):
         try: rows.extend((kind,r) for r in reader(ctx,op).values())
         except Exception: unavailable=True  # A damaged/newer bank never hides valid results in the other one.
     rows.sort(key=lambda pair:pair[1]["at"],reverse=True)
@@ -55,7 +57,8 @@ def browse(ctx,op,locked,observe=None):
         actions=[]
         for i,(kind,r) in enumerate(rows[page*4:page*4+4],page*4):
             f=r["fields"]; path=f["path"]; stamp=time.strftime("%m-%d %H:%M",time.localtime(r["at"]/1000))
-            note=("新增文件 · "+f["sourceOid"][:12]) if kind=="added" else ("修改原文件 · "+f["currentOid"][:12])
+            note=("建议移除原路径 · "+f["originalOid"][:12] if kind=="removed" else
+                  "新增文件 · "+f["sourceOid"][:12] if kind=="added" else "修改原文件 · "+f["currentOid"][:12])
             actions.append((("patch",i),(path if len(path)<=100 else "…"+path[-99:])+f"\n{stamp} · "+note))
         if observe: actions.append(("sets","多文件交付补丁\n选择几份原产物另存，或查看以前的完整组合。"))
         if page: actions.append(("prev","上一页"))
@@ -68,7 +71,7 @@ def browse(ctx,op,locked,observe=None):
             menu(ctx,op,locked,observe); return
         if pick is not None and not locked():
             kind,r=rows[pick[1]]
-            (added_detail if kind=="added" else detail)(ctx,op,r,locked)
+            {"tracked":detail,"added":added_detail,"removed":removed_detail}[kind](ctx,op,r,locked)
         return
 
 

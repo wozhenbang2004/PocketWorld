@@ -14,7 +14,7 @@ import java.util.UUID
  * writer. Formal versions use a separate, single-use native import review;
  * neither path authorizes live source edits or code execution. */
 internal class PocketWebCheckoutFiles(private val controller: PocketWorldController) {
-    private class Page(val handle: String, val project: String, val checkout: String, val parentCurrent: () -> Boolean, val sourcePath: String? = null) {
+    private class Page(val handle: String, val project: String, val checkout: String, val parentCurrent: () -> Boolean, val sourcePath: String? = null, @Volatile var initialPhoneSha: String? = null) {
         var opened: Opened? = null
         var adoption: Adoption? = null
     }
@@ -28,7 +28,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     @Volatile private var page: Page? = null
     private var busy = false
     companion object {
-        val COMMANDS = setOf("projects.development.files.open", "projects.development.files.openSource", "projects.development.files.list", "projects.development.files.read",
+        val COMMANDS = setOf("projects.development.files.open", "projects.development.files.openSource", "projects.development.files.openHostChange", "projects.development.files.list", "projects.development.files.read",
             "projects.development.files.edit", "projects.development.files.save", "projects.development.files.resolve",
             "projects.development.files.cache", "projects.development.files.close", "projects.development.files.reviewImport",
             "projects.development.files.import", "projects.development.files.dismissImport")
@@ -98,16 +98,33 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             if (page?.handle == text(args, "filesHandle")) clear()
             done(JSONObject().put("closed", true).put("taskStopped", false), null); return
         }
-        if (action == "projects.development.files.open" || action == "projects.development.files.openSource") {
+        if (action in setOf("projects.development.files.open", "projects.development.files.openSource", "projects.development.files.openHostChange")) {
             val pin = if (action.endsWith(".openSource")) {
                 fields(args, "viewHandle", "checkoutId", "sourceMember")
                 JSONObject(args.getJSONObject("sourceMember").toString()).also { text(it, "path", 240) }
-            } else { fields(args, "viewHandle", "checkoutId"); null }
+            } else null
+            val host = if (action.endsWith(".openHostChange")) {
+                fields(args, "viewHandle", "checkoutId", "hostFile")
+                JSONObject(args.getJSONObject("hostFile").toString()).also {
+                    fields(it, "path", "evidenceDigest", "originalSha256", "phoneSha256"); text(it, "path", 240)
+                    for (key in listOf("evidenceDigest", "originalSha256", "phoneSha256")) require(text(it, key, 64).matches(Regex("[a-f0-9]{64}")))
+                }
+            } else null
+            if (pin == null && host == null) fields(args, "viewHandle", "checkoutId")
             val checkout = text(args, "checkoutId")
             check(parentCurrent() && controller.webPrivateOwnerVisible()) { "原项目窗口已关闭" }
-            clear(); val original = Page(UUID.randomUUID().toString(), project, checkout, parentCurrent, pin?.getString("path")); page = original
+            clear(); val original = Page(UUID.randomUUID().toString(), project, checkout, parentCurrent, pin?.getString("path") ?: host?.getString("path"), host?.getString("phoneSha256")); page = original
             work(original, done) {
-                if (pin == null) listing(original, "", "") else {
+                if (host != null) {
+                    // Origin and phone bytes are native evidence, not a path-only editor deep link.
+                    val actual = controller.projectDevelopmentForWeb().readChangedHostTextForOwner(project, checkout, host.getString("evidenceDigest"),
+                        host.getString("path"), host.getString("originalSha256"), host.getString("phoneSha256")) { current(original) }
+                    check(actual.getString("projectId") == project && actual.getString("checkoutId") == checkout && host.keys().asSequence().all { actual.getString(it) == host.getString(it) }) {
+                        "原主机文件或本机已保存版本不符，未打开替代文件"
+                    }
+                    JSONObject().put("filesHandle", original.handle).put("projectId", project).put("checkoutId", checkout).put("hostFile", host)
+                        .put("readOnly", true).put("executionAuthorized", false)
+                } else if (pin == null) listing(original, "", "") else {
                     // Re-read the private task's producing SQL operation and immutable ZIP member;
                     // a suggested checkout/path from the renderer is never a provenance credential.
                     val saved = TaskProjectPackageFiles.read(controller.nativeButlerHost(), pin, RunControl())
@@ -180,6 +197,11 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 work(original, done) {
                     val actual = controller.projectDevelopmentForWeb().fileForOwner(original.project, original.checkout, path)
                     check(original.sourcePath == null || !actual.getBoolean("deleted")) { "原副本已没有这个文件。固定包保留原文，不会重建或替换文件" }
+                    original.initialPhoneSha?.let { expected ->
+                        check(!actual.getBoolean("deleted") && actual.getString("expectedHash") == expected) {
+                            "刚核对的本机版本已经改变，未打开或保存任何替代文件。请返回重新比较。"
+                        }
+                    }
                     val value = synchronized(store) {
                         val prior = store.open(original.project, original.checkout, path, actual.optBoolean("deleted"))
                         prior.observe(actual).also { store.retain(it) }
@@ -187,7 +209,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     if (!current(original)) { store.release(value); error("原文件读取窗口已变化，草稿已保留") }
                     original.opened?.let { store.release(it.draft) }
                     val file = Opened(UUID.randomUUID().toString(), value); original.opened = file
-                    info(original, file, true)
+                    val shown = info(original, file, true)
+                    original.initialPhoneSha = null // First real read succeeded. From here existing save CAS and adoption review govern this same path.
+                    shown
                 }
             }
             "projects.development.files.edit" -> {

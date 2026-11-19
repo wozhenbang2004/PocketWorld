@@ -1,4 +1,4 @@
-import { checkedHostFiles, checkedHostText, ProjectHostComparedFiles, ProjectHostDiff, type HostComparedFile, type HostComparison, type HostDiff } from './ProjectHostFileComparison';
+import { checkedHostFiles, checkedHostText, ProjectHostComparedFiles, ProjectHostDiff, type HostComparedFile, type HostComparison, type HostDiff, type HostEditorFile } from './ProjectHostFileComparison';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import { bridge } from './bridge';
@@ -52,6 +52,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const [hostOrigin, setHostOrigin] = useState<Data | null>(null);
   const [hostFiles, setHostFiles] = useState<HostComparison | null>(null), [hostDiff, setHostDiff] = useState<HostDiff | null>(null);
+  const [hostEditor, setHostEditor] = useState<HostEditorFile | null>(null);
   const visibleHostDiff = useRef<HostDiff | null>(null); visibleHostDiff.current = hostDiff;
   const closeHostDiff = () => { visibleHostDiff.current = null; setHostDiff(null); };
   const [requirements, setRequirements] = useState<DeliveryRequirements>(() => deliveryRequirements());
@@ -141,7 +142,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     const retire = () => {
       generation.current++; entered.current = null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null;
-      if (alive.current) { closeHostDiff(); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setSource(null); setBusy(false); setFilesOpen(false); }
+      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setSource(null); setBusy(false); setFilesOpen(false); }
       if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
     };
     // Switching the start method retires its window, never its plain draft or
@@ -180,7 +181,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     || !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
   const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed);
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
-  const closeFiles = () => { setFilesOpen(false); setHostFiles(null); sourceAttempt.current = ''; setSource(null); };
+  const closeFiles = () => { setFilesOpen(false); setHostEditor(null); setHostFiles(null); sourceAttempt.current = ''; setSource(null); };
   const available = rows(view?.checkouts);
   const origin = hostOrigin?.viewHandle === view?.viewHandle && hostOrigin?.projectId === projectId && hostOrigin?.checkoutId === checkout ? hostOrigin : null;
   const readOrigin = (open: boolean) => {
@@ -218,7 +219,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
         originalSha256: file.originalSha256, phoneSha256: file.phoneSha256 }, value => {
       if (handle.current !== viewHandle || draft.current.checkoutId !== original || value.projectId !== projectId || value.checkoutId !== original ||
           value.evidenceDigest !== evidenceDigest || value.snapshotVersion !== snapshotVersion) throw new Error('原项目或冻结版本已变，没有展示其他文件。');
-      setHostDiff({ ...checkedHostText(value, file), path: file.path, snapshotVersion, evidenceDigest, viewHandle });
+      setHostDiff({ ...checkedHostText(value, file), path: file.path, originalSha256: file.originalSha256, phoneSha256: file.phoneSha256!, snapshotVersion, evidenceDigest, viewHandle });
     });
   };
   const copy = (query: boolean) => {
@@ -285,7 +286,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
         <Button variant="ghost" disabled={busy || pending || !!review || filesOpen} onClick={() => void read()}>重新读取项目条件</Button>
         {checkout && !source && <Button variant="ghost" disabled={disabled} onClick={() => { sourceAttempt.current = ''; setView(previous => previous ? { ...previous } : previous); }}>重新读取副本版本</Button>}
       </div>
-      <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !!review || filesOpen || !checkout || !can('projects.development.files.open')} onClick={() => setFilesOpen(true)}>编辑这份私人副本的文件</Button></div>
+      <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !!review || filesOpen || !checkout || !can('projects.development.files.open')} onClick={() => { setHostEditor(null); setFilesOpen(true); }}>编辑这份私人副本的文件</Button></div>
       {view.model?.configured !== true && <p className="pw-local-inline-notice">需要先连接默认模型。项目与已保存草稿保留。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
       <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : checkoutKindSummary(source, projectId, checkout) || '可先编辑文件；运行命令前核对工具'}>
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
@@ -295,8 +296,12 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
         {source && <dl className="pw-facts"><div><dt>原项目</dt><dd>{projectId}</dd></div><div><dt>私人副本</dt><dd>{checkout}</dd></div><div><dt>已读取版本</dt><dd>{source.sourceDigest}</dd></div><CheckoutGuide source={source} projectId={projectId} checkoutId={checkout}/></dl>}
       </AccordionItem></Accordion>
     </>}
-    {active && !document.hidden && hostDiff && origin && hostDiff.viewHandle === view?.viewHandle && hostDiff.evidenceDigest === origin.evidenceDigest && <ProjectHostDiff diff={hostDiff} close={closeHostDiff}/>}
-    {view && filesOpen && checkout && <ProjectCheckoutFiles key={`${view.viewHandle}|${checkout}`} projectId={projectId} checkoutId={checkout} viewHandle={view.viewHandle} run={run} onClose={closeFiles} registerBack={registerFilesBack} />}
+    {active && !document.hidden && hostDiff && origin && hostDiff.viewHandle === view?.viewHandle && hostDiff.evidenceDigest === origin.evidenceDigest && <ProjectHostDiff diff={hostDiff} close={closeHostDiff} edit={can('projects.development.files.openHostChange') ? () => {
+      if (visibleHostDiff.current !== hostDiff || handle.current !== hostDiff.viewHandle || document.hidden) return;
+      const { path, evidenceDigest, originalSha256, phoneSha256 } = hostDiff; setHostEditor({ path, evidenceDigest, originalSha256, phoneSha256 });
+      closeHostDiff(); setFilesOpen(true);
+    } : undefined}/>}
+    {view && filesOpen && checkout && <ProjectCheckoutFiles key={`${view.viewHandle}|${checkout}`} projectId={projectId} checkoutId={checkout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined} onClose={closeFiles} registerBack={registerFilesBack} />}
     <SettingsDialog isOpen={!!review} title="开始这个项目任务？" onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
       <p>{review.goal}</p>
       {deliveryFields.some(key => review.deliveryContract?.[key]) && <dl className="pw-facts">

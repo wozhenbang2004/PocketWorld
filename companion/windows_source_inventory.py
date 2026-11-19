@@ -78,7 +78,7 @@ def compare(ctx,op,checkpoint,progress):
     report = dict(matched=0,different=0,replaced=0,missing=0,unreadable=0,unvisited=0,
                   unboundDirectories=0,newEntries=0,directoryChanged=False)
     names,stamps,observed = {},{},0
-    report.update(comparable=0,candidates=[],newParentCount=0,newParents=[])
+    report.update(comparable=0,candidates=[],newParentCount=0,newParents=[],missingCandidates=[])
     def candidate(path,state,identity,info):
         report["comparable"]+=1
         if len(report["candidates"])<64:
@@ -121,7 +121,10 @@ def compare(ctx,op,checkpoint,progress):
             checkpoint()
             parent,_,leaf = path.rpartition("/")
             if parent not in names: report["unvisited"]+=1
-            elif leaf not in names[parent]: report["missing"]+=1
+            elif leaf not in names[parent]:
+                report["missing"]+=1  # an enumeration observation, not authority for a deletion patch
+                if row["bytes"]<=128*1024 and len(report["missingCandidates"])<64:
+                    report["missingCandidates"].append({"path":path,"bytes":row["bytes"]})
             else:
                 try:
                     handle,identity = tree.open_file(path)

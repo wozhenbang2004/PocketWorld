@@ -82,11 +82,8 @@ final class ConversationPhoneHandoff {
     static JSONObject creation(JSONObject task,boolean duplicate)throws Exception {
         JSONObject link=association(task);
         return new JSONObject().put("accepted",true).put("created",!duplicate).put("duplicate",duplicate)
-                .put("admitted",!task.optString("runId").isEmpty()&&task.optInt("coordinatorEpoch")>0)
                 .put("taskId",task.getString("id")).put("requestId",link.getString("requestId"))
-                .put("conversationId",link.getString("conversationId")).put("createdAt",task.getLong("createdAt"))
-                .put("runId",task.optString("runId")).put("epoch",task.optInt("coordinatorEpoch"))
-                .put("coordinatorEpoch",task.optInt("coordinatorEpoch")).put("status",task.getString("status"));
+                .put("conversationId",link.getString("conversationId")).put("createdAt",task.getLong("createdAt")).put("status","saved");
     }
 
     static boolean ended(String status){return ENDED.contains(status);}

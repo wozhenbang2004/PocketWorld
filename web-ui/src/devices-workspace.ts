@@ -128,8 +128,19 @@ export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: 
     || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && (!sourceTaskId || row.taskId === sourceTaskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
       && (row.targetAcceptedAt === undefined || !!sourceTaskId && positiveInteger(row.targetAcceptedAt))
       && (row.targetRunRecorded === undefined || row.targetRunRecorded === true && positiveInteger(row.targetAcceptedAt))
+      && (row.mayCheckLocalText===undefined || side==='received' && row.mayCheckLocalText===true)
       && (['main_screen', 'background'].includes(row.screenMode) || row.textOnly === true && row.screenMode === 'capabilities') && positiveInteger(row.createdAt))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId, row.operationId]))).size !== value.rows.length) throw new Error('原手机、本机派发或目录已变化，请重新读取。');
+  return value;
+}
+/** Already reviewed on this receiving phone. This is not A's task.get or a new execution. */
+export function localReceivedPhonePage(value: unknown, archive: DeviceData, row: DeviceData, page: number, before?: DeviceData) {
+  if (!object(value)||value.kind!=='localReceivedReviewedText'||value.readOnly!==true||archive.side!=='received'||value.archiveHandle!==archive.archiveHandle
+    ||value.taskId!==row.taskId||value.operationId!==row.operationId||value.sourceId!==archive.targetDeviceId||value.localId!==archive.localDeviceId||value.localInstance!==archive.localInstanceId
+    ||typeof value.text!=='string'||Array.from(value.text).length>1400||!digest(value.stamp)||!identity(value.runId)||!positiveInteger(value.epoch)||!positiveInteger(value.reviewedAt)
+    ||typeof value.keptOnPhone!=='boolean'||value.page!==page||!positiveInteger(value.pages)||value.pages>188||page<0||page>=value.pages
+    ||before&&(before.stamp!==value.stamp||before.runId!==value.runId||before.epoch!==value.epoch||before.reviewedAt!==value.reviewedAt||before.keptOnPhone!==value.keptOnPhone))
+    throw new Error('没有取得同一份本机原文，未用派单或结束状态替代。');
   return value;
 }
 /** This page contains only the local index, never new controls or the peer's business result. */

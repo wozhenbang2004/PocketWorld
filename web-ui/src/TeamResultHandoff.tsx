@@ -36,7 +36,7 @@ export function TeamResultHandoff({ result, actions, sources, frozenFiles, revis
     {result.body ? <><AIAnswer text={result.body}/>
       {result.excerpt && <p className="pw-field-hint">这里只保留了原汇总的节选。</p>}
       {result.messageId && <Button variant="ghost" size="small" data-team-follow-up="summary-original" disabled={actions.disabled} onClick={() => openMessage(result.messageId)}>查看汇总原消息</Button>}</>
-      : <div className="pw-team-result-empty"><p>{stopped ? '协作已停止，成员已有的产出和记录仍可查看。' : '还没有能核对来源的共同汇总。各成员已保存的产出可以单独查看。'}</p>
+      : <div className="pw-team-result-empty"><p>{stopped ? '协作已停止后续派发，成员已有的产出和记录仍可查看。' : '还没有能核对来源的共同汇总。各成员已保存的产出可以单独查看。'}</p>
         {!sources && !frozenFiles && <Button variant="ghost" trailingIcon={IconChevronRight} data-team-follow-up="members" onClick={openMembers}>查看分工与产出</Button>}</div>}
   </section>;
 }

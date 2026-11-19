@@ -9,7 +9,15 @@ from windows_source_patch import SET_FILE,checked_output,output_names
 def _short(s,n=94): return s if len(s)<=n else "…"+s[-n+1:]
 
 
-def _title(m): return ("新增 · " if m["kind"]=="add" else "修改 · ")+_short(m["path"])
+def _title(m): return {"add":"新增 · ","edit":"修改 · ","remove":"移除原路径 · "}[m["kind"]]+_short(m["path"])
+
+
+def _end(m,length=None): return "移除原路径（不是空文件）" if m["kind"]=="remove" else m["to"][:length]
+
+
+def _warning(members):
+    n=sum(m["kind"]=="remove" for m in members)
+    return f"\n其中 {n} 项会在你日后手动应用补丁时移除原路径。现在不删除任何文件。" if n else ""
 
 
 def inspect_members(members,locked):
@@ -18,7 +26,7 @@ def inspect_members(members,locked):
         actions=[]
         for i,m in enumerate(members[page*4:page*4+4],page*4):
             before="原提交无此项" if m["kind"]=="add" else m["base"]["oid"][:10]
-            actions.append((("item",i),_title(m)+"\n"+before+" → "+m["to"][:10]+f"，单项补丁 {m['bytes']} 字节"))
+            actions.append((("item",i),_title(m)+"\n"+before+" → "+_end(m,10)+f"，单项补丁 {m['bytes']} 字节"))
         if page: actions.append(("prev","上一页"))
         if 4*(page+1)<len(members): actions.append(("next","下一页"))
         click=_dialog("这一个补丁包含哪些文件？","选择一项查看其准确来源；不会打开源代码或查现在的工作树。",actions,retire=locked)
@@ -27,7 +35,7 @@ def inspect_members(members,locked):
         elif click is not None and not locked():
             m=members[click[1]]; base=m["base"]
             before="原提交中无此名称，父树："+base["tree"] if m["kind"]=="add" else "原 blob："+base["oid"]
-            _dialog("这项补丁的原版本",f"{m['path']}\n{before}\n选定 blob：{m['to']}\n原单项记录：{m['id']}\n原补丁 SHA-256：{m['sha256']}",[],retire=locked)
+            _dialog("这项补丁的原版本",f"{m['path']}\n{before}\n目标：{_end(m)}\n原单项记录：{m['id']}\n原补丁 SHA-256：{m['sha256']}",[],retire=locked)
         else: return
 
 
@@ -40,7 +48,7 @@ def detail(ctx,op,row,locked):
     try: state=check()
     except Exception: state="unavailable"
     if locked(): return
-    text=f"原提交 {f['commit'][:12]} · {len(f['members'])} 个文件 · 完整组合补丁 {f['bytes']} 字节。"
+    text=f"原提交 {f['commit'][:12]} · {len(f['members'])} 个文件 · 完整组合补丁 {f['bytes']} 字节。"+_warning(f["members"])
     actions=[("members","查看成员、原版本和每项摘要"),("hash","查看原提交和完整补丁摘要")]
     if state=="saved":
         text+="\n原文件夹、changes.patch 的文件身份、整件摘要以及各段原摘要均已核对。"
@@ -63,7 +71,7 @@ def _choose(ctx,rows,locked):
         actions=[]
         for i,(kind,r) in enumerate(rows[4*page:4*page+4],4*page):
             m=sets._member(kind,r); symbol="已选　" if i in selected else ""
-            actions.append((("pick",i),symbol+_title(m)+f"\n版本 {m['to'][:12]}，原单项补丁 {m['bytes']} 字节"))
+            actions.append((("pick",i),symbol+_title(m)+f"\n目标：{_end(m,12)}，原单项补丁 {m['bytes']} 字节"))
         if len(selected)>=2: actions.append(("prepare",f"核对选中的 {len(selected)} 份原补丁"))
         if page: actions.append(("prev","上一页"))
         if 4*(page+1)<len(rows): actions.append(("next","下一页"))
@@ -113,7 +121,7 @@ def menu(ctx,op,locked,observe):
     if prior: detail(ctx,op,prior,locked); return
     _,_,_,base=output_names(ctx,op,rid,0,added=False,bundle=True)
     text=(f"原提交 {f['commit'][:12]} · {len(f['members'])} 个不同文件 · {f['bytes']} 字节。"
-          f"\n只会写到新位置：{ntpath.join(base,SET_FILE)}\n保存前再核全部原件。不会提交、应用到仓库、运行程序或发送给手机。")
+          f"\n只会写到新位置：{ntpath.join(base,SET_FILE)}\n保存前再核全部原件。不会提交、应用到仓库、运行程序或发送给手机。")+_warning(f["members"])
     while not locked():
         click=_dialog("保存这次完整交付补丁？",text,[("members","逐项核对文件和版本"),("save","确认保存一份新的 changes.patch")],retire=locked)
         if click=="members": inspect_members(f["members"],locked); continue

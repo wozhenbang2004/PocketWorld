@@ -13,10 +13,10 @@ type Run = (action: string, args?: Data) => Promise<any>;
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 
 /** The same memory reading surfaces, backed by retained native history and original request receipts. */
-export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, initialTaskId = '', readOnly = false }: {
-  run: Run; scopeKey: string; registerTransientBack: (handler: (() => boolean) | null) => void; initialTaskId?: string; readOnly?: boolean;
+export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, initialTaskId = '', readOnly = false, privateTaskHistory = false }: {
+  run: Run; scopeKey: string; registerTransientBack: (handler: (() => boolean) | null) => void; initialTaskId?: string; readOnly?: boolean; privateTaskHistory?: boolean;
 }) {
-  const [view, setView] = useState<'history' | 'tasks'>(initialTaskId ? 'tasks' : 'history');
+  const [view, setView] = useState<'history' | 'tasks'>(privateTaskHistory && initialTaskId ? 'tasks' : 'history');
   const [query, setQuery] = useState(''), [subject, setSubject] = useState('owner');
   const [page, setPage] = useState<Data | null>(null), [cognition, setCognition] = useState<Data | null>(null);
   const [task, setTask] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
@@ -43,7 +43,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
     setBusy(false); setPage(null); setCognition(null); setTask(null); setReceipt(null); clearReading(); setError(''); setNotice('');
   };
   const invoke = async (action: string, args: Data, accept?: (value: Data) => void) => {
-    if (blocked.current) return;
+    if (blocked.current || !privateTaskHistory && action.startsWith('taskMemory.')) return;
     const ticket = version;
     if (!window.current.enter(ticket)) return;
     setBusy(true); setError('');
@@ -107,7 +107,7 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
     setVersion(window.current.capture());
     return () => { window.current.close(); closeHandle(session.current); closeHandle(reviewHandle.current); session.current = ''; reviewHandle.current = ''; };
   }, []);
-  useEffect(() => { reset(); }, [scopeKey]);
+  useEffect(() => { reset(); if(!privateTaskHistory)setView('history'); }, [scopeKey,privateTaskHistory]);
   useEffect(() => {
     const scroll = collection.current?.closest('.pw-secondary-scroll');
     if (selected) { if (scroll) scroll.scrollTop = 0; reading.current?.focus({ preventScroll: true }); }
@@ -136,7 +136,8 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
   const resultGroups = (view === 'history' ? [{ id: 'pending_conflict', label: '冲突待核' }, { id: 'current', label: '当前记录' }, { id: 'historical', label: '历史版本' }, { id: 'unknown', label: '时间或主体待核对' }] : [{ id: 'attention', label: '需要处理' }, { id: 'active', label: '其他原任务' }, { id: 'finished', label: '已结束' }]).map(group => ({ ...group, records: pageRecords.filter(row => resultGroup(row) === group.id) })).filter(group => group.records.length);
   return <section ref={collection} tabIndex={-1} className="pw-memory-history pw-knowledge-workspace" aria-label="旧事与任务来源" inert={readOnly || undefined}>
     {!selected && <header className="pw-knowledge-heading"><h2>{view === 'history' ? '查阅旧事' : '核对任务来源'}</h2></header>}
-    {!selected && <SelectField label="查阅内容" value={view} options={[{ id: 'history', label: '旧事与主体认知' }, { id: 'tasks', label: '原任务与本轮记忆来源' }]} isDisabled={locked} onChange={value => { reset(); setView(value as 'history' | 'tasks'); setQuery(''); }} />}
+    {!selected && privateTaskHistory && <SelectField label="查阅内容" value={view} options={[{ id: 'history', label: '旧事与主体认知' }, { id: 'tasks', label: '原任务与本轮记忆来源' }]} isDisabled={locked} onChange={value => { reset(); setView(value as 'history' | 'tasks'); setQuery(''); }} />}
+    {!selected && !privateTaskHistory && <p className="pw-muted">只查阅当前记忆范围里的旧事。需要查看私人任务来源时，请先返回并明确选择“主人全局 · 私人”。</p>}
     {error && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     <WorkingStatus active={busy && !readOnly}>正在核对原版本与回执…</WorkingStatus>
     {!selected && <>

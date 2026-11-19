@@ -11,7 +11,7 @@ import org.json.JSONObject
 /** Opaque reading/review windows over the original owner memory and task journal. No second store. */
 internal class PocketWebMemoryHistory(private val controller: PocketWorldController) {
     private class Session(val id: String, val domain: String, val owner: Any, val scope: Any,
-                          val displayedScope: JSONObject, val expires: Long, var revision: Long = 0)
+                          val displayedScope: JSONObject, val expires: Long, val answerId: String? = null, val answerBinding: String? = null, var revision: Long = 0)
     private data class Pin(val session: Session, val revision: Long, val kind: String, val body: String)
     private val sessions = linkedMapOf<String, Session>()
     private val pins = linkedMapOf<String, Pin>()
@@ -40,7 +40,9 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
     fun clear() { sessions.clear(); pins.clear() }
     private fun current(session: Session): Boolean = sessions[session.id] === session &&
         controller.webPrivateOwnerVisible() && session.owner == controller.webWindowTicket() &&
-        (session.domain != "memoryReview" || session.scope == controller.webMemoryScopeTicket()) &&
+        session.scope == controller.webMemoryScopeTicket() &&
+        (session.domain != "taskMemory" || if (session.answerId == null) controller.webPrivateTaskJournalSelected()
+            else runCatching { binding(controller.webAnswerMemoryReference(session.answerId)).toString() == session.answerBinding }.getOrDefault(false)) &&
         session.expires >= System.currentTimeMillis()
     private fun session(args: JSONObject, domain: String): Session {
         val selected = sessions[text(args, "sessionHandle")] ?: error("原阅读窗口已关闭，请重新读取")
@@ -142,13 +144,25 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
         check(controller.webPrivateOwnerVisible()) { "请回到当前私人管理页" }
         when (action) {
             "memoryHistory.open" -> {
-                fields(args, "view"); val view = text(args, "view"); require(view in setOf("history", "tasks"))
+                val view = text(args, "view")
+                if (view == "answer") fields(args, "view", "messageId") else fields(args, "view")
+                require(view in setOf("history", "tasks", "answer"))
+                val message = if (view == "answer") text(args, "messageId") else null
+                val answer = message?.let { binding(controller.webAnswerMemoryReference(it)).toString() }
+                val scope = if (answer != null) JSONObject().put("ownerId","owner").put("spaceId","private") else {
+                    val snapshot = controller.state.ownerSnapshot("memoryReview")
+                    check(snapshot.optString("namespaceStatus") in setOf("private", "project")) { "请先重新读取并确认记忆范围" }
+                    if (view == "tasks") check(snapshot.optString("namespaceStatus") == "private" && controller.webPrivateTaskJournalSelected()) { "项目范围不能打开私人任务目录，请先明确切换到主人私人范围" }
+                    val reviewed = snapshot.optJSONObject("scope") ?: error("没有原生范围回执，未默认私人目录")
+                    val expectedSpace = if (snapshot.optString("namespaceStatus") == "private") {
+                        check(controller.webPrivateTaskJournalSelected()) { "私人记忆选择已失效，请重新核对" }; "private"
+                    } else controller.webProjectConventionDestination()
+                    check(reviewed.optString("ownerId") == "owner" && reviewed.optString("spaceId") == expectedSpace) { "当前范围与原回执不一致，未打开目录" }
+                    reviewed
+                }
                 while (sessions.size >= 8) sessions.remove(sessions.keys.first())?.let(::retire)
-                val snapshot = controller.state.ownerSnapshot("memoryReview")
-                if (view == "history") check(snapshot.optString("namespaceStatus") in setOf("private", "project")) { "请先重新读取并确认记忆范围" }
-                val scope = snapshot.optJSONObject("scope") ?: JSONObject().put("ownerId", "owner").put("spaceId", "private")
                 val id = UUID.randomUUID().toString()
-                sessions[id] = Session(id, if (view == "history") "memoryReview" else "taskMemory", controller.webWindowTicket(), controller.webMemoryScopeTicket(), copy(scope), System.currentTimeMillis() + 600_000)
+                sessions[id] = Session(id, if (view == "history") "memoryReview" else "taskMemory", controller.webWindowTicket(), controller.webMemoryScopeTicket(), copy(scope), System.currentTimeMillis() + 600_000, message, answer)
                 done(JSONObject().put("sessionHandle", id).put("scope", scope).put("view", view), null)
             }
             "memoryHistory.search" -> {
@@ -209,11 +223,11 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 if (review.has("conflict")) conflictCurrent(session, review.getJSONObject("conflict"), done, finish) else memoryCurrent(session, review.getJSONObject("original"), done, finish)
             }
             "taskMemory.search" -> {
-                fields(args, "sessionHandle", "query", "cursor"); val session = session(args, "taskMemory"); retire(session)
+                fields(args, "sessionHandle", "query", "cursor"); val session = session(args, "taskMemory"); check(session.answerId == null && controller.webPrivateTaskJournalSelected()) { "原回答不能搜索私人任务目录" }; retire(session)
                 call(session, "searchTaskMemoryTasks", JSONObject().put("query", text(args, "query", 500, true)).put("cursor", text(args, "cursor", 8000, true)).put("limit", 20), done)
             }
             "taskMemory.task" -> {
-                fields(args, "sessionHandle", "taskId"); val session = session(args, "taskMemory"); val id = text(args, "taskId"); retire(session); val revision = session.revision
+                fields(args, "sessionHandle", "taskId"); val session = session(args, "taskMemory"); check(session.answerId == null && controller.webPrivateTaskJournalSelected()) { "原回答不能按编号读取其他任务" }; val id = text(args, "taskId"); retire(session); val revision = session.revision
                 controller.readTaskForReview(id) { task, error ->
                     if (!current(session) || session.revision != revision) done(null, "原任务阅读窗口已变化")
                     else if (task == null) done(null, error ?: "未取得原任务")
@@ -229,7 +243,7 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
             "taskMemory.answer" -> {
                 fields(args, "sessionHandle", "messageId")
                 val session = session(args, "taskMemory"); retire(session)
-                val messageId = text(args, "messageId")
+                val messageId = text(args, "messageId"); check(session.answerId == messageId) { "请回到这条原回答的阅读窗口" }
                 val reference = controller.webAnswerMemoryReference(messageId)
                 val original = JSONObject().put("taskId", reference.getString("taskId"))
                     .put("messageId", messageId).put("binding", binding(reference))
@@ -250,7 +264,7 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 }
             }
             "taskMemory.focus" -> {
-                fields(args, "taskHandle"); val (_, original) = selected(args, "taskHandle", "task"); controller.focusTask(original.getString("taskId"))
+                fields(args, "taskHandle"); val (session, original) = selected(args, "taskHandle", "task"); check(session.answerId == null) { "请从原任务页打开任务" }; controller.focusTask(original.getString("taskId"))
                 done(JSONObject().put("taskId", original.getString("taskId")).put("opened", true).put("executionAuthorized", false), null)
             }
             "taskMemory.source" -> {
@@ -265,13 +279,13 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                 }
             }
             "taskMemory.source.focus" -> {
-                fields(args, "readHandle", "index"); val (session, original) = selected(args, "readHandle", "task-record")
+                fields(args, "readHandle", "index"); val (session, original) = selected(args, "readHandle", "task-record"); check(session.answerId == null) { "原回答只核对本次提供的记录，不会打开其他目录" }
                 val refs = original.getJSONObject("record").getJSONArray("sourceRefs"); val source = refs.getJSONObject(index(args, "index", refs.length()))
                 require(source.optString("kind") == "task_evidence"); val match = Regex("task:([A-Za-z0-9_-]+):verified_result").matchEntire(source.getString("sourceId")) ?: error("原来源不是可打开的任务结果")
                 taskCurrent(session, original, done) { _, _ -> controller.focusTask(match.groupValues[1]); done(JSONObject().put("taskId", match.groupValues[1]).put("opened", true).put("executionAuthorized", false), null) }
             }
             "taskMemory.replacements" -> {
-                fields(args, "readHandle"); val (session, original) = selected(args, "readHandle", "task-record")
+                fields(args, "readHandle"); val (session, original) = selected(args, "readHandle", "task-record"); check(session.answerId == null) { "原回答只核对本次提供的记录，不会打开其他目录" }
                 taskCurrent(session, original, done) { receipt, row -> call(session, "listTaskMemoryReplacements", TaskMemoryEvidenceGuard.reviewed(receipt, row), done) { result ->
                     rows(result.optJSONArray("records")).forEach { kept -> kept.put("replacementHandle", pin(session, "replacement", JSONObject().put("original", original).put("record", copy(kept)))) }; result
                 } }

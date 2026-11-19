@@ -7,10 +7,12 @@ from platform_backend import PlatformError
 from platform_windows import relative_parts
 from windows_added_source import _owner,records as added_records
 from windows_git_copy import _json,_read
+from windows_removed_source import records as removed_records
 from windows_git_tree import _component,_native_compare
 from windows_source_patch import (LIMIT,SET_BANK as BANK,SET_PROFILE as PROFILE,SET_LIMIT,
                                   _blob,_quoted,checked_output,output_names,publish_output,records as tracked_records)
 
+READERS=(("edit",tracked_records),("add",added_records),("remove",removed_records))
 MAX=8
 MARKER=b"\\ No newline at end of file"
 
@@ -42,7 +44,7 @@ def _paths(ctx,members,checkpoint):
 
 def catalog(ctx,op):
     rows=[]; missing=False
-    for kind,reader in (("edit",tracked_records),("add",added_records)):
+    for kind,reader in READERS:
         try: rows.extend((kind,row) for row in reader(ctx,op).values())
         except Exception: missing=True
     return sorted(rows,key=lambda p:p[1]["at"],reverse=True),missing
@@ -52,7 +54,7 @@ def _member(kind,row):
     f=row["fields"]
     return {"kind":kind,"id":row["id"],"path":f["path"],"sha256":f["patchSha"],"bytes":f["bytes"],
             "base":({"state":"absent","tree":f["parentTree"]} if kind=="add" else {"state":"tracked","oid":f["originalOid"]}),
-            "to":f["sourceOid"] if kind=="add" else f["currentOid"]}
+            "to":({"state":"remove_original_path"} if kind=="remove" else f["sourceOid"] if kind=="add" else f["currentOid"])}
 
 
 def _patch(raw,member,fields,algo):
@@ -62,41 +64,47 @@ def _patch(raw,member,fields,algo):
     p=member["path"]; a,b=_quoted("a/",p),_quoted("b/",p)
     lines=raw[:-1].split(b"\n")
     if lines.pop(0)!=b"diff --git "+a+b" "+b: _bad()
-    target=member["to"].encode(); added=member["kind"]=="add"
-    if added:
-        if len(lines)<2 or lines[:2]!=[b"new file mode 100644",b"index "+b"0"*len(target)+b".."+target]: _bad()
+    kind=member["kind"]; added=kind=="add"; removed=kind=="remove"; whole=added or removed
+    target=(member["base"]["oid"] if removed else member["to"]).encode()
+    if whole:
+        mode=b"deleted file mode "+fields["mode"].encode() if removed else b"new file mode 100644"
+        base_oid,new_oid=(target,b"0"*len(target)) if removed else (b"0"*len(target),target)
+        if len(lines)<2 or lines[:2]!=[mode,b"index "+base_oid+b".."+new_oid]: _bad()
         del lines[:2]
+        count=fields["originalBytes" if removed else "sourceBytes"]
+        digest=fields["originalSha" if removed else "sourceSha"]
         if not lines:
-            if fields["sourceBytes"]!=0 or fields["sourceSha"]!=_sha(b"") or _blob(b"",algo).encode()!=target: _bad()
+            if count!=0 or digest!=_sha(b"") or _blob(b"",algo).encode()!=target: _bad()
             return
     else:
         stem=b"index "+member["base"]["oid"].encode()+b".."+target+b" "
         if not lines or lines.pop(0) not in (stem+b"100644",stem+b"100755"): _bad()
-    if len(lines)<3 or lines[:2]!=[b"--- "+(b"/dev/null" if added else a),b"+++ "+b]: _bad()
+    if len(lines)<3 or lines[:2]!=[b"--- "+(b"/dev/null" if added else a),b"+++ "+(b"/dev/null" if removed else b)]: _bad()
     cursor=2; seen=0; was=[0,0]; reconstructed=bytearray()
     while cursor<len(lines):
         h=re.fullmatch(rb"@@ -([0-9]{1,6}),([0-9]{1,6}) \+([0-9]{1,6}),([0-9]{1,6}) @@",lines[cursor])
         if not h: _bad()
         old,before,new,after=map(int,h.groups()); cursor+=1
         if (not before and not after or old<was[0] or new<was[1] or before>1501 or after>1501
-                or before and old<1 or after and new<1 or added and (seen or old or before or new!=1)): _bad()
+                or before and old<1 or after and new<1 or added and (seen or old or before or new!=1)
+                or removed and (seen or old!=1 or new or after)): _bad()
         seen+=1; was=[old+before,new+after]; prior=None
         while before or after:
             if cursor>=len(lines): _bad()
             line=lines[cursor]; cursor+=1; tag=line[:1]
-            if tag not in (b" ",b"-",b"+") or added and tag!=b"+": _bad()
+            if tag not in (b" ",b"-",b"+") or added and tag!=b"+" or removed and tag!=b"-": _bad()
             before-=int(tag!=b"+"); after-=int(tag!=b"-")
             if before<0 or after<0: _bad()
             prior=tag
-            if added: reconstructed.extend(line[1:]+b"\n")
+            if whole: reconstructed.extend(line[1:]+b"\n")
             if cursor<len(lines) and lines[cursor]==MARKER:
                 if prior is None: _bad()
                 cursor+=1; prior=None
-                if added:
-                    if after!=0: _bad()
+                if whole:
+                    if (before if removed else after)!=0: _bad()
                     del reconstructed[-1:]
     if not seen: _bad()
-    if added and (len(reconstructed)!=fields["sourceBytes"] or _sha(reconstructed)!=fields["sourceSha"]
+    if whole and (len(reconstructed)!=count or _sha(reconstructed)!=digest
                   or _blob(bytes(reconstructed),algo).encode()!=target): _bad()
 
 
@@ -104,7 +112,7 @@ def prepare(ctx,op,selected,locked,checkpoint):
     if not isinstance(selected,(tuple,list)) or not 2<=len(selected)<=MAX or len(set(selected))!=len(selected): _bad()
     owner=_owner(ctx,op); source=owner["source"]; sources={}
     if source["objectFormat"] not in ("sha1","sha256"): _bad()
-    for kind,reader in (("edit",tracked_records),("add",added_records)):
+    for kind,reader in READERS:
         if any(pair[0]==kind for pair in selected):
             sources.update(((kind,row["id"]),row) for row in reader(ctx,op).values())
     def current():
@@ -124,7 +132,7 @@ def prepare(ctx,op,selected,locked,checkpoint):
     chunks=[]
     for m,row in planned:
         current()
-        data=checked_output(ctx,op,row,locked,show=False,added=m["kind"]=="add",content=True)
+        data=checked_output(ctx,op,row,locked,show=False,added=m["kind"]=="add",removed=m["kind"]=="remove",content=True)
         _patch(data,m,row["fields"],source["objectFormat"])
         chunks.append(data)
     current(); raw=b"".join(chunks)
@@ -145,13 +153,14 @@ def _valid(ctx,op,f,owner):
     width=40 if source["objectFormat"]=="sha1" else 64; seen=set(); last=b""; total=0
     for m in f["members"]:
         if not isinstance(m,dict) or set(m)!={"kind","id","path","sha256","bytes","base","to"}: return False
-        if (m["kind"] not in ("add","edit") or not _hash(m["id"],32) or (m["kind"],m["id"]) in seen or not _hash(m["sha256"],64)
-                or type(m["bytes"]) is not int or not 0<m["bytes"]<=LIMIT or not _hash(m["to"],width) or not isinstance(m["path"],str)): return False
+        if (m["kind"] not in ("add","edit","remove") or not _hash(m["id"],32) or (m["kind"],m["id"]) in seen or not _hash(m["sha256"],64)
+                or type(m["bytes"]) is not int or not 0<m["bytes"]<=LIMIT or not isinstance(m["path"],str)): return False
+        if (m["to"]!={"state":"remove_original_path"} if m["kind"]=="remove" else not _hash(m["to"],width)): return False
         base=m["base"]
         if not isinstance(base,dict): return False
         expected={"state","tree"} if m["kind"]=="add" else {"state","oid"}
         if (set(base)!=expected or m["kind"]=="add" and (base["state"]!="absent" or not _hash(base["tree"],width))
-                or m["kind"]=="edit" and (base["state"]!="tracked" or not _hash(base["oid"],width))): return False
+                or m["kind"]!="add" and (base["state"]!="tracked" or not _hash(base["oid"],width))): return False
         path=m["path"].encode()
         if path<=last: return False
         last=path; total+=m["bytes"]; seen.add((m["kind"],m["id"]))

@@ -1706,26 +1706,22 @@ public final class EngineApplication extends Application implements dev.pocketen
         String id=review.requestId;
         boolean[] writeEntered={false};
         try {
-            JSONObject created=tasks.createReviewedConversationPhone(review.creation,assigned->{writeEntered[0]=true;allocated.accept(assigned);});
-            if(!created.optBoolean("created")||created.optBoolean("duplicate"))return queryConversationPhoneStart(id,review.conversationId).put("duplicate",true);
-            // Deadline starts at confirmation. Neither a query nor a duplicate confirmation renews it.
-            JSONObject scope=json("deadlineAt",review.minutes==0?0L:System.currentTimeMillis()+review.minutes*60_000L,"toolLimit",review.tools,"modelCallLimit",review.models);
-            initializeOwnerExecutionScope(id,review.config,scope);
-            requireConversationPhoneReviewCurrent(review,ownerCurrent);
-            admit(id,review.mode,review.config);
-            JSONObject receipt=originalPhoneAdmissionReceipt(id);
-            return receipt.put("accepted",true).put("admitted",true).put("requestId",id).put("conversationId",review.conversationId).put("status",tasks.get(id,false).optString("status"));
+            // This explicit reviewed submission shares the first-run path that checks Android's returned component.
+            // A second confirmation or any query still exits above without reissuing the request.
+            long confirmedAt=System.currentTimeMillis();
+            java.util.concurrent.Callable<Boolean> current=()->{requireConversationPhoneReviewCurrent(review,ownerCurrent);return true;};
+            admit(id,review.mode,review.config,false,null,0,"",new NewDraftPhoneAdmission(control->{
+                control.check();return tasks.beginReviewedConversationPhone(review.creation,confirmedAt,review.config.maxSteps,
+                        assigned->{writeEntered[0]=true;allocated.accept(assigned);},()->{control.check();return current.call();});
+            },current));
+            tasks.rememberFirstConversationPhoneServiceRequest(id,review.conversationId,originalPhoneAdmissionReceipt(id));
+            return queryConversationPhoneStart(id,review.conversationId).put("duplicate",false).put("budgetIncreased",false);
         }catch(Exception failure){
             if(!writeEntered[0])throw new ConversationPhoneStartRejected(failure);
-            try{
-                JSONObject retained=tasks.get(id,false);
-                if(retained!=null&&retained.optString("runId").isEmpty()&&"preparing".equals(retained.optString("status")))
-                    tasks.status(id,"awaiting_user","手机目标已保存，但本次尚未开始执行；请核对原任务与启动条件");
-            }catch(Exception unconfirmed){/* An unreadable original write remains unknown; do not create a replacement. */}
+            // Allocation may precede a rollback. Do not manufacture a saved task or a new attempt.
             throw failure;
         }finally{
-            // Admission failure may itself have ended a real run. Publish that original result too.
-            if(writeEntered[0]){pushTask(id);queueConversationPhoneResults();}
+            if(writeEntered[0])try{if(tasks.get(id,false)!=null){pushTask(id);queueConversationPhoneResults();}}catch(Exception unknown){/* Query the same original request. */}
         }
     }
     public JSONObject queryDraftPhoneStart(String scopeKey,String request)throws Exception {
@@ -1829,7 +1825,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         try{
             nextControl.bindHostRun(taskId,t.getString("runId"),t.getInt("coordinatorEpoch"));
             if(firstDraft!=null){
-                if(!taskId.equals(t.getString("id"))||t.getInt("coordinatorEpoch")!=1||t.has("origin")||t.has("parentTaskId"))throw new SecurityException("首轮执行不属于原私人新草稿");
+                if(!taskId.equals(t.getString("id"))||t.getInt("coordinatorEpoch")!=1||t.has("origin")||t.has("parentTaskId"))throw new SecurityException("首轮执行不属于原私人创建请求");
                 if(channelTaskHost!=null)channelTaskHost.protect(taskId,nextControl);
             }
             // The first actual phone call pins this original owner in DisplayModule.

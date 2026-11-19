@@ -30,7 +30,7 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
     const current = () => live.current && generation.current === version;
     void (async () => {
       try {
-        const opened = await bridge.command('memoryHistory.open', { view: 'tasks' });
+        const opened = await bridge.command('memoryHistory.open', { view: 'answer', messageId });
         if (!current()) { void bridge.command('memoryHistory.close', { handle: opened.sessionHandle }).catch(() => {}); return; }
         session.current = opened.sessionHandle;
         const answer = await bridge.command('taskMemory.answer', { sessionHandle: session.current, messageId });

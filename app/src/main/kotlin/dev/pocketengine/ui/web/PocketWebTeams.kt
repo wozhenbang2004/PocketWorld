@@ -49,6 +49,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     private class Reading(val kind: String, val original: String) {
         @Volatile var live = true
             private set
+        var deliveryWorkers: String? = null
         private var itemPage: AutoCloseable? = null
         @Synchronized fun hold(page: AutoCloseable) {
             check(live) { "原分工窗口已关闭" }; itemPage?.close(); itemPage = page
@@ -72,7 +73,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         val COMMANDS = setOf("teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask")
+            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker")
     }
 
     fun clear() {
@@ -116,6 +117,17 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             ref.optInt("messageIndex", -1) == index && ref.optInt("chars", -1) == chars && ref.opt("sha256") == fingerprint
     }
     fun retainsRunReading(handle: String): Boolean = readings[handle]?.kind == "run"
+    fun taskForDeliveryNavigation(args: JSONObject): JSONObject {
+        check(controller.webPrivateOwnerVisible()) { "请回到私人团队原记录" }
+        fields(args,"viewHandle","taskId","runId","epoch")
+        val captured = readings[text(args,"viewHandle")]?.takeIf { it.kind == "run" && it.live } ?: error("原团队阅读已关闭")
+        val directory = captured.deliveryWorkers?.let { JSONObject(it) } ?: error("请先读取原交付进展")
+        val task = text(args,"taskId"); val run = text(args,"runId"); val epoch = args.opt("epoch")
+        require(epoch is Int && epoch > 0)
+        return directory.getJSONArray("workers").objects().singleOrNull { it.optBoolean("canOpen") && it.optString("taskId") == task &&
+            it.optString("runId") == run && it.optInt("epoch") == epoch && directory.getString("teamRunId")==it.optString("teamRunId") }
+            ?: error("这不是打开时所选的独审或整合执行，没有打开其他任务")
+    }
     fun taskForResearchNavigation(args: JSONObject): ResearchNavigation {
         check(controller.webPrivateOwnerVisible()) { "请回到前台私人团队页面" }
         fields(args, "viewHandle", "memberId", "round", "taskId", "outputFingerprint")
@@ -267,7 +279,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             } catch (failure: Exception) { phoneInFlight.set(false); workingTeamPage = null; runCatching { page?.close() }; throw failure }
         }
-        fun deliverReceipt(receipt: JSONObject) {
+        fun finishReceipt(receipt: JSONObject) {
             val reading = receipt.optJSONObject("reading")
             if (reading == null || reading.optString("kind") != "run" || reading.has("taskId")) { deliver(receipt, null); return }
             controller.readWebTeamTaskId(reading.getJSONObject("run").getString("id")) { taskId, error ->
@@ -276,6 +288,26 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     else reading.put("taskLookupNotice", error ?: "未找到这次协作的原任务绑定；记录仍可查看，没有猜测另一个任务。")
                     deliver(receipt, null)
                 } else done(null, "原团队窗口已关闭；操作结果保留，请回原记录核对，没有自动重发")
+            }
+        }
+        // Capture downstream SQL and live-control evidence on the worker thread. Do not
+        // inject display-only fields into the coordinator record used by mutation reviews.
+        fun deliverReceipt(receipt: JSONObject) {
+            val packet=receipt.optJSONObject("reading"); val source=packet?.optJSONObject("run")
+            if(packet==null || source==null || source.optJSONObject("productionScope")==null){ finishReceipt(receipt); return }
+            val handle=packet.getString("viewHandle"); val owner=readings[handle] ?: return done(null,"原团队窗口已关闭")
+            val team=source.getString("id")
+            controller.runTeamPhoneWork {
+                val observed=runCatching {
+                    check(currentWindow() && owner.live)
+                    val module=controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主不可用")
+                    module.ownerFinalWorkers(team)
+                }.getOrElse { dev.pocketengine.features.teams.TeamDeliveryWorkers.unavailable(team) }
+                main.post {
+                    if(currentWindow() && owner.live && readings[handle]===owner && observed.optString("teamRunId")==team){
+                        owner.deliveryWorkers=observed.toString(); packet.put("deliveryWorkers",observed); finishReceipt(receipt)
+                    } else done(null,"原团队窗口已关闭；没有打开其他执行或重发控制")
+                }
             }
         }
         fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, accept: (JSONObject?, String?) -> Unit) {

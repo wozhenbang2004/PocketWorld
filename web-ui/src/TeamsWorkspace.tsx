@@ -22,6 +22,7 @@ import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
 import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelivery } from './TeamResearchDeliveries';
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
+import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
 import { teamFollowUpFocus, teamFollowUps, teamResultReading, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
@@ -407,6 +408,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const activeQuestionKeys = new Set(rows(reading?.attention).filter(item => item.kind === 'question').map(questionKey));
   const isCurrentQuestion = (message: Data) => message.kind === 'assignment_question' && message.state === 'pending' && activeQuestionKeys.has(questionKey(message));
   const workItems = rows(object(current?.workPlan).items);
+  const deliveryWorkers=deliveryReading(reading?.deliveryWorkers,current?.id);
+  const pendingFinal=deliveryWorkers?.resourcesReleased===false;
   const revisionRequest=object(current?.workPlan).lastRevisionRequestId;
   const hasFrozenRevision=!!revisionRequest&&rows(current?.parentRequests).some(p=>p.kind==='revision_proposal'&&p.state==='applied_to_work_revision'&&p.revisionRequestId===revisionRequest);
   const runSection = runSections[current?.id || ''] || 'progress';
@@ -809,7 +812,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
 
     </article>}
     {current && <article className="pw-team-reading pw-team-run">
-      <header className="pw-object-toolbar pw-team-run-heading"><div><p className="pw-team-run-origin">{ownerWorkLink ? '管家工作中的协作' : '历史协作'}{current.teamName ? ` · ${current.teamName}` : ''}</p><h2 tabIndex={-1}>{teamGoalTitle(current.goal, current.teamName)}</h2><div className="pw-team-run-meta"><span className="pw-team-state" data-state={current.status}>{status(current.status)}</span>{teamPhaseLabel(current.phase) && <span>{teamPhaseLabel(current.phase)}</span>}{teamProgressLabel(current) && <span>{teamProgressLabel(current)}</span>}</div></div>{refreshReading}</header>
+      <header className="pw-object-toolbar pw-team-run-heading"><div><p className="pw-team-run-origin">{ownerWorkLink ? '管家工作中的协作' : '历史协作'}{current.teamName ? ` · ${current.teamName}` : ''}</p><h2 tabIndex={-1}>{teamGoalTitle(current.goal, current.teamName)}</h2><div className="pw-team-run-meta"><span className="pw-team-state" data-state={current.status}>{current.status==='cancelled'?(pendingFinal?'已停派，原执行待核对':'已停止后续派发'):current.status==='completed'&&(pendingFinal||deliveryWorkers?.stage==='stopped_or_waiting')?'协调已结束，交付待核对':current.status==='awaiting_review'&&deliveryWorkers?.stage==='in_progress'?'文件交付处理中':status(current.status)}</span>{teamPhaseLabel(current.phase) && <span>{teamPhaseLabel(current.phase)}</span>}{teamProgressLabel(current) && <span>{teamProgressLabel(current)}</span>}</div></div>{refreshReading}</header>
       {members.find(member => member.id === current.leaderId) && <div className="pw-team-owner"><span>{teamRoleLabel(current)}</span><TeamMemberIdentity member={members.find(member => member.id === current.leaderId)!} name={name(current.leaderId)} size={28} /></div>}
       {changed && <p className="pw-team-reading-notice" role="status">正在更新进展，阅读位置与未发送内容保留。</p>}
       {workspaceActive && !busy && !reading?.viewHandle && <p className="pw-team-reading-notice" role="status">请刷新记录后继续操作，未发送内容保留。</p>}
@@ -821,6 +824,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         </div>
       </div>
       {ownerWorkLink && !ownerWorkLink.currentRun && <p className="pw-team-context-note">这是原工作较早一次执行的协作记录，可查看当时进展与成果。</p>}
+      <TeamDeliveryWorkers reading={deliveryWorkers} stopped={current.status==='cancelled'} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openDeliveryWorker')} open={row=>{
+        const handle=reading?.viewHandle;if(!handle||!canRead||!ownsNativeWindow())return;
+        leaveWithDrafts(()=>{if(currentReading.current?.viewHandle!==handle)return;void run('teams.openDeliveryWorker',{viewHandle:handle,taskId:row.taskId,runId:row.runId,epoch:row.epoch}).catch(e=>setError(e instanceof Error?e.message:String(e)));});
+      }}/>
       {reading?.taskLookupNotice && <p className="pw-field-hint" role="status">{reading.taskLookupNotice}</p>}
       <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'result' || value === 'details') chooseRunSection(value, () => setResultSource(null)); }} className="pw-team-workbench">
         <div className="pw-team-workbench-bar pw-material-navigation"><TabList aria-label="这次协作"><Tab id="progress" isDisabled={materialBusy}>进展</Tab><Tab id="result" isDisabled={materialBusy}>成果</Tab><Tab id="details">详情</Tab></TabList></div>
@@ -940,7 +947,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         {ownerWorkLink?.currentRun && onOpenWork && <Button variant="secondary" disabled={busy || materialBusy || messageDraft.requiresRecheck || !!uncertain} onClick={() => openOwnerWork('supplement')}>回原工作补充</Button>}
       </>}
       {!replyCanReceive && <p className="pw-team-reading-notice" role="status">这条原问题已不再等待回答，已有草稿保留供核对。</p>}
-      {current.status === 'cancelled' && <p className="pw-team-reading-notice" role="status">协作已停止，消息与未发送草稿可继续查看。</p>}
+      {current.status === 'cancelled' && <p className="pw-team-reading-notice" role="status">协作已停止后续派发，消息与未发送草稿可继续查看。</p>}
       <FormDraftNotice draft={messageDraft} />{messageDraft.requiresRecheck && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { void invoke('teams.readRun', { runId: current.id }, value => { if (value.reading?.run?.id !== current.id) throw new Error('原协作身份不匹配'); acceptReading(value.reading); setMessageChecked(true); }); }}>读取原消息核对结果</Button><Button variant="secondary" disabled={busy || !messageChecked || !!uncertain} onClick={() => { messageDraft.clearSubmitted(); setMessageChecked(false); }}>已核对原消息，继续编辑</Button></div>}
       <TextAreaField label={reply?.kind === 'assignment_question' ? '回答这条原问题' : '以前未发送的内容'} value={text} onChange={value => setDrafts(old => ({ ...old, [draftKey]: value }))} maxLength={4000} showCount isReadOnly={reply?.kind !== 'assignment_question'} isDisabled={reply?.kind === 'assignment_question' && (!canMutate || !replyCanReceive) || messageDraft.loading} hint={reply?.kind === 'assignment_question' ? '只保存不会启动成员；选择继续，只会请求这名成员沿用原分工和剩余额度。' : '查看草稿不会发送消息或启动工作。'} />
       {reply?.kind === 'assignment_question' && replyCanReceive && <div className="pw-form-actions"><PressButton label="回答并继续原分工" disabled={!mayAnswer} onClick={() => { void send('continue'); }} /><Button variant="secondary" disabled={!mayAnswer} onClick={() => { void send('save'); }}>只保存回答</Button></div>}
