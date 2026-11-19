@@ -51,6 +51,11 @@ def _mutex(state, *, probe=False):
 
 
 def main():
+    if not sys.argv[1:] and getattr(sys, "frozen", False) and os.name == "nt":
+        # Opening the installed app from Explorer must not start a listener.
+        from desktop_owner_entry import open_installed_desk
+        open_installed_desk()
+        return
     if sys.argv[1:] == ["--team-mcp-stdio"]:
         # The frozen executable can host its bundled stdio module directly.
         # This mode has only the original job's loopback token, no host config,
@@ -60,6 +65,7 @@ def main():
         return
     parser = argparse.ArgumentParser(description="PocketWorld lightweight Windows Companion (user-session only)")
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--reviewed-config-sha256", help="Reject startup unless these exact reviewed installed settings are still current")
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--serve", action="store_true")
     actions.add_argument("--local-stop", action="store_true")
@@ -79,6 +85,8 @@ def main():
     parser.add_argument("--allow-harness-write", action="store_true", help="Explicitly enable owner-managed external tools in the selected environment")
     parser.add_argument("--development-state", action="store_true", help="Source-tree development only; never allowed by a frozen installed executable")
     args = parser.parse_args()
+    if args.reviewed_config_sha256 is not None and (not args.serve or args.development_state):
+        parser.error("A reviewed-config digest only narrows a fixed installed --serve action")
     if (args.environment or args.harness_definition or args.allow_harness_write) and not (args.list_harnesses or args.enable_harness):
         parser.error("Harness configuration arguments require --list-harnesses or --enable-harness")
     if args.list_harnesses and (args.harness_definition or args.allow_harness_write):
@@ -122,7 +130,7 @@ def main():
         initialize(config, args.workspace)
         return
     if installed is not None:
-        launch = installed.launch_config()
+        launch = installed.launch_config(reviewed_sha256=args.reviewed_config_sha256)
     state = _state(config, launch.json() if launch is not None else None)
     if args.list_harnesses or args.enable_harness:
         if args.manual_takeover_after_os_restart or args.identity_dir is not None:

@@ -10,6 +10,7 @@ import org.json.JSONObject;
  * Model text never supplies a speaker, execution grant, source receipt, or fact-verification bit. */
 public final class TeamEvidenceDiscussion {
     public static final String FORMAT="pocketworld.evidence-dialogue.v1";
+    static final int MAX_ANSWER_CHARS=16000;
     private TeamEvidenceDiscussion(){}
     public static boolean enabled(JSONObject run){return FORMAT.equals(run.optString("discussionFormat"));}
     public static int stages(JSONObject run){return enabled(run)?3:run.optInt("rounds",1);}
@@ -116,7 +117,7 @@ public final class TeamEvidenceDiscussion {
     private static JSONObject claim(JSONObject run,String id)throws Exception {JSONObject claim=find(allItems(run,1,"claims"),"claimId",id);if(claim==null)throw new SecurityException("主张不是原成员当前已完成的独立观点");return claim;}
     private static JSONArray challengesFor(JSONObject run,String member)throws Exception {JSONArray result=new JSONArray(),items=allItems(run,2,"challenges");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);if(member.equals(item.getString("claimOwnerId")))result.put(item);}return result;}
     private static JSONObject find(JSONArray items,String key,String id)throws Exception {for(int i=0;i<items.length();i++)if(id.equals(items.getJSONObject(i).optString(key)))return items.getJSONObject(i);return null;}
-    private static JSONObject parse(String raw)throws Exception {if(raw==null||raw.length()>16000||!raw.trim().startsWith("{")||!raw.trim().endsWith("}"))throw new IllegalArgumentException("真实讨论输出不是所约定JSON；保留错误，不伪造观点或回应");return new JSONObject(raw);}
+    private static JSONObject parse(String raw)throws Exception {if(raw==null||raw.length()>MAX_ANSWER_CHARS||!raw.trim().startsWith("{")||!raw.trim().endsWith("}"))throw new IllegalArgumentException("真实讨论输出不是所约定JSON；保留错误，不伪造观点或回应");return new JSONObject(raw);}
     private static void fields(JSONObject value,String... names)throws Exception {Set<String> expected=new HashSet<>();java.util.Collections.addAll(expected,names);Set<String> actual=new HashSet<>();value.keys().forEachRemaining(actual::add);if(!actual.equals(expected))throw new SecurityException("讨论字段与原阶段合同不一致");}
     private static String text(JSONObject value,String key,int max)throws Exception {String text=value.getString(key);if(text.codePoints().allMatch(Character::isWhitespace)||text.length()>max)throw new IllegalArgumentException("讨论文本为空或超出范围："+key);return text;}
     private static String optionalText(JSONObject value,String key,int max)throws Exception {String text=value.getString(key);if(text.length()>max)throw new IllegalArgumentException("讨论文本超出范围");return text;}

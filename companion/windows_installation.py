@@ -114,6 +114,8 @@ class WindowsInstalledContext:
             if name.casefold() in folded or not _matches(r"[a-fA-F0-9]{64}", file.get("sha256")) or type(file.get("bytes")) is not int or not 0 <= file["bytes"] <= 512 * 1024 * 1024:
                 raise PlatformError("Current release has duplicate/invalid native file declarations", 409)
             declared[name] = file; folded.add(name.casefold())
+        self.owner_entry_files = {name: declared[name] for name in ("tools/Launch-Companion.ps1", "tools/Companion-InstallState.ps1")
+                                  if name in declared}
         for name in ("app/PocketWorld-Companion.exe", "driver/cua-driver.exe", "driver/agent-desktop.exe"):
             if name not in declared:
                 raise PlatformError("Current embedded runtime or Driver is missing", 409)
@@ -152,8 +154,10 @@ class WindowsInstalledContext:
         if self._read(self.home, "current.json", 32768) != self.current:
             raise PlatformError("Installation version/pointer changed before native owner action or supervisor startup", 409)
 
-    def launch_config(self):
+    def launch_config(self, *, reviewed_sha256=None):
         raw = self._raw(self.state, "companion.json", 262144)
+        if reviewed_sha256 is not None and (not _matches(r"[0-9a-f]{64}", reviewed_sha256) or hashlib.sha256(raw).hexdigest() != reviewed_sha256):
+            raise PlatformError("The configuration shown on the local owner desk changed; no service started", 409)
         config = _object(raw)
         if not same_path(config.get("stateDir"), self.jobs) or not same_path(config.get("tokenFile"), ntpath.join(self.state, "companion-token.txt")):
             raise PlatformError("Installed configuration redirects private jobs/token state", 403)

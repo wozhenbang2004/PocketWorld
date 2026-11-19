@@ -105,6 +105,11 @@ public final class AgentRunner {
         try{return new RunOutcome(pending||proof==null?"awaiting_user":control.isCancelled()?"cancelled":"needs_confirmation",pending||proof==null?"原服务已请求停止，退出与资源释放仍待核对；不自动重启":"开发试用已结束，原服务已释放；可从原任务继续",new JSONObject().put("projectServiceDrainPending",pending||proof==null).put("projectServiceExitEvidence",proof==null?JSONObject.NULL:proof));}catch(Exception invalid){throw new IllegalStateException(invalid);}
     }
 
+    private dev.pocketengine.phone.MainPhoneOwnerReturnPage firstOwnerReturnPage;
+    private boolean ownerReturnPageRead;
+    public boolean ownerReturnPageRead(){return ownerReturnPageRead;}
+    /** Native main service only; model/tool/input JSON cannot select this route. */
+    public AgentRunner forMainOwnerReturn(dev.pocketengine.phone.MainPhoneOwnerReturnPage expected){firstOwnerReturnPage=expected;return this;}
     public AgentRunner(PhonePort phone) {
         this(phone,null);
     }
@@ -504,6 +509,9 @@ public final class AgentRunner {
             if(repeatedTools.stopRequired())return stopForProgressGuard(taskId,journal,history,steps,evidence,initialConfig,sink,contextBudget,repeatedTools);
             intent.update(latestOwnerRecallQuery(history,saved.optString("feedback").isEmpty()?goal:saved.optString("feedback")));
             if(routes!=null)routes.ownerBoundary(latestOwnerRecallQuery(history,saved.optString("feedback").isEmpty()?goal:saved.optString("feedback")));
+            if(firstOwnerReturnPage!=null&&(!(phone instanceof DeferredPhoneSession originalSession)||!originalSession.initialized()||!intent.deviceReadAllowed()||!control.phoneSurfaceActive()||!phone.isConnected())){
+                JSONObject blocked=firstOwnerReturnPage.blocked(control.pauseRevision());return finish(taskId,"awaiting_user",blocked.getString("message"),blocked,steps,initialConfig,sink);
+            }
             if(intent.deviceReadAllowed()&&control.phoneSurfaceActive()&&DeferredPhoneSession.initialized(phone)&&!phone.isConnected())return finish(taskId,"awaiting_user","请先开启手机操作权限，再继续任务。",evidence,steps,initialConfig,sink);
             requireIntentImageInput(intent,initialConfig);
             emit(taskId, "run", "running", DeferredPhoneSession.initialized(phone)&&intent.deviceReadAllowed()?(storedMessages == null ? "开始观察手机，准备执行目标。" : "正在恢复任务并重新观察手机。"):"正在处理原目标；实际使用手机时才准备并读取原显示。", null, intent.diagnostics(), initialConfig, sink);
@@ -1228,7 +1236,7 @@ public final class AgentRunner {
                         }
                         catch(dev.pocketengine.phone.observation.NativeSensitiveStep.OwnerRequired owner) {
                             // A native, original-control-bound refusal BEFORE this child effect, not JSON permission.
-                            if(!java.util.Set.of("phone_click_node","phone_type","phone_tap","phone_swipe","phone_click_text","phone_scroll_node","phone_scroll_region","phone_set_wheel","phone_press_key").contains(name)||!owner.belongsTo(control,dispatchRevision))throw owner;
+                            if(!dev.pocketengine.phone.MainPhoneOwnerStep.TOOLS.contains(name)||!owner.belongsTo(control,dispatchRevision))throw owner;
                             nativeOwnerRequired=owner;receipt=owner.notDispatchedReceipt();batchContinuation.stopSequenceAndObservations();
                         }
                         if(activeStep!=null&&activePlan!=null&&receipt!=null&&Boolean.FALSE.equals(receipt.opt("accepted")))nativeSequenceProgress.get(activePlan).notDispatched(activeStep.index);
@@ -1275,6 +1283,11 @@ public final class AgentRunner {
                     toolTrace.finish(receipt,recordedOperation,null,control);
                     if(nativeOwnerRequired!=null){
                         evidence.put("nativeSensitiveStep",receipt).put("originalEffectsRetained",true).put("automaticReplayAllowed",false);
+                        var original=control.hostRunIdentity();
+                        if(original!=null&&taskId.equals(original.taskId())&&recordedOperation!=null&&!dev.pocketengine.phone.MainPhoneOwnerStep.reason(receipt).isEmpty()){
+                            JSONObject step=new JSONObject().put("taskId",taskId).put("runId",original.runId()).put("epoch",original.epoch()).put("operationId",recordedOperation).put("reason",receipt.getString("reason"));
+                            if(!nativeOwnerRequired.observedSurfaceKey().isEmpty())step.put("observedSurfaceKey",nativeOwnerRequired.observedSurfaceKey());evidence.put(dev.pocketengine.phone.MainPhoneOwnerStep.KEY,step);
+                        }
                         return finish(taskId,"awaiting_user",nativeOwnerRequired.getMessage(),evidence,steps,config,toolSink);
                     }
                     if(unverifiedProjectRunning){
@@ -1824,7 +1837,13 @@ public final class AgentRunner {
         try{
             for(int attempt=0;attempt<2;attempt++){
                 control.checkpoint();requirePlanningCurrent(planning,expected);
-                JSONObject observation=phone.observe(config.sendScreenshots,control);
+                JSONObject observation;
+                if(firstOwnerReturnPage!=null){
+                    var expectedPage=firstOwnerReturnPage;
+                    var target=phone instanceof DeferredPhoneSession session?session.readyAdapter():null;
+                    observation=target==null?expectedPage.blocked(control.pauseRevision()):target.readForOriginalOwnerReturn(expectedPage,control);
+                    ownerReturnPageRead=Boolean.TRUE.equals(observation.opt("ok"));firstOwnerReturnPage=null;
+                }else observation=phone.observe(config.sendScreenshots,control);
                 control.check();requirePlanningCurrent(planning,expected);
                 if(observation==null)observation=failure("empty_observation","手机没有返回观察结果。");
                 boolean ok=observation.optBoolean("ok",true);

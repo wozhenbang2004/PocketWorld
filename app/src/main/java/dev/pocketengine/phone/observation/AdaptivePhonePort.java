@@ -239,7 +239,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 }catch(Exception unavailable){result=retainDispatchReceipt(result,unavailable);}
             }
             return result.put("verifiedBusinessSuccess",false).put("automaticReplayAllowed",false);
-        }catch(NativeSensitiveStep.OwnerRequired owner){synchronized(this){clearReferences();}throw owner;}
+        }catch(NativeSensitiveStep.OwnerRequired owner){dropRefusedSurface(owner,control);throw owner;}
         finally{if(write)actionEffectInFlight.set(false);}
     }
     private JSONObject practiceFrame(RunControl control)throws Exception {
@@ -449,7 +449,7 @@ public final class AdaptivePhonePort implements PhonePort {
         if(!(source instanceof NativePhoneExtensions))return failure("native_extension_unavailable","原物理端口没有容器手势能力。").put("accepted",false);
         admission.check();JSONObject result;
         try{result=((NativePhoneExtensions)source).extension("phone_gesture",gesture,control,admission);}
-        catch(NativeSensitiveStep.OwnerRequired owner){synchronized(this){clearReferences();}throw owner;}
+        catch(NativeSensitiveStep.OwnerRequired owner){dropRefusedSurface(owner,control);throw owner;}
         catch(InterruptedException stopped){throw stopped;}
         catch(Exception unknown){result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");}
         if(result==null)result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");
@@ -472,6 +472,10 @@ public final class AdaptivePhonePort implements PhonePort {
     private static boolean unknownEffect(JSONObject result){
         return result.has("accepted")&&result.isNull("accepted")||result.optBoolean("requiresReconciliation")
                 ||ObservationSafety.unknownEffect(result.optString("error",result.optString("code")));
+    }
+    private synchronized void dropRefusedSurface(NativeSensitiveStep.OwnerRequired owner,RunControl control){
+        try{if(lastObservedOwnerSurface(control)!=null)owner.retainSurfaceKey(latest);}catch(Exception unavailable){/* Unknown stays read-only. */}
+        clearReferences();
     }
     @Override public synchronized void clearReferences() {
         latest = null; latestBinding = null;localFrameObservation=null;textTargets.clear();ocrSensitive=null;source.clearReferences();
@@ -614,7 +618,7 @@ public final class AdaptivePhonePort implements PhonePort {
         }
         JSONObject result;
         try{result=((NativeTreeScrollPort)source).scrollNode(args,control,admission);}
-        catch(NativeSensitiveStep.OwnerRequired owner){synchronized(this){clearReferences();}throw owner;}
+        catch(NativeSensitiveStep.OwnerRequired owner){dropRefusedSurface(owner,control);throw owner;}
         catch(InterruptedException stopped){synchronized(this){clearReferences();}throw stopped;}
         catch(Exception unknown){result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");}
         synchronized(this){if(result==null)result=new JSONObject().put("ok",false).put("accepted",JSONObject.NULL).put("error","action_unknown");
@@ -671,7 +675,15 @@ public final class AdaptivePhonePort implements PhonePort {
             return result;
         }catch(InterruptedException stopped){synchronized(this){clearReferences();}throw stopped;}
     }
-    private JSONObject readOnlyTree(RunControl control)throws Exception {
+    /** Native returned-owner path replaces the ordinary initial read with exactly one guarded tree.
+     * No OCR or screenshot upgrade and no retention for an ineligible page. */
+    public JSONObject readForOriginalOwnerReturn(dev.pocketengine.phone.MainPhoneOwnerReturnPage expected,RunControl control)throws Exception {
+        long pause=control.pauseRevision();JSONObject o=readOnlyTree(control,expected);
+        if(Boolean.TRUE.equals(o.opt("ok"))&&!control.isCancelled()&&!control.isPaused()&&control.pauseRevision()==pause)return o;
+        clearReferences();return expected.blocked(pause);
+    }
+    private JSONObject readOnlyTree(RunControl control)throws Exception {return readOnlyTree(control,null);}
+    private JSONObject readOnlyTree(RunControl control,dev.pocketengine.phone.MainPhoneOwnerReturnPage ownerReturn)throws Exception {
         final long revision;String blocked;
         synchronized(this){blocked=authority(control);if(blocked!=null)return failure(blocked,"任务已暂停，未读取旧观察。");
             if(reconciliationRequired)return failure("reconciliation_required","原操作结果未知，未读取新目标。");
@@ -695,6 +707,7 @@ public final class AdaptivePhonePort implements PhonePort {
         latestBinding=scope.observation(observed.getString("observationId"),revision);
         observed.put("observationBinding",bindingJson(latestBinding)).put("observationDecision",new JSONObject()
                 .put("request","nodes").put("reason","read_only_condition").put("adequacy","not_asserted"));
+        if(ownerReturn!=null&&(!ownerReturn.accepts(observed,revision)||NativeSensitiveStep.historyContainsSensitiveStep(observed))){clearReferences();return ownerReturn.blocked(revision);}
         latest=new JSONObject(observed.toString());if(practice!=null)practice.observation(observed);return observed;
         }
     }
@@ -946,7 +959,7 @@ public final class AdaptivePhonePort implements PhonePort {
                 else result=((NativeOcrTapPort)source).tapOcrText(selected,control,admission);
             }else result = source.execute(tool, args, control);
         }
-        catch (NativeSensitiveStep.OwnerRequired owner) { clearReferences();throw owner; }
+        catch (NativeSensitiveStep.OwnerRequired owner) { dropRefusedSurface(owner,control);throw owner; }
         catch (InterruptedException cancelled) { throw cancelled; }
         catch (Exception unknown) {
             result = new JSONObject().put("ok", false).put("error", "action_unknown")

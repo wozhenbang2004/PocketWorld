@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { InlineDiff } from './shell-library';
 import { bridge } from './bridge';
+import type { SourceMember } from './project-preview';
 import './project-development.css';
 import './project-workspace-manga.css';
 
 type Data = Record<string, any>;
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
-  onClose: () => void; registerBack: (handler: (() => boolean) | null) => void };
+  sourceMember?: SourceMember & { taskId: string; operationId: string }; onClose: () => void; registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
 const windowKey = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
@@ -16,10 +17,10 @@ const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack, sourceMember }: Props) {
   const [listing, setListing] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [text, setText] = useState('');
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
-  const [treeOpen, setTreeOpen] = useState(true);
+  const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
   const editorHeading = useRef<HTMLHeadingElement>(null);
   const [orphan, setOrphan] = useState<string | null>(null), [choice, setChoice] = useState<'keep_mine' | 'use_latest' | null>(null);
   const [adoption, setAdoption] = useState<Data | null>(null), [adoptionExpired, setAdoptionExpired] = useState(false);
@@ -51,7 +52,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (entered.current || edits.current || document.hidden) return;
     const sequence = generation.current, token = {}; entered.current = token; setBusy(true); setError('');
     try {
-      const value = await latest.current.run(command + action, { viewHandle, ...(action === 'open' ? { checkoutId } : { filesHandle: handle.current }), ...args });
+      const value = await latest.current.run(command + action, { viewHandle, ...(action === 'open' || action === 'openSource' ? { checkoutId } : { filesHandle: handle.current }), ...args });
       if (live(sequence) && entered.current === token) { accept?.(value); return value; }
     } catch (failure) { if (live(sequence)) setError(failureText(failure)); }
     finally { if (entered.current === token) { entered.current = null; if (alive.current) setBusy(false); } }
@@ -60,10 +61,31 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('文件列表不属于原副本。');
     setListing(previous => ({ ...value, files: more ? [...rows(previous?.files), ...rows(value.files)] : rows(value.files) }));
   });
-  const readFile = (path: string) => invoke('read', { path }, value => { setChoice(null); setAdoption(null); apply(value); setTreeOpen(false); requestAnimationFrame(() => { editorHeading.current?.scrollIntoView({ block: 'nearest' }); editorHeading.current?.focus({ preventScroll: true }); }); });
+  const readFile = (path: string) => {
+    if (sourceMember) {
+      if (path !== sourceMember.path || entered.current || edits.current) return;
+      setReviewed(false); currentFile.current = null; setFile(null);
+    }
+    return invoke('read', { path }, value => {
+      if (sourceMember && (value.path !== path || value.latest?.deleted !== false || !/^[a-f0-9]{64}$/.test(value.latest?.expectedHash) ||
+          typeof value.latest.content !== 'string')) throw new Error('没有取得原副本这个文件的当前内容，未打开替代文件。');
+      setChoice(null); setAdoption(null); apply(value); setTreeOpen(false); requestAnimationFrame(() => { editorHeading.current?.scrollIntoView({ block: 'nearest' }); editorHeading.current?.focus({ preventScroll: true }); }); });
+  };
+  const openFiles = async () => {
+    const pin = sourceMember && { taskId: sourceMember.taskId, operationId: sourceMember.operationId, artifactId: sourceMember.artifactId,
+      artifactSha256: sourceMember.artifactSha256, path: sourceMember.path, fileSha256: sourceMember.fileSha256 };
+    const result = await invoke(pin ? 'openSource' : 'open', pin ? { sourceMember: pin } : {}, value => {
+      if (value.projectId !== projectId || value.checkoutId !== checkoutId || !value.filesHandle) throw new Error('没有取得原私人副本文件窗口。');
+      if (pin && (value.executionAuthorized !== false || !value.savedMember || !Object.entries(pin).every(([k, v]) => v === value.savedMember[k]) ||
+          value.savedMember.projectId !== projectId || value.savedMember.checkoutId !== checkoutId || value.savedMember.bytes !== sourceMember!.bytes ||
+          typeof value.savedMember.text !== 'string' || new TextEncoder().encode(value.savedMember.text).length !== sourceMember!.bytes)) throw new Error('原任务保存的文件与所选副本不符。');
+      handle.current = value.filesHandle; setListing(value);
+    });
+    if (result && pin && handle.current === result.filesHandle && live(generation.current)) await readFile(pin.path);
+  };
   const edit = (value: string) => {
     const original = currentFile.current;
-    if (!original || entered.current || orphan !== null || activeAdoption.current || document.hidden) return;
+    if (!original || sourceMember && !reviewed || entered.current || orphan !== null || activeAdoption.current || document.hidden) return;
     const key = keyFor(original.path);
     if (value.length > 262144 || new TextEncoder().encode(value).length > 262144) { setError('编辑上限为 256 KiB，已有文字保留。'); return; }
     if (!interfaceDrafts.has(key) && interfaceDrafts.size >= 32) { setError('有 32 份界面文字尚未确认缓存，请先处理已有草稿。'); return; }
@@ -87,10 +109,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     };
     const hidden = () => { if (document.hidden || originalWindow.current !== windowKey()) { retire(); latest.current.onClose(); } };
     const unsubscribe = bridge.subscribe(hidden); document.addEventListener('visibilitychange', hidden); window.addEventListener('pagehide', hidden);
-    void invoke('open', {}, value => {
-      if (value.projectId !== projectId || value.checkoutId !== checkoutId || !value.filesHandle) throw new Error('没有取得原私人副本文件窗口。');
-      handle.current = value.filesHandle; setListing(value);
-    });
+    void openFiles();
     return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', hidden); };
   }, [projectId, checkoutId, viewHandle]);
   useEffect(() => {
@@ -109,12 +128,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const timer = window.setTimeout(() => setAdoptionExpired(true), remaining); return () => window.clearTimeout(timer);
   }, [adoption]);
   const locked = busy || editing || !!adoption, nativeText = file?.text || '';
-  return <SettingsDialog isOpen title="这份私人副本的文件" onClose={close} closeLabel="返回项目目标"><div className="pw-checkout-files">
-    <p className="pw-muted">这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。</p>
+  const backLabel = sourceMember ? '返回原工作' : '返回项目目标';
+  return <SettingsDialog isOpen title={sourceMember ? '原工作副本' : '这份私人副本的文件'} onClose={close} closeLabel={backLabel}><div className="pw-checkout-files">
+    <p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small>
     {error && <p role="alert">{error}</p>}
-    {!listing ? <Button variant="secondary" disabled={busy} onClick={() => void invoke('open', {}, value => { if (value.projectId !== projectId || value.checkoutId !== checkoutId || !value.filesHandle) throw new Error('没有取得原私人副本文件窗口。'); handle.current = value.filesHandle; setListing(value); })}>重新读取副本文件</Button> : <>
-      <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
+    {!listing ? <Button variant="secondary" disabled={busy} onClick={() => void openFiles()}>{busy ? '正在核对原副本…' : '重新读取副本文件'}</Button> : <>
+      {sourceMember ? !file && <div><p dir="auto">{sourceMember.path}</p><Button variant="secondary" disabled={locked} onClick={() => void readFile(sourceMember.path)}>{busy ? '正在读取同一文件…' : '重读原副本中的这个文件'}</Button></div> : <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
         {listing.draftError && <p role="alert">{listing.draftError}</p>}
         <div className="pw-form-actions"><Button variant="ghost" disabled={locked} onClick={() => void readList()}>重新读取文件列表</Button></div>
         <div className="pw-checkout-file-list">{rows(listing.files).map(row => <Button key={row.path} aria-current={file?.path === row.path ? 'true' : undefined} variant="ghost" disabled={locked || row.binary === true} onClick={() => void readFile(row.path)}><span>{row.path}</span><small>{row.binary ? '二进制' : row.hasDraft ? '有保留草稿' : row.change === 'deleted' ? '副本已删除' : row.change === 'added' ? '副本新增' : row.change === 'modified' ? '副本已修改' : '与原基线一致'}</small></Button>)}</div>
@@ -122,8 +142,16 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {listing.nextPath && <Button variant="secondary" disabled={locked} onClick={() => void readList(true)}>读取下一页文件</Button>}
         <TextField label="相对文件路径" value={newPath} onChange={setNewPath} isDisabled={locked} hint="例如 index.html 或 src/main.ts；不操作运行缓存和 Git 内部目录。" />
         <Button variant="secondary" disabled={locked || !newPath.trim()} onClick={() => void readFile(newPath.trim())}>打开或准备新文件草稿</Button>
-      </AccordionItem></Accordion>
+      </AccordionItem></Accordion>}
       {file && <section className="pw-checkout-editor"><header><h3 ref={editorHeading} tabIndex={-1}>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {file.dirty ? '有未保存修改' : '没有未保存修改'}</small></header>
+        {sourceMember && !reviewed ? <div>
+          <p role="status">{file.latest.expectedHash === sourceMember.fileSha256 ? '刚读取的副本与任务当时保存的内容一致。' : '副本在交付后已改变。编辑的是当前副本，不会用旧包覆盖它。'}
+            {(file.dirty || orphan !== null) && ' 此文件另有未保存草稿，进入编辑后可核对。'}</p>
+          {file.latest.expectedHash !== sourceMember.fileSha256 && <Accordion><AccordionItem id="source-to-current" title="比较固定版本与当前副本">
+            <InlineDiff before={listing.savedMember.text} after={file.latest.content} versionLabel="任务交付时 → 当前副本" beforeLabel="任务固定版本" afterLabel="刚读取的副本" />
+          </AccordionItem></Accordion>}
+          <Button disabled={locked} onClick={() => setReviewed(true)}>编辑当前副本</Button>
+        </div> : <>
         {orphan !== null && <div role="alert"><p>上次界面文字尚未确认缓存，与手机恢复的草稿不同。下面保留的是界面文字，选择前不会替换任一份。</p><InlineDiff before={nativeText} after={orphan} versionLabel="手机恢复的草稿" /><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => { const retained = orphan; blockedEdit.current = true; setOrphan(null); currentText.current = retained; setText(retained); /* explicit cache edit, never a source write */ const sequence = ++editSequence.current; void invoke('edit', { fileHandle: file.fileHandle, editSequence: sequence, text: retained }, value => { blockedEdit.current = false; apply({ ...value, text: retained }, false); }); }}>保留界面文字为草稿</Button><Button variant="secondary" disabled={locked} onClick={() => { interfaceDrafts.delete(keyFor(file.path)); setOrphan(null); currentText.current = nativeText; setText(nativeText); }}>采用已恢复的手机草稿</Button></div></div>}
         <TextAreaField label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || orphan !== null} className="pw-code-editor" />
         {(file.conflict || file.saveUnknown) && <p role="status">{file.saveUnknown ? '保存结果待核对，请读取同一文件。' : '副本文件与保留草稿的基线不同。请比较后决定，未自动覆盖。'}</p>}
@@ -150,8 +178,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {file.message && <p role="status">{file.message} {file.saveError || ''}</p>}
         {file.draftError && <p role="alert">{file.draftError}</p>}
         {(file.draftError || blockedEdit.current) && <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => { if (blockedEdit.current) edit(currentText.current); else void invoke('cache', { fileHandle: file.fileHandle, retry: true }, value => apply(value, false)); }}>重试保留草稿</Button></div>}
+        </>}
       </section>}
     </>}
-    <Button variant="secondary" disabled={busy || editing} onClick={close}>{adoption || choice ? '返回文件' : '返回项目目标'}</Button>
+    <Button variant="secondary" disabled={busy || editing} onClick={close}>{adoption || choice ? '返回文件' : backLabel}</Button>
   </div></SettingsDialog>;
 }

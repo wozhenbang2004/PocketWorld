@@ -1,8 +1,10 @@
 # Stable per-user entry. Login tasks never target a version directory directly.
 [CmdletBinding()]
-param([ValidateSet('Serve','Initialize','StopDesktop','RecoverDesktop','PairDevices','Health','ListHarnesses','EnableHarness')][string]$Action='Serve',
-      [string]$Workspace, [string]$Environment, [string]$Harness, [string]$HarnessDefinition, [switch]$AllowHarnessWrite)
+param([ValidateSet('Serve','OpenDesk','Initialize','StopDesktop','RecoverDesktop','PairDevices','Health','ListHarnesses','EnableHarness')][string]$Action='Serve',
+      [string]$Workspace, [string]$Environment, [string]$Harness, [string]$HarnessDefinition, [switch]$AllowHarnessWrite,
+      [ValidatePattern('^[0-9a-f]{64}$')][string]$ReviewedConfigSha256)
 $ErrorActionPreference='Stop'
+if ($ReviewedConfigSha256 -and $Action -ne 'Serve') { throw 'Reviewed settings only narrow the installed Serve action.' }
 if ($Action -notin @('ListHarnesses','EnableHarness') -and ($Environment -or $Harness -or $HarnessDefinition -or $AllowHarnessWrite)) {
     throw 'Harness arguments require the explicit ListHarnesses or EnableHarness owner action.'
 }
@@ -20,14 +22,19 @@ foreach ($name in @('Launch-Companion.ps1','Companion-InstallState.ps1')) {
     if ((Get-FileHash -LiteralPath (Join-Path $homeRoot $name) -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $pointer.root ('tools\'+$name)) -Algorithm SHA256).Hash) { throw 'Fixed launcher differs from the verified current release.' }
 }
 $exe=Join-Path $pointer.root 'app\PocketWorld-Companion.exe'
-if ($Action -eq 'Initialize') {
+if ($Action -eq 'OpenDesk') {
+    & $exe
+} elseif ($Action -eq 'Initialize') {
     if (-not $Workspace) { throw 'Choose a workspace explicitly for first initialization.' }
     if (Test-Path -LiteralPath $paths.Config) { throw 'Configuration already exists; it was not reset.' }
     & $exe --init --config $paths.Config --workspace $Workspace
 } elseif ($Action -eq 'Health') { & $exe --health }
 else {
     Assert-PWFixedConfig $paths $paths.Config -Required
-    if ($Action -eq 'Serve') { & $exe --serve --config $paths.Config }
+    if ($Action -eq 'Serve') {
+        if ($ReviewedConfigSha256) { & $exe --serve --config $paths.Config --reviewed-config-sha256 $ReviewedConfigSha256 }
+        else { & $exe --serve --config $paths.Config }
+    }
     elseif ($Action -in @('ListHarnesses','EnableHarness')) {
         $harnessArguments = @('--config', $paths.Config)
         if ($Action -eq 'ListHarnesses') { $harnessArguments += '--list-harnesses' }

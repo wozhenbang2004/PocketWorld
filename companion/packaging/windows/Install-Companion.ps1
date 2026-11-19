@@ -194,7 +194,8 @@ try {
     $null = Assert-PWRelease $paths $pointer
     Set-PWCurrentTransaction $paths $pointer
     Write-Output ('Installed ' + $manifest.version + '. Login preference preserved; no task or process was resumed.')
-    if (-not (Test-Path -LiteralPath $paths.Config)) { Write-Output 'Initialize the installed Companion with a workspace before starting it.' }
+    Write-Output ('Open the current installed app to check this computer or pair a phone: ' + (Join-Path $destination 'app\PocketWorld-Companion.exe'))
+    Write-Output ('Stable entry after an update: ' + (Join-Path $paths.Home 'Manage-Companion.ps1') + ' -Action OpenDesk. Opening it does not start a service.')
     if ($AllowUnsignedDevelopment) { Write-Warning 'Unsigned development package; normal release signature checks were explicitly not requested.' }
 
 } finally {

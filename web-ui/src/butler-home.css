@@ -99,3 +99,6 @@
   .pw-butler-work-next > svg { flex: none; }
   [data-opening] .pw-butler-work-next { max-width: none; font-size: 12px; }
 }
+
+.pw-butler-work-domain { font-weight: 500; color: var(--pw-ink); }
+.pw-butler-work-domain::after { content: '·'; display: inline-block; margin-inline-start: 9px; color: var(--pw-copy); }

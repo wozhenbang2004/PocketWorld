@@ -20,6 +20,36 @@ public final class PhoneNotificationControls {
         if(!handles(action))throw new IllegalArgumentException("不支持的手机通知动作");
         return identify(new Intent(context,PhoneRunService.class).setAction(action),action,task);
     }
+    public static final String OWNER_RETURN="dev.pocketengine.PHONE_OWNER_RETURN_STEP";
+    /** This single immutable notification belongs to one refusal, pause and retained service hold.
+     * It is not a notification-level approve button and cannot create an operation or a run. */
+    public static Intent ownerReturn(Context context,JSONObject task,String operation,long pause,long scope,long generation)throws Exception {
+        Intent i=identify(new Intent(context,PhoneRunService.class).setAction(OWNER_RETURN),OWNER_RETURN,task);
+        return i.setData(i.getData().buildUpon().appendPath(operation).appendPath(Long.toString(pause)).appendPath(Long.toString(scope)).appendPath(Long.toString(generation)).build())
+                .putExtra("ownerStep",operation).putExtra("ownerPause",pause).putExtra("ownerScope",scope).putExtra("ownerGeneration",generation);
+    }
+    private static final String RETURN_NOTICE="dev.pocketengine.phone.OWNER_STEP_NOTICE";
+    public static void markOwnerReturn(android.app.Notification.Builder builder,JSONObject task,String operation,long pause,long scope)throws Exception {
+        android.os.Bundle extras=new android.os.Bundle();extras.putString(RETURN_NOTICE,task.getString("id"));extras.putString("originalRun",task.getString("runId"));
+        extras.putInt("originalEpoch",task.getInt("coordinatorEpoch"));extras.putString("originalStep",operation);extras.putLong("originalPause",pause);extras.putLong("originalScope",scope);builder.addExtras(extras);
+    }
+    /** Only this app's already-posted original notification. No listener, screen or other app's notifications. */
+    public static boolean returnNoticePosted(Context context,String id,String run,int epoch,String operation,long pause,long scope){
+        try{
+            android.app.NotificationManager notices=context.getSystemService(android.app.NotificationManager.class);
+            if(notices==null||!notices.areNotificationsEnabled())return false;
+            for(android.service.notification.StatusBarNotification item:notices.getActiveNotifications()){
+                if(!context.getPackageName().equals(item.getPackageName()))continue;
+                var notification=item.getNotification();if(notification==null||notification.extras==null)continue;var e=notification.extras;
+                if(!id.equals(e.getString(RETURN_NOTICE))||!run.equals(e.getString("originalRun"))||epoch!=e.getInt("originalEpoch",-1)||
+                        !operation.equals(e.getString("originalStep"))||pause!=e.getLong("originalPause",-1)||scope!=e.getLong("originalScope",-1))continue;
+                var channel=notices.getNotificationChannel(notification.getChannelId());
+                if(channel==null||channel.getImportance()==android.app.NotificationManager.IMPORTANCE_NONE)continue;
+                if(channel.getGroup()!=null){var group=notices.getNotificationChannelGroup(channel.getGroup());if(group==null||group.isBlocked())continue;}
+                return true;
+            }
+        }catch(RuntimeException unavailable){/* Not proof the action is visible. */}return false;
+    }
     public static Intent open(Context context,JSONObject task)throws Exception {
         Intent intent=new Intent(context,dev.pocketengine.ui.ComposeActivity.class).setAction(OPEN)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);

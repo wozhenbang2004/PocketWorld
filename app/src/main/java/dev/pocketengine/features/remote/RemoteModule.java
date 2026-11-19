@@ -25,6 +25,7 @@ public final class RemoteModule implements EngineModule {
     private final FeatureContext context;
     private final AtomicFile file;
     private final AtomicFile operationFile;
+    private final CloudWorkspaceChoice cloudWorkspace;
     private final JSONArray profiles=new JSONArray();
     private final JSONArray operations=new JSONArray();
     private final ScheduledExecutorService poller=Executors.newSingleThreadScheduledExecutor();
@@ -44,6 +45,7 @@ public final class RemoteModule implements EngineModule {
     }
     RemoteModule(FeatureContext context,CredentialReader credentials,DispatchGate dispatchGate) {
         this.credentials=credentials;this.dispatchGate=dispatchGate;
+        cloudWorkspace=new CloudWorkspaceChoice(context.android.getSharedPreferences("owner_cloud_workspace",android.content.Context.MODE_PRIVATE));
         this.context=context;file=new AtomicFile(new File(context.android.getFilesDir(),"remote-profiles.json"));operationFile=new AtomicFile(new File(context.android.getFilesDir(),"remote-operations.json"));
         try{JSONArray stored=new JSONArray(new String(file.readFully(),StandardCharsets.UTF_8));for(int i=0;i<stored.length()&&profiles.length()<20;i++){JSONObject p=stored.optJSONObject(i);if(p!=null&&p.optString("id").matches("[A-Za-z0-9_-]{1,80}"))profiles.put(p);}}catch(Exception ignored){}
         try{JSONArray stored=new JSONArray(new String(operationFile.readFully(),StandardCharsets.UTF_8));for(int i=0;i<stored.length()&&operations.length()<100;i++){JSONObject item=stored.optJSONObject(i);if(item!=null){if("submitting".equals(item.optString("status")))item.put("status","unknown").put("message","手机进程中断，需在电脑任务列表核对操作编号");operations.put(item);}}}catch(Exception ignored){}
@@ -55,7 +57,19 @@ public final class RemoteModule implements EngineModule {
     @Override public synchronized JSONObject snapshot()throws Exception {
         JSONArray listed=new JSONArray();for(int i=0;i<profiles.length();i++)listed.put(publicProfile(profiles.getJSONObject(i)));
         JSONArray jobs=new JSONArray();for(JSONObject job:recent.values()){JSONObject selected=find(job.optString("profileId"));if(jobs.length()<30&&selected!=null&&endpoint(selected.optString("baseUrl")).equals(job.optString("serviceBase")))jobs.put(metadata(job));}
-        return new JSONObject().put("profiles",listed).put("jobs",jobs).put("operations",new JSONArray(operations.toString())).put("transport","companion_https").put("directSsh",false).put("configured",profiles.length()>0).put("operationReconciliation",true);
+        return new JSONObject().put("profiles",listed).put("cloudWorkspace",cloudWorkspace.view(listed)).put("jobs",jobs).put("operations",new JSONArray(operations.toString())).put("transport","companion_https").put("directSsh",false).put("configured",profiles.length()>0).put("operationReconciliation",true);
+    }
+    /** Native private-window callers only. No new HTTP requests, authorization or CLI probing. */
+    public synchronized JSONObject selectCloudWorkspaceForOwner(JSONObject request,JSONObject originalCatalog,long expected,boolean forget)throws Exception {
+        JSONObject profile=requireProfileBinding(request.getString("profileId"),request.getString("_profileBinding"));
+        JSONArray current=new JSONArray();for(int i=0;i<profiles.length();i++)current.put(publicProfile(profiles.getJSONObject(i)));
+        if(forget)cloudWorkspace.forget(profile,current,expected);
+        else {
+            if(originalCatalog==null||!profile.get("serviceBase").equals(originalCatalog.opt("serviceBase"))||!profile.get("bindingHash").equals(originalCatalog.opt("profileBinding")))throw new SecurityException("工作环境不属于原连接");
+            JSONObject selected=RemoteTaskRequest.environment(originalCatalog,request.getString("environmentId"),request.getString("worker"));
+            cloudWorkspace.select(profile,selected,request,expected);
+        }
+        return cloudWorkspace.view(current);
     }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception {
         if(closed)throw new IllegalStateException("电脑连接模块已关闭");

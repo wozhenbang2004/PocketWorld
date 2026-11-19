@@ -7,6 +7,7 @@ import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { getRecentTaskProgress } from './task-presentation';
 import { isButlerHomeWork, workCollectionPresentation } from './work-collection';
+import { domainLabel, homeDomainResult, homeWorkIdentity } from './butler-work-entry';
 import './butler-home.css';
 
 export type ButlerHomeTask = {
@@ -43,9 +44,10 @@ const updatedAt = (task: ButlerHomeTask) => typeof task.updatedAt === 'number' &
  * This is an entry to its existing result surface, never a write receipt. */
 function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresentation(task)) {
   const runId = task.raw?.runId, epoch = task.raw?.coordinatorEpoch;
-  return view.completed && view.handling?.resultAvailable === true &&
-    !reportedHomeWork(task, view.handling) && typeof runId === 'string' && runId.trim() && Number.isSafeInteger(epoch) && epoch > 0
-    ? {runId, epoch} : null;
+  const identity=homeWorkIdentity(task), nativeLabel=identity?homeDomainResult(task,identity.domain):'';
+  const label=view.handling?.resultAvailable===true?'成果已保存':nativeLabel;
+  return view.completed && !!label && !reportedHomeWork(task, view.handling) &&
+    typeof runId === 'string' && runId.trim() && Number.isSafeInteger(epoch) && (epoch > 0 || epoch === 0 && !!identity?.direct) ? {runId, epoch, label} : null;
 }
 
 /** Adapt the retained Affect AssistantHome / Composer composition around the
@@ -68,7 +70,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
 
   // Keep the host's redacted goal/summary as supplied. Do not recover content
   // from another conversation, a generic task list or an unprojected source.
-  const work = (ready ? tasks : []).filter(isButlerHomeWork)
+  const work = (ready ? tasks : []).filter(task=>isButlerHomeWork(task)||homeWorkIdentity(task))
     .sort((a, b) => updatedAt(b) - updatedAt(a))
     .filter(task => {
       if (seenTaskIds.has(task.id)) return false;
@@ -82,13 +84,15 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
       const attention = presentation.group === 'attention';
       const unknown = progress?.source === 'task' && progress.status === 'unknown';
       const saved = originalSavedResult(task,presentation);
-      const status = saved ? '成果已保存' : presentation.label;
+      const exact=homeWorkIdentity(task);
+      const status = saved?.label || presentation.label;
       const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.waitingForChildren || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
       const runId=task.raw?.runId,epoch=task.raw?.coordinatorEpoch;
       const decision=handling?.ownerDecision&&typeof runId==='string'&&runId.trim()&&Number.isSafeInteger(epoch)&&epoch>0?{runId,epoch}:null;
       const report=presentation.group==='ended'?reportedHomeWork(task,handling):null;
-      const needsOwner = !!decision || !presentation.reconciliation && (presentation.pendingApproval || handling?.needsAttention === true);
-      return { task, decision, needsOwner, report, saved, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
+      const needsOwner = !!decision || !presentation.reconciliation && (presentation.pendingApproval || handling?.needsAttention === true ||
+        !!exact && ['awaiting_user','waiting_user','waiting_permission','awaiting_permission','waiting_approval','awaiting_approval','needs_confirmation'].includes(task.status));
+      return { task, decision, needsOwner, report, saved, exact, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
         group: presentation.group, busy: presentation.busy, completed: presentation.completed, action: presentation.actionLabel };
     });
   // An older request must not be displaced by a newer pause or unknown receipt.
@@ -135,22 +139,25 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
   const open=async(item:typeof work[number])=>{
     if(!activeRef.current||!canOpen||flight.current)return;
     const originalOnly=!!item.report&&!!unavailableReport&&sameHomeReport(item.report,unavailableReport);
-    const report=canReadReports&&!originalOnly?item.report:null,binding=item.decision||item.report||item.saved;
+    const report=canReadReports&&!originalOnly?item.report:null,binding=item.decision||item.report||item.saved||item.exact;
     if(!binding){onOpen(item.task);return}
     const id=item.task.id,{runId,epoch}=binding,documentEpoch=bridge.getDocumentEpoch();
     const resume=()=>Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0),startResume=resume();
     const originalDocument=()=>!document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&resume()===startResume;
     const current=()=>live.current&&activeRef.current&&originalDocument();
     const same=()=>{
-      const rows=bridge.getState().state.ownerWork;
+      const native=bridge.getState().state;
+      const rows=item.report||item.decision?native.ownerWork:native.tasks;
       return Array.isArray(rows)&&rows.some((row:ButlerHomeTask)=>row?.id===id&&row.raw?.runId===runId&&row.raw?.coordinatorEpoch===epoch&&
-        (item.report?sameHomeReport(reportedHomeWork(row),item.report):item.saved?!!originalSavedResult(row):row.status===item.task.status&&workCollectionPresentation(row).handling?.ownerDecision));
+        (item.report?sameHomeReport(reportedHomeWork(row),item.report):item.saved?!!originalSavedResult(row):
+          item.decision?row.status===item.task.status&&workCollectionPresentation(row).handling?.ownerDecision:
+            !!item.exact&&row.status===item.task.status&&homeWorkIdentity(row)?.domain===item.exact.domain));
     };
     let ownsWindow=false,handedOff=false;
     flight.current=true;setOpening(id);setNotice('');
     try{
       if(!current()||!same())throw new Error('原工作已变化，请核对当前记录。');
-      const receipt=await bridge.command('tasks.open',{id,requestNavigation:false,expectedRunId:runId,expectedEpoch:epoch});
+      const receipt=await bridge.command('tasks.open',{id,requestNavigation:false,expectedRunId:runId,expectedEpoch:epoch,...(epoch===0&&item.exact?.direct?{expectedExternalKind:item.exact.direct}:{})});
       if(receipt?.taskId!==id||receipt.readOnly!==true||receipt.executionAuthorized!==false)throw new Error('尚未核对到原工作，没有打开其他任务。');
       ownsWindow=true;
       if(!current())return;
@@ -169,7 +176,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     finally{
       // Release only our own provisional read if the current Home gesture
       // failed; do not close a view that another route has since entered.
-      if((item.report||item.saved)&&ownsWindow&&!handedOff&&current()&&(bridge.getState().view as {taskId?:string}|undefined)?.taskId===id)
+      if((item.report||item.saved||item.exact)&&ownsWindow&&!handedOff&&current()&&(bridge.getState().view as {taskId?:string}|undefined)?.taskId===id)
         await bridge.command('tasks.close',{}).catch(()=>{});
       flight.current=false;if(live.current)setOpening('');
     }
@@ -182,11 +189,11 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     const date = new Date(updatedAt(task)), hasDate = updatedAt(task) > 0 && Number.isFinite(date.getTime());
     const readAction=decision?'查看原工作':item.report?(canReadReports&&(!unavailableReport||!sameHomeReport(item.report,unavailableReport))?'阅读原汇报':'查看原工作'):item.saved?'查看已保存成果':needsAttention?'查看状态':action;
     return <li key={task.id} data-opening={opening===task.id||undefined} data-task-id={task.id} data-motion-key={task.id} data-task-state={task.status} data-attention={needsAttention || undefined}>
-      <Button variant="ghost" className="pw-butler-work-row" disabled={!canOpen} aria-disabled={!canOpen||!!opening} aria-busy={opening===task.id} aria-label={`${readAction}：${task.goal || '委派工作'}`} aria-description={[status, detail].filter(Boolean).join('，')} onClick={() => void open(item)}>
+      <Button variant="ghost" className="pw-butler-work-row" disabled={!canOpen} aria-disabled={!canOpen||!!opening} aria-busy={opening===task.id} aria-label={`${readAction}：${task.goal || '委派工作'}`} aria-description={[item.exact&&domainLabel[item.exact.domain],status, detail].filter(Boolean).join('，')} onClick={() => void open(item)}>
         <span className="pw-butler-work-mark" data-attention={needsAttention || undefined} aria-hidden="true">{busy ? <ProgressCircle isIndeterminate size="sm" aria-label={status} /> : <StatusIcon size={18} />}</span>
         <span className="pw-butler-work-copy">
           <strong dir="auto">{task.goal || '委派工作'}</strong>
-          <span className="pw-butler-work-meta"><MotionFeedback as="span" identity={status} initial={false}>{status}</MotionFeedback>{group === 'ended' && hasDate && <time dateTime={date.toISOString()}>{date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>}</span>
+          <span className="pw-butler-work-meta">{item.exact&&domainLabel[item.exact.domain]&&<span className="pw-butler-work-domain">{domainLabel[item.exact.domain]}</span>}<MotionFeedback as="span" identity={status} initial={false}>{status}</MotionFeedback>{group === 'ended' && hasDate && <time dateTime={date.toISOString()}>{date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>}</span>
           {group !== 'ended' && detail && <span className="pw-butler-work-detail" dir="auto">{detail}</span>}
         </span>
         <span className="pw-butler-work-next" aria-hidden="true">{opening===task.id?'核对中':readAction}<IconChevronRight size={16} /></span>

@@ -3,7 +3,7 @@ import { bridge } from './bridge';
 import { Button, SearchField } from './forms-library';
 import { IconArrowLeft, IconChevronRight, IconFile } from './icons';
 import { registerOverlayBack } from './overlay-back';
-import type { ProjectPackageOutcome } from './project-preview';
+import type { ProjectPackageOutcome, SourceMember } from './project-preview';
 import { fileBytes } from './attachment-workspace';
 
 const command = 'tasks.projectPackageFiles', pageSize = 24, textLimit = 65536;
@@ -26,8 +26,8 @@ function windowKey(task: string) {
 }
 
 /** Mounted only for the source package the owner just selected from its original work. */
-export function ProjectPackageFiles({ item, onClose, onWholePackage }: {
-  item: ProjectPackageOutcome; onClose: () => void; onWholePackage?: () => void;
+export function ProjectPackageFiles({ item, onClose, onWholePackage, onCheckout }: {
+  item: ProjectPackageOutcome; onClose: () => void; onWholePackage?: () => void; onCheckout?: (member: SourceMember) => void;
 }) {
   const { taskId, operationId, artifactId, archiveSha256: artifactSha256 } = item;
   const origin = useRef(windowKey(taskId)), current = useRef({ onClose, item }); current.current = { onClose, item };
@@ -106,6 +106,9 @@ export function ProjectPackageFiles({ item, onClose, onWholePackage }: {
     </div>
     {file && text !== null && (text === ''
       ? <p className="pw-muted">此固定文件为空（0 字节）。</p> : <pre className="pw-file-text" tabIndex={0} aria-label="固定文件原文">{text}</pre>)}
+    {file && text !== null && onCheckout && bridge.getState().capabilities.commands.includes('projects.development.files.openSource') &&
+      <Button size="small" variant="secondary" disabled={busy} onClick={() => { if (origin.current === windowKey(taskId)) onCheckout({ path: file.path, fileSha256: file.sha256, bytes: file.bytes,
+        projectId: item.projectId, checkoutId: item.checkoutId, artifactId, artifactSha256 }); }}>在原副本继续修改</Button>}
     {busy && <p role="status" className="pw-muted">{file ? '正在读取所选原文…' : '正在读取固定包清单…'}</p>}
     {error && <p role="alert" className="pw-error">{error}</p>}
     {failed && <Button size="small" variant="secondary" disabled={busy} onClick={() => void read(failed)}>重读同一选择</Button>}

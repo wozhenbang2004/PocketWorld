@@ -1,5 +1,6 @@
 package dev.pocketengine.store;
 
+import dev.pocketengine.phone.MainPhoneOwnerStep;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
@@ -8293,6 +8294,8 @@ public final class TaskStore {
         private TeamResearchRead observing;private Thread observingThread,admittedThread;private long admittedPause;
         private TeamResearchBinding(TaskStore issuer,dev.pocketengine.features.teams.TeamCoordinator.ResearchCall call,RunControl original,JSONObject data,JSONObject materials,boolean inspect){this.issuer=issuer;this.call=call;this.original=original;this.data=data.toString();this.materials=materials.toString();this.inspect=inspect;}
         public String taskId(){return call.researchTaskId;}
+        /** A restored child keeps the exact goal captured with its stored source graph. */
+        public String retainedGoal()throws Exception{synchronized(issuer){checkCurrent();return issuer.teamResearchIdentity(this).getString("goal");}}
         public String runId()throws Exception{return new JSONObject(data).getString("runId");}
         public int epoch()throws Exception{return new JSONObject(data).getInt("coordinatorEpoch");}
         public int stepCeiling()throws Exception{return new JSONObject(data).getInt("stepCeiling");}
@@ -8371,6 +8374,16 @@ public final class TaskStore {
     }
     public synchronized java.util.List<TeamResearchSourceProof> teamResearchOutputProofs(dev.pocketengine.features.teams.TeamCoordinator.ResearchSources source)throws Exception {
         source.checkCurrent();requirePrivateOwner(teamWriteTask(source.teamRunId));java.util.ArrayList<TeamResearchSourceProof> result=new java.util.ArrayList<>();collectResearchSourceProofs(source.teamRunId,source.view(),null,source,new java.util.HashSet<>(),result);source.checkCurrent();return result;
+    }
+    /** Metadata-only preview for an optional prior-stage output. The source and every
+     * ancestor must already be covered by this exact recipient. No new grants are made. */
+    public synchronized java.util.List<TeamResearchSourceProof> coveredTeamResearchOutputs(dev.pocketengine.features.teams.TeamCoordinator.MemberEvidenceCall recipient,dev.pocketengine.features.teams.TeamCoordinator.ResearchSources source)throws Exception {
+        recipient.checkCurrent();source.checkCurrent();
+        if(!source.teamRunId.equals(recipient.view().getString("teamRunId")))throw new SecurityException("不是本队原收件成员");
+        JSONObject scope=memberMaterialFacts(recipient);java.util.List<TeamResearchSourceProof> proofs=teamResearchOutputProofs(source);
+        if(proofs.isEmpty())throw new SecurityException("上轮研究没有原生来源");
+        for(TeamResearchSourceProof proof:proofs)if(!researchMaterialsCover(scope,proof.view()))throw new TeamResearchInputDenied("private_material_scope_not_shared");
+        recipient.checkCurrent();return proofs;
     }
     public synchronized void registerTeamResearchInput(TeamResearchBinding target,dev.pocketengine.features.teams.TeamCoordinator.ResearchSources source)throws Exception {
         target.checkCurrent();source.checkCurrent();if(!target.call.teamRunId.equals(source.teamRunId))throw new SecurityException("不是同队原消息来源");java.util.ArrayList<TeamResearchSourceProof> checked=new java.util.ArrayList<>();JSONArray added=source.view();collectResearchSourceProofs(source.teamRunId,added,target,source,new java.util.HashSet<>(),checked);
@@ -10947,13 +10960,40 @@ public final class TaskStore {
         requireOriginalPhoneResume(id,run,epoch,original,pause,"");
     }
     public synchronized void requireOriginalPhoneResume(String id,String run,int epoch,RunControl original,long pause,String feedback)throws Exception {
+        requireOriginalPhoneResume(id,run,epoch,original,pause,feedback,false);
+    }
+    private void requireOriginalPhoneResume(String id,String run,int epoch,RunControl original,long pause,String feedback,boolean ownerReturn)throws Exception {
         JSONObject task=originalPhoneAttempt(id,run,epoch,true);
+        if(!ownerReturn&&MainPhoneOwnerStep.needsOwner(task))throw new SecurityException("这次本人步骤不能用普通继续或文字代替，请打开原任务。");
         if(original==null||!original.matchesHostRun(id,run,epoch)||original.isCancelled()||!original.isPaused()||original.pauseRevision()!=pause||task.optBoolean("cancelRequested")||!task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|needs_confirmation|reconciling"))throw new SecurityException("原暂停状态已变化，请重新核对");
         if(hasUnresolved(id))throw new IllegalStateException("请先核对原未决动作，未重新派发");
         JSONObject permission=grant(run);if(permission==null||permission.optLong("expiresAt")<=System.currentTimeMillis()||permission.optInt("remainingOperations")<1)throw new SecurityException("原执行范围已到期或剩余额度不足，请先明确审阅范围");
         executionScopeCurrent(task,run,permission);JSONObject scope=task.optJSONObject("executionScope");
         if(scope!=null&&(scope.getInt("toolsUsed")>=scope.getInt("toolLimit")||scope.getInt("modelCallsUsed")>=scope.getInt("modelCallLimit")))throw new SecurityException("原累计预算已用尽；继续不会自动增加额度");
         if(feedback!=null&&!feedback.isBlank())feedback(id,feedback.trim());
+    }
+    /** The typed refusal's settled operation, original lease, pause and scope are all still required.
+     * An owner handback never makes the human's external decision a verified business result. */
+    public synchronized long reviewMainPhoneOwnerStep(String id,String run,int epoch,RunControl original,long pause,String operation,long expectedScope)throws Exception {
+        requireExecutionEnabled();JSONObject task=originalPhoneAttempt(id,run,epoch,true);
+        requireOriginalPhoneResume(id,run,epoch,original,pause,"",true);
+        return requireMainPhoneOwnerStepSource(task,run,epoch,operation,expectedScope);
+    }
+    private long requireMainPhoneOwnerStepSource(JSONObject t,String run,int epoch,String operation,long expectedScope)throws Exception {
+        JSONObject source=MainPhoneOwnerStep.source(t);String id=t.getString("id");
+        if(!"awaiting_user".equals(t.optString("status"))||source==null||!MainPhoneOwnerStep.needsOwner(t)||!source.getString("operationId").equals(operation)||
+                !t.isNull("ownerPhoneQuestionHold")||hasUnresolved(id))throw new SecurityException("没有可交还的同次本人步骤；不会重新执行原操作");
+        JSONArray approvals=t.optJSONArray("approvals");
+        for(int i=0;approvals!=null&&i<approvals.length();i++){JSONObject a=approvals.getJSONObject(i);if(run.equals(a.optString("runId"))&&"pending".equals(a.optString("state",a.optString("status"))))throw new SecurityException("请先核对原待审事项");}
+        requireExecutionGrantCurrent(t,run,epoch);
+        JSONObject scope=t.getJSONObject("executionScope");long revision=TaskExecutionScope.exactLong(scope,"revision",1,Long.MAX_VALUE);
+        if(expectedScope>=0&&revision!=expectedScope||TaskExecutionScope.effectiveDeadline(scope)<=System.currentTimeMillis())throw new SecurityException("原授权范围或期限已变化");
+        try(Cursor row=db.rawQuery("SELECT tool,state FROM operations WHERE task_id=? AND run_id=? AND operation_id=?",new String[]{id,run,operation})){
+            if(!row.moveToFirst()||!MainPhoneOwnerStep.TOOLS.contains(row.getString(0))||!"receipt".equals(row.getString(1)))throw new SecurityException("原未派发操作无法核对");
+        }
+        String encoded=TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_RECEIPT,operation);
+        if(encoded==null||!source.getString("reason").equals(MainPhoneOwnerStep.reason(new JSONObject(encoded))))throw new SecurityException("原生拒绝回执无法核对");
+        return revision;
     }
     /** One private local pause, not permission to create an attempt or change its apps or budget.
      * The private note is for this run/epoch/pause only: never append it to task-wide feedback inherited by future attempts. */
@@ -10985,8 +11025,16 @@ public final class TaskStore {
         }finally{if(saving)db.endTransaction();}
     }
     public synchronized void recordOriginalPhoneResumed(String id,String run,int epoch,RunControl original,long pause)throws Exception {
+        recordOriginalPhoneResumed(id,run,epoch,original,pause,null,-1);
+    }
+    public synchronized void recordOriginalPhoneResumed(String id,String run,int epoch,RunControl original,long pause,String ownerOperation,long ownerScope)throws Exception {
         db.beginTransaction();try{
             JSONObject task=originalPhoneAttempt(id,run,epoch,true);
+            if(ownerOperation!=null){
+                requireExecutionEnabled();requireMainPhoneOwnerStepSource(task,run,epoch,ownerOperation,ownerScope);
+                task.put(MainPhoneOwnerStep.RETURN,new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("operationId",ownerOperation)
+                        .put("pauseRevision",pause).put("scopeRevision",ownerScope).put("at",System.currentTimeMillis()).put("ownerHandedBack",true).put("businessResultVerified",false));
+            }else if(MainPhoneOwnerStep.needsOwner(task))throw new SecurityException("本人步骤尚未从原通知交还");
             if(original==null||!original.matchesHostRun(id,run,epoch)||original.isCancelled()||original.isPaused()||original.pauseRevision()!=pause||task.optBoolean("cancelRequested")||hasUnresolved(id))throw new SecurityException("原恢复状态已变化，请重新核对");
             JSONObject permission=grant(run);if(permission==null||permission.optLong("expiresAt")<=System.currentTimeMillis()||permission.optInt("remainingOperations")<1)throw new SecurityException("原执行范围已到期或剩余额度不足");executionScopeCurrent(task,run,permission);
             JSONObject scope=task.optJSONObject("executionScope");if(scope!=null&&(scope.getInt("toolsUsed")>=scope.getInt("toolLimit")||scope.getInt("modelCallsUsed")>=scope.getInt("modelCallLimit")))throw new SecurityException("原累计预算已用尽，未增加额度");
@@ -15728,7 +15776,7 @@ public final class TaskStore {
             if(TaskStoreDeviceTasks.deviceTask(value)){JSONObject previous=read(value.getString("id"));long revision=previous==null?0:previous.optLong("deviceStateRevision");value.put("deviceStateRevision",Math.addExact(revision,1));}
             if(channel||group){String key=group?"groupStateRevision":"channelStateRevision";JSONObject previous=read(value.getString("id"));long revision=previous==null?0:previous.optLong(key,0);if(revision==Long.MAX_VALUE)throw new IllegalStateException("渠道任务回执版本已耗尽");value.put(key,revision+1);}
             if(value.optJSONObject("origin")!=null&&"owner_reviewed_realtime".equals(value.getJSONObject("origin").optString("kind"))){JSONObject previous=read(value.getString("id"));long revision=previous==null?0:Math.max(1,previous.optLong("voiceStateRevision",previous.optLong("updatedAt",1)));if(revision==Long.MAX_VALUE)throw new IllegalStateException("语音任务记录版本已耗尽");value.put("voiceStateRevision",revision+1);}
-            value.put("updatedAt",System.currentTimeMillis());ContentValues v=new ContentValues();v.put("task_id",value.getString("id"));v.put("document",TaskAuditStore.coreAndImport(db,value));v.put("audit_format",1);JSONObject header=TaskAuditStore.header(db,value);projectOwnerWorkHeader(value,header);projectOwnerResultHandlingHeader(value,header);projectOwnerWorkPreparationHeader(value,header);projectDeviceWorkspaceNavigation(value,header);if("needs_confirmation".equals(value.optString("status")))header.put("resultReviewDigest",resultReviewDigest(value));projectResultImageIdentity(value,header);v.put("ui_header",header.toString());v.put("updated_at",value.getLong("updatedAt"));if(db.update("tasks",v,"task_id=?",new String[]{value.getString("id")})==0&&db.insertOrThrow("tasks",null,v)<0)throw new IllegalStateException("任务事务写入失败");TaskIdentityIndex.sync(db,value.getString("id"),value);
+            value.put("updatedAt",System.currentTimeMillis());ContentValues v=new ContentValues();v.put("task_id",value.getString("id"));v.put("document",TaskAuditStore.coreAndImport(db,value));v.put("audit_format",1);JSONObject header=TaskAuditStore.header(db,value);MainPhoneOwnerStep.project(value,header);projectOwnerWorkHeader(value,header);projectOwnerResultHandlingHeader(value,header);projectOwnerWorkPreparationHeader(value,header);projectDeviceWorkspaceNavigation(value,header);if("needs_confirmation".equals(value.optString("status")))header.put("resultReviewDigest",resultReviewDigest(value));projectResultImageIdentity(value,header);v.put("ui_header",header.toString());v.put("updated_at",value.getLong("updatedAt"));if(db.update("tasks",v,"task_id=?",new String[]{value.getString("id")})==0&&db.insertOrThrow("tasks",null,v)<0)throw new IllegalStateException("任务事务写入失败");TaskIdentityIndex.sync(db,value.getString("id"),value);
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }

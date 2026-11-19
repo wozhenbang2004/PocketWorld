@@ -17,7 +17,8 @@ export type ProjectPreviewState = {
 
 export type PreviewWindow = { projectId: string; documentEpoch: number; resumeRevision: number };
 export type PreviewRect = { x: number; y: number; width: number; height: number };
-export type PackagePreviewTarget = { taskId: string; operationId: string };
+export type SourceMember = { path: string; fileSha256: string; bytes: number; artifactId: string; artifactSha256: string; projectId: string; checkoutId: string };
+export type PackagePreviewTarget = { taskId: string; operationId: string; sourceMember?: SourceMember };
 export type ProjectPackageOutcome = PackagePreviewTarget & {
   runId: string; epoch: number; projectId: string; checkoutId: string; sourceDigest: string;
   artifactId: string; archiveSha256: string; archiveBytes: number; manifestIdentity: string;
@@ -112,6 +113,10 @@ export function packagePreviewChoices(value: unknown, expected: PackagePreviewTa
       !['web_output', 'source_project'].includes(String(source.mode)) || typeof source.entryPath !== 'string' ||
       !Array.isArray(source.entryChoices) || source.entryChoices.length > 2000 || !source.entryChoices.every(entry) ||
       new Set(source.entryChoices).size !== source.entryChoices.length || 'sessionId' in source || 'ready' in source) return null;
+  const member = expected.sourceMember;
+  if (member && (source.mode !== 'source_project' || !entry(member.path) || !sha256(member.fileSha256) || !Number.isSafeInteger(member.bytes) ||
+      member.bytes < 0 || member.bytes > 65536 || source.projectId !== member.projectId || source.checkoutId !== member.checkoutId ||
+      source.artifactId !== member.artifactId || source.artifactSha256 !== member.artifactSha256)) return null;
   if (source.mode === 'web_output' && (!entry(source.entryPath) || source.entryChoices.length !== 1 || source.entryChoices[0] !== source.entryPath)) return null;
   if (source.mode === 'source_project' && source.entryPath !== '') return null;
   return { kind: 'package_preview_choices', ...expected, conversationId: source.conversationId, projectId: source.projectId, checkoutId: source.checkoutId, sourceDigest: source.sourceDigest,

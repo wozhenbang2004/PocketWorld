@@ -17,13 +17,15 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
     private val sources = linkedMapOf<String, Pin>()
     private val choices = linkedMapOf<String, Pin>()
     private val identities = linkedMapOf<String, Pin>()
+    private val projectFiles = linkedMapOf<String, Pin>()
+    private val projectQuotes = linkedMapOf<String, Pin>()
     private data class Operation(val owner: Any, val payload: JSONObject, val domain: String = "memoryReview", var requestId: String = "", var result: JSONObject? = null, var error: String? = null, var settled: Boolean = false)
     private val operations = linkedMapOf<String, Operation>()
     private var generation = 0L
     companion object {
-        val COMMANDS = setOf("knowledge.snapshot", "knowledge.get", "knowledge.source", "knowledge.parent", "knowledge.review", "knowledge.confirm", "knowledge.close", "knowledge.namespaces", "knowledge.namespace", "knowledge.history", "knowledge.capacity", "knowledge.assertion.prepare", "knowledge.assertion.review", "knowledge.consolidation.review", "knowledge.consolidation.start", "knowledge.consolidation.query", "knowledge.consolidation.stop", "learning.snapshot", "learning.jobs", "learning.job", "learning.episode.inspect", "learning.episode.retain", "learning.create", "learning.run.review", "learning.run.confirm", "learning.operation.query", "learning.operation.stop", "learning.stop", "learning.skip.review", "learning.skip.confirm")
+        val COMMANDS = setOf("knowledge.snapshot", "knowledge.get", "knowledge.source", "knowledge.parent", "knowledge.review", "knowledge.confirm", "knowledge.close", "knowledge.namespaces", "knowledge.namespace", "knowledge.project.files", "knowledge.project.locate", "knowledge.project.propose", "knowledge.history", "knowledge.capacity", "knowledge.assertion.prepare", "knowledge.assertion.review", "knowledge.consolidation.review", "knowledge.consolidation.start", "knowledge.consolidation.query", "knowledge.consolidation.stop", "learning.snapshot", "learning.jobs", "learning.job", "learning.episode.inspect", "learning.episode.retain", "learning.create", "learning.run.review", "learning.run.confirm", "learning.operation.query", "learning.operation.stop", "learning.stop", "learning.skip.review", "learning.skip.confirm")
     }
-    fun clear() { generation++; reads.clear(); reviews.clear(); sources.clear(); choices.clear(); identities.clear(); operations.clear() }
+    fun clear() { generation++; reads.clear(); reviews.clear(); sources.clear(); choices.clear(); identities.clear(); projectFiles.clear(); projectQuotes.clear(); operations.clear() }
     private fun fields(value: JSONObject, vararg keys: String) { require(value.keys().asSequence().all { it in keys }) { "原审核参数含不适用字段" } }
     private fun text(value: JSONObject, key: String, max: Int = 128): String { val s = value.opt(key); require(s is String && s.isNotBlank() && s.length <= max && '\u0000' !in s) { "请重新选择原记录" }; return s }
     private fun number(value: JSONObject, key: String): Long { val n = value.opt(key); require((n is Int || n is Long) && (n as Number).toLong() > 0) { "原修订无效" }; return (n as Number).toLong() }
@@ -69,6 +71,47 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
             "knowledge.namespace" -> {
                 fields(args, "choiceHandle"); val choice = if (args.optString("choiceHandle").isBlank()) null else selected(choices, text(args, "choiceHandle"))
                 clear(); controller.selectMemoryNamespace(choice, done)
+            }
+            "knowledge.project.files" -> {
+                fields(args, "filter"); val filter = args.opt("filter"); require(filter is String && filter.length <= 160)
+                projectFiles.clear(); projectQuotes.clear()
+                call("memoryReview", "findProjectFileChoices", JSONObject().put("filter", filter), done) { found ->
+                    val files = found.getJSONArray("files"); require(files.length() <= 24)
+                    val list = JSONArray()
+                    for (i in 0 until files.length()) { val row = files.getJSONObject(i); list.put(JSONObject().put("path", row.getString("path")).put("version", row.getInt("version"))) }
+                    JSONObject().put("catalog", pin(projectFiles, found, 1)).put("spaceId", found.getString("spaceId")).put("files", list).put("matches", found.getInt("matches"))
+                }
+            }
+            "knowledge.project.locate" -> {
+                fields(args, "catalog", "index", "quote")
+                val catalog = selected(projectFiles, text(args, "catalog")); val files = catalog.getJSONArray("files")
+                val index = args.opt("index"); require(index is Int && index in 0 until files.length())
+                val file = files.getJSONObject(index)
+                val payload = JSONObject()
+                for (key in listOf("path", "version", "revisionId", "sha256")) payload.put(key, file.get(key))
+                projectQuotes.clear()
+                call("memoryReview", "locateProjectFileQuote", JSONObject(payload.toString()).put("quote", text(args, "quote", 4000)), done) { located ->
+                    val scope = catalog.getString("spaceId"); check(located.getString("spaceId") == scope)
+                    val offset = located.getInt("offset"); val chars = located.getInt("chars"); check(offset >= 0 && chars in 1..4000)
+                    payload.put("offset", offset).put("chars", chars)
+                    val review = pin(projectQuotes, JSONObject().put("spaceId", scope).put("payload", payload), 1)
+                    JSONObject().put("review", review).put("spaceId", scope).put("path", payload.getString("path")).put("version", payload.getInt("version")).put("offset", offset).put("chars", chars)
+                }
+            }
+            "knowledge.project.propose" -> {
+                fields(args, "review")
+                val reviewed = selected(projectQuotes, text(args, "review"), true); val payload = reviewed.getJSONObject("payload")
+                call("memoryReview", "proposeProjectFile", payload, done) { receipt ->
+                    val candidate = receipt.getJSONObject("candidate"); val source = dev.pocketengine.features.memory.SourceRef.fromJson(receipt.getJSONObject("sourceRef"))
+                    val location = source.workspace ?: error("没有原项目文件选段回执")
+                    val scope = reviewed.getString("spaceId"); val refs = candidate.getJSONArray("sourceRefs")
+                    check(receipt.opt("formalMemorySaved") == false && receipt.opt("modelCalled") == false && receipt.opt("executionAuthorized") == false &&
+                        candidate.getString("ownerId") == "owner" && candidate.getString("spaceId") == scope && scope == "project:" + location.projectId &&
+                        source.revision == payload.getLong("version") && location.path == payload.getString("path") && location.revisionId == payload.getString("revisionId") &&
+                        location.sha256 == payload.getString("sha256") && location.offset == payload.getInt("offset") && location.chars == payload.getInt("chars") &&
+                        (0 until refs.length()).any { source == dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(it)) }) { "候选写入结果待核对，请重新读取本项目候选" }
+                    JSONObject().put("candidateId", candidate.getString("id")).put("status", candidate.getString("status")).put("spaceId", scope)
+                }
             }
             "knowledge.history" -> { fields(args); call("memoryReview", "listCandidateHistory", JSONObject(), done) }
             "knowledge.capacity" -> { fields(args); call("memoryReview", "candidateCapacity", JSONObject(), done) }
@@ -194,7 +237,7 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController)
                     result
                 } }
             }
-            "knowledge.close" -> { fields(args, "handle"); val id = text(args, "handle"); reads.remove(id); reviews.remove(id); done(JSONObject().put("closed", true), null) }
+            "knowledge.close" -> { fields(args, "handle"); val id = text(args, "handle"); reads.remove(id); reviews.remove(id); projectFiles.remove(id); projectQuotes.remove(id); done(JSONObject().put("closed", true), null) }
             "learning.snapshot" -> { fields(args); call("learning", "snapshot", JSONObject(), done) }
             "learning.jobs" -> { fields(args, "cursor"); call("learning", "listLearningJobs", JSONObject().put("cursor", args.optString("cursor")).put("limit", 20), done) }
             "learning.job" -> { fields(args, "taskId"); call("learning", "getLearningJob", JSONObject().put("taskId", text(args, "taskId")), done) }

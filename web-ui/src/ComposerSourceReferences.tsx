@@ -7,22 +7,31 @@ type Data = Record<string, any>;
 
 /** Reference collections use the same native draft CAS, without replaying a removal. */
 export function useComposerReferenceRemoval(composer: Data, disabled: boolean, kind: 'source' | 'preview' | 'object') {
-  const identity = JSON.stringify([composer.key, composer.epoch, composer.revision]);
+  // A source edit publishes before its disk receipt. Only a different draft/window abandons it.
+  const identity = JSON.stringify([composer.key, composer.epoch, kind === 'source' ? null : composer.revision]);
+  const latestRevision = useRef(composer.revision);
+  latestRevision.current = composer.revision;
   const renderedEpoch = bridge.getDocumentEpoch();
   const currentDisabled = useRef(disabled);
   currentDisabled.current = disabled;
   const current = useRef(identity), entered = useRef(false), alive = useRef(true), generation = useRef(0);
   const [phase, setPhase] = useState<'idle' | 'removing' | 'refreshing'>('idle');
   const [error, setError] = useState(''), [unknown, setUnknown] = useState(false);
+  const [saved, setSaved] = useState<{ identity: string; revision: number } | null>(null);
   current.current = identity;
   useEffect(() => {
-    generation.current++; entered.current = false; setPhase('idle'); setError(''); setUnknown(false);
+    generation.current++; entered.current = false; setPhase('idle'); setError(''); setUnknown(false); setSaved(null);
   }, [identity]);
+  useEffect(() => {
+    if (saved?.identity === identity && composer.revision >= saved.revision) {
+      entered.current = false; setPhase('idle'); setSaved(null);
+    }
+  }, [identity, composer.revision, saved]);
   useEffect(() => {
     alive.current = true; let epoch = bridge.getDocumentEpoch();
     const unsubscribe = bridge.subscribe(() => {
       if (epoch === bridge.getDocumentEpoch()) return;
-      epoch = bridge.getDocumentEpoch(); generation.current++;
+      epoch = bridge.getDocumentEpoch(); generation.current++; setSaved(null);
       if (entered.current) {
         setUnknown(true); setError('移除结果尚未核对，请核对原草稿；没有重复移除。');
       }
@@ -31,14 +40,25 @@ export function useComposerReferenceRemoval(composer: Data, disabled: boolean, k
     return () => { alive.current = false; generation.current++; unsubscribe(); };
   }, []);
   const remove = (index: number) => {
-    if (!alive.current || current.current !== identity || bridge.getDocumentEpoch() !== renderedEpoch || entered.current || currentDisabled.current || unknown) return;
+    if (!alive.current || current.current !== identity || latestRevision.current !== composer.revision || bridge.getDocumentEpoch() !== renderedEpoch || entered.current || currentDisabled.current || unknown) return;
     const original = { key: composer.key, epoch: composer.epoch, revision: composer.revision, index };
     const request = ++generation.current, documentEpoch = bridge.getDocumentEpoch();
     const accepts = () => alive.current && generation.current === request && current.current === identity && bridge.getDocumentEpoch() === documentEpoch;
     entered.current = true; setPhase('removing'); setError('');
     void bridge.command(`composer.${kind}.remove`, original).then(value => {
       if (!accepts()) return;
-      if (value?.removed !== true) {
+      if (kind === 'source') {
+        const originalEdit = value?.key === original.key && value?.epoch === original.epoch &&
+          value?.fromRevision === original.revision && Number.isSafeInteger(value?.revision) && value.revision === original.revision + 1;
+        if (!originalEdit || value?.removed !== true || value?.persisted !== true) {
+          setUnknown(true); setPhase('idle');
+          setError(originalEdit && value?.status === 'storage_unconfirmed'
+            ? '本页已移除，但未确认保存。重开原草稿时引用可能仍在，请先核对。'
+            : '没有收到原草稿的保存回执，暂不能确认这条引用已移除。');
+          return;
+        }
+        setSaved({ identity, revision: value.revision });
+      } else if (value?.removed !== true) {
         setUnknown(true); setError('尚未收到确定的移除回执，请核对原草稿；没有重复移除。'); setPhase('idle');
         return;
       }
@@ -80,7 +100,7 @@ export function ComposerObjectReferences({ composer, disabled }: { composer: Dat
 export function ComposerSourceReferences({ composer, disabled }: { composer: Data; disabled: boolean }) {
   const refs: Data[] = Array.isArray(composer.sourceRefs) ? composer.sourceRefs : [];
   const removal = useComposerReferenceRemoval(composer, disabled, 'source');
-  if (!refs.length && !removal.error) return null;
+  if (!refs.length && !removal.error && !removal.busy) return null;
   return <section className="pw-composer-context" aria-label="草稿中的原文引用">
     {refs.length > 0 && <Accordion className="pw-composer-context-disclosure"><AccordionItem id="source-references" title={`原文引用 · ${refs.length}`} description="已加入这份草稿，发送时核对原消息。">
       <div className="pw-composer-context-scroll" role="region" aria-label="原文引用清单" tabIndex={0}>
@@ -103,7 +123,7 @@ export function ComposerSourceReferences({ composer, disabled }: { composer: Dat
         })}
       </div>
     </AccordionItem></Accordion>}
-    {removal.busy && <p className="pw-composer-context-feedback" role="status">{removal.phase === 'refreshing' ? '已收到移除回执，正在核对草稿…' : '正在移除这条原文引用…'}</p>}
+    {removal.busy && <p className="pw-composer-context-feedback" role="status">{removal.phase === 'refreshing' ? '原草稿已保存，正在核对引用清单…' : '正在从本机草稿移除引用…'}</p>}
     {removal.error && <p className="pw-composer-context-feedback pw-error" role="alert">{removal.error}</p>}
     {removal.unknown && <p className="pw-composer-context-hint">结果待核对，暂不再次移除。</p>}
   </section>;

@@ -68,16 +68,8 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
             }
             "composer.source.remove" -> {
                 fields(args, "key", "epoch", "revision", "index")
-                check(controller.webPrivateOwnerVisible() && !controller.state.chatSubmitting) { "请回到原草稿核对引用" }
-                val draft = controller.composerDraft ?: error("原草稿已关闭")
-                val epoch = integer(args, "epoch").toInt()
-                check(draft.key == text(args, "key") && controller.composerViewEpoch == epoch && draft.revision == integer(args, "revision", Long.MAX_VALUE)) { "原草稿已变化，请重新核对引用" }
-                val index = integer(args, "index").toInt()
-                val count = draft.sourceRefs().length()
-                require(index in 0 until count) { "原引用已变化" }
-                controller.removeComposerSource(index, draft.key, epoch)
-                check(controller.composerDraft?.sourceRefs()?.length() == count - 1) { "原引用尚未确认移除，请重新核对草稿" }
-                done(JSONObject().put("removed", true), null)
+                controller.removeComposerSource(integer(args, "index").toInt(), text(args, "key"),
+                    integer(args, "epoch").toInt(), integer(args, "revision", Long.MAX_VALUE), done)
             }
             else -> error("未接入的原文引用操作")
         }

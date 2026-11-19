@@ -587,6 +587,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun describeLocalCheckout(checkout: String): JSONObject = dev.pocketengine.features.local.project.ProjectSources.describe(app.features.module("local").handle("export", JSONObject().put("checkoutId", checkout)))
     internal fun projectDevelopmentForWeb() = app.projectDevelopmentForOwner()
     internal fun nativeButlerHost(): EngineApplication = app
+    internal fun refreshCloudWorkspaceForWeb() { native("getFeatures") }
     internal fun butlerPreparationPresentationForWeb() = app.getSharedPreferences("butler_preparation_presentation", android.content.Context.MODE_PRIVATE)
     internal fun projectDevelopmentPresentationForWeb() = app.getSharedPreferences("project_development_presentation", android.content.Context.MODE_PRIVATE)
     internal fun projectDevelopmentModelForWeb(): JSONObject {
@@ -985,12 +986,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } }
     }
     private fun scheduleComposerSave() { composerSaving=true;main.removeCallbacks(composerSave);main.postDelayed(composerSave,250) }
-    fun persistOwnerComposer() {
-        main.removeCallbacks(composerSave);val model=ownerComposer ?: return;val version=model.revision();composerSaving=true
-        ownerComposerStore.save(model).whenComplete { _,error -> main.post {
-            if(closed)return@post
-            if(error!=null){state=state.copy(error="草稿仍在本页，尚未保存；没有自动发送："+composerFailure(error));return@post}
-            if(ownerComposer?.revision()==version)composerSaving=false
+    fun persistOwnerComposer() { ownerComposer?.let { persistComposer(it) } }
+    private fun persistComposer(model: OwnerComposerState, completed: ((Throwable?) -> Unit)? = null) {
+        main.removeCallbacks(composerSave)
+        val version = model.revision()
+        composerSaving = true
+        ownerComposerStore.save(model).whenComplete { _, error -> main.post {
+            if (closed) return@post
+            if (error == null && ownerComposer === model && model.revision() == version) composerSaving = false
+            if (error != null && completed == null) state = state.copy(error = "草稿仍在本页，尚未保存；没有自动发送：" + composerFailure(error))
+            completed?.invoke(error)
         } }
     }
     fun editComposerText(key:String,viewEpoch:Int,text: String) {
@@ -1021,10 +1026,29 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         awaitWebOwnerReceipt("taskMemory", "selectOwnerOriginalReference", original, owner, done)
         return original
     }
-    fun removeComposerSource(index:Int,key:String,viewEpoch:Int){
-        val model=ownerComposer?:return;val draft=model.active();if(draft.key!=key||viewEpoch!=chatViewEpoch)return
-        try{val refs=draft.sourceRefs();if(index !in 0 until refs.length())return;val next=org.json.JSONArray();for(i in 0 until refs.length())if(i!=index)next.put(refs.getJSONObject(i));model.editSources(key,draft.revision,next);publishComposer();scheduleComposerSave()}
-        catch(error:Exception){state=state.copy(error=message(error))}
+    internal fun removeComposerSource(index: Int, key: String, viewEpoch: Int, revision: Long, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible() && !state.chatSubmitting) { "请回到原草稿核对引用" }
+        val model = ownerComposer ?: error("原草稿已关闭")
+        val draft = model.active()
+        require(draft.key == key && chatViewEpoch == viewEpoch && draft.revision == revision &&
+                draft.conversationId == state.conversationId.orEmpty()) { "原草稿已变化，没有移除其他引用" }
+        val refs = draft.sourceRefs()
+        require(index in 0 until refs.length()) { "原引用已变化，请核对草稿" }
+        val owner = webWindowTicket()
+        val next = JSONArray()
+        for (i in 0 until refs.length()) if (i != index) next.put(refs.getJSONObject(i))
+        val updated = model.editSources(key, revision, next)
+        publishComposer()
+        // The store captures this exact edit synchronously and verifies its bytes on its serial disk queue.
+        persistComposer(model) { failure ->
+            if (!webPrivateOwnerVisible() || webWindowTicket() != owner || ownerComposer !== model || model.activeKey() != key) {
+                done(JSONObject().put("status", "scope_changed"), null)
+            } else {
+                val result = JSONObject().put("key", key).put("epoch", viewEpoch).put("fromRevision", revision).put("revision", updated.revision)
+                if (failure == null) done(result.put("removed", true).put("persisted", true), null)
+                else done(result.put("status", "storage_unconfirmed"), null)
+            }
+        }
     }
     fun saveComposerReading(key:String,index:Int,offset:Int,anchor:String,observed:String,unread:Boolean) {
         val model=ownerComposer ?: return
@@ -1642,12 +1666,23 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             MemoryReviewScope.Private -> when (command) {
                 "openSource" -> app.nativeOwnerWorkflows.source(payload)
                 "proposeConsolidation" -> app.proposeMemoryConsolidation(payload.getJSONArray("selections"), original)
-                "projectFileChoices", "proposeProjectFile" -> throw SecurityException("请先明确选择原生项目记忆范围")
+                "projectFileChoices", "findProjectFileChoices", "locateProjectFileQuote", "proposeProjectFile" -> throw SecurityException("请先明确选择原生项目记忆范围")
                 else -> app.nativeOwnerWorkflows.memory(command, payload)
             }
             is MemoryReviewScope.Project -> when (command) {
                 "openSource" -> scope.native.readFileSourceForOwner(scope.selected, dev.pocketengine.features.memory.SourceRef.fromJson(payload))
                 "projectFileChoices" -> JSONObject().put("files", scope.native.fileChoicesForOwner(scope.selected))
+                "findProjectFileChoices" -> {
+                    require(payload.keys().asSequence().toSet() == setOf("filter"))
+                    original.check()
+                    scope.native.findFileChoicesForOwner(scope.selected, payload.getString("filter"))
+                }
+                "locateProjectFileQuote" -> {
+                    require(payload.keys().asSequence().toSet() == setOf("path", "version", "revisionId", "sha256", "quote"))
+                    original.check()
+                    scope.native.locateFileQuoteForOwner(scope.selected, payload.getString("path"), payload.getInt("version"),
+                        payload.getString("revisionId"), payload.getString("sha256"), payload.getString("quote"))
+                }
                 "proposeProjectFile" -> {
                     require(payload.keys().asSequence().toSet() == setOf("path", "version", "revisionId", "sha256", "offset", "chars")) { "项目原文只接受所选文件版本和范围；namespace不是JSON权限" }
                     original.check()
@@ -1816,7 +1851,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (domain == "accounts" && (command in setOf("beginLogin", "cancelLogin", "logout") || command in setOf("setEnabled", "setAppLearningPolicy") && !payload.optBoolean("enabled"))) authorizationOpening = null
         ownerRequests[key]?.let { previous ->
             if (previous.payload.toString() == payload.toString()) return previous.id
-            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "namespaceChoices", "projectFileChoices", "cognitionProjection", "searchHistory", "readHistoryRecord", "readAssertionEvidence", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
+            if (command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "namespaceChoices", "projectFileChoices", "findProjectFileChoices", "locateProjectFileQuote", "cognitionProjection", "searchHistory", "readHistoryRecord", "readAssertionEvidence", "models", "openSource", "prepareLearningSource", "discoverMcp", "discoverMcpAuthorized", "searchTaskMemoryTasks", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "readTaskMemoryReceipt", "readTaskMemorySource", "listTaskMemoryReplacements", "getLearningJob", "listLearningJobs", "searchOwnerOriginals", "readOwnerOriginalSearchHit", "selectOwnerOriginalReference")) throw IllegalStateException("这项操作仍在处理中，请等待真实回执")
             previous.control.cancel(); previous.call.cancel(); originalSourceStages.remove(previous.id); completeWebOwnerReceipt(previous.id, null, "原读取已被更新的读取替代")
             if (domain == "mcp" && command in setOf("discoverMcp", "discoverMcpAuthorized")) cleanOwnerResult(domain, "cancel", JSONObject().put("operationId", previous.payload.optString("_operationId")))
         }
@@ -1865,12 +1900,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
             } catch (error: Exception) { failure = error }
             finally { modelMutation?.close(); if (modelMutation != null) modelMutations.remove(modelMutation) }
-            if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "cognitionProjection", "searchHistory", "readHistoryRecord", "readAssertionEvidence", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
+            if (failure == null && domain != "accounts" && command !in setOf("snapshot", "list", "search", "get", "listCandidates", "getCandidate", "candidateCapacity", "listCandidateHistory", "findProjectFileChoices", "locateProjectFileQuote", "cognitionProjection", "searchHistory", "readHistoryRecord", "readAssertionEvidence", "openSource", "readTaskMemoryTrace", "readTaskMemoryTraceOperation", "readTaskNativeOutputAudit", "readLearnedMethodApplications", "listSavedMemorySources", "selectSavedMemorySource", "getConversationHistoryReadScope", "discoverMcp", "discoverMcpAuthorized", "discardMcpPreview", "cancel")) {
                 try { app.features.sendState() } catch (_: Exception) { /* The direct receipt remains authoritative. */ }
             }
             try {
                 snapshot = when (domain) {
-                    "memoryReview" -> memoryReviewSnapshot(capturedMemoryScope)
+                    "memoryReview" -> if (command in setOf("findProjectFileChoices", "locateProjectFileQuote")) null else memoryReviewSnapshot(capturedMemoryScope)
                     "mcp" -> app.nativeOwnerWorkflows.mcpSnapshot()
                     "accounts" -> app.nativeOwnerWorkflows.accountSnapshot()
                     "learning" -> app.nativeOwnerWorkflows.learningSnapshot()
@@ -3213,6 +3248,29 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } } catch (error: Exception) { state = state.copy(error = message(error)); completed?.invoke(null, message(error)) }
     }
     /** This route can only resume the already-live original pause. Unlike a generic continuation it cannot start a replacement attempt. */
+    internal fun mainPhoneOwnerStep(task: UiTask, run: String, epoch: Int, operation: String, leave: Boolean,
+                                   current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        fun valid() = current() && webPrivateOwnerVisible() && state.activeTaskId == task.id && !activity.isFinishing && !activity.isDestroyed
+        if (!valid()) { done(null, "请在原主屏任务核对本人步骤"); return }
+        try { io.execute {
+            val result = runCatching {
+                check(valid()) { "原主屏任务窗口已经关闭" }
+                app.reviewMainPhoneOwnerStepPage(task.id, run, epoch, operation)
+            }
+            main.post {
+                if (!valid()) done(null, "原主屏任务窗口已变化，没有交还")
+                else result.fold({ receipt ->
+                    if (!leave) done(receipt, null)
+                    else if (!receipt.getBoolean("returnNoticePosted") && !receipt.getBoolean("returnControlVisible")) done(null, "原任务通知和悬浮控制条暂时都没有可核对的交还按钮。任务仍暂停；没有打开其他应用。")
+                    else {
+                        // Only leave PocketWorld on this tap. Do not launch/guess the original app or resume on return.
+                        val moved = activity.moveTaskToBack(true)
+                        done(receipt.put("leftPocketWorld", moved), if (moved) null else "PocketWorld 未退出前台，请用安卓最近任务切换；任务仍暂停")
+                    }
+                }, { done(null, message(it)) })
+            }
+        } } catch (failure: Exception) { done(null, message(failure)) }
+    }
     internal fun privatePhonePauseNote(task: UiTask, pause: Long, scope: Long, note: String?, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         val id = task.id; val run = task.raw.getString("runId"); val epoch = task.raw.getInt("coordinatorEpoch"); val window = webWindowTicket()
         fun valid() = !closed && webPrivateOwnerVisible() && webWindowTicket() == window && current()

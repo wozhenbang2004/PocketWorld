@@ -1,6 +1,6 @@
 # Local management only. Private state is retained unless the owner explicitly deletes it.
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High')]
-param([Parameter(Mandatory=$true)][ValidateSet('Initialize','StopDesktop','RecoverDesktop','PairDevices','EnableLoginStart','DisableLoginStart','Repair','Rollback','Uninstall')][string]$Action,
+param([ValidateSet('OpenDesk','Initialize','StopDesktop','RecoverDesktop','PairDevices','EnableLoginStart','DisableLoginStart','Repair','Rollback','Uninstall')][string]$Action='OpenDesk',
       [string]$Config,[string]$Workspace,[switch]$DeletePrivateState)
 $ErrorActionPreference='Stop'
 $fixedHome=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'PocketWorld\Companion'))
@@ -12,6 +12,12 @@ if ([IO.Path]::GetFullPath($PSScriptRoot) -ne $paths.Home) { throw 'Use the inst
 Assert-PWPrivateAcl $paths.Home $paths.Sid
 if ($Config -and [IO.Path]::GetFullPath($Config) -ne $paths.Config) { throw 'Installed management never follows an external config/state path.' }
 $launcher=Join-Path $paths.Home 'Launch-Companion.ps1'
+if ($Action -eq 'OpenDesk') {
+    if ($Workspace -or $DeletePrivateState) { throw 'Opening the owner desk does not initialize or remove private state.' }
+    if ($WhatIfPreference) { Write-Output 'Would open this local owner desk; no service would start.'; return }
+    & $launcher -Action OpenDesk
+    return
+}
 if ($Action -in @('Initialize','StopDesktop','RecoverDesktop','PairDevices')) {
     if ($PSCmdlet.ShouldProcess('This local Companion', $Action)) {
         & $launcher -Action $Action -Workspace $Workspace

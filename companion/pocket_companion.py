@@ -158,6 +158,13 @@ class JobManager:
         self.ledger.execute("CREATE TABLE IF NOT EXISTS operations (operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, job_id TEXT NOT NULL, last_status TEXT NOT NULL, updated_at INTEGER NOT NULL)")
         if "details" not in {row[1] for row in self.ledger.execute("PRAGMA table_info(operations)")}:
             self.ledger.execute("ALTER TABLE operations ADD COLUMN details TEXT")
+        # Logical operation-store identity, not a credential, hardware identity or running-process proof.
+        # A new state directory must not silently inherit a phone's remembered workspace.
+        self.location_store = None
+        if os.name == "posix" and os.uname().sysname == "Linux":
+            self.ledger.execute("CREATE TABLE IF NOT EXISTS workspace_location_identity (slot INTEGER PRIMARY KEY CHECK(slot=1), id TEXT NOT NULL)")
+            self.ledger.execute("INSERT OR IGNORE INTO workspace_location_identity(slot,id) VALUES(1,?)", (str(uuid.uuid4()),))
+            self.location_store = self.ledger.execute("SELECT id FROM workspace_location_identity WHERE slot=1").fetchone()[0]
         # In-flight prepare bodies/Git cannot be replayed after a supervisor restart.
         for op, raw in self.ledger.execute("SELECT operation_id,details FROM operations WHERE details IS NOT NULL").fetchall():
             original = json.loads(raw)
@@ -328,9 +335,11 @@ class JobManager:
                     available = bool(resolved) and (os.name != "nt" or Path(resolved).suffix.lower() == ".exe")
                 production = harness_registry.production_available(item) and harness_registry.production_worker(worker)
                 workers.append({"id": worker, "label": {"codex_app_server": "Codex", "claude": "Claude Code", "pi": "Pi", "gemini_acp": "Gemini fixed profile"}.get(worker, worker), "adapter": "native", "available": available, "availability": "requires_fixed_profile_probe" if worker == gemini_acp_profile.WORKER else "unverified_remote" if available is None else "installed" if available else "missing", "autonomousTools": worker == "kimi", "capabilities": {**worker_capabilities(worker), "assignmentWorkspace": production, "projectProduction": production and assignment_projects.capability(item).get("supported", False)}, **worker_executable_identity.inspect(item, worker)})
+            location = self.host_workspace(item)
             entries.append({"id": eid, "label": item.get("label", eid), "kind": item.get("kind", "local"), "workers": workers,
+                            **({"hostWorkspace": location} if location else {}),
                             "writeAllowed": bool(item.get("writeAllowed", False)), "sandboxed": False,
-                            "bindingHash": self.environment_binding(eid), "workspace": item["root"],
+                            "bindingHash": self.environment_binding(eid, location=location), "workspace": item["root"],
                             "harnesses": [{key: value.get(key) for key in ("bindingId", "family", "scope")} for value in item.get("harnesses", [])],
                             "harnessConfiguration": {"protocol": "harness_config_v1", "writeConsistency": "OPTIMISTIC", "runtimeVerified": False, "platformSupported": os.name != "nt" or self.harness_configs.windows_storage is not None},
                             "nativePlatformCapabilities": self.platform.capabilities() if item.get("kind", "local") == "local" else {"platform": "ssh_posix_only", "windowsSshSecondHop": False},
@@ -341,8 +350,25 @@ class JobManager:
                             "assignmentWorkspaceCapabilities": {"protocol": "selected_files_v1", "copySupported": harness_registry.production_available(item), "workers": harness_registry.production_workers(item), "maxFiles": 8, "fullProject": False, "osReadIsolationVerified": False, "commandApprovalEscalationSupported": False, "wallTimeEnforcement": "original_companion_process_group", "detachedDescendantIsolationVerified": False}})
         return {"environments": entries}
 
-    def environment_binding(self, eid):
+    def host_workspace(self, env, root_identity=None):
+        # Linux on the Companion host, not a phone-local folder or the SSH second hop.
+        # This hints at continuity of one operation store + directory; it is not a grant or physical-host attestation.
+        if env.get("kind", "local") != "local" or os.name != "posix" or os.uname().sysname != "Linux":
+            return None
+        try:
+            root_identity = root_identity or self.workspace_identity(env)
+            if not root_identity or str(uuid.UUID(self.location_store)) != self.location_store:
+                return None
+            anchor = hashlib.sha256(json.dumps([self.location_store, env["id"], root_identity], separators=(",", ":")).encode()).hexdigest()
+            return {"format": "companion_host_workspace_v1", "anchor": anchor, "jobRegistry": "persistent_operations",
+                    "runningAfterSupervisorRestart": "not_guaranteed", "processSandbox": False}
+        except (ValueError, TypeError, OSError, RequestError):
+            return None  # An unreadable store/root does not become a guessed match.
+
+    def environment_binding(self, eid, *, location=...):
         item = self._environment(eid)
+        if location is ...:
+            location = self.host_workspace(item)
         # No credential contents or token-derived identity are exposed. A restart invalidates
         # an unsubmitted review; accepted operations still reconcile by their original ID.
         scope = {key: item.get(key) for key in ("kind", "root", "host", "user", "port", "writeAllowed", "workers", "commands", "knownHosts", "identityFile", "sshConfig", "harnesses", "commandOutputEncoding")}
@@ -351,6 +377,8 @@ class JobManager:
             scope["harnessWorkers"] = hmac.new(self.auth_generation_salt, harness_registry.canonical(item["harnessWorkers"]).encode(), hashlib.sha256).hexdigest()
         if "ccSwitchSources" in item:
             scope["ccSwitchSourceDefinitions"] = cc_switch_import.source_definitions_identity(item)
+        if location:
+            scope["hostWorkspaceAnchor"] = location["anchor"]
         scope.update(instance=self.instance_id, environmentId=eid)
         return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -1033,6 +1061,11 @@ class JobManager:
             if team_context is not None and request.get("externalExecutionRiskAcknowledged") is True:
                 job["externalExecutionRiskAcknowledged"] = True
             job["workspaceIdentity"] = self.workspace_identity(env)
+            # Bind the observed root again at reservation. Existing process-start checks still fence a later swap.
+            if assignment_record is None and request.get("environmentBinding") and job["workspaceIdentity"] and env["root"] == self._environment(eid)["root"]:
+                location = self.host_workspace(env, job["workspaceIdentity"])
+                if request["environmentBinding"] != self.environment_binding(eid, location=location):
+                    raise RequestError("Original workspace changed before acceptance; no replacement job was created", 409)
             if job["worker"] == "command":
                 job["outputEncoding"] = env.get("commandOutputEncoding", "utf-8")
             if native_device_admission is not None:

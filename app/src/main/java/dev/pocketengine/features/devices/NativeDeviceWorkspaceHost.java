@@ -169,6 +169,11 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         void cancelPendingGoal(String originalTaskId) throws Exception;
         ResultAction reviewResult(String originalTaskId) throws Exception;
         JSONObject historyLinks(String originalTaskId) throws Exception;
+        default JSONObject historyPage(String originalTaskId,String target,String after) throws Exception {
+            if (target.isEmpty() && after.isEmpty()) return historyLinks(originalTaskId);
+            throw new IllegalStateException("此本机宿主未提供原派发分页");
+        }
+        default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter) throws Exception { throw new IllegalStateException("本机未提供手机目标记录"); }
         HistoryAction openHistory(String originalTaskId, String originalOperationId) throws Exception;
         void pause(String originalTaskId) throws Exception;
         void resume(String originalTaskId) throws Exception;
@@ -470,6 +475,8 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             return new JSONObject().put("sessionId", sessionId).put("closed", true).put("remoteCloseConfirmed", false);
         }
         public JSONObject historyLinks(String id) throws Exception { current(); return copy(control.historyLinks(id)); }
+        public JSONObject historyPage(String id,String target,String after) throws Exception { current(); return copy(control.historyPage(id,target,after)); }
+        public JSONObject phoneGoalIndex(String target,String parentAfter,String after) throws Exception { current(); return copy(control.phoneGoalIndex(target,parentAfter,after)); }
         public HistoryWindow openHistory(String id, String operationId) throws Exception {
             current(); HistoryAction source = Objects.requireNonNull(control.openHistory(id, operationId)); JSONObject safe;
             try { safe = source.view(); if (!id.equals(safe.optString("taskId")) || !operationId.equals(safe.optString("operationId"))) throw new SecurityException("不是这项原任务操作的历史窗口"); }

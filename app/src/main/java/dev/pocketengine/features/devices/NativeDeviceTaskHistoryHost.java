@@ -28,15 +28,8 @@ public final class NativeDeviceTaskHistoryHost {
             if(directPhoneGoal(wire))view.put("phoneGoalResult",true);
             return view;
         }
-        private boolean directPhoneGoal(JSONObject wire)throws Exception{
-            JSONObject resource=wire.getJSONObject("resourceBinding");
-            return "GoalSubmission".equals(wire.optString("messageType"))&&"task.submitGoal".equals(wire.optString("method"))
-                && ("main_screen".equals(resource.optString("screenMode"))||"background".equals(resource.optString("screenMode")))
-                && resource.opt("androidUserId") instanceof Number&&resource.optJSONArray("packageNames")!=null&&resource.getJSONArray("packageNames").length()>0
-                && local.deviceId().equals(wire.optString("callerDeviceId"))&&local.deviceId().equals(wire.optString("originDeviceId"))
-                && original.taskId().equals(wire.optString("rootTaskId"))&&original.taskId().equals(wire.optString("parentTaskId"))
-                && original.operationId().equals(wire.optString("operationId"))
-                && (wire.optJSONArray("delegationChain")==null||wire.getJSONArray("delegationChain").length()==0);
+        private boolean directPhoneGoal(JSONObject wire) {
+            return DeviceProtocol.isDirectPhoneGoal(wire,local.deviceId(),original.taskId(),original.operationId());
         }
         /** The permitted object comes from the original stored, authenticated acceptance, not UI input.
          * A deterministic child ID or an accepted submission without a run is not a result binding. */

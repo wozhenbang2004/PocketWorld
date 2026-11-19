@@ -141,6 +141,48 @@ public final class ProjectMemoryNamespaces {
             for(int i=0;i<files.length();i++){JSONObject row=files.getJSONObject(i);out.put(new JSONObject().put("path",row.getString("path")).put("version",row.getInt("version")).put("revisionId",row.getString("revisionId")).put("sha256",row.getString("sha256")).put("tombstone",row.optBoolean("deleted")).put("kind",row.optString("kind","text")).put("sizeBytes",row.getLong("sizeBytes")));}return out;
         }
     }
+    /** Only committed text choices in the selected owner project. No body leaves this search. */
+    public synchronized JSONObject findFileChoicesForOwner(Selection selected,String filter)throws Exception {
+        if(filter==null||filter.length()>160)throw new IllegalArgumentException("文件名最多160个字符");
+        String query=filter.strip().toLowerCase(java.util.Locale.ROOT);
+        JSONArray files=fileChoicesForOwner(selected);var matches=new java.util.ArrayList<JSONObject>();
+        for(int i=0;i<files.length();i++){
+            JSONObject file=files.getJSONObject(i);
+            if(!file.getBoolean("tombstone")&&"text".equals(file.getString("kind"))&&file.getLong("sizeBytes")>0&&file.getLong("sizeBytes")<=1_048_576L&&file.getString("path").toLowerCase(java.util.Locale.ROOT).contains(query))matches.add(file);
+        }
+        matches.sort(java.util.Comparator.comparing(file->file.optString("path")));
+        JSONArray page=new JSONArray();for(int i=0;i<Math.min(24,matches.size());i++)page.put(matches.get(i));
+        synchronized(local){requireCurrent(selected);}
+        return new JSONObject().put("spaceId","project:"+selected.project).put("files",page).put("matches",matches.size());
+    }
+    /** Locate only the owner's supplied quote in a pinned, currently readable text file. Return
+     * offsets, never file text. The explicit proposal below must independently recheck the bytes. */
+    public synchronized JSONObject locateFileQuoteForOwner(Selection selected,String path,int version,String revisionId,String sha,String quote)throws Exception {
+        if(sourceBridge==null)throw new IllegalStateException("项目原来源未连接，不能准备待审资料");
+        if(quote==null||quote.isBlank()||quote.length()>4000||!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(quote))throw new IllegalArgumentException("请提供1至4000个字符的完整原话");
+        synchronized(local){
+            requireCurrent(selected);
+            var head=workspace.refreshFileHeadForHost(selected.project,path);
+            if(!head.authorityKnown||head.deleted||head.version!=version||!revisionId.equals(head.revisionId)||!sha.equals(head.sha256)||head.sizeBytes<=0||head.sizeBytes>1_048_576)throw new SecurityException("所选文件已变化，请重新选择已提交的版本");
+            JSONObject read=workspace.handle("read",new JSONObject().put("projectId",selected.project).put("path",path).put("version",version));
+            if(!read.optBoolean("contentAvailable")||!"text".equals(read.optString("kind"))||!selected.project.equals(read.optString("projectId"))||!path.equals(read.optString("path"))||read.optInt("version")!=version||!revisionId.equals(read.optString("revisionId"))||!sha.equals(read.optString("sha256")))throw new IllegalStateException("原版本不在项目文字阅读范围内，未生成候选");
+            String original=read.getString("content"),shown=displayLines(original),wanted=displayLines(quote);
+            int start=shown.indexOf(wanted);
+            if(start<0)throw new IllegalArgumentException("这段文字不在所选版本中。请从原文件重新复制，保留标点和空格");
+            if(shown.indexOf(wanted,start+1)>=0)throw new IllegalArgumentException("同一段文字出现多次，请多选几句相邻原文以确定出处");
+            int offset=originalOffset(original,start),chars=originalOffset(original,start+wanted.length())-offset;
+            if(chars>4000)throw new IllegalArgumentException("原段含换行后超过4000个字符，请缩短选段");
+            var after=workspace.currentFileHeadForHost(selected.project,path);
+            if(!after.authorityKnown||after.deleted||after.version!=version||!revisionId.equals(after.revisionId)||!sha.equals(after.sha256))throw new SecurityException("核对时原文件已变化，未保留旧选段");
+            requireCurrent(selected);
+            return new JSONObject().put("spaceId","project:"+selected.project).put("offset",offset).put("chars",chars);
+        }
+    }
+    private static String displayLines(String text){return text.replace("\r\n","\n").replace('\r','\n');}
+    private static int originalOffset(String text,int displayed){
+        int offset=0;for(int i=0;i<displayed;i++)if(text.charAt(offset++)=='\r'&&offset<text.length()&&text.charAt(offset)=='\n')offset++;
+        return offset;
+    }
     /** Explicit native source selection. This stages an exact excerpt for owner review; no model
      * call, automatic acceptance, task context, source alias or new SourceLearningJob is created. */
     public synchronized JSONObject proposeFileForOwner(Selection selected,String path,int version,String revisionId,String sha256,int offset,int chars)throws Exception{

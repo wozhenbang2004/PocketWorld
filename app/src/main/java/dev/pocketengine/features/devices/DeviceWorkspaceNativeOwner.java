@@ -342,6 +342,12 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             };
         }
         public JSONObject historyLinks(String id) throws Exception { tasks.get(id, false); return tasks.deviceTasks().childOverview(id, 24); }
+        public JSONObject historyPage(String id,String target,String after) throws Exception { return tasks.deviceTasks().childHistoryPage(id,target,after,24); }
+        public JSONObject phoneGoalIndex(String target,String parentAfter,String after) throws Exception {
+            DeviceIdentity.LocalIdentity local=existingIdentity();JSONObject peer=trust.peer(target);
+            if(local==null||peer==null)throw new SecurityException("原本机或配对设备身份已变化，未读取其他设备");
+            return tasks.deviceTasks().ownerPhoneGoalIndex(local.deviceId(),target,peer.getString("instanceId"),parentAfter,after).put("localInstanceId",local.instanceId());
+        }
         public NativeDeviceWorkspaceHost.HistoryAction openHistory(String id, String operation) throws Exception {
             DeviceIdentity.LocalIdentity local = existingIdentity(); if (local == null) throw new SecurityException("本机设备身份不存在，不能继承原结果读取范围");
             NativeDeviceTaskHistoryHost original = new NativeDeviceTaskHistoryHost(tasks, local, new NativeDeviceTaskHistoryHost.NativeReads() {

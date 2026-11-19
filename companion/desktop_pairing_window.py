@@ -32,6 +32,7 @@ def show_pairing_window(controller, host):
         "AppendMenuW": ([w.HMENU, w.UINT, ctypes.c_size_t, w.LPCWSTR], w.BOOL),
         "TrackPopupMenuEx": ([w.HMENU, w.UINT, ctypes.c_int, ctypes.c_int, w.HWND, ctypes.c_void_p], w.UINT),
         "GetCursorPos": ([ctypes.POINTER(w.POINT)], w.BOOL),
+        "GetWindowRect": ([w.HWND, ctypes.POINTER(w.RECT)], w.BOOL),
         "GetMessageW": ([ctypes.POINTER(w.MSG), w.HWND, w.UINT, w.UINT], ctypes.c_int), "TranslateMessage": ([ctypes.POINTER(w.MSG)], w.BOOL),
         "DispatchMessageW": ([ctypes.POINTER(w.MSG)], ctypes.c_ssize_t),
     }
@@ -41,7 +42,8 @@ def show_pairing_window(controller, host):
     instance = kernel.GetModuleHandleW(None)
     window = status = invitation_edit = candidate_edit = start_button = review_button = None
     controls, choices = {}, []
-    candidate, start_bridge = None, False
+    extra_options, extra_selected = [], set()
+    candidate, start_bridge, chosen_address = None, False, None
 
     def text(control, maximum=128):
         value = ctypes.create_unicode_buffer(maximum + 1)
@@ -50,6 +52,34 @@ def show_pairing_window(controller, host):
     def notice(message):
         if status:
             user.SetWindowTextW(status, message[:700])
+
+    def selected_host():
+        value = text(controls["host"], 64)
+        if chosen_address is not None:
+            from desktop_pairing_addresses import local_choices
+            if value != chosen_address.address or not any(
+                row.address == value and row.adapter == chosen_address.adapter for row in local_choices()
+            ):
+                raise PlatformError("刚选的网卡或地址已经改变。请重新选择；没有改用其他地址或打开监听。")
+        return value
+
+    def scope_label(option):
+        if option["version"] == "workspace-v1":
+            return option["id"] + " · " + controller.manager._environment(option["resources"][0]["environmentId"])["root"]
+        if option["id"] == "desktop":
+            resources = option["resources"]
+            if len(resources) == 1:
+                binding = resources[0]
+                scope = (f"窗口 0x{binding['windowId']:X}" if "windowId" in binding else "主屏（所有窗口）")
+                return f"Windows 会话 {binding['sessionId']} · {scope} · 手机观看与接管、桌面观察与操作"
+            return f"桌面 · {len(resources)} 项范围，核对时逐项显示"
+        return option["id"]
+
+    def freeze_scopes():
+        for _, checkbox in choices:
+            user.EnableWindow(checkbox, False)
+        if "more_scopes" in controls:
+            user.EnableWindow(controls["more_scopes"], False)
 
     def poll():
         nonlocal candidate
@@ -78,7 +108,7 @@ def show_pairing_window(controller, host):
 
     @wndproc
     def procedure(hwnd, message, wparam, lparam):
-        nonlocal start_bridge
+        nonlocal start_bridge, chosen_address
         if message == 0x113:
             try: poll()
             except Exception: notice("无法核对当前配对状态；没有自动确认或重试。")
@@ -86,10 +116,32 @@ def show_pairing_window(controller, host):
         if message == 0x111:
             action = wparam & 0xFFFF
             try:
-                if action == 101:
-                    invitation = host.start(text(controls["host"], 64), control_port=int(text(controls["control"], 5)), bulk_port=int(text(controls["bulk"], 5)))
+                if action == 110 and (wparam >> 16) & 0xffff == 0x300:  # EN_CHANGE: manual edit restores original explicit path.
+                    chosen_address = None
+                elif action == 109 and host.thread is None:
+                    from desktop_pairing_addresses import local_choices
+                    rows = local_choices()
+                    if not rows:
+                        notice("没有可明确选择的活动 Wi-Fi / 以太网私网地址。请核对电脑和手机所用网络，或手动填写准确地址。")
+                        return 0
+                    menu, rectangle = user.CreatePopupMenu(), w.RECT()
+                    if not menu: raise ctypes.WinError(ctypes.get_last_error())
+                    try:
+                        for index, item in enumerate(rows):
+                            if not user.AppendMenuW(menu, 0, index + 1, item.label.replace("&", "&&")):
+                                raise ctypes.WinError(ctypes.get_last_error())
+                        if not user.GetWindowRect(controls["choose_address"], ctypes.byref(rectangle)): raise ctypes.WinError(ctypes.get_last_error())
+                        picked = user.TrackPopupMenuEx(menu, 0x100 | 0x80, rectangle.left, rectangle.bottom, hwnd, None)
+                    finally: user.DestroyMenu(menu)
+                    if 1 <= picked <= len(rows):
+                        row = rows[picked - 1]
+                        if not user.SetWindowTextW(controls["host"], row.address): raise ctypes.WinError(ctypes.get_last_error())
+                        chosen_address = row  # After synchronous EN_CHANGE; preserve exact adapter identity.
+                        notice("已选 " + row.label + "。尚未监听或探测手机；请确认手机也可达该网络，再创建邀请。")
+                elif action == 101:
+                    invitation = host.start(selected_host(), control_port=int(text(controls["control"], 5)), bulk_port=int(text(controls["bulk"], 5)))
                     user.SetWindowTextW(invitation_edit, json.dumps(invitation, ensure_ascii=False, separators=(",", ":")))
-                    for key in ("host", "control", "bulk", "create"):
+                    for key in ("choose_address", "host", "control", "bulk", "create"):
                         user.EnableWindow(controls[key], False)
                     notice("120秒一次性邀请已创建。复制到手机的邀请导入入口；手机提交候选后，本机还必须核对两端指纹和准确授权。")
                 elif action == 102:
@@ -103,6 +155,20 @@ def show_pairing_window(controller, host):
                         raise PlatformError("先创建本窗口的一次性邀请")
                     from pairing_qr import show_invitation_qr
                     show_invitation_qr(controller.invitation, owner=hwnd)
+                elif action == 108 and extra_options and controller.pending is None and host.recovery is None:
+                    menu, point = user.CreatePopupMenu(), w.POINT()
+                    if not menu: raise ctypes.WinError(ctypes.get_last_error())
+                    try:
+                        for index, item in enumerate(extra_options):
+                            # Escape ampersands in real paths; a mnemonic is not part of a reviewed pathname.
+                            if not user.AppendMenuW(menu, 0x08 if item["id"] in extra_selected else 0, index + 1, scope_label(item).replace("&", "&&")):
+                                raise ctypes.WinError(ctypes.get_last_error())
+                        if not user.GetCursorPos(ctypes.byref(point)): raise ctypes.WinError(ctypes.get_last_error())
+                        picked = user.TrackPopupMenuEx(menu, 0x100 | 0x80, point.x, point.y, hwnd, None)
+                    finally: user.DestroyMenu(menu)
+                    if 1 <= picked <= len(extra_options):
+                        extra_selected.symmetric_difference_update([extra_options[picked - 1]["id"]])
+                        user.SetWindowTextW(controls["more_scopes"], f"其他范围（另有 {len(extra_options)} 项，已选 {len(extra_selected)}）")
                 elif action == 107:
                     if host.thread is not None:
                         raise PlatformError("当前窗口已有邀请/通道；先关闭，再选择单独的原已提交回执恢复")
@@ -122,7 +188,7 @@ def show_pairing_window(controller, host):
                     if not 1101 <= selected < 1101 + len(rows): raise PlatformError("原本机配对事务选择无效")
                     review = controller.prepare_recovery_review(rows[selected - 1101])
                     proof = confirm_local_pairing_recovery(review.summary)
-                    address = host.start_recovery(text(controls["host"], 64), review, proof)
+                    address = host.start_recovery(selected_host(), review, proof)
                     fixed = review.record["originalCommit"]
                     value = ("仅恢复原回执，非新邀请。请在手机原配对记录的恢复入口手动填写：\r\n"
                              + "Host: " + address[0] + "\r\nPort: " + str(address[1]) + "\r\n"
@@ -130,21 +196,24 @@ def show_pairing_window(controller, host):
                              + "\r\n手机指纹: " + fixed["peerFingerprint"] + "\r\n30秒后自动关闭；当前撤销/到期/scope变动仍会拒绝。")
                     user.SetWindowTextW(invitation_edit, value)
                     user.SetWindowTextW(candidate_edit, review.summary)
-                    for control in [controls[key] for key in ("host", "control", "bulk", "create", "qr", "recover", "budget", "minutes", "history")] + [control for item, control in choices]:
-                        user.EnableWindow(control, False)
+                    for key in ("choose_address", "host", "control", "bulk", "create", "qr", "recover", "budget", "minutes", "history"):
+                        user.EnableWindow(controls[key], False)
                     user.SetWindowTextW(controls["copy"], "复制恢复地址")
+                    freeze_scopes()
                     user.EnableWindow(review_button, False); user.EnableWindow(start_button, False)
                     notice("仅开放原事务30秒只读回执通道；不会写配置、启动业务或重放旧任务。地址本身不授信，仍须原双向TLS指纹。")
                 elif action == 103:
                     if candidate is None:
                         raise PlatformError("先由手机导入邀请并提交候选")
                     selected = [item["id"] for item, control in choices if user.SendMessageW(control, 0xF0, 0, 0) == 1]
+                    selected += [item["id"] for item in extra_options if item["id"] in extra_selected]
                     review = controller.prepare_review(candidate, selected, int(text(controls["budget"], 3)), int(text(controls["minutes"], 2)),
                                                        user.SendMessageW(controls["history"], 0xF0, 0, 0) == 1)
                     proof = confirm_local_pairing(review.summary)
                     host.confirm(review, proof)
                     user.EnableWindow(review_button, False)
-                    for control in [control for item, control in choices] + [controls["budget"], controls["minutes"], controls["history"]]:
+                    freeze_scopes()
+                    for control in [controls["budget"], controls["minutes"], controls["history"]]:
                         user.EnableWindow(control, False)
                     notice("本机已确认准确授权，正在等待手机通过保留端口完成双向TLS；此时仍没有业务通道。")
                 elif action == 104:
@@ -189,11 +258,11 @@ def show_pairing_window(controller, host):
         return handle
     try:
         control("STATIC", "电脑只做轻桥接，不需Codex；以下操作仅由本机主人确认，不启动第二Agent。", 16, 12, width - 40, 22)
-        control("STATIC", "本机可达LAN地址", 16, 42, 145, 24)
+        controls["choose_address"] = control("BUTTON", "选择本机地址", 16, 39, 140, 28, 109, 0x10000)
         configured = controller.manager.config.get("devices", {}).get("listen", {})
         initial_host = configured.get("host", "")
         if initial_host in {"0.0.0.0", "::"}: initial_host = ""
-        controls["host"] = control("EDIT", initial_host, 165, 39, 210, 28, extra=0x10000)
+        controls["host"] = control("EDIT", initial_host, 165, 39, 210, 28, 110, 0x10000)
         control("STATIC", "控制 / 文件端口", 388, 42, 145, 24)
         controls["control"] = control("EDIT", str(configured.get("controlPort") or 8768), 535, 39, 70, 28, extra=0x10000)
         controls["bulk"] = control("EDIT", str(configured.get("bulkPort") or 8769), 615, 39, 70, 28, extra=0x10000)
@@ -202,19 +271,19 @@ def show_pairing_window(controller, host):
         controls["qr"] = control("BUTTON", "显示二维码", 380, 77, 145, 30, 106, 0x10000)
         controls["recover"] = control("BUTTON", "恢复原已提交回执", 540, 77, 170, 30, 107, 0x10000)
         control("STATIC", "选择准确授权范围（默认未选择；包含本机私有状态的工作区不会列出）：", 16, 116, width - 40, 22)
-        options = controller.scope_options()
+        # The management-only receiver enumerates workspaces before the desktop.
+        # Keep actual desktop scope reachable on a laptop without preselecting it.
+        options = sorted(controller.scope_options(), key=lambda item: item["id"] != "desktop")
         visible = min(8, max(1, (height - 570) // 24))
         for index, option in enumerate(options[:visible]):
-            label = option["id"]
-            if option["version"] == "workspace-v1":
-                label += " · " + controller.manager._environment(option["resources"][0]["environmentId"])["root"]
-            else:
-                label = "主屏当前交互会话（所有窗口，非文件沙箱；首次观察仍须驱动实探）"
-            checkbox = control("BUTTON", label, 20, 143 + 24 * index, width - 60, 24, 200 + index, 0x3 | 0x10000)
+            checkbox = control("BUTTON", scope_label(option).replace("&", "&&"), 20, 143 + 24 * index, width - 60, 24, 200 + index, 0x3 | 0x10000)
             choices.append((option, checkbox))
         bottom = height - 105
         field_y = min(350, 151 + 24 * max(1, len(choices)))
-        if len(options) > visible: control("STATIC", "当前尺寸只显示前" + str(visible) + "项；更多范围请先在本机配置中缩小选择。没有隐式授权。", 20, field_y, width - 50, 22); field_y += 24
+        extra_options = options[visible:]
+        if extra_options:
+            controls["more_scopes"] = control("BUTTON", f"其他范围（另有 {len(extra_options)} 项，已选 0）", 20, field_y, width - 60, 26, 108, 0x10000)
+            field_y += 30
         control("STATIC", "工具总额度", 16, field_y, 110, 24)
         controls["budget"] = control("EDIT", "20", 130, field_y - 2, 62, 27, extra=0x10000)
         control("STATIC", "执行授权分钟", 210, field_y, 125, 24)
@@ -226,7 +295,7 @@ def show_pairing_window(controller, host):
         start_button = control("BUTTON", "启动桥接（不重放旧任务）", 264, bottom - 8, 260, 31, 104, 0x10000)
         control("BUTTON", "关闭，不启动服务", width - 255, bottom - 8, 205, 31, 105, 0x10000)
         user.EnableWindow(review_button, False); user.EnableWindow(start_button, False)
-        status = control("STATIC", "先填写本机LAN地址并创建邀请。关闭不等于撤销已经确认/完成的配对；服务不会自动启动。", 16, bottom + 32, width - 50, 52)
+        status = control("STATIC", "选择手机也能访问的本机地址，或手动填写，再创建一次性邀请。选地址不会监听；关闭窗口不会撤销已确认的配对。", 16, bottom + 32, width - 50, 52)
         user.SetTimer(window, 1, 500, None)
         user.ShowWindow(window, 5); user.SetForegroundWindow(window)
         message = w.MSG()

@@ -38,12 +38,15 @@ export function currentHomeReport(report:VerifiedHomeReport){
   return !document.hidden&&bridge.getDocumentEpoch()===report.documentEpoch&&resume()===report.resume&&Array.isArray(rows)&&
     rows.some((row:ButlerHomeTask)=>row?.id===report.target.taskId&&sameHomeReport(reportedHomeWork(row),report.target));
 }
-export function ButlerReturnedReport({report,task,active,onCopy,onOriginal}:{report:VerifiedHomeReport|null;task:ButlerHomeTask;active:boolean;onCopy:(text:string)=>Promise<unknown>;onOriginal:()=>void}){
+export function ButlerReturnedReport({report,task,active,onCopy,onOriginal,onFollowUp}:{report:VerifiedHomeReport|null;task:ButlerHomeTask;active:boolean;onCopy:(text:string)=>Promise<unknown>;onOriginal:()=>void;onFollowUp?:()=>void}){
   const [notice,setNotice]=useState('');
   if(!report||bridge.getDocumentEpoch()!==report.documentEpoch||resume()!==report.resume||!sameHomeReport(reportedHomeWork(task),report.target))
     return <p className="pw-reading-note" role="status">原工作或汇报已变化，没有改读其他轮次。请返回管家首页核对。</p>;
   const identity=JSON.stringify([report.documentEpoch,report.resume,report.target,report.pin]);
   return <><OwnerWorkReport key={identity} identity={identity} target={report.target} originalVersion={report.pin} active={active} supported={bridge.getState().capabilities.commands.includes('ownerWork.report.read')} onCopy={onCopy}/>
-    <Button variant="ghost" disabled={!active} onClick={()=>{if(currentHomeReport(report))onOriginal();else setNotice('原工作已变化，没有打开其他执行。')}}>查看原工作详情</Button>
+    <div className="pw-action-row">
+      {onFollowUp&&<Button variant="secondary" disabled={!active} onClick={()=>{if(currentHomeReport(report))onFollowUp();else setNotice('原汇报已变化，未关联到其他对话。')}}>在原对话追问</Button>}
+      <Button variant="ghost" disabled={!active} onClick={()=>{if(currentHomeReport(report))onOriginal();else setNotice('原工作已变化，没有打开其他执行。')}}>查看原工作详情</Button>
+    </div>
     {notice&&<p className="pw-reading-note" role="status">{notice}</p>}</>;
 }

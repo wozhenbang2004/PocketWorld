@@ -3,6 +3,7 @@ import { IconArrowLeft, IconClose, IconCursor, IconHistory, IconRefresh } from '
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, SelectField } from './forms-library';
 import { ProgressCircle } from './library';
+import { ProjectPackageCheckout } from './ProjectPackageCheckout';
 import { MotionFeedback } from './library/journey-motion';
 import { packagePreviewMatches, previewReturned, previewViewport, projectPreviewState, samePreviewWindow, type PackagePreviewChoices, type ProjectPreviewState, type PreviewWindow } from './project-preview';
 import './project-preview.css';
@@ -58,7 +59,7 @@ export function useProjectPreview(options: Options) {
     if (pending.current) { setUnknown(true); setError('原操作回执尚未核对；没有重发，草稿仍保留。'); }
     pending.current = false; setBusy('');
   }, []);
-  useEffect(() => { if (!options.active) hide(); }, [options.active, hide]);
+  useEffect(() => { if (!options.active || options.blocked && choices?.sourceMember) hide(); }, [options.active, options.blocked, choices?.sourceMember, hide]);
   useEffect(() => {
     generation.current++; pending.current = false; setBusy(''); setExpanded(false); setOpened(null); setError(''); setUnknown(false);
     setChoices(null); setSelectedEntry(''); setPackageShowing(false);
@@ -95,7 +96,7 @@ export function useProjectPreview(options: Options) {
   const open = () => {
     const context = optionsRef.current;
     if (pending.current || !context.active || document.hidden) return;
-    if (choices && exportState) { setExpanded(true); return; }
+    if (choices && !choices.sourceMember && exportState) { setExpanded(true); return; }
     if (exportBusy) return;
     setChoices(null); setSelectedEntry(''); setPackageShowing(false);
     // Returning to the existing view retains its native Document and staged refs.
@@ -276,6 +277,10 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
   const problem = error || view?.error;
   const choices = control.choices, choosing = !!choices && !view;
   const fixed = view?.metadata.origin === 'fixed_workspace_project_artifact';
+  if (choosing && choices?.sourceMember) return !blocked
+    ? <ProjectPackageCheckout key={JSON.stringify([choices.taskId, choices.operationId, choices.artifactId, choices.sourceMember.path])}
+      target={{ ...choices, sourceMember: choices.sourceMember }} onReturn={control.returnToPackageTask} onDismiss={control.hide}/>
+    : null;
   return <section className="pw-preview-pane" data-motion-native-surface="project-preview" aria-label="项目预览" aria-busy={working}>
     <header className="pw-preview-heading"><div><h3>{choosing ? '固定项目包' : fixed ? '任务固定版本' : '已采集预览'}</h3><p>{choosing ? choices?.entryPath || '项目源码与资源' : view?.metadata.entryPath ? String(view.metadata.entryPath) : '原项目画面'}</p></div>{view?.selecting && <span className="pw-preview-selection-state">正在选择</span>}</header>
     {!choosing && <div className="pw-preview-actions">

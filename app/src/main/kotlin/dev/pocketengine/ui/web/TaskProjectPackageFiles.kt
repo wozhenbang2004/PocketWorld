@@ -47,6 +47,7 @@ internal object TaskProjectPackageFiles {
         check(manifest.getString("mode") == "source_project") { "这不是所选源码包" }
         val files = manifest.getJSONArray("files")
         val result = JSONObject().put("taskId", task).put("operationId", operation).put("artifactId", id).put("artifactSha256", sha)
+            .put("projectId", before.getString("projectId")).put("checkoutId", before.getString("checkoutId"))
             .put("runId", before.getString("runId")).put("epoch", before.getInt("epoch")).put("readOnly", true)
         if (member) {
             val file = (0 until files.length()).asSequence().map { files.getJSONObject(it) }.firstOrNull { it.getString("path") == path }

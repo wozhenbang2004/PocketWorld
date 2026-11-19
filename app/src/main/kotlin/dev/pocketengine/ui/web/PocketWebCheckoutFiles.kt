@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.local.project.ProjectFileDraft
 import dev.pocketengine.ui.PocketWorldController
 import org.json.JSONArray
@@ -13,7 +14,7 @@ import java.util.UUID
  * writer. Formal versions use a separate, single-use native import review;
  * neither path authorizes live source edits or code execution. */
 internal class PocketWebCheckoutFiles(private val controller: PocketWorldController) {
-    private class Page(val handle: String, val project: String, val checkout: String, val parentCurrent: () -> Boolean) {
+    private class Page(val handle: String, val project: String, val checkout: String, val parentCurrent: () -> Boolean, val sourcePath: String? = null) {
         var opened: Opened? = null
         var adoption: Adoption? = null
     }
@@ -27,7 +28,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     @Volatile private var page: Page? = null
     private var busy = false
     companion object {
-        val COMMANDS = setOf("projects.development.files.open", "projects.development.files.list", "projects.development.files.read",
+        val COMMANDS = setOf("projects.development.files.open", "projects.development.files.openSource", "projects.development.files.list", "projects.development.files.read",
             "projects.development.files.edit", "projects.development.files.save", "projects.development.files.resolve",
             "projects.development.files.cache", "projects.development.files.close", "projects.development.files.reviewImport",
             "projects.development.files.import", "projects.development.files.dismissImport")
@@ -97,11 +98,26 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             if (page?.handle == text(args, "filesHandle")) clear()
             done(JSONObject().put("closed", true).put("taskStopped", false), null); return
         }
-        if (action == "projects.development.files.open") {
-            fields(args, "viewHandle", "checkoutId"); val checkout = text(args, "checkoutId")
+        if (action == "projects.development.files.open" || action == "projects.development.files.openSource") {
+            val pin = if (action.endsWith(".openSource")) {
+                fields(args, "viewHandle", "checkoutId", "sourceMember")
+                JSONObject(args.getJSONObject("sourceMember").toString()).also { text(it, "path", 240) }
+            } else { fields(args, "viewHandle", "checkoutId"); null }
+            val checkout = text(args, "checkoutId")
             check(parentCurrent() && controller.webPrivateOwnerVisible()) { "原项目窗口已关闭" }
-            clear(); val original = Page(UUID.randomUUID().toString(), project, checkout, parentCurrent); page = original
-            work(original, done) { listing(original, "", "") }; return
+            clear(); val original = Page(UUID.randomUUID().toString(), project, checkout, parentCurrent, pin?.getString("path")); page = original
+            work(original, done) {
+                if (pin == null) listing(original, "", "") else {
+                    // Re-read the private task's producing SQL operation and immutable ZIP member;
+                    // a suggested checkout/path from the renderer is never a provenance credential.
+                    val saved = TaskProjectPackageFiles.read(controller.nativeButlerHost(), pin, RunControl())
+                    check(saved.getString("projectId") == project && saved.getString("checkoutId") == checkout && saved.getString("path") == original.sourcePath) {
+                        "文件不属于原工作的这个项目副本，没有改用其他副本"
+                    }
+                    JSONObject().put("filesHandle", original.handle).put("projectId", project).put("checkoutId", checkout)
+                        .put("savedMember", saved).put("readOnly", true).put("executionAuthorized", false)
+                }
+            }; return
         }
         val original = selected(args)
         if (action in setOf("projects.development.files.list", "projects.development.files.read", "projects.development.files.edit",
@@ -151,13 +167,19 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             }
             "projects.development.files.list" -> {
                 fields(args, "viewHandle", "filesHandle", "afterPath", "sourceDigest")
+                check(original.sourcePath == null) { "这个入口只打开原任务选中的那一个文件" }
                 val after = text(args, "afterPath", 240, true); val expected = text(args, "sourceDigest", 64, true)
                 work(original, done) { listing(original, after, expected) }
             }
             "projects.development.files.read" -> {
                 fields(args, "viewHandle", "filesHandle", "path"); val path = text(args, "path", 240)
+                if (original.sourcePath != null) {
+                    check(path == original.sourcePath && !busy) { "只能重新核对已选择的原文件" }
+                    original.opened?.let { store.release(it.draft) }; original.opened = null
+                }
                 work(original, done) {
                     val actual = controller.projectDevelopmentForWeb().fileForOwner(original.project, original.checkout, path)
+                    check(original.sourcePath == null || !actual.getBoolean("deleted")) { "原副本已没有这个文件。固定包保留原文，不会重建或替换文件" }
                     val value = synchronized(store) {
                         val prior = store.open(original.project, original.checkout, path, actual.optBoolean("deleted"))
                         prior.observe(actual).also { store.retain(it) }

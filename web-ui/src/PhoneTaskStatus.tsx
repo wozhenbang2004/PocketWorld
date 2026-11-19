@@ -1,3 +1,4 @@
+import {mainPhoneStep} from './PhoneMainOwnerStep';
 import { useEffect, useState } from 'react';
 import { Button, IconButton } from './forms-library';
 import { Popover, PopoverTrigger } from './shell-library';
@@ -29,7 +30,7 @@ export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props
   const surfaceLabel = surface ? phoneSurfaceLabel(surface) : '';
   const compactSurface = surface ? phoneSurfaceLabel(surface,true) : '';
   const stopping = task.status === 'stopping' || surface?.stopRequested === true;
-  const stage = stopping ? '正在停止' : surface?.paused && task.status === 'running' ? '已请求暂停，等待任务回执' : status;
+  const stage = stopping ? '正在停止' : mainPhoneStep(task) ? '等你在手机上亲自处理' : surface?.paused && task.status === 'running' ? '已请求暂停，等待任务回执' : status;
   const control = (action: string) => { setMenuOpen(false); if (identity) onControl(action, identity); };
   const canPause = identity && !stopping && (!surface || !surface.paused) && task.status === 'running' && can('phone.pause');
   const canResume = identity && !stopping && (!surface || surface.paused) && task.status === 'paused' && !conversationInlineAttention(task) && can('phone.resume');

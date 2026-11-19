@@ -82,6 +82,15 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private LinearLayout controls;
     private TextView status;
     private Button pause;
+    private record OwnerReturnButton(RunControl control,long pause,String operation,android.app.PendingIntent action,java.util.function.BooleanSupplier current){}
+    private volatile OwnerReturnButton ownerReturnButton;
+    public void bindOriginalOwnerReturn(RunControl original,long revision,String operation,android.app.PendingIntent action,java.util.function.BooleanSupplier current){
+        runOnMain(()->{if(instance!=this||original==null||original!=control||ownerControls==null||pause==null||!current.getAsBoolean())return;
+            ownerReturnButton=new OwnerReturnButton(original,revision,operation,action,current);refreshOwnerControls(ownerControls,"原手机任务");});
+    }
+    public boolean ownerReturnVisible(RunControl original,long revision,String operation){
+        OwnerReturnButton b=ownerReturnButton;return visible&&instance==this&&b!=null&&b.control()==original&&b.pause()==revision&&b.operation().equals(operation)&&b.current().getAsBoolean();
+    }
     private Button controlGrip;
     private LinearLayout controlDetails;
     private PhoneControlOverlayPosition controlPosition;
@@ -391,7 +400,10 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             });
             pause = button(runControl.isPaused() ? "继续" : "暂停");
             pause.setOnClickListener(v -> {
-                bound.toggle();
+                OwnerReturnButton hand=ownerReturnButton;
+                if(hand!=null&&hand.control()==runControl&&ownerReturnVisible(runControl,runControl.pauseRevision(),hand.operation())){
+                    try{hand.action().send();}catch(android.app.PendingIntent.CanceledException stale){app.error("这次交还按钮已失效，请打开原任务核对");}
+                }else bound.toggle();
                 refreshOwnerControls(bound,goal);
             });
             Button stop = button("停止");
@@ -465,8 +477,11 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private void refreshOwnerControls(PhoneOwnerControls expected,String goal) {
         if(ownerControls!=expected||pause==null||status==null)return;
         PhoneOwnerControls.ViewState state=expected.view(goal);
-        pause.setText(state.paused?"继续":"暂停");
-        pause.setEnabled(state.canToggle);
+        OwnerReturnButton hand=ownerReturnButton;
+        boolean canReturn=hand!=null&&control!=null&&hand.control()==control&&hand.pause()==control.pauseRevision()&&hand.current().getAsBoolean();
+        if(hand!=null&&!hand.current().getAsBoolean())ownerReturnButton=null;
+        pause.setText(canReturn?"本人已处理，交还":state.paused?"继续":"暂停");
+        pause.setEnabled(canReturn||state.canToggle);
         status.setText(shortText(state.message,140));
         if(controlGrip!=null)controlGrip.setContentDescription("拖动可移动手机任务控制条；点击"+(controlDetails!=null&&controlDetails.getVisibility()==View.VISIBLE?"收起":"展开")+"操作。"+state.message);
     }
@@ -558,6 +573,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
 
     private void removeControls() {
+        ownerReturnButton=null;
         clearInAppStopSurface();
         if (control != null && cancellation != null) control.removeCancelAction(cancellation);
         if(ownerApp!=null&&ownerObserver!=null)ownerApp.removeObserver(ownerObserver);

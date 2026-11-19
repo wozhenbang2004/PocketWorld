@@ -236,6 +236,17 @@ public final class DeviceProtocol {
         catch(ProtocolException failed){throw failed;}catch(Exception invalid){throw fail("invalid_json","Invalid UTF-8 JSON");}
     }
     public static String argumentsDigest(JSONObject envelope){try{JSONObject bound=new JSONObject();for(String key:objectKeys(envelope))if(!NON_SEMANTIC.contains(key))bound.put(key,envelope.get(key));return sha256(canonical(bound).getBytes(StandardCharsets.UTF_8));}catch(ProtocolException failure){throw failure;}catch(Exception impossible){throw new IllegalStateException(impossible);}}
+    /** Shared by the owner-only local index and the original device history reader. */
+    public static boolean isDirectPhoneGoal(JSONObject wire,String here,String parent,String operation) {
+            JSONObject resource=wire.optJSONObject("resourceBinding");
+            return resource!=null&&"GoalSubmission".equals(wire.optString("messageType"))&&"task.submitGoal".equals(wire.optString("method"))
+                && ("main_screen".equals(resource.optString("screenMode"))||"background".equals(resource.optString("screenMode")))
+                && resource.opt("androidUserId") instanceof Number&&resource.optJSONArray("packageNames")!=null&&resource.optJSONArray("packageNames").length()>0
+                && here.equals(wire.optString("callerDeviceId"))&&here.equals(wire.optString("originDeviceId"))
+                && parent.equals(wire.optString("rootTaskId"))&&parent.equals(wire.optString("parentTaskId"))
+                && operation.equals(wire.optString("operationId"))
+                && (!wire.has("delegationChain")||wire.optJSONArray("delegationChain")!=null&&wire.optJSONArray("delegationChain").length()==0);
+    }
     public static String sha256(byte[] data){try{byte[] digest=MessageDigest.getInstance("SHA-256").digest(data);StringBuilder out=new StringBuilder();for(byte b:digest)out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}catch(Exception impossible){throw new IllegalStateException(impossible);}}
     private static void tree(Object value,int depth,int[] count){
         if(depth>MAX_DEPTH||++count[0]>MAX_NODES)throw fail("limit_exceeded","JSON structure exceeds device limits");

@@ -77,7 +77,7 @@ export function useProjectPackageHandoff(options: Options) {
     if (r.phase === 'waiting') {
       r.phase = 'inspecting'; window.clearTimeout(r.timer);
       void (async () => {
-        const result = await bridge.command('projects.package.preview.inspect', r.target);
+        const result = await bridge.command('projects.package.preview.inspect', { taskId: r.target.taskId, operationId: r.target.operationId });
         if (!onDestination(r)) { finish(r); return; }
         const choices = packagePreviewChoices(result, r.target);
         if (!choices) throw new Error('固定包与所选原工作操作不符，没有打开其他版本。');

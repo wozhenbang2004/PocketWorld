@@ -84,6 +84,16 @@ public final class TeamResearchHost implements TeamCoordinator.ResearchFactory {
         try{tasks.registerTeamResearchInput(actual.binding(),call.peerSource(messageId));materials.checkResearchSources(actual.binding());return new JSONObject().put("ready",true);}
         catch(TaskStore.TeamResearchInputDenied unavailable){return new JSONObject().put("ready",false).put("reason",unavailable.reason);}
     }
+    @Override public boolean canSharePriorOutput(TeamCoordinator.MemberEvidenceCall recipient,TeamCoordinator.ResearchSources source)throws Exception {
+        // Optional peer context only: fail closed before copying text. Mandatory dependencies
+        // still go through normal child admission and cannot be bypassed here.
+        try{
+            for(TaskStore.TeamResearchSourceProof proof:tasks.coveredTeamResearchOutputs(recipient,source)){
+                proof.checkCurrent();materials.checkMaterialMetadata(proof.view(),proof);proof.checkCurrent();
+            }
+        }catch(TaskStore.TeamResearchInputDenied|SecurityException unavailable){recipient.checkCurrent();source.checkCurrent();return false;}
+        recipient.checkCurrent();source.checkCurrent();return true;
+    }
     @Override public void checkOutputs(TeamCoordinator.ResearchSources selected)throws Exception {
         for(TaskStore.TeamResearchSourceProof proof:tasks.teamResearchOutputProofs(selected)){proof.checkCurrent();materials.checkMaterialMetadata(proof.view(),proof);proof.checkCurrent();}
     }
@@ -118,7 +128,7 @@ public final class TeamResearchHost implements TeamCoordinator.ResearchFactory {
                 return request;
             };
             RunOutcome outcome=new AgentRunner(null,current.port(),ContextBudgetPolicy.currentHostSource(),projection,call.inputs())
-                    .run(task,call.goal(),captured.withStepCeiling(binding.stepCeiling()),original,event->{
+                    .run(task,binding.retainedGoal(),captured.withStepCeiling(binding.stepCeiling()),original,event->{
                         try{
                             if("result".equals(event.optString("type"))){terminal.set(new JSONObject(event.toString()));return;}
                             tasks.event(task,run,epoch,event);

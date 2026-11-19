@@ -95,7 +95,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -106,6 +106,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   onCopy: (text: string) => Promise<unknown>;
   onOpenAttachment?: (messageId: string, id: string, sha256: string) => void;
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
+  onFollowUp?: () => void;
   resultFiles?: {
     taskId: string;
     supported: boolean;
@@ -201,6 +202,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
         selectPackage(''); const target = packageButton.current;
         requestAnimationFrame(() => { if (!document.hidden && packageWindowOwns(readingPackage.taskId) && target?.isConnected && !target.closest('[hidden],[inert]')) target.focus(); });
       }}
+        onCheckout={onOpenProjectPackage ? sourceMember => { selectPackage(''); onOpenProjectPackage({ taskId: readingPackage.taskId, operationId: readingPackage.operationId, sourceMember }); } : undefined}
         onWholePackage={onOpenProjectPackage ? () => { selectPackage(''); onOpenProjectPackage({ taskId: readingPackage.taskId, operationId: readingPackage.operationId }); } : undefined}/>}
       {packageRead.waiting ? <p className="pw-reading-note" role="status">正在打开原工作，随后读取已保存的版本…</p> : packageRead.busy && <p className="pw-reading-note" role="status">正在读取原任务保存的固定成果…</p>}
       {packageRead.error && <p className="pw-reading-note pw-error" role="alert">{packageRead.error}</p>}
@@ -239,6 +241,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
         <div className="pw-outcome-conversation"><AIAnswer text={reply.text} onCopy={() => onCopy(reply.text)} onCopyCode={onCopy}/></div>
       </AccordionItem>}
     </Accordion>}
+    {active&&!readingPackage&&!reconciliation&&onFollowUp&&(report||work?.resultAvailable===true)&&<div className="pw-action-row">
+      <Button variant="secondary" onClick={onFollowUp}>在原对话追问</Button>
+    </div>}
     {screenshot && <p className="pw-outcome-limit pw-outcome-retention">{screenshot.state === 'deleted' ? '这张本机结果截图已删除。' : screenshot.state === 'expired' ? '截图已到留存期限，不再显示。' : screenshot.readState === 'unreadable' ? '原截图暂不可读取，没有使用明文替代。' : screenshot.state.startsWith('migration_') ? '旧截图仍保留，正在等待本机加密迁移核对。' : screenshot.expiresAt ? '本机加密截图保留至 ' + new Date(screenshot.expiresAt).toLocaleString() + '。' : '旧截图继续保留，可在原任务核对中主动删除。'}{screenshot.deletionPending ? ' 文件删除尚待核对。' : ''}</p>}
   </section>;
 }

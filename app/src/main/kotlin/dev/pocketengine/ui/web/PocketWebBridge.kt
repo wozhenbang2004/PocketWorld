@@ -254,7 +254,7 @@ internal class PocketWebBridge(
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
-            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.edit", "phone.draft.fromMessage", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
+            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.edit", "phone.draft.fromMessage", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
             "memory.list", "memory.search", "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
@@ -629,11 +629,34 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.open") {
-                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId"))
+                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId", "expectedExternalKind"))
                 val taskId = requiredString(args, "id")
                 val fromReader = args.has("readerWindow") || args.has("readerConversationId") || args.has("readerMessageId")
                 require(args.has("expectedRunId") == args.has("expectedEpoch")) { "原整理记录身份不完整" }
                 val expectedRunId = if (args.has("expectedRunId")) requiredString(args, "expectedRunId") else null
+                if (args.has("expectedExternalKind")) {
+                    val kind = requiredString(args, "expectedExternalKind")
+                    require(kind in setOf("remote", "teams", "ssh") && expectedRunId == taskId && requiredInt(args, "expectedEpoch") == 0 &&
+                        !fromReader && !args.has("searchQuery") && !args.has("expectedProjectId") && !args.has("expectedCheckoutId") &&
+                        args.has("requestNavigation") && !requiredBoolean(args, "requestNavigation") && controller.webPrivateOwnerVisible()) { "原本机工作身份无效" }
+                    openOriginalTask(id, taskId, false, expectedRunId = expectedRunId, expectedEpoch = 0,
+                        sourceWindowCurrent = { controller.webPrivateOwnerVisible() },
+                        checkReaderInput = { task ->
+                            val raw = task.raw
+                            val refs = raw.optJSONObject("externalRefs")
+                            require(raw.optString("id") == taskId && raw.optString("operationId") == taskId &&
+                                raw.optString("actorId") == "owner" && raw.optString("spaceId") == "private" &&
+                                raw.isNull("origin") && raw.isNull("parentTaskId") && raw.optInt("coordinatorEpoch", -1) == 0 &&
+                                raw.optString("kind") == kind && raw.optString("feature") == kind &&
+                                raw.optBoolean("contextAvailable", true) && !raw.optBoolean("metadataLimited") &&
+                                !raw.optBoolean("sourceCurrentReadRequired") && raw.optString("taskProjection") != "source_unavailable" &&
+                                (kind != "remote" || raw.optString("command") == "submitJob" && !refs?.optString("profileId").isNullOrBlank()) &&
+                                (kind != "ssh" || refs?.optJSONObject("sshNativeRequest")?.optString("format") == "pocketworld.ssh.native-request.v1")) {
+                                "原远端或协作记录当前不可核对，没有打开其他运行。"
+                            }
+                        })
+                    return
+                }
                 val expectedEpoch = if (expectedRunId != null) requiredInt(args, "expectedEpoch").also { require(it > 0) { "原整理回合无效" } } else null
                 val projectScope = ProjectTaskReadScope.read(args)
                 if (args.has("searchQuery") || expectedRunId != null || projectScope != null) {
@@ -915,7 +938,13 @@ internal class PocketWebBridge(
             }
             if (action == "devices.openTask") {
                 requireSection("devices")
-                openOriginalTask(id, devicePages.taskForNavigation(args), true, "devices")
+                val taskId = devicePages.taskForNavigation(args)
+                if (args.has("archiveHandle")) {
+                    val sourceCurrent = { runCatching { devicePages.taskForNavigation(args) == taskId }.getOrDefault(false) }
+                    openOriginalTask(id, taskId, true, "devices", sourceWindowCurrent = sourceCurrent, checkReaderInput = { source ->
+                        require(sourceCurrent() && source.id == taskId && source.raw.optString("actorId") == "owner" && source.raw.optString("spaceId") == "private" && !source.raw.has("origin")) { "原工作来源已变化，没有打开其他任务" }
+                    })
+                } else openOriginalTask(id, taskId, true, "devices")
                 return
             }
             if (action in PocketWebDevices.COMMANDS) {
@@ -1095,6 +1124,19 @@ internal class PocketWebBridge(
             if (action == "phone.review.settings") { complete(id, phoneComposer.openReviewedSettings(args), null); return }
             if (action == "phone.start") { phoneComposer.start(id, args); return }
             if (action == "phone.query") { phoneComposer.query(id, args); return }
+            if (action == "phone.ownerStep.review" || action == "phone.ownerStep.leave") {
+                val leaving = action == "phone.ownerStep.leave"
+                checkedPayload(args, if (leaving) setOf("taskId","runId","epoch","operationId","confirmed") else setOf("taskId","runId","epoch","operationId"))
+                val target = requiredString(args,"taskId"); val run = requiredString(args,"runId"); val epoch = requiredInt(args,"epoch")
+                val operation = requiredString(args,"operationId"); val task = requireTask(target); val window = captureWindow()
+                fun current() = !closed && acceptsWindow(window) && taskViewId == target && controller.webPrivateOwnerVisible()
+                require((!leaving || requiredBoolean(args,"confirmed")) && current() && epoch > 0 &&
+                    task.raw.optString("runId") == run && task.raw.optInt("coordinatorEpoch",-1) == epoch && task.status == "awaiting_user") { "请从原主屏任务核对此步骤" }
+                controller.mainPhoneOwnerStep(task, run, epoch, operation, leaving, ::current) { result, error ->
+                    complete(id, result, error, retainValue = false)
+                }
+                return
+            }
             if (action == "phone.pauseNote.read" || action == "phone.pauseNote.continue") {
                 val sending = action.endsWith(".continue")
                 checkedPayload(args, if (sending) setOf("taskId", "runId", "epoch", "reviewHandle", "note", "confirmed") else setOf("taskId", "runId", "epoch"))

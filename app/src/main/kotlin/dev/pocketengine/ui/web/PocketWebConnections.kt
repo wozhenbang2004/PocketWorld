@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.pocketengine.features.remote.RemoteModule
 import dev.pocketengine.features.remote.RemoteTaskRequest
 import dev.pocketengine.features.ssh.SshTerminalScreen
 import dev.pocketengine.features.ssh.SshOwnerWorkflows
@@ -29,7 +30,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
 
     companion object {
         val COMMANDS = setOf(
-            "remote.saveProfile", "remote.removeProfile", "remote.probe", "remote.environments", "remote.probeWorker",
+            "remote.rememberWorkspace", "remote.forgetWorkspace", "remote.saveProfile", "remote.removeProfile", "remote.probe", "remote.environments", "remote.probeWorker",
             "remote.reconnect", "remote.reconcileOperation", "remote.getJob", "remote.readSessionRecovery", "remote.cancelJob",
             "remote.reviewTask", "remote.confirmTask", "remote.project.open", "remote.project.review", "remote.project.confirm", "remote.project.close", "remote.inputs.open", "ssh.saveProfile", "ssh.removeProfile", "ssh.probeHostKey", "ssh.approveHostKey",
             "ssh.forgetHostKey", "ssh.listFiles", "ssh.readFile", "ssh.inspectFile", "ssh.getOperation", "ssh.reviewOperation", "ssh.confirmOperation",
@@ -72,6 +73,22 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
         }
         var listing: Long? = null; var file: PocketWebSshDownloads.Selection? = null; var pickup: PocketWebSshDownloads.Reviewed? = null
         when (command) {
+            "rememberWorkspace", "forgetWorkspace" -> {
+                val forget = command == "forgetWorkspace"
+                if (forget) fields(args, "profileId", "_profileBinding", "expectedRevision")
+                else fields(args, "profileId", "_profileBinding", "expectedRevision", "environmentId", "environmentBinding", "workspaceAnchor", "worker")
+                val p = currentProfile("remote", args)
+                val revision = args.opt("expectedRevision"); require(revision is Int || revision is Long)
+                val catalog = if (forget) null else (environments[p.getString("id")]?.let { JSONObject(it.toString()) } ?: error("请先核对原主机的实际环境"))
+                val module = controller.nativeButlerHost().features.module("remote") as? RemoteModule ?: error("主机模块暂不可用")
+                controller.runPluginCatalogWork(Runnable {
+                    val settled = runCatching {
+                        check(originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) { "原主机页面已关闭，没有保存选择" }
+                        module.selectCloudWorkspaceForOwner(input, catalog, (revision as Number).toLong(), forget)
+                    }
+                    main.post { controller.refreshCloudWorkspaceForWeb(); settled.fold({ result -> deliver(result, null) }, { deliver(null, it.message ?: "未取得常用环境保存回执") }) }
+                }); return
+            }
             "inspectDownload" -> {
                 fields(args, "profileId", "_profileBinding", "path"); currentProfile(domain, args); string(args, "path", 1024)
                 check(controller.state.feature("ssh").opt("binaryFileTransfers") == true) { "私人文件保存宿主未就绪，未读取远端文件" }

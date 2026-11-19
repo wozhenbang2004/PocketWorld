@@ -9,14 +9,16 @@ import { resumeSshFile } from './workspace-resume';
 import { useDataSettingsJourney } from './DataSettingsJourney';
 import { HarnessEvidence } from './HarnessEvidence';
 import { RemoteProjectBaseline } from './RemoteProjectBaseline';
+import { CloudWorkspaceChoice, cloudChoice, hostWorkspaceAnchor, originalCloudEnvironment } from './CloudWorkspaceChoice';
 import { RemoteInputFlow } from './RemoteTaskInputs';
 import { harnessOptions, harnessProbeReady, harnessSelection, harnessWorkerLabel, isConfiguredHarness } from './harness-capabilities';
 import { IconAdd, IconArrowLeft, IconArrowUp, IconChevronRight, IconFileText, IconFolder, IconHistory, IconMonitor, IconServer, IconShieldCheck, IconTerminal, IconTool } from './icons';
+import type {CloudGoal} from './cloud-goal';
 import './connection-workspace.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
-type Props = { domain: 'remote' | 'ssh'; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void };
+type Props = { cloudGoal?: CloudGoal; onCloudGoalUsed?: (id:string)=>void; domain: 'remote' | 'ssh'; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void };
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const text = (value: any) => typeof value === 'string' ? value : value == null ? '' : String(value);
@@ -82,7 +84,7 @@ const profileReadiness = (domain: 'remote' | 'ssh', profile: Data) => domain ===
   ? profile.hasToken ? '凭据已配置 · 能力待核对' : '待配置连接令牌'
   : !profile.credentialsConfigured ? '待配置凭据' : profile.hostKeyTrusted ? '已保存主机信任' : '待核对主机指纹';
 
-export default function ConnectionWorkspace({ domain, state, data, supported, run, registerTransientBack }: Props) {
+export default function ConnectionWorkspace({ cloudGoal, onCloudGoalUsed, domain, state, data, supported, run, registerTransientBack }: Props) {
   const profiles = list(data.profiles), [editing, setEditing] = useState<Data | null>(null), [selected, setSelected] = useState<Data | null>(null), [removing, setRemoving] = useState<Data | null>(null);
   const editorTrigger = useRef<HTMLElement | null>(null);
   const workBack = useRef<(() => boolean) | null>(null), editorBack = useRef<(() => boolean) | null>(null);
@@ -119,6 +121,16 @@ export default function ConnectionWorkspace({ domain, state, data, supported, ru
     journey.open('profile:' + profile.id);
   };
   const openWork = () => { setWorkOpened(true); journey.open('work:' + selected!.id); };
+  const cloudSelection = object(data.cloudWorkspace), savedCloud = object(cloudSelection.target);
+  const savedCloudProfile = domain === 'remote' && cloudGoal && cloudSelection.selectionOnly === true &&
+    cloudSelection.liveState === 'not_checked' && typeof savedCloud.environmentId === 'string' && savedCloud.environmentId &&
+    typeof savedCloud.workspaceAnchor === 'string' && !!savedCloud.workspaceAnchor && typeof savedCloud.profileBinding === 'string' && !!savedCloud.profileBinding
+    ? profiles.find(profile => profile.id === savedCloud.profileId && profile.bindingHash === savedCloud.profileBinding && profile.hasToken === true) : undefined;
+  const openSavedCloud = () => {
+    if (!savedCloudProfile || busy || document.hidden) return;
+    setSelected({ ...savedCloudProfile }); setWorkOpened(true); setProbe(null); setReceipt(null);
+    journey.open('work:' + savedCloudProfile.id);
+  };
   const collectionName = domain === 'remote' ? '电脑环境' : 'SSH 主机';
   const EmptyIcon = domain === 'remote' ? IconMonitor : IconTerminal;
   const filteredProfiles = profiles.filter(profile => `${profile.name || ''} ${profileAddress(profile)} ${profile.workspace || ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -131,6 +143,9 @@ export default function ConnectionWorkspace({ domain, state, data, supported, ru
   const closeEditor = () => { setEditing(null); requestAnimationFrame(() => { const trigger = editorTrigger.current; (trigger?.isConnected && trigger.getClientRects().length ? trigger : journey.root.current)?.focus({ preventScroll: true }); }); };
   return <div className="pw-connection-workspace" ref={journey.root} tabIndex={-1} data-connection-view={journey.view}>
     <div hidden={journey.view !== 'list'}>
+      {cloudGoal&&<section className="pw-connection-attention" aria-label="从管家带来的目标"><h3>选择接这项工作的主机</h3>
+        <p>原对话仍保留。这一步只选连接，不会把草稿发给主机。</p>
+        {savedCloudProfile&&<Button variant="secondary" leadingIcon={IconServer} disabled={busy} onClick={openSavedCloud}>使用已保存的 {savedCloudProfile.name || '云主机'}</Button>}</section>}
       {profiles.length > 0 && <header className="pw-connection-collection-heading"><p className="pw-connection-directory-count">{profiles.length} 个{collectionName}</p><Button variant="secondary" leadingIcon={IconAdd} aria-label={'添加' + collectionName} disabled={busy} onClick={() => openEditor({})}>添加连接</Button></header>}
       {(profiles.length > 0 || query.length > 0) && <SearchField className="pw-connection-directory-search" fieldClassName="pw-connection-search" shape="rounded" aria-label={'搜索' + collectionName} placeholder="搜索名称、地址或工作区" value={query} onChange={setQuery} />}
       {profiles.length === 0 && !query ? <div className="pw-connection-empty"><EmptyIcon size={26} aria-hidden /><h3>{domain === 'remote' ? '连接你的第一台电脑' : '添加你的第一台主机'}</h3><p>{domain === 'remote' ? '填写 Companion 地址与令牌，再读取实际工作环境。' : '保存地址与凭据后，通过可信渠道核对主机指纹。'}</p><Button leadingIcon={IconAdd} disabled={busy} onClick={() => openEditor({})}>添加{collectionName}</Button></div> : <div className="pw-connection-directory">{profileSections.filter(section => section.profiles.length > 0).map(section => <section className="pw-connection-directory-group" key={section.id} aria-label={section.title}><header><h3>{section.title}</h3><span>{section.profiles.length}</span></header><div className="pw-connection-list">{section.profiles.map(profile => <ConnectionRow key={profile.id} title={profile.name} detail={profileAddress(profile)} icon={domain === 'remote' ? IconMonitor : IconServer} disabled={busy} entry={'profile:' + profile.id} onOpen={() => openProfile(profile)}><small className="pw-connection-readiness">{profileReadiness(domain, profile)}</small></ConnectionRow>)}</div></section>)}{query && !filteredProfiles.length && <div className="pw-connection-empty"><h3>没有匹配的连接</h3><p>试试连接名称、地址或工作区。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div>}
@@ -159,7 +174,7 @@ export default function ConnectionWorkspace({ domain, state, data, supported, ru
       <Receipt value={receipt} run={run} />
       <Accordion><AccordionItem id="connection-settings" title="连接设置" description="地址、凭据与本机配置"><Facts values={[[ '工作区', selected.workspace ], ['凭据', selected.hasToken || selected.credentialsConfigured ? '已配置' : '未配置' ]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => openEditor({ ...selected })}>编辑连接</Button><Button variant="ghost" disabled={busy} onClick={() => setRemoving({ ...selected })}>移除</Button></div></AccordionItem></Accordion>
     </>}
-    {selected && workOpened && !stale && <div hidden={!working} className="pw-connection-work-body">{domain === 'remote' ? <RemoteWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} visible={working} /> : <SshWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} openHistory={() => journey.open('jobs:' + selected.id)} visible={working} />}</div>}
+    {selected && workOpened && !stale && <div hidden={!working} className="pw-connection-work-body">{domain === 'remote' ? <RemoteWork cloudGoal={cloudGoal} onCloudGoalUsed={onCloudGoalUsed} key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} visible={working} /> : <SshWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} openHistory={() => journey.open('jobs:' + selected.id)} visible={working} />}</div>}
     {showingJobs && (domain === 'remote' ? <div className="pw-connection-jobs">{jobs.length === 0 && <p className="pw-secondary-empty">这项连接暂时没有已读取的原任务。可返回概览同步。</p>}{jobs.map(job => <article className="pw-connection-job" key={job.id}><header><div><h3>{job.worker || '电脑任务'}</h3><p>{profiles.find(profile => profile.id === job.profileId)?.name || job.serviceBase || '原连接'}</p></div><span>{status(job.status)}</span></header>{job.message && <p>{job.message}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => act('remote.getJob', originalJob(job))}>读取原回执</Button>{list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId)?.id && <Button variant="ghost" onClick={() => { const task = list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId); void run('tasks.open', { id: task!.id }).catch(() => {}); }}>打开本机原任务</Button>}{['queued', 'running', 'stopping', 'awaiting_approval', 'awaiting_input'].includes(job.status) && <Button variant="ghost" disabled={busy} onClick={() => act('remote.cancelJob', originalJob(job))}>请求停止原任务</Button>}</div></article>)}<Receipt value={receipt} run={run} /></div> : selected && !stale ? <SshOriginalWork key={selected.id + ':' + selected.bindingHash} profile={selected} supported={supported('ssh.workHistory') && supported('ssh.openOriginalWork')} run={run} /> : null)}
     {editing && <ProfileEditor key={editing.id || 'new'} domain={domain} original={editing} current={profiles.find(profile => profile.id === editing.id)} state={state} run={run} back={editorBack} close={closeEditor} />}
     <SettingsDialog isOpen={!!removing} title="移除这个连接？" onClose={() => { if (!busy) setRemoving(null); }}><p>只移除本机连接配置。已发生的远端操作请在原任务核对。</p><Facts values={[[ '连接', removing?.name ], ['地址', removing?.baseUrl || removing?.host ]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setRemoving(null)}>取消</Button><Button disabled={busy} onClick={() => removing && act(domain + '.removeProfile', { profileId: removing.id, expectedBindingHash: removing.bindingHash }, () => { setRemoving(null); setSelected(null); setWorkOpened(false); journey.back(); })}>移除这项原连接</Button></div></SettingsDialog>
@@ -231,12 +246,17 @@ function GeminiEvidence({ probe }: { probe: Data }) {
     </AccordionItem></Accordion>
   </div>;
 }
-function RemoteWork({ profile, state, data, run, supported, back, visible }: { profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean; back: { current: (() => boolean) | null }; visible: boolean }) {
+function RemoteWork({ profile, state, data, run, supported, back, visible, cloudGoal, onCloudGoalUsed }: { cloudGoal?: CloudGoal; onCloudGoalUsed?: (id:string)=>void; profile: Data; state: Data; data: Data; run: Run; supported: (action: string) => boolean; back: { current: (() => boolean) | null }; visible: boolean }) {
   const key = profile.id + ':' + profile.bindingHash, initial = useRef(remoteDrafts.get(key));
   const [environments, setEnvironments] = useState<Data[] | null>(null), [environmentFresh, setEnvironmentFresh] = useState(false);
   const [environmentId, setEnvironment] = useState(initial.current?.environmentId || ''), [worker, setWorker] = useState(initial.current?.worker || 'codex_app_server'), [probe, setProbe] = useState<Data | null>(null);
   const [modeId, setModeId] = useState(initial.current?.modeId || ''), [optionCatalog, setOptionCatalog] = useState<Data | null>(null);
   const [goal, setGoal] = useState(initial.current?.goal || ''), [argv, setArgv] = useState(initial.current?.argv || '["git","status","--short"]'), [model, setModel] = useState(initial.current?.model || ''), [effort, setEffort] = useState(initial.current?.effort || ''), [readOnly, setReadOnly] = useState(initial.current?.readOnly ?? true), [timeout, setTimeoutValue] = useState(initial.current?.timeout || '300');
+  const [savedReply, setSavedReply] = useState<Data | undefined>();
+  const recorded = cloudChoice(data.cloudWorkspace), confirmed = cloudChoice(savedReply);
+  const saved = confirmed && (!recorded || confirmed.revision > recorded.revision) ? confirmed : recorded;
+  const t = saved?.target;
+  const sameHost = t && t.profileId === profile.id && t.profileBinding === profile.bindingHash ? t : undefined;
   const [writeIntent, setWriteIntent] = useState(false), [draftError, setDraftError] = useState(''), [review, setReview] = useState<Data | null>(null);
   const [baseline, setBaseline] = useState<Data | null>(null);
   const [inputRequest, setInputRequest] = useState<Data | null>(null);
@@ -289,7 +309,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible }: { p
   // This is guidance, never permission. The original native review/admission remains authoritative.
   const nextStep = !profile.hasToken ? { title: '先接通这台电脑', detail: '返回连接概览，在连接设置中补充原 Companion 令牌。不会安装、登录或更换电脑上的代理。', action: '' }
     : unresolved.length ? { title: '先核对原提交', detail: '此连接有结果未明的原操作。使用上方只读查询或打开原任务，不再创建同一工作。', action: '' }
-    : !environmentFresh ? { title: '读取电脑提供的工作环境', detail: '电脑连接、工作目录、代理安装、模型登录是四件事。先取得当前环境目录，不根据已安装软件推定可启动。', action: 'environments' }
+    : !environmentFresh ? { title: sameHost ? '核对常用云环境' : '读取电脑提供的工作环境', detail: '电脑连接、工作目录、代理安装、模型登录是四件事。先取得当前环境目录，不根据已安装软件推定可启动。', action: 'environments' }
     : !environments?.length ? { title: '电脑尚未提供工作环境', detail: '在电脑 Companion 配置允许的目录与执行器后，重新读取。不自动创建目录或安装软件。', action: 'environments' }
     : !environment ? { title: '选择这次使用的工作目录', detail: '从下方实际环境中选择；不会自动采用上次浏览的其他目录。', action: 'environment' }
     : !workerReady ? { title: selectedWorker ? '这个代理当前不可用' : '选择电脑上的执行器', detail: text(object(selectedWorker?.reason).message || selectedWorker?.reason) || '从此环境实际返回的选项中选择。电脑有 Codex 或 Claude 命令，不等于该环境已配置并能启动它。', action: 'worker' }
@@ -319,11 +339,40 @@ function RemoteWork({ profile, state, data, run, supported, back, visible }: { p
       if (mode === 'baseline') setBaseline(prepared); else if (mode === 'inputs') setInputRequest(prepared); else setReview(prepared);
     } catch (failure) { if (alive.current) setDraftError(failure instanceof Error ? failure.message : '请核对这次任务参数。'); }
   };
-  const readEnvironments = () => {
-    if (locked || !formCurrent() || waiting.current) return;
+  const readEnvironments = (useSaved = false) => {
+    if (locked || !formCurrent() || waiting.current || useSaved && !sameHost) return;
     const selected = ++formVersion.current;
     setReview(null); setProbe(null); setOptionCatalog(null); setWriteIntent(false); setEnvironmentFresh(false); setDraftError('');
-    void request('remote.environments', binding(profile)).then(value => { if (formVersion.current === selected && nativeActive()) { setEnvironments(list(value.environments)); setEnvironmentFresh(true); } }).catch(() => {});
+    void request('remote.environments', binding(profile)).then(value => {
+      if (formVersion.current !== selected || !nativeActive()) return;
+      if (value.profileBinding !== profile.bindingHash || value.serviceBase !== profile.serviceBase || !Array.isArray(value.environments)) {
+        setDraftError('环境回执不属于原连接，未选择工作目录。'); return;
+      }
+      const catalog = list(value.environments); setEnvironments(catalog); setEnvironmentFresh(true);
+      if (useSaved && sameHost) {
+        const original = originalCloudEnvironment(catalog, sameHost);
+        setEnvironment(original?.id || ''); setWorker(original ? sameHost.worker : '');
+        // Never restore old write consent, model selection, or CLI options as part of a remembered location.
+        setReadOnly(true); setModel(''); setModeId(''); setEffort('');
+        if (!original) setDraftError('未核对到已记住的操作库、目录和执行器。可能是服务或目录已更换，未改用同名位置；可以手动重新选择。');
+      } else if (environmentId && (!environment || !catalog.some(e => e.id === environmentId && e.bindingHash === environment.bindingHash))) {
+        setEnvironment(''); setWorker(''); setModel(''); setModeId(''); setEffort(''); setReadOnly(true);
+        setDraftError('原先浏览的环境版本未能核对。目标文字保留，请重新选择目录和执行器。');
+      }
+    }).catch(() => {});
+  };
+  const changeCloudChoice = (forget: boolean) => {
+    if (!saved || locked || !formCurrent() || waiting.current || (forget ? !sameHost : !environmentFresh || !selectedWorker || !hostWorkspaceAnchor(environment))) return;
+    const selected = formVersion.current;
+    void request(forget ? 'remote.forgetWorkspace' : 'remote.rememberWorkspace', { ...binding(profile), expectedRevision: saved.revision,
+      ...(forget ? {} : { environmentId, environmentBinding: environment!.bindingHash, workspaceAnchor: hostWorkspaceAnchor(environment), worker }) }).then(value => {
+      if (formVersion.current !== selected || !nativeActive()) return;
+      const verified = cloudChoice(value);
+      if (!verified || verified.revision !== saved.revision + 1 || (forget ? !!verified.target :
+        !verified.target || verified.target.profileId !== profile.id || verified.target.profileBinding !== profile.bindingHash || verified.target.environmentId !== environmentId ||
+        verified.target.worker !== worker || verified.target.workspaceAnchor !== hostWorkspaceAnchor(environment))) { setDraftError('手机尚未确认保存这个选择，请重读原连接；没有启动工作。'); return; }
+      setSavedReply(value);
+    }).catch(() => {});
   };
   const probeWorker = () => {
     if (locked || !formCurrent() || waiting.current || !selectedWorker || !environmentFresh) return;
@@ -344,10 +393,21 @@ function RemoteWork({ profile, state, data, run, supported, back, visible }: { p
     <header className="pw-connection-work-title"><h3>{operation ? '这次电脑工作' : '开始新工作'}</h3><p>{operation ? '结果与后续操作都保留在同一项原任务中。' : '先选择实际环境，再说明这次要完成的事情。'}</p></header>
     {unresolved.map(item => <div className="pw-selected-object" key={item.operationId}><p>此连接有原提交待核对。</p><Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: item.operationId }).then(setReceipt).catch(() => {}); }}>只读核对原提交</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }}>打开原任务</Button></div>)}
     <div ref={composer} hidden={!!operation} className="pw-remote-composer">
+    {cloudGoal&&<section className="pw-connection-attention" aria-label="管家原目标">
+      <h3>使用管家里的目标</h3>
+      <p>{cloudGoal.carriesTextOnly?'这里只带目标文字，附件与引用留在原对话。':'原输入仍在管家，可随时返回。'}</p>
+      {goal.trim()&&goal.trim()!==cloudGoal.text?<p>这里已有另一份草稿，不会覆盖。若要改用管家的目标，请先处理本页草稿。</p>:null}
+      <Button variant="secondary" disabled={locked||!!review||!!goal.trim()&&goal.trim()!==cloudGoal.text} onClick={()=>{
+        if(!nativeActive()||locked||waiting.current||review||goal.trim()&&goal.trim()!==cloudGoal.text)return;
+        changed(()=>setGoal(cloudGoal.text));onCloudGoalUsed?.(cloudGoal.id);
+      }}>填入目标，继续核对</Button>
+    </section>}
     <section className="pw-connection-attention" aria-label="这次电脑工作的下一步"><h3>{nextStep.title}</h3><p>{nextStep.detail}</p>
-      {nextStep.action && <Button variant={nextStep.action === 'review' ? 'primary' : 'secondary'} disabled={locked || nextStep.action === 'probe' && !supported('remote.probeWorker') || nextStep.action === 'review' && !readyForReview} onClick={() => { if (nextStep.action === 'environments') readEnvironments(); else if (nextStep.action === 'probe') probeWorker(); else if (nextStep.action === 'review') void prepare(); else focusStep(nextStep.action); }}>{({ environments: '读取当前环境', environment: '选择工作环境', worker: '核对执行器与权限', probe: '核对当前能力', goal: '填写本次目标与选项', review: '审阅这次新工作' } as Record<string,string>)[nextStep.action]}</Button>}
+      {nextStep.action && <Button variant={nextStep.action === 'review' ? 'primary' : 'secondary'} disabled={locked || nextStep.action === 'probe' && !supported('remote.probeWorker') || nextStep.action === 'review' && !readyForReview} onClick={() => { if (nextStep.action === 'environments') readEnvironments(!!sameHost); else if (nextStep.action === 'probe') probeWorker(); else if (nextStep.action === 'review') void prepare(); else focusStep(nextStep.action); }}>{({ environments: '读取当前环境', environment: '选择工作环境', worker: '核对执行器与权限', probe: '核对当前能力', goal: '填写本次目标与选项', review: '审阅这次新工作' } as Record<string,string>)[nextStep.action]}</Button>}
     </section>
-    <section className="pw-connection-environment" data-remote-step="environment"><div className="pw-connection-section-toolbar"><h3>工作环境</h3><Button variant="ghost" disabled={locked || !profile.hasToken} onClick={readEnvironments}>读取当前工作环境</Button></div>
+    <section className="pw-connection-environment" data-remote-step="environment"><div className="pw-connection-section-toolbar"><h3>工作环境</h3><Button variant="ghost" disabled={locked || !profile.hasToken} onClick={() => readEnvironments()}>读取当前工作环境</Button></div>
+    {supported('remote.rememberWorkspace') && <CloudWorkspaceChoice profile={profile} value={saved} environment={environment} worker={selectedWorker} fresh={environmentFresh}
+      locked={locked} useSaved={() => readEnvironments(true)} save={() => changeCloudChoice(false)} forget={() => changeCloudChoice(true)}/>}
     {!environments && <p className="pw-field-hint">{profile.hasToken ? '读取这台电脑已提供的目录与执行器，不会自动创建或安装。' : '请返回连接概览，在连接设置中补充令牌。'}</p>}
     {!environmentFresh && (environmentId || operation) && <p className="pw-field-hint">草稿与原操作保留；开始另一项工作前，需要重新读取环境与核对执行器。</p>}
     {environments?.length === 0 && <p>未取得可用工作环境；不会自动创建电脑目录或安装执行器。</p>}

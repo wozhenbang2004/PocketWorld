@@ -88,6 +88,30 @@ export function deviceOriginalTaskActions(task: DeviceData, details: DeviceData 
   return { stop: facts.stop, pendingCancel: facts.pendingCancel, resultReview: facts.resultReview,
     goalReview: { available: false, reason }, resume: { available: false, reason }, phoneActionReason: reason };
 }
+export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData | undefined, local: DeviceData) {
+  return !!value && !!peer && identity(local.deviceId) && identity(local.instanceId) && identity(peer.instanceId) && /^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')
+    && value.targetDeviceId === peer.deviceId && value.instanceId === peer.instanceId && value.targetFingerprint === peer.certificateFingerprint
+    && value.localDeviceId === local.deviceId && value.localInstanceId === local.instanceId;
+}
+export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: DeviceData) {
+  if (!object(value) || value.kind !== 'phoneGoalArchive' || !samePhoneGoalArchive(value, peer, local) || value.readOnly !== true || !identity(value.archiveHandle)
+    || !Array.isArray(value.rows) || value.rows.length > 24 || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean'
+    || !value.rows.every((row: unknown) => object(row) && identity(row.taskId) && identity(row.operationId) && typeof row.goal === 'string' && !!row.goal
+      && ['main_screen', 'background'].includes(row.screenMode) && positiveInteger(row.createdAt))
+    || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId, row.operationId]))).size !== value.rows.length) throw new Error('原手机、本机派发或目录已变化，请重新读取。');
+  return value;
+}
+/** This page contains only the local index, never new controls or the peer's business result. */
+export function deviceTaskHistoryPage(value: unknown, taskId: string, targetDeviceId: string, kind: 'taskDetails' | 'taskHistoryPage') {
+  if (!object(value) || value.kind !== kind || value.taskId !== taskId || !object(value.history)) throw new Error('本机派发页不属于这项原工作。');
+  const page = value.history;
+  if (page.readOnly !== true || !identity(page.pageHandle) || page.targetDeviceId !== targetDeviceId || typeof page.hasMore !== 'boolean'
+      || typeof page.canReadNewer !== 'boolean' || !Array.isArray(page.links) || page.links.length > 24
+      || !page.links.every((link: unknown) => object(link) && link.parentTaskId === taskId && identity(link.operationId) && identity(link.targetDeviceId)
+        && (!targetDeviceId || link.targetDeviceId === targetDeviceId))
+      || new Set(page.links.map((link: DeviceData) => link.operationId)).size !== page.links.length) throw new Error('原工作、设备或本机派发页已变化，请从最近记录重新读取。');
+  return page;
+}
 export function deviceTaskHistoryLinks(details: DeviceData | undefined, taskId: string, peerId: string): DeviceData[] {
   if (!details || details.taskId !== taskId) return [];
   return deviceRows(details.history?.links).filter(link => link.parentTaskId === taskId && (!peerId || link.targetDeviceId === peerId));

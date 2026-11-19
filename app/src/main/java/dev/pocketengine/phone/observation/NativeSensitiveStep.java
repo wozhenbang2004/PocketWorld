@@ -32,6 +32,14 @@ public final class NativeSensitiveStep {
             super("这一步涉及付款、登录验证、应用安装或权限升级，请主人亲手完成；交还后将重新观察，不重放旧动作。");
             this.reason=reason;this.original=original;this.revision=revision;
         }
+        private String observedSurfaceKey="";
+        /** At the native refusal boundary, before invalidating the accepted tree. The retained
+         * key identifies the previously verified app/session, not the user's intended app. */
+        void retainSurfaceKey(JSONObject observed){
+            var scope=original.hostRunIdentity();if(scope==null||!observedSurfaceKey.isEmpty()||!belongsTo(original,revision))return;
+            try{observedSurfaceKey=dev.pocketengine.phone.MainPhoneOwnerReturnPage.surfaceKey(observed,scope.taskId(),scope.runId(),scope.epoch(),revision);}catch(Exception unavailable){/* Unknown stays read-only. */}
+        }
+        public String observedSurfaceKey(){return observedSurfaceKey;}
         /** The original Runner may settle only this still-unentered operation, never a prior unknown. */
         public boolean belongsTo(RunControl control,long pause) {
             return original==control&&revision==pause&&control.pauseRevision()==pause&&!control.isPaused()&&!control.isCancelled();

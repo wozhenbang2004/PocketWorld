@@ -1,5 +1,7 @@
 package dev.pocketengine.store;
 
+import dev.pocketengine.features.devices.DeviceProtocol;
+
 import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
@@ -885,16 +887,34 @@ public final class TaskStoreDeviceTasks {
     }
     /** Bounded local-owner workspace projection of the ORIGINAL allocation/link records.
      * This is not a peer endpoint; it never returns wire_json, contexts, paths or credentials. */
-    public JSONObject workspaceTaskLinks(int offset,int limit)throws Exception{return workspaceTaskLinks(null,offset,limit);}
-    public JSONObject childOverview(String parentTaskId,int limit)throws Exception{
-        synchronized(owner){JSONObject parent=task(parentTaskId);if(!deviceTask(parent)&&!("owner".equals(parent.optString("actorId"))&&"private".equals(parent.optString("spaceId"))))throw new SecurityException("不是本机owner或原设备父任务");}
-        return workspaceTaskLinks(parentTaskId,0,limit);
+    public JSONObject workspaceTaskLinks(int offset,int limit)throws Exception{return workspaceTaskLinks(null,offset,limit,"","");}
+    public JSONObject childOverview(String parentTaskId,int limit)throws Exception{return childHistoryPage(parentTaskId,"","",limit);}
+    public JSONObject ownerPhoneGoalIndex(String here,String target,String instance,String parentAfter,String afterOperation)throws Exception{
+        synchronized(owner){return OwnerPhoneGoalIndex.read(db,here,target,instance,parentAfter,afterOperation);}
     }
-    private JSONObject workspaceTaskLinks(String parent,int offset,int limit)throws Exception{
+    /** Local owner index only. Resolve the next anchor inside the same original parent/target;
+     * keyset ordering keeps concurrent newer allocations from shifting this reading position. */
+    public JSONObject childHistoryPage(String parentTaskId,String target,String afterOperation,int limit)throws Exception{
+        synchronized(owner){JSONObject parent=task(parentTaskId);if(!deviceTask(parent)&&!("owner".equals(parent.optString("actorId"))&&"private".equals(parent.optString("spaceId"))))throw new SecurityException("不是本机owner或原设备父任务");
+            if(!target.isEmpty())DeviceProtocol.deviceId(target,"targetDeviceId");
+            if(!afterOperation.isEmpty())DeviceProtocol.identifier(afterOperation,"afterOperation");
+            return workspaceTaskLinks(parentTaskId,0,limit,target,afterOperation);}
+    }
+    private JSONObject workspaceTaskLinks(String parent,int offset,int limit,String target,String after)throws Exception{
         if(offset<0||offset>100000||limit<1||limit>100)throw new SecurityException("设备任务关联分页越界");
         synchronized(owner){JSONArray links=new JSONArray();boolean more=false;
-            String query="SELECT parent_task_id,parent_operation_id,allocation_id,target_device_id,state,tools_reserved,models_reserved,child_binding,receipt_json,created_at FROM device_child_budget"+(parent==null?"":" WHERE parent_task_id=?")+" ORDER BY created_at DESC,parent_task_id,parent_operation_id LIMIT ? OFFSET ?";
-            String[] args=parent==null?new String[]{Integer.toString(limit+1),Integer.toString(offset)}:new String[]{parent,Integer.toString(limit+1),Integer.toString(offset)};
+            String where=parent==null ? "" : " WHERE parent_task_id=?";
+            java.util.ArrayList<String> values=new java.util.ArrayList<>();if(parent!=null)values.add(parent);
+            if(!target.isEmpty()){where+=" AND target_device_id=?";values.add(target);}
+            if(!after.isEmpty()){
+                java.util.ArrayList<String> anchor=new java.util.ArrayList<>(values);anchor.add(after);long created;
+                try(Cursor at=db.rawQuery("SELECT created_at FROM device_child_budget"+where+" AND parent_operation_id=?",anchor.toArray(new String[0]))){
+                    if(!at.moveToFirst())throw new SecurityException("原派发索引位置已变化，请从最近的记录重新读取");created=at.getLong(0);}
+                where+=" AND (created_at<? OR (created_at=? AND parent_operation_id>?))";
+                values.add(Long.toString(created));values.add(Long.toString(created));values.add(after);
+            }
+            String query="SELECT parent_task_id,parent_operation_id,allocation_id,target_device_id,state,tools_reserved,models_reserved,child_binding,receipt_json,created_at FROM device_child_budget"+where+" ORDER BY created_at DESC,parent_task_id,parent_operation_id LIMIT ? OFFSET ?";
+            values.add(Integer.toString(limit+1));values.add(Integer.toString(offset));String[] args=values.toArray(new String[0]);
             try(Cursor row=db.rawQuery(query,args)){while(row.moveToNext()){
                 if(links.length()==limit){more=true;break;}JSONObject link=new JSONObject().put("parentTaskId",row.getString(0)).put("operationId",row.getString(1)).put("allocationId",row.getString(2)).put("targetDeviceId",row.getString(3)).put("holdState",row.getString(4)).put("toolsReserved",row.getInt(5)).put("modelsReserved",row.getInt(6)).put("createdAt",row.getLong(9));
                 if(!row.isNull(7)){JSONObject accepted=new JSONObject(row.getString(7)),safe=new JSONObject();for(String field:new String[]{"executorDeviceId","instanceId","acceptedObjectKind","objectId","targetOperationId","jobId","localTaskId","runId","executorEpoch","acceptedAt","argumentsDigest","parentTaskId","parentOperationId"})if(accepted.has(field))safe.put(field,accepted.get(field));link.put("childBinding",safe);}
