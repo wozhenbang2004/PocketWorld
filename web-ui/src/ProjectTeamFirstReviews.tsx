@@ -41,7 +41,7 @@ export function ProjectTeamFirstReviews({id,run,epoch,project,checkout,conversat
   return <section aria-label="原项目的协作文件">
     {rows===null?(!busy&&error?<Button variant="secondary" size="small" onClick={()=>void check()}>重新读取原协作</Button>:null):<>
       {rows.map(({source,title})=><Button variant="secondary" size="small" key={source.teamRunId} disabled={busy} trailingIcon={IconChevronRight}
-        onClick={()=>void check(source)}>{rows.length>1?(title||'原团队')+(repeatedTitle(title)?'（'+source.teamRunId.slice(-6)+'）':'')+' · ':''}核对独审交回的 {source.fileCount} 份原文件</Button>)}
+        onClick={()=>void check(source)}>{rows.length>1?(title||'原团队')+(repeatedTitle(title)?'（'+source.teamRunId.slice(-6)+'）':'')+' · ':''}{source.registeredReviewId?'查看已登记的 '+source.fileCount+' 份原文件':'核对独审交回的 '+source.fileCount+' 份原文件'}</Button>)}
       {after&&<Button variant="ghost" size="small" disabled={busy} onClick={()=>void check(undefined,after)}>读取其余原协作</Button>}
       <Button variant="ghost" size="small" disabled={busy} onClick={()=>void check()}>重新核对目录</Button>
     </>}{busy&&<p role="status">正在核对原项目的团队审阅…</p>}{error&&<p role="alert">{error}</p>}

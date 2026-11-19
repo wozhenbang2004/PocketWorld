@@ -12,6 +12,8 @@ internal object PocketWebProjectReviewReturn {
     private val fields = setOf("parentTaskId","parentRunId","parentEpoch","conversationId","teamTaskId","teamRunId","projectId","checkoutId",
         "planHash","reviewerTaskId","reviewerRunId","selectionHash","snapshotIdentity","parentSourceDigest","sourceDigest","fileCount")
 
+    private val recorded = setOf("registeredReviewId","registeredAt")
+    private val receiptId = "[a-f0-9-]{36}".toRegex()
     fun read(action:String, args:JSONObject, store:TaskStore, read:RunControl, module:()->TeamsModule):JSONObject {
         val exact=action==ORIGINAL
         require(exact || action==DIRECTORY)
@@ -28,12 +30,17 @@ internal object PocketWebProjectReviewReturn {
         return store.projectTeamFirstReviews(parent,run,epoch,after,read)
     }
     fun original(module: TeamsModule, source: JSONObject, team: String, read: RunControl): JSONObject {
-        require(source.keys().asSequence().toSet() == fields && source.opt("teamRunId") == team)
+        val observed = source.keys().asSequence().toSet()
+        require((observed == fields || observed == fields + recorded && receiptId.matches(source.optString("registeredReviewId")) &&
+                source.optLong("registeredAt") > 0) && source.opt("teamRunId") == team)
         return module.projectFirstReviewOrigin(source,team,read)
     }
     fun index(files: JSONObject, decision: JSONObject, source: JSONObject) {
+        val sameDecision = if(source.has("registeredReviewId")) decision.opt("state") == "approved_current" &&
+                decision.opt("reviewId") == source.opt("registeredReviewId") && decision.opt("registrationKind") == "first_local_project_text_v1" &&
+                decision.opt("separateIntegratorStartRequired") == true else decision.opt("state") == "eligible_project_first"
         check(files.opt("projectId") == source.opt("projectId") && files.opt("planHash") == source.opt("planHash")
-            && files.getJSONArray("files").length() == source.getInt("fileCount") && decision.opt("state") == "eligible_project_first") {
+            && files.getJSONArray("files").length() == source.getInt("fileCount") && sameDecision) {
             "原项目、独审或当前冻结目录已变，没有打开替代文件"
         }
     }

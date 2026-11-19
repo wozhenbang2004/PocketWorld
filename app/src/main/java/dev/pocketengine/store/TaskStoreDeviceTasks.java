@@ -177,7 +177,7 @@ public final class TaskStoreDeviceTasks {
     /** Auto-admit ONLY against that already persisted B-native policy and exact enabled profile. */
     public GoalModelApproval authorizeGoalModelPolicy(String id,DeviceExecutionAdmission admission,dev.pocketengine.core.ModelConfig selected)throws Exception{
         admission.checkCurrent();synchronized(owner){JSONObject current=task(id);requireDevice(current);requireSameSession(current,admission);JSONObject policy=modelPolicy(modelPolicyKey(admission));if(policy==null)throw new SecurityException("没有B本机持久模型策略");requireModelPolicyScope(policy,admission);
-            if(selected.usesAccount()||selected.capabilityBinding==null||!dev.pocketengine.features.devices.DeviceProtocol.canonical(selected.capabilityBinding.toJson()).equals(dev.pocketengine.features.devices.DeviceProtocol.canonical(policy.getJSONObject("modelBinding")))||!selected.model.equals(policy.getString("model"))||!dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(selected).equals(policy.getString("configurationDigest")))throw new SecurityException("本机策略的模型或凭据版本变化，未换用默认");
+            if(!matchesOriginalPolicyModel(policy,selected))throw new SecurityException("本机策略的模型或凭据版本变化，未换用默认");
             GoalModelReview review=reviewGoalModel(id,current.getLong("deviceStateRevision"),admission,selected);review.confirmed=true;review.policyKey=modelPolicyKey(admission);review.policyDigest=TaskStore.capabilityFingerprint(policy);return new GoalModelApproval(review);
         }
     }
@@ -215,18 +215,23 @@ public final class TaskStoreDeviceTasks {
     /** Native scoped health input only. Root resolves these public profile references with SettingsStore;
      * never serialize this owner-only object wholesale into a peer's capability manifest. */
     public JSONObject goalModelPolicyStatus(dev.pocketengine.features.devices.PairingCoordinator.Permission permission)throws Exception{
-        permission.checkCurrent(System.currentTimeMillis());return goalModelPolicyStatus(permission.callerDeviceId(),permission.targetDeviceId());
+        permission.checkCurrent(System.currentTimeMillis());JSONObject status;
+        synchronized(owner){status=ScopedGoalModelPolicyStatus.read(db,owner,permission.targetDeviceId(),permission.callerDeviceId(),permission.originDeviceId(),permission.authorizationEpoch(),permission.grantId());}
+        permission.checkCurrent(System.currentTimeMillis());return status;
     }
-    public JSONObject goalModelPolicyStatus(dev.pocketengine.features.devices.PairingCoordinator.DiscoveryPermission permission)throws Exception{permission.checkCurrent(System.currentTimeMillis());return goalModelPolicyStatus(permission.callerDeviceId(),permission.targetDeviceId());}
-    private JSONObject goalModelPolicyStatus(String callerDeviceId,String targetDeviceId)throws Exception{
-        synchronized(owner){JSONArray policies=new JSONArray();boolean truncated=false;int scanned=0;
-            try(Cursor rows=db.rawQuery("SELECT value FROM meta WHERE key GLOB 'device_goal_model_policy:*' ORDER BY rowid DESC LIMIT 129",null)){while(rows.moveToNext()){
-                if(++scanned>128){truncated=true;break;}JSONObject policy=new JSONObject(rows.getString(0));if(policy.has("ownerDisabledAt")||!callerDeviceId.equals(policy.optString("callerDeviceId"))||!targetDeviceId.equals(policy.optString("targetDeviceId"))||policy.optLong("expiresAt")<=System.currentTimeMillis())continue;
-                JSONObject grant=null;try(Cursor row=db.rawQuery("SELECT body_json,authorization_epoch,revoked FROM device_grants WHERE grant_id=? AND peer_device_id=? AND local_device_id=?",new String[]{policy.getString("grantId"),callerDeviceId,targetDeviceId})){if(row.moveToFirst())grant=new JSONObject(row.getString(0)).put("authorizationEpoch",row.getLong(1)).put("revoked",row.getInt(2)!=0);}
-                if(grant==null||grant.optBoolean("revoked")||grant.optLong("expiresAt")<=System.currentTimeMillis()||!policy.getString("grantFingerprint").equals(dev.pocketengine.features.devices.DeviceProtocol.sha256(dev.pocketengine.features.devices.DeviceProtocol.canonicalBytes(grant))))continue;
-                if(policies.length()==8){truncated=true;break;}policies.put(policy);
-            }}return new JSONObject().put("callerDeviceId",callerDeviceId).put("configured",policies.length()>0).put("policies",policies).put("truncated",truncated).put("executionAuthorized",false);
-        }
+    public JSONObject goalModelPolicyStatus(dev.pocketengine.features.devices.PairingCoordinator.DiscoveryPermission permission)throws Exception{
+        permission.checkCurrent(System.currentTimeMillis());JSONObject status;String caller=permission.callerDeviceId();
+        synchronized(owner){status=ScopedGoalModelPolicyStatus.read(db,owner,permission.targetDeviceId(),caller,caller,permission.authorizationEpoch(),null);}
+        permission.checkCurrent(System.currentTimeMillis());return status;
+    }
+    /** Same profile identity and credential generation check for execution and metadata-only readiness.
+     * The latter supplies only a stored public profile reference, never materializes its key or calls a model. */
+    public static boolean matchesOriginalPolicyModel(JSONObject policy,dev.pocketengine.core.ModelConfig selected)throws Exception {
+        JSONObject binding=policy.optJSONObject("modelBinding");
+        return selected!=null&&!selected.usesAccount()&&selected.capabilityBinding!=null&&binding!=null
+                &&DeviceProtocol.canonical(selected.capabilityBinding.toJson()).equals(DeviceProtocol.canonical(binding))
+                &&selected.model.equals(policy.opt("model"))
+                &&dev.pocketengine.runtime.models.ModelRoutePlan.configurationDigest(selected).equals(policy.opt("configurationDigest"));
     }
     public interface Access {
         JSONObject read(String taskId) throws Exception;

@@ -170,10 +170,15 @@ final class ReceivedPhoneGoalIndex {
                     }
                     JSONObject closedReview=null;
                     if(closed){
-                        if(!zero||!("completed".equals(header.opt("status"))||"cancelled".equals(header.opt("status")))||header.optString("runId").isEmpty()||header.optInt("coordinatorEpoch")<=0)continue;
+                        if(!("completed".equals(header.opt("status"))||"cancelled".equals(header.opt("status")))||header.optString("runId").isEmpty()||header.optInt("coordinatorEpoch")<=0)continue;
                         JSONObject selected=new JSONObject().put("taskId",task).put("operationId",op).put("localId",here).put("localInstance",localInstance)
                                 .put("sourceId",source).put("screenMode",mode).put("wireDigest",digest).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin)));
-                        try{closedReview=ReceivedPhoneReviewArchive.checkedMetadata(db,selected,search);if(closedReview==null)continue;}
+                        try{
+                            // A checked screen job is a navigable native decision, never a saved text or evidence reader.
+                            if(!zero&&search.active()&&!search.matches(wire.getJSONObject("arguments").getString("goal")))continue;
+                            closedReview=zero?ReceivedPhoneReviewArchive.checkedMetadata(db,selected,search):ReceivedScreenGoalDecision.metadata(db,header,wire);
+                            if(closedReview==null)continue;
+                        }
                         catch(IllegalStateException|SecurityException|JSONException unavailable){limited++;continue;}
                     }
                     JSONObject review=null;

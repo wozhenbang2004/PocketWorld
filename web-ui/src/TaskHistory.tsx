@@ -158,7 +158,7 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
       {checkpoint.record.locatable && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => locate(checkpoint.record!)}>定位原记录</Button>}
     </div>}
     {checkpoint.lines?.map((line,index) => <p key={index} dir="auto">{line}</p>)}
-    {resources?.stored&&resources.stored!==resources.event?.body&&<p><strong>独立屏留存记录：</strong>{resources.stored}</p>}
+    {resources?.stored&&resources.stored.body!==resources.event?.body&&<p><strong>独立屏留存记录：</strong>{resources.stored.body}</p>}
     {resources?.event&&!(checkpoint.record?.section==='events'&&checkpoint.record.id===resources.event.id&&checkpoint.record.body===resources.event.body)&&<div className="pw-checkpoint-evidence"><small>{resources.event.label}</small><p>{resources.event.body}</p>
       {(checkpoint.record?.section!=='events'||checkpoint.record.id!==resources.event.id)&&<Button variant="ghost" trailingIcon={IconChevronRight} data-phone-release-return={recordKey(resources.event.runId,resources.event.id)} onClick={()=>locate(resources.event!,true)}>查看这笔清理记录</Button>}</div>}
   </section>;

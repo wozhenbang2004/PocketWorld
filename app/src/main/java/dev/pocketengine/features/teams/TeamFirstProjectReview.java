@@ -15,9 +15,23 @@ public final class TeamFirstProjectReview {
     private static void need(boolean ok){if(!ok)throw new SecurityException("不能证明这是首版、全本机、完整独审的原项目文本，保留待审");}
     private static boolean same(Object a,Object b)throws Exception{return a!=null&&b!=null&&ProjectSources.canonical(a).equals(ProjectSources.canonical(b));}
     public static JSONObject begin(JSONObject team,JSONObject parent,JSONObject dev,JSONObject verdict,String hash)throws Exception{
+        need(!team.has("teamOutputReview")&&!team.optBoolean("cancelRequested")&&"active".equals(team.getJSONObject("teamWorkPlan").opt("state"))&&
+                team.getJSONObject("teamWorkPlan").optLong("expiresAt")>System.currentTimeMillis());
+        return original(team,parent,dev,verdict,hash);
+    }
+    /** Read the retained owner's very first registration, not an alternative way to seek or refresh approval. */
+    public static JSONObject registered(JSONObject team,JSONObject parent,JSONObject dev,JSONObject verdict,String hash)throws Exception{
+        JSONObject saved=team.getJSONObject("teamOutputReview"),plan=saved.getJSONObject("plan");
+        need(registrationOnly(saved)&&Boolean.TRUE.equals(saved.opt("separateIntegratorStartRequired"))&&"owner".equals(saved.opt("actorId"))&&
+                "private".equals(saved.opt("spaceId"))&&saved.optString("reviewId").matches("[a-f0-9-]{36}")&&saved.optLong("approvedAt")>0&&
+                !saved.has("previousReviewId")&&!saved.has("previousPlanHash")&&!plan.has("recovery")&&hash.equals(saved.opt("planHash"))&&
+                hash.equals(ProjectSources.digest(plan))&&same(plan.opt("teamRunId"),parent.opt("teamRunId"))&&same(plan.opt("targetProjectId"),parent.opt("targetProjectId")));
+        return original(team,parent,dev,verdict,hash).put("state","registered_project_first")
+                .put("registeredReviewId",saved.getString("reviewId")).put("registeredAt",saved.getLong("approvedAt"));
+    }
+    private static JSONObject original(JSONObject team,JSONObject parent,JSONObject dev,JSONObject verdict,String hash)throws Exception{
         JSONObject work=team.getJSONObject("teamWorkPlan"),scope=team.getJSONObject("teamWriteScope"),base=scope.getJSONObject("projectSelection"),ind=team.getJSONObject("teamIndependentReview");
-        need(!team.has("teamOutputReview")&&!team.has("teamOutputReviewHistory")&&!team.optBoolean("cancelRequested")&&work.optInt("revision",-1)==1&&"active".equals(work.opt("state"))&&
-                !work.has("lastRevisionRequestId")&&work.optLong("expiresAt")>System.currentTimeMillis()&&hash.matches("[a-f0-9]{64}"));
+        need(!team.has("teamOutputReviewHistory")&&work.optInt("revision",-1)==1&&!work.has("lastRevisionRequestId")&&hash.matches("[a-f0-9]{64}"));
         JSONObject copy=new JSONObject(base.toString());copy.remove("selectionHash");
         need(ProjectSources.digest(copy).equals(base.opt("selectionHash"))&&"pocketworld.team-project-selection.v1".equals(base.opt("format"))&&
                 "owner_baseline".equals(base.opt("role"))&&!base.has("previousDelivery")&&!base.has("originalPackageArtifactId")&&!base.optBoolean("knownFailedCopy")&&

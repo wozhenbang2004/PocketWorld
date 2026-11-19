@@ -1445,13 +1445,20 @@ public final class MemoryBook {
         }}while(changed);
     }
 
-    public synchronized JSONObject get(JSONObject scope,String id)throws Exception{JSONObject row=require(Scope.from(scope),id),view=viewRecord(row).put("active",activeIds(System.currentTimeMillis()).contains(id));if(row.has("assertion"))view.put("assertionStatus",MemoryAssertion.statuses(records.values(),sourceEligibleIds(System.currentTimeMillis()),System.currentTimeMillis(),assertionFences).get(id));return view;}
+    public synchronized JSONObject get(JSONObject scope,String id)throws Exception{
+        JSONObject row=require(Scope.from(scope),id); // Reject out-of-scope IDs before any eligibility lookup.
+        return inspectedRecord(row,activeInspection(System.currentTimeMillis()));
+    }
     /** Inspection keeps expired records visible; only retrieval excludes them and their descendants. */
     public synchronized JSONArray list(JSONObject scope)throws Exception{
-        Scope s=Scope.from(scope);Set<String> active=activeIds(System.currentTimeMillis());List<JSONObject> rows=new ArrayList<>();
+        Scope s=Scope.from(scope);ActiveInspection inspection=activeInspection(System.currentTimeMillis());List<JSONObject> rows=new ArrayList<>();
         for(JSONObject record:records.values())if(s.matches(record))rows.add(record);
         rows.sort(Comparator.comparingLong((JSONObject value)->value.optLong("updatedAt")).reversed());
-        Map<String,String> statuses=MemoryAssertion.statuses(records.values(),sourceEligibleIds(System.currentTimeMillis()),System.currentTimeMillis(),assertionFences);JSONArray result=new JSONArray();for(JSONObject record:rows){JSONObject view=viewRecord(record).put("active",active.contains(record.getString("id")));if(record.has("assertion"))view.put("assertionStatus",statuses.get(record.getString("id")));result.put(view);}return result;
+        JSONArray result=new JSONArray();for(JSONObject record:rows)result.put(inspectedRecord(record,inspection));return result;
+    }
+    private JSONObject inspectedRecord(JSONObject row,ActiveInspection inspection)throws Exception{
+        String id=row.getString("id");JSONObject view=viewRecord(row).put("active",inspection.active.contains(id));
+        if(row.has("assertion"))view.put("assertionStatus",inspection.assertions.get(id));return view;
     }
     /** Pure parameter check shared with the native tool admission boundary. */
     public static void validateSearchQueryForHost(String query){normalizedSearchQuery(query);}
@@ -2212,7 +2219,14 @@ public final class MemoryBook {
         }}while(changed);
         removed.remove(root);for(String id:removed)records.remove(id);return removed.size();
     }
-    private Set<String> activeIds(long now)throws Exception {
+    /** Operation-local only: the authority/expiry evaluation is not cached across reads, reviews or commits. */
+    private static final class ActiveInspection {
+        final Set<String> active;
+        final Map<String,String> assertions;
+        ActiveInspection(Set<String> active,Map<String,String> assertions){this.active=active;this.assertions=assertions;}
+    }
+    private Set<String> activeIds(long now)throws Exception {return activeInspection(now).active;}
+    private ActiveInspection activeInspection(long now)throws Exception {
         Set<String> active=new HashSet<>();Map<String,String> checkedAppVersions=new LinkedHashMap<>();
         for(JSONObject record:records.values())if(appRecordEligible(record,checkedAppVersions)&&!record.optBoolean("archiveOnly")&&record.optLong("expiresAt",Long.MAX_VALUE)>now&&externalActive(record))active.add(record.getString("id"));
         Set<String> sourceEligible=sourceEligibleIds(now);Map<String,String> assertions=MemoryAssertion.statuses(records.values(),sourceEligible,now,assertionFences);
@@ -2238,7 +2252,7 @@ public final class MemoryBook {
         // descendants may keep this exact superseded baseline, not arbitrary retired methods.
         for(JSONObject record:records.values()){JSONObject app=record.optJSONObject("appKnowledge");if(app!=null&&"archived".equals(app.optString("stage")))active.remove(record.getString("id"));}
         Set<String> shadowed=new HashSet<>();for(JSONObject record:records.values())if(active.contains(record.optString("id"))){JSONObject app=record.optJSONObject("appKnowledge");if(app!=null&&"trial".equals(app.optString("stage"))&&!app.optString("baseId").isEmpty())shadowed.add(app.getString("baseId"));}
-        active.removeAll(shadowed);return active;
+        active.removeAll(shadowed);return new ActiveInspection(active,assertions);
     }
     private boolean identityParentAvailable(JSONObject child,String id,Set<String> active,Set<String> sourceEligible,Map<String,String> statuses,Set<String> visiting)throws Exception {
         if(!checkedIdentityParents(child,false).contains(id))return active.contains(id);

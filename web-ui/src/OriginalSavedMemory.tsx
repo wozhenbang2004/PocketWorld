@@ -2,9 +2,10 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { ShimmerText } from './library';
+import { VisibleOriginalMemoryQuote } from './VisibleOriginalMemoryQuote';
 import type { ConversationDraftTarget } from './SkillDraftReview';
 
-type Read = { status: 'read' | 'changed' | 'not_active'; currentRevision: number; readExpiresAt: number; text?: string };
+type Read = { status: 'read' | 'changed' | 'not_active'; currentRevision: number; readExpiresAt: number; text?: string; visibleQuoteKey?: string };
 const positive = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
 export const originalMemoryWindow = () => {
   const snapshot = bridge.getState(), s = snapshot.state, v = snapshot.view as Record<string, unknown> | undefined;
@@ -38,7 +39,7 @@ export function OriginalSavedMemory({ target, id, revision, duplicate, windowKey
       const left = value.readExpiresAt - Date.now();
       if (left <= 0) { retire(); return; }
       s.timer = window.setTimeout(retire, left);
-      setRead({ status: value.status, currentRevision: value.currentRevision, readExpiresAt: value.readExpiresAt, text: value.text });
+      setRead({ status: value.status, currentRevision: value.currentRevision, readExpiresAt: value.readExpiresAt, text: value.text, visibleQuoteKey: typeof value.visibleQuoteKey === 'string' && /^[a-f0-9]{64}$/.test(value.visibleQuoteKey) ? value.visibleQuoteKey : undefined });
       setPhase('settled');
     } catch {
       if (seq === s.seq && current()) { setRead(null); setPhase('unavailable'); }
@@ -63,6 +64,8 @@ export function OriginalSavedMemory({ target, id, revision, duplicate, windowKey
       <Button variant="secondary" onClick={() => withCurrentRead(() => { void load(read.currentRevision); })}>查看这一条的第 {read.currentRevision} 版</Button></>}
     {read?.status === 'read' && <><p className="pw-muted">{read.currentRevision !== revision ? '这条记忆的后续版本' : duplicate ? '当时匹配到的同一版本，没有重复保存' : '与这次保存回执同一版本'} · 第 {read.currentRevision} 版</p>
       <p className="pw-reading-copy">{read.text}</p><p className="pw-muted">这是回读时的个人记忆，不证明内容属实，也不说明哪次回答用过它。</p>
+      {read.visibleQuoteKey && read.currentRevision === revision && <VisibleOriginalMemoryQuote target={target} id={id} revision={revision} duplicate={duplicate}
+        spanKey={read.visibleQuoteKey} deadline={read.readExpiresAt} current={current} />}
       {manage && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="manage-receipted-memory" title="管理这条记忆" description="编辑内容或核对来源">
         <p className="pw-muted">进入个人中心会加载个人资料与记忆目录。</p><Button variant="secondary" onClick={() => withCurrentRead(manage)}>进入个人中心</Button>
       </AccordionItem></Accordion>}</>}

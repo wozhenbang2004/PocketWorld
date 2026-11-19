@@ -133,13 +133,15 @@ export function waitingPhoneGoalPage(value: unknown, local: DeviceData, search='
 }
 export type PhoneArchiveSide = 'sent' | 'received';
 export function receivedPhoneArchiveReturn(value: unknown, row: DeviceData, peer: DeviceData, local: DeviceData): ReceivedPhoneGoalReturn {
+  const runBound=row.screenDecision===true||['original_run','failed_run'].includes(row.waitingState);
   if (!object(value) || value.kind !== 'receivedGoalReturn' || value.readOnly !== true || value.taskId !== row.taskId || value.operationId !== row.operationId
     || value.targetId !== local.deviceId || value.instanceId !== local.instanceId || value.sourceId !== peer.deviceId
+    || (row.screenDecision===true?value.screenDecision!==true||value.confirmed!==row.confirmed:value.screenDecision!==undefined)
     || (row.waitingState==='failed_run' ? value.failedOriginalRun!==true : value.failedOriginalRun!==undefined)
-    || (['original_run','failed_run'].includes(row.waitingState) ? value.runId!==row.runId || value.executorEpoch!==row.epoch : value.runId!==undefined || value.executorEpoch!==undefined)
+    || (runBound ? value.runId!==row.runId || value.executorEpoch!==row.epoch : value.runId!==undefined || value.executorEpoch!==undefined)
     || !identity(value.parentTaskId) || !identity(value.grantId) || !positiveInteger(value.epoch)) throw new Error('未能核对本机接纳的这次原任务。');
   return { taskId: value.taskId, operationId: value.operationId, targetId: value.targetId, instanceId: value.instanceId, sourceId: value.sourceId,
-    parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, ...(row.waitingState==='failed_run'?{failedOriginalRun:true as const}:{}), ...(['original_run','failed_run'].includes(row.waitingState)?{runId:value.runId,executorEpoch:value.executorEpoch}:{}), peerDetail: true, leftAt: Date.now() };
+    parentTaskId: value.parentTaskId, grantId: value.grantId, epoch: value.epoch, ...(row.waitingState==='failed_run'?{failedOriginalRun:true as const}:{}), ...(runBound?{runId:value.runId,executorEpoch:value.executorEpoch}:{}), peerDetail: true, leftAt: Date.now() };
 }
 export type ArchivedPhoneStopAttempt={localPhase:'prepared_no_write'|'abandoned_before_write'|'write_unconfirmed'; preparedAt:number};
 export function isArchivedPhoneStopAttempt(value:unknown):value is ArchivedPhoneStopAttempt{
@@ -176,7 +178,8 @@ export function localReviewedInbox(value:unknown,local:DeviceData,search=''){
   if(!object(value)||value.kind!=='reviewedPhoneInbox'||(value.searchText??'')!==search||Array.from(search).length>64||value.readOnly!==true||value.localDeviceId!==local.deviceId||value.localInstanceId!==local.instanceId||!identity(value.closedHandle)
     ||!Array.isArray(value.rows)||value.rows.length>6||typeof value.hasMore!=='boolean'||typeof value.canReadNewer!=='boolean'||!Number.isSafeInteger(value.limitedCandidates)||value.limitedCandidates<0
     ||!value.rows.every((r:unknown)=>object(r)&&identity(r.taskId)&&identity(r.operationId)&&identity(r.sourceDeviceId)&&typeof r.goal==='string'&&positiveInteger(r.reviewedAt)
-      &&(r.notConfirmed===true?r.hasText===undefined&&r.keptOnPhone===undefined&&r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined
+      &&(r.screenDecision===true?typeof r.confirmed==='boolean'&&identity(r.runId)&&positiveInteger(r.epoch)&&r.notConfirmed===undefined&&r.hasText===undefined&&r.keptOnPhone===undefined&&r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined
+        :r.screenDecision!==undefined||r.confirmed!==undefined||r.runId!==undefined||r.epoch!==undefined?false:r.notConfirmed===true?r.hasText===undefined&&r.keptOnPhone===undefined&&r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined
         :r.notConfirmed===undefined&&typeof r.keptOnPhone==='boolean'&&typeof r.hasText==='boolean'
       &&(search ? (r.matchPart==='goal'||r.matchPart==='result'&&r.hasText===true)&&Number.isSafeInteger(r.matchPage)&&r.matchPage>=0&&r.matchPage<188&&typeof r.bothParts==='boolean'
         : r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined)))

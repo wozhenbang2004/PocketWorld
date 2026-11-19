@@ -231,6 +231,8 @@ def _page(context, facts, notice):
         actions.append(("LocalProjectWork", "继续本机项目工作\n按原登记找底稿、草稿或多文件补丁，不需要先选择仓库或启动服务。"))
         actions.append(("CommandSetup", "核对本机可接的命令\n看一个工作区已登记的命令名；可单独核对一项，不运行或授权。"))
         actions.append(("ProjectSource", "核对一个本机 Git 项目的来源\n只从本机已登记工作区读取提交，不启动服务或项目工作。"))
+    if facts["interactive"] and context.current.get("allowUnsignedDevelopment") is False:
+        actions.append(("OwnerStartMenu", "从开始菜单找到工作台\n可选择为这个签名安装创建普通入口，不随登录启动。"))
     if notice: body += "\n\n" + notice
     return _dialog(heading, body, [*actions, ("Refresh", "重新读取本机状态")])
 
@@ -272,6 +274,10 @@ def open_installed_desk():
             action = _page(context, facts, notice)
             if action is None: return
             if action == "Refresh": notice = ""; continue
+            if action == "OwnerStartMenu":
+                from windows_owner_start_menu import offer
+                offer(context)
+                notice = ""; continue
             if action == "LocalProjectWork":
                 from windows_project_workbench import open_work
                 open_work(context, facts["settings"])

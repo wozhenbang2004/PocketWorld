@@ -502,6 +502,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       if(!selectedPeer.current){setClosedInbox(localReviewedInbox(value,local,search));setClosedDraft(search);}
     });
   };
+  const returnScreenDecision=(row:Data)=>{
+    if(busy||selectedPeer.current||!localInbox||!rows(localInbox.rows).some(r=>r.screenDecision===true&&r.taskId===row.taskId&&r.operationId===row.operationId&&r.runId===row.runId&&r.epoch===row.epoch))return;
+    void invoke('devices.returnToReceivedPhoneGoal',{closedHandle:localInbox.closedHandle,taskId:row.taskId,operationId:row.operationId},value=>{
+      if(selectedPeer.current)return;
+      const source=receivedPhoneArchiveReturn(value,row,{deviceId:row.sourceDeviceId},local);
+      setModelReturnFocus({...source,peerDetail:false});setNotice('已定位本机核对过的原执行，没有联系伙伴或重新运行。');
+    });
+  };
   const sourceLabel = (id:string, original?:Data) => {
     const known=original && Number.isSafeInteger(original.expiresAt) && original.expiresAt>Date.now() &&
       peers.find(p=>p.deviceId===id && !retired(p) && p.instanceId===original.instanceId &&
@@ -957,13 +965,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 onChange={value=>setClosedDraft(Array.from(value).slice(0,64).join(''))}/>
               <Button type="submit" variant="secondary" disabled={busy||!closedDraft.trim()}>查找</Button>
               {localInbox.searchText&&<Button type="button" variant="ghost" disabled={busy} onClick={()=>readClosedInbox()}>显示全部</Button>}</form>
-              <p role="status">{localInbox.searchText?'仅在本机原目标和已确认的结果中查找「'+localInbox.searchText+'」；不列出结果正文。':'这是这部手机自己核对过的文字工作；原发起设备不需要在线。未确认完成的工作只列本机决定，不提供结果正文。'}</p>
-              {localInbox.limitedCandidates>0&&<p>另有 {localInbox.limitedCandidates} 项已结束记录无法核对，未列作已核对原文。</p>}
+              <p role="status">{localInbox.searchText?'查找「'+localInbox.searchText+'」：屏幕工作只匹配原目标，文字工作还可匹配已确认的原文。':'这是这部手机自己核对过的工作。屏幕工作可定位原执行；文字工作只按当时的决定查看。发起设备无需在线。'}</p>
+              {localInbox.limitedCandidates>0&&<p>另有 {localInbox.limitedCandidates} 项已结束记录无法核对，没有列入。</p>}
               {!localInbox.rows.length&&<p>{localInbox.searchText?'这段已核对的记录没有匹配。':'这一页没有可核对的本机原件。'}{localInbox.hasMore&&'可以继续查看较早记录。'}</p>}
               {rows(localInbox.rows).map(row=><article className="pw-device-history-entry" key={JSON.stringify([row.taskId,row.operationId])}><h4 dir="auto">{row.goal}</h4>
-                <p>{time(row.reviewedAt)} 核对 · 原发起设备 …{String(row.sourceDeviceId).slice(-8)} · {row.notConfirmed?'本机已结束，但没有确认完成':row.keptOnPhone?'只回状态':'允许读取摘要'}{!row.notConfirmed&&!row.hasText&&' · 原结果无文字'}</p>
-                {localInbox.searchText&&<p>{row.notConfirmed?'匹配原目标，未检索结果正文':row.bothParts?'原目标与原结果均匹配':row.matchPart==='result'?'匹配原结果':'匹配原目标'}</p>}
-                {!row.notConfirmed&&<Button variant="secondary" disabled={busy||!supported('devices.readLocalReviewedPhoneGoal')} onClick={()=>readOwnText(row,0,undefined,true,'result',!!localInbox.searchText)}>
+                <p>{time(row.reviewedAt)} 核对 · 原发起设备 …{String(row.sourceDeviceId).slice(-8)} · {row.screenDecision?(row.confirmed?'屏幕工作 · 本机确认已完成':'屏幕工作 · 本机没有确认完成'):row.notConfirmed?'本机已结束，但没有确认完成':row.keptOnPhone?'只回状态':'允许读取摘要'}{!row.screenDecision&&!row.notConfirmed&&!row.hasText&&' · 原结果无文字'}</p>
+                {localInbox.searchText&&<p>{row.screenDecision||row.notConfirmed?'匹配原目标，未检索结果正文':row.bothParts?'原目标与原结果均匹配':row.matchPart==='result'?'匹配原结果':'匹配原目标'}</p>}
+                {row.screenDecision&&<Button variant="secondary" disabled={busy||!supported('devices.returnToReceivedPhoneGoal')} onClick={()=>returnScreenDecision(row)}>查看这次屏幕工作的原记录</Button>}
+                {!row.screenDecision&&!row.notConfirmed&&<Button variant="secondary" disabled={busy||!supported('devices.readLocalReviewedPhoneGoal')} onClick={()=>readOwnText(row,0,undefined,true,'result',!!localInbox.searchText)}>
                   {localInbox.searchText?'打开匹配段附近':row.hasText?'重看本机原文':'查看当时的核对'}</Button>}</article>)}
               <div className="pw-form-actions">{localInbox.canReadNewer&&<Button variant="ghost" disabled={busy} onClick={()=>readClosedInbox('newer')}>较新记录</Button>}
                 {localInbox.hasMore&&<Button variant="secondary" disabled={busy} onClick={()=>readClosedInbox('older')}>{localInbox.searchText?'查找较早记录':'较早记录'}</Button>}</div></>}

@@ -8,7 +8,6 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.local.LocalModule;
 import dev.pocketengine.features.devices.transport.DeviceEndpointResolver;
 import dev.pocketengine.features.devices.transport.DeviceTransportStatus;
-import dev.pocketengine.runtime.models.ModelRoutePlan;
 import dev.pocketengine.store.TaskStore;
 import dev.pocketengine.store.TaskStoreDeviceTasks;
 import dev.pocketengine.store.TaskStoreDeviceTrust;
@@ -746,9 +745,9 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             for (int i = 0; policies != null && i < policies.length(); i++) {
                 JSONObject policy = policies.getJSONObject(i), binding = policy.optJSONObject("modelBinding");
                 if (binding == null) continue; ModelConfig metadata = app.settings.apiMetadataForPricing(binding.optString("connectionId"), policy.optString("model"));
-                if (metadata != null && !metadata.usesAccount() && ModelRoutePlan.configurationDigest(metadata).equals(policy.optString("configurationDigest"))) ready = true;
+                if (TaskStoreDeviceTasks.matchesOriginalPolicyModel(policy,metadata)) {ready=true;break;}
             }
-            result.put("goalPolicy", new JSONObject().put("callerDeviceId", permission.callerDeviceId()).put("configured", status.optBoolean("configured")).put("apiModelReady", ready));
+            result.put("goalPolicy", new JSONObject().put("callerDeviceId", permission.callerDeviceId()).put("configured", status.optBoolean("configured")).put("apiModelReady", ready).put("partial",status.optBoolean("truncated")));
         }
         return result;
     }

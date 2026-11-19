@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { Button, CheckboxField, SettingsDialog } from './forms-library';
 import { bridge } from './bridge';
 import {TeamRevisionFileComparison,originalRevision,type RevisionComparison} from './TeamRevisionFileComparison';
-import {sameProjectTeamReview,type ProjectTeamReviewOrigin} from './project-team-review-origin';
+import {sameProjectFileDecision,sameProjectTeamReview,type ProjectTeamReviewOrigin} from './project-team-review-origin';
 import type {WorkFileSource} from './team-navigation';
 
 type Data = Record<string, any>;
@@ -57,7 +57,7 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
         release(result.fileHandle);throw new Error('原文件不再等待这次核对，没有展示其他版本。');
       }
       if(fromProject&&(!sameProjectTeamReview(fromProject,result.projectReviewOrigin)||result.fullProject!==true||result.projectId!==fromProject.projectId||
-          result.planHash!==fromProject.planHash||result.files.length!==fromProject.fileCount||result.ownerDecision?.state!=='eligible_project_first')){
+          result.planHash!==fromProject.planHash||result.files.length!==fromProject.fileCount||!sameProjectFileDecision(fromProject,result.ownerDecision))){
         release(result.fileHandle);throw new Error('这份原项目首版独审或冻结目录已变，没有改到另一项。');
       }
       current.current=result;setSource(result);
@@ -147,7 +147,7 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
                   {!source.revisionComparison&&<Button variant="ghost" disabled={busy} onClick={()=>{setSelected('');setPage(null);setError('');}}>收起差异</Button>}</>}</>}
           </section>)}
           {registered||source.ownerDecision?.state==='approved_current'?<p role="status">{source.ownerDecision?.state==='eligible_project_first'||source.ownerDecision?.registrationKind==='first_local_project_text_v1'&&source.ownerDecision.separateIntegratorStartRequired===true
-            ?'这版原项目文本已登记。没有授权启动整合，也没有写文件、运行检查或打包。':'这份计划的写回许可已登记。批准记录不是写入回执；实际整合请看原任务。'}</p>
+            ?(source.projectReviewOrigin?.registeredReviewId&&source.projectReviewOrigin.registeredAt?<>{new Date(source.projectReviewOrigin.registeredAt).toLocaleString('zh-CN')} 已登记这版文件许可。这笔登记没有启动整合、写文件或打包。</>:'这版原项目文本已登记。这笔登记没有启动整合、写文件、运行检查或打包。'):'这份计划的写回许可已登记。批准记录不是写入回执；实际整合请看原任务。'}</p>
             :(source.ownerDecision?.state==='eligible'||source.ownerDecision?.state==='eligible_project_first')&&!unknown?<><p className="pw-field-hint">{allLoaded?'所有文件的原始文本差异已加载，当前独审没有阻断项。':'完整加载每份原始差异后，才可单独核对写回许可。'}</p>
               <Button variant="secondary" disabled={!allLoaded||busy} onClick={()=>void reviewApproval()}>{source.ownerDecision?.state==='eligible_project_first'?'核对首版项目文件许可':'核对写回许可'}</Button></>
               :source.fullProject&&source.ownerDecision?.state==='read_only'&&!source.revisionComparison?<p className="pw-field-hint">这份完整项目保留待核对。只有首版、全本机作者、完整原文独审且基线未变的文本才可在此登记；没有为其他版本、二进制或删除项批准写回。</p>

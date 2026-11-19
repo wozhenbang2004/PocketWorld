@@ -114,7 +114,7 @@ class WindowsInstalledContext:
             if name.casefold() in folded or not _matches(r"[a-fA-F0-9]{64}", file.get("sha256")) or type(file.get("bytes")) is not int or not 0 <= file["bytes"] <= 512 * 1024 * 1024:
                 raise PlatformError("Current release has duplicate/invalid native file declarations", 409)
             declared[name] = file; folded.add(name.casefold())
-        self.owner_entry_files = {name: declared[name] for name in ("tools/Launch-Companion.ps1", "tools/Companion-InstallState.ps1")
+        self.owner_entry_files = {name: declared[name] for name in ("tools/Manage-Companion.ps1", "tools/Launch-Companion.ps1", "tools/Companion-InstallState.ps1")
                                   if name in declared}
         for name in ("app/PocketWorld-Companion.exe", "driver/cua-driver.exe", "driver/agent-desktop.exe"):
             if name not in declared:

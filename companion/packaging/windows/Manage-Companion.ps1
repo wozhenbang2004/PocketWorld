@@ -1,8 +1,13 @@
 # Local management only. Private state is retained unless the owner explicitly deletes it.
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='High')]
 param([ValidateSet('OpenDesk','Initialize','StopDesktop','RecoverDesktop','PairDevices','EnableLoginStart','DisableLoginStart','Repair','Rollback','Uninstall')][string]$Action='OpenDesk',
-      [string]$Config,[string]$Workspace,[switch]$DeletePrivateState)
+      [string]$Config,[string]$Workspace,[switch]$DeletePrivateState,
+      [ValidatePattern('^[a-f0-9]{32}$')][string]$OwnerDeskInstallId,
+      [ValidatePattern('^[a-fA-F0-9]{40}$')][string]$OwnerDeskSigner)
 $ErrorActionPreference='Stop'
+if (($OwnerDeskInstallId -or $OwnerDeskSigner) -and ($Action -ne 'OpenDesk' -or -not $OwnerDeskInstallId -or -not $OwnerDeskSigner -or $Config -or $Workspace -or $DeletePrivateState)) {
+    throw 'An owner Start-menu link can only open its original signed desk.'
+}
 $fixedHome=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'PocketWorld\Companion'))
 if ([IO.Path]::GetFullPath($PSScriptRoot) -ne $fixedHome) { throw 'Use the installed fixed management entry. If it is missing/damaged, run the original trusted Installer and bundle with -Repair.' }
 if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Companion-InstallState.ps1') -PathType Leaf)) { throw 'Fixed helper is missing. Run the original trusted Installer and bundle with -Repair.' }
@@ -15,7 +20,8 @@ $launcher=Join-Path $paths.Home 'Launch-Companion.ps1'
 if ($Action -eq 'OpenDesk') {
     if ($Workspace -or $DeletePrivateState) { throw 'Opening the owner desk does not initialize or remove private state.' }
     if ($WhatIfPreference) { Write-Output 'Would open this local owner desk; no service would start.'; return }
-    & $launcher -Action OpenDesk
+    if ($OwnerDeskInstallId) { & $launcher -Action OpenDesk -OwnerDeskInstallId $OwnerDeskInstallId -OwnerDeskSigner $OwnerDeskSigner }
+    else { & $launcher -Action OpenDesk }
     return
 }
 if ($Action -in @('Initialize','StopDesktop','RecoverDesktop','PairDevices')) {
@@ -63,6 +69,7 @@ try {
         Set-PWLoginTask $paths $false
         Remove-Item -LiteralPath $paths.Releases -Recurse -Force
         Remove-Item -LiteralPath $paths.Current -Force
+        Write-Output 'An optional personal Start-menu shortcut is not removed. You can remove it in Windows; it cannot open a different installation or unsigned release.'
         Write-Output 'Binaries removed. Private state retained; remote revocation still requires acknowledgement on the other device.'
     } else { return }
     if ($DeletePrivateState -and $PSCmdlet.ShouldContinue('Permanently delete the registered local identity, pairings, tasks and logs? Reinstalling cannot recover them.','Delete private state') -and $PSCmdlet.ShouldProcess($paths.State,'Permanently remove only this installation registered private state')) {

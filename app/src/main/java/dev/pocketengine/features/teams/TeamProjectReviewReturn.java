@@ -13,13 +13,16 @@ public final class TeamProjectReviewReturn {
     private TeamProjectReviewReturn(){}
     public static final int PAGE_SIZE=4;
     public static boolean parent(JSONObject work){
+        return retainedParent(work)&&!work.optBoolean("cancelRequested")&&!work.optString("status").matches("completed|stopping|cancelled|paused|pausing|interrupted");
+    }
+    /** No authority: a stopped original can still locate its own retained receipt. */
+    public static boolean retainedParent(JSONObject work){
         JSONObject dev=work.optJSONObject("developmentContext"),pool=work.optJSONObject("teamReservationPool");
         JSONObject source=pool==null?null:pool.optJSONObject("budgetSource");
         return dev!=null&&source!=null&&source.opt("nativeProjectWorkPlan")==Boolean.TRUE&&
                 "pocketworld.development-context.v1".equals(dev.opt("format"))&&"owner".equals(work.opt("actorId"))&&"private".equals(work.opt("spaceId"))&&
                 "assistant".equals(work.opt("kind"))&&"capabilities".equals(work.opt("executionMode"))&&!work.has("ownerWork")&&!work.has("teamAssignment")&&
-                work.optJSONObject("origin")==null&&!work.has("teamProjectRound")&&!work.optBoolean("cancelRequested")&&
-                !work.optString("status").matches("completed|stopping|cancelled|paused|pausing|interrupted")&&!work.optString("conversationId").isEmpty()&&
+                work.optJSONObject("origin")==null&&!work.has("teamProjectRound")&&!work.optString("conversationId").isEmpty()&&
                 work.optString("runId").equals(pool.opt("parentRunId"))&&work.optString("id").equals(pool.opt("parentTaskId"));
     }
     public static List<JSONObject> links(JSONObject work)throws Exception{
@@ -39,7 +42,8 @@ public final class TeamProjectReviewReturn {
                 work.optString("id").equals(team.opt("parentTaskId"))&&work.optString("runId").equals(team.opt("parentRunId"));
     }
     public static JSONObject mark(JSONObject work,JSONObject team,JSONObject link,JSONObject facts)throws Exception{
-        if(!parent(work)||!linked(work,team,link)||!"eligible_project_first".equals(facts.opt("state"))||!work.getString("id").equals(facts.opt("parentTaskId"))||
+        boolean registered="registered_project_first".equals(facts.opt("state"));
+        if(!(registered?retainedParent(work):parent(work)&&"eligible_project_first".equals(facts.opt("state")))||!linked(work,team,link)||!work.getString("id").equals(facts.opt("parentTaskId"))||
                 !work.getString("runId").equals(facts.opt("parentRunId"))||work.getInt("coordinatorEpoch")!=facts.getInt("parentEpoch")||
                 !team.getString("runId").equals(facts.opt("teamRunId"))||!work.getJSONObject("developmentContext").getString("projectId").equals(facts.opt("targetProjectId"))||
                 !work.getJSONObject("developmentContext").getString("checkoutId").equals(facts.opt("checkoutId")))throw new SecurityException("这份独审不属于当前原项目任务");
@@ -47,6 +51,7 @@ public final class TeamProjectReviewReturn {
                 .put("projectId",facts.getString("targetProjectId")).put("fileCount",team.getJSONObject("teamIndependentReview").getJSONArray("files").length());
         for(String key:new String[]{"parentTaskId","parentRunId","parentEpoch","teamRunId","planHash","reviewerTaskId","reviewerRunId","checkoutId","selectionHash","snapshotIdentity","parentSourceDigest","sourceDigest"})
             mark.put(key,facts.get(key));
+        if(registered)mark.put("registeredReviewId",facts.getString("registeredReviewId")).put("registeredAt",facts.getLong("registeredAt"));
         return mark;
     }
 }

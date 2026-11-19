@@ -296,7 +296,7 @@ public final class NativeConversationMemoryDraftHost {
     /** One explicit owner read in the original answer. Unlike queryForOwner, this never settles a journal,
      * opens candidates, follows source references or substitutes a similarly worded record. */
     public JSONObject originalSavedRecordForOwner(String task,String run,int epoch,String operation,String digest,
-                                                  String foregroundConversation,Long chosenRevision)throws Exception {
+                                                  String foregroundConversation,Long chosenRevision,String requestedSpan)throws Exception {
         JSONObject row=tasks.memoryProposalForOwner(task,run,epoch,operation),proposal=row.getJSONObject("proposal");
         if(foregroundConversation==null||foregroundConversation.isBlank()||!foregroundConversation.equals(row.getString("conversationId"))
                 ||!digest.equals(proposal.getString("proposalDigest"))||!Set.of("create","update").contains(proposal.getString("action")))
@@ -327,7 +327,42 @@ public final class NativeConversationMemoryDraftHost {
             return out.put("status","not_active");
         if(revision!=(chosenRevision==null?original:chosenRevision.longValue()))return out.put("status","changed");
         if(!current.isNull("expiresAt"))out.put("readExpiresAt",Math.min(out.getLong("readExpiresAt"),positive(current,"expiresAt")));
+        // A typed selector inside this projection, never a source body nor an input ID.
+        JSONObject span=revision==original?oneRegisteredVisibleSpan(proposal,pin,current):null;
+        if(requestedSpan!=null){
+            if(chosenRevision==null||chosenRevision!=revision||span==null||!requestedSpan.equals(span.getString("key")))
+                throw new SecurityException("此版本没有可核对的同一段原话");
+            SourceRef ref=SourceRef.fromJson(span.getJSONObject("ref"));
+            JSONArray choice=new JSONArray().put(new JSONObject().put("sourceId",ref.sourceId).put("revision",ref.revision));
+            // Existing native eligibility validates the exact prepared owner row's metadata, not its body.
+            JSONArray refs=tasks.preparedMemoryProposalRefs(task,run,epoch,choice);
+            if(refs.length()!=1||!ref.equals(SourceRef.fromJson(refs.getJSONObject(0)))||memory.isSourceForgotten(scope(),ref))
+                throw new SecurityException("这段原话的整理来源已不可核对");
+            JSONObject end=tasks.conversationRepository().personalMemoryControls(foregroundConversation);
+            if(!end.getBoolean("enabled")||end.getLong("readRevision")!=controls.getLong("readRevision"))
+                throw new SecurityException("原对话的读取选择已变化");
+            return out.put("status","quote_pin").put("nativeVisibleSpan",span);
+        }
+        if(span!=null)out.put("nativeVisibleSpan",span);
         return out.put("status","read").put("text",current.getString("text"));
+    }
+    /** Only one unambiguous immutable span, present in the original receipt, current row AND this proposal. */
+    private static JSONObject oneRegisteredVisibleSpan(JSONObject proposal,JSONObject saved,JSONObject current){
+        try{
+            JSONArray atSave=saved.getJSONObject("assertion").getJSONArray("evidenceSpans"),now=current.getJSONObject("assertion").getJSONArray("evidenceSpans");
+            if(atSave.length()!=1||now.length()!=1||!digest(atSave.getJSONObject(0)).equals(digest(now.getJSONObject(0))))return null;
+            JSONObject span=now.getJSONObject(0);SourceRef ref=SourceRef.fromJson(span.getJSONObject("sourceRef"));
+            if(!"message".equals(ref.kind)||!"private".equals(ref.spaceId)||!"owner".equals(ref.ownerId))return null;
+            for(JSONObject owner:new JSONObject[]{proposal,saved,current}){
+                JSONArray registered=owner.getJSONArray("sourceRefs");boolean found=false;
+                for(int i=0;i<registered.length();i++)if(ref.equals(SourceRef.fromJson(registered.getJSONObject(i)))){found=true;break;}
+                if(!found)return null;
+            }
+            long offset=SourceRef.integer(span,"offset",0),chars=SourceRef.integer(span,"chars",1);
+            String sha=span.getString("sha256");
+            if(offset>Integer.MAX_VALUE-chars||chars>4000||!sha.matches("[0-9a-f]{64}"))return null;
+            return new JSONObject().put("ref",ref.toJson()).put("offset",offset).put("chars",chars).put("sha256",sha).put("key",digest(span));
+        }catch(Exception unproved){return null;}
     }
     private static boolean ownerPersonalRecord(JSONObject row){
         return "owner".equals(row.optString("ownerId"))&&"private".equals(row.optString("spaceId"))

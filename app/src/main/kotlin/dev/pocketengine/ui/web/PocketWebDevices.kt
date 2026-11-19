@@ -52,8 +52,9 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private data class ModelPlace(val handle:String,val source:ReceiptOrigin,val issuedEpoch:Long,val until:Long)
     @Volatile private var modelPlace:ModelPlace?=null
     private data class LocalLeaf(val handle:String,val origin:ReceiptOrigin,val wire:String,val stamp:String="",val matchPart:String="",val matchPage:Int=0)
+    private data class ScreenDecision(val origin:ReceiptOrigin,val proof:JSONObject)
     private data class ClosedPage(val handle:String,val window:Host.Window,val epoch:Long,val here:String,val instance:String,
-        val after:Pair<String,String>,val previous:List<Pair<String,String>>,val next:Pair<String,String>?,val entries:Map<Pair<String,String>,LocalLeaf>,val search:String)
+        val after:Pair<String,String>,val previous:List<Pair<String,String>>,val next:Pair<String,String>?,val entries:Map<Pair<String,String>,LocalLeaf>,val search:String,val screens:Map<Pair<String,String>,ScreenDecision>)
     @Volatile private var closedPage:ClosedPage?=null
     private val historyPages = LinkedHashMap<String, LocalHistoryPage>()
     @Volatile private var latest = JSONObject()
@@ -227,8 +228,18 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             &&raw.optString("status") in setOf("queued","awaiting_user","interrupted")) { "原目标已启动或结束，不能再按未启动原件处理" }
         return source to raw
     }
-    fun receivedTaskForReturn(args: JSONObject): String = receivedEntry(args).task
-    fun checkReceivedTaskForReturn(args: JSONObject, raw: JSONObject): JSONObject = checkedReceivedSource(receivedEntry(args),raw)
+    private fun screenReturn(args:JSONObject):ScreenDecision {
+        fields(args,"closedHandle","taskId","operationId")
+        val page=closedFor(text(args,"closedHandle"),requireNotNull(window()),generation.get())
+        return page.screens[text(args,"taskId") to text(args,"operationId")]?:error("不是本机刚核对的原屏幕工作")
+    }
+    fun receivedTaskForReturn(args:JSONObject):String = if(args.has("closedHandle"))screenReturn(args).origin.task else receivedEntry(args).task
+    fun checkReceivedTaskForReturn(args:JSONObject,raw:JSONObject):JSONObject {
+        if(!args.has("closedHandle"))return checkedReceivedSource(receivedEntry(args),raw)
+        val chosen=screenReturn(args)
+        dev.pocketengine.store.ReceivedScreenGoalDecision.requireSame(raw,chosen.proof)
+        return checkedReceivedSource(chosen.origin,raw).put("screenDecision",true).put("confirmed",chosen.proof.getBoolean("confirmed"))
+    }
     private fun checkedReceivedSource(source:ReceiptOrigin,raw:JSONObject):JSONObject{
         val origin=raw.optJSONObject("origin") ?: error("原接纳来源未能核对")
         require(raw.opt("id")==source.task && raw.opt("deviceExecutionKind")=="GOAL" && DeviceProtocol.receivedPhoneScopeMode(raw)==source.mode
@@ -457,7 +468,13 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             require(seek!=nextSeek && nextSeek.first.isNotEmpty() && nextSeek.second.isNotEmpty());seek=nextSeek;page=readPart()
         }
         val handle=UUID.randomUUID().toString();val rows=page.getJSONArray("rows").objects();require(rows.size<=6)
-        val readable=rows.filter { it.getJSONObject("closedReview").opt("notConfirmed")!=true }
+        val screens=rows.filter{it.getJSONObject("closedReview").opt("screenDecision")==true}.associate{ row->
+            val task=row.getString("taskId");val op=row.getString("operationId");val proof=row.getJSONObject("closedReview")
+            val record=ReceiptOrigin(task,op,row.getString("sourceDeviceId"),here,instance,row.getString("originDigest"),row.getString("screenMode"),
+                activeRun=proof.getString("runId"),activeEpoch=proof.getInt("epoch"))
+            (task to op) to ScreenDecision(record,JSONObject(proof.toString()))
+        }
+        val readable=rows.filter { it.getJSONObject("closedReview").opt("notConfirmed")!=true && it.getJSONObject("closedReview").opt("screenDecision")!=true }
         val entries=readable.associate { row->
             val task=row.getString("taskId");val op=row.getString("operationId")
             val record=ReceiptOrigin(task,op,row.getString("sourceDeviceId"),here,instance,row.getString("originDigest"),row.getString("screenMode"))
@@ -468,11 +485,13 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }
         require(entries.size==readable.size && rows.map { it.getString("taskId") to it.getString("operationId") }.distinct().size==rows.size)
         val next=if(page.getBoolean("hasMore"))page.getString("lastParent") to page.getString("lastOperation") else null
-        synchronized(this){current(original,epoch);if(old!=null)require(closedPage===old);closedPage=ClosedPage(handle,original,epoch,here,instance,after,previous,next,entries,search)}
+        synchronized(this){current(original,epoch);if(old!=null)require(closedPage===old);closedPage=ClosedPage(handle,original,epoch,here,instance,after,previous,next,entries,search,screens)}
         val display=JSONArray();for(row in rows){val meta=row.getJSONObject("closedReview");display.put(JSONObject().also { out->
             for(key in listOf("taskId","operationId","sourceDeviceId","goal"))out.put(key,row.get(key))
             out.put("reviewedAt",meta.getLong("reviewedAt"))
-            if(meta.opt("notConfirmed")==true)out.put("notConfirmed",true)
+            if(meta.opt("screenDecision")==true) {
+                out.put("screenDecision",true).put("confirmed",meta.getBoolean("confirmed")).put("runId",meta.getString("runId")).put("epoch",meta.getInt("epoch"))
+            }else if(meta.opt("notConfirmed")==true)out.put("notConfirmed",true)
             else{
                 out.put("keptOnPhone",meta.getBoolean("keptOnPhone")).put("hasText",meta.getBoolean("hasText"))
                 if(search.isNotEmpty())for(key in listOf("matchPart","matchPage","bothParts"))out.put(key,meta.get(key))

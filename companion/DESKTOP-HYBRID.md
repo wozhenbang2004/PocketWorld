@@ -33,6 +33,13 @@ Android APK 或开发 ZIP 不适用；这里说明的是产品入口，不表示
 本机停止、部分初始化、其他实例正在运行均不会触发自动修复或重放。
 功能需要包含准备页的 Windows 伴侣版本；手机 APK 和源码归档不等于 Windows 安装包。
 
+**以后从 Windows 开始菜单重开：**在已签名伴侣的本机准备页选择 **从开始菜单找到工作台**，
+核对本机当前用户的准确位置，再确认创建普通的「PocketWorld 工作台」。不必先配对或启动服务。
+入口只打开仍属同一安装、同一发布者的已签名工作台；版本升级可沿原固定入口，另一安装或
+未签名版本不会沿用。它不属于「启动」目录、不自动启动或固定到任务栏。只支持当前用户标准、
+本机、非重解析的程序菜单；不会覆盖或解析任何已有同名快捷方式。此入口可由机主在 Windows
+中自行移除；卸载不会删除其他人的链接，也不替机主重新创建。
+
 手机入口为 **我的设备 → 查看设备与授权 → 查看桌面 → 连接桌面**。连接后默认
 观看；点 **我来操作** 才申请人工控制，点 **交还 AI** 释放人工控制。页面沿用原
 Android 原生桥接和 `desktop.viewer` 设备方法，不另建 Agent 任务或模型工具。
@@ -240,6 +247,37 @@ NAT、防火墙或外网组合都能连通。
 窗口和非主屏捕获不在本实现支持范围。受保护或特殊渲染窗口可能显示空白。
 
 ## 固定来源与 Windows 三二进制打包
+
+### 在准备好的构建机一次检查，再明确做本地候选
+
+该仓库本身**不是**一个开箱可装的 Windows 包。没有自行安装编译器、联网取 wheel/驱动、生成可信
+输入锁或代签的步骤。构建者需要已完成独立核准的完整 Windows x64 Python 输入锁和 SHA-256、
+匹配的隔离解释器/完整 wheelhouse、两份指定提交的干净上游 Git 仓库，以及带离线缓存的 Rust/MSVC。
+现有几个组件锁不能替代整份输入锁。普通电脑使用者不需要准备这些，应该取得独立 Windows 发行物。
+
+在干净的产品源码根目录，用该已准备的解释器运行：
+
+```powershell
+# 这些值来自已核准的材料，不是在这条命令中把当前目录或当前环境自动当作正确答案。
+$inputs = @(
+  '--source-commit', $productCommit, '--version', $bundleVersion,
+  '--cua-source', 'C:\BuildInputs\cua', '--agent-source', 'C:\BuildInputs\agent-desktop',
+  '--input-lock', 'C:\BuildInputs\windows-runtime-inputs.json', '--input-lock-sha256', $runtimeLockSha256,
+  '--wheelhouse', 'C:\BuildInputs\wheelhouse', '--output', 'C:\BuildOutput\candidate-new'
+)
+python -I -B .\companion\packaging\windows\build_candidate.py check @inputs
+# 只有要真正生成本地未签开发候选时，才另外显式调用：
+python -I -B .\companion\packaging\windows\build_candidate.py build-development @inputs
+```
+
+`check` 逐项报告材料是否齐备，不写输出、不启动驱动或构建。它不能证明 Cargo 缓存、
+MSVC SDK 或 GUI 可用。显式 `build-development` 通过相同检查后依次调用原两份固定源码的驱动构建、
+原 PyInstaller/内置媒体校验及原打包器；最后从实际 ZIP 回核长度与 SHA-256 才写 `candidate.json`。
+输出固定标为未签开发候选，不生成正式首装材料、不安装或运行伴侣工作台，不推送。中断会保留
+阶段目录给构建者检查，不接着跑、不覆盖；原始构建记录含实际构建时间，不承诺逐字节可重复。
+上游构建脚本不是系统网络沙箱；需要物理离线时由专用构建机提供。
+
+### 独立阶段与已签正式包
 
 | 组件 | 本实现固定版本与源码 | 事实源 |
 | --- | --- | --- |

@@ -1611,7 +1611,7 @@ export default function App(){
    {/* Keep the result document mounted while reading deeper task details. */}
    <TabPanel id="overview" shouldForceMount hidden={taskLayer!=='overview'}>
     <section className="pw-task-overview pw-task-review" aria-label="这件工作的进展、决定与成果">
-     {overviewActive&&<WorkExecutionPlace task={task} projects={projects}/>}
+     {overviewActive&&<WorkExecutionPlace task={task} projects={projects} canReadPhoneResources={!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')}/>}
      {taskOpen&&!taskOpening&&openedTaskId.current===task.id&&<PhoneMainOwnerStep key={'main-owner-step:'+task.id} task={task} visible={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&obj(snapshot?.view).taskId===task.id} run={act} can={can} onProcess={()=>showTaskLayer('process')}/>}
      {inspectResult?[evidence,decision,workFacts]:decisionFirst?[mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence]:[latestProgress,workFacts,evidence,decision]}
      {taskLayer==='overview'&&ownerWorkActions(task)}
