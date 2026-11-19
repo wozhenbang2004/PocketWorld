@@ -37,7 +37,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
-            "devices.openHistory", "devices.queryHistory", "devices.stopHistory",
+            "devices.openHistory", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
             "devices.desktop.open", "devices.desktop.negotiate", "devices.desktop.status",
             "devices.desktop.control", "devices.desktop.input", "devices.desktop.close")
         private fun fields(value: JSONObject, vararg allowed: String) = PocketWebGroupReviews.fields(value, *allowed)
@@ -295,6 +295,14 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         fields(args, "taskId", "operationId"); val id = taskId(); val operation = text(args, "operationId")
                         require(original.historyLinks(id).optJSONArray("links").objects().any { it.opt("parentTaskId") == id && it.opt("operationId") == operation }) { "原操作不在这项任务的关联记录内" }
                         val native = original.openHistory(id, operation); store("history", History(native), native.view(), original, epoch)
+                    }
+                    "devices.queryPhoneGoalResult" -> {
+                        fields(args, "viewHandle")
+                        val old = selected(args, original, epoch, consume = false)
+                        require(old.kind == "history" && old.view.opt("phoneGoalResult") == true) { "请从原手机目标的派发记录读取" }
+                        val result = (old.native as History).original.queryPhoneGoalResult()
+                        JSONObject().put("kind", "phoneGoalResult").put("viewHandle", old.handle).put("taskId", old.view.getString("taskId"))
+                            .put("operationId", old.view.getString("operationId")).put("targetDeviceId", old.view.getString("targetDeviceId")).put("result", result)
                     }
                     "devices.queryHistory", "devices.stopHistory" -> {
                         fields(args, "viewHandle", "acknowledged")

@@ -68,6 +68,8 @@ public final class DeferredPhoneSession implements PhonePort {
     public String executionMode(){return mode;}
     public RunControl originalControl(){return original;}
     public boolean initialized(){return binding!=null;}
+    /** Retained binding only; unlike isConnected(), this never polls a device or helper. */
+    public boolean holdsObservationBinding(){return !closed&&binding!=null;}
     public synchronized boolean pending(){return !closed&&!opening&&!preparationUncertain&&binding==null;}
     public synchronized boolean cleanupUnconfirmed(){return preparationUncertain;}
     public synchronized JSONObject initializationEvidence()throws Exception {

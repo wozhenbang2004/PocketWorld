@@ -37,7 +37,8 @@
 .pw-phone-activity-mark [role="progressbar"] { width: 16px; height: 16px; }
 .pw-phone-activity-copy { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
 .pw-phone-activity-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pw-ink); font: 500 13px/20px var(--pw-font); }
-.pw-phone-activity-copy > span { color: var(--pw-copy); font: 400 11px/18px var(--pw-font); }
+.pw-phone-activity-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pw-copy); font: 400 11px/18px var(--pw-font); }
+.pw-phone-surface-detail { overflow-wrap: anywhere; }
 .pw-phone-activity > button { flex: none; min-width: 44px; min-height: 44px; background: transparent; box-shadow: none; }
 .pw-phone-activity .pw-phone-activity-stop { color: var(--pw-ink); }
 .pw-phone-activity .pw-phone-activity-stop:disabled { color: var(--pw-muted); }

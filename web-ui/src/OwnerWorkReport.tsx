@@ -3,15 +3,16 @@ import { bridge } from './bridge';
 import { AIAnswer } from './library';
 import { Button } from './forms-library';
 
-type ReportTarget = { taskId: string; runId: string; epoch: number; reportMessageId: string; conversationId: string };
-type ReportPin = { expectedReportRevision: number; expectedReportFingerprint: string };
+export type ReportTarget = { taskId: string; runId: string; epoch: number; reportMessageId: string; conversationId: string };
+export type ReportPin = { expectedReportRevision: number; expectedReportFingerprint: string };
 type ReportPage = { identity: string; body: string; offset: number; totalChars: number; nextOffset: number };
 const resumeRevision = () => Number((bridge.getState().view as { resumeRevision?: number } | undefined)?.resumeRevision || 0);
 
 /** Read the saved report in its original work, using the existing Answer and
  * reader controls. A page read never selects a conversation or starts a task. */
-export function OwnerWorkReport({ target, active, supported, identity, onCopy }: {
+export function OwnerWorkReport({ target, active, supported, identity, onCopy, originalVersion }: {
   target: ReportTarget;
+  originalVersion?: ReportPin;
   active: boolean;
   supported: boolean;
   identity: string;
@@ -22,13 +23,13 @@ export function OwnerWorkReport({ target, active, supported, identity, onCopy }:
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [offsets, setOffsets] = useState<number[]>([]);
   const alive = useRef(false), enabled = useRef(false), generation = useRef(0), pending = useRef(false);
-  const pin = useRef<ReportPin | null>(null), requestedOffset = useRef(0);
+  const pin = useRef<ReportPin | null>(originalVersion??null), requestedOffset = useRef(0);
   const heading = useRef<HTMLHeadingElement>(null);
   enabled.current = active && supported;
 
   const read = useCallback(async (offset: number, fromStart = false, moveToHeading = false) => {
     if (!enabled.current || document.hidden || pending.current) return;
-    if (fromStart) { pin.current = null; setOffsets([]); }
+    if (fromStart) { pin.current = originalVersion??null; setOffsets([]); }
     const expected = pin.current;
     if (offset > 0 && !expected) { setError('请从汇报开头重新读取。'); return; }
     const request = ++generation.current, documentEpoch = bridge.getDocumentEpoch(), resume = resumeRevision();
@@ -69,7 +70,7 @@ export function OwnerWorkReport({ target, active, supported, identity, onCopy }:
     } finally {
       if (request === generation.current) { pending.current = false; if (alive.current) setBusy(false); }
     }
-  }, [taskId, runId, epoch, reportMessageId, conversationId, identity]);
+  }, [taskId, runId, epoch, reportMessageId, conversationId, identity, originalVersion]);
 
   useEffect(() => {
     alive.current = true; setBusy(false); setError('');

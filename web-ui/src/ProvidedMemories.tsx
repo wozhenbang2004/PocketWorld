@@ -3,7 +3,7 @@ import { IconChevronLeft, IconChevronRight, IconClose, IconRefresh } from './ico
 import { bridge } from './bridge';
 import { Drawer } from './shell-library';
 import { Button, IconButton } from './forms-library';
-import { memoryHistoryStatus } from './memory-history';
+import { memoryHistoryStatus, taskMemoryVisibleRecords } from './memory-history';
 import './source-reading.css';
 
 type Data = Record<string, any>;
@@ -70,20 +70,32 @@ export function ProvidedMemories({ messageId, revision, onClose, onManage, regis
     finally { if (reading.current === version) reading.current = null; if (live.current && version === generation.current) setBusy(false); }
   };
   const provided = receipt?.phase === 'provided_to_request';
-  const records = rows(receipt?.records);
+  const records = taskMemoryVisibleRecords(receipt);
+  // Layer is returned only for the exact still-readable revision. Neither the
+  // source text nor today's profile can prove a missing historical category.
+  const isPreference = (row: Data) => provided && (receipt?.status === 'current' || receipt?.status === 'invalidated')
+    && row.status === 'current' && row.layer === 'preference' && typeof row.text === 'string';
+  const preferences = records.filter(isPreference);
+  const groups = preferences.length
+    ? [{ title: '偏好类记忆', items: preferences }, { title: '同次请求的其他条目', items: records.filter(row => !isPreference(row)) }]
+    : [{ title: '', items: records }];
   return <Drawer.Root open onOpenChange={open => { if (!open) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
     <Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-answer-sources" aria-describedby="provided-memory-description">
       <div className="pw-drawer-handle"/><header className="pw-drawer-header">
-        {selected && <IconButton icon={IconChevronLeft} aria-label="返回本次记忆列表" disabled={busy} onClick={returnToMemories}/>}<div><Drawer.Title>{selected ? '这次提供的记忆' : '本次提供的记忆'}</Drawer.Title></div>
+        {selected && <IconButton icon={IconChevronLeft} aria-label="返回本次记忆列表" disabled={busy} onClick={returnToMemories}/>}<div><Drawer.Title>{selected ? '这条记忆' : provided ? '本次提供的记忆' : '核对本次记忆'}</Drawer.Title></div>
         <IconButton icon={IconRefresh} aria-label="重新核对原记忆回执" disabled={busy} onClick={() => setRefresh(value => value + 1)}/><IconButton icon={IconClose} aria-label="返回原回答" onClick={onClose}/>
       </header>
-      <Drawer.Description id="provided-memory-description" className="pw-source-description">这些条目曾提供给这条回答的模型请求；不代表模型逐条采用或证实内容。</Drawer.Description>
+      <Drawer.Description id="provided-memory-description" className="pw-source-description">{!provided ? '在这里核对这条回答的原请求，不用现在的设置或新的检索代替。' : selected ? '这条记忆曾提供给模型。可以对照原来源，但不能据此断定模型读过原文。' : '下列记忆条目有原请求的提供回执，不代表模型采用了它们。'}</Drawer.Description>
       <div className="pw-drawer-body">
         {busy && <p className="pw-muted" role="status">正在核对原请求与记忆版本…</p>}{error && <p className="pw-error" role="alert">{error}</p>}
         {receipt && !provided && <p className="pw-muted">这条回答的原生提供回执当前不可读，未用新的检索结果代替。</p>}
         {provided && !selected && <>
-          {!records.length && <p className="pw-muted">这次请求没有提供已保存的记忆条目。</p>}
-          <div className="pw-source-list">{records.map(row => <Button key={row.id} variant="ghost" className="pw-source-row" trailingIcon={IconChevronRight} disabled={busy || row.status !== 'current' || !row.readHandle} onClick={() => { setSelected(row); setSource(null); setError(''); }}><span className="pw-source-row-copy"><b>{row.status === 'current' ? row.text : statusLabel(row.status)}</b><small>{row.selectionReason === 'task_query_match' ? '与这次问题相关' : row.selectionReason === 'owner_core' ? '你设定的常用记忆' : row.selectionReason === 'owner_current' ? '当前个人背景' : '原回执未保留选入原因'} · {statusLabel(row.status)}</small></span></Button>)}</div>
+          {!records.length && <p className="pw-muted">这份回执没有列出记忆条目。</p>}
+          {groups.filter(group => group.items.length > 0).map(group => <section key={group.title} aria-label={group.title || '原请求提供的记忆条目'}>
+            {group.title && <header className="pw-knowledge-group-heading"><h3>{group.title}</h3><span>{group.items.length}</span></header>}
+            <div className="pw-source-list">{group.items.map(row => <Button key={row.id} variant="ghost" className="pw-source-row" trailingIcon={IconChevronRight} disabled={busy || row.status !== 'current' || !row.readHandle} onClick={() => { setSelected(row); setSource(null); setError(''); }}><span className="pw-source-row-copy"><b>{row.status === 'current' ? row.text : statusLabel(row.status)}</b><small>{row.selectionReason === 'task_query_match' ? '与这次问题相关' : row.selectionReason === 'owner_core' ? '常用记忆' : row.selectionReason === 'owner_current' ? '当时的个人背景' : '原回执未保留选入原因'} · {statusLabel(row.status)}</small></span></Button>)}</div>
+          </section>)}
+          <p className="pw-muted">这份回执不列出语言、详略等默认设置。聊天里说“这次简短些”，也不等于改了长期偏好。</p>
           <div className="pw-action-row"><Button variant="ghost" onClick={onManage}>管理我的记忆</Button></div>
         </>}
         {selected && <>

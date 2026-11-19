@@ -16,7 +16,7 @@ from desktop_adapter import DesktopError
 from platform_backend import PlatformError
 from device_control_projection import validate_tool_result
 from cua_desktop_adapter import CAPABILITY_VERSION
-from device_companion_history import native_operation_id, operation_receipt_for
+from device_companion_history import desktop_observation_readback, native_operation_id, operation_receipt_for
 
 PROTOCOL = "desktop-v1"
 TOOLS = {"desktop.observe": "read", "desktop.act": "write", "desktop.control": "write"}
@@ -162,10 +162,12 @@ class DesktopJobs:
             if row:
                 if row[0] != fingerprint:
                     raise DesktopError("Observation request identity was reused with different semantics", 409)
+                # Redelivery of an invoke is not a fresh capture or evidence of model
+                # delivery. Use the fixed operation's history admission for any contents.
                 job = self.manager.jobs.get(row[1])
-                if job and job.get("desktopObservation"):
-                    return copy.deepcopy(job["desktopObservation"])
-                return self.operation(operation)
+                return {"operationId": operation, "id": row[1], "status": job.get("status") if job else "unknown",
+                        "originalObservationRead": False, "capturedAgain": False, "actionReady": False,
+                        "noAutomaticReplay": True, "readbackReason": "query_original_operation"}
             if sum(job.get("status") not in TERMINAL for job in self.manager.jobs.values()) >= 12:
                 raise DesktopError("Original Companion queue is full", 503)
             now, job_id = self.manager.now(), str(uuid.uuid4())
@@ -190,7 +192,8 @@ class DesktopJobs:
             with self.manager.lock:
                 job.update(status="completed", desktopObservation=observation, executionSettlement=settlement,
                            message="Actual observation captured; no input was dispatched", updatedAt=self.manager.now())
-                self._persist(job)
+                from device_protocol import canonical_bytes
+                self._persist(job, observation_digest=hashlib.sha256(canonical_bytes(observation)).hexdigest())
             return copy.deepcopy(observation)
         except BaseException:
             with self.manager.lock:
@@ -209,7 +212,7 @@ class DesktopJobs:
             raise DesktopError("Original desktop query requires operation.get", 400)
         operation = envelope.arguments.get("operationId")
         with manager.lock:
-            row = manager.ledger.execute("SELECT job_id,last_status,details FROM operations WHERE operation_id=?", (operation,)).fetchone()
+            row = manager.ledger.execute("SELECT job_id,last_status,details,fingerprint FROM operations WHERE operation_id=?", (operation,)).fetchone()
             if not row:
                 return {"operationId": operation, "status": "not_found", "submitted": False}
             job = manager.jobs.get(row[0])
@@ -225,6 +228,9 @@ class DesktopJobs:
             if not resource_equal(envelope.get("resourceBinding"), binding) or not any(resource_equal(binding, item) for item in permission.resources):
                 raise DesktopError("Current owner grant does not include the original operation resource", 403)
             permission.check_current(manager.now())
+            readback = desktop_observation_readback(manager, operation, row[3], row[0], row[1], detail, job, permission)
+            if readback is not None:
+                return readback
             if job:
                 return manager._public(job)
             return {"operationId": operation, "id": row[0], "status": "unknown", "lastKnownStatus": row[1], "archived": True,
@@ -262,7 +268,7 @@ class DesktopJobs:
             return {"operationId": operation_id, "id": row[0], "status": "unknown", "lastKnownStatus": row[1],
                     "archived": True, "desktopReceipt": detail.get("desktopReceipt"), "executionSettlement": detail.get("executionSettlement"), "noAutomaticReplay": True}
 
-    def _persist(self, job):
+    def _persist(self, job, *, observation_digest=None):
         self.manager._save(job)
         original = self.manager.ledger.execute("SELECT details FROM operations WHERE operation_id=?", (job["operationId"],)).fetchone()
         original = json.loads(original[0]) if original and original[0] else {}
@@ -270,8 +276,13 @@ class DesktopJobs:
                   "desktopDispatchAttempted": job.get("desktopDispatchAttempted", False), "desktopReceipt": job.get("desktopReceipt"),
                   "executionSettlement": copy.deepcopy(job.get("executionSettlement")),
                   "audience": copy.deepcopy(job["desktopOperation"])}
-        if "historyAudience" in original:
-            detail["historyAudience"] = original["historyAudience"]
+        for key in ("historyAudience", "historyVisibilityWithdrawn", "desktopObservationDigest"):
+            if key in original:
+                detail[key] = original[key]
+        if observation_digest is not None:
+            # Only the validated synchronous result may establish this witness; never
+            # backfill a digest from a reloaded job or store window contents in SQLite.
+            detail.setdefault("desktopObservationDigest", observation_digest)
         self.manager.ledger.execute("UPDATE operations SET details=? WHERE operation_id=?", (json.dumps(detail), job["operationId"]))
         self.manager.ledger.commit()
 

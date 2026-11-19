@@ -36,6 +36,10 @@ final class DeviceSemanticObservations implements AutoCloseable {
         Observation old = latest.remove(route);
         if (old != null) { delivered.remove(old); retired.add(route + "\n" + old.reference); }
     }
+    synchronized void retireOriginal(String route, String operation) {
+        Observation value = latest.get(route);
+        if (value != null && value.operation.equals(operation)) invalidate(route);
+    }
     synchronized void capture(String route, JSONObject wire, JSONObject receipt, Current current) throws Exception {
         requireRun(original);
         current.require();
@@ -116,7 +120,7 @@ final class DeviceSemanticObservations implements AutoCloseable {
         if (typed == null) typed = result;
         if (!"OperationReceipt".equals(typed.optString("messageType")) || !operation.equals(typed.optString("operationId"))) return null;
         JSONObject body = typed.optJSONObject("payload");
-        if (body == null) return null;
+        if (body == null || body.optBoolean("originalObservationRead")) return null;
         JSONObject action = body.optJSONObject("desktopReceipt");
         return action == null ? body : action.optJSONObject("afterObservation");
     }

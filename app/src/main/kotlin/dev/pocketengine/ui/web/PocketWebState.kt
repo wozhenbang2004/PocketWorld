@@ -83,9 +83,11 @@ internal object PocketWebState {
         // snapshot, without retaining mutable source JSON between publications.
         val tasks = JSONArray()
         val ownerWork = JSONArray()
+        val livePrivatePhones = JSONArray()
         state.tasks.forEach { row ->
             val projected = task(row)
             tasks.put(projected)
+            controller.retainedPrivatePhoneSurface(row)?.let { livePrivatePhones.put(it) }
             if (homeWork(row)) {
                 ownerWork.put(projected)
             }
@@ -109,7 +111,7 @@ internal object PocketWebState {
             .put("modelCatalogEnabled", state.modelCatalogEnabled).put("maxOutputTokens", state.maxOutputTokens)
             .put("cleartextConsent", state.cleartextConsent).put("accessibilityEnabled", state.accessibilityEnabled)
             .put("notificationsEnabled", state.notificationsEnabled).put("activeTaskId", state.activeTaskId ?: JSONObject.NULL)
-            .put("activePhoneTaskIds", JSONArray(state.activePhoneTaskIds))
+            .put("activePhoneTaskIds", JSONArray(state.activePhoneTaskIds)).put("livePrivatePhones", livePrivatePhones)
             .put("maximumActiveBackgroundPhoneRuns", state.maximumActiveBackgroundPhoneRuns)
             .put("foregroundTaskId", state.foregroundTaskId ?: JSONObject.NULL)
             .put("tasks", tasks)

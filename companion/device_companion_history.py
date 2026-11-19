@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import uuid
 
 import device_protocol as protocol
 from device_pairing import HistoryPermission, NativeHistoryAudienceSource, Permission
@@ -82,10 +83,81 @@ def accepted_audience(envelope, permission, object_id, now_ms, *, kind="operatio
     return copy.deepcopy(value)
 
 
+def desktop_observation_readback(manager, operation, fingerprint, job_id, status, detail, job, permission):
+    """A receipt read never calls the desktop adapter or recovers a live input lease."""
+    scope = detail.get("audience") if isinstance(detail.get("audience"), dict) else {}
+    cached_scope = (job or {}).get("desktopOperation")
+    cached_scope = cached_scope if isinstance(cached_scope, dict) else {}
+    if scope.get("toolName") != "desktop.observe" and cached_scope.get("toolName") != "desktop.observe":
+        return None  # Not an observation: leave other original tools' contracts alone.
+    facts = {"operationId": operation, "id": job_id, "status": status if job else "unknown",
+             "historicalReadOnly": True, "actionReady": False, "taskControl": False, "capturedAgain": False,
+             "noAutomaticReplay": True}
+    if not job:
+        facts.update(lastKnownStatus=status, archived=True)
+    unavailable = {**facts, "originalObservationRead": False, "readbackReason": "original_observation_unavailable"}
+    if not isinstance(permission, HistoryPermission):
+        # Execution authority (including a delegation) is not fixed-result read authority.
+        return {**unavailable, "readbackReason": "original_history_permission_required"}
+    def same(left, right):
+        try:
+            return isinstance(left, dict) and isinstance(right, dict) and protocol.resource_equal(left, right)
+        except (TypeError, ValueError, protocol.ProtocolError):
+            return False
+
+    accepted = permission.audience
+    if not (job and detail.get("protocol") == job.get("protocol") == "desktop-v1"
+            and detail.get("jobId") == job.get("id") == job_id
+            and detail.get("status") == job.get("status") == status == "completed"
+            and accepted.get("kind") == "operation" and accepted.get("objectId") == operation
+            and accepted.get("argumentsDigest") == job.get("fingerprint") == fingerprint
+            and scope.get("operationId") == job.get("operationId") == operation
+            and scope.get("toolName") == "desktop.observe" and same(scope, cached_scope)
+            and same(accepted, detail.get("historyAudience"))
+            and accepted.get("localTaskId") == scope.get("taskId")
+            and all(accepted.get(k) == scope.get(k) for k in
+                    ("originDeviceId", "callerDeviceId", "instanceId", "rootTaskId", "requestRunId",
+                     "requestExecutorEpoch", "grantId", "authorizationEpoch"))
+            and same(accepted.get("resourceBinding"), scope.get("resourceBinding"))):
+        return unavailable
+    # Read the retained ORIGINAL job, not a JSON body left in a stale process
+    # cache after removal. Use the existing bounded Windows handle/path checks.
+    try:
+        backend = manager.platform
+        if backend.name != "windows" or not isinstance(job_id, str) or str(uuid.UUID(job_id)) != job_id:
+            return unavailable
+        raw = backend.read_bytes(str(manager.state), "job-" + job_id + ".json", maximum=256 * 1024)
+        if raw is None:
+            return unavailable
+        retained = json.loads(raw)
+    except (OSError, ValueError, TypeError, PlatformError, RecursionError):
+        return unavailable
+    if not (isinstance(retained, dict) and retained.get("protocol") == "desktop-v1" and retained.get("id") == job_id
+            and retained.get("fingerprint") == fingerprint and retained.get("operationId") == operation
+            and retained.get("status") == status and same(scope, retained.get("desktopOperation"))):
+        return unavailable
+    observed = retained.get("desktopObservation")
+    settled = detail.get("executionSettlement")
+    if not (isinstance(observed, dict) and observed.get("jobId") == job_id and observed.get("readOperationId") == operation
+            and isinstance(settled, dict) and same(settled, observed.get("executionSettlement"))
+            and settled.get("operationId") == operation and settled.get("proofScope") == "synchronous_desktop_observation"
+            and settled.get("adapterFinished") is True and settled.get("noFurtherDispatchForOperation") is True
+            and settled.get("terminalVerified") is True and settled.get("inputDispatched") is False):
+        return unavailable
+    try:
+        digest = hashlib.sha256(protocol.canonical_bytes(observed)).hexdigest()
+    except (ValueError, TypeError, protocol.ProtocolError):
+        return unavailable
+    if digest != detail.get("desktopObservationDigest"):
+        return unavailable  # Old/partial saves cannot vouch for the original bytes.
+    return {**copy.deepcopy(observed), **facts, "originalObservationRead": True}
+
+
 class CompanionHistory(NativeHistoryAudienceSource):
     """Read accepted audiences only from durable SQL, even after job-cache eviction."""
-    def __init__(self, manager):
+    def __init__(self, manager, *, retire_desktop_input=None):
         self.manager = manager
+        self.retire_desktop_input = retire_desktop_input
         with manager.lock:
             manager.ledger.execute("CREATE TABLE IF NOT EXISTS device_artifact_audiences(artifact_id TEXT PRIMARY KEY, descriptor TEXT NOT NULL, audience TEXT NOT NULL, withdrawn INTEGER NOT NULL DEFAULT 0)")
             manager.ledger.commit()
@@ -159,15 +231,27 @@ class CompanionHistory(NativeHistoryAudienceSource):
         permission.check_current(self.manager.now())
         operation = permission.audience["objectId"]
         with self.manager.lock:
-            row = self.manager.ledger.execute("SELECT details FROM operations WHERE operation_id=?", (operation,)).fetchone()
-            detail = json.loads(row[0]) if row and row[0] else {}
-            result = copy.deepcopy(self.manager.operation(operation))
+            row = self.manager.ledger.execute("SELECT fingerprint,job_id,last_status,details FROM operations WHERE operation_id=?", (operation,)).fetchone()
+            if row is None:
+                raise PermissionError("Original accepted operation is no longer retained")
+            detail = json.loads(row[3]) if row[3] else {}
+            result = desktop_observation_readback(self.manager, operation, row[0], row[1], row[2], detail, self.manager.jobs.get(row[1]), permission)
+            if result is None:
+                result = copy.deepcopy(self.manager.operation(operation))
             if detail.get("audience", {}).get("toolName") in {"workspace.receive", "workspace.project.receive", "workspace.project.confirm"}:
                 result.update(copy.deepcopy(result.get("nativeToolResult", {})))
             if detail.get("audience", {}).get("toolName") in {"workspace.write", "workspace.receive"}:
                 result["originalFileReceipt"] = self.manager.files.operation(operation)
-            if detail.get("protocol") == "desktop-v1" and result.get("archived"):
+            if detail.get("protocol") == "desktop-v1" and result.get("archived") and "originalObservationRead" not in result:
                 result["desktopReceipt"] = detail.get("desktopReceipt")
+        ref = result.get("observationRef")
+        if result.get("originalObservationRead") and isinstance(ref, dict):
+            # Do not hold manager.lock here: native desktop dispatch takes adapter -> manager.
+            # A proof may be returned only AFTER it can no longer authorize input on the PC.
+            retired = self.retire_desktop_input and self.retire_desktop_input(operation, ref, permission)
+            if not retired and self.manager.now() < ref["expiresAt"]:
+                result = {key: result[key] for key in ("operationId", "id", "status", "noAutomaticReplay", "capturedAgain", "actionReady")}
+                result.update(originalObservationRead=False, readbackReason="original_input_reference_not_retired")
         result.update(historicalReadOnly=True, originalOriginDeviceId=permission.original_origin_device_id,
                       acceptedAuthorizationEpoch=permission.accepted_authorization_epoch)
         # A result read is never a task-control lease or a resumed execution.

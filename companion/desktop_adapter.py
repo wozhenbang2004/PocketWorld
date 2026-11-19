@@ -442,11 +442,29 @@ class DesktopAdapter:
             self.snapshots = {key: item for key, item in self.snapshots.items() if item["ref"]["expiresAt"] > captured}
             if len(self.snapshots) >= 16:
                 self.snapshots.pop(next(iter(self.snapshots)))
-            self.snapshots[identifier] = {"ref": reference, "health": after, "target": target, "binding": copy.deepcopy(binding),
+            self.snapshots[identifier] = {"ref": reference, "operationId": metadata.get("operationId"), "health": after, "target": target, "binding": copy.deepcopy(binding),
                                           "hash": value.get("captureSha256"), "state": copy.deepcopy(value["state"]), "consumed": False, "mode": mode,
                                           "audience": {key: metadata[key] for key in ("taskId", "requestRunId", "requestExecutorEpoch")},
                                           "targetRegions": self._region_fingerprints(raw, state.get("elements", [])) if raw is not None else {}}
             return value
+
+    def retire_observation_input(self, operation, reference, permission):
+        """Retire only this original input reference before disclosing its read-only contents.
+        No driver call, screen change, lease renewal, global fence or task cancellation."""
+        with self.lock:
+            permission.check_current(self.manager.now())
+            audience = permission.audience
+            snapshot = self.snapshots.get(reference.get("id"))
+            if snapshot is None:
+                return True  # Already consumed/evicted, or a different driver generation.
+            expected = {"taskId": audience["localTaskId"], "requestRunId": audience["requestRunId"],
+                        "requestExecutorEpoch": audience["requestExecutorEpoch"]}
+            if (snapshot.get("operationId") != operation or not resource_equal(snapshot["ref"], reference)
+                    or not resource_equal(snapshot["binding"], audience["resourceBinding"])
+                    or not resource_equal(snapshot["audience"], expected)):
+                return False
+            snapshot["consumed"] = True
+            return True
 
     @staticmethod
     def _bounded(value, maximum=24576):

@@ -66,7 +66,45 @@ public final class DeviceTaskCoordinator {
     public JSONObject task(PairingCoordinator.Permission permission) throws Exception {
         return taskSnapshot(requireTask(permission,permission.envelope().arguments().getString("taskId")),permission.callerDeviceId(),permission.authorizationEpoch());
     }
-    public JSONObject task(PairingCoordinator.HistoryPermission permission)throws Exception{return taskSnapshot(requireHistoryTask(permission,permission.envelope().arguments().getString("taskId")),permission.callerDeviceId(),permission.authorizationEpoch());}
+    public JSONObject task(PairingCoordinator.HistoryPermission permission)throws Exception{
+        JSONObject task=requireHistoryTask(permission,permission.envelope().arguments().getString("taskId"));
+        JSONObject snapshot=taskSnapshot(task,permission.callerDeviceId(),permission.authorizationEpoch());
+        projectReviewedPhoneGoal(permission,task,snapshot);
+        permission.checkCurrent(System.currentTimeMillis());
+        return snapshot;
+    }
+    /** A dispatch receipt or current task.summary can be merely a lifecycle message. Publish only
+     * the bounded text previously visible on this task AND reviewed on the receiving phone.
+     * The original B-owner review digest covers precisely that Runner summary and its evidence;
+     * the evidence itself, tools, inputs, captures and leases are not part of this projection. */
+    private void projectReviewedPhoneGoal(PairingCoordinator.HistoryPermission reader,JSONObject task,JSONObject snapshot)throws Exception{
+        JSONObject origin=task.getJSONObject("origin"),resource=reader.resourceBinding();
+        String caller=reader.callerDeviceId(),run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");
+        if(!"GOAL".equals(task.optString("deviceExecutionKind"))||!"paired_device".equals(origin.optString("kind"))
+            ||!caller.equals(origin.optString("callerDeviceId"))||!caller.equals(origin.optString("originDeviceId"))
+            ||!localDeviceId.equals(origin.optString("targetDeviceId"))||!reader.grantId().equals(origin.optString("grantId"))
+            ||reader.authorizationEpoch()!=origin.optLong("authorizationEpoch")||reader.acceptedAuthorizationEpoch()!=reader.authorizationEpoch()
+            ||origin.optString("parentTaskId").isEmpty()||!origin.optString("rootTaskId").equals(origin.optString("parentTaskId"))
+            ||!DeviceProtocol.resourceEquals(resource,task.getJSONObject("deviceExecutionScope").getJSONObject("resourceBinding"))
+            ||!("main_screen".equals(resource.optString("screenMode"))||"background".equals(resource.optString("screenMode")))
+            ||!(resource.opt("androidUserId") instanceof Number)||resource.optJSONArray("packageNames")==null||resource.getJSONArray("packageNames").length()==0
+            ||run.isEmpty()||epoch<=0)return;
+        JSONObject detail=snapshot.getJSONObject("result"),saved=task.optJSONObject("deviceGoalResult");
+        JSONObject onward=new JSONObject().put("review","none").put("summary","").put("truncated",false);
+        detail.put("phoneGoalOutcome",onward);
+        if(saved==null)return;
+        if(!run.equals(saved.optString("runId"))||epoch!=saved.optInt("executorEpoch")||!saved.optBoolean("nativeRunnerExited")
+            ||!saved.optBoolean("nativeDispatchClosed")||!"needs_confirmation".equals(saved.optString("status"))){onward.put("review","unverified");return;}
+        if(!saved.optBoolean("closed")){onward.put("review","pending");return;}
+        if(!saved.optBoolean("ownerVerified")||!"completed".equals(task.optString("status"))){onward.put("review","not_confirmed");return;}
+        JSONObject evidence=task.optJSONObject("evidence"),check=evidence==null?null:evidence.optJSONObject("nativeDeviceGoalOwnerReview");
+        if(check==null||!check.optBoolean("completed")||!check.optBoolean("sameRun")||!(saved.opt("summary") instanceof String)){onward.put("review","unverified");return;}
+        JSONObject reviewed=new JSONObject(saved.toString());reviewed.put("closed",false);reviewed.remove("ownerVerified");reviewed.remove("reviewedAt");
+        if(!TaskStore.capabilityFingerprint(reviewed).equals(check.optString("resultDigest"))){onward.put("review","unverified");return;}
+        String text=saved.getString("summary");int length=text.codePointCount(0,text.length());
+        // At most 2,048 Unicode code points (8 KiB UTF-8), never split a surrogate pair.
+        onward.put("review","confirmed").put("truncated",length>2048).put("summary",length>2048?text.substring(0,text.offsetByCodePoints(0,2048)):text);
+    }
     private JSONObject taskSnapshot(JSONObject task,String caller,long authorizationEpoch)throws Exception{
         JSONArray events = task.optJSONArray("events"); long cursor = 0;
         for (int i = 0; events != null && i < events.length(); i++) cursor = Math.max(cursor, events.getJSONObject(i).optLong("seq", i + 1L));

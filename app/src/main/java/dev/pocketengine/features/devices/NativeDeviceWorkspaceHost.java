@@ -182,6 +182,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
     public interface HistoryAction extends AutoCloseable {
         JSONObject view() throws Exception;
         JSONObject query() throws Exception;
+        default JSONObject queryPhoneGoalResult() throws Exception { throw new SecurityException("这个原操作不支持读取手机目标结果"); }
         default JSONObject requestStop() throws Exception { throw new SecurityException("这个历史入口不支持原操作停止"); }
         void close();
     }
@@ -529,6 +530,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         private void require() { window.current(); if (closed || generation != window.reviewGeneration.get()) throw new SecurityException("原结果读取窗口已关闭"); }
         public JSONObject view() throws Exception { require(); return copy(value); }
         public JSONObject query() throws Exception { require(); JSONObject next = source.query(); require(); return copy(next); }
+        public JSONObject queryPhoneGoalResult() throws Exception { require(); JSONObject next = source.queryPhoneGoalResult(); require(); return copy(next); }
         public JSONObject requestStop() throws Exception { require(); JSONObject next = source.requestStop(); require(); return copy(next); }
         public void close() { closed = true; source.close(); }
     }

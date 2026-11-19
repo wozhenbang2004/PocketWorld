@@ -339,12 +339,14 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             NativeDeviceTaskHistoryHost original = new NativeDeviceTaskHistoryHost(tasks, local, new NativeDeviceTaskHistoryHost.NativeReads() {
                 public PairingCoordinator.HistoryRoute currentHistoryRoute(String target, String grant) throws Exception { return network.currentHistoryRoute(target, grant); }
                 public DeviceCapabilityPort.Reply readHistory(DeviceTaskEnvelope request, RunControl ioCancellation) throws Exception { return network.readOwnerHistory(request, ioCancellation); }
+                public DeviceCapabilityPort.Reply readPhoneGoal(PairingCoordinator.HistoryQuery query, RunControl io) throws Exception { return network.readHistory(query, io::check); }
             });
             NativeDeviceTaskHistoryHost.Window nativeWindow = original.open(id, operation);
             TaskStoreDeviceTasks.OwnerStopReview stopReview = tasks.deviceTasks().reviewOwnerStop(id, operation);
             return new NativeDeviceWorkspaceHost.HistoryAction() {
                 public JSONObject view() throws Exception { return nativeWindow.view(); }
                 public JSONObject query() throws Exception { JSONObject result = nativeWindow.query(); app.pushTask(id); changed(); return result; }
+                public JSONObject queryPhoneGoalResult() throws Exception { return nativeWindow.queryPhoneGoalResult(); }
                 public JSONObject requestStop() throws Exception {
                     nativeWindow.view();
                     NativeDeviceChildStopHost stops = new NativeDeviceChildStopHost(tasks, local, new NativeDeviceChildStopHost.NativeStops() {

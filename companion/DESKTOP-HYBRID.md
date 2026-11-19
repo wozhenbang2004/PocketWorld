@@ -43,6 +43,16 @@ Android 原生桥接和 `desktop.viewer` 设备方法，不另建 Agent 任务�
 [AGENT-DESKTOP.md](packaging/windows/AGENT-DESKTOP.md) 和
 [DESKTOP-STREAM.md](packaging/windows/DESKTOP-STREAM.md)。
 
+若 Windows 已完成观察、手机却没有收到回执，原任务可用原操作 ID 查询：
+能核对同一设备实例、授权范围、任务、操作和原件摘要时，返回**当时**的结构，
+或固定到当时 PNG 的描述。默认即使不能使用图片模型也可查询状态；需要原图时，
+在同一 `device_operation_get` 设置 `includeOriginalImage=true`。只有手机在
+原有效期内取回并核对实际字节、尺寸和
+哈希，才可把旧图作为参考交给本轮模型。不会重新截图、续租或占用新的观察次数。
+回查只废弃同一张图的旧输入引用，不改变现有租约，不撤回已经发送的输入；
+继续点按需要新观察及原有控制授权。旧版本没有原件摘要、原件缺失或授权不再
+允许读取时，不补造画面。若仍有状态读取权限，可查原操作状态；已撤回的结果不返回。
+
 人工接管等待当前有界 AI 操作结束，且不能强行覆盖未知状态或其他所有者的租约。
 人工租约与视频会话最长五分钟；交还后，AI 必须取得新租约和新观察才可继续。
 每次人工输入引用最近两秒内的真实发送帧。Companion 在原帧最后一个 RTP 包
@@ -106,6 +116,12 @@ NAT、防火墙或外网组合都能连通。
 | Cua Driver | 0.38.0 prerelease；`f595a4fb6f524e555e5e422aab81c3457fe4a713` | [Build-CuaDriver.ps1](packaging/windows/Build-CuaDriver.ps1)；只构建 Driver，不包含 Spaces 或 Perception |
 | aiortc / PyAV | aiortc 1.15.0：`a1dc5e2546aa7f51a92860f358192590559d7225`；PyAV 17.0.1：`fa90286add4ebbaa2e141b5d6d1ba3e290973a38` | [媒体依赖清单](packaging/windows-stream-dependencies.json)、[媒体运行时说明](packaging/windows/DESKTOP-STREAM.md)，包含实际 wheel 哈希与许可 |
 | 截图依赖 | Pillow 13.0.0 | [Windows 桌面依赖清单](packaging/windows-desktop-dependencies.json) |
+
+**手机发布与电脑伴侣是两个交付物。** 例如 [v0.1.147 的实际资产](https://github.com/wozhenbang2004/PocketWorld/releases/tag/v0.1.147)
+是 Android APK、Android 差分和发布清单，不是 Windows 安装包；GitHub 自动生成的源码归档也不是运行时。
+已有配对或协议名 `desktop-v2` 不代表电脑支持找回原观察。手机进入「我的设备 → 这台电脑 → 能力与两端权限」
+更新能力记录，按原设备自己的声明判断。独立 Windows 包可在其 `bundle-manifest.json` 核对
+`product`、`version`、`platform`、`sourceCommit`；这些字段不能代替包哈希、签名核验或本次原件读取权限。
 
 在已经准备好的 Windows x64 构建机、PocketWorld 仓库根目录执行。三个源码工作区
 都须是准确、干净的固定提交；Rust/MSVC 工具链、Cargo 缓存、Python 环境及完整

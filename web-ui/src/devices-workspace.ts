@@ -42,6 +42,17 @@ export function deviceHistoryReceipt(value: unknown, review: DeviceData): Device
   if (receipt.managementOnly !== true && (receipt.readOnly !== true || receipt.newRun !== false || receipt.retrySubmitted !== false || receipt.unknownRefunded !== false || typeof receipt.unknown !== 'boolean' || !object(receipt.operationReceipt))) throw new Error('未取得原操作的只读执行回执。');
   return value;
 }
+export function devicePhoneGoalResult(value: unknown, review: DeviceData): DeviceData {
+  if (review.kind !== 'history' || review.view?.phoneGoalResult !== true || !object(value) || value.kind !== 'phoneGoalResult'
+    || value.viewHandle !== review.viewHandle || !['taskId', 'operationId', 'targetDeviceId'].every(key => value[key] === review.view[key]))
+    throw new Error('目标结果不属于当前手机和原派发。');
+  const result = value.result;
+  if (!object(result) || result.readOnly !== true || result.instanceId !== review.view.instanceId || !identity(result.taskId)
+    || !identity(result.runId) || !positiveInteger(result.executorEpoch) || !identity(result.state) || !positiveInteger(result.updatedAt)
+    || !['confirmed','none','pending','not_confirmed','unverified','unavailable'].includes(result.review) || typeof result.summary !== 'string'
+    || typeof result.truncated !== 'boolean' || (result.review !== 'confirmed' && (result.summary || result.truncated))) throw new Error('缺少原任务、原执行或准确结果回执。');
+  return result;
+}
 export function deviceHistoryLabel(value: DeviceData | null): string {
   if (!value) return '读取这次操作的最新回执。';
   if (value.managementOnly === true) return value.stopped === true ? '执行端报告已停止，请继续查询原操作结果。' : value.requested === true ? '执行端已接受停止请求，仍待核对停止结果。' : '停止结果待核对，请查询原操作回执。';

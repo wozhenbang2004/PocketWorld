@@ -39,7 +39,8 @@ public final class AdaptivePhonePort implements PhonePort {
     private final LocalImageOcr ocr;
     private final AdaptiveObservationPolicy policy = new AdaptiveObservationPolicy();
     private RunControl boundControl;
-    private JSONObject latest;
+    // Each published observation is an existing private copy; no UI query captures a new tree or frame.
+    private volatile JSONObject latest;
     private Binding latestBinding;
     private Need pendingNeed = Need.AUTOMATIC;
     private boolean imageCeiling, reconciliationRequired;
@@ -76,6 +77,25 @@ public final class AdaptivePhonePort implements PhonePort {
     }
     @Override public boolean isConnected() { return source.isConnected(); }
     public boolean textTargetingAvailable(){return localCaptureAllowed&&localOcrAllowed&&source instanceof NativeOcrTapPort&&ocrAvailable();}
+    /** Display-only facts from the last already accepted native observation. Never expose pixels, text, nodes, or a launch target. */
+    public JSONObject lastObservedOwnerSurface(RunControl original)throws Exception {
+        JSONObject retained=latest;if(retained==null||original==null||!original.matchesHostRun(scope.taskId,scope.runId,scope.epoch)||original.isCancelled()||!original.phoneSurfaceActive())return null;
+        JSONObject binding=retained.optJSONObject("observationBinding");long revision=original.pauseRevision();
+        long at=retained.optLong("observedAtUptimeMs",-1),now=uptime.getAsLong();
+        if(!retained.optBoolean("ok")||retained.optBoolean("changedDuringRead")||at<0||at>now||now-at>MAX_AGE_MS||
+                binding==null||!scope.taskId.equals(binding.optString("taskId"))||!scope.runId.equals(binding.optString("runId"))||scope.epoch!=binding.optInt("epoch",-1)||
+                scope.displayId!=binding.optInt("displayId",-1)||!scope.sessionId.equals(binding.optString("sessionId"))||
+                binding.optLong("pauseRevision",-1)!=revision||scope.displayId!=retained.optInt("displayId",-1)||
+                !scope.sessionId.equals(retained.optString("sessionId"))||retained.optString("observationId").isEmpty()||
+                !retained.optString("observationId").equals(binding.optString("observationId")))return null;
+        JSONObject fact=new JSONObject().put("displayId",scope.displayId);
+        String name=retained.optString("packageName");JSONObject installed=retained.optJSONObject("installedApp");
+        if(scope.displayId>0&&"display_has_no_app".equals(retained.optString("screenState"))&&retained.optBoolean("emptyDisplayVerified"))
+            fact.put("emptyDisplayVerified",true);
+        else if(installed!=null&&"android_package_manager".equals(installed.optString("source"))&&
+            name.equals(installed.optString("packageName"))&&name.length()<=255&&name.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))fact.put("packageName",name);
+        return latest==retained&&original.pauseRevision()==revision?fact:null;
+    }
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
     public PhonePort physicalPort(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).physicalPort():source;}
     public boolean appPolicyBound(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort;}

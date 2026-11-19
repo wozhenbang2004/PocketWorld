@@ -13,13 +13,14 @@ const sameResource = (a: ScopeData, b: ScopeData): boolean => {
     : JSON.stringify(value) ?? 'null';
   return canonical(a) === canonical(b);
 };
-export function routeTitle(option: ScopeData): string {
+export function routeTitle(option: ScopeData, human = false): string {
   const scope = option.resourceBinding || {};
+  const phone = scope.screenMode === 'main_screen' ? '主屏' : scope.screenMode === 'background' ? '独立屏' : '';
+  if (phone) return human ? '由你操作对方手机' + phone : option.kind === 'goal' ? '让对方手机在' + phone + '完成目标' : '本机助手使用对方手机' + phone + '工具';
   if (option.kind === 'goal') return '让对端模型处理目标';
   if (scope.kind === 'desktop') return scope.windowId ? '使用电脑的指定窗口' : '使用电脑桌面工具';
-  if (scope.screenMode === 'main_screen') return '使用手机主屏工具';
-  if (scope.screenMode === 'background') return '使用手机独立屏工具';
-  return '使用电脑工作区工具';
+  if (scope.projectId && scope.checkoutId) return '使用已授权的项目工具';
+  return scope.kind === 'workspace' ? '使用电脑工作区工具' : '使用对方已授权的工具';
 }
 export function routeDraft(option: ScopeData, view: ScopeData, now = Date.now()): RouteDraft {
   const old = scopeRows(view.selected?.routes).find(row => row.optionId === option.optionId);

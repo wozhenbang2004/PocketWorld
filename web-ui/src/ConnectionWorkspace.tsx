@@ -3,6 +3,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectFie
 import { bridge } from './bridge';
 import { connectionProfilePayload, wirelessPort } from './forms-library/host-contracts';
 import TerminalSurface from './TerminalSurface';
+import { SshFilePickup } from './SshFilePickup';
 import { resumeSshFile } from './workspace-resume';
 import { useDataSettingsJourney } from './DataSettingsJourney';
 import { HarnessEvidence } from './HarnessEvidence';
@@ -414,6 +415,7 @@ function SshWork({ profile, state, data, run, supported, back, visible }: { prof
   const journey = useDataSettingsJourney(initial.current?.mode || 'list'), mode = journey.view;
   const [goal, setGoal] = useState(initial.current?.goal || ''), [client, setClient] = useState<string | null>(initial.current?.client || null), [command, setCommand] = useState(initial.current?.command || '');
   const [directory, setDirectory] = useState(initial.current?.directory || ''), [files, setFiles] = useState<Data | null>(initial.current?.files || null), [file, setFile] = useState<Data | null>(initial.current?.file || null), [content, setContent] = useState(initial.current?.content || '');
+  const [pickup, setPickup] = useState<{ path: string; bytes: number } | null>(null);
   const [agentReceipt, setAgentReceipt] = useState<Data | null>(initial.current?.agentReceipt || null);
   const [review, setReview] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(initial.current?.receipt || null), [uncertain, setUncertain] = useState(initial.current?.uncertain || false), [cooperative, setCooperative] = useState(false);
   const [terminal, setTerminal] = useState<Data | null>(null), [doctor, setDoctor] = useState<Data | null>(null), { request, busy, error } = useRequest(run, state, visible);
@@ -435,6 +437,7 @@ function SshWork({ profile, state, data, run, supported, back, visible }: { prof
     const target = path ? journey.root.current?.querySelector<HTMLElement>('[data-file-heading]') : Array.from(journey.root.current?.querySelectorAll<HTMLElement>('[data-operation-entry]') || []).find(row => row.dataset.operationEntry === fileReturn.current.path);
     target?.focus({ preventScroll: true });
   }, [file?.path]);
+  useLayoutEffect(() => { if (!visible || mode !== 'files' || state.webWorkspaceTaskOpen) setPickup(null); }, [visible, mode, state.webWorkspaceTaskOpen]);
   const closeFile = () => { if (content === file?.content) setFile(null); else setReview({ operation: 'discardFile' }); };
   useEffect(() => {
     back.current = () => {
@@ -466,12 +469,18 @@ function SshWork({ profile, state, data, run, supported, back, visible }: { prof
   const prepare = (operation: string, arguments_: Data) => { if (!visibleNow.current || busy) return; void request('ssh.reviewOperation', { command: operation, arguments: { ...binding(profile), ...arguments_ } }).then(value => { setCooperative(false); setReview(value); }).catch(() => {}); };
   const selectedTasks = list(state.tasks).filter(task => object(task.raw).feature === 'ssh' && object(object(task.raw).externalRefs).profileId === profile.id);
   const unknown = uncertain || selectedTasks.some(task => ['reconciling', 'unknown'].includes(task.status));
-  const readDirectory = (path: string) => { void request('ssh.listFiles', { ...binding(profile), path }).then(value => { setFiles(value); setDirectory(text(value.path)); }).catch(() => {}); };
+  const readDirectory = (path: string) => {
+    setFiles(null); setPickup(null);
+    void request('ssh.listFiles', { ...binding(profile), path }).then(value => {
+      if (value.status !== 'completed' || value.profileId !== profile.id || value.path !== path || !Array.isArray(value.files)) { setReceipt(value); return; }
+      setFiles(value); setDirectory(path);
+    }).catch(() => {});
+  };
   const readFile = (path: string) => { if (!file) fileReturn.current = { scroll: journey.root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0, path }; void request('ssh.readFile', { ...binding(profile), path }).then(value => { setReceipt(value); if (value.status === 'completed' && typeof value.content === 'string' && /^sha256:[a-f0-9]{64}$/.test(text(value.version))) { setFile(value); setContent(value.content); setFileNeedsRead(false); setFileConflict(false); } }).catch(() => {}); };
   const verifyFile = () => { if (!file) return; const original = file; void request('ssh.readFile', { ...binding(profile), path: original.path }).then(value => { const restored = resumeSshFile(original, currentContent.current, value, profile.id, fileConflict); setFile(restored.file); setContent(restored.content); setFileConflict(restored.conflict); setFileNeedsRead(false); }).catch(() => {}); };
   const tools = [
     { id: 'agent', title: '让 Agent 办事', detail: '说明目标，在原任务中审阅与继续', icon: IconMonitor },
-    { id: 'files', title: '工作区文件', detail: '浏览目录、读取文本，审阅后保存修改', icon: IconFolder },
+    { id: 'files', title: '工作区文件', detail: '浏览目录、编辑文本，或将所选文件保存到手机', icon: IconFolder },
     { id: 'command', title: '运行一条命令', detail: '核对准确命令与工作目录后执行', icon: IconTerminal },
     { id: 'terminal', title: '交互式终端', detail: '连接远端 Shell，保留原终端与回执', icon: IconServer },
     { id: 'doctor', title: '环境诊断', detail: '只读检查系统、目录与工具状态', icon: IconTool },
@@ -485,10 +494,13 @@ function SshWork({ profile, state, data, run, supported, back, visible }: { prof
     {mode === 'command' && <section className="pw-connection-task-composer"><TextAreaField label="POSIX 命令" value={command} isDisabled={busy} onChange={setCommand} hint="从所选工作目录执行，使用此账号的远端权限；工作目录不是沙箱。" /><Button disabled={!trusted || busy || unknown || !command.trim() || command.length > 12000} onClick={() => prepare('exec', { command, timeoutSeconds: 60 })}>核对并执行这条命令</Button></section>}
     {mode === 'files' && <section className="pw-ssh-files">
       {!file && <><div className="pw-connection-directory-bar"><TextField label="相对目录，留空为工作区" value={directory} isDisabled={busy} onChange={setDirectory} /><Button variant="secondary" disabled={!trusted || busy} onClick={() => readDirectory(directory.trim())}>读取目录</Button></div>
-        {files ? <><div className="pw-connection-file-location"><IconFolder size={17} aria-hidden /><span>{files.path || '工作区根目录'}</span>{files.path && <Button variant="ghost" iconOnly leadingIcon={IconArrowUp} aria-label="返回上级目录" disabled={busy} onClick={() => readDirectory(text(files.path).split('/').slice(0, -1).join('/'))} />}</div><p className="pw-field-hint">已读取的目录内容，不跟随符号链接。</p><div className="pw-connection-file-list">{list(files.files).length === 0 && <p className="pw-secondary-empty">这个目录没有可显示的文件。</p>}{list(files.files).map(item => <ConnectionRow key={item.name} entry={safeChild(files.path || '', item.name) || undefined} title={item.name} detail={item.symlink ? '符号链接 · 不跟随' : item.directory ? '目录' : `${item.bytes} 字节 · 文本读取`} icon={item.directory ? IconFolder : IconFileText} disabled={busy || item.symlink || !safeChild(files.path || '', item.name)} onOpen={() => { const path = safeChild(files.path || '', item.name); if (!path) return; if (item.directory) readDirectory(path); else readFile(path); }} />)}</div></> : <p className="pw-secondary-empty">读取目录后，在这里查看文件与子目录。</p>}
+        {files ? <><div className="pw-connection-file-location"><IconFolder size={17} aria-hidden /><span>{files.path || '工作区根目录'}</span>{files.path && <Button variant="ghost" iconOnly leadingIcon={IconArrowUp} aria-label="返回上级目录" disabled={busy} onClick={() => readDirectory(text(files.path).split('/').slice(0, -1).join('/'))} />}</div><p className="pw-field-hint">已读取的目录内容，不跟随符号链接。</p><div className="pw-connection-file-list">{list(files.files).length === 0 && <p className="pw-secondary-empty">这个目录没有可显示的文件。</p>}{list(files.files).map(item => <ConnectionRow key={item.name} entry={safeChild(files.path || '', item.name) || undefined} title={item.name} detail={item.symlink ? '符号链接 · 不跟随' : item.directory ? '目录' : `${item.bytes} 字节`} icon={item.directory ? IconFolder : IconFileText} disabled={busy || item.symlink || !safeChild(files.path || '', item.name)} onOpen={() => { const path = safeChild(files.path || '', item.name); if (!path) return; if (item.directory) readDirectory(path); else if (Number.isSafeInteger(item.bytes) && item.bytes >= 0) setPickup({ path, bytes: item.bytes }); }} />)}</div></> : <p className="pw-secondary-empty">读取目录后，在这里查看文件与子目录。</p>}
       </>}
       {file && <div className="pw-connection-file-editor"><div className="pw-connection-file-location" tabIndex={-1} data-file-heading><IconFileText size={18} aria-hidden /><span>{file.path}</span><small>{content === file.content ? '读取版本' : '未保存修改'}</small></div><TextAreaField label="原文件内容" value={content} isDisabled={busy} onChange={setContent} /><p className="pw-field-hint">按刚读取的文件版本校验。另一写入者仍可能在最后检查后改变文件。</p>{fileNeedsRead && <div className="pw-connection-attention"><p role="status">尚未重新读到原文件，草稿保留，先核对原保存版本。</p><Button variant="secondary" disabled={busy} onClick={verifyFile}>核对原文件，保留草稿</Button></div>}{fileConflict && <p role="alert">离开期间原文件已变化，未保存内容保留，没有自动合并或覆盖。请保留需要的草稿，再关闭文件并核对当前版本。</p>}<div className="pw-form-actions"><Button disabled={busy || unknown || fileNeedsRead || fileConflict || content === file.content} onClick={() => prepare('writeFile', { path: file.path, content, expectedVersion: file.version, acceptCooperativeWrite: true })}>审阅本次文件修改</Button><Button variant="ghost" disabled={busy || content !== file.content} onClick={() => readFile(file.path)}>重新读取已保存版本</Button><Button variant="ghost" disabled={busy} onClick={closeFile}>关闭文件</Button></div></div>}
     </section>}
+    {visible && mode === 'files' && !state.webWorkspaceTaskOpen && pickup && <SshFilePickup key={key + ':' + pickup.path} profile={profile} {...pickup} busy={busy}
+      canReadText={trusted && supported('ssh.readFile')} enabled={trusted && data.binaryFileTransfers === true && supported('ssh.inspectDownload') && supported('ssh.confirmDownload')} request={request} onClose={() => setPickup(null)}
+      onText={() => readFile(pickup.path)} onReceipt={setReceipt} openTask={id => { void run('tasks.open', { id }).catch(() => {}); }} />}
     {mode === 'terminal' && <section className="pw-connection-terminal-entry"><p>交互式 Shell 使用账号的实际远端权限。收起不会关闭连接；关闭连接也不保证远端进程终止。</p><Button disabled={!trusted || busy || unknown} onClick={() => prepare('openPty', { cols: 80, rows: 24, timeoutSeconds: 600, allowInteractiveShell: true })}>核对并打开终端</Button><div className="pw-connection-list">{list(data.terminals).filter(item => item.profileId === profile.id).map(item => <ConnectionRow key={item.terminalId} title="原终端" detail={status(item.status)} icon={IconTerminal} onOpen={() => setTerminal({ ...item, hostTaskId: item.hostTaskId || item.taskId })} />)}</div></section>}
     {mode === 'doctor' && <section className="pw-connection-diagnostics"><p>只读诊断原连接的实际环境。详细报告仅在当前私人页面展示。</p><Button disabled={!trusted || busy || !supported('ssh.doctor')} onClick={() => { void request('ssh.doctor', binding(profile)).then(setDoctor).catch(() => {}); }}>开始一次只读诊断</Button>{doctor && <><Receipt value={doctor} run={run} /><Facts values={[[ '系统', doctor.os || object(doctor.doctor).os ], ['架构', doctor.architecture || object(doctor.doctor).architecture ], ['工作区', doctor.workspace || profile.workspace ]]} />{Object.entries(object(object(doctor.doctor).tools)).map(([tool, value]) => <article className="pw-source-record" key={tool}><header><h3>{tool}</h3><span>{status(object(value).status)}</span></header><p>{object(value).version || object(value).message}</p></article>)}</>}</section>}
     {error && <p role="alert">{error}</p>}{unknown && <div className="pw-connection-attention"><p>有原操作结果尚待核对，当前不会重放命令、写入或新建终端。</p></div>}

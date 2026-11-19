@@ -370,6 +370,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         app.confirmPendingDeviceGoalCancellation(review)
     internal fun webUiCanInteract(): Boolean = !closed && voiceForeground && !activity.isFinishing && !activity.isDestroyed
     internal fun webPrivateOwnerVisible(): Boolean = webUiCanInteract() && privateWorkspaceView()
+    internal fun retainedPrivatePhoneSurface(task: UiTask): JSONObject? {
+        val raw = task.raw
+        if (!webPrivateOwnerVisible() || raw.optString("id") != task.id || raw.optString("kind") != "phone" ||
+            raw.optString("actorId") != "owner" || raw.optString("spaceId") != "private" || !raw.isNull("origin") ||
+            !raw.isNull("parentTaskId") || !raw.isNull("ownerPhoneControl") || !raw.isNull("ownerDeviceWork") ||
+            raw.optString("runId").isBlank() || raw.optInt("coordinatorEpoch", -1) < 1) return null
+        return runCatching { app.retainedPhoneSurface(task.id, raw.getString("runId"), raw.getInt("coordinatorEpoch"), task.executionMode) }.getOrNull()
+    }
     internal fun webMemoryScopeTicket(): Any = Pair(ownerEpochs["memoryReview"] ?: 0, memoryReviewScope)
     /** Personal identity is intentionally independent of the memory workspace's namespace picker. */
     internal fun webPersonalProfileSummary(): JSONObject? =

@@ -25,6 +25,9 @@ class UnavailableDesktop:
     query = invoke
     viewer = invoke
 
+    def retire_observation_input(self, operation, reference, permission):
+        return False  # This instance cannot retire a still-live input reference.
+
     def close(self):
         return {"notStarted": True, "processGroupStoppedVerified": True}
 
@@ -48,6 +51,9 @@ class DesktopRuntime:
 
     def query(self, envelope, permission):
         return self.jobs.query(envelope, permission)
+
+    def retire_observation_input(self, operation, reference, permission):
+        return self.jobs.adapter.retire_observation_input(operation, reference, permission)
 
     def cancel(self, job_id):
         return self.jobs.cancel(job_id)

@@ -367,6 +367,34 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private final java.util.concurrent.ConcurrentHashMap<String,BackgroundRun> backgroundRuns=new java.util.concurrent.ConcurrentHashMap<>();
     private RunControl currentPhoneControl(String id){BackgroundRun run=id==null?null:backgroundRuns.get(id);return run!=null?run.control:id!=null&&id.equals(activeTaskId)?activeControl:null;}
+    /** Snapshot for an already visible private task. Registry reads only: no TaskStore, service, PackageManager, helper, or physical phone call. */
+    public JSONObject retainedPhoneSurface(String id,String run,int epoch,String requested)throws Exception {
+        if(id==null||run==null||epoch<1||!("main_screen".equals(requested)||"background".equals(requested)))return null;
+        BackgroundRun bg=backgroundRuns.get(id);RunControl original=currentPhoneControl(id);
+        if(original==null||!original.matchesHostRun(id,run,epoch)||(bg!=null)!="background".equals(requested))return null;
+        long pause=original.pauseRevision();boolean stopped=original.isCancelled(),paused=original.isPaused();
+        JSONObject result=new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("requestedMode",requested)
+                .put("stopRequested",stopped).put("paused",paused);
+        var session=deferredPhoneSessions.get(original);String surface="unconfirmed";JSONObject observation=null;
+        if(!original.phoneSurfaceActive())surface="other_surface";
+        else if(session!=null&&session.originalControl()==original&&session.matchesHostScope(id,run,epoch)&&requested.equals(session.executionMode())){
+            var adapter=session.readyAdapter();var port=session.physicalPort();
+            if(port instanceof dev.pocketengine.phone.display.BackgroundPhonePort background&&background.ownerHandoffActive())surface="handoff_unconfirmed";
+            else if(adapter!=null&&port!=null&&session.holdsObservationBinding()&&!stopped){
+                surface="bound";observation=adapter.lastObservedOwnerSurface(original);
+                if(!session.holdsObservationBinding()||session.readyAdapter()!=adapter||session.physicalPort()!=port||(port instanceof dev.pocketengine.phone.display.BackgroundPhonePort b&&b.ownerHandoffActive())){
+                    surface="unconfirmed";observation=null;
+                }
+            }
+        }
+        if(currentPhoneControl(id)!=original||!original.matchesHostRun(id,run,epoch)||deferredPhoneSessions.get(original)!=session||
+                original.pauseRevision()!=pause||original.isCancelled()!=stopped||original.isPaused()!=paused)return null;
+        if(!original.phoneSurfaceActive()){surface="other_surface";observation=null;}
+        result.put("surfaceState",surface);
+        if(observation!=null&&("background".equals(requested)?observation.optInt("displayId",-1)>0:observation.optInt("displayId",-1)==0))
+            result.put("lastObservation",observation);
+        return result;
+    }
     /** TaskStore callbacks must not acquire the Application monitor. BackgroundRun's
      * final fields are published through the concurrent map; legacy fields are volatile.
      * A changed original controller cannot inherit a replacement run's captured model. */

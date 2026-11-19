@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceRecordedScopes, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceRecordedScopes, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { DeviceTaskPreparation } from './DeviceTaskPreparation';
 import { PhoneControlPreparation } from './PhoneControlPreparation';
 import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
 import { desktopScopes } from './desktop-viewer';
+import { windowsObservationCompatibility } from './windows-observation-compatibility';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
 import './devices-reading.css';
@@ -70,6 +71,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [invitation, setInvitation] = useState(''), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
   const [workBusy, setWorkBusy] = useState(false), [controlBusy, setControlBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [taskDetails, setTaskDetails] = useState<Record<string, Data>>({}), [historyReceipt, setHistoryReceipt] = useState<Data | null>(null), [historyStopSubmitted, setHistoryStopSubmitted] = useState(false);
+  const [phoneGoalResult, setPhoneGoalResult] = useState<Data | null>(null);
   const [preparingDeviceWork, setPreparingDeviceWork] = useState(false);
   const [discoveryAck, setDiscoveryAck] = useState(false), [advertise, setAdvertise] = useState(false), [discoveryPeer, setDiscoveryPeer] = useState('');
   const [desktopOpen, setDesktopOpen] = useState(false), [query, setQuery] = useState('');
@@ -104,7 +106,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const refresh = () => { void invoke('devices.snapshot'); };
   const closeReview = () => {
     const old = handle.current; handle.current = ''; scope.current.invalidate(document.visibilityState === 'visible');
-    setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
+    setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
     if (old) void run('devices.discard', { viewHandle: old }).catch(() => {});
   };
   const selectPeer = (next: string) => {
@@ -116,11 +118,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     selectedPeer.current = next;
     setPeerId(next);
   };
-  const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
+  const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
     setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation('');
-    setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
+    setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
   };
   useEffect(() => { if (document.visibilityState === 'visible') { try { acceptSnapshot(data); } catch { /* A summary is not a native device snapshot. */ } } }, [data]);
@@ -207,6 +209,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const timer = window.setTimeout(() => tickClock(value => value + 1), Math.min(2_147_483_647, Math.max(1, nextExpiry - Date.now())));
     return () => window.clearTimeout(timer);
   }, [nextExpiry, clockRevision]);
+  const windowsObservation = windowsObservationCompatibility(peer, now);
   const capabilityCaveat = !Number.isSafeInteger(validUntil) || validUntil <= 0 ? '尚未核实有效期限' : validUntil <= now ? '上次读取已过期' : '';
   const phonePeer = /android|phone/i.test(peer?.platform || '') || phoneCapabilities.some(item => String(item.id).startsWith('phone.'));
   const desktopPeer = desktopScopes(peer || {}).length > 0 || /windows/i.test(peer?.platform || '') || rows(peer?.capabilitySnapshot?.capabilities).some(item => String(item.id).startsWith('desktop.'));
@@ -242,6 +245,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     void invoke(stop ? 'devices.stopHistory' : 'devices.queryHistory', { viewHandle: original.viewHandle, ...(stop ? { acknowledged: true } : {}) }, value => {
       const actual = deviceHistoryReceipt(value, original); setHistoryReceipt(actual.receipt); setHistoryStopSubmitted(actual.stopSubmitted); setAck(false);
     });
+  };
+  const readPhoneGoal = () => {
+    const original = review; if (original?.kind !== 'history' || original.view.phoneGoalResult !== true || busy) return;
+    setPhoneGoalResult(null);
+    void invoke('devices.queryPhoneGoalResult', { viewHandle: original.viewHandle }, value => setPhoneGoalResult(devicePhoneGoalResult(value, original)));
   };
   const openRecovery = (original: Data, providing: boolean) => { setInviteId(original.inviteId); setHost(''); setPort(''); setAddress(''); if (providing) void invoke('devices.recoveryAddresses', {}, value => { setRecoveryAddresses(strings(value.addresses)); setForm('recoveryProvide'); }); else setForm('recoveryRead'); };
   const originalView = review?.view || {}, exactGrant = originalView.grantReview;
@@ -315,7 +323,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                   <Button variant="ghost" disabled={busy} onClick={() => { void invoke('devices.readTask', { taskId: task.id }, value => { const actual = deviceTaskDetails(value, task.id); setTaskDetails(old => ({ ...old, [task.id]: actual })); }); }}>{details ? '刷新原设备操作记录' : '读取原设备操作记录'}</Button>
                   {details && <>
                     {!links.length && <p>{peerId ? '本次读取中没有这台设备的关联操作。' : '本次读取中没有关联的设备操作。'}</p>}
-                    {links.map(link => <div className="pw-device-history-entry" key={link.operationId}><p>设备 {link.targetDeviceId} · 原操作 {link.operationId}</p><p>{link.terminalReceipt?.terminal === true && link.terminalReceipt?.stopped === true && link.terminalReceipt?.hasUnresolved === false ? '执行端已有结束回执，业务成果仍待核对。' : String(link.holdState || '').includes('unknown') ? '执行效果仍未确认，原占用次数保留。' : link.childBinding ? '执行端已接受，尚未核对最终结果。' : '已保留这次原操作的关联记录。'}</p><Button variant="secondary" disabled={busy} onClick={() => openHistory(task.id, link)}>查看这次原操作回执</Button></div>)}
+                    {links.map(link => <div className="pw-device-history-entry" key={link.operationId}><p>设备 {link.targetDeviceId} · 原操作 {link.operationId}</p><p>{link.terminalReceipt?.terminal === true && link.terminalReceipt?.stopped === true && link.terminalReceipt?.hasUnresolved === false ? '执行端已有结束回执，业务成果仍待核对。' : String(link.holdState || '').includes('unknown') ? '执行效果仍未确认，原占用次数保留。' : link.childBinding ? '执行端已接受，尚未核对最终结果。' : '已保留这次原操作的关联记录。'}</p><Button variant="secondary" disabled={busy} onClick={() => openHistory(task.id, link)}>查看原派发记录</Button></div>)}
                     {details.history.hasMore === true && <p>本次仅核对了此任务最近 24 项设备操作。</p>}
                   </>}
                 </AccordionItem></Accordion>}
@@ -458,6 +466,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               : peer.connection?.state === 'DEGRADED' ? <p>上次通道不稳定。打开本机记录不需要重新配对；读取对端最新结果需重新核对。</p>
               : !deviceChannelWasConnected(peer) ? <p>未接通不等于工作停止。先查看原记录，需要对端时再核对连接。</p>
               : <p>当时通道已接通；画面、输入和本次执行范围另行核对。</p>}
+            {!retired(peer) && windowsObservation && <p className="pw-field-hint">{windowsObservation}</p>}
             {!retired(peer) && <><dl className="pw-device-scope-directions">
               <div><dt>对方给本机</dt><dd>{received?.text}</dd></div>
               <div><dt>本机给对方</dt><dd>{given?.text}</dd></div>
@@ -577,7 +586,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       <p className="pw-source-copy">本机完整指纹：<bdi>{fingerprint(local.certificateFingerprint)}</bdi></p>
       <Button variant="secondary" onClick={() => setInvitation('')}>清除显示，回到配对进度</Button>
     </div></SettingsDialog>
-    <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '用本机模型处理原目标' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? '原设备操作回执' : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
+    <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '用本机模型处理原目标' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? (originalView.phoneGoalResult === true ? '这次手机目标与派发' : '原设备操作回执') : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       {review && <div className="pw-device-review">
         {error && <p role="alert">{error}</p>}
         {['pair', 'grant'].includes(review.kind) && !exactGrant ? <GrantSelection key={review.viewHandle} review={review} busy={busy} confirm={args => { void invoke('devices.reviewGrant', args, acceptReview); }} /> : <>
@@ -588,10 +597,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           {review.kind === 'relay' && <><p>{originalView.serviceBase} · 至 {time(originalView.expiresAt)}</p><p>只在内存中使用这份临时租约；不产生设备权限，双端身份仍要核对。</p><p>原邀请设备 {originalView.inviterDeviceId}</p></>}
           {review.kind === 'abandon' && <><p>只放弃本机这次待配对记录，对端可能已经保存配对。这里不会代替对端撤销。</p><p className="pw-source-copy">原设备指纹：{fingerprint(originalView.inviterFingerprint)}</p></>}
           {review.kind === 'recovery' && <><p>{originalView.kind === 'relay' ? originalView.serviceBase : `${originalView.host} · ${originalView.port}`}</p><p>只读入口截至 {time(originalView.expiresAt)}，关闭此窗口将关闭入口，不延长旧授权。</p><p className="pw-source-copy">本机指纹 {fingerprint(originalView.localFingerprint)}<br />原设备指纹 {fingerprint(originalView.peerFingerprint)}</p></>}
-          {review.kind === 'result' && <><p className="pw-source-copy">{originalView.summary || '执行已结束，请核对原成果。'}</p><Accordion><AccordionItem id="evidence" title="原成果依据"><pre className="pw-source-copy">{JSON.stringify(originalView.evidence || {}, null, 2)}</pre></AccordionItem></Accordion><p>只保存这次执行的成果核对，不重新执行。</p></>}
+          {review.kind === 'result' && <><p className="pw-source-copy">{originalView.summary || '执行已结束，请核对原成果。'}</p><Accordion><AccordionItem id="evidence" title="原成果依据"><pre className="pw-source-copy">{JSON.stringify(originalView.evidence || {}, null, 2)}</pre></AccordionItem></Accordion><p>确认会保存这次核对。对于直接委派的手机目标，原发起设备可在已有读取权限内查看已确认的摘要；不会重新执行或新增权限。</p></>}
           {review.kind === 'approval' && <><p>{originalView.message || originalView.tool}</p><ResourceScope resource={originalView.resourceBinding || {}} /><Accordion><AccordionItem id="arguments" title="这次操作的准确参数"><pre className="pw-source-copy">{JSON.stringify(originalView.arguments || {}, null, 2)}</pre></AccordionItem></Accordion><p>只决定这个原运行的准确参数，不扩大设备授权。</p></>}
           {review.kind === 'resume' && <><p>原任务 {originalView.taskId} · 原执行 {originalView.runId}</p><p>请求设备 {originalView.callerDeviceId} · 请求于 {time(originalView.requestedAt)}</p><p>本次只决定已暂停原执行的恢复请求，原授权、累计预算、期限与来源仍由原生核对。</p>{originalView.canApprove !== true && <p role="alert">这次请求已失效或原执行暂不可继续；可以拒绝后由对方重新读取。</p>}</>}
-          {review.kind === 'history' && <><p>执行设备 {originalView.targetDeviceId}</p><p>原操作 {originalView.operationId}</p><ResourceScope resource={originalView.resourceBinding} /><p role="status">{deviceHistoryLabel(historyReceipt)}</p>{historyReceipt?.operationReceipt?.summary && <p className="pw-source-copy">{historyReceipt.operationReceipt.summary}</p>}<p>查询只读取原操作；未知效果保留原占用次数。请求停止后仍需核对回执。</p>{historyReceipt && <Accordion><AccordionItem id="original-receipt" title="原操作回执详情"><pre className="pw-source-copy">{JSON.stringify(historyReceipt, null, 2)}</pre></AccordionItem></Accordion>}<Button disabled={busy} onClick={() => queryHistory()}>查询原操作回执</Button>{!historyStopSubmitted ? <><CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对上方原设备、原操作与范围，要求停止这次操作</CheckboxField><Button variant="secondary" disabled={busy || !ack} onClick={() => queryHistory(true)}>请求停止这次原操作</Button></> : <p>本窗口已提交过停止请求。继续查询原回执核对结果。</p>}</>}
+          {review.kind === 'history' && originalView.phoneGoalResult === true && <section aria-label="同一手机目标的实际结果">
+            <h3>对方手机的目标结果</h3><p>派发回执只说明请求进展。这里单独向原手机读取同一目标、同一次执行的结果，不会重新派发。</p>
+            <Button variant="secondary" disabled={busy || !supported('devices.queryPhoneGoalResult')} onClick={readPhoneGoal}>{phoneGoalResult ? '重读原目标结果' : '读取原目标结果'}</Button>
+            {phoneGoalResult && <div role="status"><p>对端报告：{({ succeeded: '已完成', failed: '未完成', cancelled: '已取消', running: '执行中', paused: '已暂停', accepted: '已接收', waiting_approval: '等待确认', waiting_resource: '等待资源', waiting_dependency: '等待前置工作', queued_local: '已排队', submitting: '提交中', pause_requested: '正在暂停', cancel_requested: '正在取消', interrupted: '已中断', needs_reconcile: '仍待核对' } as Record<string,string>)[phoneGoalResult.state] || '状态待核对'} · {time(phoneGoalResult.updatedAt)}</p>
+              {phoneGoalResult.review === 'confirmed' ? <><p>对方机主已核对{phoneGoalResult.truncated ? ' · 仅显示摘要前 2,048 字' : ''}</p>
+                {phoneGoalResult.summary.trim() ? <p className="pw-source-copy" dir="auto">{phoneGoalResult.summary}</p> : <p>没有可返回的文字摘要，不能在这里核对原结果。这里未读取文件或其他成果依据。</p>}</>
+                : <p>{phoneGoalResult.review === 'pending' ? '结果在原手机等机主核对，暂不显示内容。' : phoneGoalResult.review === 'not_confirmed' ? '原手机没有确认这份成果。' : phoneGoalResult.review === 'none' ? '原手机还没有这次执行已核对的成果记录。' : '原手机只返回了执行进展，没有可核对的原结果摘要。'}</p>}
+            </div>}
+          </section>}
+          {review.kind === 'history' && <>{originalView.phoneGoalResult === true && <h3>原派发回执</h3>}<p>执行设备 {originalView.targetDeviceId}</p><p>原操作 {originalView.operationId}</p><ResourceScope resource={originalView.resourceBinding} /><p role="status">{deviceHistoryLabel(historyReceipt)}</p><p>查询只读取原操作；未知效果保留原占用次数。请求停止后仍需核对回执。</p>{historyReceipt && <Accordion><AccordionItem id="original-receipt" title="原操作回执详情"><pre className="pw-source-copy">{JSON.stringify(historyReceipt, null, 2)}</pre></AccordionItem></Accordion>}<Button disabled={busy} onClick={() => queryHistory()}>查询原操作回执</Button>{!historyStopSubmitted ? <><CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对上方原设备、原操作与范围，要求停止这次操作</CheckboxField><Button variant="secondary" disabled={busy || !ack} onClick={() => queryHistory(true)}>请求停止这次原操作</Button></> : <p>本窗口已提交过停止请求。继续查询原回执核对结果。</p>}</>}
           {!['recovery', 'history'].includes(review.kind) && <CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>{review.kind === 'pair' ? '我同意准确权限，并已比较两台设备显示的两个完整指纹，均一致' : '我已核对原对象、范围与影响，确认这一次操作'}</CheckboxField>}
           <div className="pw-form-actions"><Button variant="secondary" onClick={closeReview}>{review.kind === 'recovery' ? '关闭只读入口' : '返回核对'}</Button>{!['recovery', 'history'].includes(review.kind) && <Button disabled={busy || !ack || review.kind === 'resume' && originalView.canApprove !== true || review.kind === 'goal' && (originalView.source === 'local_account' || !originalView.model)} onClick={() => confirmReview(review.kind === 'result' ? { completed: true } : ['approval', 'resume'].includes(review.kind) ? { approved: true } : {})}>{review.kind === 'result' ? '确认成果并结束' : review.kind === 'approval' ? '允许这次原操作' : review.kind === 'resume' ? '同意继续原执行' : review.kind === 'pair' ? '同意权限并确认双端指纹' : '确认本次操作'}</Button>}{review.kind === 'result' && <Button variant="secondary" disabled={busy || !ack} onClick={() => confirmReview({ completed: false })}>结束但不确认完成</Button>}{['approval', 'resume'].includes(review.kind) && <Button variant="secondary" disabled={busy || !ack} onClick={() => confirmReview({ approved: false })}>{review.kind === 'resume' ? '拒绝这次恢复请求' : '拒绝这次操作'}</Button>}</div>
         </>}

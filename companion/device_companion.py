@@ -161,7 +161,7 @@ class CompanionDeviceReceiver:
         self.trust.create_schema()
         self.pairing = PairingCoordinator(self.trust, local_identity.device_id, local_identity.instance_id)
         self.budget = NativeOperationBudget(manager)
-        self.history = CompanionHistory(manager)
+        self.history = CompanionHistory(manager, retire_desktop_input=lambda op, ref, grant: self.desktop.retire_observation_input(op, ref, grant))
         self.management = OperationManagement(manager)
         self._exports = {}
         self._export_lock = threading.RLock()
@@ -211,6 +211,10 @@ class CompanionDeviceReceiver:
 
     def describe(self):
         desktop = self.desktop.describe()
+        # desktop-v2 already means the existing desktop tool contract. Do not break
+        # paired grants or advertise readback merely because a Driver/worker is online.
+        if self.manager.platform.name == "windows" and callable(getattr(self.history, "retire_desktop_input", None)):
+            desktop["originalObservationReadbackProfile"] = "windows-retained-observation-v1"
         commands = any(worker.get("id") == "command" and worker.get("available") is True for item in self.manager.list_environments()["environments"] for worker in item["workers"] if item["kind"] == "local")
         workspace_capabilities = []
         for key, environment in self.manager.environments.items():

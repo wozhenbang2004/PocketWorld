@@ -18,6 +18,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
     private val reviews = linkedMapOf<String, Review>()
     private val environments = mutableMapOf<String, JSONObject>()
     private val probes = mutableMapOf<String, Pair<String, JSONObject>>()
+    private val downloads = PocketWebSshDownloads()
     private val screens = mutableMapOf<String, SshTerminalScreen>()
     private var doctor: SshOwnerWorkflows.DoctorPage? = null
     private data class Baseline(val window: String, val task: String, val owner: Pair<Triple<Long, Int, Long>, Long>, var snapshot: JSONObject? = null, var busy: Boolean = false)
@@ -31,10 +32,10 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
             "remote.reconnect", "remote.reconcileOperation", "remote.getJob", "remote.readSessionRecovery", "remote.cancelJob",
             "remote.reviewTask", "remote.confirmTask", "remote.project.open", "remote.project.review", "remote.project.confirm", "remote.project.close", "remote.inputs.open", "ssh.saveProfile", "ssh.removeProfile", "ssh.probeHostKey", "ssh.approveHostKey",
             "ssh.forgetHostKey", "ssh.listFiles", "ssh.readFile", "ssh.inspectFile", "ssh.getOperation", "ssh.reviewOperation", "ssh.confirmOperation",
-            "ssh.readPty", "ssh.writePty", "ssh.resizePty", "ssh.closePty", "ssh.startTask", "ssh.doctor", "ssh.closeDoctor"
+            "ssh.inspectDownload", "ssh.confirmDownload", "ssh.dismissDownload", "ssh.readPty", "ssh.writePty", "ssh.resizePty", "ssh.closePty", "ssh.startTask", "ssh.doctor", "ssh.closeDoctor"
         )
     }
-    fun clear() { generation++; reviews.clear(); environments.clear(); probes.clear(); screens.clear(); doctor?.close(); doctor = null; closeBaseline() }
+    fun clear() { generation++; downloads.clear(); reviews.clear(); environments.clear(); probes.clear(); screens.clear(); doctor?.close(); doctor = null; closeBaseline() }
     private fun closeBaseline() { val original = baseline; baseline = null; original?.let { controller.leaveRemoteTask(it.window) } }
     private fun fields(args: JSONObject, vararg allowed: String) { require(args.keys().asSequence().all { it in allowed }) { "原连接操作包含不适用的字段" } }
     private fun string(args: JSONObject, key: String, max: Int = 128, empty: Boolean = false): String {
@@ -68,7 +69,23 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
             if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) done(result, error)
             else done(null, "原连接页面已关闭；请查询原任务或当前连接，不自动重做这项操作")
         }
+        var listing: Long? = null; var file: PocketWebSshDownloads.Selection? = null; var pickup: PocketWebSshDownloads.Reviewed? = null
         when (command) {
+            "inspectDownload" -> {
+                fields(args, "profileId", "_profileBinding", "path"); currentProfile(domain, args); string(args, "path", 1024)
+                check(controller.state.feature("ssh").opt("binaryFileTransfers") == true) { "私人文件保存宿主未就绪，未读取远端文件" }
+                file = downloads.begin(window, args); command = "inspectFile"
+            }
+            "confirmDownload" -> {
+                fields(args, "reviewHandle")
+                val reviewed = downloads.take(window, string(args, "reviewHandle"))
+                input = reviewed.input(); currentProfile(domain, input)
+                check(controller.state.feature("ssh").opt("binaryFileTransfers") == true) { "私人文件保存宿主未就绪，未派发传输" }
+                command = "downloadFile"; pickup = reviewed
+            }
+            "dismissDownload" -> {
+                fields(args, "reviewHandle"); downloads.dismiss(string(args, "reviewHandle")); done(JSONObject().put("closed", true), null); return
+            }
             "saveProfile" -> {
                 if (domain == "remote") fields(args, "id", "expectedBindingHash", "name", "baseUrl", "token", "clearToken")
                 else fields(args, "id", "expectedBindingHash", "name", "host", "port", "username", "workspace", "authType", "password", "privateKey", "passphrase")
@@ -80,7 +97,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
             "probeWorker" -> { fields(args, "profileId", "_profileBinding", "environmentId", "environmentBinding", "worker", "model", "modeId", "effort"); currentProfile(domain, args) }
             "approveHostKey" -> { fields(args, "profileId", "expectedBindingHash", "probeId", "fingerprint"); currentProfile(domain, args, "expectedBindingHash") }
             "forgetHostKey" -> { fields(args, "profileId", "expectedBindingHash", "fingerprint"); currentProfile(domain, args, "expectedBindingHash") }
-            "listFiles", "readFile", "inspectFile" -> { fields(args, "profileId", "_profileBinding", "path"); currentProfile(domain, args); string(args, "path", 1024, command == "listFiles") }
+            "listFiles", "readFile", "inspectFile" -> { fields(args, "profileId", "_profileBinding", "path"); currentProfile(domain, args); string(args, "path", 1024, command == "listFiles"); if (domain == "ssh" && command == "listFiles") listing = downloads.clear() }
             "getOperation" -> { fields(args, "operationId"); string(args, "operationId") }
             "reconcileOperation" -> { fields(args, "profileId", "operationId"); string(args, "profileId"); string(args, "operationId") }
             "getJob", "readSessionRecovery", "cancelJob" -> {
@@ -161,7 +178,13 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
         }) { actual, error ->
             if (error != null || actual == null) deliver(null, error ?: "原操作未返回结果")
             else try {
+                var shown = actual
                 if (generation == originalGeneration && window == controller.webWindowTicket()) {
+                    if (domain == "ssh" && controller.webPrivateOwnerVisible()) {
+                        listing?.let { downloads.listed(it, window, capturedInput, actual) }
+                        file?.let { currentProfile("ssh", capturedInput); shown = downloads.observe(it, actual) }
+                        pickup?.let { shown = downloads.saved(it, actual) }
+                    }
                     if (action == "remote.environments") environments[input.getString("profileId")] = JSONObject(actual.toString())
                     if (action == "remote.probeWorker") probes[input.getString("profileId")] = Pair(input.toString(), JSONObject(actual.toString()))
                     if (domain == "ssh" && capturedCommand in setOf("readFile", "writeFile") && actual.optString("status") == "completed") {
@@ -174,7 +197,7 @@ internal class PocketWebConnections(private val controller: PocketWorldControlle
                         actual.put("frame", screen.view(80, 24)); actual.remove("dataBase64")
                     }
                 }
-                deliver(PocketWebState.publicValue(actual) as JSONObject, null)
+                deliver(PocketWebState.publicValue(shown) as JSONObject, null)
             } catch (failure: Exception) { deliver(null, failure.message ?: "原操作回执无法核对") }
         }
     }

@@ -13,12 +13,12 @@ function ScopeFacts({ value, peers, human = false }: { value: Data; peers: Data[
   const declarations = Array.isArray(value.toolDeclarations) ? value.toolDeclarations : Object.entries(value.toolDeclarations || {}).map(([toolName, effect]) => ({ toolName, effect }));
   const writes = declarations.filter(row => row.effect === 'write').length, external = declarations.filter(row => row.effect === 'external').length;
   const target = resource.kind === 'desktop' ? `电脑屏幕 ${resource.displayId}${resource.windowId ? ' · 指定窗口 ' + resource.windowId : ''}`
-    : resource.screenMode ? `${resource.screenMode === 'background' ? '独立后台屏' : '手机主屏'} · ${(resource.packageNames || []).join('、') || '按原授权应用范围'}`
-    : resource.projectId ? `项目 ${resource.projectId}${resource.checkoutId ? ' · 工作副本 ' + resource.checkoutId : ''}` : '对端明确授权的工作区';
+    : resource.screenMode === 'main_screen' || resource.screenMode === 'background' ? `${resource.screenMode === 'background' ? '独立后台屏' : '手机主屏'} · ${(resource.packageNames || []).join('、') || '按原授权应用范围'}`
+    : resource.projectId ? `项目 ${resource.projectId}${resource.checkoutId ? ' · 工作副本 ' + resource.checkoutId : ''}` : resource.screenMode === 'capabilities' ? '仅对方授权的能力范围，不含手机屏幕' : '对端明确授权的资源';
   return <>
     <dl className="pw-facts">
       <div><dt>接收设备</dt><dd>{deviceName(value.targetDeviceId || '', peers)}</dd></div>
-      <div><dt>使用方式</dt><dd>{routeTitle(value)}</dd></div>
+      <div><dt>使用方式</dt><dd>{routeTitle(value, human)}</dd></div>
       <div><dt>作用范围</dt><dd>{target}</dd></div>
       <div><dt>操作影响</dt><dd>{human ? '你逐次进行全屏输入；不调用模型，不继承 AI 自动操作权限' : value.kind === 'goal' ? '对端模型在原授权工具范围内处理目标' : writes || external ? `含 ${writes} 项写入操作、${external} 项外部影响能力，执行时仍受原工具审批约束` : declarations.length && declarations.every(row => row.effect === 'read') ? '当前列出的工具仅报告读取能力' : '尚未取得完整操作影响，不能推定只读'}</dd></div>
       {value.toolBudget !== undefined && <div><dt>累计份额</dt><dd>工具 {value.toolBudget} 次 · 模型 {value.modelBudget} 次</dd></div>}
@@ -153,7 +153,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
               const draft = drafts[option.optionId]; if (!draft) return null;
               const update = (next: RouteDraft) => { dismissReview(); setDrafts(old => ({ ...(view.humanInputOnly && next.selected ? Object.fromEntries(Object.entries(old).map(([id, value]) => [id, { ...value, selected: false }])) : old), [option.optionId]: next })); };
               const shareCount = Object.values(draft.shares).filter(row => row.selected).length;
-              return <AccordionItem key={option.optionId} id={option.optionId} title={routeTitle(option)} description={draft.selected ? '已选择 · 尚未执行' : '未选择'}>
+              return <AccordionItem key={option.optionId} id={option.optionId} title={routeTitle(option, view.humanInputOnly)} description={draft.selected ? '已选择 · 尚未执行' : '未选择'}>
                 <CheckboxField isSelected={draft.selected} isDisabled={busy} onChange={selected => update({ ...draft, selected })}>将这个准确范围用于本任务</CheckboxField>
                 <ScopeFacts value={option} peers={peers} human={view.humanInputOnly} />
                 {draft.selected && <>

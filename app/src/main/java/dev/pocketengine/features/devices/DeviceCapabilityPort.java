@@ -78,7 +78,16 @@ public final class DeviceCapabilityPort implements CapabilityPort {
                 if(exact.length()==0)continue;properties.put("toolName",string().put("enum",names)).put("arguments",object()).put("observationRef",object()).put("toolBudget",integer(1,400));JSONObject definition=tool(function,"目标只执行明确工具且零模型请求。参数anyOf来自固定receiver实际parser，不是可改权限。"+description+"\n"+contractNotes,properties,"routeId","targetDeviceId","toolName","arguments","toolBudget");definition.getJSONObject("function").getJSONObject("parameters").put("anyOf",exact);result.put(definition);
             }
             else if(function.equals("device_delegate_goal")){JSONObject selected=string();if(goal!=null)selected.put("enum",new JSONArray().put(goal));properties.put("goal",selected).put("toolBudget",integer(0,400)).put("modelBudget",integer(1,1000));result.put(tool(function,"交给目标原Agent，预算先原SQL预留。仅分享owner已选目标，材料与私记忆为空；接受不等于成功。"+description,properties,"routeId","targetDeviceId","goal","toolBudget","modelBudget"));}
-            else{properties.put("operationId",string());result.put(tool(function,"只读原操作，不重提或再分配预算。"+description,properties,"routeId","targetDeviceId","operationId"));}
+            else{
+                properties.put("operationId",string());
+                for(var route:routes.values())if(route.supportsFunction(function)
+                        &&"desktop".equals(route.reservationApproval().resourceBinding().optString("kind"))){
+                    properties.put("includeOriginalImage",new JSONObject().put("type","boolean")
+                            .put("description","仅用于原 Windows 桌面观察。默认只查状态和可用结构；需要当时的原图时设 true，不再截图，也不能用于点按。"));
+                    break;
+                }
+                result.put(tool(function,"只读原操作，不重提或再分配预算。"+description,properties,"routeId","targetDeviceId","operationId"));
+            }
         }return result;
     }
     private static JSONObject object() throws Exception { return new JSONObject().put("type", "object"); }
@@ -118,19 +127,39 @@ public final class DeviceCapabilityPort implements CapabilityPort {
                 .put("code","device_original_state_unknown").put("requiresReconciliation",true).put("nextAction","device_operation_get").put("retrySubmitted",false)
                 .put("message","原设备操作仍需核对，或原记录已不可确认；保留原ID，不换ID重提。").put("businessVerified",false);
         JSONObject body=typed.getJSONObject("payload"),actual=body.optJSONObject("receipt");if("awaiting_import_review".equals(body.optString("phase")))return new JSONObject().put("ok",false).put("code","needs_user").put("message","项目包已暂存，尚未导入；请打开原任务的设备协作范围，核对原包清单和新目录后确认，再继续原任务。").put("deviceReceipt",typed).put("operationId",typed.get("operationId")).put("businessVerified",false);boolean ok=typed.optBoolean("accepted")&&"reported".equals(typed.optString("effectState"))&&(typed.optString("status").equals("succeeded")||actual!=null&&Boolean.TRUE.equals(actual.opt("ok"))||Boolean.TRUE.equals(body.opt("ok")));
-        return new JSONObject().put("ok",ok).put("accepted",typed.getBoolean("accepted")).put("operationId",typed.get("operationId")).put("status",typed.getString("status")).put("code",ok?"device_operation_reported":typed.optBoolean("accepted")?"device_request_accepted_waiting_result":"device_original_not_found").put("message",ok?"已取得原目标准确操作回执；不等于业务目标已验证":"原请求接受/执行状态请查原ID，不换ID重提").put("deviceReceipt",typed).put("businessVerified",false);
+        String message=ok?"已取得原目标准确操作回执；不等于业务目标已验证":"原请求接受/执行状态请查原ID，不换ID重提";
+        if(body.optBoolean("historicalReadOnly")&&body.has("originalObservationRead"))message=body.optBoolean("originalObservationRead")
+                ?"已找回 Windows 当时的观察记录。它不是当前屏幕，不能用于点按；截图描述不等于实际附图。"
+                :"只查到了原 Windows 操作状态，无法取回原来的窗口结构或截图；没有重新观察。";
+        return new JSONObject().put("ok",ok).put("accepted",typed.getBoolean("accepted")).put("operationId",typed.get("operationId")).put("status",typed.getString("status")).put("code",ok?"device_operation_reported":typed.optBoolean("accepted")?"device_request_accepted_waiting_result":"device_original_not_found").put("message",message).put("deviceReceipt",typed).put("businessVerified",false);
     }
     private JSONObject invoke(String name, JSONObject input, RunControl control) throws Exception {
         JSONObject args = new JSONObject(input.toString()); String hostOperation = args.optString("_hostOperationId"); args.remove("_hostOperationId");
         validate(name, args); NativeRoute route = route(args, control);
+        visual.discardUnconsumedReadback();
         if (name.equals("device_operation_get")) {
             String operation = args.getString("operationId");
             JSONObject originalAllocation=devices.childAllocationForOperation(taskId,operation);JSONObject originalWire=originalAllocation.getJSONObject("boundWire");
             if(!route.targetDeviceId().equals(originalWire.getString("targetDeviceId"))||!DeviceProtocol.resourceEquals(route.reservationApproval().resourceBinding(),originalWire.getJSONObject("resourceBinding")))throw new SecurityException("只准查本原父操作和已选准确资源，不读取别的任务结果");
+            boolean desktopRead = "ToolInvocation".equals(originalWire.optString("messageType"))
+                    && "desktop.observe".equals(originalWire.getJSONObject("arguments").optString("toolName"));
+            if (args.has("includeOriginalImage")&&!desktopRead)throw new SecurityException("原图选项只适用于原 Windows 观察");
+            if (desktopRead) {
+                // Never let a receipt query or a missing ACK arm the original input reference.
+                semantic.retireOriginal(route.routeId(), operation);
+                visual.beginObservationReadback(route.routeId(), operation);
+            }
             DeviceTaskEnvelope query = route.request("operation.get", new JSONObject().put("operationId", operation), operation, 0, 0, null, original);
             try {
                 Reply actual = route.exchange(query, original); JSONObject result = reply(route, actual,query);
-                if (Boolean.TRUE.equals(result.opt("accepted"))){recordAccepted(route, actual, result, operation, result.optString("argumentsDigest"));captureSemantic(route,operation,result);captureImage(route,actual,operation,name,result);receiveFile(route,actual,operation,result);sendFile(route,actual,operation,result);}
+                if (Boolean.TRUE.equals(result.opt("accepted"))){if(desktopRead) restrictObservationReadback(result,operation);
+                    recordAccepted(route, actual, result, operation, result.optString("argumentsDigest"));
+                    if(!desktopRead)captureSemantic(route,operation,result);
+                    if(!desktopRead||args.optBoolean("includeOriginalImage"))captureImage(route,actual,operation,name,result);
+                    else if(result.getJSONObject("payload").has("capture"))result.getJSONObject("payload").put("nativeImageInput",
+                            new JSONObject().put("requested",false).put("imageProvidedToModel",false).put("reason","original_descriptor_only"));
+                    receiveFile(route,actual,operation,result);sendFile(route,actual,operation,result);
+                }
                 JSONObject payload=result.getJSONObject("payload");
                 if (Boolean.TRUE.equals(payload.opt("terminal")) && Boolean.TRUE.equals(payload.opt("stopped"))&&"GoalSubmission".equals(originalWire.optString("messageType"))&&result.has("localTaskId")&&result.has("runId")) {
                     JSONObject allocation = devices.childAllocationForOperation(taskId, operation);
@@ -220,19 +249,48 @@ public final class DeviceCapabilityPort implements CapabilityPort {
                 .put("operationId",operation).put("nextAction","device_operation_get").put("retrySubmitted",false).put("reason","original_file_receive_unavailable"));
         }
     }
+    /** Ignore old generic job bodies: their nested window/tree is not a proven observation. */
+    private static void restrictObservationReadback(JSONObject receipt,String operation)throws Exception{
+        JSONObject body=receipt.getJSONObject("payload"),settled=body.optJSONObject("executionSettlement");
+        if("succeeded".equals(receipt.optString("status")) && "completed".equals(body.optString("status"))
+                && Boolean.TRUE.equals(body.opt("originalObservationRead")) && Boolean.TRUE.equals(body.opt("historicalReadOnly"))
+                && Boolean.FALSE.equals(body.opt("capturedAgain")) && Boolean.FALSE.equals(body.opt("taskControl"))
+                && Boolean.FALSE.equals(body.opt("actionReady")) && operation.equals(body.optString("readOperationId"))
+                && receipt.has("jobId") && receipt.getString("jobId").equals(body.optString("jobId"))
+                && settled!=null && operation.equals(settled.optString("operationId"))
+                && "synchronous_desktop_observation".equals(settled.optString("proofScope"))
+                && Boolean.TRUE.equals(settled.opt("adapterFinished")) && Boolean.TRUE.equals(settled.opt("terminalVerified"))
+                && Boolean.TRUE.equals(settled.opt("noFurtherDispatchForOperation")) && Boolean.FALSE.equals(settled.opt("inputDispatched")))return;
+        // The typed operation status remains intact even when no verified original contents survive.
+        JSONObject statusOnly=new JSONObject().put("originalObservationRead",false).put("historicalReadOnly",true)
+                .put("capturedAgain",false).put("taskControl",false).put("actionReady",false).put("noAutomaticReplay",true)
+                .put("readbackReason","original_observation_unavailable").put("nativeStatusOnlyProjection",true);
+        if(Boolean.TRUE.equals(body.opt("archived"))&&java.util.Set.of("queued","running","completed","failed","cancelled","interrupted","blocked","unknown").contains(body.optString("lastKnownStatus")))
+            statusOnly.put("archived",true).put("lastKnownStatus",body.getString("lastKnownStatus"));
+        receipt.put("payload",statusOnly);
+    }
     private void captureImage(NativeRoute route,Reply actual,String operation,String function,JSONObject receipt)throws Exception{
         if(!visual.installed())return;
         // Image enrichment is optional. An already authenticated accepted/terminal receipt must
         // remain usable even if its image is absent, malformed, stale or cannot be downloaded.
-        JSONObject payload=receipt.getJSONObject("payload");
+        JSONObject payload=receipt.getJSONObject("payload");boolean readback=false;
         try{
             JSONObject wire=devices.childAllocationForOperation(taskId,operation).getJSONObject("boundWire");
             if(!"ToolInvocation".equals(wire.optString("messageType")))return;
             String tool=wire.getJSONObject("arguments").getString("toolName");
+            readback=function.equals("device_operation_get")&&tool.equals("desktop.observe");
+            if(readback){
+                if(!Boolean.TRUE.equals(payload.opt("originalObservationRead")))return;
+                if(!payload.has("capture")){
+                    payload.put("nativeImageInput",new JSONObject().put("requested",true).put("available",false)
+                            .put("imageProvidedToModel",false).put("reason","original_observation_has_no_screenshot"));
+                    return;
+                }
+            }
             JSONObject observation=tool.equals("desktop.observe")?payload:tool.equals("desktop.act")?payload.optJSONObject("desktopReceipt")==null?null:payload.getJSONObject("desktopReceipt").optJSONObject("afterObservation"):tool.equals("phone_observe")?payload.optJSONObject("receipt"):null;
             if(observation==null||!observation.has(tool.startsWith("desktop.")?"capture":"imageArtifact"))return;
-            visual.capture(route.routeId(),function,devices.deviceImageEvidence(route.reservationApproval(),original,actual.peer(),operation));
-        }catch(Exception invalid){visual.invalidate(route.routeId());payload.put("nativeImageInput",new JSONObject().put("available",false).put("imageProvidedToModel",false).put("reason","verified_image_unavailable_or_stale"));}
+            visual.capture(route.routeId(),function,devices.deviceImageEvidence(route.reservationApproval(),original,actual.peer(),operation),readback);
+        }catch(Exception invalid){if(!readback)visual.invalidate(route.routeId());payload.put("nativeImageInput",new JSONObject().put("available",false).put("imageProvidedToModel",false).put("reason","verified_image_unavailable_or_stale"));}
     }
     private boolean requiresDesktopImage(NativeRoute route,String tool,JSONObject arguments,JSONObject ref)throws Exception{
         if(tool.equals("desktop.observe"))return arguments==null||!arguments.optBoolean("discovery")&&!"semantic".equals(arguments.optString("observationMode",arguments.has("windowId")?"semantic":"hybrid"));
@@ -248,6 +306,8 @@ public final class DeviceCapabilityPort implements CapabilityPort {
     }
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject args,RunControl control)throws Exception{
         NativeRoute selected=route(args,control);String tool=args.optString("toolName");JSONObject nativeArguments=args.optJSONObject("arguments"),reference=args.optJSONObject("observationRef");if(name.equals("device_operation_get")){JSONObject wire=devices.childAllocationForOperation(taskId,args.getString("operationId")).getJSONObject("boundWire");tool=wire.getJSONObject("arguments").optString("toolName");nativeArguments=wire.getJSONObject("arguments").optJSONObject("arguments");reference=wire.optJSONObject("observationRef");}
+        if(name.equals("device_operation_get")&&tool.equals("desktop.observe")&&!args.optBoolean("includeOriginalImage"))
+            return dev.pocketengine.core.NativeToolObservation.Requirement.NONE;
         boolean needs=requiresDesktopImage(selected,tool,nativeArguments,reference)||tool.equals("phone_observe")&&nativeArguments!=null&&nativeArguments.optBoolean("includeImage");if(needs&&!visual.installed())throw new SecurityException("真实设备视觉接收器未安装");return needs?dev.pocketengine.core.NativeToolObservation.Requirement.IMAGE:dev.pocketengine.core.NativeToolObservation.Requirement.NONE;
     }
     @Override public JSONObject beforeTool(String name,JSONObject args,RunControl control)throws Exception{
