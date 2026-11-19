@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.teams.TeamParentRevisionOffer
 import dev.pocketengine.features.teams.TeamsModule
 import dev.pocketengine.ui.PocketWorldController
 import org.json.JSONObject
@@ -27,12 +28,16 @@ internal fun PocketWorldController.readWebTeamAttention(afterRunId: String, afte
 
 /** A locator only, never an owner decision. Both the original chat and the opened
  * team compare it with current SQL links before returning this version's directory. */
-internal fun PocketWorldController.requireWorkFileReview(source: JSONObject, team: String): JSONObject {
+internal fun PocketWorldController.requireWorkOrigin(source: JSONObject, team: String): JSONObject {
     val link = nativeTokenBudgetHost().tasks.ownerWorkLinkForTeam(team)
     check(link != null && link.opt("readOnly") == true && link.opt("currentRun") == true && link.opt("stopping") == false
         && team == source.optString("teamRunId") && link.opt("teamRunId") == team && link.opt("taskId") == source.opt("parentTaskId")
         && link.opt("runId") == source.opt("parentRunId") && link.opt("epoch") == source.opt("parentEpoch")
         && link.opt("conversationId") == source.opt("conversationId")) { "原父工作、对话或团队已变化，没有打开其他成果" }
+    return link
+}
+internal fun PocketWorldController.requireWorkFileReview(source: JSONObject, team: String): JSONObject {
+    val link = requireWorkOrigin(source,team)
     val received = source.getJSONObject("fileReview")
     val actual = link.optJSONObject("fileReview") ?: error("这版文件不再等主人核对，请返回原工作")
     val keys = setOf("planHash","reviewerTaskId","reviewerRunId","projectId","fileCount")
@@ -48,25 +53,26 @@ internal fun requireWorkFileIndex(index: JSONObject, decision: JSONObject, mark:
 
 /** Read one known team's member decisions, or preflight the owner's explicit file choice.
  * No question body, file, approval or execution is inserted into the conversation. */
-internal fun PocketWorldController.readWebWorkDecisions(parent: String, run: String, epoch: Int, conversation: String, team: String, files: JSONObject?, done: (JSONObject?, String?) -> Unit) {
+internal fun PocketWorldController.readWebWorkDecisions(parent: String, run: String, epoch: Int, conversation: String, team: String, files: JSONObject?, proposalDirectory: Boolean, proposal: JSONObject?, done: (JSONObject?, String?) -> Unit) {
     val window = webWindowTicket()
     fun current() = webPrivateOwnerVisible() && webWindowTicket() == window && state.conversationId == conversation
     check(current()) { "请从发起这件工作的原对话查看" }
     val main = Handler(Looper.getMainLooper())
     runTeamPhoneWork {
         val result = runCatching {
-            fun requireOriginal() {
-                check(current()) { "原对话已经切换" }
-                val link = nativeTokenBudgetHost().tasks.ownerWorkLinkForTeam(team)
-                check(link != null && link.opt("readOnly") == true && link.opt("currentRun") == true && link.opt("stopping") == false
-                    && link.opt("taskId") == parent && link.opt("runId") == run && link.optInt("epoch", -1) == epoch
-                    && link.opt("conversationId") == conversation && link.opt("teamRunId") == team) { "原协作已经变化，请回这件工作核对" }
-            }
+            val origin = JSONObject().put("parentTaskId",parent).put("parentRunId",run).put("parentEpoch",epoch).put("conversationId",conversation).put("teamRunId",team)
+            fun requireOriginal() { check(current()) { "原对话已经切换" }; requireWorkOrigin(origin,team) }
             requireOriginal()
             val module = webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主尚未接入")
-            val page = if (files == null) module.ownerDecisionPage(team) else {
-                val origin = JSONObject().put("parentTaskId",parent).put("parentRunId",run).put("parentEpoch",epoch)
-                    .put("conversationId",conversation).put("teamRunId",team).put("fileReview",files)
+            val page = if (proposalDirectory || proposal != null) {
+                val retained = module.retainedOwnerReading(team)
+                val result = JSONObject().put("runId",team).put("readOnly",true).put("executionAuthorized",false)
+                if (proposal != null) {
+                    module.requireOwnerRevisionTarget(retained,origin,proposal)
+                    result.put("proposal",proposal)
+                } else result.put("proposals",TeamParentRevisionOffer.directory(retained))
+            } else if (files == null) module.ownerDecisionPage(team) else {
+                origin.put("fileReview",files)
                 val marker = requireWorkFileReview(origin,team); val reader = RunControl()
                 try {
                     val frozen = module.readOwnerFrozenFiles(team,reader)

@@ -19,7 +19,7 @@ const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
 const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
   deliveryFields.every(key => draft[key] === (original[key] || ''));
 type Props = { projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
-  onOpenTask: (id: string, checkoutId?: string) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: () => void;
+  onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: () => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
@@ -47,8 +47,9 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
+  const [hostOrigin, setHostOrigin] = useState<Data | null>(null);
   const [requirements, setRequirements] = useState<DeliveryRequirements>(() => deliveryRequirements());
   const [source, setSource] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [submission, setSubmission] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
@@ -177,6 +178,22 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
   const closeFiles = () => { setFilesOpen(false); sourceAttempt.current = ''; setSource(null); };
   const available = rows(view?.checkouts);
+  const origin = hostOrigin?.viewHandle === view?.viewHandle && hostOrigin?.projectId === projectId && hostOrigin?.checkoutId === checkout ? hostOrigin : null;
+  const readOrigin = (open: boolean) => {
+    if (!checkout || !handle.current || open && (!origin?.taskVerified || !onOpenHostOriginal)) return;
+    const viewHandle = handle.current, original = checkout;
+    if (!open) setHostOrigin(null);
+    void invoke(open ? 'projects.development.resolveHostSource' : 'projects.development.hostSource',
+      { viewHandle, checkoutId: original, ...(open ? { evidenceDigest: origin!.evidenceDigest } : {}) }, value => {
+        if (draft.current.checkoutId !== original || handle.current !== viewHandle || value.projectId !== projectId || value.checkoutId !== original)
+          throw new Error('这不是当前副本的原主机来源，请重新核对。');
+        if (open) {
+          if (value.taskVerified !== true || !origin || value.evidenceDigest !== origin.evidenceDigest || value.taskId !== origin.taskId || typeof value.taskId !== 'string' || !value.taskId)
+            throw new Error('未取得同一原委托，没有打开其他任务。');
+          onOpenHostOriginal!(value.taskId);
+        } else setHostOrigin({ ...value, viewHandle });
+      });
+  };
   const copy = (query: boolean) => {
     if (!query) setCopyResult({ unconfirmed: true });
     return invoke(query ? 'projects.development.queryCopy' : 'projects.development.prepare', { viewHandle: handle.current }, value => {
@@ -222,7 +239,14 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
       <SelectField label="要工作的私人副本" value={checkout} isDisabled={disabled} options={[{ id: '', label: available.length ? '选择已有私人副本' : '尚未准备私人副本' },
         ...available.map(row => ({ id: row.checkoutId, label: `${row.name || name} · ${new Date(row.createdAt || 0).toLocaleString()}` })),
         ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
-        onChange={value => { setCheckout(value); setSource(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value }); }} />
+        onChange={value => { setCheckout(value); setSource(null); setHostOrigin(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value }); }} />
+      {available.some(row => row.checkoutId === checkout && row.hostSource === true) && can('projects.development.hostSource') &&
+        <div className="pw-form-actions"><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => readOrigin(false)}>核对导入来源</Button>
+          {origin && <div role="status">{origin.localSourceRecorded ? <p>来自主机冻结版本 {origin.snapshotVersion} · {origin.files} 份文件 · {origin.bytes} 字节。这里只记录导入时的版本，不代表本机文件未改或主机现在在线。</p> :
+            <p>保留了这份旧副本，但缺少可核对的原来源；不会按项目名猜测委托。</p>}
+            {origin.taskVerified && onOpenHostOriginal && can('projects.development.resolveHostSource') && can('tasks.open') ?
+              <Button variant="secondary" disabled={busy || !!review || filesOpen} onClick={() => readOrigin(true)}>打开原主机委托</Button> :
+              origin.localSourceRecorded && !origin.taskVerified ? <p>原私人任务或冻结文件回执目前不能核对。</p> : null}</div>}</div>}
       {available.length === 0 && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
       {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
         {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={onOpenTerminal}>打开副本准备入口</Button></div>}

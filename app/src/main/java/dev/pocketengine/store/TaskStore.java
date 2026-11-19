@@ -2284,7 +2284,9 @@ public final class TaskStore {
                         .put("updatedAt",team.optLong("externalUpdatedAt",team.optLong("updatedAt"))).put("needsAttention",attention)
                         .put("active",!settled).put("readOnly",true).put("cancelRequested",team.optBoolean("cancelRequested"));
                 if(progress!=null)for(String key:new String[]{"memberCount","completedMemberCount","pendingMemberCount","pendingQuestionCount","pendingDecisionCount","attentionCount"})if(progress.has(key))row.put(key,progress.get(key));
-                if(!stopped&&!unresolved){JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)row.put("fileReview",marker).put("needsAttention",true);}
+                if(!stopped&&!unresolved){int proposals=progress==null?0:progress.optInt("pendingParentRevisionCount",0);
+                    if(proposals>0&&proposals<=16&&!work.optString("status").matches("completed|stopping|cancelled|paused|pausing|interrupted")&&team.optJSONObject("teamWorkPlan")!=null&&team.getJSONObject("teamWorkPlan").optLong("expiresAt")>System.currentTimeMillis())row.put("pendingParentRevisionCount",proposals).put("needsAttention",true);
+                    JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)row.put("fileReview",marker).put("needsAttention",true);}
                 teams.put(row);
             }
         }catch(SecurityException|dev.pocketengine.features.memory.TaskStoreMemoryReader.RawMessageUnavailable unavailable){
@@ -15228,6 +15230,7 @@ public final class TaskStore {
             JSONArray attention=dev.pocketengine.features.teams.TeamAttention.forRun(receipt);Set<String> pendingMembers=new java.util.HashSet<>();int questions=0,decisions=0;
             for(int a=0;a<attention.length();a++){JSONObject item=attention.getJSONObject(a);pendingMembers.add(item.getString("memberId"));if("question".equals(item.optString("kind")))questions++;if(dev.pocketengine.features.teams.TeamAttention.isOwnerDecision(item))decisions++;}
             evidence.put("nativeTeamProgress",new JSONObject().put("memberCount",memberCount).put("completedMemberCount",completed)
+                    .put("pendingParentRevisionCount",dev.pocketengine.features.teams.TeamParentRevisionOffer.pendingCount(receipt))
                     .put("pendingMemberCount",pendingMembers.size()).put("pendingQuestionCount",questions).put("pendingDecisionCount",decisions).put("attentionCount",attention.length()).put("needsAttention",attention.length()>0));
         }
         if(t.optString("feature").equals("remote")&&savedEvidence!=null&&raw.matches("unknown|not_found"))for(String key:new String[]{"id","operationId","profileId","serviceBase","environmentId","environmentBinding","worker","threadId","sessionId","promptRequestId","turnId","protocol","model","backendSelection"})if(!evidence.has(key)&&savedEvidence.has(key))evidence.put(key,savedEvidence.get(key));
@@ -15579,6 +15582,23 @@ public final class TaskStore {
      * actions still carry the original tuple to independently checked controls.
      * Keep the question/fallback branches intact without loading all audit rows. */
     /** Owner notification navigation is a read. Resolves an old local phone run, never other tasks or the latest run. */
+    public synchronized java.util.List<String> pendingPrivatePhoneWatches(){return PrivatePhoneResultWatch.pending(db);}
+    public synchronized JSONObject privatePhoneWatchChoice(String id,String run,int epoch,RunControl original,Boolean wanted,java.util.function.BooleanSupplier window)throws Exception{
+        // Unlike stored task decisions, a watch is not a grant and does not keep a runner/service alive.
+        boolean revoke=Boolean.FALSE.equals(wanted);JSONObject task=originalPhoneAttempt(id,run,epoch,!revoke);
+        if(!PhoneActionRecovery.local(task)||!window.getAsBoolean()||!revoke&&(original==null||!original.matchesHostRun(id,run,epoch)||original.isCancelled()))throw new SecurityException("只能在原私人手机工作里查看或选择本轮提醒");
+        if(wanted==null)return PrivatePhoneResultWatch.choice(db,id,run,epoch,null,window,System.currentTimeMillis());
+        db.beginTransaction();try{JSONObject result=PrivatePhoneResultWatch.choice(db,id,run,epoch,wanted,window,System.currentTimeMillis());
+            if(!window.getAsBoolean()||!revoke&&original.isCancelled())throw new SecurityException("原工作或窗口已变化，未登记提醒");
+            db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
+    }
+    public synchronized JSONObject claimPrivatePhoneWatch(String id)throws Exception{
+        db.beginTransaction();try{JSONObject claim=PrivatePhoneResultWatch.claim(db,id,System.currentTimeMillis());
+            db.setTransactionSuccessful();return claim;
+        }finally{db.endTransaction();}
+    }
+    public synchronized void retirePrivatePhoneWatch(String id,String run,int epoch)throws Exception{PrivatePhoneResultWatch.retire(db,id,run,epoch);}
     public synchronized JSONObject originalPhoneNotification(String id,String run,int epoch)throws Exception{
         if(id==null||id.isBlank()||id.length()>100||run==null||run.isBlank()||run.length()>100||epoch<1)throw new SecurityException("原手机通知身份无效");
         return PhoneActionRecovery.notificationRun(db,required(id),run,epoch);

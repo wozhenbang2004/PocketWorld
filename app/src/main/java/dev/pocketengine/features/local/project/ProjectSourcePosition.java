@@ -32,7 +32,7 @@ public final class ProjectSourcePosition {
     public synchronized JSONObject read()throws Exception{
         safe();
         if(!Files.exists(file.toPath(),LinkOption.NOFOLLOW_LINKS))return new JSONObject().put("state","none");
-        JSONObject raw=JsonFiles.read(file);
+        JSONObject raw=ProjectPrivateRecord.read(file,8192);
         if(!FORMAT.equals(raw.opt("format")))throw new SecurityException("上次本机项目的创建定位损坏；未重建或重复导入");
         if("released".equals(raw.opt("state"))&&raw.length()==4&&raw.optString("clientImportId").matches("[a-f0-9-]{36}")&&raw.optString("planDigest").matches("[a-f0-9]{64}"))return raw;
         if(!"located".equals(raw.opt("state"))||raw.length()!=3)throw new SecurityException("无法核对原创建定位；未重新执行");

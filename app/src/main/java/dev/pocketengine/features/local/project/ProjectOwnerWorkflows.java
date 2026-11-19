@@ -27,7 +27,8 @@ public final class ProjectOwnerWorkflows {
     public JSONObject inspectForOwner(String project)throws Exception {
         ProjectBuildPlan.identity(project);JSONArray available=new JSONArray(),rows=local.snapshot().getJSONArray("checkouts");
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!project.equals(row.optString("projectId"))||!ordinaryCheckout(row))continue;
-            available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt")));}
+            available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt"))
+                .put("hostSource",row.optJSONObject("sourceImport")!=null&&"host_saved_snapshot".equals(row.getJSONObject("sourceImport").opt("sourceKind"))));}
         return new JSONObject().put("projectId",project).put("checkouts",available).put("runtime",local.projectRuntimeForHost("managed_process_v1")).put("executionAuthorized",false);
     }
     private static boolean ordinaryCheckout(JSONObject value){return !value.has("teamProjectCopy")&&!value.has("skillExecutionCopy")&&!value.has("isolatedGit")&&!value.has("nativeGitImportPending");}
@@ -48,6 +49,19 @@ public final class ProjectOwnerWorkflows {
     private void requireOrdinaryFileOwner(String project,String checkout)throws Exception {
         ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);
         if(!project.equals(row.getString("projectId"))||!ordinaryCheckout(row))throw new SecurityException("请选择此项目的普通私人副本");
+    }
+    /** Project -> historical original receipt. Does not restore a grant, connect, or prepare a new task. */
+    public JSONObject hostSourceOriginForOwner(String project,String checkout,String expected)throws Exception {
+        requireOrdinaryFileOwner(project,checkout);
+        var origin=local.phoneHostOriginForOwner(project,checkout);
+        if(origin==null){
+            if(expected!=null)throw new SecurityException("此前核对的主机来源目前不可用");
+            return new JSONObject().put("projectId",project).put("checkoutId",checkout).put("localSourceRecorded",false).put("taskVerified",false);
+        }
+        if(expected!=null&&!expected.equals(origin.digest()))throw new SecurityException("原来源已变化，请重新核对");
+        JSONObject result=origin.summary(tasks.get(origin.task(),false));
+        if(expected!=null&&!result.optBoolean("taskVerified"))throw new SecurityException("原私人主机委托和所选文件不再匹配，未打开其他任务");
+        return result;
     }
     public JSONObject filesForOwner(String project,String checkout)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.handle("changes",new JSONObject().put("checkoutId",checkout));}
     public JSONObject fileForOwner(String project,String checkout,String path)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.readDevelopmentFileForOwner(project,checkout,path);}

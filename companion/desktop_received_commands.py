@@ -24,7 +24,7 @@ LABEL = {"queued": "已在这台电脑排队", "running": "这台电脑已启动
          "accepted_only": "已接单，原执行文件未能核对"}
 
 
-def local_record(view, peer, item, *, read=False, revision=None):
+def local_record(view, peer, item, *, read=False, revision=None, archive=False, ticket=None, held=None):
     # This is the unlocked receiver owner's local view, never a synthetic MTLS
     # history permission. Admit only the direct source and its still-current original read scope.
     if not view._peer_current(peer): return None
@@ -51,6 +51,9 @@ def local_record(view, peer, item, *, read=False, revision=None):
             return None
         if revision is not None and manager.jobs.get(row[1], {}).get("nativeDeviceRevision") != revision:
             return None
+        if archive:
+            from windows_received_file_view import access
+            return access(manager, operation, row, original, grant, now, revision, ticket, held)
         if not read: return True
         return (command_receipt if source["toolName"] == COMMAND else workspace_file if source["toolName"] == FILE else workspace_read)(manager, operation, row, original)
 
@@ -75,7 +78,10 @@ def show(view, peer, item):
             elif phase in ("delivered","write_verified_only"): text+="\n原生写入已回读同一文件身份与字节；不代表现在未被改动。"
         else: text+="\n未取得一致的原选材、转移或落盘证明；未按同名路径打开或补写。"
         text+=f"\n原操作：{item[1]}\nWindows 工作：{receipt['jobId']}"
-        view._dialog(titles[phase],text,[],current)
+        if phase in ("delivered","write_verified_only"):
+            from windows_received_file_view import offer
+            offer(view,peer,item,receipt,titles[phase],text,current)
+        else: view._dialog(titles[phase],text,[],current)
         return
     if receipt["profile"] == READ_PROFILE:
         _show_read(view, peer, item, receipt, current)

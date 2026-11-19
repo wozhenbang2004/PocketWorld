@@ -96,6 +96,29 @@ public final class LocalModule implements EngineModule {
         if(runtime instanceof ManagedProjectRuntime)return ((ManagedProjectRuntime)runtime).identity().equals(exact.getString("runtimeIdentity"));
         return dev.pocketengine.store.TaskStore.capabilityFingerprint(captured.getJSONObject("target")).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(projectRuntimeForHost(id)));
     }
+    /** Only the owner project receipt reader calls this. No network, file attachment reads, or job enumeration. */
+    public dev.pocketengine.features.local.project.ProjectHostOrigin phoneHostOriginForOwner(String project,String id)throws Exception {
+        packageIdentity(id);packageIdentity(project);JSONObject row=projectCheckoutForHost(id),source=row.optJSONObject("sourceImport");
+        if(!project.equals(row.opt("projectId"))||!id.equals(row.opt("id"))||source==null||!"host_saved_snapshot".equals(source.opt("sourceKind")))throw new SecurityException("所选副本不是这个项目的主机源码导入");
+        File directory=new File(new File(root,"checkouts"),id);
+        var original=dev.pocketengine.features.local.project.ProjectHostOrigin.read(directory,row);if(original!=null)return original;
+        // An old checkout may retain the original stage. Consider at most four small headers and reopen
+        // only the matching archive; no guessed TaskStore search or creation of a missing cache.
+        synchronized(projectPackageStaging){
+            File cache=new File(context.android.getCacheDir(),"project-package-imports-v1");
+            if(!Files.exists(cache.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))return null;
+            if(!cache.getAbsoluteFile().equals(cache.getCanonicalFile())||!Files.isDirectory(cache.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))throw new SecurityException("原来源缓存不可核对");
+            File[] headers=cache.listFiles(f->f.getName().matches("[a-f0-9-]{36}\\.source\\.json"));
+            if(headers==null||headers.length>4)throw new SecurityException("原来源缓存超出核对范围");
+            for(File header:headers){if(!dev.pocketengine.features.local.project.ProjectHostOrigin.matchesLegacyHeader(header,source))continue;
+                if(original!=null)throw new SecurityException("旧副本匹配多条来源，未选择其他委托");
+                var staged=stagedProjectPackage(header.getName().substring(0,36),source.getString("packageSha256"));
+                original=dev.pocketengine.features.local.project.ProjectHostOrigin.fromOriginalStage(row,staged);
+                if(original==null)throw new SecurityException("所选原缓存与这份副本来源不一致");
+            }
+            return original;
+        }
+    }
     public synchronized JSONObject projectCheckoutForHost(String checkoutId)throws Exception {if(closed)throw new IllegalStateException("项目执行器已关闭");return new JSONObject(checkout(checkoutId).toString());}
     @FunctionalInterface private interface ProjectImageBytes {byte[] read()throws Exception;}
     /** The original capability host checks its SQL grant against these actual catalog facts.
@@ -588,6 +611,8 @@ public final class LocalModule implements EngineModule {
             if(sourceEvidence!=null)checkout.getJSONObject("sourceImport").put("sourceKind",sourceEvidence.getString("sourceKind")).put("sourceEvidenceSha256",plan.getString("sourceEvidenceSha256"));
             if(nativeGit!=null){JSONObject pins=nativeGit.metadata();pins.remove("files");checkout.getJSONObject("sourceImport").put("gitOriginal",pins).put("gitHistoryCopied",true).put("credentialsRestored",false);}
 
+            if(sourceEvidence!=null&&"host_saved_snapshot".equals(sourceEvidence.opt("sourceKind")))
+                dev.pocketengine.features.local.project.ProjectHostOrigin.write(prepared,checkout,sourceEvidence);
             JsonFiles.write(new File(prepared,"checkout.json"),checkout);
             synchronized(this){
                 if(closed||Thread.currentThread().isInterrupted())throw new IllegalStateException("原项目模块已关闭或导入等待已取消，未发布新工作副本");JSONObject prior=existingPackageImport(id,client,sha,plan);if(prior!=null)return prior;

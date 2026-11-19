@@ -292,6 +292,8 @@ public final class TaskAuditStore {
         JSONObject out=header(task),flags=new JSONObject();String id=task.getString("id");
         for(String type:new String[]{"memory_owner_consolidation","media_owner_prepared","browser_research_requested"})try(Cursor row=db.rawQuery("SELECT 1 FROM task_events WHERE task_id=? AND event_type=? LIMIT 1",new String[]{id,type})){flags.put(type,row.moveToFirst());}
         JSONObject contextCheck=contextBudgetCheck(db,task);out.put("contextBudgetCheck",contextCheck==null?JSONObject.NULL:contextCheck);
+        // Read-only explicit local result watches can recheck original private ownership from the header, not the task/screen evidence.
+        if("phone".equals(task.optString("kind")))out.put("nativePrivatePhoneResultSource",PhoneActionRecovery.local(task));
         return out.put("nativeEventTypeFlags",flags).put("nativeTaskKind",out.optJSONObject("sourceLearningJob")!=null?"source_learning":flags.optBoolean("memory_owner_consolidation")?"memory_consolidation":flags.optBoolean("media_owner_prepared")?"media":out.optString("kind"));
     }
     /** Body-free display numbers survive summary snapshots and bounded event-window eviction.

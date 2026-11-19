@@ -2,11 +2,12 @@ import {Button} from './forms-library';
 
 type Data=Record<string,any>;
 
-export function TeamParentRevisions({rows,disabled,inspect}:{rows:Data[];disabled:boolean;inspect:(row:Data)=>void}) {
-  if(!rows.length)return null;
+export function TeamParentRevisions({rows,disabled,inspect,returnToWork}:{rows:Data[];disabled:boolean;inspect:(row:Data)=>void;returnToWork?:()=>void}) {
+  if(!rows.length)return returnToWork?<><p role="status">原提案不再等待这次确认，没有换成其他分工。</p><Button variant="ghost" size="small" onClick={returnToWork}>返回原对话</Button></>:null;
   return <section className="pw-team-action-list" aria-label="管家留在原分工的修订提案">
     <header className="pw-collaboration-group-heading"><h3>管家建议修改</h3><span>{rows.length} 项</span></header>
-    {rows.map(row=><details className="pw-team-expanded-copy" key={row.operationId}><summary>{row.title} · {row.author}</summary>
+    {returnToWork&&<Button variant="ghost" size="small" onClick={returnToWork}>返回原对话</Button>}
+    {rows.map(row=><details open={returnToWork?true:undefined} className="pw-team-expanded-copy" key={row.operationId}><summary>{row.title} · {row.author}</summary>
       <p dir="auto" style={{whiteSpace:'pre-wrap'}}>{row.text}</p>
       {row.canReview?<Button variant="secondary" disabled={disabled} onClick={()=>inspect(row)}>核对这次修订范围</Button>
         :<p className="pw-field-hint">这是原提案，没有发给成员执行。这里没有与它对应的已写回版本可供修订确认。</p>}

@@ -61,11 +61,39 @@ public final class TeamParentRevisionOffer {
                 JSONObject author=one(run.optJSONArray("members"),"id",item.getString("memberId"));if(author==null)continue;
                 String text=row.getString("text");if(text.isBlank()||text.length()>4000)continue;
                 JSONObject display=new JSONObject();for(String key:new String[]{"operationId","workItemId","assignmentId"})display.put(key,row.get(key));
-                boolean action=false;if(row.optJSONObject("integratedBasis")!=null)try{exact(run,row.getString("operationId"));action=true;}catch(SecurityException changed){/* Retain the actual suggestion as read-only. */}
+                boolean action=false;if(row.optJSONObject("integratedBasis")!=null)try{JSONObject selected=exact(run,row.getString("operationId"));display.put("planHash",selected.getJSONObject("integratedBasis").getString("planHash"));action=true;}catch(SecurityException changed){/* Retain the actual suggestion as read-only. */}
                 result.put(display.put("title",item.getString("title")).put("author",author.optString("name",author.getString("id"))).put("text",text).put("canReview",action));
             }catch(org.json.JSONException incomplete){/* Older incomplete records cannot authorize or impersonate a proposal. */}
         }
         return result;
+    }
+    /** A parent-chat directory carries identities, not instructions or a new approval. */
+    public static JSONArray directory(JSONObject run)throws Exception {
+        JSONArray options=new JSONArray(),available=available(run);
+        for(int i=0;i<available.length();i++){JSONObject row=available.getJSONObject(i);if(!row.optBoolean("canReview"))continue;
+            JSONObject entry=new JSONObject();for(String key:new String[]{"operationId","workItemId","assignmentId","planHash","title","author"})entry.put(key,row.get(key));
+            boolean sameLabel=false;for(int j=0;j<available.length();j++){JSONObject other=available.getJSONObject(j);
+                if(i!=j&&other.optBoolean("canReview")&&row.getString("title").equals(other.optString("title"))&&row.getString("author").equals(other.optString("author"))){sameLabel=true;break;}}
+            if(sameLabel){String text=row.getString("text");int end=text.offsetByCodePoints(0,Math.min(72,text.codePointCount(0,text.length())));
+                entry.put("excerpt",text.substring(0,end)).put("excerptTruncated",end<text.length());}
+            options.put(entry);
+        }
+        return options;
+    }
+    public static int pendingCount(JSONObject run)throws Exception {
+        JSONArray requests=run.optJSONArray("parentRequests");if(requests==null||requests.length()>128||!local(run))return 0;
+        int count=0;for(int i=0;i<requests.length();i++){JSONObject row=requests.optJSONObject(i);
+            if(row==null||row.optJSONObject("integratedBasis")==null)continue;
+            try{exact(run,row.getString("operationId"));count++;}catch(SecurityException|org.json.JSONException ignored){/* Not this original offer. */}}
+        return count;
+    }
+    static void requireCurrentTarget(JSONObject run,JSONObject origin,JSONObject target,JSONObject actual)throws Exception {
+        JSONObject selected=exact(run,target.getString("operationId")),original=selected.getJSONObject("integratedBasis");
+        for(String key:new String[]{"workItemId","assignmentId"})if(!selected.get(key).equals(target.opt(key)))throw changed();
+        if(!original.getString("planHash").equals(target.opt("planHash"))||!run.getString("id").equals(origin.opt("teamRunId")))throw changed();
+        for(String key:new String[]{"parentTaskId","parentRunId","parentEpoch"})if(!original.get(key).equals(origin.opt(key)))throw changed();
+        JSONObject now=basis(run,original,actual);if(now==null)throw changed();
+        for(java.util.Iterator<String> keys=original.keys();keys.hasNext();){String key=keys.next();if(!original.get(key).equals(now.opt(key)))throw changed();}
     }
     static JSONObject preview(JSONObject proposal,JSONObject facts)throws Exception {
         JSONObject basis=proposal.getJSONObject("integratedBasis"),plan=facts.getJSONObject("workPlan"),parent=facts.getJSONObject("parent"),integration=facts.getJSONObject("integration");

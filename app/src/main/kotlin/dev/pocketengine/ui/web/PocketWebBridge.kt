@@ -253,7 +253,7 @@ internal class PocketWebBridge(
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original",
-            "phone.result.original",
+            "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
             "tasks.refresh", "tasks.open", "tasks.close", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
@@ -1284,6 +1284,19 @@ internal class PocketWebBridge(
                         complete(id, result.put("reviewHandle", ticket), null, retainValue = false)
                     } else complete(id, result, null, retainValue = false)
                     publishState()
+                }
+                return
+            }
+            if (action == "phone.resultNotice.read" || action == "phone.resultNotice.set") {
+                val change = action.endsWith(".set")
+                checkedPayload(args, if (change) setOf("taskId", "runId", "epoch", "watching") else setOf("taskId", "runId", "epoch"))
+                val task = requireTask(requiredString(args,"taskId")); val run = requiredString(args,"runId"); val epoch = requiredInt(args,"epoch")
+                require(controller.webPrivateOwnerVisible() && dev.pocketengine.store.PhoneActionRecovery.local(task.raw) && task.raw.optString("runId") == run &&
+                    task.raw.optInt("coordinatorEpoch",-1) == epoch) { "原本机手机工作已变化，没有改其他轮的提醒" }
+                val page = commandFence.ticket(); val owner = controller.displayedPhoneWindowVersion()
+                fun current() = !closed && commandFence.accepts(page) && controller.displayedPhoneWindowAlive(owner)
+                controller.privatePhoneResultWatch(task, if (change) requiredBoolean(args,"watching") else null, ::current) { result,error ->
+                    complete(id,result,error,if (change) "outcome_unknown" else "not_accepted",retainValue = false)
                 }
                 return
             }

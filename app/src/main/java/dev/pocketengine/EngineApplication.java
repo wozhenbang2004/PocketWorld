@@ -30,6 +30,12 @@ import org.json.JSONArray;
 
 public final class EngineApplication extends Application implements dev.pocketengine.features.automation.AutomationModule.AlarmHostProvider,dev.pocketengine.phone.OwnerScreenContextHost,dev.pocketengine.features.notifications.NotificationsModule.Host,dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.Host {
     private dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications assistantTaskNotifications;
+    private volatile dev.pocketengine.phone.PrivatePhoneResultNotices privatePhoneResults;
+    public JSONObject privatePhoneResultWatch(String id,String run,int epoch,Boolean wanted,java.util.function.BooleanSupplier window)throws Exception{
+        var notices=privatePhoneResults;RunControl original=control(id);
+        if(notices==null||!Boolean.FALSE.equals(wanted)&&(original==null||!original.matchesHostRun(id,run,epoch)))throw new SecurityException("原本机手机执行已经变化，未更改提醒");
+        return notices.choice(id,run,epoch,original,wanted,window);
+    }
     private final dev.pocketengine.features.assistant.OwnerQuestionInputs ownerQuestionInputs=new dev.pocketengine.features.assistant.OwnerQuestionInputs();
     private final dev.pocketengine.features.assistant.OwnerPhoneQuestions ownerPhoneQuestions=new dev.pocketengine.features.assistant.OwnerPhoneQuestions();
     private final java.util.Set<String> taskNoticePending=java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -942,6 +948,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             },permit);
             deviceOwnerInputs=new dev.pocketengine.features.devices.DeviceOwnerInputs(tasks,id->{var session=deviceGoalSessions.get(id);return session!=null&&session.originalControl()==currentPhoneControl(id)?session:null;});
             assistantTaskNotifications=new dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications(this,tasks);
+            TaskStore phoneNoticeStore=tasks;
+            privatePhoneResults=new dev.pocketengine.phone.PrivatePhoneResultNotices(this,phoneNoticeStore,()->businessReady()&&tasks==phoneNoticeStore);
             bootstrap.activity(generation,"models");initializeModelConnections();attachmentRoutePins=new dev.pocketengine.features.AssistantAttachmentRoutePins(new SecretVault(this));
             localOcr=new dev.pocketengine.vision.ocr.TesseractLocalOcrEngine(this);
             modelStreams=new dev.pocketengine.features.NativeModelStreamUi(tasks,main,this::ownsRunControl,event->{for(Observer observer:observers)try{observer.onEvent(event);}catch(RuntimeException ignored){}});
@@ -957,6 +965,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             bootstrap.stage(generation,"features_ready",TaskStore.DATABASE_SCHEMA);tasks.setTaskScreenshotChangeListener(this::queueTaskScreenshotMaintenance);
             if(permit!=null)databaseMaintenance.completeOriginalRetry(permit,tasks);
             bootstrap.activity(generation,"ready");if(!bootstrap.complete(generation))throw new IllegalStateException("原初始化代次已变化，未发布ready");
+            var originalPhoneNotices=privatePhoneResults;
+            try{capabilityWorkers.execute(()->{try{originalPhoneNotices.restore();}catch(Exception unavailable){/* No outside wake or automatic repost. */}});}catch(java.util.concurrent.RejectedExecutionException stopped){/* Original results stay in-app. */}
             hasReachedBusinessReady=true;
             diagnostic.success();
             try{queueReadyMaintenance(generation);}catch(java.util.concurrent.RejectedExecutionException stopped){error("原启动后的维护队列已关闭，未重新派发");}
@@ -4727,7 +4737,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     private void queueTaskNotice(String id){
         if(!businessReady())return;
         if(id==null||assistantTaskNotifications==null&&automaticUserLearning==null)return;taskNoticeDirty.add(id);if(!taskNoticePending.add(id))return;
-        try{capabilityWorkers.execute(()->{try{if(!businessReady())return;do{taskNoticeDirty.remove(id);try{if(assistantTaskNotifications!=null)assistantTaskNotifications.update(id);}catch(Exception unavailable){/* Actual task/effect stays unchanged; no execution retry. */}try{processAutomaticUserLearningTaskEvent(id);}catch(Exception unavailable){/* Original candidate source/job remains inspectable; no model replay. */}}while(taskNoticeDirty.remove(id));}
+        try{capabilityWorkers.execute(()->{try{if(!businessReady())return;do{taskNoticeDirty.remove(id);var phoneWatch=privatePhoneResults;if(phoneWatch!=null)phoneWatch.afterTask(id);try{if(assistantTaskNotifications!=null)assistantTaskNotifications.update(id);}catch(Exception unavailable){/* Actual task/effect stays unchanged; no execution retry. */}try{processAutomaticUserLearningTaskEvent(id);}catch(Exception unavailable){/* Original candidate source/job remains inspectable; no model replay. */}}while(taskNoticeDirty.remove(id));}
             finally{taskNoticePending.remove(id);if(taskNoticeDirty.contains(id))queueTaskNotice(id);}});}
         catch(java.util.concurrent.RejectedExecutionException stopped){taskNoticePending.remove(id);taskNoticeDirty.remove(id);}
     }

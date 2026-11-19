@@ -409,6 +409,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     // Plain atomic/volatile probes only: this guard is also read inside the short original-pause commit.
     internal fun displayedPhoneWindowVersion() = phoneViewerWindowEpoch
     internal fun displayedPhoneWindowAlive(version: Long) = !closed && voiceForeground && phoneViewerWindowEpoch == version
+    internal fun privatePhoneResultWatch(task: UiTask, wanted: Boolean?, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val id = task.id; val run = task.raw.optString("runId"); val epoch = task.raw.optInt("coordinatorEpoch", -1)
+        if (!current() || !webPrivateOwnerVisible() || !dev.pocketengine.store.PhoneActionRecovery.local(task.raw)) { done(null, "请回原私人手机工作查看提醒"); return }
+        try { io.execute {
+            val result = runCatching { app.privatePhoneResultWatch(id, run, epoch, wanted) { current() } }
+            main.post { if (!current() || !webPrivateOwnerVisible()) done(null, "原窗口已离开，请回原任务核对选择；不会重发提醒")
+                else result.fold({ done(it, null) }, { done(null, message(it)) }) }
+        } } catch (failure: Exception) { done(null, message(failure)) }
+    }
     internal fun retainedPrivatePhoneSurface(task: UiTask): JSONObject? {
         val raw = task.raw
         if (!webPrivateOwnerVisible() || raw.optString("id") != task.id || raw.optString("kind") != "phone" ||

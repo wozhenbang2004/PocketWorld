@@ -45,8 +45,8 @@ class WindowsWorkspaceFiles(WorkspaceFiles):
         except PlatformError as failure:
             raise FileError(str(failure), failure.status) from failure
 
-    def revision(self,env,path,value):
-        try: return self.versions.remember(env,path,value)
+    def revision(self,env,path,value,*,delivery=None):
+        try: return self.versions.remember(env,path,value,delivery=delivery)
         except (OSError,ValueError,TypeError,PlatformError,sqlite3.Error) as error:
             raise FileError("Exact private Windows file version could not be retained",409) from error
 
@@ -170,7 +170,7 @@ class WindowsWorkspaceFiles(WorkspaceFiles):
             if result.get("verified"):
                 actual = self.raw(env, path)
                 if actual == value:
-                    try: saved=self.revision(env,path,actual)==desired
+                    try: saved=self.revision(env,path,actual,delivery=(operation,fingerprint) if _received else None)==desired
                     except FileError: saved=False
                     # Target readback already matched. An optional after-copy failing
                     # is not proof the user's original file write failed or never ran.

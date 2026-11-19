@@ -25,7 +25,7 @@ import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { teamFollowUpFocus, teamFollowUps, teamResultReading, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
-import {sameTeamFiles,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource} from './team-navigation';
+import {sameTeamFiles,sameTeamProposal,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource} from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
@@ -125,6 +125,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const handledAttention = useRef('');
   const handledRunFocus = useRef('');
   const [fileEntry,setFileEntry]=useState<{view:string;requestId:string;source:WorkFileSource;returnToWork?:(reason?:string)=>void}|null>(null);
+  const [proposalEntry,setProposalEntry]=useState<{source:WorkProposalSource;returnToWork?:(reason?:string)=>void}|null>(null);
+  const focusedProposal=proposalEntry&&reading?.run?.id===proposalEntry.source.teamRunId?proposalEntry:null;
+  const proposalRead=(runId:string)=>({runId,...(focusedProposal?.source.teamRunId===runId?{proposalOrigin:focusedProposal.source}:{})});
+  const revisionRows=rows(reading?.revisionOffers).filter(row=>!focusedProposal||row.canReview===true&&sameTeamProposal(focusedProposal.source.proposal,row));
   const workspaceActive = state.webWorkspaceSection === 'teams' && !state.webWorkspaceTaskOpen;
   const workspaceWindow = useRef({ active: false, revision: Number(state.webWorkspaceResumeRevision || 0) });
   const ownsNativeWindow = () => {
@@ -241,28 +245,31 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const load = () => { void invoke('teams.snapshot', {}, value => { acceptCatalog(value); if (formDraft.requiresRecheck || startDraft.requiresRecheck || memberFormDraft.requiresRecheck) setDraftCatalogChecked(true); }); };
   useEffect(() => { if (formDraft.requiresRecheck || startDraft.requiresRecheck || memberFormDraft.requiresRecheck) setDraftCatalogChecked(false); }, [formDraft.requiresRecheck, startDraft.requiresRecheck, memberFormDraft.requiresRecheck]);
-  const readRun = (id: string) => { void invoke('teams.readRun', { runId: id }, result => { if (result.reading?.run?.id !== id) throw new Error('原团队运行身份不匹配'); acceptReading(result.reading); }); };
+  const readRun = (id: string) => { void invoke('teams.readRun', proposalRead(id), result => { if (result.reading?.run?.id !== id) throw new Error('原团队运行身份不匹配'); acceptReading(result.reading); }); };
   const readDefinition = (id: string) => { void invoke('teams.readDefinition', { id }, value => { if (value.definition?.id !== id) throw new Error('团队配置身份不匹配，请刷新目录'); acceptReading(value); }); };
   useEffect(() => {
     const requestId = runFocus?.requestId, runId = runFocus?.runId;
     if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledRunFocus.current = requestId;
-    void invoke('teams.readRun', { runId }, result => {
-      const next=result.reading,from=runFocus?.fromWork;
+    const from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined;
+    void invoke('teams.readRun', { runId,...(proposal?{proposalOrigin:proposal}:{}) }, result => {
+      const next=result.reading;
       if (next?.run?.id !== runId||!next.viewHandle) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
       if(from){
         const link=next.ownerWorkLink;
         if(!link||link.currentRun!==true||link.readOnly!==true||link.stopping!==false||link.taskId!==from.parentTaskId||link.runId!==from.parentRunId
-          ||link.epoch!==from.parentEpoch||link.conversationId!==from.conversationId||link.teamRunId!==from.teamRunId||runId!==from.teamRunId||!sameTeamFiles(from.fileReview,link.fileReview)){
-          release(next);throw new Error('原文件审阅已变化，没有打开另一轮。');
+          ||link.epoch!==from.parentEpoch||link.conversationId!==from.conversationId||link.teamRunId!==from.teamRunId||runId!==from.teamRunId||files&&!sameTeamFiles(files.fileReview,link.fileReview)
+          ||proposal&&rows(next.revisionOffers).filter(row=>row.canReview===true&&sameTeamProposal(proposal.proposal,row)).length!==1){
+          release(next);throw new Error('原文件或提案已变化，没有打开另一轮。');
         }
       }
       setEditor(null); setMemberDraft(null); setResultSource(null); closeReview(); closePhoneSelection();
-      acceptReading(next);setFileEntry(from?{view:next.viewHandle,source:from,requestId,returnToWork:runFocus?.returnToWork}:null);
+      acceptReading(next);setProposalEntry(proposal?{source:proposal,returnToWork:runFocus?.returnToWork}:null);
+      setFileEntry(files?{view:next.viewHandle,source:files,requestId,returnToWork:runFocus?.returnToWork}:null);
       setRunSections(old => ({ ...old, [runId]: from?'result':'progress' }));
       setComposeOpen(false);
       onRunFocusConsumed?.(requestId);
-    }, failure => {onRunFocusConsumed?.(requestId);if(runFocus?.fromWork)runFocus.returnToWork?.(failure instanceof Error?failure.message:'原文件目录已变化。');});
+    }, failure => {onRunFocusConsumed?.(requestId);if(runFocus?.fromWork)runFocus.returnToWork?.(failure instanceof Error?failure.message:'原文件或提案目录已变化。');});
   }, [runFocus?.requestId, workspaceActive, catalogReady, busy]);
   useEffect(() => {
     const requestId = label(attentionFocus?.requestId);
@@ -323,7 +330,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       if (!alive.current || generation !== requestGeneration.current) return;
       acceptCatalog(fresh);
       if (original?.kind === 'run') {
-        const value = object(await run('teams.readRun', { runId: original.run.id }));
+        const value = object(await run('teams.readRun', proposalRead(original.run.id)));
         if (alive.current && generation === requestGeneration.current && value.reading?.run?.id === original.run.id) acceptReading(value.reading);
       } else if (original?.kind === 'definition') {
         const value = object(await run('teams.readDefinition', { id: original.definition.id }));
@@ -359,7 +366,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide);
     return () => { document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
   });
-  useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if (focusedProposal?.returnToWork) { leaveWithDrafts(focusedProposal.returnToWork); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, focusedProposal, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const current = reading?.kind === 'run' ? object(reading.run) : null;
@@ -383,7 +390,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     // A foreground action/navigation retires this read, never the action itself.
     const timer = setTimeout(() => {
       if (!stillCurrent()) return;
-      void bridge.command('teams.readRun', { runId }).then(result => {
+      void bridge.command('teams.readRun', proposalRead(runId)).then(result => {
         const next = object(object(result).reading);
         if (!stillCurrent()) { release(next); return; }
         if (next.run?.id !== runId || !next.viewHandle) {
@@ -865,7 +872,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} revisionOffers={reading?.revisionOffers?.length ? <TeamParentRevisions rows={rows(reading.revisionOffers)} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
+          <TeamResultHandoff result={teamResult} revisionOffers={revisionRows.length||focusedProposal ? <TeamParentRevisions rows={revisionRows} returnToWork={focusedProposal?.returnToWork?()=>leaveWithDrafts(focusedProposal.returnToWork!):undefined} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
             const original=reading?.viewHandle;if(!original||!canMutate||materialBusy)return;
             void invoke('teams.reviewParentRevision',{viewHandle:original,operationId:row.operationId},value=>{
               if(currentReading.current?.viewHandle!==original||value.operation!=='reviseFromParent'||value.input?.runId!==current.id||value.input?.operationId!==row.operationId||

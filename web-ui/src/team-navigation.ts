@@ -16,7 +16,19 @@ export type TeamButlerRequest = {
 
 export type TeamFileReviewMark = { planHash:string; reviewerTaskId:string; reviewerRunId:string; projectId:string; fileCount:number };
 export type WorkFileSource = TeamDecisionOrigin & {fileReview:TeamFileReviewMark};
-export type TeamRunFocus = { requestId: string; runId: string; fromWork?: WorkFileSource; returnToWork?: (reason?:string)=>void };
+export type TeamProposalMark = {operationId:string;workItemId:string;assignmentId:string;planHash:string};
+export type WorkProposalSource = TeamDecisionOrigin & {proposal:TeamProposalMark};
+export function teamProposalMark(input:unknown):TeamProposalMark|null{
+  if(!input||typeof input!=='object')return null;
+  const x=input as Record<string,unknown>,id=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9-]{36}$/.test(v);
+  return typeof x.operationId==='string'&&x.operationId.length>0&&x.operationId.length<=240&&id(x.workItemId)&&id(x.assignmentId)&&typeof x.planHash==='string'&&/^[a-f0-9]{64}$/.test(x.planHash)
+    ?{operationId:x.operationId,workItemId:x.workItemId,assignmentId:x.assignmentId,planHash:x.planHash}:null;
+}
+export function sameTeamProposal(left:TeamProposalMark,right:unknown):boolean{
+  const next=teamProposalMark(right);return !!next&&next.operationId===left.operationId&&next.workItemId===left.workItemId&&next.assignmentId===left.assignmentId&&next.planHash===left.planHash;
+}
+export const teamProposalEntryKey=(source:TeamDecisionOrigin)=>JSON.stringify(['team-revisions',source.conversationId,source.parentTaskId,source.parentRunId,source.parentEpoch,source.teamRunId]);
+export type TeamRunFocus = { requestId: string; runId: string; fromWork?: WorkFileSource|WorkProposalSource; returnToWork?: (reason?:string)=>void };
 export function teamFileMark(input:unknown): TeamFileReviewMark | null {
   if(!input||typeof input!=='object')return null;
   const m=input as Record<string,unknown>,id=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9-]{36}$/.test(v);

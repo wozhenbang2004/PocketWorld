@@ -58,7 +58,7 @@ public final class ProjectHostSource {
            !claim.getString("sha256").equals(meta.opt("sha256")))throw changed();
         RemoteSavedOriginal.requireLive(task,meta);return meta;
     }
-    private static String bound(JSONObject meta)throws Exception {
+    static String bindingDigest(JSONObject meta)throws Exception {
         JSONObject source=meta.getJSONObject("source"),binding=new JSONObject();
         for(String key:BINDING)binding.put(key,source.getString(key));
         return ProjectSources.digest(binding); // no server address or account settings leave the original Book
@@ -81,7 +81,7 @@ public final class ProjectHostSource {
             control.check();JSONObject claim=ProjectSources.copy(requested.getJSONObject(i));
             HashSet<String> keys=new HashSet<>();claim.keys().forEachRemaining(keys::add);
             if(!CLAIM.equals(keys)||!taskId.equals(claim.opt("taskId")))throw changed();
-            JSONObject meta=live(task,claim,book);long size=meta.getLong("size");String path=sourcePath(claim),scope=bound(meta);
+            JSONObject meta=live(task,claim,book);long size=meta.getLong("size");String path=sourcePath(claim),scope=bindingDigest(meta);
             String normal=Normalizer.normalize(path,Normalizer.Form.NFC).toLowerCase(Locale.ROOT);
             for(int slash=path.indexOf('/');slash>=0;slash=path.indexOf('/',slash+1)){
                 String prefix=path.substring(0,slash),before=prefixSpellings.putIfAbsent(Normalizer.normalize(prefix,Normalizer.Form.NFC).toLowerCase(Locale.ROOT),prefix);
@@ -105,7 +105,7 @@ public final class ProjectHostSource {
         }
         // Re-read the live private task and Book after copying. A removed receipt cannot be silently replaced by a similarly named file.
         control.check();JSONObject after=currentTask.read();if(after==null||!taskId.equals(after.opt("id")))throw changed();
-        for(JSONObject claim:claims.values()){control.check();if(!binding.equals(bound(live(after,claim,book))))throw changed();}
+        for(JSONObject claim:claims.values()){control.check();if(!binding.equals(bindingDigest(live(after,claim,book))))throw changed();}
         return new ProjectHostSource(files,new JSONObject().put("taskId",taskId).put("snapshotId",snapshot).put("snapshotVersion",version)
             .put("originalBindingDigest",binding).put("files",receipts).put("bytes",bytes).put("entireRepository",false).put("networkUsed",false));
     }

@@ -29,7 +29,7 @@ export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyF
     focused.current=null;
     if(target)target.focus({preventScroll:true});else if(!tasks.length)onEmptyFocus?.();
   },[revision,identity]);
-  const decisionsFor=(handling:ReturnType<typeof ownerWorkPresentation>)=>onTeamDecision&&handling?.teamNeedsAttention ? handling.teams.filter(team=>team.conversationId===identity && team.needsAttention && !team.cancelRequested && ((team.pendingDecisionCount ?? team.pendingQuestionCount ?? 0)>0 || !!team.fileReview)) : [];
+  const decisionsFor=(handling:ReturnType<typeof ownerWorkPresentation>)=>onTeamDecision&&handling?.teamNeedsAttention ? handling.teams.filter(team=>team.conversationId===identity && team.needsAttention && !team.cancelRequested && ((team.pendingDecisionCount ?? team.pendingQuestionCount ?? 0)>0 || (team.pendingParentRevisionCount??0)>0 || !!team.fileReview)) : [];
   // The composer's pinned parent can have its own decision at the same time as a
   // member does. Do not remove the member's entry or duplicate the parent button.
   const pinned=decisionsFor(ownerWorkPresentation(pinnedTask));

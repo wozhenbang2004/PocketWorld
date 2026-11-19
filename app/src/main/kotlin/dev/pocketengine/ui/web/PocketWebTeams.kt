@@ -278,12 +278,19 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 } else done(null, "原团队窗口已关闭；操作结果保留，请回原记录核对，没有自动重发")
             }
         }
-        fun readOwnerRun(id: String, accept: (JSONObject?, String?) -> Unit) {
+        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, accept: (JSONObject?, String?) -> Unit) {
             controller.runTeamPhoneWork {
                 val result = runCatching {
                     check(currentWindow()) { "原团队阅读窗口已关闭" }
                     val teams = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主尚未接入")
-                    teams.retainedOwnerReading(id).also { check(it.optString("id") == id) { "原团队运行身份不匹配" } }
+                    teams.retainedOwnerReading(id).also {
+                        check(it.optString("id") == id) { "原团队运行身份不匹配" }
+                        if (proposalOrigin != null) {
+                            controller.requireWorkOrigin(proposalOrigin,id)
+                            teams.requireOwnerRevisionTarget(it,proposalOrigin,proposalOrigin.getJSONObject("proposal"))
+                            controller.requireWorkOrigin(proposalOrigin,id)
+                        }
+                    }
                 }
                 main.post {
                     if (!currentWindow()) done(null, "原团队阅读窗口已关闭，请回原记录核对")
@@ -291,7 +298,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
         }
-        fun feature(command: String, input: JSONObject, messageId: String? = null, attention: JSONObject? = null) {
+        fun feature(command: String, input: JSONObject, messageId: String? = null, attention: JSONObject? = null, proposalOrigin: JSONObject? = null) {
             val received: (JSONObject?, String?) -> Unit = receive@{ result, error ->
                 if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return@receive }
                 if (error != null || result == null) deliver(null, error ?: "原团队操作没有返回回执")
@@ -336,18 +343,22 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     deliverReceipt(receipt)
                 } catch (failure: Exception) { deliver(null, failure.message ?: "原团队回执待核对") }
             }
-            if (command == "get") readOwnerRun(input.getString("runId"), received)
+            if (command == "get") readOwnerRun(input.getString("runId"), proposalOrigin, received)
             else controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow, received)
         }
         when (action) {
             "teams.attention" -> {
                 if (args.has("parentTaskId")) {
-                    fields(args, "parentTaskId", "parentRunId", "parentEpoch", "conversationId", "teamRunId", "fileReview")
+                    fields(args, "parentTaskId", "parentRunId", "parentEpoch", "conversationId", "teamRunId", "fileReview", "proposalDirectory", "proposal")
                     val parent = text(args, "parentTaskId"); val parentRun = text(args, "parentRunId"); val conversation = text(args, "conversationId")
                     val teamRun = text(args, "teamRunId"); val epoch = args.opt("parentEpoch")
                     require(epoch is Int && epoch > 0) { "原工作代次无效" }
                     val mark = if (args.has("fileReview")) args.getJSONObject("fileReview") else null
-                    controller.readWebWorkDecisions(parent, parentRun, epoch, conversation, teamRun, mark) { value, error ->
+                    val directory = args.has("proposalDirectory")
+                    require(!directory || args.opt("proposalDirectory") == true)
+                    val proposal = if (args.has("proposal")) args.getJSONObject("proposal").also { fields(it,"operationId","workItemId","assignmentId","planHash") } else null
+                    require(listOf(mark != null,directory,proposal != null).count { it } <= 1) { "请选择一类原工作记录" }
+                    controller.readWebWorkDecisions(parent, parentRun, epoch, conversation, teamRun, mark, directory, proposal) { value, error ->
                         if (currentWindow()) deliver(value?.let { PocketWebState.publicValue(it) as JSONObject }, error)
                         else done(null, "原对话已变化，请重新打开这件工作")
                     }
@@ -399,7 +410,14 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     }
                 }
             }
-            "teams.readRun" -> { fields(args, "runId"); val id = text(args, "runId"); known(id, "runs"); feature("get", JSONObject().put("runId", id)) }
+            "teams.readRun" -> {
+                fields(args,"runId","proposalOrigin"); val id = text(args,"runId"); known(id,"runs")
+                val origin = if (args.has("proposalOrigin")) args.getJSONObject("proposalOrigin").also {
+                    fields(it,"parentTaskId","parentRunId","parentEpoch","conversationId","teamRunId","proposal")
+                    fields(it.getJSONObject("proposal"),"operationId","workItemId","assignmentId","planHash")
+                } else null
+                feature("get",JSONObject().put("runId",id),proposalOrigin=origin)
+            }
             "teams.readDefinition" -> {
                 fields(args, "id"); val id = text(args, "id"); known(id, "teams")
                 controller.readWebTeamSnapshot { value, error ->

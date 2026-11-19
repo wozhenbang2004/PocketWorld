@@ -4,13 +4,14 @@ Only bytes already read/written by the original workspace API are retained. SQLi
 holds the binding, not a second job/permission or another copy of the file body.
 Old pathlib caches have no native binding: never import, enumerate or remove them.
 """
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import re
 import sqlite3
 import threading
 import time
+import unicodedata
 
 from platform_backend import PlatformError
 from platform_windows import WindowsHandleReader, relative_parts
@@ -44,6 +45,29 @@ def _hash(value): return isinstance(value,str) and re.fullmatch(r"[a-f0-9]{64}",
 
 
 def _name(scope,sha): return "retained-version-v1-"+_digest(_json([scope,sha]))+".bin"
+
+
+def display_text(raw):
+    # Plain, inert text only. Files with controls, bidi markers or invalid UTF-8
+    # are shown as bytes, never interpreted as a document, link or command.
+    try: text=raw.decode("utf-8")
+    except UnicodeError: return None
+    if text.startswith("\ufeff"): text=text[1:]  # Display a leading UTF-8 signature separately.
+    return text if all(x in "\r\n\t" or not unicodedata.category(x).startswith("C") for x in text) else None
+
+
+def _audience_class(raw,path,sha):
+    text=display_text(raw) if len(raw)<=24576 else None
+    if text is not None and len(_json({"path":path,"content":raw.decode("utf-8"),"version":"sha256:"+sha,
+                                        "bytes":len(raw),"revisionRetained":False}))<=24576: return "text"
+    return "file"
+
+
+def _seal(delivery,vault,scope,sha,size,ids,kind):
+    op,fp=delivery
+    if (not isinstance(op,str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}",op)
+            or not _hash(fp) or not _origin(ids) or kind not in ("text","file")): _bad()
+    return _digest(_json(["windows-original-received-bytes-v1",op,fp,vault,scope,sha,size,ids,kind]))
 
 
 class NativeFileVersions:
@@ -90,9 +114,12 @@ class NativeFileVersions:
     def _row(self,vault,scope,sha):
         return self.db.execute(f"SELECT size,origin FROM {TABLE} WHERE vault=? AND scope=? AND digest=?",(vault,scope,sha)).fetchone()
 
-    def _bytes(self,scope,sha,size,ids,sid):
+    def _bytes(self,scope,sha,size,ids,sid,*,held=None):
         if not _hash(scope) or not _hash(sha) or type(size) is not int or not 0<=size<=MAX_BYTES: _bad()
-        with self.backend._private_leaf(self.root,_name(scope,sha),sid,optional=False) as handle:
+        with ExitStack() as local:
+            # A local original viewer may keep just this immutable leaf pinned.
+            # The manager and workspace locks are never held over a UI message loop.
+            handle=(local if held is None else held).enter_context(self.backend._private_leaf(self.root,_name(scope,sha),sid,optional=False))
             birth=_identity(self.backend.api,handle)
             if ids is not _JUST_CREATED and (not _origin(ids) or ids!=birth): _bad()
             reader=WindowsHandleReader(self.backend.api,handle,MAX_BYTES)
@@ -127,17 +154,50 @@ class NativeFileVersions:
                 return
             except (OSError,ValueError,PlatformError,sqlite3.Error): continue  # Unknown/busy objects stay untouched.
 
-    def remember(self,env,path,raw):
+    def _bind_delivery(self,delivery,vault,scope,path,raw,sha,ids):
+        # Private commitment in the ORIGINAL direct admission, not the file-write
+        # receipt returned to the sender. No second copy, new grant or wire file ID.
+        if delivery is None: return
+        op,fp=delivery
+        kind=_audience_class(raw,path,sha)
+        proof=_seal(delivery,vault,scope,sha,len(raw),ids,kind)
+        self._change("""UPDATE operations SET details=json_set(details,'$.windowsIncomingFile.archive',json(?))
+               WHERE operation_id=? AND json_valid(details)
+               AND json_extract(details,'$.protocol')='native-device-tool-v1'
+               AND json_extract(details,'$.audience.toolName')='workspace.receive'
+               AND json_extract(details,'$.audience.callerDeviceId')=json_extract(details,'$.audience.originDeviceId')
+               AND json_extract(details,'$.historyAudience.argumentsDigest')=fingerprint
+               AND json_extract(details,'$.windowsIncomingFile.format')='windows-original-file-delivery-v1'
+               AND json_extract(details,'$.windowsIncomingFile.fileOperationFingerprint')=?
+               AND json_type(details,'$.windowsIncomingFile.archive') IS NULL""",
+               (json.dumps({"class":kind,"seal":proof}),op,fp))
+
+    def delivery_bytes(self,env,path,version,delivery,kind,proof,held):
+        if not isinstance(version,str) or not re.fullmatch(r"sha256:[a-f0-9]{64}",version) or not _hash(proof): _bad()
+        sha=version[7:]
+        with self._scope(env,path) as (vault,scope,sid):
+            row=self._row(vault,scope,sha)
+            if row is None or row[1] is None: _bad()
+            size,ids=row[0],json.loads(row[1])
+            # Check the original classification and immutable physical identity
+            # BEFORE opening a body. Identical bytes recaptured after eviction are not it.
+            if _seal(delivery,vault,scope,sha,size,ids,kind)!=proof: _bad()
+            body,_=self._bytes(scope,sha,size,ids,sid,held=held)
+            if _audience_class(body,path,sha)!=kind: _bad()
+            return body
+
+    def remember(self,env,path,raw,*,delivery=None):
         if not isinstance(raw,bytes) or len(raw)>MAX_BYTES: _bad()
         sha=_digest(raw); size=len(raw)
         with self._scope(env,path,create=True) as (vault,scope,sid):
             row=self._row(vault,scope,sha)
             if row is not None:
                 if row[0]!=size or row[1] is None: _bad()
-                body,_=self._bytes(scope,sha,size,json.loads(row[1]),sid)
+                body,ids=self._bytes(scope,sha,size,json.loads(row[1]),sid)
                 if body!=raw: _bad()
                 if self._change(f"UPDATE {TABLE} SET used=? WHERE vault=? AND scope=? AND digest=? AND origin=?",
                                 (time.time_ns(),vault,scope,sha,row[1]))!=1: _bad()
+                self._bind_delivery(delivery,vault,scope,path,raw,sha,ids)
                 return "sha256:"+sha
             # An ambiguous previous eviction/reservation blocks growth beyond the
             # one extra slot. Never adopt a preexisting file by its digest/name.
@@ -157,6 +217,7 @@ class NativeFileVersions:
                             (json.dumps(ids),vault,scope,sha))!=1: _bad()
             self._trim(vault,scope,sha,sid)
             self._trim(vault,scope,sha,sid,True)
+            self._bind_delivery(delivery,vault,scope,path,raw,sha,ids)
             return "sha256:"+sha
 
     def read(self,env,path,version):

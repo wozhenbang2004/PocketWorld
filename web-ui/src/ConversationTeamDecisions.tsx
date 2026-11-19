@@ -1,16 +1,17 @@
 import {useEffect,useId,useRef,useState} from 'react';
 import {bridge} from './bridge';
+import {ConversationParentRevisions} from './ConversationParentRevisions';
 import {Button} from './forms-library';
 import {IconChevronDown,IconChevronRight} from './icons';
 import type {OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamAttentionLocator} from './NotificationTeamAttention';
 import {originalAttentionLocator} from './team-result-reading';
 import {teamStatusLabel} from './team-presentation';
-import {sameTeamFiles,teamDecisionEntryKey,teamFileEntryKey,type TeamDecisionOrigin,type TeamFileReviewMark,type WorkFileSource} from './team-navigation';
+import {sameTeamFiles,teamDecisionEntryKey,teamFileEntryKey,type TeamDecisionOrigin,type TeamProposalMark,type TeamFileReviewMark,type WorkFileSource} from './team-navigation';
 
 type Item={locator:TeamAttentionLocator;name:string;title:string;detail:string};
 type Page={items:Item[];total:number};
-export type TeamWorkTarget = TeamAttentionLocator | {runId:string;fileReview:TeamFileReviewMark};
+export type TeamWorkTarget = TeamAttentionLocator | {runId:string;fileReview:TeamFileReviewMark} | {runId:string;proposal:TeamProposalMark};
 export type OpenTeamDecision=(locator:TeamWorkTarget,source:TeamDecisionOrigin)=>void;
 
 function WorkFileLink({source,label,onOpen}:{source:WorkFileSource;label:string;onOpen:OpenTeamDecision}){
@@ -68,10 +69,12 @@ export function ConversationTeamDecisions({team,distinguish,onOpen}:{team:OwnerW
     catch(error){if(current())setReading({stamp,error:error instanceof Error?error.message:'未能读取这组原待办。'})}
   };
   const count=team.pendingDecisionCount??team.pendingQuestionCount??0;
-  if(!team.needsAttention||team.cancelRequested||count<1&&!team.fileReview)return null;
+  if(!team.needsAttention||team.cancelRequested||count<1&&!team.fileReview&&!(team.pendingParentRevisionCount??0))return null;
   return <div className="pw-conversation-team-decisions">
     {team.fileReview&&<WorkFileLink key={teamFileEntryKey({...source,fileReview:team.fileReview})}
       source={{...source,fileReview:team.fileReview}} label={distinguish&&team.goal?team.goal+' · ':''} onOpen={onOpen}/>}
+    {!!team.pendingParentRevisionCount&&<ConversationParentRevisions key={entry} source={source} count={team.pendingParentRevisionCount} stamp={stamp}
+      label={distinguish?team.goal:''} onOpen={proposal=>onOpen({runId:team.teamRunId,proposal},source)}/>}
     {count>0&&<><Button size="small" variant="ghost" data-workspace-entry={entry} aria-expanded={!!shown} aria-controls={id}
       trailingIcon={shown?IconChevronDown:IconChevronRight} onClick={()=>shown?close():void open()}>
       {distinguish&&team.goal?`${team.goal} · `:''}{team.pendingQuestionCount===count?`${count} 个成员问题`:`${count} 项成员待办`}

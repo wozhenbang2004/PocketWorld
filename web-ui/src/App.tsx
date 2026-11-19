@@ -94,7 +94,7 @@ import {WorkExecutionPlace} from './WorkExecutionPlace';
 import {OwnerWorkSupplement,type WorkSupplementTarget,type WorkSupplementLeave} from './OwnerWorkSupplement';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
-import {teamDecisionEntryKey,teamFileEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
+import {teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
 import {TaskApproval} from './TaskApproval';
 import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,privateProjectTask,projectContinuation,type ContinuationSubmission} from './task-continuation';
 import {TaskInference} from './TaskInference';
@@ -1100,15 +1100,16 @@ export default function App(){
    const live=bridge.getState();
    if(document.hidden||route!=='chat'||taskOpen||live.state.conversationId!==source.conversationId||locator.runId!==source.teamRunId||!can('teams.readAttention'))return;
    const files='fileReview' in locator?{...source,fileReview:locator.fileReview}:undefined;
-   if(files&&!can('teams.readFrozenOutputs'))return;
-   const origin={...captureWorkspaceOrigin(),focus:null,focusKey:files?teamFileEntryKey(files):teamDecisionEntryKey(source),
+   const proposal='proposal' in locator?{...source,proposal:locator.proposal}:undefined;
+   if(files&&!can('teams.readFrozenOutputs')||proposal&&!can('teams.readRun'))return;
+   const origin={...captureWorkspaceOrigin(),focus:null,focusKey:proposal?teamProposalEntryKey(source):files?teamFileEntryKey(files):teamDecisionEntryKey(source),
      drawerChat:{id:source.conversationId,draftKey:String(live.composer?.key||''),documentEpoch:bridge.getDocumentEpoch()}};
-   if(files){
+   if(files||proposal){
      const returnToWork=(reason?:string)=>{if(document.hidden||relatedOrigin.current!==origin)return;void restoreWorkspace(origin).then(()=>{
        if(reason&&!document.hidden&&bridge.getState().state.conversationId===source.conversationId)setLocalError(reason);
      });};
-     void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:source.teamRunId,fromWork:files,returnToWork});});
-   }else if(!('fileReview' in locator)) void openRelatedWorkspace('teams',origin,()=>{setTeamRunFocus(undefined);setTeamAttentionFocus({...locator,ownerWork:source,requestId:crypto.randomUUID()});});
+     void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:source.teamRunId,fromWork:proposal||files,returnToWork});});
+   }else if('memberId' in locator) void openRelatedWorkspace('teams',origin,()=>{setTeamRunFocus(undefined);setTeamAttentionFocus({...locator,ownerWork:source,requestId:crypto.randomUUID()});});
  };
  const openWorkTeam=(team:OwnerWorkTeam)=>{
    if(!can('teams.readRun'))return;
@@ -1833,7 +1834,7 @@ export default function App(){
           resumeProfile={!!projectWorkDrafts[currentProject.id]?.operation}
           presentation={projectWorkPresentations[currentProject.id]??{open:!!(projectWorkDrafts[currentProject.id]?.operation||projectWorkDrafts[currentProject.id]?.expanded),mode:projectWorkDrafts[currentProject.id]?.operation||projectWorkDrafts[currentProject.id]?.expanded||!can('projects.development.read')?'profile':'default'}}
           onPresentationChange={presentation=>setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}))}
-          defaultStart={can('projects.development.read')?(active,onBusy)=><ProjectDevelopmentWorkspace key={currentProject.id} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onTaskRegistered={projectDirectory.reset} onPrepareTools={()=>void openSetup('tools')} onConnectModel={()=>void openRelatedWorkspace('model-settings')} onOpenTerminal={()=>void openRelatedWorkspace('local')}/>:undefined}
+          defaultStart={can('projects.development.read')?(active,onBusy)=><ProjectDevelopmentWorkspace key={currentProject.id} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)} onTaskRegistered={projectDirectory.reset} onPrepareTools={()=>void openSetup('tools')} onConnectModel={()=>void openRelatedWorkspace('model-settings')} onOpenTerminal={()=>void openRelatedWorkspace('local')}/>:undefined}
           profileStart={can('projectWork.open')&&can('projectWork.confirm')?(active,onBusy)=><ProjectWorkStart
             key={currentProject.id} project={currentProject} embedded
             draft={projectWorkDrafts[currentProject.id]||emptyProjectWorkDraft()}

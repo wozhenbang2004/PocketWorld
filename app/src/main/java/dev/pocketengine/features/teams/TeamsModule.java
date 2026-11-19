@@ -87,6 +87,10 @@ public final class TeamsModule implements EngineModule {
     /** Native private-owner read only, deliberately not a model command. */
     public JSONObject ownerAttention(String afterRunId,String afterItemId,int limit)throws Exception{return coordinator.ownerAttention(afterRunId,afterItemId,limit);}
     public JSONObject ownerDecisionPage(String runId)throws Exception{return coordinator.ownerDecisionPage(runId);}
+    /** Read existing write receipts and project heads only; does not create a review handle or grant. */
+    public void requireOwnerRevisionTarget(JSONObject retained,JSONObject origin,JSONObject target)throws Exception {
+        TeamParentRevisionOffer.requireCurrentTarget(retained,origin,target,requireWriteHost().parentIntegrationState(retained.getString("id")));
+    }
     public boolean parentOrchestrationConfigured(){return parentHost!=null;}
     public boolean continuousResearchConfigured(){return researchHost!=null;}
     public TeamCoordinator.OriginalCancellation originalCancellation(String run)throws Exception{return coordinator.originalCancellation(run);}
