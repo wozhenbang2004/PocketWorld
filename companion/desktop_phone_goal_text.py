@@ -6,19 +6,29 @@ import struct
 
 
 def ask_goal(current):
+    return _ask(current, lookup=False)
+
+
+def ask_original_operation(current):
+    return _ask(current, lookup=True)
+
+
+def _ask(current, *, lookup):
     # Standard dialog template: scale in dialog units, native tab order, IME,
     # multiline edit, Escape and system-close. IDOK only returns a LOCAL draft.
     def string(text): return (text + "\0").encode("utf-16le")
-    template = bytearray(struct.pack("<IIHhhhh", 0x80C808C0, 0, 4, 0, 0, 292, 147))
-    template.extend(b"\0\0\0\0" + string("交给手机 · 写下这次目标") + struct.pack("<H", 9) + string("Segoe UI"))
+    template = bytearray(struct.pack("<IIHhhhh", 0x80C808C0, 0, 4, 0, 0, 292, 82 if lookup else 147))
+    template.extend(b"\0\0\0\0" + string("找回这台电脑接过的原操作" if lookup else "交给手机 · 写下这次目标") + struct.pack("<H", 9) + string("Segoe UI"))
     def item(style, x, y, width, height, ident, atom, title):
         template.extend(b"\0" * (-len(template) % 4))
         template.extend(struct.pack("<IIhhhhHHH", style | 0x50000000, 0, x, y, width, height, ident, 0xffff, atom))
         template.extend(string(title) + b"\0\0")
-    item(0, 9, 7, 273, 19, 100, 0x82, "只发送这里的文字，不附带电脑文件、项目或历史。")
-    item(0x00800000 | 0x00200000 | 0x10000 | 0x1044, 9, 27, 273, 86, 101, 0x81, "")
-    item(0x10001, 155, 121, 73, 16, 1, 0x80, "核对草稿")
-    item(0x10000, 232, 121, 51, 16, 2, 0x80, "取消")
+    hint = "在手机「原派发」里查看完整的原操作编号。只查这台电脑，不联系手机。" if lookup else "只发送这里的文字，不附带电脑文件、项目或历史。"
+    item(0, 9, 7, 273, 19, 100, 0x82, hint)
+    item(0x00800000 | 0x10000 | (0x80 if lookup else 0x00201044), 9, 27, 273, 17 if lookup else 86, 101, 0x81, "")
+    buttons_y = 54 if lookup else 121
+    item(0x10001, 155, buttons_y, 73, 16, 1, 0x80, "找原回执" if lookup else "核对草稿")
+    item(0x10000, 232, buttons_y, 51, 16, 2, 0x80, "取消")
     user, kernel = c.WinDLL("user32", use_last_error=True), c.WinDLL("kernel32")
     proc = c.WINFUNCTYPE(c.c_ssize_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
     def signature(lib, name, args, result):

@@ -264,6 +264,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         selectProject(checkout.getString("projectId")); developmentCheckoutId = checkout.getString("id"); developmentNavigationRevision++
         refresh()
     }
+    internal val formalFileDrafts by lazy { ProjectFormalDrafts(app,this) }
+    internal fun formalFileWindowEpoch() = artifactContinuationGeneration
     internal val formalFileExports = ProjectFormalFileExport(app,this,activity::chooseFormalFileTarget)
     internal val attachmentOutcomes = AttachmentOutcomeCoordinator(activity,app,io,main,::outcomeOwnerWindow,::focusTask,::releaseOutcomeWindow).also { flow -> app.teamWorkspaceOutcomes?.let { flow.bindTeamOutcomes(it,::openTeamAssignment) } }
     fun openTeamArtifact(selected:dev.pocketengine.features.attachments.TeamWorkspaceOutcomeHost.Selection) = attachmentOutcomes.openTeamArtifact(selected)
@@ -740,7 +742,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun startPreparedProjectForWeb(preparation: dev.pocketengine.store.TaskStore.OwnerWorkPreparation, input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         startProjectDevelopmentForWeb(input, current, done, preparation)
     }
-    private fun startProjectDevelopmentForWeb(input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit, preparation: dev.pocketengine.store.TaskStore.OwnerWorkPreparation?) {
+    internal fun startProjectInputFromDraftForWeb(input: JSONObject, marker: JSONObject?, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val picked = dev.pocketengine.features.local.project.ProjectConventionDelivery.fromReviewedDraft(marker,input)
+        startProjectDevelopmentForWeb(input,current,done,null,picked)
+    }
+    private fun startProjectDevelopmentForWeb(input: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit,
+        preparation: dev.pocketengine.store.TaskStore.OwnerWorkPreparation?, picked: dev.pocketengine.features.local.project.ProjectConventionDelivery.Picked? = null) {
         check(webPrivateOwnerVisible() && current()) { "原项目审阅窗口已关闭" }
         val frozen = JSONObject(input.toString())
         io.execute {
@@ -754,7 +761,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 check(projectDevelopmentModelForWeb().optBoolean("configured")) { "默认模型配置已不可用，没有开始任务" }
                 check(current()) { "原项目审阅窗口已变化，没有开始任务" }
                 entered = true
-                if (preparation == null) app.projectDevelopmentForOwner().startReviewedForOwner(frozen, java.util.function.BooleanSupplier { current() })
+                if (picked!=null && preparation==null) app.projectDevelopmentForOwner().startWithOwnerConvention(frozen, java.util.function.BooleanSupplier { current() },picked)
+                else if (preparation == null) app.projectDevelopmentForOwner().startReviewedForOwner(frozen, java.util.function.BooleanSupplier { current() })
                 else app.projectDevelopmentForOwner().startReviewedForOwner(frozen, java.util.function.BooleanSupplier { current() }, preparation)
             }
             main.post {
@@ -1617,6 +1625,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (closed) throw java.util.concurrent.RejectedExecutionException()
         control.check()
         return app.nativeOwnerWorkflows.answerSources(request, control)
+    }
+    /** Original message/source and physical model receipt only. No Book, project catalog, model or new task. */
+    internal fun requestProvidedProjectConvention(messageId:String, current:()->Boolean, done:(JSONObject?,String?)->Unit) {
+        val conversation=state.conversationId ?: error("请回到原私人对话")
+        val original=state.messages.singleOrNull { it.id==messageId && it.role=="assistant" && it.projectConventionRecorded } ?: error("请回到已保存的原项目回答")
+        val taskId=original.taskId ?: error("没有原任务身份")
+        fun valid() = current() && webPrivateOwnerVisible() && state.conversationId==conversation &&
+            state.messages.singleOrNull { it.id==messageId && it.taskId==taskId && it.role=="assistant" }?.let { it.projectConventionRecorded && it.sourceRevision==original.sourceRevision }==true
+        requestPersonalOwner(::valid,done) { app.tasks.originalProjectConventionForAnswer(conversation,messageId,taskId,original.sourceRevision) }
     }
     /** Resolve the original answer in the visible native conversation, never a caller-supplied receipt. */
     internal fun webAnswerMemoryReference(messageId: String): JSONObject {
@@ -3538,27 +3555,42 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         val privateStop = action == "stop" && webPrivateOwnerVisible() && dev.pocketengine.store.PhoneActionRecovery.local(task.raw)
         state = state.copy(taskActionErrors = state.taskActionErrors - id)
-        try { controls.execute {
-            val result = runCatching {
-                val execute = {
-                  when (action) {
-                    "pause" -> app.pauseOriginalPhoneRun(id, run, epoch)
-                    "stop" -> if(privateStop) app.stopPrivatePhoneFromOwner(id, run, epoch) else app.stopOriginalPhoneRun(id, run, epoch)
-                    "resume" -> app.continueOriginalPhoneTaskReceipt(id, run, epoch, feedback, true, task.executionMode)
-                    else -> error("未知原手机控制操作")
-                  }
-                }
-                if (group) app.groupOwnerWorkflows.call(groupWindow ?: throw SecurityException("请在原群任务窗口核对这次控制")) { execute() } else execute()
-            }
+        fun finished(result: Result<JSONObject>) {
             main.post {
                 if (!closed) result.fold({ value ->
                     state = state.copy(notice = value.optString("message").takeIf { it.isNotBlank() } ?: "原任务控制请求已接纳；实际状态以原回执为准")
                     if (action == "resume") state = state.copy(savedFeedbackRevision = state.savedFeedbackRevision + 1, savedFeedbackTaskId = id, savedFeedback = feedback)
                     if (action == "resume" && task.executionMode == "main_screen") moveOriginalPhoneToBackground(value)
                 }, { state = state.copy(taskActionErrors = state.taskActionErrors + (id to message(it)), error = message(it)) })
-                if (!closed) getTask(id)
+                if (!closed && result.getOrNull()?.optString("stopJournal") != "unconfirmed") getTask(id)
                 result.fold({ completed?.invoke(it, null) }, { completed?.invoke(null, message(it)) })
             }
+        }
+        if(privateStop){
+            try {
+                app.submitPrivatePhoneStop(id,run,epoch).whenComplete { reply,failure ->
+                    if(failure!=null)finished(Result.failure(if(failure is java.util.concurrent.CompletionException) failure.cause ?: failure else failure))
+                    else finished(runCatching { JSONObject(reply) })
+                }
+            } catch(unavailable:dev.pocketengine.phone.OwnerPhoneStopInputs.NotDispatched) {
+                val reason=message(unavailable);state=state.copy(taskActionErrors=state.taskActionErrors+(id to reason),error=reason)
+                completed?.invoke(JSONObject().put("stopInput","not_submitted"),reason)
+            } catch(unavailable:Exception) { finished(Result.failure(unavailable)) }
+            return
+        }
+        try { controls.execute {
+            val result = runCatching {
+                val execute = {
+                  when (action) {
+                    "pause" -> app.pauseOriginalPhoneRun(id, run, epoch)
+                    "stop" -> app.stopOriginalPhoneRun(id, run, epoch)
+                    "resume" -> app.continueOriginalPhoneTaskReceipt(id, run, epoch, feedback, true, task.executionMode)
+                    else -> error("未知原手机控制操作")
+                  }
+                }
+                if (group) app.groupOwnerWorkflows.call(groupWindow ?: throw SecurityException("请在原群任务窗口核对这次控制")) { execute() } else execute()
+            }
+            finished(result)
         } } catch (error: Exception) { state = state.copy(error = message(error)); completed?.invoke(null, message(error)) }
     }
     /** Home and original viewer Continue the shown pause only. Unlike generic cold continuation, losing
@@ -5239,7 +5271,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         state = state.copy(conversations = parseConversations(state.feature("assistant").optJSONArray("conversations")))
                     }
                     // Only absent or valid empty reference arrays permit text-only staging; malformed or unknown payloads fail closed.
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), learningExcluded = originalLearningExcluded(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), projectConventionRecorded = it.opt("projectConventionRecorded") == true, memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), learningExcluded = originalLearningExcluded(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }

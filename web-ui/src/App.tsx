@@ -69,6 +69,7 @@ import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
 import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWorkspace';
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
+import {ProjectConventionProvided} from './ProjectConventionProvided';
 import {ProvidedMemories} from './ProvidedMemories';
 import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {MessageOriginReader,type MessageOriginTarget} from './MessageOriginReader';
@@ -81,6 +82,7 @@ import {ProjectLocalSourceIntake} from './ProjectLocalSourceIntake';
 import {ProjectGitIntake,type PublicGitDraft} from './ProjectGitIntake';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
 import {ProjectFileEditor} from './ProjectFileEditor';
+import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
 import {ProjectDevelopmentWorkspace} from './ProjectDevelopmentWorkspace';
 import {ContinuedProjectBinding} from './ProjectWorkBinding';
@@ -143,7 +145,7 @@ const Secondary=lazy(()=>import('./Secondary'));
 
 type Json=Record<string,any>;
 type Task={id:string;goal:string;status:string;summary?:string;executionMode?:string;updatedAt?:number;raw?:Json;hostReceipt?:Json};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];memoryReference?:Json;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
@@ -343,6 +345,7 @@ export default function App(){
  const taskReconciliationOrigin=useRef<{taskId:string;layer:TaskLayer;openedId:string;expected:{runId:string;epoch:number};history?:ConversationHistoryTaskOrigin}|null>(null);
  const [taskOpening,setTaskOpening]=useState(false);
  const [sourceSelection,setSourceSelection]=useState<AnswerSourceTarget|null>(null);
+ const [projectConventionMessage,setProjectConventionMessage]=useState<string|null>(null);
  const [providedMemoryMessage,setProvidedMemoryMessage]=useState<string|null>(null);
  const providedMemoryBack=useRef<(()=>boolean)|null>(null);
  const registerProvidedMemoryBack=useCallback((handler:(()=>boolean)|null)=>{providedMemoryBack.current=handler},[]);
@@ -783,7 +786,7 @@ export default function App(){
   const navigation=navigationWindow.current;
   if(await openRelatedWorkspace('projects')&&navigationWindow.current===navigation+1)run('projects.select',{id:projectId});
  };
- const previewBlocked=!!(searchOriginal||projectWorkReviewOpen||providedMemoryMessage||conversationMemoryOpen||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
+ const previewBlocked=!!(searchOriginal||projectWorkReviewOpen||projectConventionMessage||providedMemoryMessage||conversationMemoryOpen||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
  const packageReturn=useRef<{target:PackagePreviewTarget;origin:WorkspaceOrigin;epoch:number;navigation:number;projectFocus:ProjectTaskReturn|null}|null>(null);
  const returnFromPackage=(id:string,operationId?:string)=>{
   const saved=packageReturn.current;
@@ -1409,7 +1412,7 @@ export default function App(){
   sync();document.addEventListener('visibilitychange',sync);
   return()=>{active=false;document.removeEventListener('visibilitychange',sync)};
  },[canvasRole,canvasSupported,personalDocumentEpoch,canvasResume]);
- const phoneViewerObscured=!!(searchOriginal||preparationTarget||providedMemoryMessage||conversationMemoryOpen||state.conversationReader||state.queuedInputsPage||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||workOpen||commandOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice||readingDocuments.length);
+ const phoneViewerObscured=!!(searchOriginal||preparationTarget||projectConventionMessage||providedMemoryMessage||conversationMemoryOpen||state.conversationReader||state.queuedInputsPage||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||workOpen||commandOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice||readingDocuments.length);
  const phoneViewerFor=(task:Task)=>{
   const target=phoneViewerTask(task);if(!target||!can('phone.viewer.open')||!can('phone.viewer.frame')||!can('phone.viewer.close'))return null;
   const local=isPrivateLocalPhone(task),live=privatePhoneSurface(task,state.livePrivatePhones);
@@ -1863,6 +1866,7 @@ export default function App(){
         {m.role==='user'&&m.submission?.taskId&&can('queued.open')&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{setMessageMenu(null);run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}}>原任务的输入队列</Button>}
         {canQuote&&<Button variant="ghost" leadingIcon={IconQuote} disabled={!draftKey||!!state.chatSubmitting} onClick={()=>{setMessageMenu(null);openQuote(m)}}>引用到草稿</Button>}
         {m.retainedSources&&can('sources.open')&&<Button variant="ghost" leadingIcon={IconLink} onClick={()=>{setMessageMenu(null);openSource(m)}}>回答来源</Button>}
+        {m.projectConventionRecorded===true&&m.id&&can('conversation.projectConvention.read')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProjectConventionMessage(m.id!)}}>核对本次项目约定</Button>}
         {m.memoryReference&&m.id&&can('taskMemory.answer')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProvidedMemoryMessage(m.id!)}}>本次提供的记忆</Button>}
         {m.memoryReference&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);openPersonalMemory({view:'memories'})}}>管理个人记忆</Button>}
         {m.role==='assistant'&&!phoneResult&&!taskResult&&m.taskId&&can('conversation.drafts')&&messageTaskAnchors.get(m.taskId)===index&&<ConversationDrafts key={m.taskId} taskId={m.taskId} reviewingMemory={memoryDraftTarget?.taskId===m.taskId} refreshRevision={Number(state.memoryRefreshRevision||0)} open={draft=>{setMessageMenu(null);openConversationDraft(draft)}}/>}
@@ -1920,7 +1924,7 @@ export default function App(){
           />:undefined}
         />:undefined}/>
       </TabPanel>
-      <TabPanel id="files">{projectFiles}</TabPanel>
+      <TabPanel id="files">{can('projects.keptDrafts.list')&&<ProjectKeptDraftIndex key={currentProject.id} project={currentProject.id}/>} {projectFiles}</TabPanel>
       <TabPanel id="preview" className="pw-project-preview-panel" style={{translate:'none',opacity:1,transition:'none'}}>{desktopNavigation?<div className="pw-project-connected-workspace" data-preview-open="true"><motion.section layoutScroll className="pw-project-files-pane" aria-label="项目文件"><header className="pw-project-connected-header"><h2>项目文件</h2></header>{projectFiles}</motion.section><section className="pw-project-preview-panel" aria-label="项目预览"><ProjectPreviewPane control={projectPreview} composer={composer}/></section></div>:<ProjectPreviewPane control={projectPreview} composer={composer}/>}</TabPanel>
     </Tabs>
 
@@ -2023,6 +2027,7 @@ export default function App(){
   onRefresh={can('phone.notice.refresh')?()=>{void bridge.command('phone.notice.refresh',{noticeHandle:phoneNotification.token}).catch(()=>{})}:undefined}/>}
  {messageOriginTarget&&('phoneResult' in messageOriginTarget?<PhoneReturnedReport key={messageOriginTarget.phoneResult.deliveryId} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>:<MessageOriginReader key={`${messageOriginTarget.conversationId}:${messageOriginTarget.messageId}`} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>)}
  {messageQuoteTarget&&<MessageQuote key={`${messageQuoteTarget.key}:${messageQuoteTarget.epoch}:${messageQuoteTarget.messageId}`} target={messageQuoteTarget} onClose={()=>setMessageQuoteTarget(null)}/>}
+ {projectConventionMessage&&<ProjectConventionProvided key={projectConventionMessage} messageId={projectConventionMessage} onClose={()=>setProjectConventionMessage(null)}/>}
  {providedMemoryMessage&&<ProvidedMemories key={providedMemoryMessage} messageId={providedMemoryMessage} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setProvidedMemoryMessage(null)} onManage={()=>{setProvidedMemoryMessage(null);void openPersonalMemory({view:'memories'})}} registerBack={registerProvidedMemoryBack}/>}
  {sourceSelection&&<AnswerSources key={sourceSelection.messageId||sourceSelection.taskId} target={sourceSelection} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setSourceSelection(null)}/>}
  <ReadingView documents={readingDocuments} onBack={closeReading}/>

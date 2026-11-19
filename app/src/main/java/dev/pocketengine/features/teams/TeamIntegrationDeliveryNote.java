@@ -59,12 +59,41 @@ final class TeamIntegrationDeliveryNote {
         }
         if(!refs.isEmpty()||matched!=p.getInt("applied")+p.getInt("retained"))return null;
         boolean unknown=actual.getBoolean("hasUnresolved"),active=actual.getBoolean("activeAttempt");
-        boolean complete=actual.getBoolean("currentFilesComplete")&&"completed".equals(actual.optString("status"))&&matched==rows.length()&&!active&&!unknown;
+        boolean filesComplete=actual.getBoolean("currentFilesComplete")&&matched==rows.length()&&!active&&!unknown;
+        boolean complete=filesComplete&&"completed".equals(actual.optString("status"));
         String message="上次核对，"+rows.length()+" 份原团队文件中有 "+matched+" 份与成功写回回执和当时的项目版本一致。";
         message+=unknown?"尚有未确定效果，请查原整合操作，不要重放。":active?"原整合者仍在处理中。":complete?"文件已写回，业务结果仍由主人验收。"
-                :conflicts>0?"另有 "+conflicts+" 份的项目基线不一致，请核对原文件。":"尚未确认这份计划全部写回；没有重跑分工。";
+                :filesComplete?"原清单已全部写回；原整合执行没有正常收尾，不代表业务验收。":conflicts>0?"另有 "+conflicts+" 份的项目基线不一致，请核对原文件。":"尚未确认这份计划全部写回；没有重跑分工。";
         return new JSONObject().put("teamRunId",team).put("generation",run.getInt("generation")).put("workPlanId",work.getString("planId")).put("workPlanRevision",work.getInt("revision"))
                 .put("taskId",task).put("runId",actual.getString("runId")).put("reviewId",reviewId).put("planHash",hash).put("observedAt",System.currentTimeMillis())
-                .put("matched",matched).put("total",rows.length()).put("settledAtObservation",complete).put("businessVerified",false).put("message",message);
+                .put("matched",matched).put("total",rows.length()).put("allFileHeadsMatched",filesComplete).put("workerStatusAtObservation",actual.getString("status")).put("settledAtObservation",complete).put("businessVerified",false).put("message",message);
     }
+    static boolean readableRecovery(JSONObject run){
+        JSONObject review=run.optJSONObject("independentReview"),scope=run.optJSONObject("productionScope");JSONArray files=review==null?null:review.optJSONArray("files");
+        return scope!=null&&!scope.has("projectSelection")&&run.optJSONObject("workPlan")!=null&&review!=null&&!review.optBoolean("stale")
+                &&"completed".equals(review.opt("status"))&&files!=null&&files.length()>0&&files.length()<=8;
+    }
+    /** A genuine positive recovery in this exact stopped child, not a prepared/no-dispatch or similar-name receipt. */
+    static JSONObject recovered(JSONObject run,JSONObject actual,JSONObject source)throws org.json.JSONException{
+        if(source==null||!"team_file_receipt_recovered".equals(source.opt("type"))||!source.optBoolean("receiptRestored")||source.optBoolean("notDispatchedConfirmed")
+                ||!actual.optString("taskId").equals(source.opt("taskId"))||!actual.optString("runId").equals(source.opt("runId"))
+                ||source.optInt("epoch",-1)<1||source.getInt("epoch")!=actual.optInt("coordinatorEpoch",-1)
+                ||actual.optBoolean("activeAttempt")||!source.optString("operationId").matches("[a-f0-9-]{36}")||actual.optJSONObject("progress")==null)return null;
+        JSONObject note=observe(run,actual);if(note==null)return null;JSONArray receipts=actual.optJSONArray("receipts");JSONObject match=null;
+        for(int i=0;receipts!=null&&i<receipts.length();i++){JSONObject receipt=receipts.optJSONObject(i);
+            if(receipt==null||!receipt.optBoolean("recoveredFromOriginalVersion")||!receipt.optBoolean("ok")||!source.getString("operationId").equals(receipt.opt("operationId")))continue;
+            JSONObject w=receipt.optJSONObject("teamIntegrated");
+            if(match!=null||w==null||!actual.getString("taskId").equals(w.opt("integrationTaskId"))||!actual.getString("runId").equals(w.opt("integrationRunId"))
+                    ||!run.getString("id").equals(w.opt("teamRunId"))||!note.getString("reviewId").equals(w.opt("reviewId"))||!note.getString("planHash").equals(w.opt("planHash"))
+                    ||!run.getJSONObject("productionScope").getString("targetProjectId").equals(w.opt("projectId"))||!source.optString("path").equals(w.opt("path"))
+                    ||source.optInt("version",-1)<1||source.getInt("version")!=w.optInt("version",-1)||!source.optString("revisionId").matches("[a-f0-9-]{36}")||!source.getString("revisionId").equals(w.opt("revisionId")))return null;
+            match=w;
+        }
+        if(match==null)return null;
+        boolean inCurrentPlan=false;JSONArray rows=actual.getJSONObject("progress").getJSONArray("files");
+        for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(match.getString("artifactId").equals(row.opt("artifactId"))&&match.getString("path").equals(row.opt("path")))inCurrentPlan=true;}
+        return !inCurrentPlan?null:note.put("source","recovered_original_file_operation").put("operationId",source.getString("operationId")).put("epoch",source.getInt("epoch"))
+                .put("executionAuthorized",false).put("workerStatusChanged",false);
+    }
+
 }

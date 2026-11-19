@@ -76,6 +76,8 @@ public final class TeamParentHost {
     private JSONObject integration(String id)throws Exception {
         JSONObject actual=writes.parentIntegrationState(id),out=smallReview(actual);
         for(String key:new String[]{"activeAttempt","hasUnresolved","currentFilesComplete","requiresOwnerReview","historicalStatus","progress","atomicBatch","projectDelivery"})if(actual.has(key))out.put(key,actual.get(key));
+        try{JSONObject recovered=writes.recoveredFilesForReading(coordinator,id,actual);if(recovered!=null)out.put("originalFileObservation",recovered);}
+        catch(Exception noOriginalReading){out.put("originalFileObservationUnavailable",true);}
         JSONArray receipts=actual.optJSONArray("receipts"),shown=new JSONArray();
         for(int i=0;receipts!=null&&i<receipts.length();i++){
             JSONObject source=receipts.getJSONObject(i),row=new JSONObject();

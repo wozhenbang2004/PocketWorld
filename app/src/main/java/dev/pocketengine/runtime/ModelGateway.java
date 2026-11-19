@@ -758,6 +758,7 @@ public final class ModelGateway {
         capture.requestProjection(request);
         byte[] payload = request.toString().getBytes(StandardCharsets.UTF_8);
         if(payload.length>MAX_REQUEST_BYTES)throw new GatewayException("模型请求序列化后超过24MiB本地传输限制；尚未发送，请缩减图片或上下文。此限制不是模型上下文窗口。");
+        dev.pocketengine.features.local.project.ProjectConventionDelivery.observeWire(control,capture.callId,payload);
         return new PreparedApiRequest(provider, endpoint, request, payload);
     }
 
@@ -946,6 +947,7 @@ public final class ModelGateway {
                 AccountRequestSession session = new AccountRequestSession(
                         control, requestScope, stream, capture, operation, port, binding, expected, refusals);
                 checkRequest(control, requestScope);
+                request.observeOwnerQuoteOnWire(control,capture.callId);
                 port.streamWithVersion(expected, request, operation, session, session);
                 return session.response(config, tools);
             }catch(GatewayFailure failure){

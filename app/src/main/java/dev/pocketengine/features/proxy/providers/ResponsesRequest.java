@@ -47,6 +47,10 @@ public final class ResponsesRequest {
             if(bytes.length-imageChars>MAX_REQUEST_BYTES||bytes.length>MAX_REQUEST_BYTES+MAX_IMAGES*MAX_IMAGE_URL_CHARS)throw invalid();
         }catch(GatewayFailure failure){throw failure;}catch(Exception invalid){throw invalid();}
     }
+    /** Body stays private: only a live, owner-picked project submission can register a local match. */
+    public void observeOwnerQuoteOnWire(dev.pocketengine.core.RunControl original,String callId){
+        dev.pocketengine.features.local.project.ProjectConventionDelivery.observeWire(original,callId,bytes);
+    }
     public boolean hasExplicitReasoning(){return reasoning.mode()!=dev.pocketengine.runtime.models.ReasoningOptions.Mode.DEFAULT;}
     /** Whole actual wire framing is charged. Inline base64 uses an explicit local image reserve. */
     public void admit(dev.pocketengine.runtime.models.AccountCatalogFacts current)throws GatewayFailure {

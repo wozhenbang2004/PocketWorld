@@ -78,5 +78,14 @@ public final class RecoveryProjection {
         if(!body.startsWith(prefix+exactSelectedContext)||!body.endsWith("\n</host_reference_data>"))return false;
         int end=prefix.length()+exactSelectedContext.length();return end<body.length()&&body.charAt(end)=='\n';
     }
+    /** Hash matching only: inspect exactly a bounded prefix of an existing native-framed user row.
+     * The verifier holds its expected digest; no reference, journal or prompt body is retained. */
+    public static boolean referencePrefixMatches(JSONObject row,int chars,java.util.function.Predicate<String> matches){
+        if(chars<1||chars>120000||row==null||!"user".equals(row.optString("role"))||!(row.opt("content") instanceof String))return false;
+        String body=row.optString("content"),prefix=body.startsWith(HOST_PREFIX)?HOST_PREFIX:HOST_PREFIX.replace("恢复、","");
+        int end=prefix.length()+chars;
+        return body.length()<=150000&&body.startsWith(prefix)&&end<body.length()&&body.charAt(end)=='\n'&&
+            body.endsWith("\n</host_reference_data>")&&matches.test(body.substring(prefix.length(),end));
+    }
     private static boolean identifier(String value,int max){return value!=null&&!value.isEmpty()&&value.length()<=max&&value.matches("[A-Za-z0-9_.:-]+");}
 }

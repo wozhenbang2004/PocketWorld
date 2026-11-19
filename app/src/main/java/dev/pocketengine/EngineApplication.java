@@ -375,6 +375,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     // Admission provenance, not a second controller. Never reconstructed from a Web handle or an old task.
     // Weak keys and exact release confine it to this native controller's lifetime.
     private final java.util.Map<RunControl,TaskStore> privatePhoneStopOrigins=new java.util.WeakHashMap<>();
+    private final dev.pocketengine.phone.OwnerPhoneStopInputs privatePhoneStopInputs=new dev.pocketengine.phone.OwnerPhoneStopInputs();
     private RunControl currentPhoneControl(String id){BackgroundRun run=id==null?null:backgroundRuns.get(id);return run!=null?run.control:id!=null&&id.equals(activeTaskId)?activeControl:null;}
     /** Snapshot for an already visible private task. Retained registry and local policy only: no TaskStore, service, PackageManager, helper, or physical phone call. */
     public JSONObject retainedPhoneSurface(String id,String run,int epoch,String requested,long displayedScopeRevision)throws Exception {
@@ -1905,6 +1906,14 @@ public final class EngineApplication extends Application implements dev.pocketen
     /** Explicit owner UI stop, using exactly the existing stop admission, never the read-only display ticket. */
     public JSONObject stopPrivatePhoneFromOwner(String id,String run,int epoch)throws Exception {
         return stopOriginalPhoneRun(id,run,epoch,true);
+    }
+    public java.util.concurrent.CompletionStage<String> submitPrivatePhoneStop(String id,String run,int epoch) {
+        long generation=bootstrap.generation();TaskStore originalStore=tasks;
+        return privatePhoneStopInputs.submit(generation,id,run,epoch,()->{
+            if(bootstrap.generation()!=generation||originalStore==null||tasks!=originalStore)
+                throw new IllegalStateException("原执行宿主已变化，没有向后继工作发送停手。");
+            return stopPrivatePhoneFromOwner(id,run,epoch).toString();
+        });
     }
     private JSONObject stopOriginalPhoneRun(String id,String run,int epoch,boolean ownerUi)throws Exception {
         if(tasks!=null&&Thread.holdsLock(tasks))throw new IllegalStateException("related_task_capture_requires_unlocked_tasks");

@@ -74,15 +74,21 @@ public final class AgentRunner {
     public static final class OwnerReply {
         public final String id,taskId,text;
         private final java.util.List<String> messageIds;
-        private final String memoryReference,memoryContext;
+        private final String memoryReference,memoryContext,projectConvention;
         private final RunControl producer;
         private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context){
+            this(taskId,text,ids,producer,reference,context,null);
+        }
+        private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,String physical){
             this.id=reference==null?java.util.UUID.randomUUID().toString():reference.optString("answerId");this.taskId=taskId;this.text=text;messageIds=immutableOwnerIds(ids);this.producer=java.util.Objects.requireNonNull(producer);
             memoryReference=reference==null?null:reference.toString();memoryContext=context==null?null:context.toString();
+            String projected=null;try{JSONObject actual=dev.pocketengine.features.local.project.ProjectConventionDelivery.forReply(producer,taskId,physical,id,text);if(actual!=null)projected=actual.toString();}
+            catch(Exception unavailable){/* No exact source evidence: the original answer still stands. */}projectConvention=projected;
         }
         public java.util.List<String> messageIds(){return messageIds;}
         public boolean matchesOriginal(RunControl original){return producer==original;}
         public JSONObject memoryReference()throws Exception{return memoryReference==null?null:new JSONObject(memoryReference);}
+        public JSONObject projectConvention()throws Exception{return projectConvention==null?null:new JSONObject(projectConvention);}
         public JSONObject memoryContext()throws Exception{return memoryContext==null?null:new JSONObject(memoryContext);}
     }
     private final RequestProjection requestProjection;
@@ -918,7 +924,7 @@ public final class AgentRunner {
                         return finish(taskId,"awaiting_user","规划答复已保存；任务仍在规划阶段，请审阅原计划版本后明确确认执行。\n"+clean(answer,config),evidence,steps,config,sink);
                     }
                     requirePlanningCurrent(planning,turnPlanning);
-                    if(ownerInputs!=null&&!requestedOwnerIds.isEmpty())ownerInputs.completed(new OwnerReply(taskId,clean(answer,config),requestedOwnerIds,control,memoryReference,memoryDependency),control);
+                    if(ownerInputs!=null&&!requestedOwnerIds.isEmpty())ownerInputs.completed(new OwnerReply(taskId,clean(answer,config),requestedOwnerIds,control,memoryReference,memoryDependency,nativeApprovedResponse?null:nativeRequest[0]),control);
                     // Queue means next owner turn, not cancellation of the current tool batch.
                     // The final empty poll atomically closes admission in the same native store.
                     boolean retain=developmentContinuation!=null&&developmentContinuation.retainAfterTurn();

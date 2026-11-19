@@ -1,3 +1,4 @@
+import { ProjectKeptFileDrafts } from './ProjectKeptDrafts';
 import { FileObservation, ProjectFormalReadOnly, RetainedFormalDraft } from './ProjectFormalReadOnly';
 import { ProjectFormalFileDelivery } from './ProjectFormalFileDelivery';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -40,6 +41,7 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   const switchMode = (value: FileLayer) => { if (locked) return; setReviewing(false); setMode(value); if (value === 'history') readHistory(); };
   return <section ref={root} className="pw-file-editor pw-file-workspace pw-project-file-editor" aria-label="文件工作区" aria-busy={!!state.fileLoading || locked}>
     <header className="pw-file-heading"><div><h2 className="pw-file-name">{path.split('/').at(-1)}</h2><p className="pw-file-path">{path.includes('/')?path.slice(0,path.lastIndexOf('/')):'项目根目录'}</p><p>{state.fileReady || version>0 ? '版本 '+(state.fileReady ? draft?.version ?? version : version) : '版本尚未核对'}<span className={draft?.dirty ? 'pw-file-dirty' : ''}>{draft?.dirty ? ' · 有保留的修改' : state.fileReady ? ' · 当前文件' : ' · 只读'}</span></p></div>{draft?.dirty && <span className="pw-file-state-dot" aria-hidden="true"/>}</header>
+    {!state.fileLoading && can('projects.keptDrafts.forFile') && <ProjectKeptFileDrafts state={state} draft={draft} edit={edit} disabled={!!state.fileSaving || adoption.pending}/>}
     {state.fileLoading ? <div className="pw-loading-file" aria-busy="true"><ShimmerText>正在读取文件</ShimmerText><Skeleton width="85%" height={13}/><Skeleton width="65%" height={13}/><Skeleton width="94%" height={13}/></div> : state.fileReady && draft ? <>
       {state.heldFormalDraft && <RetainedFormalDraft state={state}/>}
       {state.fileSaving && <ProgressBar label="正在保存当前文件" isIndeterminate showValueLabel={false} size="sm"/>}

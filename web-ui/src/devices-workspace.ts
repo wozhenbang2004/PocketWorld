@@ -106,12 +106,15 @@ export function samePhoneGoalArchive(value: DeviceData | null, peer: DeviceData 
 const startedPhases=new Set(['preparing','running','pausing','paused','stopping','verifying','awaiting_user','waiting_user','awaiting_approval','waiting_approval','waiting_permission','interrupted','reconciling','reconciliation_required','blocked_unknown']);
 export function waitingPhoneGoalPage(value: unknown, local: DeviceData) {
   if (!object(value) || value.kind !== 'waitingPhoneGoals' || value.readOnly !== true
+    || value.declinedOnly!==undefined&&typeof value.declinedOnly!=='boolean'||value.declinedOnly===true&&(value.startedOnly!==false||value.resultOnly!==false||value.rows?.length>6)
     || value.startedOnly!==undefined && typeof value.startedOnly!=='boolean' || value.startedOnly===true && value.resultOnly!==false
-    || (value.resultOnly === true || value.startedOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
+    || (value.resultOnly === true || value.startedOnly===true || value.declinedOnly===true) && (!Number.isSafeInteger(value.limitedCandidates) || value.limitedCandidates < 0 || value.limitedCandidates > 24) || !identity(local.deviceId) || !identity(local.instanceId)
     || value.localDeviceId !== local.deviceId || value.localInstanceId !== local.instanceId || !identity(value.waitingHandle) || !positiveInteger(value.capturedAt)
     || typeof value.hasMore !== 'boolean' || typeof value.canReadNewer !== 'boolean' || !Array.isArray(value.rows) || value.rows.length > 24
     || !value.rows.every((r: unknown) => object(r) && identity(r.taskId) && identity(r.operationId) && typeof r.sourceDeviceId === 'string'
-      && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.startedOnly===true
+      && /^pw1_[a-f0-9]{64}$/.test(r.sourceDeviceId) && (value.declinedOnly===true
+        ? r.waitingState==='declined_before_start' && r.notDispatched===true && positiveInteger(r.declinedAt) && r.runId===undefined && r.epoch===undefined
+        : value.startedOnly===true
         ? r.waitingState==='original_run' && identity(r.runId) && positiveInteger(r.epoch) && startedPhases.has(r.taskState)
           &&(startedPhases.has(r.runState)||r.runState==='needs_confirmation')&&positiveInteger(r.registeredAt)&&typeof r.stopRequested==='boolean'
         : value.resultOnly === true

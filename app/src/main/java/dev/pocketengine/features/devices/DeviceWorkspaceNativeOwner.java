@@ -356,6 +356,10 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机身份不可核对");
             return tasks.deviceTasks().closedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation,query);
         }
+        public JSONObject declinedReceivedPhoneGoals(String caller,String operation)throws Exception{
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("本机决定不能与接收手机核对");
+            return tasks.deviceTasks().declinedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
+        }
         public JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{
             DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("无法核对这部接收手机的原身份");
             return tasks.deviceTasks().startedReceivedPhoneGoals(local.deviceId(),local.instanceId(),caller,operation);
@@ -378,6 +382,25 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             var pinned=new DirectedPhoneTarget(target,peer.getString("instanceId"),peer.getString("fingerprint"));
             return tasks.deviceTasks().directedPhoneDispatches(local.deviceId(),pinned,source,parentAfter,after)
                     .put("targetFingerprint",pinned.certificateFingerprint()).put("localInstanceId",local.instanceId()).put("side","sent");
+        }
+        /** No trust lookup, history reader or peer I/O. The private source task must contain this exact target pin. */
+        public JSONObject savedDirectedPhoneDispatches(DirectedPhoneTarget target,String source,String after)throws Exception {
+            DeviceIdentity.LocalIdentity local=existingIdentity();if(local==null)throw new SecurityException("没有原本机身份，未读取派单留档");
+            JSONObject page=tasks.deviceTasks().directedPhoneDispatches(local.deviceId(),target,source,after.isEmpty()?"":source,after);
+            JSONArray records=page.getJSONArray("rows"),rows=new JSONArray();
+            for(int i=0;i<records.length();i++){
+                JSONObject row=records.getJSONObject(i);if(!source.equals(row.opt("taskId")))throw new SecurityException("原私人任务发生变化");
+                JSONObject safe=new JSONObject().put("goal",row.getString("goal")).put("createdAt",row.getLong("createdAt"));
+                if(row.has("targetAcceptedAt"))safe.put("targetAcceptedAt",row.getLong("targetAcceptedAt"));rows.put(safe);
+            }
+            String next="";
+            if(page.getBoolean("hasMore")){
+                if(!source.equals(page.opt("lastParent")))throw new SecurityException("原派单留档位置已变化");
+                next=DeviceProtocol.identifier(page.opt("lastOperation"),"after");if(next.equals(after))throw new SecurityException("原派单留档没有下一页");
+            }
+            return new JSONObject().put("kind","savedDirectedPhoneDispatches").put("readOnly",true).put("sourceTaskId",source)
+                    .put("target",target.view()).put("localDeviceId",local.deviceId()).put("localInstanceId",local.instanceId())
+                    .put("after",after).put("nextAfter",next).put("rows",rows);
         }
         public NativeDeviceWorkspaceHost.HistoryAction openHistory(String id, String operation) throws Exception {
             DeviceIdentity.LocalIdentity local = existingIdentity(); if (local == null) throw new SecurityException("本机设备身份不存在，不能继承原结果读取范围");

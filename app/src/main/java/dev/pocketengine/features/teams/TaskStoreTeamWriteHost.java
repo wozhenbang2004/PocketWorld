@@ -248,7 +248,7 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
     private JSONObject integrationState(String run)throws Exception {
         JSONObject state,context;synchronized(tasks){state=tasks.inspectTeamIntegration(run);context=tasks.teamIntegrationContext(run,new RunControl());}if(context==null)return state;
         JSONObject progress=TeamIntegrationFiles.progress(workspace,context.getJSONObject("binding"),context.getJSONArray("receipts"));boolean active=context.getBoolean("activeAttempt")||integrations.containsKey(run),unknown=context.getBoolean("hasUnresolved");
-        state.put("progress",progress).put("activeAttempt",active).put("hasUnresolved",unknown).put("currentFilesComplete",progress.getBoolean("complete")&&!active&&!unknown);
+        state.put("progress",progress).put("coordinatorEpoch",context.getJSONObject("binding").getInt("coordinatorEpoch")).put("activeAttempt",active).put("hasUnresolved",unknown).put("currentFilesComplete",progress.getBoolean("complete")&&!active&&!unknown);
         if(!active&&!unknown&&state.optString("status").equals("completed")&&!progress.getBoolean("complete"))state.put("historicalStatus","completed").put("status","awaiting_user").put("requiresOwnerReview",true).put("message","原成功回执已保留，但当前项目版本已变化；请重新审查实际差异，不会重放旧操作");return state.put("parentBudget",tasks.teamBudgetSnapshot(run));
     }
     /** Same exact head/progress check used by the original owner review, not a summary assertion. */
@@ -467,14 +467,30 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         }catch(Exception failure){if(!settled&&binding!=null&&!binding.optBoolean("inspectOnly"))try{tasks.endAttempt(binding.getString("taskId"),binding.getString("runId"),control.isCancelled()?"cancelled":"interrupted","原唯一整合者未取得确定终态，实际逐文件回执保留；未知效果只核对、不重放",new JSONObject());changed.accept(binding.getString("taskId"));}catch(Exception persistence){failure.addSuppressed(persistence);}throw failure;}
         finally{closeFence(liveFence);integrations.remove(run,control);if(binding!=null&&!binding.optString("taskId").isEmpty())integrationTasks.remove(binding.optString("taskId"),control);}
     }
-    JSONObject recoverOriginalFile(String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+    JSONObject recoverOriginalFile(TeamCoordinator coordinator,String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{
         JSONObject selection=tasks.pendingTeamFileEffect(id,run,epoch,operation);String team=selection.getJSONObject("binding").getString("teamRunId");
         java.util.function.BooleanSupplier stopped=()->ownerWindow.getAsBoolean()&&!integrations.containsKey(team)&&!integrationTasks.containsKey(id);
         if(!stopped.getAsBoolean())throw new SecurityException("原整合尚未退出或私人窗口已关闭");
         TeamIntegrationFileRecovery.Observed proof=TeamIntegrationFiles.recoverOriginal(workspace,selection);
         JSONObject receipt=tasks.recoverTeamFileReceipt(proof,stopped);
+        if(receipt.optBoolean("receiptRestored")){
+            try{
+                JSONObject pointer=tasks.recoveredOriginalTeamFileSource(team);
+                if(pointer!=null&&operation.equals(pointer.opt("operationId"))&&run.equals(pointer.opt("runId"))&&ownerWindow.getAsBoolean()&&TeamIntegrationDeliveryNote.readableRecovery(coordinator.retainedOwnerReading(team))){
+                    JSONObject actual=integrationState(team);
+                    if(ownerWindow.getAsBoolean())receipt.put("originalTeamObservationSaved",coordinator.recordRecoveredFiles(team,actual,pointer));
+                }
+            }catch(Exception laterDisplayFailure){receipt.put("originalTeamObservationSaved",false);} // SQL recovery already committed; original views reread it.
+        }
         try{changed.accept(id);}catch(RuntimeException stalePresentation){receipt.put("refreshRequired",true);}
         return receipt; // A notification failure cannot undo the already committed original receipt.
+    }
+    /** Original SQL remains the source if a restart split receipt settlement from team presentation. */
+    JSONObject recoveredFilesForReading(TeamCoordinator coordinator,String team,JSONObject knownState)throws Exception {
+        JSONObject pointer=tasks.recoveredOriginalTeamFileSource(team);if(pointer==null)return null;
+        JSONObject run=coordinator.retainedOwnerReading(team);if(!TeamIntegrationDeliveryNote.readableRecovery(run))return null;
+        JSONObject actual=knownState==null?integrationState(team):knownState;
+        return TeamIntegrationDeliveryNote.recovered(run,actual,pointer);
     }
     JSONObject finalWorkers(String team)throws Exception {
         RunControl review=reviews.get(team),integration=integrations.get(team);JSONObject sql;

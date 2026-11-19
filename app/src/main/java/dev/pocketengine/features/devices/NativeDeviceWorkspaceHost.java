@@ -177,6 +177,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default JSONObject closedReceivedPhoneGoals(String caller,String operation,String query)throws Exception{
             if(!query.isEmpty())throw new IllegalStateException("原宿主未提供本机文字查找");return closedReceivedPhoneGoals(caller,operation);
         }
+        default JSONObject declinedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有本机不接手记录");}
         default JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此本机宿主没有已接手目录");}
         default JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {throw new IllegalStateException("本机未提供待接手工作索引");}
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received) throws Exception { throw new IllegalStateException("本机未提供手机目标记录"); }
@@ -184,6 +185,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             if(!searchText.isEmpty())throw new IllegalStateException("本机未提供原目标查找");return phoneGoalIndex(target,parentAfter,operationAfter,received);
         }
         default JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {throw new IllegalStateException("本机未提供原任务派单索引");}
+        default JSONObject savedDirectedPhoneDispatches(DirectedPhoneTarget target,String source,String after)throws Exception {throw new IllegalStateException("此宿主未提供原派单的本机留档");}
         HistoryAction openHistory(String originalTaskId, String originalOperationId) throws Exception;
         void pause(String originalTaskId) throws Exception;
         void resume(String originalTaskId) throws Exception;
@@ -499,10 +501,17 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public JSONObject closedReceivedPhoneGoals(String caller,String operation,String query)throws Exception {
             current();JSONObject page=copy(control.closedReceivedPhoneGoals(caller,operation,query));current();return page;
         }
+        public JSONObject declinedReceivedPhoneGoals(String caller,String operation)throws Exception{
+            current();JSONObject page=copy(control.declinedReceivedPhoneGoals(caller,operation));current();return page;
+        }
         public JSONObject startedReceivedPhoneGoals(String caller,String operation)throws Exception{
             current();JSONObject page=copy(control.startedReceivedPhoneGoals(caller,operation));current();return page;
         }
         public JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {current();return copy(control.waitingPhoneGoals(afterCaller,afterOp,results));}
+        /** No history window: only the owner's retained, non-actionable page. */
+        public JSONObject savedDirectedPhoneDispatches(JSONObject selected,String source,String after)throws Exception {
+            current();JSONObject page=copy(control.savedDirectedPhoneDispatches(DirectedPhoneTarget.read(selected),source,after));current();return page;
+        }
         public JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {
             current();JSONObject page=copy(control.directedPhoneDispatches(target,source,parentAfter,after));current();return page;
         }

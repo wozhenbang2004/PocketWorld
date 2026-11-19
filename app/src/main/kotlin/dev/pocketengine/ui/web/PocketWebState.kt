@@ -14,7 +14,7 @@ internal object PocketWebState {
         "refreshtoken", "idtoken", "bearer", "bearertoken", "authorization", "secret",
         "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput",
         // The project run selection holds private file paths, range fingerprints and record revisions. It is native audit, not Web state.
-        "projectmemoryread"
+        "projectmemoryread", "nativeprojectconventionreceipt"
     )
     private val contractFields = setOf("deliverycontract","deliverycontractdigest")
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
@@ -57,6 +57,7 @@ internal object PocketWebState {
         .put("attachmentFiles", JSONArray().also { out -> row.attachmentFiles.forEach { out.put(publicValue(it)) } })
         .put("submission", publicValue(row.submission)).put("memoryReference", publicValue(row.memoryReference))
         .also { value ->
+            if (row.projectConventionRecorded && row.role=="assistant") value.put("projectConventionRecorded",true)
             row.phoneResult?.let { value.put("phoneResult", it.toJson()) }
             row.replyContext?.let { value.put("replyContext", it.toJson()) }
             row.hostGoalTaskId?.let { value.put("hostGoalTaskId",it) }

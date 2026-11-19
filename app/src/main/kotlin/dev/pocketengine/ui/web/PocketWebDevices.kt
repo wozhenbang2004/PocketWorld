@@ -43,7 +43,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private data class ReceiptOrigin(val task: String, val operation: String, val source: String, val here: String, val instance: String, val digest: String, val mode: String,
         val reviewRun: String = "", val reviewEpoch: Int = 0, val reviewRecordedAt: Long = 0,val activeRun:String="",val activeEpoch:Int=0)
     private data class WaitingPage(val handle: String,val window: Host.Window,val epoch: Long,val here: String,val instance: String,
-        val after: Pair<String,String>,val previous: List<Pair<String,String>>,val next: Pair<String,String>?,val rows: Map<Pair<String,String>,ReceiptOrigin>,val results: Boolean,val started:Boolean)
+        val after: Pair<String,String>,val previous: List<Pair<String,String>>,val next: Pair<String,String>?,val rows: Map<Pair<String,String>,ReceiptOrigin>,val results: Boolean,val started:Boolean,val declined:Boolean)
     @Volatile private var waitingPage: WaitingPage? = null
     // Across the local model-settings detour keep IDs only. No goal text, model selection or native Admission.
     private data class ModelPlace(val handle:String,val source:ReceiptOrigin,val issuedEpoch:Long,val until:Long)
@@ -180,7 +180,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     @Synchronized private fun beginControl(original:Host.Window,args:JSONObject,picking:Boolean):Pair<Long,PendingPick?>{
         val pick=if(picking){
             fields(args,"operation","waitingHandle","taskId","operationId");require(text(args,"operation")=="task.cancelPending")
-            val page=waitingFor(text(args,"waitingHandle"),original,generation.get());require(!page.results && !page.started)
+            val page=waitingFor(text(args,"waitingHandle"),original,generation.get());require(!page.results && !page.started && !page.declined)
             val row=page.rows[text(args,"taskId") to text(args,"operationId")]?:error("请选择原目录里的未启动工作")
             PendingPick(page.handle,page.epoch,row)
         }else null
@@ -215,7 +215,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     private fun waitingPending(args: JSONObject): Pair<ReceiptOrigin,JSONObject> {
         fields(args,"waitingHandle","taskId","operationId")
         val index=waitingFor(text(args,"waitingHandle"),requireNotNull(window()),generation.get())
-        require(!index.results && !index.started) { "请从本机待接手页重新读取原目标" }
+        require(!index.results && !index.started && !index.declined) { "请从本机待接手页重新读取原目标" }
         return checkedPending(receivedEntry(args))
     }
     private fun checkedPending(source:ReceiptOrigin):Pair<ReceiptOrigin,JSONObject>{
@@ -277,9 +277,9 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         return receipt.put("modelReturnHandle",place.handle)
     }
     private fun waitingGoals(args: JSONObject, original: Host.Window, epoch: Long): JSONObject {
-        val old: WaitingPage?;val after: Pair<String,String>;val previous: List<Pair<String,String>>;val results:Boolean;val started:Boolean
+        val old: WaitingPage?;val after: Pair<String,String>;val previous: List<Pair<String,String>>;val results:Boolean;val started:Boolean;val declined:Boolean
         if(args.has("waitingHandle")){
-            fields(args,"waitingHandle","direction");old=waitingFor(text(args,"waitingHandle"),original,epoch);results=old.results;started=old.started
+            fields(args,"waitingHandle","direction");old=waitingFor(text(args,"waitingHandle"),original,epoch);results=old.results;started=old.started;declined=old.declined
             when(text(args,"direction")){
                 "older" -> { after=requireNotNull(old.next); previous=(old.previous+listOf(old.after)).takeLast(32) }
                 "newer" -> { require(old.previous.isNotEmpty());after=old.previous.last();previous=old.previous.dropLast(1) }
@@ -287,27 +287,29 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             }
         }else{
             fields(args,"queue");val lane=if(args.has("queue"))text(args,"queue") else "pending"
-            require(lane in setOf("pending","results","started"));results=lane=="results";started=lane=="started"
+            require(lane in setOf("pending","results","started","declined"));results=lane=="results";started=lane=="started";declined=lane=="declined"
             old=null;after="" to "";previous=emptyList()
         }
         val here=latest.getJSONObject("local");val id=here.getString("deviceId");val instance=here.getString("instanceId")
-        val page=if(started)original.startedReceivedPhoneGoals(after.first,after.second) else original.waitingPhoneGoals(after.first,after.second,results)
-        require(page.opt("readOnly")==true && page.opt("waitingOnly")== !started && page.optBoolean("startedOnly")==started && page.opt("resultOnly")==results && page.opt("localDeviceId")==id && page.opt("localInstanceId")==instance)
-        val rows=page.getJSONArray("rows").objects();require(rows.size<=24)
-        val keys=rows.associate { val task=it.getString("taskId");val op=it.getString("operationId")
+        val page=if(declined)original.declinedReceivedPhoneGoals(after.first,after.second) else if(started)original.startedReceivedPhoneGoals(after.first,after.second) else original.waitingPhoneGoals(after.first,after.second,results)
+        require(page.opt("readOnly")==true && page.opt("waitingOnly")==(!started&&!declined) && page.optBoolean("startedOnly")==started && page.optBoolean("declinedOnly")==declined && page.opt("resultOnly")==results && page.opt("localDeviceId")==id && page.opt("localInstanceId")==instance)
+        val rows=page.getJSONArray("rows").objects();require(rows.size<=(if(declined)6 else 24))
+        // A closed decision has NO actionable or navigable task entries. Its handle only moves the page.
+        val keys=if(declined)emptyMap() else rows.associate { val task=it.getString("taskId");val op=it.getString("operationId")
             (task to op) to ReceiptOrigin(task,op,it.getString("sourceDeviceId"),id,instance,it.getString("originDigest"),it.getString("screenMode"),
                 if(results)it.getString("reviewRun") else "", if(results)it.getInt("reviewEpoch") else 0, if(results)it.getLong("reviewRecordedAt") else 0,
                 if(started)it.getJSONObject("startedRun").getString("runId") else "",if(started)it.getJSONObject("startedRun").getInt("epoch") else 0) }
-        require(keys.size==rows.size)
+        require(declined||keys.size==rows.size)
         val next=if(page.getBoolean("hasMore")) page.getString("lastParent") to page.getString("lastOperation") else null
-        val index=WaitingPage(UUID.randomUUID().toString(),original,epoch,id,instance,after,previous,next,keys,results,started)
+        val index=WaitingPage(UUID.randomUUID().toString(),original,epoch,id,instance,after,previous,next,keys,results,started,declined)
         synchronized(this){current(original,epoch);if(old!=null)require(waitingPage===old);waitingPage=index}
         val display=JSONArray();for(row in rows)display.put(JSONObject().also { item ->
             for(key in listOf("taskId","operationId","sourceDeviceId","goal","screenMode","createdAt","waitingState"))item.put(key,row.get(key))
             if(row.optBoolean("textOnly"))item.put("textOnly",true)
+            if(declined)item.put("declinedAt",row.getLong("declinedAt")).put("notDispatched",true)
             if(started){val run=row.getJSONObject("startedRun");for(key in listOf("runId","epoch","taskState","runState","registeredAt","stopRequested"))item.put(key,run.get(key))}
             if(results)item.put("reviewRecordedAt",row.getLong("reviewRecordedAt")) })
-        return JSONObject().put("kind","waitingPhoneGoals").put("startedOnly",started).put("resultOnly",results).put("limitedCandidates",page.getInt("limitedCandidates")).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
+        return JSONObject().put("kind","waitingPhoneGoals").put("declinedOnly",declined).put("startedOnly",started).put("resultOnly",results).put("limitedCandidates",page.getInt("limitedCandidates")).put("readOnly",true).put("waitingHandle",index.handle).put("localDeviceId",id)
             .put("localInstanceId",instance).put("capturedAt",System.currentTimeMillis()).put("rows",display).put("hasMore",next!=null).put("canReadNewer",previous.isNotEmpty())
     }
     @Synchronized private fun archiveFor(handle: String, original: Host.Window, epoch: Long): PhoneArchive {
@@ -320,6 +322,17 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         return index
     }
     private fun phoneArchivePage(args: JSONObject, original: Host.Window, epoch: Long, received: Boolean): JSONObject {
+        if(args.has("localCopy")){
+            fields(args,"sourceTaskId","localCopy","after");require(!received) { "本机发件留档不能用于收件或读对端" }
+            val source=DeviceProtocol.identifier(args.opt("sourceTaskId"),"sourceTaskId")
+            val after=if(args.has("after")) DeviceProtocol.identifier(args.opt("after"),"after") else ""
+            val here=latest.getJSONObject("local");current(original,epoch)
+            val page=original.savedDirectedPhoneDispatches(args.getJSONObject("localCopy"),source,after)
+            current(original,epoch);val live=latest.getJSONObject("local")
+            require(listOf("deviceId" to "localDeviceId","instanceId" to "localInstanceId").all { (field,key) ->
+                here.getString(field)==page.opt(key) && here.getString(field)==live.opt(field) }) { "本机身份已变化，未展示派单留档" }
+            return page // No PhoneArchive/Review capability is minted, even after a previously valid pairing.
+        }
         val old: PhoneArchive?; val targetId: String; val after: Pair<String,String>; val previous: List<Pair<String,String>>; val search: String; val source: String
         if (args.has("archiveHandle")) {
             fields(args, "archiveHandle", "direction")
@@ -678,7 +691,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }catch(failure:Exception){gate.compareAndSet(call,null);throw failure}
         val phoneResultRead=action=="devices.queryPhoneGoalResult"
         val readRevision=if(phoneResultRead) controller.deviceWorkspaceRevision else -1L
-        val ids = if(action=="devices.openCheckedLocalFile"||action=="devices.checkLocalExportedFile"||phoneResultRead||action=="devices.readLocalReviewedPhoneGoal"||action=="devices.readReviewedPhoneInbox") emptyArray() else taskIds()
+        val ids = if(action=="devices.readPhoneGoalArchive"&&args.has("localCopy")||action=="devices.openCheckedLocalFile"||action=="devices.checkLocalExportedFile"||phoneResultRead||action=="devices.readLocalReviewedPhoneGoal"||action=="devices.readReviewedPhoneInbox") emptyArray() else taskIds()
         fun taskId(): String = text(args, "taskId").also { require(it in ids) { "请从原设备任务记录选择" } }
         val work = Runnable {
             var snapshot: JSONObject? = null; var value: JSONObject? = null; var error: String? = null

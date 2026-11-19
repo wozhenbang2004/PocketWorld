@@ -11,6 +11,7 @@ import org.json.JSONArray;
 /** Native owner selection narrows the existing assistant admission; it creates no runner or grant. */
 public final class ProjectOwnerWorkflows {
     private final LocalModule local;private final TaskStore tasks;private final AssistantModule assistant;
+    private final ThreadLocal<ProjectConventionDelivery.Picked> ownerConvention=new ThreadLocal<>();
     private final ThreadLocal<JSONObject> selection=new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> ownerStartFence=new ThreadLocal<>();
     private final ThreadLocal<dev.pocketengine.features.teams.TeamProjectRoundHost.Admission> teamRound=new ThreadLocal<>();
@@ -129,6 +130,11 @@ public final class ProjectOwnerWorkflows {
         if(!current.getAsBoolean())throw new SecurityException("原项目或模型审阅已变化，没有进入启动");
         ownerStartFence.set(current);try{return start(ownerInput);}finally{ownerStartFence.remove();}
     }
+    /** Owner's picked plain-text provenance only. The original start still takes the exact same owner contract and scopes. */
+    public JSONObject startWithOwnerConvention(JSONObject input,java.util.function.BooleanSupplier current,ProjectConventionDelivery.Picked picked)throws Exception{
+        if(picked==null||ownerConvention.get()!=null||butlerPreparation.get()!=null)throw new SecurityException("没有此原项目的单次手写约定或正在其他启动");
+        ownerConvention.set(picked);try{return startReviewedForOwner(input,current);}finally{ownerConvention.remove();}
+    }
     /** The saved proposal supplies provenance only. The actual owner still selects and reviews
      * the original checkout, source digest and runtime through the ordinary project admission. */
     public JSONObject startReviewedForOwner(JSONObject ownerInput,java.util.function.BooleanSupplier current,TaskStore.OwnerWorkPreparation preparation)throws Exception {
@@ -219,6 +225,7 @@ public final class ProjectOwnerWorkflows {
         var round=teamRound.get();if(round!=null){if(selection.get()!=null)throw new SecurityException("新一轮与其他项目选择不能混合");round.bindNewAttempt(task,original,actualModel);return;}
         JSONObject context=selection.get();if(context!=null){
             tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,new JSONObject(context.toString()));
+            ProjectConventionDelivery.bind(ownerConvention.get(),context,task,original);
             var preparation=butlerPreparation.get();if(preparation!=null)preparation.bindPreparedTask(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
         }
     }

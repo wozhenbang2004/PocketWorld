@@ -12,7 +12,7 @@ import org.json.JSONObject;
 /** B's own accepted requests, not the sender's outbox and not authority to execute one. */
 final class ReceivedPhoneGoalIndex {
     private ReceivedPhoneGoalIndex() {}
-    private enum Shelf{PEER,PENDING,RESULT,CLOSED,STARTED}
+    private enum Shelf{PEER,PENDING,RESULT,CLOSED,STARTED,DECLINED}
     private static final Set<String> OPEN_PHASES=Set.of("preparing","running","pausing","paused","stopping","verifying","awaiting_user","waiting_user",
             "awaiting_approval","waiting_approval","waiting_permission","interrupted","reconciling","reconciliation_required","blocked_unknown");
 
@@ -25,6 +25,9 @@ final class ReceivedPhoneGoalIndex {
     static JSONObject waiting(SQLiteDatabase db,String here,String localInstance,String afterCaller,String afterOp,boolean results)throws Exception{
         return scan(db,here,localInstance,null,afterCaller,afterOp,results?Shelf.RESULT:Shelf.PENDING,new LocalPhoneGoalSearch(""));
     }
+    static JSONObject declined(SQLiteDatabase db,String here,String instance,String afterCaller,String afterOp)throws Exception{
+        return scan(db,here,instance,null,afterCaller,afterOp,Shelf.DECLINED,new LocalPhoneGoalSearch(""));
+    }
     static JSONObject started(SQLiteDatabase db,String here,String instance,String afterCaller,String afterOp)throws Exception{
         return scan(db,here,instance,null,afterCaller,afterOp,Shelf.STARTED,new LocalPhoneGoalSearch(""));
     }
@@ -32,11 +35,13 @@ final class ReceivedPhoneGoalIndex {
         return scan(db,here,instance,null,afterCaller,afterOp,Shelf.CLOSED,new LocalPhoneGoalSearch(query));
     }
     private static JSONObject scan(SQLiteDatabase db,String here,String localInstance,String issuer,String anchorId,String afterOp,Shelf shelf,LocalPhoneGoalSearch search)throws Exception{
-        boolean results=shelf==Shelf.RESULT,closed=shelf==Shelf.CLOSED,started=shelf==Shelf.STARTED;
+        boolean results=shelf==Shelf.RESULT,closed=shelf==Shelf.CLOSED,started=shelf==Shelf.STARTED,declined=shelf==Shelf.DECLINED;
+        int limit=(closed||declined)?6:24;
         DeviceProtocol.deviceId(here,"targetDeviceId"); DeviceProtocol.identifier(localInstance,"instanceId");
         boolean waiting=issuer==null; String where=" WHERE i.method='task.submitGoal'";
         ArrayList<String> args=new ArrayList<>();
         if(closed)where+=" AND EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id AND r.status='completed')";
+        else if(declined)where+=" AND EXISTS(SELECT 1 FROM task_events e WHERE e.task_id=i.local_task_id AND e.event_type='"+ReceivedPhoneDeclineHistory.EVENT+"') AND NOT EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id)";
         else if(started)where+=" AND EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id AND r.status NOT IN ('completed','failed','cancelled','canceled','stopped'))";
         else if(waiting) where+=" AND "+(results?"":"NOT ")+"EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id)"; // runs has UNIQUE(task_id,epoch).
         else {where+=" AND i.caller_device_id=?";args.add(issuer);}
@@ -53,14 +58,14 @@ final class ReceivedPhoneGoalIndex {
         String sql = "SELECT i.local_task_id,i.remote_operation_id,i.accepted_at,i.arguments_digest,i.grant_id,i.authorization_epoch,"
             + "CASE WHEN length(CAST(i.envelope_json AS BLOB))<="+DeviceProtocol.MAX_CONTROL_BYTES+" THEN i.envelope_json END,"
             + "CASE WHEN length(CAST(t.ui_header AS BLOB))<=32768 THEN t.ui_header END,i.caller_device_id "
-            + "FROM device_inbound i LEFT JOIN tasks t ON t.task_id=i.local_task_id"+where+" ORDER BY i.accepted_at DESC,i.caller_device_id,i.remote_operation_id LIMIT "+(closed?7:25);
+            + "FROM device_inbound i LEFT JOIN tasks t ON t.task_id=i.local_task_id"+where+" ORDER BY i.accepted_at DESC,i.caller_device_id,i.remote_operation_id LIMIT "+(limit+1);
         JSONArray items = new JSONArray(); String task="",op="",source=""; int scanned=0,limited=0; boolean more=false;
         try (Cursor c = db.rawQuery(sql,args.toArray(new String[0]))) {
             while (c.moveToNext()) {
-                if (scanned++ == (closed?6:24)) { more=true; break; }
+                if (scanned++ == limit) { more=true; break; }
                 task=c.getString(0); op=c.getString(1); source=c.getString(8);
                 if (here.equals(source) || c.getLong(2)<=0 || c.getLong(5)<=0) continue;
-                if(c.isNull(6)||c.isNull(7)){if(started)limited++;continue;}
+                if(c.isNull(6)||c.isNull(7)){if(started||declined)limited++;continue;}
                 try {
                     JSONObject wire=new JSONObject(c.getString(6)), header=new JSONObject(c.getString(7)); boolean textOnly=DeviceProtocol.ownerTextRequest(wire);
                     if(shelf==Shelf.PENDING && (!header.optString("runId").isEmpty() || header.optInt("coordinatorEpoch",-1)!=0 || !Boolean.FALSE.equals(header.opt("cancelRequested"))
@@ -80,6 +85,11 @@ final class ReceivedPhoneGoalIndex {
                             || !here.equals(origin.opt("targetDeviceId")) || !op.equals(origin.opt("remoteOperationId")) || !parent.equals(origin.opt("rootTaskId"))
                             || !parent.equals(origin.opt("parentTaskId")) || !wire.getString("localTaskId").equals(origin.opt("remoteLocalTaskId"))
                             || !c.getString(4).equals(origin.opt("grantId")) || c.getLong(5)!=origin.getLong("authorizationEpoch")) continue;
+                    long declinedAt=0;
+                    if(declined){
+                        try{declinedAt=ReceivedPhoneDeclineHistory.checkedAt(db,task,source,op,here,localInstance,mode,digest,c.getLong(2),origin);}
+                        catch(IllegalStateException|SecurityException|JSONException unavailable){limited++;continue;}
+                    }
                     JSONObject startedRun=null;
                     if(started){
                         String phase=header.optString("status"),run=header.optString("runId");int epoch=header.optInt("coordinatorEpoch",-1);
@@ -116,16 +126,16 @@ final class ReceivedPhoneGoalIndex {
                     String goal=wire.getJSONObject("arguments").getString("goal"); if (goal.trim().isEmpty()||!closed&&!search.matches(goal)) continue;
                     if (goal.codePointCount(0,goal.length())>160) goal=goal.substring(0,goal.offsetByCodePoints(0,160))+"…";
                     items.put(new JSONObject().put("taskId",task).put("operationId",op).put("argumentsDigest",digest)
-                            .put("sourceDeviceId",source).put("startedRun",startedRun).put("closedReview",closedReview).put("mayCheckLocalText",!waiting&&zero&&"completed".equals(header.opt("status"))&&!header.optString("runId").isEmpty()&&header.optInt("coordinatorEpoch")>0?true:null)
+                            .put("sourceDeviceId",source).put("declinedAt",declined?Long.valueOf(declinedAt):null).put("startedRun",startedRun).put("closedReview",closedReview).put("mayCheckLocalText",!waiting&&zero&&"completed".equals(header.opt("status"))&&!header.optString("runId").isEmpty()&&header.optInt("coordinatorEpoch")>0?true:null)
                             .put("textOnly",textOnly||zero&&"assistant".equals(header.opt("kind"))?true:null).put("reviewRun",review==null?null:review.getString("runId"))
                             .put("reviewEpoch",review==null?null:review.getInt("epoch")).put("reviewRecordedAt",review==null?null:review.getLong("recordedAt"))
-                            .put("waitingState",started?"original_run":results?"result_review":waiting&&!closed?("interrupted".equals(header.opt("status"))?"interrupted_before_start":"not_started"):null).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin))).put("screenMode",mode)
+                            .put("waitingState",declined?"declined_before_start":started?"original_run":results?"result_review":waiting&&!closed?("interrupted".equals(header.opt("status"))?"interrupted_before_start":"not_started"):null).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin))).put("screenMode",mode)
                             .put("goal",goal).put("matchedLater",!closed&&search.beyondPreview(goal)?true:null).put("createdAt",c.getLong(2)));
                 } catch (JSONException | DeviceProtocol.ProtocolException invalid) { /* Never replace missing provenance with a nearby task. */ }
             }
         }
         return new JSONObject().put("rows",items).put("hasMore",more).put("lastParent",waiting?source:task).put("lastOperation",op)
-                .put("localDeviceId",here).put("localInstanceId",localInstance).put("targetDeviceId",issuer).put("waitingOnly",waiting&&!closed&&!started).put("startedOnly",started?Boolean.TRUE:null).put("closedOnly",closed?Boolean.TRUE:null).put("resultOnly",results).put("limitedCandidates",limited).put("readOnly",true);
+                .put("localDeviceId",here).put("localInstanceId",localInstance).put("targetDeviceId",issuer).put("waitingOnly",waiting&&!closed&&!started&&!declined).put("declinedOnly",declined?Boolean.TRUE:null).put("startedOnly",started?Boolean.TRUE:null).put("closedOnly",closed?Boolean.TRUE:null).put("resultOnly",results).put("limitedCandidates",limited).put("readOnly",true);
     }
 
     /** Non-content marker from the same native task write. No summary/evidence is put in the queue. */

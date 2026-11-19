@@ -723,6 +723,9 @@ class CompanionDeviceReceiver:
             if self.manager.platform.name=="windows" and envelope.arguments["toolName"]=="workspace.receive":
                 from windows_received_file import accepted as original_file
                 file_witness=original_file(self.manager,envelope,operation,original_environment)
+            elif self.manager.platform.name=="windows" and envelope.arguments["toolName"]=="workspace.write":
+                from windows_text_write_receipt import accepted as original_text
+                file_witness=original_text(self.manager,envelope,operation,original_environment)
             now, job_id = self.manager.now(), str(uuid.uuid4())
             job = {"id": job_id, "operationId": operation, "fingerprint": fingerprint, "worker": "device_tool", "status": "running",
                    "environmentId": envelope.get("resourceBinding")["environmentId"], "createdAt": now, "updatedAt": now, "output": "", "outputTruncated": False,

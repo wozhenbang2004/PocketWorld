@@ -6,21 +6,20 @@ import device_protocol as protocol
 from platform_backend import PlatformError
 from windows_installation import _object
 
-COMMAND, FILE, EXPORT = "command.run", "workspace.receive", "workspace.export"
+COMMAND, FILE, EXPORT, TEXT_WRITE = "command.run", "workspace.receive", "workspace.export", "workspace.write"
 READS = frozenset({"workspace.list", "workspace.read"})
 TOOLS = {COMMAND: "native-device-command-v1", FILE: "native-device-tool-v1", **{k: "native-device-tool-v1" for k in READS}}
 
 
-def admission(manager, operation, row, *, owner_export=False):
+def admission(manager, operation, row, *, owner_export=False, owner_text_write=False):
     """Validate stored identities only; caller independently owns the current read authority."""
     if not row or manager.platform.name != "windows": return None
     fingerprint, job_id, _last, raw = row
     try:
         detail = json.loads(raw) if raw else {}
         tool = (detail.get("audience") or {}).get("toolName")
-        # The machine owner's new export summary is local only. In particular this
-        # must not add an unrequested projection to a peer's operation.get.
-        expected = "native-device-tool-v1" if owner_export and tool==EXPORT else TOOLS.get(tool)
+        # Local-only projections must not change the peer's existing operation.get shape.
+        expected = "native-device-tool-v1" if owner_export and tool==EXPORT or owner_text_write and tool==TEXT_WRITE else TOOLS.get(tool)
         if expected is None or detail.get("protocol") != expected:
             return None
         source, accepted = detail["audience"], detail["historyAudience"]

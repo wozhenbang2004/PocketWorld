@@ -8,8 +8,15 @@ const roundId = (v: unknown) => Number.isInteger(v) && Number(v) >= 1 && Number(
 
 /** Run.summary doubles as a coordinator progress line. The durable assistant
  * summary message survives an intervention/stop which overwrites that field. */
-export function teamResultReading(run: Data | null, messages: unknown) {
-  const saved = text(run?.summary);
+export function teamResultReading(run: Data | null, messages: unknown, observed?: Data | null) {
+  // A native read-through can be newer than the coordinator's saved progress sentence after a crash.
+  // It is never an assistant summary, a completion, or a grant. An old generation cannot replace this note.
+  const currentReceipt = run?.mode==='produce'&&run?.status==='awaiting_review'&&run?.phase==='review'&&run?.summaryStale!==true
+    &&observed?.source==='recovered_original_file_operation'&&observed?.teamRunId===run.id&&observed.generation===run.generation
+    &&observed.workPlanId===run.workPlan?.planId&&observed.workPlanRevision===run.workPlan?.revision&&observed.planHash===run.independentReview?.planHash
+    &&observed.businessVerified===false&&observed.workerStatusChanged===false&&observed.executionAuthorized===false&&typeof observed.message==='string'
+    &&Number.isSafeInteger(observed.observedAt)&&observed.observedAt>0&&observed.observedAt<=8.64e15;
+  const saved = currentReceipt ? observed.message+'（'+new Date(observed.observedAt).toLocaleString()+' 核对）' : text(run?.summary);
   // Earlier production runs persisted this pre-integration prompt even after real writes.
   const raw = run?.mode==='produce'&&run?.phase==='review'&&saved==='实际成员草稿成果已保留，请查看真实文件差异并逐项审查；原项目尚未整合'
     ? '作者已交回冻结文件。请在原成果页核对实际差异与原项目写回情况。':saved;

@@ -1011,6 +1011,16 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
             if("awaiting_review".equals(run.json.optString("status"))&&"review".equals(run.json.optString("phase"))&&!run.json.optBoolean("summaryStale"))run.json.put("summary",note.getString("message"));}
         save(run);return receipt;
     }
+    /** Record observed files only; never settle the worker, accept the work, resume a member or create a message. */
+    synchronized boolean recordRecoveredFiles(String id,JSONObject actual,JSONObject pointer)throws Exception{
+        Run run=runs.get(id);if(run==null)return false; // Do not promote an archive; its reading uses the same durable SQL receipt.
+        JSONObject note=TeamIntegrationDeliveryNote.recovered(run.json,actual,pointer);if(note==null)return false;
+        Object previous=run.json.opt("fileDeliveryObservation");run.json.put("fileDeliveryObservation",note);
+        try{persist();}catch(Exception failure){if(previous==null)run.json.remove("fileDeliveryObservation");else run.json.put("fileDeliveryObservation",previous);throw failure;}
+        // A dated reading is not a coordinator transition. Do not call save/publish,
+        // change status/revision, append a parent event or wake a model waiting on the team.
+        return true;
+    }
     /** Idempotent metadata repair from the original SQL pool only. Never resumes or creates a Control. */
     public synchronized JSONObject synchronizeIntegrationBudget(String id)throws Exception {
         Run run=required(id);if(closed||budgetHost==null||!run.children.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(id))throw new SecurityException("原团队仍有实际执行，不能同步预算展示");

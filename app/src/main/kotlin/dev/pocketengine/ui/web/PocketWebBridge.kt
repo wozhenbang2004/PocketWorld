@@ -264,6 +264,7 @@ internal class PocketWebBridge(
         )
         val commands: Set<String> = PocketWebLocalSourceIntake.COMMANDS + linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal",
+            "conversation.projectConvention.read",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
@@ -284,7 +285,7 @@ internal class PocketWebBridge(
             "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.discoverDirect", "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled", "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant", "learning.snapshot", "groups.snapshot",
             "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
-        ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts", "composer.firstMemory.save", "composer.oneLearning.save") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + dev.pocketengine.ui.ProjectFormalFileExport.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
+        ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts", "composer.firstMemory.save", "composer.oneLearning.save") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + dev.pocketengine.ui.ProjectFormalDrafts.COMMANDS + dev.pocketengine.ui.ProjectFormalFileExport.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -541,6 +542,12 @@ internal class PocketWebBridge(
                 complete(id, projectGitImport.dispatch(action, args), null, retainValue = false)
                 publishState(); return
             }
+            if (action in dev.pocketengine.ui.ProjectFormalDrafts.COMMANDS) {
+                val ticket=captureWindow()
+                fun original()=!closed && section==null && taskViewId==null && controller.webPrivateOwnerVisible() && acceptsWindow(ticket)
+                check(original()) { "请在原私人项目中操作本机保留稿" }
+                controller.formalFileDrafts.dispatch(action,args,::original){result,error->complete(id,result,error,retainValue=false);publishState()};return
+            }
             if (action in dev.pocketengine.ui.ProjectFormalFileExport.COMMANDS) {
                 require(section==null&&taskViewId==null&&controller.webPrivateOwnerVisible()) { "请返回原私人项目文件" }
                 requireFile(args)
@@ -631,6 +638,14 @@ internal class PocketWebBridge(
                     remove("resultMessageId"); remove("conversationId")
                 }
                 attachmentPages.dispatch(action, attachmentArgs, conversationResult) { result, error -> complete(id, result, error); publishState() }; return
+            }
+            if (action == "conversation.projectConvention.read") {
+                require(args.length()==1 && args.opt("messageId") is String)
+                val message=requiredString(args,"messageId");val origin=captureWindow()
+                fun visible()=section==null && taskViewId==null && !closed && acceptsWindow(origin) && controller.webPrivateOwnerVisible()
+                check(visible()){"请返回原私人对话查看项目交办依据"}
+                controller.requestProvidedProjectConvention(message,::visible){value,error->complete(id,value,error,retainValue=false)}
+                return
             }
             if (action in PocketWebMemoryHistory.COMMANDS) {
                 if (action == "memoryHistory.open") {
@@ -1444,7 +1459,10 @@ internal class PocketWebBridge(
                     controller.resumeDisplayedPhone(task, pause, scope, handle, ::current) { result, error ->
                         complete(id, result, error, "outcome_unknown", retainValue = false); publishState()
                     }
-                } else controller.controlOriginalPhone(task, action.substringAfter('.')) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }
+                } else controller.controlOriginalPhone(task, action.substringAfter('.')) { result, error ->
+                    val code=if(action=="phone.stop" && error!=null && result?.optString("stopInput")=="not_submitted") "not_accepted" else "outcome_unknown"
+                    complete(id,result,error,code);publishState()
+                }
                 return
             }
             val result = dispatch(action, args)

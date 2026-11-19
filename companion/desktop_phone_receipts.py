@@ -212,7 +212,7 @@ class ResultView:
                 if WindowsDesktopHealth().probe(session_only=True).get("available") is not True: return
                 while self.active():
                     direction = self._dialog("要看哪一端执行的工作？", "工作和结果都保留在原执行设备；这里不能启动或接管任务。",
-                                             [("incoming", "其他设备交给这台电脑的工作\n查看原命令、目录和文本读取，以及手机交来文件的原落盘回执。"),
+                                             [("incoming", "其他设备交给这台电脑的工作\n查看本机命令、目录、文本读取或改写，以及手机交来文件的原落盘回执。"),
                                               ("outgoing", "这台电脑交给手机的工作\n选择原派单后，只向那部手机查询。")])
                     if direction is None: return
                     incoming = direction == "incoming"
@@ -241,6 +241,7 @@ class ResultView:
                                 choices.append((row, label + (f"\n工作区 {work.environment} · 手机任务 …{work.task[-10:]}" if work else "\n操作 …" + row[1][-16:])))
                             if len(pages) > 1: choices.append(("newer", "较新派单"))
                             if older is not None: choices.append(("older", "查看较早的原记录"))
+                            if incoming: choices.append(("find", "用手机上的完整原操作编号找回"))
                             choices.append(("back", "返回设备"))
                             heading = ("这台 Windows 接收的原工作" if rows else "本批没有可核对的本机工作") if incoming else ("选择一笔原派单" if rows else "本批没有发给这台设备的原工作")
                             row = self._dialog(heading, "只读本机原执行器的工作和留存输出。断线不等于失败；没有记录也不会启动工作。" if incoming else
@@ -248,6 +249,7 @@ class ResultView:
                                                lambda: self._peer_current(peer) and (not incoming or all(received.local_record(self, peer, entry) for entry in rows)))
                             if row is None: return
                             if row == "back": break
+                            if row == "find" and incoming: received.open_original_number(self, peer); continue
                             if row == "older": pages.append(older); continue
                             if row == "newer": pages.pop(); continue
                             if incoming: received.show(self, peer, row)

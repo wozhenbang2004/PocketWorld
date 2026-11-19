@@ -783,7 +783,17 @@ public final class ConversationRepository {
         }
         if(more&&!lastId.isEmpty())next=encode(new JSONObject().put("at",lastAt).put("id",lastId));return new JSONObject().put("conversations",rows).put("gaps",gaps).put("scannedRows",scanned).put("materializedHeaderUtf8Bytes",bytes).put("nextCursor",next).put("hasMore",more).put("retentionLimitApplied",false).put("paginationSemantics","mutable_updated_at_keyset_not_snapshot");
     }
-    private JSONObject messageFromRow(Cursor row)throws Exception{JSONObject message=new JSONObject(row.getString(1));message.put("content",row.getString(0)).put("revision",row.getLong(2));JSONObject state=source(message.getString("id"));if(state==null||state.getBoolean("deleted"))return null;for(String key:List.of("submission","memorySourceRetiredThrough","memoryContextRetired","retirementReason"))if(state.has(key))message.put(key,state.get(key));return message;}
+    private JSONObject messageFromRow(Cursor row)throws Exception{JSONObject message=new JSONObject(row.getString(1));message.put("content",row.getString(0)).put("revision",row.getLong(2));JSONObject state=source(message.getString("id"));if(state==null||state.getBoolean("deleted"))return null;
+        if(message.has("projectConventionRecorded")){
+            JSONObject proof=state.optJSONObject("nativeProjectConventionReceipt");String reply=state.optString("nativeReplyId");
+            boolean original=Boolean.TRUE.equals(message.opt("projectConventionRecorded"))&&proof!=null
+                &&"project_owner_quote_response.v1".equals(proof.optString("format"))&&"assistant".equals(state.optString("role"))&&"owner".equals(state.optString("ownerId"))&&"private".equals(state.optString("spaceId"))
+                &&!state.optBoolean("nativeProvenanceImported")&&!message.optBoolean("importAssignedIdentity")&&!state.optBoolean("memoryContextRetired")&&state.optLong("memorySourceRetiredThrough")<1
+                &&row.getLong(2)==1&&state.optLong("revision")==1&&!reply.isEmpty()&&reply.equals(proof.optString("replyId"))&&reply.equals(message.optString("nativeReplyId"))
+                &&shaBytes(message.getString("content").getBytes(StandardCharsets.UTF_8)).equals(proof.optString("answerFingerprint"));
+            if(!original)message.remove("projectConventionRecorded");
+        }
+        for(String key:List.of("submission","memorySourceRetiredThrough","memoryContextRetired","retirementReason"))if(state.has(key))message.put(key,state.get(key));return message;}
     public JSONObject message(String conversation,String id)throws Exception{
         JSONObject state=metadata(id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId")))return null;
         try(Cursor size=db.rawQuery("SELECT length(CAST(m.body AS BLOB))+length(CAST(m.meta_json AS BLOB))+length(CAST(s.source_json AS BLOB)) FROM assistant_messages m JOIN assistant_sources s ON s.generation=m.generation AND s.source_id=m.source_id WHERE m.generation=? AND m.conversation_id=? AND m.source_id=? LIMIT 1",new String[]{activeGeneration(),conversation,id})){if(!size.moveToFirst())return null;if(size.getLong(0)>MAX_BYTES)throw new ReadLimited("original_message_exceeds_inline_budget");}
@@ -893,6 +903,12 @@ public final class ConversationRepository {
         JSONObject state=new JSONObject().put("kind","message").put("sourceId",replyId).put("revision",1L).put("ownerId","owner").put("spaceId","private")
                 .put("conversationId",selected.conversationId).put("role","assistant").put("deleted",false).put("updatedAt",now)
                 .put("nativeReplyId",selected.completed.id).put("nativeReplyDigest",digest).put("nativeRunId",selected.runId).put("nativeEpoch",selected.epoch).put("nativeTaskId",selected.taskId);
+        JSONObject quote=selected.completed.projectConvention();
+        if(quote!=null&&selected.taskId.equals(quote.optString("taskId"))&&selected.runId.equals(quote.optString("runId"))&&selected.epoch==quote.optInt("epoch")&&selected.completed.id.equals(quote.optString("replyId"))&&
+            text.equals(selected.completed.text)&&shaBytes(text.getBytes(StandardCharsets.UTF_8)).equals(quote.optString("answerFingerprint"))){
+            // Only the display hint is on the ordinary message. Original proof stays on the local authoritative source.
+            reply.put("projectConventionRecorded",true);state.put("nativeProjectConventionReceipt",quote);
+        }
         saveSource(state);saveMessage(selected.conversationId,reply);bindNativeReplyContext(original,selected.conversationId,replyId,selected.taskId,selected.runId,selected.epoch);JSONObject header=header(selected.conversationId);header.put("updatedAt",now);saveConversation(header);
         return new JSONObject().put("duplicate",false).put("message",reply).put("consumed",consumedRows);
     }
@@ -1212,7 +1228,7 @@ public final class ConversationRepository {
     /** Staging is invisible and lives only in this original DB. Bodies/versions/times are not invented. */
     public JSONObject stageLegacy(String stage,JSONObject legacy,Callable<Void> beforeBatch)throws Exception{
         if(active())throw new IllegalStateException("已有DB原文权威，不能重导旧副本");JSONArray convs=legacy.getJSONArray("conversations"),sources=legacy.getJSONArray("sourceStates");if(integer(legacy,"version",1)!=2)throw new IllegalArgumentException("旧原文需已知原生version2来源，未补造旧修订");
-        Set<String> ids=new HashSet<>();for(int start=0;start<sources.length();start+=100){final int a=start,b=Math.min(start+100,sources.length());stageTransaction(()->{beforeBatch.call();for(int i=a;i<b;i++){JSONObject source=new JSONObject(sources.getJSONObject(i).toString());source.remove("nativeContext");if("assistant".equals(source.optString("role")))source.put("nativeProvenanceImported",true);if(!ids.add(source.getString("sourceId")))throw new IllegalArgumentException("旧来源编号重复");saveSource(stage,source);}return null;});}
+        Set<String> ids=new HashSet<>();for(int start=0;start<sources.length();start+=100){final int a=start,b=Math.min(start+100,sources.length());stageTransaction(()->{beforeBatch.call();for(int i=a;i<b;i++){JSONObject source=new JSONObject(sources.getJSONObject(i).toString());source.remove("nativeContext");source.remove("nativeProjectConventionReceipt");if("assistant".equals(source.optString("role")))source.put("nativeProvenanceImported",true);if(!ids.add(source.getString("sourceId")))throw new IllegalArgumentException("旧来源编号重复");saveSource(stage,source);}return null;});}
         int count=0;Set<String> conversationIds=new HashSet<>(),messageIds=new HashSet<>();for(int i=0;i<convs.length();i++){JSONObject conversation=convs.getJSONObject(i);if(!conversationIds.add(conversation.getString("conversationId")))throw new IllegalArgumentException("旧会话编号重复");final JSONObject current=conversation;stageTransaction(()->{beforeBatch.call();saveConversation(stage,current);return null;});JSONArray messages=conversation.getJSONArray("messages");for(int start=0;start<messages.length();start+=40){final int a=start,b=Math.min(start+40,messages.length());stageTransaction(()->{beforeBatch.call();for(int j=a;j<b;j++){JSONObject message=new JSONObject(messages.getJSONObject(j).toString());message.remove("nativeContext");message.remove("nativeAssistantSource");if(!messageIds.add(message.getString("id")))throw new IllegalArgumentException("旧消息编号重复");saveMessage(stage,current.getString("conversationId"),message,j+1);}return null;});}count+=messages.length();}
         try(Cursor missing=db.rawQuery("SELECT 1 FROM assistant_sources s LEFT JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id LEFT JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE s.generation=? AND s.deleted=0 AND (m.source_id IS NULL OR c.conversation_id IS NULL OR m.conversation_id<>s.conversation_id OR m.revision<>s.revision) LIMIT 1",new String[]{stage})){if(missing.moveToFirst())throw new IllegalArgumentException("旧活动来源缺真实原文/容器，未激活不完整副本");}
         // Tombstones whose old container was already trimmed/deleted still keep their true source

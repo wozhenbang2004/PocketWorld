@@ -618,7 +618,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     workItems.map(item => [item.workItemId, item.status]), !!current?.summary,
     expandedMembers[String(current?.id || '')] || [], expandedItems[String(current?.id || '')] || [],
   ]), { active: workspaceActive && catalogReady && (!reading || !!reading.viewHandle) && !editor && !memberDraft && !review && !phoneSelection });
-  const teamResult = teamResultReading(current, messages);
+  const teamResult = teamResultReading(current, messages, deliveryWorkers?.originalFileObservation);
   const followUps = teamFollowUps(current, reading?.attention);
   const resultOrigin = (key = '') => current ? { runId: String(current.id), key, scroll: root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0 } : null;
   resultBack.current = () => {

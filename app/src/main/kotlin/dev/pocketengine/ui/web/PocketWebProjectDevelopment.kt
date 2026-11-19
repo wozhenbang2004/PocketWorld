@@ -288,7 +288,7 @@ internal class PocketWebProjectDevelopment(
                     // reach Assistant; a killed Activity cannot turn unknown
                     // admission into permission to replay the goal.
                     updateDraft(original.project, true) { it.put("submission", marker) }
-                    controller.startProjectDevelopmentForWeb(input, ::startCurrent) { result, error ->
+                    controller.startProjectInputFromDraftForWeb(input, ProjectConventionDraft.present(draft(original.project)), ::startCurrent) { result, error ->
                         if (page === original) busy = false
                         val receipt = recordSubmission(marker, result, error)
                         done(public(receipt), null)

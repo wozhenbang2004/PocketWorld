@@ -35,6 +35,24 @@ def _id(value):
     return isinstance(value,list) and len(value)==3 and all(type(n) is int and 0<=n<2**32 for n in value) and any(value[1:])
 
 
+def verified_replacement(f,path,want,sha,size,before):
+    native=f.get("nativeReplacement") or {}; objects=native.get("objects") or {}
+    target=objects.get("target") or {}; prev=native.get("beforeObject") or {}; backup=objects.get("backup") or {}
+    if (f.get("status")!="completed" or f.get("verified") is not True
+            or f.get("replacementAttempted") is not True or f.get("version")!=want or type(f.get("bytes")) is not int or f["bytes"]!=size
+            or native.get("phase")!="readback_verified" or native.get("target")!=path or native.get("afterSha256")!=sha
+            or not _id(native.get("temporaryIdentity")) or target.get("fileIdentity")!=native["temporaryIdentity"]
+            or target.get("state")!="present" or target.get("sha256")!=sha or type(target.get("bytes")) is not int or target["bytes"]!=size
+            or not _id(f.get("parentIdentity")) or f["parentIdentity"]!=native.get("parentIdentity")): return False
+    # The native writer always persisted this key, with explicit JSON null ONLY for an absent original.
+    old_sha=native["beforeSha256"]  # missing/invalid is unknown, never normalized to absent
+    if before=="absent":
+        if old_sha is not None or prev!={"state":"absent"} or backup!={"state":"not_requested"}: return False
+    elif (not isinstance(old_sha,str) or old_sha!=before[7:] or prev.get("state")!="present" or prev.get("sha256")!=before[7:]
+            or backup.get("sha256")!=before[7:] or not _id(prev.get("fileIdentity")) or backup.get("fileIdentity")!=prev["fileIdentity"]): return False
+    return True
+
+
 def project(manager,op,row,original):
     source,acceptance=original
     value={"profile":PROFILE,"operationId":op,"jobId":row[1],"argumentsDigest":row[0],"tool":FILE,
@@ -72,8 +90,7 @@ def project(manager,op,row,original):
                 return {**ev,"phase":"receiving","verifiedOffset":result["verifiedOffset"]}
             return value
         if tuple(file_row[:4])!=(witness["fileOperationFingerprint"],ev["environmentId"],path,want): return value
-        f=json.loads(file_row[4]); native=f.get("nativeReplacement") or {}; objects=native.get("objects") or {}
-        target=objects.get("target") or {}; prev=native.get("beforeObject") or {}; backup=objects.get("backup") or {}
+        f=json.loads(file_row[4]); native=f.get("nativeReplacement") or {}
         if (fixed.get("nativeInputDispatchStarted") is not True or f.get("operationId")!=op or f.get("environmentId")!=ev["environmentId"]
                 or f.get("path")!=path or f.get("desiredVersion")!=want or f.get("consistency")!="optimistic_raw_bytes_cas"): return value
         mismatch=f.get("targetConditionMatched") is False and f.get("reviewedVersion")==before and "previousVersion" not in f
@@ -85,18 +102,7 @@ def project(manager,op,row,original):
         if mismatch: return value
         if f.get("status")=="unknown" and f.get("verified") is not True:
             return {**ev,"phase":"target_unconfirmed"}
-        if (f.get("status")!="completed" or f.get("verified") is not True
-                or f.get("replacementAttempted") is not True or f.get("version")!=want or type(f.get("bytes")) is not int or f["bytes"]!=size
-                or native.get("phase")!="readback_verified" or native.get("target")!=path or native.get("afterSha256")!=sha
-                or not _id(native.get("temporaryIdentity")) or target.get("fileIdentity")!=native["temporaryIdentity"]
-                or target.get("state")!="present" or target.get("sha256")!=sha or type(target.get("bytes")) is not int or target["bytes"]!=size
-                or not _id(f.get("parentIdentity")) or f["parentIdentity"]!=native.get("parentIdentity")): return value
-        # The native writer always persisted this key, with explicit JSON null ONLY for an absent original.
-        old_sha=native["beforeSha256"]  # missing/invalid is unknown, never normalized to absent
-        if before=="absent":
-            if old_sha is not None or prev!={"state":"absent"} or backup!={"state":"not_requested"}: return value
-        elif (not isinstance(old_sha,str) or old_sha!=before[7:] or prev.get("state")!="present" or prev.get("sha256")!=before[7:]
-                or backup.get("sha256")!=before[7:] or not _id(prev.get("fileIdentity")) or backup.get("fileIdentity")!=prev["fileIdentity"]): return value
+        if not verified_replacement(f,path,want,sha,size,before): return value
         if fixed["status"]=="completed":
             if (result.get("delivered") is not True or result.get("transferId")!=transfer or result.get("sha256")!=sha
                     or protocol.canonical_bytes({k:result[k] for k in f})!=protocol.canonical_bytes(f)): return value

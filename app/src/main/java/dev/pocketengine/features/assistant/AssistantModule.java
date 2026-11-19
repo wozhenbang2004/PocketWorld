@@ -712,7 +712,12 @@ public final class AssistantModule implements EngineModule {
         });
     }
     private static JSONObject unconfirmedSubmission(JSONObject ack)throws Exception{return copy(ack).put("status","unconfirmed").put("reconciliationRequired",true).put("resourceState","released");}
-    private JSONObject findConversation(String id)throws Exception{return sourceRead(()->durable()?historyRepository.window(id,"",80):copy(find(id)));}
+    private JSONObject findConversation(String id)throws Exception{return sourceRead(()->{
+        if(durable())return historyRepository.window(id,"",80);
+        JSONObject legacy=copy(find(id));JSONArray messages=legacy.optJSONArray("messages");
+        for(int i=0;messages!=null&&i<messages.length();i++){JSONObject row=messages.optJSONObject(i);if(row!=null)row.remove("projectConventionRecorded");}
+        return legacy;
+    });}
     /** Native completed-turn receipt only; no generic command can assert input consumption. */
     public void acceptNativeReply(String conversationId,JSONObject expected,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,RunControl original)throws Exception{
         JSONObject saved;
