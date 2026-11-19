@@ -16,6 +16,7 @@ import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.accountConnectionsFailure
 import dev.pocketengine.ui.UiTask
+import dev.pocketengine.ui.UiTaskResult
 import dev.pocketengine.ui.isPhoneTask
 import dev.pocketengine.ui.isDeviceWorkspaceTask
 import dev.pocketengine.ui.objects
@@ -439,8 +440,13 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebWorkSearch.COMMANDS) {
-                if (action in setOf("ownerWork.report.read", "tasks.projectPackages", "tasks.resultFiles")) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
-                workSearch.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "tasks.resultFiles") }
+                val conversationResult = if (action == "tasks.resultFiles") visibleChatTaskResult(args) else null
+                if (action in setOf("ownerWork.report.read", "tasks.projectPackages", "tasks.resultFiles") && conversationResult == null) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
+                workSearch.dispatch(action, args, conversationResult) { result, error ->
+                    if (conversationResult != null && runCatching { visibleChatTaskResult(args) }.getOrNull() != conversationResult)
+                        complete(id, null, "原对话消息已变化，请重新打开成果")
+                    else complete(id, result, error, retainValue = action != "tasks.resultFiles")
+                }
                 return
             }
             if (action in PocketWebFormDrafts.COMMANDS) {
@@ -553,10 +559,14 @@ internal class PocketWebBridge(
                 teamEvidence.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebAttachments.COMMANDS) {
-                if (action == "attachmentWorkspace.open" && args.optBoolean("openOriginal")) {
+                val conversationResult = if (action == "attachmentWorkspace.open") visibleChatTaskResult(args) else null
+                if (action == "attachmentWorkspace.open" && args.optBoolean("openOriginal") && conversationResult == null) {
                     require(section == null && taskViewId == requiredString(args, "taskId")) { "请从原工作打开这份成果" }
                 }
-                attachmentPages.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+                val attachmentArgs = if (conversationResult == null) args else JSONObject(args.toString()).apply {
+                    remove("resultMessageId"); remove("conversationId")
+                }
+                attachmentPages.dispatch(action, attachmentArgs, conversationResult) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebMemoryHistory.COMMANDS) {
                 memoryHistory.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
@@ -1673,6 +1683,19 @@ internal class PocketWebBridge(
     }
     private fun isGroup(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") == "group"
     private fun canUseTaskControls(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") != "paired_device" && (!isGroup(task) || taskPage != null && controller.groupTaskReady)
+    private fun visibleChatTaskResult(args: JSONObject): UiTaskResult? {
+        if (!args.has("resultMessageId") && !args.has("conversationId")) return null
+        val taskId = requiredString(args, "taskId")
+        val conversation = requiredString(args, "conversationId")
+        val messageId = requiredString(args, "resultMessageId")
+        require(section == null && taskViewId == null && controller.webPrivateOwnerVisible() &&
+            controller.state.conversationId == conversation) { "请回到这条结果所在的原对话" }
+        val message = controller.state.messages.singleOrNull { it.id == messageId && it.role == "assistant" }
+            ?: error("原对话中未找到这条已保存的结果")
+        val result = message.taskResult ?: error("原消息没有这件工作的完成回执")
+        require(message.taskId == taskId && result.taskId == taskId && result.status == "completed" && result.noticeKind == null) { "原消息没有这件工作的完成回执" }
+        return result
+    }
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() { phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }

@@ -8,7 +8,9 @@ import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.processing.NativeFileProcess
 import dev.pocketengine.features.attachments.processing.NativeMediaTrim
 import dev.pocketengine.ui.AttachmentOutcomeState
+import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.UiTaskResult
 import dev.pocketengine.ui.objects
 import org.json.JSONArray
 import org.json.JSONObject
@@ -85,7 +87,7 @@ internal class PocketWebAttachments(
             .put("originalFile", viewer.snapshot()).put("comparison", viewer.comparisonSnapshot())
     }
 
-    fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+    fun dispatch(action: String, args: JSONObject, conversationResult: UiTaskResult? = null, done: (JSONObject?, String?) -> Unit) {
         try {
             check(controller.webUiCanInteract()) { "请回到当前工作区再操作文件" }
             if (action == "attachmentWorkspace.open") {
@@ -96,15 +98,20 @@ internal class PocketWebAttachments(
                 val file = args.optString("fileId").takeIf { it.isNotBlank() }
                 val openOriginal = args.opt("openOriginal")
                 require(openOriginal == null || openOriginal == true && task != null && file != null) { "原件入口需要原工作和固定文件版本" }
+                val resultRun = conversationResult?.let { result ->
+                    require(result.taskId == task && (file != null && openOriginal == true || !args.has("fileId") && openOriginal == null)) { "请选择这条原工作回执的文件" }
+                    AttachmentResultRun(result.taskId, result.runId, result.epoch)
+                }
                 if (file != null) {
                     val sha = args.getString("sha256")
                     require(file.length <= 240 && '\u0000' !in file && sha.matches(Regex("[0-9a-f]{64}"))) { "原文件版本无效，请重新查找" }
-                    clear(); flow.openFile(JSONObject().put("id", file).put("sha256", sha), task, openOriginal == true)
+                    clear(); flow.openFile(JSONObject().put("id", file).put("sha256", sha), task, openOriginal == true,
+                        fromWorkResult = openOriginal == true && resultRun == null, resultRun = resultRun)
                 } else {
                     require(!args.has("sha256")) { "请选择对应的原文件" }
                     // The coordinator rereads the original owner task on its IO executor.
                     // An older task need not still be in the home page's summary cache.
-                    clear(); flow.openTask(task)
+                    clear(); flow.openTask(task, resultRun)
                 }
                 done(JSONObject().put("opened", true).put("reading", true), null); changed(); return
             }

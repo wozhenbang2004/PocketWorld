@@ -5,6 +5,7 @@ import android.os.Looper
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.assistant.AssistantModule
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.UiTaskResult
 import dev.pocketengine.ui.objects
 import org.json.JSONArray
 import org.json.JSONObject
@@ -28,7 +29,7 @@ internal class PocketWebWorkSearch(
 
     fun clear() { pending.toList().forEach { it.cancel() }; pending.clear() }
 
-    fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+    fun dispatch(action: String, args: JSONObject, conversationResult: UiTaskResult? = null, done: (JSONObject?, String?) -> Unit) {
         try {
             check(controller.webPrivateOwnerVisible()) { "请回到私人工作区查找自己的记录" }
             val window = captureWindow()
@@ -58,7 +59,7 @@ internal class PocketWebWorkSearch(
                                 val cursor = args.opt("cursor") as? String ?: error("原成果读取位置缺失")
                                 host.tasks.projectPackagesForOwner(task, cursor, control)
                             }
-                            "tasks.resultFiles" -> resultFiles(args, control)
+                            "tasks.resultFiles" -> resultFiles(args, conversationResult, control)
                             "work.search" -> search(args, control)
                             "work.tasks.list" -> {
                                 fields(args, setOf("query", "filter", "projectId", "cursor", "limit"))
@@ -142,8 +143,8 @@ internal class PocketWebWorkSearch(
         } catch (failure: Exception) { done(null, failure.message ?: "查找暂不可用") }
     }
 
-    private fun resultFiles(args: JSONObject, control: RunControl): JSONObject {
-        fields(args, setOf("taskId"))
+    private fun resultFiles(args: JSONObject, conversationResult: UiTaskResult?, control: RunControl): JSONObject {
+        fields(args, if (conversationResult == null) setOf("taskId") else setOf("taskId", "conversationId", "resultMessageId"))
         val taskId = args.opt("taskId") as? String ?: error("原工作身份缺失")
         require(taskId.isNotBlank() && taskId.length <= 240 && taskId == taskId.trim() && '\u0000' !in taskId) { "原工作身份无效" }
         fun requireVisibleTask() {
@@ -152,10 +153,14 @@ internal class PocketWebWorkSearch(
             check(task.optString("id") == taskId && task.optString("actorId") == "owner" && task.optString("spaceId") == "private" &&
                 task.optString("kind") != "inference" && task.optJSONObject("origin")?.optString("kind") != "group" &&
                 task.optString("taskProjection") != "source_unavailable" && task.optBoolean("contextAvailable", true)) { "原工作来源已不可读取" }
+            if (conversationResult != null) check(conversationResult.taskId == taskId && task.optString("runId") == conversationResult.runId &&
+                task.optInt("coordinatorEpoch") == conversationResult.epoch && task.optString("status") == "completed") { "原任务状态已变化，请打开当前工作核对成果" }
         }
         requireVisibleTask()
         val snapshot = host.ownerOutcomeSnapshot(taskId, control)
         check(snapshot.getString("taskId") == taskId) { "原工作成果身份不符" }
+        if (conversationResult != null) check(snapshot.optString("taskRunId") == conversationResult.runId &&
+            snapshot.optInt("coordinatorEpoch") == conversationResult.epoch) { "原任务状态已变化，请打开当前工作核对成果" }
         val artifacts = snapshot.getJSONArray("artifacts").objects()
         val available = artifacts.filter { it.optString("sourceTaskId") == taskId && it.optString("availability") == "available" }
         val limit = 8

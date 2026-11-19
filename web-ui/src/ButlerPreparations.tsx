@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, RadioOptions, SelectField } from './forms-library';
 import { Drawer, PermissionReview } from './shell-library';
-import { IconArrowLeft, IconChat, IconChevronRight, IconFolder, IconMonitor, IconRefresh } from './icons';
+import { IconArrowLeft, IconChat, IconChevronRight, IconClose, IconFolder, IconMonitor, IconRefresh } from './icons';
 import { WorkContract } from './OwnerWorkFacts';
 import './butler-preparations.css';
 
@@ -21,7 +21,7 @@ const contractOf = (value: Data | null) => value?.contract && typeof value.contr
 
 /** The retained ConversationWork rows, backed by the durable proposal index. */
 export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, representedTaskIds, active, refreshKey, can, run, onOpen, onPresenceChange }: Shared & {
-  conversationId?: string; sourceTaskId?: string; active: boolean; refreshKey: string; onOpen: (target: ButlerPreparationTarget) => void;
+  conversationId?: string; sourceTaskId?: string; active: boolean; refreshKey: string; onOpen: (target: ButlerPreparationTarget, trigger: HTMLButtonElement) => void;
   representedTaskIds?: ReadonlySet<string>;
   onPresenceChange?: (present: boolean) => void;
 }) {
@@ -62,7 +62,7 @@ export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, re
     {relevant.length > 0 && <header><h2>{sourceTaskId ? '关联的准备' : '还需准备'}</h2></header>}
     {error && <p className="pw-error" role="alert">{error}</p>}
     {error && <Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={!active || busy} onClick={() => void load()}>重新读取工作记录</Button>}
-    <ol>{visible.map(row => <li key={keyOf(row)}><Button variant="ghost" className="pw-preparation-row" leadingIcon={row.kind === 'phone' ? IconMonitor : IconFolder} trailingIcon={IconChevronRight} disabled={!active || busy} onClick={() => onOpen({ sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId })}>
+    <ol>{visible.map(row => <li key={keyOf(row)}><Button variant="ghost" className="pw-preparation-row" leadingIcon={row.kind === 'phone' ? IconMonitor : IconFolder} trailingIcon={IconChevronRight} disabled={!active || busy} onClick={event => onOpen({ sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId }, event.currentTarget)}>
       <span><strong dir="auto">{text(row.goal) || (row.kind === 'phone' ? '原手机工作提案' : '原项目工作提案')}</strong><small>{row.target?.taskId ? targetStateLabels[row.target.status] || '原任务状态待核对' : stateLabels[row.state] || '状态待核对'} · {row.kind === 'phone' ? '手机操作' : '项目开发'}</small></span>
     </Button></li>)}</ol>
     {relevant.length > 3 && <Button variant="ghost" size="small" disabled={!active || busy} onClick={() => setExpanded(value => !value)}>{expanded ? '收起' : `查看另 ${relevant.length - 3} 项`}</Button>}
@@ -76,9 +76,11 @@ const encodeChoices = (value: Choices, kind: string) => kind === 'phone' ? JSON.
 
 /** Reuses the existing work goal, project selectors, PermissionReview and Vaul
  * object page. Only the native typed proposal can enter the original admission. */
-export function ButlerPreparationDetail({ target, projects, can, run, onClose, onOpenTask, onConversation, onSetup, registerBack }: Shared & {
+export function ButlerPreparationDetail({ target, projects, can, run, onClose, onOpenTask, onConversation, onSetup, registerBack, registerBeforeLeave, inline = false }: Shared & {
   target: ButlerPreparationTarget; projects: { id: string; name: string }[]; onClose: () => void; onOpenTask: (id: string) => void;
   onConversation?: (id: string) => void; onSetup?: (kind: 'phone' | 'project') => void; registerBack: (handler: (() => boolean) | null) => void;
+  registerBeforeLeave?: (handler: (() => Promise<boolean>) | null) => void;
+  inline?: boolean;
 }) {
   const [view, setView] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [capabilities, setCapabilities] = useState<Data[]>([]);
   const [choices, setChoices] = useState<Choices>(() => choicesOf({})), [inspection, setInspection] = useState<Data | null>(null), [copy, setCopy] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
@@ -86,6 +88,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   const alive = useRef(true), entered = useRef(false), generation = useRef(0), handle = useRef(''), viewRef = useRef(view), reviewRef = useRef(review), receiptRef = useRef(receipt);
   const choicesRef = useRef(choices), baseline = useRef(''), touched = useRef(false), needsSave = useRef(false), flight = useRef<Promise<void> | null>(null), paused = useRef(false);
   const scroller = useRef<HTMLDivElement>(null), heading = useRef<HTMLHeadingElement>(null), reviewPosition = useRef(0), wasReview = useRef(false);
+  const titleId = useId(), descriptionId = useId();
   const latest = useRef({ run, can, onClose }); latest.current = { run, can, onClose }; viewRef.current = view; reviewRef.current = review; receiptRef.current = receipt;
   const invoke = async (action: string, args: Data, accept?: (value: Data) => void, raw = false) => {
     if (entered.current || document.hidden || !latest.current.can(action)) return;
@@ -120,7 +123,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
     const unsubscribe = bridge.subscribe(inspect); document.addEventListener('visibilitychange', inspect);
     void readRef.current();
     return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', inspect); };
-  }, [target.sourceTaskId, target.proposalId]);
+  }, [target.sourceTaskId, target.proposalId, target.sourceConversationId]);
   async function flush(explicit = false): Promise<void> {
     if (flight.current) return flight.current;
     const currentView = viewRef.current;
@@ -140,6 +143,22 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
     finally { flight.current = null; if (alive.current) setSaving(false); } })();
     flight.current = operation; return operation;
   }
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useLayoutEffect(() => {
+    if (!inline || !registerBeforeLeave) return;
+    registerBeforeLeave(async () => {
+      if (entered.current) return false;
+      try {
+        await flushRef.current();
+        return !entered.current;
+      } catch (failure) {
+        if (alive.current) setDraftError(failureText(failure));
+        return false;
+      }
+    });
+    return () => registerBeforeLeave(null);
+  }, [inline, registerBeforeLeave]);
   const edit = (next: Choices) => { if (entered.current || reviewRef.current) return; touched.current = true; if (choicesRef.current.projectId !== next.projectId) setInspection(null); choicesRef.current = next; setChoices(next); setSaved(false); setReview(null); setError(''); if (!paused.current) void flush().catch(() => {}); };
   const close = async (after?: () => void) => {
     if (entered.current) return;
@@ -149,12 +168,18 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   const back = useRef<() => boolean>(() => true);
   back.current = () => { if (!entered.current) { if (reviewRef.current) setReview(null); else void close(); } return true; };
   useEffect(() => { registerBack(() => back.current()); return () => registerBack(null); }, [registerBack]);
+  const reviewing = !!review;
   useLayoutEffect(() => {
-    if (!scroller.current || wasReview.current === !!review) return;
-    if (review) { reviewPosition.current = scroller.current.scrollTop; scroller.current.scrollTop = 0; heading.current?.focus({ preventScroll: true }); }
+    if (inline) {
+      heading.current?.scrollIntoView({ block: 'nearest' });
+      heading.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (!scroller.current || wasReview.current === reviewing) return;
+    if (reviewing) { reviewPosition.current = scroller.current.scrollTop; scroller.current.scrollTop = 0; heading.current?.focus({ preventScroll: true }); }
     else scroller.current.scrollTop = reviewPosition.current;
-    wasReview.current = !!review;
-  }, [!!review]);
+    wasReview.current = reviewing;
+  }, [inline, reviewing]);
   const afterSave = async (operation: () => void | Promise<unknown>) => { try { await flush(true); if (alive.current) await operation(); } catch (failure) { if (alive.current) setDraftError(failureText(failure)); } };
   const inspectProject = () => void afterSave(() => invoke('butler.preparation.project.choices', { projectId: choicesRef.current.projectId }, value => {
     if (value.projectId !== choicesRef.current.projectId || !Array.isArray(value.checkouts)) throw new Error('私人副本信息不属于当前所选项目。'); setInspection(value);
@@ -188,10 +213,9 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   const canPrepare = !blocked && view?.canPrepare === true && !unresolved && !review && can('butler.preparation.draft');
   const checkouts = rows(inspection?.checkouts), contract = contractOf(view), targetTaskId = text(receipt?.taskId) || text(view?.target?.taskId);
   const projectName = projects.find(project => project.id === choices.projectId)?.name || '原项目';
-  return <Drawer.Root open onOpenChange={open => { if (!open) void close(); }} dismissible={!busy && !saving} direction="right" handleOnly shouldScaleBackground={false}>
-    <Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay" /><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-preparation-detail" aria-describedby="pw-preparation-description">
-      <header className="pw-drawer-header pw-task-header"><IconButton icon={IconArrowLeft} aria-label={review ? '返回准备选择' : '返回原页面'} disabled={busy || saving} onClick={() => back.current()} /><div><Drawer.Title ref={heading} tabIndex={-1}>{review ? '核对本次执行' : '管家为你准备的工作'}</Drawer.Title><Drawer.Description id="pw-preparation-description">{view?.kind === 'phone' ? '原请求 · 手机操作' : view?.kind === 'project' ? '原请求 · 项目开发' : '读取原提案与准备状态'}</Drawer.Description></div></header>
-      <div ref={scroller} className="pw-drawer-body pw-task-body pw-preparation-body">
+  const title = reviewing ? '核对本次执行' : inline ? '准备这次工作' : '管家为你准备的工作';
+  const description = view?.kind === 'phone' ? '原请求 · 手机操作' : view?.kind === 'project' ? '原请求 · 项目开发' : '读取原提案与准备状态';
+  const body = <div ref={scroller} className={inline ? 'pw-preparation-body' : 'pw-drawer-body pw-task-body pw-preparation-body'}>
         {error && <p className="pw-error" role="alert">{error}</p>}{draftError && <p className="pw-error" role="alert">{draftError}</p>}
         {draftError && !saved && <Button variant="ghost" disabled={busy || saving} onClick={() => { const original = handle.current; handle.current = ''; closeNative(original); onClose(); }}>放弃本页未保存的选择并返回</Button>}
         {(!view || stale) && <section><p className="pw-muted">{stale ? '原准备窗口已变化，保留选择后重新核对即可继续。' : busy ? '正在读取原提案…' : '原提案尚未完整读取。'}</p><Button variant="secondary" disabled={busy || saving} onClick={() => void read()}>重新读取原提案</Button></section>}
@@ -219,8 +243,19 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
             </AccordionItem></Accordion>
           </section>}
           {review && <PermissionReview title={text(review.goal)} context={view.kind === 'phone' ? review.mode === 'background' ? '在后台独立屏执行' : '在手机主屏执行' : `${projectName} · 原私人副本`} reason={view.kind === 'phone' ? review.screenDisclosure : '按已选择的源码与模型建立原项目任务，命令执行与项目导回继续使用各自的原审阅入口。'} fields={view.kind === 'phone' ? [{ label: '结果返回', value: review.conversationTitle || '原私人对话' }, { label: '本次模型', value: review.modelName }, { label: '工具调用上限', value: review.toolLimit }, { label: '模型调用上限', value: review.modelCallLimit }, { label: '本次期限', value: review.scopeMinutes === 0 ? '不设截止时间' : `${review.scopeMinutes} 分钟` }] : [{ label: '本次模型', value: text(review.model?.label) }, { label: '运行位置', value: text(review.runtime) }, { label: '固定副本', value: choices.checkoutId }, { label: '源码版本', value: text(review.source?.sourceDigest) }]} pending={busy} onReject={() => setReview(null)} onApprove={!blocked ? start : undefined} approveLabel="确认并开始这次工作"><WorkContract goal={text(review.goal)} contract={contractOf(review)} /></PermissionReview>}
-          <nav className="pw-task-source-links" aria-label="原委托与准备"><Button variant="ghost" disabled={busy || saving || !can('tasks.open')} onClick={() => void close(() => onOpenTask(target.sourceTaskId))}>查看原委托记录</Button>{onConversation && <Button variant="ghost" leadingIcon={IconChat} disabled={busy || saving} onClick={() => void close(() => onConversation(target.sourceConversationId))}>回到原委托话题</Button>}{view.canPrepare === true && !unresolved && !review && <Button variant="ghost" disabled={blocked} onClick={() => void afterSave(() => invoke('butler.preparation.dismiss', {}, value => { if (!preparation(value, target)) throw new Error('原提案取消回执尚未核对。'); setView(value); }))}>取消这份提案</Button>}</nav>
+          <nav className="pw-task-source-links" aria-label="原委托与准备"><Button variant="ghost" disabled={busy || saving || !can('tasks.open')} onClick={() => void close(() => onOpenTask(target.sourceTaskId))}>查看原委托记录</Button>{!inline && onConversation && <Button variant="ghost" leadingIcon={IconChat} disabled={busy || saving} onClick={() => void close(() => onConversation(target.sourceConversationId))}>回到原委托话题</Button>}{view.canPrepare === true && !unresolved && !review && <Button variant="ghost" disabled={blocked} onClick={() => void afterSave(() => invoke('butler.preparation.dismiss', {}, value => { if (!preparation(value, target)) throw new Error('原提案取消回执尚未核对。'); setView(value); }))}>取消这份提案</Button>}</nav>
         </>}
-      </div>
+      </div>;
+  if (inline) return <section className="pw-preparation-detail pw-preparation-inline" aria-labelledby={titleId} aria-describedby={descriptionId} aria-busy={busy || saving}>
+    <header className="pw-preparation-inline-header">
+      <div><h2 id={titleId} ref={heading} tabIndex={-1}>{title}</h2><p id={descriptionId}>{description}</p></div>
+      <IconButton icon={reviewing ? IconArrowLeft : IconClose} aria-label={reviewing ? '返回准备选择' : '收起工作准备'} disabled={busy || saving} onClick={() => back.current()} />
+    </header>
+    {body}
+  </section>;
+  return <Drawer.Root open onOpenChange={open => { if (!open) void close(); }} dismissible={!busy && !saving} direction="right" handleOnly shouldScaleBackground={false}>
+    <Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay" /><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-preparation-detail" aria-describedby={descriptionId}>
+      <header className="pw-drawer-header pw-task-header"><IconButton icon={IconArrowLeft} aria-label={reviewing ? '返回准备选择' : '返回原页面'} disabled={busy || saving} onClick={() => back.current()} /><div><Drawer.Title ref={heading} tabIndex={-1}>{title}</Drawer.Title><Drawer.Description id={descriptionId}>{description}</Drawer.Description></div></header>
+      {body}
     </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }
