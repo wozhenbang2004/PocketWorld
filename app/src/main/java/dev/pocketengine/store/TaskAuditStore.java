@@ -257,6 +257,7 @@ public final class TaskAuditStore {
         JSONObject pendingPhoneResult=ReceivedPhoneGoalIndex.pendingSlot(task);
         if(pendingPhoneResult!=null)out.put("receivedPhoneResultSlot",pendingPhoneResult);
         JSONObject phoneLink=conversationPhoneLink(task);if(phoneLink!=null)out.put("conversationPhoneLink",phoneLink);
+        if("phone".equals(task.optString("kind")))out.put("originalNoticePrivateLocal",PhoneActionRecovery.local(task));
         out.put("taskProjection","summary").put("auditBodyIncluded",false).put("events",new JSONArray());
         if(utf8(out.toString())>MAX_HEADER_BYTES-2048){for(String key:new String[]{"origin","sshSelection","teamAssignment"})out.remove(key);JSONObject project=out.optJSONObject("developmentContext");if(project!=null&&project.has("deliveryContract")){project.remove("deliveryContract");project.put("deliveryContractReadState","not_loaded");}out.put("metadataLimited",true);}
         return out;

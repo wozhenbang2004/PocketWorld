@@ -555,6 +555,9 @@ class CompanionDeviceReceiver:
                 manifest,files=read(b"".join(pieces))
             if manifest_identity(manifest)!=args["manifestDigest"]: raise PermissionError("Reviewed package manifest changed")
             environment_id,environment=self.require_workspace(envelope,permission)
+            # Local back-reference only, after the ORIGINAL approved package, manifest and workspace matched.
+            # Reuse this existing pre-publication save; never expose the pointer to a peer or use it to publish.
+            source["_nativeProjectConfirmationOperation"] = confirmation_job["operationId"]
             source["nativeInputDispatchStarted"]=True; self.manager._save(source)
             def intent(value):
                 confirmation_job["nativeProjectImportIntent"]=value
@@ -726,6 +729,9 @@ class CompanionDeviceReceiver:
             elif self.manager.platform.name=="windows" and envelope.arguments["toolName"]=="workspace.write":
                 from windows_text_write_receipt import accepted as original_text
                 file_witness=original_text(self.manager,envelope,operation,original_environment)
+            elif self.manager.platform.name == "windows" and envelope.arguments["toolName"] in {"workspace.project.receive", "workspace.project.confirm"}:
+                from windows_received_project import accepted as original_project
+                file_witness = original_project(envelope)
             now, job_id = self.manager.now(), str(uuid.uuid4())
             job = {"id": job_id, "operationId": operation, "fingerprint": fingerprint, "worker": "device_tool", "status": "running",
                    "environmentId": envelope.get("resourceBinding")["environmentId"], "createdAt": now, "updatedAt": now, "output": "", "outputTruncated": False,

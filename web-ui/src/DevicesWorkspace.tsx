@@ -79,6 +79,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [invitation, setInvitation] = useState<ShownPairingInvitation|null>(null), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
   const [workBusy, setWorkBusy] = useState(false), [controlBusy, setControlBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [taskDetails, setTaskDetails] = useState<Record<string, Data>>({}), [historyReceipt, setHistoryReceipt] = useState<Data | null>(null), [historyStopSubmitted, setHistoryStopSubmitted] = useState(false);
+  const [firstPair,setFirstPair]=useState<{handle:string;picker:string;inviteId:string;deviceId:string;fingerprint:string;expiresAt:number;until:number}|null>(null);
   const [waitingPhones, setWaitingPhones] = useState<Data | null>(null);
   const [waitingBlock,setWaitingBlock]=useState<Data|null>(null);
   const [phoneArchive, setPhoneArchive] = useState<Data | null>(null);
@@ -156,7 +157,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
-    setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
+    setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation(null);
     setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
@@ -225,6 +226,37 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const closeImage = () => { releaseImage(); setImageId(''); };
   useEffect(() => { if (form !== 'add' && activeImage.current) closeImage(); }, [form]);
   useEffect(() => () => releaseImage(), []);
+  const leaveFirstPair=()=>{
+    if(!firstPair)return;
+    setFirstPair(null);setRaw('');closeImage();
+    if(handle.current===firstPair.handle){handle.current='';void run('devices.discard',{viewHandle:firstPair.handle}).catch(()=>{});}
+  };
+  const showPairPreview=(value:Data,picker='')=>{
+    if(value.kind!=='firstIdentity'){closeImage();setFirstPair(null);acceptReview(value);return;}
+    const v=value.view,left=v?.expiresAt-Date.now();
+    if(!v||typeof value.viewHandle!=='string'||!value.viewHandle||typeof v.inviteId!=='string'||!v.inviteId||typeof v.inviterDeviceId!=='string'
+      ||!/^pw1_[a-f0-9]{64}$/.test(v.inviterDeviceId)||typeof v.inviterInstanceId!=='string'||!v.inviterInstanceId||!/^[a-f0-9]{64}$/.test(v.inviterFingerprint)
+      ||!Number.isSafeInteger(left)||left<=0||left>300000||v.fromImage!==!!picker||picker&&activeImage.current!==picker)throw Error('首次本机身份预览与原邀请不一致。');
+    handle.current=value.viewHandle;setFirstPair({handle:value.viewHandle,picker,inviteId:v.inviteId,deviceId:v.inviterDeviceId,fingerprint:v.inviterFingerprint,expiresAt:v.expiresAt,until:performance.now()+left});
+  };
+  useEffect(()=>{
+    if(!firstPair)return;
+    let timer=0;const check=()=>{
+      const left=Math.min(firstPair.expiresAt-Date.now(),firstPair.until-performance.now());
+      if(form!=='add'||document.hidden||left<=0){leaveFirstPair();return;}
+      timer=window.setTimeout(check,Math.min(left,1000));
+    };check();return()=>window.clearTimeout(timer);
+  },[firstPair,form]);
+  const continueFirstPair=()=>{
+    const first=firstPair;
+    if(busy||!first||handle.current!==first.handle||Date.now()>=first.expiresAt||performance.now()>=first.until||
+      (first.picker?activeImage.current!==first.picker:!raw.trim()))return;
+    setFirstPair(null);handle.current='';setRaw('');
+    void invoke('devices.continueFirstPair',{viewHandle:first.handle,acknowledged:true,...(first.picker?{pickerId:first.picker}:{raw})},value=>{
+      if(value.kind!=='pair'||value.view?.inviteId!==first.inviteId||value.view?.inviterDeviceId!==first.deviceId||value.view?.inviterFingerprint!==first.fingerprint)throw Error('原双端身份窗口已变化，请重新预览。');
+      closeImage();acceptReview(value);
+    });
+  };
   const chooseImage = () => {
     releaseImage(); const id = crypto.randomUUID(); activeImage.current = id; setImageId(id);
     void invoke('devices.pairImage.pick', { pickerId: id }, value => {
@@ -233,7 +265,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const inviteAddresses = strings(actions.localAddresses);
   const inviteAddress = address ? inviteAddresses.includes(address) ? address : '' : inviteAddresses.length === 1 ? inviteAddresses[0] : '';
-  const openPairEntry = (side: 'add' | 'invite') => { setRaw(''); setAddress(''); setError(''); setNotice(''); setForm(side); };
+  const openPairEntry = (side: 'add' | 'invite') => { leaveFirstPair();setRaw(''); setAddress(''); setError(''); setNotice(''); setForm(side); };
   const reportPair = (candidate: Data, receipt: Data | null | undefined) => {
     const here = receipt?.local;
     const localKnown = typeof here?.deviceId === 'string' && !!here.deviceId && typeof here.certificateFingerprint === 'string' && /^[a-f0-9]{64}$/.test(here.certificateFingerprint);
@@ -448,6 +480,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   },[sourceFocus,focusedPeer,busy,peerId,local.deviceId,local.instanceId]);
   const ownTextShown=ownText && (ownText.home?!!localInbox&&ownText.archiveHandle===localInbox.closedHandle:activeArchive?.side==='received'&&ownText.archiveHandle===activeArchive.archiveHandle)?ownText:null;
   const readOwnText=(row:Data,page=0,before?:Data,home=ownText?.home===true,part:string=before?.part||'result',match=false)=>{
+    if(row.notConfirmed===true)return;
     const archive=home?localInbox:activeArchive;
     if(busy||sourceFocus||!archive||(home?!!selectedPeer.current:!peer||selectedPeer.current!==peer.deviceId||archive.side!=='received')
       ||!rows(archive.rows).some(it=>it.taskId===row.taskId&&it.operationId===row.operationId&&(home?it.sourceDeviceId===row.sourceDeviceId:it.mayCheckLocalText===true)))return;
@@ -810,21 +843,21 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               <Button variant={waitingPage && !waitingPage.resultOnly && !waitingPage.startedOnly ? 'primary' : 'secondary'} disabled={busy} onClick={() => readWaiting()}>待接手</Button>
               <Button variant={waitingPage?.startedOnly ? 'primary' : 'secondary'} disabled={busy} onClick={() => readWaiting(undefined,'started')}>已接手</Button>
               <Button variant={waitingPage?.resultOnly ? 'primary' : 'secondary'} disabled={busy} onClick={() => readWaiting(undefined,'results')}>待核对成果</Button>
-              {supported('devices.readReviewedPhoneInbox')&&<Button variant={localInbox?'primary':'secondary'} disabled={busy} onClick={()=>readClosedInbox()}>已核对原文</Button>}
+              {supported('devices.readReviewedPhoneInbox')&&<Button variant={localInbox?'primary':'secondary'} disabled={busy} onClick={()=>readClosedInbox()}>核对过的工作</Button>}
             </>} />
             {localInbox&&<><form className="pw-form-actions" onSubmit={e=>{e.preventDefault();if(closedDraft.trim())readClosedInbox(undefined,closedDraft);}}>
-              <SearchField aria-label="在本机已核对的目标和结果中查找" placeholder="查找原目标或结果里的词" value={closedDraft} isDisabled={busy}
+              <SearchField aria-label="在本机原目标和已确认的结果中查找" placeholder="查找原目标或已确认的文字" value={closedDraft} isDisabled={busy}
                 onChange={value=>setClosedDraft(Array.from(value).slice(0,64).join(''))}/>
               <Button type="submit" variant="secondary" disabled={busy||!closedDraft.trim()}>查找</Button>
               {localInbox.searchText&&<Button type="button" variant="ghost" disabled={busy} onClick={()=>readClosedInbox()}>显示全部</Button>}</form>
-              <p role="status">{localInbox.searchText?'仅在本机已核对的目标和结果中查找「'+localInbox.searchText+'」；不列出结果正文。':'这是这部手机自己核对过的文字工作；原发起设备不需要在线或仍在配对名单。'}</p>
+              <p role="status">{localInbox.searchText?'仅在本机原目标和已确认的结果中查找「'+localInbox.searchText+'」；不列出结果正文。':'这是这部手机自己核对过的文字工作；原发起设备不需要在线。未确认完成的工作只列本机决定，不提供结果正文。'}</p>
               {localInbox.limitedCandidates>0&&<p>另有 {localInbox.limitedCandidates} 项已结束记录无法核对，未列作已核对原文。</p>}
               {!localInbox.rows.length&&<p>{localInbox.searchText?'这段已核对的记录没有匹配。':'这一页没有可核对的本机原件。'}{localInbox.hasMore&&'可以继续查看较早记录。'}</p>}
               {rows(localInbox.rows).map(row=><article className="pw-device-history-entry" key={JSON.stringify([row.taskId,row.operationId])}><h4 dir="auto">{row.goal}</h4>
-                <p>{time(row.reviewedAt)} 核对 · 原发起设备 …{String(row.sourceDeviceId).slice(-8)} · {row.keptOnPhone?'只回状态':'允许读取摘要'}{!row.hasText&&' · 原结果无文字'}</p>
-                {localInbox.searchText&&<p>{row.bothParts?'原目标与原结果均匹配':row.matchPart==='result'?'匹配原结果':'匹配原目标'}</p>}
-                <Button variant="secondary" disabled={busy||!supported('devices.readLocalReviewedPhoneGoal')} onClick={()=>readOwnText(row,0,undefined,true,'result',!!localInbox.searchText)}>
-                  {localInbox.searchText?'打开匹配段附近':row.hasText?'重看本机原文':'查看当时的核对'}</Button></article>)}
+                <p>{time(row.reviewedAt)} 核对 · 原发起设备 …{String(row.sourceDeviceId).slice(-8)} · {row.notConfirmed?'本机已结束，但没有确认完成':row.keptOnPhone?'只回状态':'允许读取摘要'}{!row.notConfirmed&&!row.hasText&&' · 原结果无文字'}</p>
+                {localInbox.searchText&&<p>{row.notConfirmed?'匹配原目标，未检索结果正文':row.bothParts?'原目标与原结果均匹配':row.matchPart==='result'?'匹配原结果':'匹配原目标'}</p>}
+                {!row.notConfirmed&&<Button variant="secondary" disabled={busy||!supported('devices.readLocalReviewedPhoneGoal')} onClick={()=>readOwnText(row,0,undefined,true,'result',!!localInbox.searchText)}>
+                  {localInbox.searchText?'打开匹配段附近':row.hasText?'重看本机原文':'查看当时的核对'}</Button>}</article>)}
               <div className="pw-form-actions">{localInbox.canReadNewer&&<Button variant="ghost" disabled={busy} onClick={()=>readClosedInbox('newer')}>较新记录</Button>}
                 {localInbox.hasMore&&<Button variant="secondary" disabled={busy} onClick={()=>readClosedInbox('older')}>{localInbox.searchText?'查找较早记录':'较早记录'}</Button>}</div></>}
             {waitingPage && <><p role="status">{time(waitingPage.capturedAt)} 读取。{waitingPage.declinedOnly?'这里只列本机明确选择不接手、且凭原记录核对为从未启动的目标。按原接纳时间排列，不是对方已读回执。':waitingPage.startedOnly?'这是本机原执行留下的状态，不代表此刻仍在运行或一定能恢复。':waitingPage.resultOnly ? '以下原执行已结束，需机主核对；此处不显示或交回摘要。' : '接纳不等于已同意使用模型；过期的目标只能按原记录处理。'}</p>
@@ -997,22 +1030,29 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           options={[{id: 'add', label: '对方已发邀请'}, {id: 'invite', label: '从这台手机发出'}]} />}
         {['add', 'connection', 'relay'].includes(form) && <section className="pw-device-form-step">
           {form === 'add' && <p>加入对方的短时邀请，无需开启这台手机的接收或屏幕读取。两端仍需分别核对指纹和权限。</p>}
+          {form==='add'&&firstPair?<div className="pw-device-review">
+            <h3>先看这次原邀请</h3>
+            <p>发起设备 …{firstPair.deviceId.slice(-8)} · 有效至 {time(firstPair.expiresAt)}</p><p className="pw-source-copy">邀请中的完整证书指纹：<bdi>{fingerprint(firstPair.fingerprint)}</bdi></p>
+            <p>本机还没有设备身份。继续会将本机身份保存在 Android 密钥库里，再核对两端指纹和权限；不会发送请求或开启接收。</p>
+            <div className="pw-form-actions"><Button disabled={busy||!supported('devices.continueFirstPair')} onClick={continueFirstPair}>继续配对并创建本机身份</Button>
+              <Button variant="ghost" disabled={busy} onClick={leaveFirstPair}>返回，不创建身份</Button></div>
+          </div>:<>
           {form === 'add' && supported('devices.pairImage.pick') && supported('devices.pairImage.review') && <>
             <div className="pw-form-actions">
               <Button variant="secondary" disabled={busy || !available(actions.join)} onClick={chooseImage}>{imageId ? '重新选择图片' : '选择邀请二维码图片'}</Button>
               {imageId && <Button disabled={busy || !available(actions.join)} onClick={() => {
                 void invoke('devices.pairImage.review', { pickerId: imageId }, value => {
                   if (activeImage.current !== imageId) throw new Error('原选图窗口已变化，请重新选择。');
-                  closeImage();
-                  if (value.cancelled === true && value.pickerId === imageId) { setError('没有选择图片。请重新选图，或粘贴原邀请。'); return; }
-                  acceptReview(value);
+                  if (value.cancelled === true && value.pickerId === imageId) { closeImage();setError('没有选择图片。请重新选图，或粘贴原邀请。'); return; }
+                  showPairPreview(value,imageId);
                 });
               }}>核对所选图片</Button>}
             </div>
             <p>可选另一台手机或电脑这次邀请的截图或照片，保留四周白边。只在本机识别，不上传，也不自动加入。也可以粘贴邀请：</p>
           </>}
           <TextAreaField label={form === 'relay' ? '已有临时租约' : form === 'add' ? '对方的短时邀请' : '原设备短时邀请'} value={raw} onChange={setRaw} isDisabled={busy} hint="仅在当前窗口核对，离开或进入后台后清除。" />
-          <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { void invoke(form === 'relay' ? 'devices.reviewRelay' : form === 'connection' ? 'devices.reviewConnection' : 'devices.inspectInvitation', { raw, ...(form === 'connection' ? { deviceId: peerId } : {}) }, acceptReview); }}>{form === 'add' ? '核对邀请与权限' : '读取原生审阅'}</Button>
+          <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { void invoke(form === 'relay' ? 'devices.reviewRelay' : form === 'connection' ? 'devices.reviewConnection' : 'devices.inspectInvitation', { raw, ...(form === 'connection' ? { deviceId: peerId } : {}) }, form==='add'?value=>showPairPreview(value):acceptReview); }}>{form === 'add' ? '核对原邀请' : '读取原生审阅'}</Button>
+          </>}
           {form === 'add' && !available(actions.join) && actions.join?.reason && <p>{actions.join.reason}</p>}
         </section>}
         {form === 'invite' && <section className="pw-device-form-step">

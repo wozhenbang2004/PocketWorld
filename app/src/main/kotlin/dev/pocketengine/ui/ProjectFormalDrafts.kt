@@ -19,10 +19,13 @@ internal class ProjectFormalDrafts(private val app:EngineApplication, private va
     private data class Scope(val project:String,val path:String?,val version:Int,val epoch:Long)
     private data class Review(val scope:Scope,val id:String,val sha:String,val handle:String,val until:Long)
     private var review:Review?=null
+    private data class Sections(val scope:Scope,val id:String,val sha:String,val handle:String,val until:Long,val fingerprint:String)
+    private var sections:Sections?=null
     private data class IndexPin(val project:String,val path:String,val id:String,val sha:String,val fileEpoch:Long)
     private var fromIndex:IndexPin?=null
     companion object {val COMMANDS=setOf("projects.keptDrafts.list","projects.keptDrafts.forFile","projects.keptDrafts.open",
-        "projects.keptDrafts.keep","projects.keptDrafts.read","projects.keptDrafts.stage","projects.keptDrafts.discard")}
+        "projects.keptDrafts.keep","projects.keptDrafts.read","projects.keptDrafts.stage","projects.keptDrafts.discard",
+        "projects.keptDrafts.compareChanges","projects.keptDrafts.stageChanges")}
     private fun string(a:JSONObject,key:String,max:Int)= (a.opt(key) as? String)?.takeIf {it.length in 1..max}?:error("保留原稿的 ${key} 无效")
     private fun number(a:JSONObject,key:String):Int {val n=a.opt(key);require(n is Int || n is Long);return (n as Number).toLong().also {require(it in 0L..Int.MAX_VALUE.toLong())}.toInt()}
     private fun current(s:Scope)=controller.webPrivateOwnerVisible()&&controller.formalFileWindowEpoch()==s.epoch&&
@@ -38,24 +41,39 @@ internal class ProjectFormalDrafts(private val app:EngineApplication, private va
         val scope=Scope(project,if(projectView)null else string(args,"path",240),if(projectView)0 else number(args,"version"),controller.formalFileWindowEpoch())
         val required=(if(projectView)setOf("projectId") else setOf("projectId","path","version"))+when(mode){
             "open"->setOf("path","keepId","sha256");"read"->setOf("keepId","sha256");"keep"->setOf("baseVersion","baseSha256","text")
-            "stage","discard"->setOf("keepId","sha256","reviewHandle");else->emptySet()
+            "stage","discard","compareChanges"->setOf("keepId","sha256","reviewHandle")
+            "stageChanges"->setOf("keepId","sha256","planHandle","chosen");else->emptySet()
         }
         check(args.keys().asSequence().toSet()==required && window() && current(scope)){"原私人项目或文件窗口已变化"}
         check(!busy){"请先等待正在核对的本机原稿"}
         val path=scope.path?:if(mode=="open")string(args,"path",240) else ""
-        val id=if(mode in setOf("read","open","stage","discard"))string(args,"keepId",36) else ""
+        val id=if(mode in setOf("read","open","stage","discard","compareChanges","stageChanges"))string(args,"keepId",36) else ""
         val sha=if(id.isNotEmpty())string(args,"sha256",64).also {require(it.matches(Regex("[a-f0-9]{64}")))}else ""
-        val selected=review
-        if(mode=="stage"||mode=="discard"){
+        val selected=review;val compared=sections
+        if(mode in setOf("stage","discard","compareChanges")){
             check(selected!=null&&selected.scope==scope&&selected.id==id&&selected.sha==sha&&selected.handle==string(args,"reviewHandle",36)&&
-              SystemClock.elapsedRealtime()<selected.until){"上次原稿审阅已结束，请重新打开；没有改变任何文件"};review=null
+              SystemClock.elapsedRealtime()<selected.until){"上次原稿审阅已结束，请重新打开；没有改变任何文件"}
+            if(mode!="compareChanges")review=null
+        }else if(mode=="stageChanges"){
+            check(compared!=null&&compared.scope==scope&&compared.id==id&&compared.sha==sha&&compared.handle==string(args,"planHandle",36)&&
+                SystemClock.elapsedRealtime()<compared.until){"逐段核对已经过期，请从原稿重新对照"}
+            review=null
         }else if(mode in setOf("open","read","keep")) review=null
+        if(mode !in setOf("list","forFile"))sections=null
         val wasEditable=controller.state.fileReady&&!controller.state.fileLoading&&!controller.state.fileSaving
         if(mode=="stage")check(wasEditable){"当前正式文件没有完整可编辑的文字，只能核对以前保留的原稿"}
         fun gate(){check(window()&&current(scope)){"原私人文件窗口已变化；请在原项目核对保留稿，不会写正式版本"}}
         fun editable(){gate();controller.requireFormalTextEditor()}
         if(mode=="keep")check(!controller.state.fileLoading&&!controller.state.fileSaving){"请先等原文件读取或保存完成，文字没有被替换"}
-        var headForStage:WorkspaceModule?=null
+        fun cleanEditor(plan:FormalDraftSections.Plan?=null){
+            editable();val state=controller.state;val observed=state.fileObservation
+            check(observed!=null&&observed.matches(project,path)&&observed.version==scope.version&&observed.representation=="text"&&
+                state.fileContent==state.fileBaseline&&(plan==null||observed.revision==plan.headRevision&&observed.sha==plan.headSha)){
+                "当前编辑区另有未保存的文字或已换版本；先保留或处理它，再核对分段"
+            }
+        }
+        if(mode=="compareChanges"||mode=="stageChanges")cleanEditor()
+        var headForStage:WorkspaceModule?=null;var observedPlan:FormalDraftSections.Plan?=null
         busy=true
         try{controller.runPluginCatalogWork(Runnable {
             val outcome=runCatching {
@@ -90,7 +108,20 @@ internal class ProjectFormalDrafts(private val app:EngineApplication, private va
                         if(mode=="stage"){editable();check(exact){"正式基线已经改变，保留稿仍可只读核对，未覆盖当前草稿"};headForStage=ws}
                         JSONObject().put("item",item).put("sameFormalBase",exact)
                     }
-                    else->{shelf.discard(project,path,id,sha){gate()};JSONObject().put("removed",true)}
+                    "compareChanges","stageChanges"->{
+                        cleanEditor();val item=shelf.read(project,path,id,sha);val ws=workspace()
+                        val actual=FormalDraftSections.inspect(ws,project,path,scope.version,item);cleanEditor(actual)
+                        headForStage=ws;observedPlan=actual
+                        if(mode=="compareChanges")JSONObject().put("plan",actual.view()).put("keepId",id)
+                        else {
+                            check(compared!=null&&compared.fingerprint==actual.fingerprint()&&SystemClock.elapsedRealtime()<compared.until){"原保留稿或正式文件已变化，未写入编辑区"}
+                            val text=actual.selected(args.getJSONArray("chosen"))
+                            JSONObject().put("keepId",id).put("draftSha",sha).put("headSha",actual.headSha).put("headRevision",actual.headRevision)
+                                .put("text",text).put("resultSha",ProjectFileDeliveryBytes.sha(text.toByteArray(Charsets.UTF_8)))
+                        }
+                    }
+                    "discard"->{shelf.discard(project,path,id,sha){gate()};JSONObject().put("removed",true)}
+                    else->error("未知的保留稿操作")
                 }
             }
             main.post {busy=false
@@ -111,6 +142,12 @@ internal class ProjectFormalDrafts(private val app:EngineApplication, private va
                     } else if(mode=="read"){
                         if(fromIndex?.id==id&&fromIndex?.sha==sha)fromIndex=null
                         val r=Review(scope,id,sha,UUID.randomUUID().toString(),SystemClock.elapsedRealtime()+120000);review=r;out.put("reviewHandle",r.handle)
+                    } else if(mode=="compareChanges"||mode=="stageChanges"){
+                        val plan=observedPlan?:error("逐段核对没有版本依据");cleanEditor(plan)
+                        check(plan.current(headForStage?.currentFileHeadForHost(project,path))){"当前正式版本已变化，未将所选改动放入草稿"}
+                        if(mode=="compareChanges"){
+                            val pin=Sections(scope,id,sha,UUID.randomUUID().toString(),SystemClock.elapsedRealtime()+120000,plan.fingerprint());sections=pin;out.put("planHandle",pin.handle)
+                        }
                     } else if(mode=="stage"){
                         editable();check(headForStage?.let {matches(it.currentFileHeadForHost(project,path),out.getJSONObject("item"))}==true){"原正式版本已变化，没有代用或覆盖"}
                     }

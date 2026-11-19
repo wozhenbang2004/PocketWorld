@@ -212,7 +212,7 @@ class ResultView:
                 if WindowsDesktopHealth().probe(session_only=True).get("available") is not True: return
                 while self.active():
                     direction = self._dialog("要看哪一端执行的工作？", "工作和结果都保留在原执行设备；这里不能启动或接管任务。",
-                                             [("incoming", "其他设备交给这台电脑的工作\n查看本机命令、目录、文本读取或改写，以及手机交来文件的原落盘回执。"),
+                                             [("incoming", "其他设备交给这台电脑的工作\n查看本机工作、收文件和项目副本。收到项目包不代表已经确认导入。"),
                                               ("outgoing", "这台电脑交给手机的工作\n选择原派单后，只向那部手机查询。")])
                     if direction is None: return
                     incoming = direction == "incoming"

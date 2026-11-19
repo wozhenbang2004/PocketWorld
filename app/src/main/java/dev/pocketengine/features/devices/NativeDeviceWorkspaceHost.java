@@ -50,6 +50,8 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         Availability joinAvailability();
         /** Isolated exact-pin server-auth bootstrap only; not business TLS or a Permission. */
         PairingReviewAction inspectInvitation(String invitation) throws Exception;
+        default boolean hasPairingIdentity()throws Exception{return true;}
+        default PairingReviewAction inspectWithFirstIdentity(String invitation,IdentityGate gate)throws Exception{throw new IllegalStateException("当前宿主不支持首次本机身份确认");}
         /** Resolve an opaque native Candidate retained by the original PairingCoordinator. */
         PairingReviewAction reviewCandidate(String candidateId) throws Exception;
         Availability connectAvailability(String peerId) throws Exception;
@@ -348,6 +350,23 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             current(); if (review == null || review.window != this || review.generation != reviewGeneration.get()) throw new SecurityException("放弃本机待配对的核对窗口已关闭");
             consume(review.generation); review.source.confirm();
         }
+        public FirstIdentityPreview firstIdentityPreview(String raw)throws Exception{
+            current();joinAvailability().require();if(pairing.hasPairingIdentity())return null;
+            byte[] bytes=raw.getBytes(java.nio.charset.StandardCharsets.UTF_8);if(bytes.length>16_384)throw new IllegalArgumentException("原邀请超过 16 KiB");
+            long now=System.currentTimeMillis();JSONObject i=PairingCoordinator.validateInvitationForPreview(DeviceProtocol.parseObject(bytes),now);
+            JSONObject safe=new JSONObject().put("inviteId",i.getString("inviteId")).put("inviterDeviceId",i.getString("inviterDeviceId"))
+                    .put("inviterInstanceId",i.getString("instanceId")).put("inviterFingerprint",i.getString("certificateFingerprint")).put("expiresAt",i.getLong("expiresAt"));
+            return new FirstIdentityPreview(this,nextReview(),DeviceProtocol.sha256(bytes),safe,i.getLong("expiresAt")-now);
+        }
+        public PairReview continueFirstIdentity(FirstIdentityPreview v,String raw,IdentityGate visible)throws Exception{
+            current();joinAvailability().require();if(v==null||v.window!=this||v.generation!=reviewGeneration.get()||!v.valid())
+                throw new SecurityException("原邀请预览已过期或更换，没有创建设备身份");
+            byte[] bytes=raw.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if(bytes.length>16_384||!DeviceProtocol.sha256(bytes).equals(v.digest))throw new SecurityException("所选原邀请已改变，请重新预览");
+            consume(v.generation);
+            return pairReview(pairing.inspectWithFirstIdentity(raw,()->{visible.check();current();
+                if(reviewGeneration.get()!=v.generation+1||!v.valid())throw new SecurityException("原邀请窗口或期限已变化，没有创建设备身份");}));
+        }
         public PairReview inspectInvitation(String raw) throws Exception {
             current(); joinAvailability().require();
             if (raw == null || raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 16_384 || blank(raw)) throw new IllegalArgumentException("邀请为空或超过16 KiB，请重新复制另一台设备的原邀请");
@@ -549,6 +568,17 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             synchronized (this) { if (closed) return; closed = true; }
             source.close();
         }
+    }
+    @FunctionalInterface public interface IdentityGate {void check()throws Exception;}
+    /** A one-window comparison only: retain a digest and public preview, never the invitation token. */
+    public static final class FirstIdentityPreview {
+        private final Window window;private final long generation,expires,nanos;private final String digest;private final JSONObject safe;
+        private FirstIdentityPreview(Window w,long g,String d,JSONObject v,long ttl)throws Exception{
+            window=w;generation=g;digest=d;safe=copy(v);expires=v.getLong("expiresAt");
+            nanos=System.nanoTime()+java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(ttl);
+        }
+        public JSONObject view()throws Exception{return copy(safe);}
+        private boolean valid(){return System.currentTimeMillis()<expires && System.nanoTime()-nanos<0;}
     }
     public static final class PairReview {
         private final Window window; private final long generation; private final PairingReviewAction source; private final JSONObject value;

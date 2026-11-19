@@ -249,7 +249,11 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
         public List<String> localAddresses() throws Exception { List<String> choices = new ArrayList<>(DeviceEndpointResolver.localLanAddresses()); choices.addAll(network.relayInvitationAddresses()); return choices; }
         public NativeDeviceWorkspaceHost.Availability joinAvailability() { return NativeDeviceWorkspaceHost.Availability.ready(); }
         public String createInvitation(String selectedAddress) throws Exception { return network.createInvitation(enableIdentity(), selectedAddress); }
-        public NativeDeviceWorkspaceHost.PairingReviewAction inspectInvitation(String invitation) throws Exception { return network.inspectInvitation(invitation); }
+        public boolean hasPairingIdentity()throws Exception{return existingIdentity()!=null;}
+        public NativeDeviceWorkspaceHost.PairingReviewAction inspectInvitation(String invitation)throws Exception{return network.inspectInvitation(invitation,null);}
+        public NativeDeviceWorkspaceHost.PairingReviewAction inspectWithFirstIdentity(String invitation,NativeDeviceWorkspaceHost.IdentityGate gate)throws Exception{
+            return network.inspectInvitation(invitation,java.util.Objects.requireNonNull(gate));
+        }
         public void advancePairing(String id) throws Exception { network.advancePairing(id); changed(); }
         public NativeDeviceWorkspaceHost.PairingReviewAction reviewCandidate(String id) throws Exception {
             for (PairingCoordinator.Candidate candidate : pairing().pendingCandidates(System.currentTimeMillis())) if (id.equals(candidate.inviteId())) return candidateReview(candidate, null);

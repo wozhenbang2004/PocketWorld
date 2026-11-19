@@ -7,11 +7,12 @@ from platform_backend import PlatformError
 from windows_installation import _object
 
 COMMAND, FILE, EXPORT, TEXT_WRITE = "command.run", "workspace.receive", "workspace.export", "workspace.write"
+PROJECT_RECEIVE, PROJECT_CONFIRM = "workspace.project.receive", "workspace.project.confirm"
 READS = frozenset({"workspace.list", "workspace.read"})
 TOOLS = {COMMAND: "native-device-command-v1", FILE: "native-device-tool-v1", **{k: "native-device-tool-v1" for k in READS}}
 
 
-def admission(manager, operation, row, *, owner_export=False, owner_text_write=False):
+def admission(manager, operation, row, *, owner_export=False, owner_text_write=False, owner_project=False):
     """Validate stored identities only; caller independently owns the current read authority."""
     if not row or manager.platform.name != "windows": return None
     fingerprint, job_id, _last, raw = row
@@ -19,7 +20,8 @@ def admission(manager, operation, row, *, owner_export=False, owner_text_write=F
         detail = json.loads(raw) if raw else {}
         tool = (detail.get("audience") or {}).get("toolName")
         # Local-only projections must not change the peer's existing operation.get shape.
-        expected = "native-device-tool-v1" if owner_export and tool==EXPORT or owner_text_write and tool==TEXT_WRITE else TOOLS.get(tool)
+        expected = ("native-device-tool-v1" if owner_export and tool == EXPORT or owner_text_write and tool == TEXT_WRITE
+                    or owner_project and tool in (PROJECT_RECEIVE, PROJECT_CONFIRM) else TOOLS.get(tool))
         if expected is None or detail.get("protocol") != expected:
             return None
         source, accepted = detail["audience"], detail["historyAudience"]
@@ -50,7 +52,9 @@ def retained(manager, operation, row, original):
         # Bounded same-handle read of the original, owner-private, retained job.
         sid = backend.logon_context()["userSid"]
         backend.assert_private_directory(root, sid, require_protected=False)
-        raw = backend.read_private_bytes(root, "job-" + job_id + ".json", sid, maximum=1536*1024 if source["toolName"] == COMMAND else 96*1024)
+        # The project receiver can retain a validated original manifest of up to 1 MiB, never the ZIP's file bodies.
+        maximum = 2*1024*1024 if source["toolName"] == PROJECT_RECEIVE else 1536*1024 if source["toolName"] == COMMAND else 96*1024
+        raw = backend.read_private_bytes(root, "job-" + job_id + ".json", sid, maximum=maximum)
         fixed = _object(raw)
         if (not 0 < fixed["nativeDeviceRevision"] == job["nativeDeviceRevision"] or type(fixed["nativeDeviceRevision"]) is not int
                 or fixed.get("id") != job_id or fixed.get("operationId") != operation or fixed.get("fingerprint") != fingerprint

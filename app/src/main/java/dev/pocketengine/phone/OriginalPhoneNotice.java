@@ -22,6 +22,45 @@ public final class OriginalPhoneNotice {
         return !before.optString("kind").isBlank() && before.toString().equals(after.toString());
     }
 
+    /** Presentation-only. A compact native header must not borrow the private identity of another
+     * local/source/child run. Older full rows use the same original private-source predicate. */
+    public static boolean privatePresentation(JSONObject original) {
+        if (original == null || !"phone".equals(original.optString("kind"))) return false;
+        Object marked = original.opt("originalNoticePrivateLocal");
+        return marked instanceof Boolean flag ? flag : dev.pocketengine.store.PhoneActionRecovery.local(original);
+    }
+
+    /** Neither the detailed shade nor its public substitute receives the goal, summary, answer,
+     * app name or pixels. A service record does not prove that an action reached the screen. */
+    public static void presentPrivately(android.content.Context context, String channel, int icon,
+            android.app.Notification.Builder builder, JSONObject original, boolean held, boolean cancelled, boolean unconfirmedWait, int ordinal) {
+        String title = switch (original.optString("executionMode")) {
+            case "main_screen" -> "本机主屏任务"; case "background" -> "本机独立屏任务"; default -> "本机手机任务";
+        };
+        if (ordinal > 0 && "background".equals(original.optString("executionMode"))) title += " · 通知 " + ordinal;
+        String text;
+        if (!held || unconfirmedWait) text = "点开原任务核对当前状态。";
+        else if (cancelled || original.optBoolean("cancelRequested")) text = "已请求停手；在途操作及清理情况请在原任务核对。";
+        else text = switch (original.optString("status")) {
+            case "preparing" -> "本轮正在准备，尚不代表已取得屏幕。";
+            case "running" -> "原任务已进入执行阶段。点开可核对实际进展。";
+            case "pausing" -> "已请求暂停，等待原执行确认。";
+            case "paused" -> "原任务记录为已暂停。";
+            case "awaiting_user" -> "这轮在等你。点开原任务查看需要处理的内容。";
+            case "reconciling", "needs_confirmation" -> "原操作或结果需要你核对。";
+            case "completed" -> "本轮已收尾，结果在原任务中。";
+            case "stopped", "cancelled" -> "原记录已标记停止，清理情况请在任务中核对。";
+            case "interrupted", "failed" -> "这轮没有完成。点开可核对最后的记录。";
+            default -> "点开原任务核对当前状态。";
+        };
+        android.app.Notification cover = new android.app.Notification.Builder(context,channel).setSmallIcon(icon)
+                .setContentTitle("PocketWorld 手机任务").setContentText("详情留在本机原任务中。")
+                .setLocalOnly(true).setShowWhen(false).build();
+        builder.setContentTitle(title).setContentText(text).setLocalOnly(true)
+                .setVisibility(android.app.Notification.VISIBILITY_PRIVATE).setPublicVersion(cover);
+        if (android.os.Build.VERSION.SDK_INT >= 29) builder.setAllowSystemGeneratedContextualActions(false);
+    }
+
     private static int epoch(JSONObject row) {
         Object raw = row.opt("coordinatorEpoch");
         if (!(raw instanceof Integer || raw instanceof Long)) return -1;

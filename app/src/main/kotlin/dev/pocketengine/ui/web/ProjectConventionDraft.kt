@@ -31,8 +31,35 @@ internal object ProjectConventionDraft {
             marker.optString("textSha256")!=ProjectSources.sha256(draft.optString("constraints").toByteArray(Charsets.UTF_8)))return null
         return JSONObject(marker.toString())
     }
+    /** Derive an action from this exact current note and this one local unsent draft only. */
+    data class Transfer(val kind:String,val fromRevision:Long?=null,val oldChars:Int?=null)
+    fun transfer(draft:JSONObject,selected:JSONObject):Transfer {
+        val body=draft.optString("constraints")
+        if(body.isEmpty())return Transfer("place")
+        require(body.length<=4000) { "原草稿的限制无法在此核对，没有覆盖。" }
+        // Any edit invalidates the source marker in the normal draft editor; manual text is never replaceable.
+        val prior=present(draft) ?: error("原草稿有手写或已编辑的限制，没有覆盖。请先回原项目核对。")
+        check(listOf("projectId","checkoutId","recordId").all { prior.getString(it)==selected.getString(it) }) {
+            "原草稿不是从同项目、同副本的这条约定复制而来，没有替换。"
+        }
+        val previous=prior.getLong("revision");val next=selected.getLong("revision")
+        val sameText=prior.getString("textSha256")==selected.getString("textSha256")
+        check(previous<=next && (previous<next || sameText)) { "原来源修订或正文无法核对，没有替换。请重新打开原条目。" }
+        return Transfer(if(sameText)"same_text" else "replace_older",previous,body.length)
+    }
+    /** This is a source-identity fence, never execution authority. Only a live native Review keeps the exact marker. */
+    class Bound internal constructor(private val original:String?,val seal:String){
+        fun copyMarker():JSONObject? = original?.let { JSONObject(it) }
+        val submissionSeal:String? get() = if(original==null)null else seal
+        fun matches(draft:JSONObject):Boolean = seal==bind(draft).seal
+    }
+    const val SUBMISSION_SEAL="nativeProjectConventionDraftSeal"
+    fun bind(draft:JSONObject):Bound{
+        val selected=present(draft)
+        return Bound(selected?.toString(),selected?.let { ProjectSources.digest(it) } ?: "no_owner_source")
+    }
     /** Never put source IDs/hashes in the web snapshot, task input or model context. */
     fun ownerView(draft: JSONObject): JSONObject = JSONObject(draft.toString()).also { out ->
-        out.remove(KEY); present(draft)?.let { out.put(KEY, JSONObject().put("revision", it.getLong("revision")).put("checkoutId", it.getString("checkoutId"))) }
+        out.optJSONObject("submission")?.remove(SUBMISSION_SEAL);out.remove(KEY); present(draft)?.let { out.put(KEY, JSONObject().put("revision", it.getLong("revision")).put("checkoutId", it.getString("checkoutId"))) }
     }
 }

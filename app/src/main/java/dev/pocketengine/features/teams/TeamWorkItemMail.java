@@ -35,7 +35,7 @@ final class TeamWorkItemMail {
     static boolean forTurn(JSONObject letter, JSONObject current) throws Exception {
         return !letter.has("workItemTarget") || current!=null&&TeamWorkItems.sameIdentity(letter.getJSONObject("workItemTarget"),current);
     }
-    static boolean ended(JSONObject item) {return item.optString("status").matches("completed|cancelled");}
+    static boolean ended(JSONObject item) {return TeamWorkItemAddress.ended(item);}
 
     /** A reassignment/revision retains the original delivery; it is never made generic again. */
     static void retireWaiting(JSONArray inbox, JSONArray items) throws Exception {

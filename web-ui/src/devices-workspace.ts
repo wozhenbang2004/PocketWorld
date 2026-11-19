@@ -146,9 +146,11 @@ export function devicePhoneGoalArchive(value: unknown, peer: DeviceData, local: 
 export function localReviewedInbox(value:unknown,local:DeviceData,search=''){
   if(!object(value)||value.kind!=='reviewedPhoneInbox'||(value.searchText??'')!==search||Array.from(search).length>64||value.readOnly!==true||value.localDeviceId!==local.deviceId||value.localInstanceId!==local.instanceId||!identity(value.closedHandle)
     ||!Array.isArray(value.rows)||value.rows.length>6||typeof value.hasMore!=='boolean'||typeof value.canReadNewer!=='boolean'||!Number.isSafeInteger(value.limitedCandidates)||value.limitedCandidates<0
-    ||!value.rows.every((r:unknown)=>object(r)&&identity(r.taskId)&&identity(r.operationId)&&identity(r.sourceDeviceId)&&typeof r.goal==='string'&&positiveInteger(r.reviewedAt)&&typeof r.keptOnPhone==='boolean'&&typeof r.hasText==='boolean'
+    ||!value.rows.every((r:unknown)=>object(r)&&identity(r.taskId)&&identity(r.operationId)&&identity(r.sourceDeviceId)&&typeof r.goal==='string'&&positiveInteger(r.reviewedAt)
+      &&(r.notConfirmed===true?r.hasText===undefined&&r.keptOnPhone===undefined&&r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined
+        :r.notConfirmed===undefined&&typeof r.keptOnPhone==='boolean'&&typeof r.hasText==='boolean'
       &&(search ? (r.matchPart==='goal'||r.matchPart==='result'&&r.hasText===true)&&Number.isSafeInteger(r.matchPage)&&r.matchPage>=0&&r.matchPage<188&&typeof r.bothParts==='boolean'
-        : r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined))
+        : r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined)))
     ||new Set(value.rows.map((r:DeviceData)=>JSON.stringify([r.taskId,r.operationId]))).size!==value.rows.length)throw new Error('本机已核对目录身份已变化，请重新读取。');
   return value;
 }

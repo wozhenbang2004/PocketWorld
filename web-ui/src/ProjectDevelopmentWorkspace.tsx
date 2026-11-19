@@ -61,11 +61,12 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   const [filesOpen, setFilesOpen] = useState(false), filesBack = useRef<(() => boolean) | null>(null);
   const registerFilesBack = useCallback((handler: (() => boolean) | null) => { filesBack.current = handler; }, []);
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
+  const keptNativePick=useRef(false);const [sourceConflict,setSourceConflict]=useState(false);
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
   const latest = useRef({ run, can, active }); latest.current = { run, can, active }; activeReview.current = review;
   const clearSubmittedDraft = (receipt: Data) => {
-    if (receipt.status !== 'accepted' || !sameDraft(draft.current, receipt)) return;
-    draft.current = { ...draft.current, goal: '', ...deliveryRequirements() }; setGoal(''); setRequirements(deliveryRequirements());
+    if (receipt.status !== 'accepted' || receipt.draftSourceNeedsReview===true || !sameDraft(draft.current, receipt)) return;
+    keptNativePick.current=false;draft.current = { ...draft.current, goal: '', ...deliveryRequirements() }; setGoal(''); setRequirements(deliveryRequirements());
   };
   const applySubmission = (receipt: Data, expected: Data) => {
     if (receipt.projectId !== projectId || receipt.clientMessageId !== expected.clientMessageId ||
@@ -96,13 +97,22 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     if (value.projectId !== projectId || typeof value.viewHandle !== 'string') throw new Error('没有取得这个原项目的页面，请重新读取。');
     handle.current = value.viewHandle; setView(value); sourceAttempt.current = ''; setSource(null);
     const incoming = value.draft || {}, here = draft.current;
-    const selectedCopy = incoming.ownerPickedConvention && !here.constraints && (!here.checkoutId || here.checkoutId===incoming.checkoutId) &&
+    const selectedCopy = incoming.ownerPickedConvention && (!here.constraints || keptNativePick.current) && (!here.checkoutId || here.checkoutId===incoming.checkoutId) &&
       here.goal === (incoming.goal||'') && here.deliverable === (incoming.deliverable||'') && here.completionCriteria === (incoming.completionCriteria||'');
+    setSourceConflict(false);
     if (!touched.current || selectedCopy) {
       const retained = incoming, available = rows(value.checkouts);
       const selected = retained.checkoutId || (available.length === 1 ? available[0].checkoutId : '');
       draft.current = { goal: retained.goal || '', checkoutId: selected, ...deliveryRequirements(retained) };
+      keptNativePick.current=!!incoming.ownerPickedConvention;
       setGoal(draft.current.goal); setCheckout(selected); setRequirements(deliveryRequirements(retained));
+    } else if(keptNativePick.current && here.checkoutId===incoming.checkoutId){
+      // The owner only edited other fields. Refresh the picked field without dropping those local edits.
+      const constraints=deliveryRequirements(incoming).constraints;draft.current={...here,constraints};
+      setRequirements(deliveryRequirements(draft.current));keptNativePick.current=!!incoming.ownerPickedConvention;
+    } else if(incoming.ownerPickedConvention){
+      // Equal text is not identity: neither a changed source nor an unsaved local paragraph wins silently.
+      setSourceConflict(true);
     }
     setSubmission(value.draft?.submission || null);
     if (value.draft?.submission) clearSubmittedDraft(value.draft.submission);
@@ -110,6 +120,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
   };
   const readRef = useRef(read); readRef.current = read;
   const retain = (next: DevelopmentDraft) => {
+    if(next.constraints!==draft.current.constraints||next.checkoutId!==draft.current.checkoutId)keptNativePick.current=false;
     touched.current = true; draft.current = next;
     const original = handle.current, sequence = generation.current;
     if (original) void latest.current.run('projects.development.draft', { viewHandle: original, ...next }).catch(failure => {
@@ -120,7 +131,8 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     if (value.projectId !== projectId || value.checkoutId !== draft.current.checkoutId ||
         value.source?.projectId !== projectId || value.source?.checkoutId !== value.checkoutId || value.runtimeId != null && value.runtimeId !== 'managed_process_v1' ||
         typeof value.goal !== 'string' || value.goal.trim() !== draft.current.goal.trim() ||
-        !value.requestId || !value.reviewHandle || value.commandsAuthorized !== false || value.projectMemoryAuthorized !== false)
+        !value.requestId || !value.reviewHandle || value.commandsAuthorized !== false || value.projectMemoryAuthorized !== false ||
+        value.ownerPickedConventionRevision!==undefined&&(!Number.isSafeInteger(value.ownerPickedConventionRevision)||value.ownerPickedConventionRevision<1))
       throw new Error('审阅不属于这个项目或所选副本，没有开始工作。请重新读取项目条件。');
     if (!source?.sourceDigest || value.source.sourceDigest !== source.sourceDigest) {
       sourceAttempt.current = ''; setSource(null);
@@ -161,7 +173,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', inspect); window.removeEventListener('pagehide', retire); };
   }, [projectId, active]);
   const picked = view?.draft?.ownerPickedConvention;
-  const currentPicked = picked && Number.isSafeInteger(picked.revision) && picked.revision>0 && picked.checkoutId===checkout &&
+  const currentPicked = !sourceConflict && keptNativePick.current && picked && Number.isSafeInteger(picked.revision) && picked.revision>0 && picked.checkoutId===checkout &&
     requirements.constraints && view?.draft?.constraints===requirements.constraints ? picked : null;
   const removePicked = () => { setRequirements(value=>({...value,constraints:''})); retain({...draft.current,constraints:''});
     setView(value=>value ? {...value,draft:{...value.draft,ownerPickedConvention:null}} : value); };
@@ -184,7 +196,20 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     if (!Number.isFinite(remaining) || remaining <= 0) { setExpired(true); return; }
     const timer = window.setTimeout(() => setExpired(true), remaining); return () => window.clearTimeout(timer);
   }, [review]);
-  const pending = unresolved(submission), disabled = !active || busy || pending || !!review || filesOpen || !view || view.draftRecoveryRequired === true;
+  const pending = unresolved(submission), disabled = !active || busy || pending || sourceConflict || !!review || filesOpen || !view || view.draftRecoveryRequired === true;
+  const reconcileSource=(useProject:boolean)=>{
+    if(!sourceConflict||!active||busy||pending||filesOpen||!view||!view.draft?.ownerPickedConvention||document.hidden)return;
+    const remote=view.draft,here=draft.current,scope=String(remote.checkoutId||'');
+    if(!scope||here.checkoutId!==scope){setError('这两份输入属于不同副本，没有替换。请复制需保留的本页文字后，退出并打开原项目副本。');return;}
+    if(useProject){
+      const next={...here,constraints:deliveryRequirements(remote).constraints};draft.current=next;
+      setRequirements(deliveryRequirements(next));keptNativePick.current=true;setSourceConflict(false);return;
+    }
+    void invoke('projects.development.draft',{viewHandle:handle.current,...here,dropSelectedSource:true},value=>{
+      if(value.projectId!==projectId||value.saved!==true||value.removedSelectedSource!==true)throw new Error('原项目草稿需要重新核对。');
+      keptNativePick.current=false;setSourceConflict(false);setView(v=>v?{...v,draft:{...v.draft,ownerPickedConvention:null,constraints:here.constraints}}:v);
+    });
+  };
   const copyUnconfirmed = copyResult?.unconfirmed === true || copyResult?.found === false && copyResult?.partial !== true
     || !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
   const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed);
@@ -263,6 +288,9 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
           {submission.taskId && <Button variant="secondary" disabled={busy || filesOpen || !can('tasks.open')} data-project-receipt-task={submission.taskId} onClick={() => onOpenTask(submission.taskId, submission.checkoutId)}>查看原任务与结果</Button>}
           {pending && <Button variant="secondary" disabled={busy || filesOpen} onClick={() => void invoke('projects.development.query', { viewHandle: handle.current }, receipt => applySubmission(receipt, submission))}>查询原输入</Button>}
         </div></div>}
+      {sourceConflict&&view.draft?.ownerPickedConvention&&<div className="pw-local-inline-notice"><p>原草稿现在有另一次选择，本页还留着你的输入。两份都没有被自动覆盖。</p>
+        {draft.current.checkoutId===view.draft.checkoutId&&<details><summary>对照本副本的两份限制</summary><p>本页普通文字</p><p dir="auto" className="pw-reading-copy">{draft.current.constraints||'（本页为空）'}</p><p>项目当前所选约定 · 修订 {view.draft.ownerPickedConvention.revision}</p><p dir="auto" className="pw-reading-copy">{view.draft.constraints}</p></details>}
+        {draft.current.checkoutId===view.draft.checkoutId?<><Button variant="secondary" size="small" disabled={busy||pending} onClick={()=>reconcileSource(true)}>在本页使用项目当前约定</Button><Button variant="ghost" size="small" disabled={busy||pending} onClick={()=>reconcileSource(false)}>用本页普通文字替换草稿约定</Button></>:<p>工作副本不同，不展示另一份正文，也不能互相覆盖。请保留本页文字后，退出并打开原项目副本。</p>}</div>}
       <TextAreaField label="这次的目标" value={goal} isDisabled={disabled} onChange={value => { if (value.length <= 12000) { setGoal(value); retain({ ...draft.current, goal: value }); } }} hint="例如：做一个能在手机预览的番茄钟，先用本地数据。不要填写密码或令牌。" />
       {currentPicked && <div className="pw-local-inline-notice"><p>已从本项目手写约定修订 {currentPicked.revision} 放入本次草稿，尚不是模型采用的证据。</p>
         <Button variant="ghost" size="small" disabled={disabled} onClick={removePicked}>移除本次约定</Button></div>}
@@ -318,7 +346,7 @@ export function ProjectDevelopmentWorkspace({ projectId, name, active, run, can,
     <SettingsDialog isOpen={!!review} title="开始这个项目任务？" onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
       <p>{review.goal}</p>
       {deliveryFields.some(key => review.deliveryContract?.[key]) && <dl className="pw-facts">
-        {review.deliveryContract.constraints && <div><dt>限制与约束</dt><dd>{review.deliveryContract.constraints}</dd></div>}
+        {review.deliveryContract.constraints && <div><dt>{review.ownerPickedConventionRevision?'所选手写约定 · 修订 '+review.ownerPickedConventionRevision:'限制与约束'}</dt><dd>{review.deliveryContract.constraints}</dd></div>}
         {review.deliveryContract.deliverable && <div><dt>要交付什么</dt><dd>{review.deliveryContract.deliverable}</dd></div>}
         {review.deliveryContract.completionCriteria && <div><dt>怎样算完成</dt><dd>{review.deliveryContract.completionCriteria}</dd></div>}
       </dl>}

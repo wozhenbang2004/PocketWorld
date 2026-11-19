@@ -103,10 +103,11 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController,
                     check(scope.toString() == destination.toString()) { "所选项目或副本已变化" }
                     val existing = checkNotNull(draftConvention) { "本机没有连接原项目输入草稿" }
                     val value = existing(destination, result.getJSONObject("record"), admitted?.getString("stamp"))
-                    if (!confirm) {
+                    if (!confirm && value.getString("transfer")!="same_text") {
                         val retained = pin(draftChoices, JSONObject().put("sourceRead", handle).put("stamp", value.getString("stamp")), 1)
-                        value.remove("stamp"); value.put("review", retained).put("expiresAt", minOf(reads.getValue(handle).expires, draftChoices.getValue(retained).expires))
+                        value.put("review", retained).put("expiresAt", minOf(reads.getValue(handle).expires, draftChoices.getValue(retained).expires))
                     }
+                    value.remove("stamp")
                     done(value, null)
                 }
             }

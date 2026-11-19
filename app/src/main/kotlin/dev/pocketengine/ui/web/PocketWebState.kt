@@ -14,7 +14,7 @@ internal object PocketWebState {
         "refreshtoken", "idtoken", "bearer", "bearertoken", "authorization", "secret",
         "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput",
         // The project run selection holds private file paths, range fingerprints and record revisions. It is native audit, not Web state.
-        "projectmemoryread", "nativeprojectconventionreceipt"
+        "projectmemoryread", "nativeprojectconventionreceipt", "nativeprojectconventiondraftseal"
     )
     private val contractFields = setOf("deliverycontract","deliverycontractdigest")
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")

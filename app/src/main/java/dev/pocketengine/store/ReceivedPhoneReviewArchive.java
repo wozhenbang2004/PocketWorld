@@ -49,13 +49,17 @@ final class ReceivedPhoneReviewArchive {
         JSONObject saved=task.optJSONObject("deviceGoalResult"),evidence=task.optJSONObject("evidence");
         JSONObject check=evidence==null?null:evidence.optJSONObject("nativeDeviceGoalOwnerReview");
         String run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch",-1);
-        if(!"completed".equals(task.opt("status"))||run.isEmpty()||epoch<=0||saved==null||check==null
+        // A rejected result is eligible ONLY for the receiver's decision index, never for its text reader.
+        boolean notConfirmed=metadataOnly && "cancelled".equals(task.opt("status"));
+        if(notConfirmed && (saved==null||check==null||!Boolean.FALSE.equals(saved.opt("ownerVerified"))||!Boolean.FALSE.equals(check.opt("completed"))))return null;
+        String terminal=notConfirmed?"cancelled":"completed";
+        if(!terminal.equals(task.opt("status"))||run.isEmpty()||epoch<=0||saved==null||check==null
                 ||!run.equals(saved.opt("runId"))||epoch!=saved.optInt("executorEpoch",-1)||!"needs_confirmation".equals(saved.opt("status"))
-                ||!Boolean.TRUE.equals(saved.opt("closed"))||!Boolean.TRUE.equals(saved.opt("ownerVerified"))||!Boolean.TRUE.equals(saved.opt("nativeRunnerExited"))||!Boolean.TRUE.equals(saved.opt("nativeDispatchClosed"))
-                ||!Boolean.TRUE.equals(check.opt("completed"))||!Boolean.TRUE.equals(check.opt("sameRun"))||!(saved.opt("summary") instanceof String)
+                ||!Boolean.TRUE.equals(saved.opt("closed"))||!Boolean.valueOf(!notConfirmed).equals(saved.opt("ownerVerified"))||!Boolean.TRUE.equals(saved.opt("nativeRunnerExited"))||!Boolean.TRUE.equals(saved.opt("nativeDispatchClosed"))
+                ||!Boolean.valueOf(!notConfirmed).equals(check.opt("completed"))||!Boolean.TRUE.equals(check.opt("sameRun"))||!(saved.opt("summary") instanceof String)
                 ||saved.optLong("recordedAt")<=0||saved.optLong("reviewedAt")<=0)
             throw new IllegalStateException("没有这一次已完成且经本机机主核对的原结果；未用结束状态代替文字");
-        try(Cursor seen=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='completed'",new String[]{id,run,Integer.toString(epoch)})){
+        try(Cursor seen=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status=?",new String[]{id,run,Integer.toString(epoch),terminal})){
             if(!seen.moveToFirst())throw new IllegalStateException("原执行的本机结束记录不可核对");
         }
         boolean kept=saved.has("ownerOnlyText")||check.has("ownerOnlyText");
@@ -63,6 +67,12 @@ final class ReceivedPhoneReviewArchive {
         JSONObject reviewed=new JSONObject(saved.toString());reviewed.put("closed",false);reviewed.remove("ownerVerified");reviewed.remove("reviewedAt");reviewed.remove("ownerOnlyText");
         String digest=TaskStore.capabilityFingerprint(reviewed);
         if(!digest.equals(check.opt("resultDigest")))throw new SecurityException("本机原结果与当时核对的内容不一致");
+        if(notConfirmed){
+            if(kept)throw new SecurityException("未确认完成的决定不匹配原文字去向");
+            // Only the original request can match; neither a result fragment nor a reader reference is issued.
+            if(search!=null&&search.active()&&!search.matches(receivedGoal))return null;
+            return new JSONObject().put("notConfirmed",true).put("reviewedAt",saved.getLong("reviewedAt"));
+        }
         String reference=TaskStore.capabilityFingerprint(new JSONObject().put("task",id).put("operation",op).put("wire",selection.getString("wireDigest"))
                 .put("run",run).put("epoch",epoch).put("review",digest).put("at",saved.getLong("reviewedAt")).put("kept",kept));
         if(!stamp.isEmpty()&&!stamp.equals(reference))throw new SecurityException("本机原结果已变化，不可接读另一份文字");

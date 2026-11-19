@@ -432,15 +432,24 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         saveRelayPeerEndpoint(peer.deviceId(), lease);
         connectInviter(local, peer.deviceId(), peer.certificateDer(), DeviceEndpointResolver.resolveInvitation(new JSONObject().put("inviterDeviceId", peer.deviceId()).put("connectionHint", new JSONObject().put("kind", "relay").put("serviceBase", lease.serviceBase).put("inviterDeviceId", peer.deviceId())), trustedRelays()), receiverToken);
     }
-    NativeDeviceWorkspaceHost.PairingReviewAction inspectInvitation(String raw) throws Exception {
+    NativeDeviceWorkspaceHost.PairingReviewAction inspectInvitation(String raw,NativeDeviceWorkspaceHost.IdentityGate explicitFirst) throws Exception {
         JSONObject invitation;
         try { invitation = DeviceProtocol.parseObject(raw.getBytes(StandardCharsets.UTF_8)); }
         catch (Exception invalid) { throw new IllegalArgumentException("邀请内容无法读取，请重新复制"); }
         invitation = PairingCoordinator.validateInvitationForPreview(invitation, System.currentTimeMillis());
         DeviceEndpointResolver.Resolved endpoint = DeviceEndpointResolver.resolveInvitation(invitation, trustedRelays());
         if ("relay".equals(endpoint.kind)) invitationRelay(endpoint.serviceBase, invitation.getString("inviterDeviceId"));
-        DeviceIdentity.LocalIdentity local = owner.enableIdentity(); if (local.deviceId().equals(invitation.getString("inviterDeviceId"))) throw new SecurityException("不能与这台设备自己配对");
         if (owner.trust.peer(invitation.getString("inviterDeviceId")) != null) throw new SecurityException("这台设备已有配对记录，请在设备详情管理原授权");
+        DeviceIdentity.LocalIdentity local;
+        synchronized(owner){
+            local=owner.existingIdentity();
+            if(explicitFirst==null&&local==null)throw new SecurityException("请先预览并明确同意创建本机设备身份");
+            if(explicitFirst!=null){
+                if(local!=null)throw new SecurityException("本机身份已变化，请重新核对原邀请");
+                explicitFirst.check();local=owner.enableIdentity(); // The original local creation, only at the reviewed user gesture.
+            }
+        }
+        if(local.deviceId().equals(invitation.getString("inviterDeviceId")))throw new SecurityException("不能与这台设备自己配对");
         return new Outgoing(invitation, endpoint, null);
     }
     private final class Outgoing implements NativeDeviceWorkspaceHost.PairingReviewAction {

@@ -120,7 +120,8 @@ public final class PhoneRunService extends Service {
     private final java.util.concurrent.ConcurrentHashMap<String,BackgroundPhoneRun> backgroundRuns=new java.util.concurrent.ConcurrentHashMap<>();
     // Main-thread presentation only. A metadata update must not move a sibling into the original foreground row.
     private BackgroundPhoneRun primaryBackgroundNotice;
-    private final java.util.concurrent.atomic.AtomicInteger backgroundNotificationIds=new java.util.concurrent.atomic.AtomicInteger(1000);
+    private static final int FIRST_BACKGROUND_NOTICE=1000;
+    private final java.util.concurrent.atomic.AtomicInteger backgroundNotificationIds=new java.util.concurrent.atomic.AtomicInteger(FIRST_BACKGROUND_NOTICE);
     private final EngineApplication.Observer observer=event->{
         if(destroyed)return;
         if("task".equals(event.optString("type"))){JSONObject changed=event.optJSONObject("task");if(changed!=null&&ownerWorkLifetimes.containsKey(changed.optString("id")))settleForegroundOwnership(latestServiceStartId);}
@@ -794,13 +795,18 @@ public final class PhoneRunService extends Service {
         EngineApplication.GatewayParentRun gatewayParent=gatewayAware?this.gatewayParent:null;
         dev.pocketengine.features.proxy.NativeHarnessGatewayBridge gatewayOnly=gatewayAware?this.gatewayOnly:null;
         RunControl ownerControl=noticeControl;
+        // Bind privacy to the original source before a waiting header is refreshed or narrowed.
+        boolean privateNotice=gatewayParent==null&&gatewayOnly==null&&OriginalPhoneNotice.privatePresentation(t);
         String id=t==null?"":t.optString("id");
         boolean originalWaitUnconfirmed=false;
         if(t!=null&&"phone".equals(t.optString("kind"))&&"awaiting_user".equals(t.optString("status"))){
             JSONObject refreshed=null;
             try{refreshed=app.tasks.getForUi(id,false);}catch(Exception unavailable){/* Fall back to this original identity only. */}
             boolean held=noticeControl!=null&&noticeControl==app.control(id)&&noticeControl.matchesHostRun(id,t.optString("runId"),t.optInt("coordinatorEpoch"));
-            if(held&&OriginalPhoneNotice.sameAwaiting(t,refreshed))t=refreshed;
+            if(held&&OriginalPhoneNotice.sameAwaiting(t,refreshed)){
+                if(gatewayParent==null&&gatewayOnly==null)privateNotice|=OriginalPhoneNotice.privatePresentation(refreshed);
+                t=refreshed;
+            }
             else{t=OriginalPhoneNotice.readingOnly(t);originalWaitUnconfirmed=true;}
         }
         Intent openIntent=new Intent(this,dev.pocketengine.ui.ComposeActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -808,14 +814,20 @@ public final class PhoneRunService extends Service {
         try{if(identified&&!dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(t))openIntent=PhoneNotificationControls.open(this,t);}catch(Exception invalid){identified=false;}
         PendingIntent open=PendingIntent.getActivity(this,0,openIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         boolean gatewayMode=gatewayParent!=null||gatewayOnly!=null;String text=gatewayParent!=null&&gatewayOnly==null?"原网关会话已登记，等待本轮配置与确认 · 不执行Agent或工具":gatewayOnly!=null?"仅模型推理 · 不执行手机或工具 · 可随时停止":t==null?"正在准备":t.optString("summary");if(gatewayParent!=null)try{String state=app.tasks.gatewayParentSessionForUi(gatewayParent.task()).optString("state");text=switch(state){case "REQUEST_IN_PROGRESS"->"正在处理原模型请求 · 不执行Agent或工具";case "REQUEST_CLAIMED"->"原模型请求已登记，等待确定回执";case "READY_WAITING","REQUEST_RECEIPT_RECORDED"->"网关会话已就绪，等待远端模型请求";case "PREPARING_SERVICE"->"正在登记前台服务，尚不可派发";case "WAITING_CONFIGURATION"->"等待本轮准确配置与主人确认";default->"本轮网关停止、到期或结果待核对";};}catch(Exception unknown){text="网关状态待核对，不推定正在执行";}if(text.isEmpty())text="运行中 · 可随时停止";
-        Notification.Builder builder=new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_app).setContentTitle(gatewayMode?"任务模型网关":t==null?"手机任务":t.optString("goal","手机任务")).setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE);
+        Notification.Builder builder=new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_app).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE);
+        boolean liveOriginal=!gatewayMode&&identified&&ownerControl!=null&&ownerControl==app.control(id)&&ownerControl.matchesHostRun(id,t.optString("runId"),t.optInt("coordinatorEpoch"));
+        if(privateNotice){
+            // Distinguish concurrent local notices without exposing their goals or claiming this is a physical display ID.
+            var shown=backgroundRuns.get(id);int ordinal=liveOriginal&&shown!=null&&shown.matches(id,t.optString("runId"),t.optInt("coordinatorEpoch"),ownerControl)?
+                    shown.notificationId-FIRST_BACKGROUND_NOTICE+1:0;
+            OriginalPhoneNotice.presentPrivately(this,CHANNEL,R.drawable.ic_app,builder,t,liveOriginal,liveOriginal&&ownerControl.isCancelled(),originalWaitUnconfirmed,ordinal);
+        }else builder.setContentTitle(gatewayMode?"任务模型网关":t==null?"手机任务":t.optString("goal","手机任务")).setContentText(text);
         if(gatewayParent!=null){var owner=gatewayParent;Intent stopIntent=new Intent(this,PhoneRunService.class).setAction(STOP_GATEWAY_PARENT).setData(android.net.Uri.parse("pocketengine-gateway-parent://stop/"+owner.id())).putExtra("gatewayParentResourceId",owner.id());builder.addAction(new Notification.Action.Builder(null,"停止本轮网关",PendingIntent.getService(this,owner.id().hashCode(),stopIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE)).build());return builder.build();}
         if(gatewayOnly!=null){
             var bridge=gatewayOnly;Intent stopIntent=new Intent(this,PhoneRunService.class).setAction(STOP_GATEWAY).setData(android.net.Uri.parse("pocketengine-gateway://stop/"+bridge.leaseId())).putExtra("gatewayLeaseId",bridge.leaseId());
             PendingIntent stop=PendingIntent.getService(this,0,stopIntent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);builder.addAction(new Notification.Action.Builder(null,"停止模型网关",stop).build());return builder.build();
         }
         // While the original question is unavailable, the only control retained is a stop for the exact live owner.
-        boolean liveOriginal=identified&&ownerControl!=null&&ownerControl==app.control(id)&&ownerControl.matchesHostRun(id,t.optString("runId"),t.optInt("coordinatorEpoch"));
         if(originalWaitUnconfirmed&&!liveOriginal)return builder.build();
         if(identified&&dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(t))try{
             PendingIntent stop=PendingIntent.getService(this,0,dev.pocketengine.features.devices.DeviceNotificationControls.command(this,dev.pocketengine.features.devices.DeviceNotificationControls.STOP,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);builder.addAction(new Notification.Action.Builder(null,"停止设备执行",stop).build());

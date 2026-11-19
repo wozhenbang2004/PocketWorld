@@ -67,8 +67,8 @@ public final class TeamWorkItems {
         do{added=false;for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);if(selected.contains(item.getString("workItemId")))continue;JSONArray deps=item.getJSONArray("dependsOn");for(int d=0;d<deps.length();d++)if(selected.contains(deps.getString(d))){selected.add(item.getString("workItemId"));added=true;break;}}}while(added);
         JSONArray result=new JSONArray();for(int i=0;i<items.length();i++)if(selected.contains(items.getJSONObject(i).getString("workItemId")))result.put(JsonFiles.copy(items.getJSONObject(i)));return result;
     }
-    public static JSONObject exactIdentity(JSONObject item)throws Exception {return new JSONObject().put("workItemId",item.getString("workItemId")).put("itemRevision",item.getInt("itemRevision")).put("ownerGeneration",item.getInt("ownerGeneration")).put("memberId",item.getString("memberId")).put("assignmentId",item.getString("assignmentId"));}
-    public static boolean sameIdentity(JSONObject a,JSONObject b)throws Exception {return TeamWorkFiles.canonical(exactIdentity(a)).equals(TeamWorkFiles.canonical(exactIdentity(b)));}
+    public static JSONObject exactIdentity(JSONObject item)throws Exception {return TeamWorkItemAddress.of(item).view();}
+    public static boolean sameIdentity(JSONObject a,JSONObject b)throws Exception {return TeamWorkItemAddress.of(a).equals(TeamWorkItemAddress.of(b));}
     private static JSONArray identifiers(JSONArray values)throws Exception {if(values.length()>MAX_ITEMS-1)throw new IllegalArgumentException("前置工作项过多");JSONArray copy=new JSONArray();for(int i=0;i<values.length();i++)copy.put(uuid(values.getString(i)));return copy;}
     private static String uuid(String id){if(id==null||!id.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("原工作项/任务/项目ID无效");return id;}
     private static String text(JSONObject value,String key,int max,boolean required)throws Exception {String text=value.getString(key);if(text.length()>max||required&&text.codePoints().allMatch(Character::isWhitespace))throw new IllegalArgumentException("工作项文字为空或过长："+key);return text;}

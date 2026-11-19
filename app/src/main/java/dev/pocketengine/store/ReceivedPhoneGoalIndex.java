@@ -40,7 +40,7 @@ final class ReceivedPhoneGoalIndex {
         DeviceProtocol.deviceId(here,"targetDeviceId"); DeviceProtocol.identifier(localInstance,"instanceId");
         boolean waiting=issuer==null; String where=" WHERE i.method='task.submitGoal'";
         ArrayList<String> args=new ArrayList<>();
-        if(closed)where+=" AND EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id AND r.status='completed')";
+        if(closed)where+=" AND EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id AND r.status IN ('completed','cancelled'))";
         else if(declined)where+=" AND EXISTS(SELECT 1 FROM task_events e WHERE e.task_id=i.local_task_id AND e.event_type='"+ReceivedPhoneDeclineHistory.EVENT+"') AND NOT EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id)";
         else if(started)where+=" AND EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id AND r.status NOT IN ('completed','failed','cancelled','canceled','stopped'))";
         else if(waiting) where+=" AND "+(results?"":"NOT ")+"EXISTS(SELECT 1 FROM runs r WHERE r.task_id=i.local_task_id)"; // runs has UNIQUE(task_id,epoch).
@@ -106,7 +106,7 @@ final class ReceivedPhoneGoalIndex {
                     }
                     JSONObject closedReview=null;
                     if(closed){
-                        if(!zero||!"completed".equals(header.opt("status"))||header.optString("runId").isEmpty()||header.optInt("coordinatorEpoch")<=0)continue;
+                        if(!zero||!("completed".equals(header.opt("status"))||"cancelled".equals(header.opt("status")))||header.optString("runId").isEmpty()||header.optInt("coordinatorEpoch")<=0)continue;
                         JSONObject selected=new JSONObject().put("taskId",task).put("operationId",op).put("localId",here).put("localInstance",localInstance)
                                 .put("sourceId",source).put("screenMode",mode).put("wireDigest",digest).put("originDigest",DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin)));
                         try{closedReview=ReceivedPhoneReviewArchive.checkedMetadata(db,selected,search);if(closedReview==null)continue;}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Button, SettingsDialog } from './forms-library';
 import { InlineDiff } from './shell-library';
+import {ProjectKeptDraftSections} from './ProjectKeptDraftSections';
 import { IconFile, IconRefresh } from './icons';
 
 type Data=Record<string,any>;
@@ -99,7 +100,11 @@ export function ProjectKeptFileDrafts({state,draft,edit,disabled}:{state:Data;dr
       {removing?<p>这份手机保留稿不能在这里撤回。正式文件、其余保留稿和当前编辑文字不会改变。</p>:<>
         {typeof selected.old==='string'?<InlineDiff before={selected.old} after={selected.text} versionLabel="当前编辑区 → 所选手机保留稿" beforeLabel="当前编辑区" afterLabel="手机保留稿"/>:
           <pre className="pw-file-revision-content">{selected.text||'（原稿为空）'}</pre>}
-        {!selected.same&&<p role="status">原来的正式基线已变化或不能核对，原稿可读，不会覆盖当前文件。</p>}
+        {!selected.same&&<><p role="status">原来的正式基线已变化或不能核对，不会用整份原稿覆盖文件。</p>
+          <ProjectKeptDraftSections key={selected.review} file={selected.r} handle={selected.review} version={version} disabled={s.busy||disabled}
+            read={s.read} baseline={()=>{const d=live.current.draft;return s.seen()&&state.fileReady&&d&&!d.dirty&&d.version===version&&d.text===d.baseline?d.baseline:null}}
+            stage={(value,expected)=>{const d=live.current.draft;if(!s.seen()||live.current.disabled||!d||d.dirty||d.version!==version||d.text!==expected||d.baseline!==expected)return false;
+              live.current.edit(value);setSelected(null);setReceipt('所选改动已放进当前草稿；其余内容和手机保留稿没变。还没有写正式版本。');return true}}/></>}
         <p className="pw-field-hint">草稿 SHA-256 {selected.r.sha256}</p></>}
       <div className="pw-form-actions">{removing?<><Button variant="secondary" disabled={s.busy} onClick={()=>setRemoving(false)}>保留原稿</Button><Button disabled={s.busy} onClick={()=>void discard()}>只移除这份原稿</Button></>:
         <>{selected.same&&!!draft&&state.fileReady&&draft.version===version&&<Button disabled={s.busy||disabled} onClick={()=>void stage()}>将这份文字放入当前草稿</Button>}

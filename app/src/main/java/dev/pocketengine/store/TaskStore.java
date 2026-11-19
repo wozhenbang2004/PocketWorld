@@ -15980,6 +15980,8 @@ public final class TaskStore {
         JSONObject context=new JSONObject();
         for(String key:new String[]{"id","runId","coordinatorEpoch","kind","status","executionMode","goal","summary","origin","actorId","spaceId","sourceLearningJob","cancelRequested","evidence","ownerPhoneQuestionHold","ownerInputMailbox","ownerPhoneQuestionNotice"})
             if(task.has(key))context.put(key,task.get(key));
+        // A bounded notice header omits parent/owner routing objects; omissions cannot classify a source.
+        if("phone".equals(task.optString("kind")))context.put("originalNoticePrivateLocal",PhoneActionRecovery.local(task));
         return context;
     }
     public synchronized JSONObject get(String id,boolean image)throws Exception{
