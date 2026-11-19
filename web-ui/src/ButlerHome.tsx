@@ -39,6 +39,15 @@ export type ButlerHomeProps = {
 
 const updatedAt = (task: ButlerHomeTask) => typeof task.updatedAt === 'number' && Number.isFinite(task.updatedAt) ? task.updatedAt : 0;
 
+/** A private original may have a saved result without a butler message.
+ * This is an entry to its existing result surface, never a write receipt. */
+function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresentation(task)) {
+  const runId = task.raw?.runId, epoch = task.raw?.coordinatorEpoch;
+  return view.completed && view.handling?.resultAvailable === true &&
+    !reportedHomeWork(task, view.handling) && typeof runId === 'string' && runId.trim() && Number.isSafeInteger(epoch) && epoch > 0
+    ? {runId, epoch} : null;
+}
+
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
@@ -50,7 +59,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
   const restored = useRef(false), reportScroll = useRef(onScrollTop);
   reportScroll.current = onScrollTop;
   const workHeading = useId(), decisionList = useId(), returnedList = useId(), checkingList = useId();
-  const [allReports,setAllReports]=useState(false),[unavailableReport,setUnavailableReport]=useState<ReturnType<typeof reportedHomeWork>>(null);
+  const [allResults,setAllResults]=useState(false),[unavailableReport,setUnavailableReport]=useState<ReturnType<typeof reportedHomeWork>>(null);
   const [showDecisions,setShowDecisions]=useState(false),[checkingExpanded,setCheckingExpanded]=useState<boolean>();
   const [opening,setOpening]=useState(''),[notice,setNotice]=useState('');
   const live=useRef(false),activeRef=useRef(active),flight=useRef(false);activeRef.current=active;
@@ -72,13 +81,14 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
       const presentation = workCollectionPresentation(task), { handling } = presentation;
       const attention = presentation.group === 'attention';
       const unknown = progress?.source === 'task' && progress.status === 'unknown';
-      const status = presentation.label;
+      const saved = originalSavedResult(task,presentation);
+      const status = saved ? '成果已保存' : presentation.label;
       const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.waitingForChildren || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
       const runId=task.raw?.runId,epoch=task.raw?.coordinatorEpoch;
       const decision=handling?.ownerDecision&&typeof runId==='string'&&runId.trim()&&Number.isSafeInteger(epoch)&&epoch>0?{runId,epoch}:null;
       const report=presentation.group==='ended'?reportedHomeWork(task,handling):null;
       const needsOwner = !!decision || !presentation.reconciliation && (presentation.pendingApproval || handling?.needsAttention === true);
-      return { task, decision, needsOwner, report, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
+      return { task, decision, needsOwner, report, saved, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
         group: presentation.group, busy: presentation.busy, completed: presentation.completed, action: presentation.actionLabel };
     });
   // An older request must not be displaced by a newer pause or unknown receipt.
@@ -87,14 +97,14 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
   const shownDecisions=showDecisions?decisions:decisions.slice(0,2);
   const checking=work.filter(item=>!item.needsOwner&&item.group==='attention');
   const running=work.filter(item=>item.group==='running');
-  const returned=work.filter(item=>item.report);
-  const ended=work.filter(item=>item.group==='ended'&&!item.report);
-  const shownRunning=running.slice(0,2), shownReturned=allReports?returned:returned.slice(0,2);
-  const showChecking=checkingExpanded??(!decisions.length&&!running.length&&!returned.length&&!phoneActivity);
+  const results=work.filter(item=>item.report||item.saved);
+  const ended=work.filter(item=>item.group==='ended'&&!item.report&&!item.saved);
+  const shownRunning=running.slice(0,2), shownResults=allResults?results:results.slice(0,2);
+  const showChecking=checkingExpanded??(!decisions.length&&!running.length&&!results.length&&!phoneActivity);
   const shownEnded=ended.slice(0,1), shownChecking=showChecking?checking.slice(0,2):[];
   // Present each job once under the human question it answers. Fold only
-  // diagnostics; real decisions and the newest reports stay one tap away.
-  const visible=[...shownDecisions,...shownRunning,...shownReturned,...shownChecking,...shownEnded];
+  // diagnostics; real decisions and the newest original results stay one tap away.
+  const visible=[...shownDecisions,...shownRunning,...shownResults,...shownChecking,...shownEnded];
   const revision = JSON.stringify([ready, canOpen, visible.map(({ task, status, detail }) => [task.id, status, detail])]);
   useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false });
   const empty = ready && !work.length && !hasPreparations && !phoneActivity && !moreWork;
@@ -125,7 +135,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
   const open=async(item:typeof work[number])=>{
     if(!activeRef.current||!canOpen||flight.current)return;
     const originalOnly=!!item.report&&!!unavailableReport&&sameHomeReport(item.report,unavailableReport);
-    const report=canReadReports&&!originalOnly?item.report:null,binding=item.decision||item.report;
+    const report=canReadReports&&!originalOnly?item.report:null,binding=item.decision||item.report||item.saved;
     if(!binding){onOpen(item.task);return}
     const id=item.task.id,{runId,epoch}=binding,documentEpoch=bridge.getDocumentEpoch();
     const resume=()=>Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0),startResume=resume();
@@ -134,7 +144,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     const same=()=>{
       const rows=bridge.getState().state.ownerWork;
       return Array.isArray(rows)&&rows.some((row:ButlerHomeTask)=>row?.id===id&&row.raw?.runId===runId&&row.raw?.coordinatorEpoch===epoch&&
-        (item.report?sameHomeReport(reportedHomeWork(row),item.report):row.status===item.task.status&&workCollectionPresentation(row).handling?.ownerDecision));
+        (item.report?sameHomeReport(reportedHomeWork(row),item.report):item.saved?!!originalSavedResult(row):row.status===item.task.status&&workCollectionPresentation(row).handling?.ownerDecision));
     };
     let ownsWindow=false,handedOff=false;
     flight.current=true;setOpening(id);setNotice('');
@@ -159,7 +169,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     finally{
       // Release only our own provisional read if the current Home gesture
       // failed; do not close a view that another route has since entered.
-      if(item.report&&ownsWindow&&!handedOff&&current()&&(bridge.getState().view as {taskId?:string}|undefined)?.taskId===id)
+      if((item.report||item.saved)&&ownsWindow&&!handedOff&&current()&&(bridge.getState().view as {taskId?:string}|undefined)?.taskId===id)
         await bridge.command('tasks.close',{}).catch(()=>{});
       flight.current=false;if(live.current)setOpening('');
     }
@@ -170,7 +180,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     const StatusIcon = ['paused', 'interrupted'].includes(task.status) ? IconPauseCircle : task.status === 'failed' ? IconError
       : needsAttention ? IconInfo : completed ? IconCheckCircle : IconClock;
     const date = new Date(updatedAt(task)), hasDate = updatedAt(task) > 0 && Number.isFinite(date.getTime());
-    const readAction=decision?'查看原工作':item.report?(canReadReports&&(!unavailableReport||!sameHomeReport(item.report,unavailableReport))?'阅读原汇报':'查看原工作'):needsAttention?'查看状态':action;
+    const readAction=decision?'查看原工作':item.report?(canReadReports&&(!unavailableReport||!sameHomeReport(item.report,unavailableReport))?'阅读原汇报':'查看原工作'):item.saved?'查看已保存成果':needsAttention?'查看状态':action;
     return <li key={task.id} data-opening={opening===task.id||undefined} data-task-id={task.id} data-motion-key={task.id} data-task-state={task.status} data-attention={needsAttention || undefined}>
       <Button variant="ghost" className="pw-butler-work-row" disabled={!canOpen} aria-disabled={!canOpen||!!opening} aria-busy={opening===task.id} aria-label={`${readAction}：${task.goal || '委派工作'}`} aria-description={[status, detail].filter(Boolean).join('，')} onClick={() => void open(item)}>
         <span className="pw-butler-work-mark" data-attention={needsAttention || undefined} aria-hidden="true">{busy ? <ProgressCircle isIndeterminate size="sm" aria-label={status} /> : <StatusIcon size={18} />}</span>
@@ -209,10 +219,10 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
               {phoneActivity}
               {shownRunning.length>0&&<ol className="pw-butler-work-list">{shownRunning.map(renderTask)}</ol>}
             </section>}
-            {shownReturned.length>0&&<section className="pw-butler-work-group" aria-label="已交回">
-              <header className="pw-butler-group-heading"><h3>已交回</h3></header>
-              <ol id={returnedList} className="pw-butler-work-list">{shownReturned.map(renderTask)}</ol>
-              {returned.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-expanded={allReports} aria-controls={returnedList} onClick={()=>setAllReports(value=>!value)}>{allReports?'收起汇报':`再看 ${returned.length-2} 份汇报`}</Button>}
+            {shownResults.length>0&&<section className="pw-butler-work-group" aria-label="成果">
+              <header className="pw-butler-group-heading"><h3>成果</h3></header>
+              <ol id={returnedList} className="pw-butler-work-list">{shownResults.map(renderTask)}</ol>
+              {results.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-expanded={allResults} aria-controls={returnedList} onClick={()=>setAllResults(value=>!value)}>{allResults?'收起成果':`再看 ${results.length-2} 项成果`}</Button>}
             </section>}
             {(checking.length>0||shownEnded.length>0||moreWork)&&<div className="pw-butler-work-group pw-butler-work-secondary">
               {checking.length>0&&<>

@@ -196,10 +196,15 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const activeMemories = memories.current.filter(row => !historicalMemory(row));
   const searchText = query.trim().toLocaleLowerCase();
   const searched = (row: Data) => !searchText || [row.text, row.title, row.sourceSummary, topicOf(row).label].filter(Boolean).join(' ').toLocaleLowerCase().includes(searchText);
-  const visibleMemories = activeMemories.filter(row => searched(row) && (topic === 'all' || topicOf(row).id === topic));
+  const matchingMemories = activeMemories.filter(searched);
+  const visibleMemories = topic === 'all' ? matchingMemories : matchingMemories.filter(row => topicOf(row).id === topic);
   const topics = [...new Map(activeMemories.map(row => [topicOf(row).id, topicOf(row)])).values()];
   const visibleCandidates = pendingCandidates.filter(searched);
   const historyRows = memories.history.filter(searched);
+  const hasMemoryRows = activeMemories.length + pendingCandidates.length + memories.history.length > 0;
+  const savedMiss = memoryAvailable && !showCandidates && !visibleMemories.length && (!!searchText || topic !== 'all');
+  const candidateMatchLink = savedMiss && !!searchText && visibleCandidates.length > 0;
+  const historyMatchLink = savedMiss && !!searchText && historyRows.length > 0;
   useCollectionMotion(scroller, JSON.stringify([presentationKey, view, searchText, topic, showCandidates]), JSON.stringify([
     visibleMemories.map(row => [row.id, row.revision, topicOf(row).id]),
     visibleCandidates.map(row => [row.id, row.status]), historyRows.map(row => [row.id, row.revision]),
@@ -444,6 +449,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     if (current.current.leaveOpen) { pendingLeave.current = null; setLeaveOpen(false); return true; }
     if (current.current.review) { clearReview(); return true; }
     if (beforeLeave(leaveToParent)) return true;
+    if (current.current.view === 'memories' && showCandidates) { setShowCandidates(false); return true; }
     if (unresolvedDirectExit()) { pendingLeave.current = leaveToParent; setLeaveOpen(true); return true; }
     if (current.current.view === 'home') return false;
     leaveToParent(); return true;
@@ -806,7 +812,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const receiptLabel = recentReceipt ? ({ delivery_unknown: '投递待核对', awaiting_user: '等待你查看', blocked_notifications: '通知受阻', notified: '已通知', delivered: '已投递', cancelled: '已取消', failed: '未完成' }[string(recentReceipt.status)] || '查看原发生记录') : '';
 
   return <section className="pw-profile-workspace pw-route-workspace" data-profile-view={view} aria-label={headingLabel}>
-    <header className="pw-profile-header"><IconButton icon={IconArrowLeft} aria-label={atDirectEntry() ? '返回进入时的页面' : view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><div className="pw-profile-header-copy"><h1 ref={heading} tabIndex={-1}>{headingLabel}</h1><WorkingStatus active={locked && loaded || avatarPicking && !locked}>{locked ? `${pending}…` : '正在等候所选头像…'}</WorkingStatus></div>{headerSave}</header>
+    <header className="pw-profile-header"><IconButton icon={IconArrowLeft} aria-label={view === 'memories' && showCandidates ? '返回已保存的记忆' : atDirectEntry() ? '返回进入时的页面' : view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><div className="pw-profile-header-copy"><h1 ref={heading} tabIndex={-1}>{headingLabel}</h1><WorkingStatus active={locked && loaded || avatarPicking && !locked}>{locked ? `${pending}…` : '正在等候所选头像…'}</WorkingStatus></div>{headerSave}</header>
     <div className="pw-profile-scroll" ref={scroller}>
       <div className="pw-profile-content">
         {!canEnter && <div className="pw-profile-empty"><IconAccount aria-hidden="true" /><h2>个人资料暂不可用</h2><p>请更新应用后重新打开。</p></div>}
@@ -871,27 +877,35 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         {loaded && view === 'memories' && <>
           <p className="pw-profile-intro">这里是已保存的个人记忆，可以纠正或忘记。待选建议单独显示，不算已保存。</p>
           {memoryError && <div className="pw-profile-feedback is-error" role="alert"><p>{memoryError}</p><Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>重新读取记忆</Button></div>}
-          {(activeMemories.length > 0 || pendingCandidates.length > 0 || !!query) && <div className="pw-profile-collection-tools">
-            <SearchField className="pw-profile-memory-search" fieldClassName="pw-profile-input" aria-label={memories.complete ? '搜索个人记忆' : '搜索已读取的个人记忆'} placeholder="搜索个人记忆" clearLabel="清除搜索" value={query} onChange={setQuery} shape="rounded" isDisabled={locked} />
+          {(hasMemoryRows || !!query || showCandidates) && <div className="pw-profile-collection-tools">
+            <SearchField className="pw-profile-memory-search" fieldClassName="pw-profile-input" aria-label={showCandidates ? '搜索待确认建议' : '搜索已读取的个人记忆'} placeholder={showCandidates ? '搜索待确认建议' : '搜索个人记忆'} clearLabel="清除搜索" value={query} onChange={setQuery} shape="rounded" isDisabled={locked} />
             <div className="pw-profile-collection-nav">
               <Button variant="secondary" leadingIcon={IconAdd} disabled={locked || !supported('profile.memory.createReview')} onClick={openNewMemory}>记住一件事</Button>
-              {(pendingCandidates.length > 0 || showCandidates) && <Button variant="ghost" aria-pressed={showCandidates} disabled={locked} onClick={() => setShowCandidates(value => !value)}>{showCandidates ? '查看已保存' : `待确认 ${pendingCandidates.length} 条`}</Button>}
+              {!candidateMatchLink && (pendingCandidates.length > 0 || showCandidates) && <Button variant="ghost" aria-pressed={showCandidates} disabled={locked} onClick={() => setShowCandidates(value => !value)}>{showCandidates ? '查看已保存' : `待确认 ${pendingCandidates.length} 条`}</Button>}
             </div>
             {!showCandidates && topics.length > 1 && <SelectField className="pw-profile-topic-select" label="主题" value={topic} options={[{ id: 'all', label: '所有主题' }, ...topics]} onChange={setTopic} isDisabled={locked} />}
             {!memories.complete && <p className="pw-profile-list-hint">当前搜索范围为已读取的个人记忆。</p>}
           </div>}
-          {showCandidates ? <section className="pw-profile-memory-group"><h2>待你确认<span>{pendingCandidates.length}</span></h2><p className="pw-profile-list-hint">这些建议还不是已保存的个人记忆。有原文时可先核对，不必现在决定。</p><div className="pw-profile-memory-list">{visibleCandidates.map(row => memoryRow(row, true))}</div>{!visibleCandidates.length && <p className="pw-profile-list-hint">{query ? '没有匹配的候选。' : '目前没有待确认的内容。'}</p>}</section>
+          {showCandidates ? memoryAvailable && <section className="pw-profile-memory-group"><h2>待你确认<span>{searchText ? `${visibleCandidates.length} 条匹配` : pendingCandidates.length}</span></h2><p className="pw-profile-list-hint">这些建议还不是已保存的个人记忆。有原文时可先核对，不必现在决定。</p><div className="pw-profile-memory-list">{visibleCandidates.map(row => memoryRow(row, true))}</div>{!visibleCandidates.length && <p className="pw-profile-list-hint">{searchText ? '已读取的建议中没有匹配项。' : '暂未读到待确认的内容。'}</p>}</section>
             : topics.filter(item => visibleMemories.some(row => topicOf(row).id === item.id)).map(item => <section className="pw-profile-memory-group" key={item.id}><h2>{item.label}</h2><div className="pw-profile-memory-list">{visibleMemories.filter(row => topicOf(row).id === item.id).map(row => memoryRow(row, false))}</div></section>)}
-          {memoryAvailable && !showCandidates && !visibleMemories.length && (query || topic !== 'all') && <div className="pw-profile-empty"><h2>没有找到匹配的记忆</h2><p>试试其他关键词，或查看所有主题。</p><Button variant="ghost" disabled={locked} onClick={() => { setQuery(''); setTopic('all'); }}>清除搜索与筛选</Button></div>}
-          {memoryAvailable && !activeMemories.length && !pendingCandidates.length && !query && topic === 'all' && <div className="pw-profile-empty"><IconSparkles aria-hidden="true" /><h2>还没有个人记忆</h2><p>告诉我一件你希望下次不用再解释的事。</p><Button leadingIcon={IconAdd} disabled={locked || !supported('profile.memory.createReview')} onClick={openNewMemory}>记住一件事</Button><p>也可以在对话中直接说“记住这件事”。</p></div>}
+          {savedMiss && <section className="pw-profile-empty">
+            <h2>{topic === 'all' ? '当前已保存列表没有匹配项' : '所选主题没有匹配的记忆'}</h2>
+            {topic !== 'all' && <Button variant="secondary" disabled={locked} onClick={() => setTopic('all')}>{matchingMemories.length ? `查看其他主题的 ${matchingMemories.length} 条记忆` : '取消主题筛选'}</Button>}
+            {candidateMatchLink && <Button variant="ghost" disabled={locked} onClick={() => setShowCandidates(true)}>查看 {visibleCandidates.length} 条匹配的待确认建议</Button>}
+            {historyMatchLink && <Button variant="ghost" disabled={locked} onClick={() => go('memory-history')}>查看 {historyRows.length} 条匹配的过去记忆</Button>}
+            {searchText && !matchingMemories.length && !candidateMatchLink && !historyMatchLink && <p>试试其他关键词。</p>}
+          </section>}
+          {memoryAvailable && !showCandidates && !activeMemories.length && !searchText && topic === 'all' && <div className="pw-profile-empty"><IconSparkles aria-hidden="true" /><h2>当前列表里没有已保存的记忆</h2>
+            {hasMemoryRows ? <p>待确认建议和过去的记忆不计入当前列表。</p> : !memories.complete ? <p>清单尚未完整读取，可先刷新记忆。</p> : <><p>告诉我一件你希望下次不用再解释的事。</p><Button leadingIcon={IconAdd} disabled={locked || !supported('profile.memory.createReview')} onClick={openNewMemory}>记住一件事</Button><p>也可以在对话中直接说“记住这件事”。</p></>}
+          </div>}
           {memories.pendingConflicts.length > 0 && <Accordion className="pw-profile-disclosure"><AccordionItem id="personal-conflicts" title={`有 ${memories.pendingConflicts.length} 项信息需要核对`}><p className="pw-profile-help">这些信息存在差异，尚未自动覆盖已保存内容。</p>{memories.pendingConflicts.map((row, index) => <p key={string(row.id) || index} className="pw-profile-conflict-text">{string(row.text || row.summary || row.reason) || '请核对相关个人记忆的来源与内容。'}</p>)}</AccordionItem></Accordion>}
-          <div className="pw-profile-collection-footer"><Button variant="ghost" leadingIcon={IconHistory} trailingIcon={IconChevronRight} disabled={locked} onClick={() => go('memory-history')}>过去的记忆</Button>{onOpenAdvancedMemory && <Button variant="ghost" leadingIcon={IconArrowUpRight} disabled={locked} onClick={() => guarded(onOpenAdvancedMemory)}>项目记忆与更多管理</Button>}<Button variant="ghost" className="pw-profile-refresh" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>刷新记忆</Button></div>
+          <div className="pw-profile-collection-footer">{!historyMatchLink && <Button variant="ghost" leadingIcon={IconHistory} trailingIcon={IconChevronRight} disabled={locked} onClick={() => go('memory-history')}>过去的记忆</Button>}{onOpenAdvancedMemory && <Button variant="ghost" leadingIcon={IconArrowUpRight} disabled={locked} onClick={() => guarded(onOpenAdvancedMemory)}>项目记忆与更多管理</Button>}<Button variant="ghost" className="pw-profile-refresh" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>刷新记忆</Button></div>
         </>}
         {loaded && view === 'memory-new' && <div className="pw-profile-form">
           <p className="pw-profile-intro">手动保存的背景、兴趣或偏好可供以后参考。只对这次任务有效的要求，留在原对话即可。</p>
           <TextAreaField className="pw-profile-field" fieldClassName="pw-profile-input pw-profile-memory-input" label="希望记住什么" placeholder="一件你希望下次不用再解释的事" value={newMemoryText} onChange={setNewMemoryText} rows={5} maxLength={4000} resize="none" isDisabled={locked || createUnknown} />
           <SelectField className="pw-profile-language" label="有效期" value={newMemoryExpiry} options={expiryOptions} onChange={setNewMemoryExpiry} isDisabled={locked || createUnknown} />
-          <p className="pw-profile-preference-priority">到期后会移入过去的记忆，不再作为当前背景。回答风格与做事方式可以在明确偏好中设置。</p>
+          <p className="pw-profile-preference-priority">到期后不再作为当前背景。回答风格与做事方式可以在明确偏好中设置。</p>
           <Button variant="ghost" className="pw-profile-inline-link" trailingIcon={IconChevronRight} disabled={locked || createUnknown} onClick={() => openEditor('communication')}>设置交流偏好</Button>
         </div>}
         {loaded && view === 'memory-settings' && <div className="pw-profile-form pw-profile-memory-controls">
@@ -905,10 +919,10 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           <div className="pw-profile-collection-footer"><Button variant="ghost" leadingIcon={IconRefresh} disabled={locked} onClick={openMemorySettings}>重新读取设置</Button>{onOpenAdvancedMemory && <Button variant="ghost" leadingIcon={IconArrowUpRight} disabled={locked} onClick={() => guarded(onOpenAdvancedMemory)}>项目记忆与更多管理</Button>}</div>
         </div>}
         {loaded && view === 'memory-history' && <>
-          <p className="pw-profile-intro">已到期或已退出当前背景的内容保留在这里，方便核对过去的变化。</p>
+          <p className="pw-profile-intro">这里显示仍可查看、但不在当前背景中的个人记忆。</p>
           {(memories.history.length > 0 || !!query) && <SearchField className="pw-profile-memory-search" fieldClassName="pw-profile-input" aria-label="搜索过去的记忆" placeholder="搜索过去的记忆" clearLabel="清除搜索" value={query} onChange={setQuery} shape="rounded" isDisabled={locked} />}
           <div className="pw-profile-memory-list">{historyRows.map(row => memoryRow(row, false))}</div>
-          {memoryAvailable && !historyRows.length && <div className="pw-profile-empty"><IconHistory aria-hidden="true" /><h2>{query ? '没有匹配的过去记忆' : '还没有过去的记忆'}</h2>{query ? <Button variant="ghost" onClick={() => setQuery('')}>清除搜索</Button> : <p>到期或被替代的内容会在这里显示。</p>}</div>}
+          {memoryAvailable && !historyRows.length && <div className="pw-profile-empty"><IconHistory aria-hidden="true" /><h2>{searchText ? '已读取的过去记忆中没有匹配项' : '暂未读到过去的记忆'}</h2>{searchText && <Button variant="ghost" onClick={() => setQuery('')}>清除搜索</Button>}</div>}
           {memoryError && <p className="pw-profile-list-hint" role="alert">{memoryError}</p>}
           <Button variant="ghost" className="pw-profile-refresh" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>刷新记忆</Button>
         </>}

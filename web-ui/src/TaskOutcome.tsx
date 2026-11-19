@@ -10,6 +10,7 @@ import { OwnerWorkReport } from './OwnerWorkReport';
 import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
+import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import './task-reading.css';
 
 const stoppedAttemptTitles: Record<string, string> = {
@@ -116,6 +117,10 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const [clock, setClock] = useState(Date.now);
   const packageRead = useProjectPackages(task, active, readIdentity);
   const outcome = getTaskOutcome(task, messages, Math.max(clock, Date.now()), packageRead.page ?? undefined);
+  const [selectedPackage, selectPackage] = useState(''), packageButton = useRef<HTMLButtonElement | null>(null);
+  const packageKey = (item: typeof outcome.projectPackages[number]) => JSON.stringify([readIdentity, item.taskId, item.operationId, item.archiveSha256]);
+  const inWorkReader = (item: typeof outcome.projectPackages[number]) => item.mode === 'source_project' && canReadProjectPackageFiles();
+  const readingPackage = active && outcome.projectPackages.find(item => selectedPackage === packageKey(item) && inWorkReader(item));
   const screenshot = outcome.screenshot;
   const remotePhone = outcome.remotePhoneSnapshot;
   const phoneStatus = outcome.remotePhoneSnapshotStatus;
@@ -180,24 +185,29 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
-      {outcome.projectPackages.length > 0 && <>
+      {outcome.projectPackages.length > 0 && <div hidden={!!readingPackage}>
         <p className="pw-reading-note">这些版本已由原保存操作生成。任务完成、生成成果、发出与发布各有自己的回执；打开时会核对原文件。</p>
         <div className="pw-outcome-files">{outcome.projectPackages.map(item => <Button key={item.operationId} data-motion-key={`package:${item.operationId}:${item.archiveSha256}`}
-          variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight} disabled={!active || !onOpenProjectPackage}
-          onClick={() => onOpenProjectPackage?.({ taskId: item.taskId, operationId: item.operationId })}>
+          variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight} disabled={!active || !inWorkReader(item) && !onOpenProjectPackage}
+          onClick={event => { if (inWorkReader(item)) { packageButton.current = event.currentTarget; selectPackage(packageKey(item)); } else onOpenProjectPackage?.({ taskId: item.taskId, operationId: item.operationId }); }}>
           <span className="pw-outcome-file-copy"><span>{item.name}</span>
             <small>{item.currentRun ? '本轮生成' : '较早执行生成'} · {item.mode === 'web_output' ? '网页成果' : '源码项目包'}{item.fileCount === undefined ? '' : ` · ${item.fileCount} 个文件`} · {item.archiveBytes.toLocaleString()} 字节</small>
             {item.omittedCount !== undefined && item.omittedCount > 0 && <small>保存时有 {item.omittedCount} 项未收入包内，具体范围保留在原清单。</small>}
-            <small>{onOpenProjectPackage ? '查看固定版本' : '当前无法打开原固定版本'}</small>
+            <small>{inWorkReader(item) ? '查看包内文件' : onOpenProjectPackage ? '查看固定版本' : '当前无法打开原固定版本'}</small>
           </span>
         </Button>)}</div>
-      </>}
+      </div>}
+      {readingPackage && <ProjectPackageFiles key={selectedPackage} item={readingPackage} onClose={() => {
+        selectPackage(''); const target = packageButton.current;
+        requestAnimationFrame(() => { if (!document.hidden && packageWindowOwns(readingPackage.taskId) && target?.isConnected && !target.closest('[hidden],[inert]')) target.focus(); });
+      }}
+        onWholePackage={onOpenProjectPackage ? () => { selectPackage(''); onOpenProjectPackage({ taskId: readingPackage.taskId, operationId: readingPackage.operationId }); } : undefined}/>}
       {packageRead.waiting ? <p className="pw-reading-note" role="status">正在打开原工作，随后读取已保存的版本…</p> : packageRead.busy && <p className="pw-reading-note" role="status">正在读取原任务保存的固定成果…</p>}
       {packageRead.error && <p className="pw-reading-note pw-error" role="alert">{packageRead.error}</p>}
       {!packageRead.supported && <p className="pw-reading-note">当前连接尚不能读取项目固定成果。</p>}
       {packageRead.page && !outcome.projectPackages.length && !packageRead.busy && <p className="pw-reading-note">{outcome.projectPackagesPartial ? '这一段原记录尚未提供可核对的固定成果。' : '当前读取的原保存记录中没有固定成果。'}</p>}
       {outcome.projectPackagesPartial && <p className="pw-outcome-limit" role="status">{packageRead.page?.hasMore ? '还有原保存记录尚未读取。' : '部分原保存记录未能完整核对，当前列表不代表全部交付物。'}{packageRead.page?.readLimited ? ' 本次另有记录因读取限制或凭证不可用而保留缺口。' : ''}</p>}
-      {active && packageRead.supported && <div className="pw-action-row">
+      {!readingPackage && active && packageRead.supported && <div className="pw-action-row">
         {packageRead.page?.hasMore && <Button variant="secondary" disabled={packageRead.busy || packageRead.waiting} onClick={() => void packageRead.read(packageRead.page!.nextCursor)}>继续读取固定成果</Button>}
         <Button variant="ghost" disabled={packageRead.busy || packageRead.waiting} onClick={() => void packageRead.read()}>重新读取固定成果</Button>
       </div>}

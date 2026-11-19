@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { IconAdd, IconArrowDown, IconArrowLeft, IconArrowRight, IconArrowUp, IconCheck, IconClose, IconCollapse, IconCursor, IconCursorClick, IconExpand, IconKeyboard, IconLoading, IconMinus, IconMonitor, IconMore, IconRefresh, IconReturn, IconSend, IconTakeControl } from './icons';
-import { DesktopViewerConnection, desktopScopes, desktopText, type DesktopInput, type DesktopRecord, type DesktopRun, type DesktopViewerState } from './desktop-viewer';
+import { DesktopViewerConnection, desktopScopes, desktopText, initialDesktopViewerState, type DesktopInput, type DesktopRecord, type DesktopRun } from './desktop-viewer';
 import { MotionFeedback } from './library/journey-motion';
 import { Button, RadioOptions } from './forms-library';
 import './desktop-viewer.css';
 
-const idle: DesktopViewerState = { phase: 'idle', session: null, playbackReady: false, frameReady: false, frameIssue: null, controlPending: false, inputPending: false, inputUncertain: false, controlExpired: false, error: '' };
+const inputNames = { click: '点按', scroll: '滚动', insert_text: '文字输入', press_key: '按键', hotkey: '组合键' };
 const clampZoom = (n: number) => Math.round(Math.max(1, Math.min(3, n)) * 10) / 10;
 type Touch = { x: number; y: number; initialX: number; initialY: number; started: number; button: number; moved: boolean; sessionId?: string; revision?: number; inputAllowed: boolean; inside: boolean };
 
@@ -15,7 +15,7 @@ export function DesktopViewer({ peer, ownerDeviceId, now, partialGrants, support
   onRefresh: () => void; refreshing: boolean; refreshError: string; onClose: () => void;
 }) {
   const scopes = useMemo(() => desktopScopes(peer, now, ownerDeviceId), [peer, now, ownerDeviceId]);
-  const [scopeKey, setScopeKey] = useState(''), [state, setState] = useState<DesktopViewerState>(idle);
+  const [scopeKey, setScopeKey] = useState(''), [state, setState] = useState(initialDesktopViewerState);
   const [zoom, setZoom] = useState(1), [expanded, setExpanded] = useState(false), [keyboard, setKeyboard] = useState(false), [more, setMore] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [draft, setDraft] = useState(''), [textError, setTextError] = useState(''), [videoError, setVideoError] = useState(''), [clickMode, setClickMode] = useState<'left' | 'double' | 'right'>('left');
@@ -188,7 +188,14 @@ export function DesktopViewer({ peer, ownerDeviceId, now, partialGrants, support
     setTextError(''); const sessionId = state.session?.sessionId;
     if (await connection.current.input({ kind: 'insert_text', text }) && mounted.current && connection.current?.state.session?.sessionId === sessionId) setDraft(current => current === text ? '' : current);
   };
-  const status = state.controlPending ? '正在切换控制' : state.inputPending ? '正在输入' : state.inputUncertain ? '请核对操作结果' : state.phase === 'opening' ? '正在连接电脑' : state.phase === 'connecting' ? '正在连接画面' : state.phase === 'disconnected' ? '连接中断' : state.controlExpired ? '本次操作时间已到' : connected && !state.playbackReady ? '通道已连接 · 等待画面播放' : connected && otherHuman ? '另一窗口正在控制' : connected && state.frameIssue ? '仅可观看' : connected && !state.frameReady ? '等待新画面' : human ? '你正在操作' : connected ? state.session?.control.owner === 'agent' ? 'AI 正在操作' : '正在观看' : '未连接';
+  const receipt = state.lastInput;
+  const known = receipt?.outcome === 'dispatched' || receipt?.outcome === 'not_dispatched';
+  const showReceipt = receipt && !state.inputPending && (more || state.inputUncertain);
+  const receiptText = !showReceipt ? '' : `上次${inputNames[receipt.kind]}：` + (receipt.outcome === 'dispatched' ? '电脑已确认派发。是否生效，请看当前窗口。'
+    : receipt.outcome === 'not_dispatched' ? '电脑已确认未派发。这次输入没有重发。'
+    : !state.session?.canReadInputReceipt ? '尚未确认。此连接不支持核对原输入，重新连接也不会找回回执。'
+    : receipt.outcome === 'unavailable' ? '没有找到能与这次输入对应的回执，不能据此判定未派发。' : '尚未确认是否派发，请勿重复输入。');
+  const status = state.controlPending ? '正在切换控制' : state.inputPending ? '正在输入' : state.inputUncertain ? known ? '输入暂停' : '请核对操作结果' : state.phase === 'opening' ? '正在连接电脑' : state.phase === 'connecting' ? '正在连接画面' : state.phase === 'disconnected' ? '连接中断' : state.controlExpired ? '本次操作时间已到' : connected && !state.playbackReady ? '通道已连接 · 等待画面播放' : connected && otherHuman ? '另一窗口正在控制' : connected && state.frameIssue ? '仅可观看' : connected && !state.frameReady ? '等待新画面' : human ? '你正在操作' : connected ? state.session?.control.owner === 'agent' ? 'AI 正在操作' : '正在观看' : '未连接';
   const label = peer.label || peer.name || '电脑';
 
   return <section className={`pw-desktop-viewer${expanded ? ' is-expanded' : ''}`} aria-label="电脑实时桌面" data-phase={state.phase}>
@@ -239,7 +246,12 @@ export function DesktopViewer({ peer, ownerDeviceId, now, partialGrants, support
         <button type="button" className="pw-desktop-icon" aria-label="更多桌面操作" aria-expanded={more} title="更多操作" onClick={() => setMore(value => !value)}><IconMore size={19} /></button>
       </MotionFeedback>}
     </div>}
-    {(state.error || textError || videoError) && <MotionFeedback identity={textError || state.error || videoError} className="pw-desktop-error" role="alert"><span>{textError || state.error || videoError}</span>{state.inputUncertain && <button type="button" onClick={reconnect} disabled={state.controlPending || state.inputPending}>重新连接核对</button>}</MotionFeedback>}
+    {(state.error || textError || videoError || receiptText) && <MotionFeedback identity={textError || state.error || videoError || receiptText} className={state.error || textError || videoError || state.inputUncertain ? 'pw-desktop-error' : 'pw-desktop-hint'} role="status">
+      {(textError || state.error || videoError) && <span>{textError || state.error || videoError}</span>}
+      {receiptText && <span>{receiptText}</span>}
+      {showReceipt && !known && connected && state.session?.canReadInputReceipt && <Button variant="secondary" disabled={state.controlPending || state.checkingInput} onClick={() => void connection.current?.checkLastInput()}>{state.checkingInput ? '正在核对…' : '核对这次输入'}</Button>}
+      {state.inputUncertain && !receipt && <button type="button" onClick={reconnect} disabled={!allowed || state.controlPending || state.inputPending}>重新连接并仅观看</button>}
+    </MotionFeedback>}
     {connected && state.playbackReady && state.frameIssue && !state.inputUncertain && <p className="pw-desktop-hint">{state.frameIssue === 'unavailable' ? '当前连接无法核对画面，只能观看。请更新手机端和电脑端后重新连接。' : '暂时无法核对画面，已停用电脑操作。可以继续观看，或重新连接后再试。'}</p>}
     {human && connected && !state.inputUncertain && !state.frameIssue && <p className="pw-desktop-hint">{state.controlExpired ? '请先交还控制，再重新接管。' : clickMode === 'double' ? '轻点画面执行一次双击' : clickMode === 'right' ? '轻点画面执行右键' : zoom > 1 ? '拖动画面查看 · 轻点操作' : '轻点点击 · 长按右键 · 滑动滚动'}</p>}
 

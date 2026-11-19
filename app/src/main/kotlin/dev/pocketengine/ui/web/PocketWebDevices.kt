@@ -196,7 +196,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                             fields(args, "sessionId", "action", "expectedRevision")
                             text(args, "action").also { require(it in setOf("take", "release")); input.remove("action") }
                         }
-                        "devices.desktop.input" -> { fields(args, "sessionId", "controlLease", "frameRef", "input"); "input" }
+                        "devices.desktop.input" -> { fields(args, "sessionId", "controlLease", "frameRef", "input", "receiptSequence"); "input" }
                         else -> error("桌面操作尚未接入")
                     }
                     value = source.request(operation, input)

@@ -278,6 +278,13 @@ public final class LocalModule implements EngineModule {
             .put("artifactSha256",nativeEvidence.getString("artifactSha256")).put("mode",mode)
             .put("entryPath","web_output".equals(mode)?manifest.getString("entryPath"):"").put("entryChoices",choices);
     }
+    /** Owner-only read of the pinned source archive, never the mutable checkout bytes or a model tool. */
+    public synchronized dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen sourcePackageForOwner(JSONObject source)throws Exception {
+        requirePackagePreviewOwner(source);
+        if(!"source_project".equals(source.getJSONObject("packageArtifact").getString("mode")))throw new SecurityException("请选择原任务的源码固定包");
+        var frozen=packageWorkspace().originalTaskPackage(source);
+        requirePackagePreviewOwner(source);return frozen;
+    }
     /** Opens only the explicitly selected member of the same verified immutable package. */
     public synchronized dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified openProjectPackagePreviewForOwner(JSONObject nativeEvidence,String entryPath)throws Exception {
         dev.pocketengine.features.workspace.VersionedWorkspace.path(entryPath);

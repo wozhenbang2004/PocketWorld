@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { DesktopViewer } from './DesktopViewer';
 import { DeviceTaskPreparation } from './DeviceTaskPreparation';
@@ -67,7 +67,7 @@ function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean
   </>;
 }
 
-export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels }: { state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: () => void }) {
+export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn }: { modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
   const [snapshot, setSnapshot] = useState<Data | null>(null), [peerId, setPeerId] = useState(''), [form, setForm] = useState(''), [raw, setRaw] = useState('');
   const [address, setAddress] = useState(''), [inviteId, setInviteId] = useState(''), [host, setHost] = useState(''), [port, setPort] = useState(''), [recoveryAddresses, setRecoveryAddresses] = useState<string[]>([]);
   const [invitation, setInvitation] = useState(''), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
@@ -77,6 +77,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [preparingDeviceWork, setPreparingDeviceWork] = useState(false);
   const [discoveryAck, setDiscoveryAck] = useState(false), [advertise, setAdvertise] = useState(false), [discoveryPeer, setDiscoveryPeer] = useState('');
   const [desktopOpen, setDesktopOpen] = useState(false), [query, setQuery] = useState('');
+  const restoredModelReturn = useRef<ReceivedPhoneGoalReturn | undefined>(undefined);
+  const [modelReturnFocus, setModelReturnFocus] = useState<ReceivedPhoneGoalReturn>();
+  const focusedModelReturn = useRef<ReceivedPhoneGoalReturn | undefined>(undefined);
   const [localExpanded, setLocalExpanded] = useState(false), [moreWork, setMoreWork] = useState({ key: '', count: 0 });
   const lastPeer = useRef('');
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef({ list: 0, detail: 0 }), previousReadingView = useRef('list');
@@ -113,6 +116,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const selectPeer = (next: string) => {
     if (selectedPeer.current === next) return;
+    setModelReturnFocus(undefined);
     closeReview(); // Retire pending review handles before changing the list/detail scope.
     setNotice(''); setError(''); setTaskDetails({});
     setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
@@ -122,7 +126,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(''); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
-    setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
+    setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer(''); setModelReturnFocus(undefined);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation('');
     setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
@@ -194,6 +198,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       : other === 'inviter' ? '原配对尚未读到已保存的伙伴。请对方核对指纹与范围，再从这台手机继续原配对。' : '配对请求已有回执，尚未核对到同一身份的伙伴。请查看原配对记录。');
   };
   const tasks = deviceTaskRows(state.tasks, snapshot, peerId);
+  // Model settings are local. Restore only the exact saved recipient/task on a new owner view.
+  useEffect(() => {
+    if (!modelReturn || restoredModelReturn.current === modelReturn || !Array.isArray(state.tasks) || !snapshot || !Number.isSafeInteger(snapshot.capturedAt) || snapshot.capturedAt < modelReturn.leftAt || document.visibilityState !== 'visible') return;
+    restoredModelReturn.current = modelReturn;
+    const task = deviceTaskRows(state.tasks, snapshot, '').find(item => matchesReceivedPhoneGoal(item, snapshot, modelReturn));
+    if (!task || unreadSource(task) || modelReturn.peerDetail && !rows(snapshot.peers).some(item => item.deviceId === modelReturn.sourceId)) {
+      setNotice('原派工或本机身份已变化，未打开其他任务。请从设备记录重新选择。'); return;
+    }
+    selectPeer(modelReturn.peerDetail ? modelReturn.sourceId : '');
+    setModelReturnFocus(modelReturn);
+    setNotice(!task.raw.runId && ['queued', 'awaiting_user'].includes(task.status) && !task.raw.cancelRequested
+      ? '已回到这次原派工。选择模型不等于接受任务，请重新审阅原目标、范围与预算。' : '已回到同一项原工作。它已不在原先的待接手状态，未重新启动。');
+  }, [modelReturn, snapshot, state.tasks]);
   const readPeerCapabilities = () => {
     if (!peer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
     setNotice('');
@@ -301,13 +318,28 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     return available(facts?.goalReview) || available(facts?.resultReview) || resumeRequest(task)?.ownerActionRequired === true
       || rows(task.raw?.approvals).some(item => item.state === 'pending');
   };
+  const openModelSettingsFor = (task: Data) => {
+    if (!openModels || busy || unreadSource(task) || task.raw?.runId || !available(actionsFor(task, Date.now()).goalReview)) {
+      setError('这次待接手状态已变化，请重新读取原工作后再选择模型。'); return;
+    }
+    const origin = receivedPhoneGoalReturn(task, snapshot, !!peerId);
+    if (!origin || peerId && origin.sourceId !== peerId) { setError('无法核对本机与原派工，没有打开其他工作。'); return; }
+    closeReview(); openModels(origin);
+  };
+  const returnedTask = modelReturnFocus && tasks.find(item => !unreadSource(item) && matchesReceivedPhoneGoal(item, snapshot, modelReturnFocus));
   const waiting: Data[] = [], interruptible: Data[] = [], remaining: Data[] = [];
   const canStop = (task: Data) => { const facts = actionsFor(task); return available(facts.stop) || available(facts.pendingCancel); };
   // The native 40-action window bounds controls, not the number of saved originals one may open.
-  for (const task of tasks) (needsOwner(task) ? waiting : canStop(task) ? interruptible : remaining).push(task);
-  const initialCount = Math.max(0, 2 - waiting.length - interruptible.length);
-  const shownTasks = [...waiting, ...interruptible, ...remaining.slice(0, initialCount + extraWork)];
+  for (const task of tasks) if (task !== returnedTask) (needsOwner(task) ? waiting : canStop(task) ? interruptible : remaining).push(task);
+  const initialCount = Math.max(0, 2 - Number(!!returnedTask) - waiting.length - interruptible.length);
+  const shownTasks = [...(returnedTask ? [returnedTask] : []), ...waiting, ...interruptible, ...remaining.slice(0, initialCount + extraWork)];
   const nextCount = Math.min(12, tasks.length - shownTasks.length);
+  useLayoutEffect(() => {
+    if (!returnedTask || !modelReturnFocus || focusedModelReturn.current === modelReturnFocus) return;
+    const heading = Array.from(readingRoot.current?.querySelectorAll<HTMLElement>('[data-received-goal]') || []).find(el => el.dataset.receivedGoal === returnedTask.id);
+    if (!heading) return;
+    focusedModelReturn.current = modelReturnFocus; heading.focus({ preventScroll: true }); heading.scrollIntoView({ block: 'nearest' });
+  }, [modelReturnFocus, returnedTask?.id]);
   useCollectionMotion(readingRoot, JSON.stringify([state.webWorkspaceResumeRevision, peerId, query.trim()]),
     JSON.stringify([localExpanded, peerSections.map(section => [section.id, section.peers.map(row => row.deviceId)]), pairings.map(row => [row.candidateId || row.inviteId, row.state]), shownTasks.map(task => [task.id, task.status])]),
     { active: !desktopOpen && !!snapshot });
@@ -321,7 +353,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               const receivedPhone = readable && isReceivedPhoneTask(task, snapshot), showLocalRead = receivedPhone && (!controls.capturedAt || controls.phoneActionReason);
               const readLocalTask = () => { void invoke('devices.readTask', { taskId: task.id }, value => { const actual = deviceTaskDetails(value, task.id); setTaskDetails(old => ({ ...old, [task.id]: actual })); }); };
               return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
-                <header><h4 dir="auto">{readable ? task.goal || '原设备任务' : '原工作来源待核对'}</h4><span>{readable ? taskLabels[task.status] || '状态待读取' : '本机仅留关联'}</span></header>
+                <header><h4 dir="auto" tabIndex={receivedPhone ? -1 : undefined} data-received-goal={receivedPhone ? task.id : undefined}>{readable ? task.goal || '原设备任务' : '原工作来源待核对'}</h4><span>{readable ? taskLabels[task.status] || '状态待读取' : '本机仅留关联'}</span></header>
                 {readable && task.summary && <p className="pw-device-task-summary" dir="auto">{task.summary}</p>}
                 {readable && deviceWorkspaceTaskMode(task.raw) === 'manual_phone' && <p>{task.raw?.runId ? '原手控操作与回执保留；离页后不恢复旧输入权限。' : '手控尚未开始。打开后选择一个手机屏幕，明确审阅，再逐次操作。'}</p>}
                 {readable && deviceWorkspaceTaskMode(task.raw) === 'agent_device' && !task.raw?.runId && <p>原目标尚未启动。打开后选择设备范围并审阅开始；取消不会影响其他任务。</p>}
@@ -331,6 +363,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 <div className="pw-form-actions">
                   {showLocalRead && <Button variant="secondary" disabled={busy || !supported('devices.readTask')} onClick={readLocalTask}>读取本机接手状态</Button>}
                   {readable && available(controls.goalReview) && <Button disabled={busy} onClick={() => actIfCurrent(task, 'goalReview', () => { void invoke('devices.reviewGoal', { taskId: task.id }, acceptReview); })}>审阅本机模型与原目标</Button>}
+                  {receivedPhone && !task.raw.runId && openModels && available(controls.goalReview) && receivedPhoneGoalReturn(task, snapshot) &&
+                    <Button variant="ghost" disabled={busy} onClick={() => openModelSettingsFor(task)}>先选本机 API 模型</Button>}
                   {readable && available(controls.resultReview) && <Button disabled={busy} onClick={() => actIfCurrent(task, 'resultReview', () => { void invoke('devices.reviewResult', { taskId: task.id }, acceptReview); })}>核对成果并结束</Button>}
                   <Button variant="secondary" disabled={busy || !supported('devices.openTask')} onClick={() => {
                     if (selectedPeer.current !== peerId || !deviceTaskRows(state.tasks, snapshot, peerId).some(row => row.id === task.id)) return;
@@ -635,7 +669,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {error && <p role="alert">{error}</p>}
         {['pair', 'grant'].includes(review.kind) && !exactGrant ? <GrantSelection key={review.viewHandle} review={review} busy={busy} confirm={args => { void invoke('devices.reviewGrant', args, acceptReview); }} /> : <>
           {exactGrant && <><GrantScope scope={exactGrant} />{review.kind === 'pair' ? <><p className="pw-source-copy">发出邀请的设备：{originalView.inviterDeviceId}<br />完整指纹：{fingerprint(originalView.inviterFingerprint)}</p><p className="pw-source-copy">加入设备：{originalView.joinerDeviceId}<br />完整指纹：{fingerprint(originalView.joinerFingerprint)}</p><p>原邀请至 {time(originalView.expiresAt)}。两台设备均核对一致后才能完成配对。</p></> : <p className="pw-source-copy">已配对设备完整指纹：{fingerprint(originalView.certificateFingerprint)}</p>}</>}
-          {review.kind === 'goal' && <><h3>{originalView.goal}</h3><p>本机模型 {originalView.model} · {originalView.provider} · {originalView.source === 'local_api' ? '本机 API 连接' : originalView.source === 'local_account' ? '本机账号' : originalView.source}</p><ResourceScope resource={originalView.resourceBinding || {}} /><p>本次上限：工具 {originalView.toolBudget} 次 · 模型 {originalView.modelBudget} 次 · 至 {time(originalView.deadline)}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.contextSummary && <p>{originalView.contextSummary}</p>}{originalView.contextArtifactCount > 0 && <p>附带 {originalView.contextArtifactCount} 个原文件引用，仅本任务使用。</p>}{openModels && <Button variant="secondary" disabled={busy} onClick={() => { closeReview(); openModels(); }}>更换本机模型</Button>}{originalView.source === 'local_account' && <p role="alert">这个账号当前不支持跨设备目标，请先在模型设置选择已授权 API 模型。</p>}<CheckboxField isSelected={future} onChange={setFuture} isDisabled={busy}>以后同一配对授权、模型与范围内的目标自动处理</CheckboxField>{future && <p>未来策略：工具 {originalView.policyToolBudget} 次 · 模型 {originalView.policyModelBudget} 次 · 至 {time(originalView.policyExpiresAt)}。模型、配对代次或范围改变后重新审阅。</p>}</>}
+          {review.kind === 'goal' && <><h3>{originalView.goal}</h3><p>本机模型 {originalView.model} · {originalView.provider} · {originalView.source === 'local_api' ? '本机 API 连接' : originalView.source === 'local_account' ? '本机账号' : originalView.source}</p><ResourceScope resource={originalView.resourceBinding || {}} /><p>本次上限：工具 {originalView.toolBudget} 次 · 模型 {originalView.modelBudget} 次 · 至 {time(originalView.deadline)}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.contextSummary && <p>{originalView.contextSummary}</p>}{originalView.contextArtifactCount > 0 && <p>附带 {originalView.contextArtifactCount} 个原文件引用，仅本任务使用。</p>}{openModels && <Button variant="secondary" disabled={busy} onClick={() => {
+              const source = tasks.find(item => item.id === originalView.taskId);
+              const origin = originalView.origin;
+              if (['main_screen', 'background'].includes(originalView.resourceBinding?.screenMode) && origin?.callerDeviceId && origin.callerDeviceId === origin.originDeviceId) {
+                if (!source || !isReceivedPhoneTask(source, snapshot) || origin.remoteOperationId !== source.raw.origin.remoteOperationId || origin.grantId !== source.raw.origin.grantId) { setError('这项原派工已变化，请关闭后重新读取。'); return; }
+                openModelSettingsFor(source);
+              } else { closeReview(); openModels(); }
+            }}>更换本机模型</Button>}{originalView.source === 'local_account' && <p role="alert">这个账号当前不支持跨设备目标，请先在模型设置选择已授权 API 模型。</p>}<CheckboxField isSelected={future} onChange={setFuture} isDisabled={busy}>以后同一配对授权、模型与范围内的目标自动处理</CheckboxField>{future && <p>未来策略：工具 {originalView.policyToolBudget} 次 · 模型 {originalView.policyModelBudget} 次 · 至 {time(originalView.policyExpiresAt)}。模型、配对代次或范围改变后重新审阅。</p>}</>}
           {review.kind === 'action' && <><h3>{deviceOperationLabels[originalView.operation]}</h3>{originalView.peer && <><p>{name(originalView.peer)} · {originalView.peer.deviceId}</p><p className="pw-source-copy">{fingerprint(originalView.peer.certificateFingerprint)}</p></>}{originalView.taskId && <><p>{originalView.goal || originalView.pendingGoal?.goal}</p><p>原任务 {originalView.taskId}{originalView.runId ? ` · 执行 ${originalView.runId} · 代次 ${originalView.executorEpoch}` : ' · 从未启动的原目标'}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.resourceBinding && <ResourceScope resource={originalView.resourceBinding} />}</>}{originalView.lease && <p>{originalView.lease.serviceBase} · {originalView.lease.inviterDeviceId}</p>}<p>{originalView.operation === 'peer.revoke' ? '本机撤销会使旧授权失效，对端是否收到撤销另看真实回执。已经发生的动作无法撤回。' : originalView.operation.startsWith('task.') ? '只控制这项原任务，不重新提交目标。暂停、继续与停止仍以执行端回执为准。' : '变更本机接收或连接不会把正在执行的任务标记为停止。'}</p></>}
           {review.kind === 'connection' && <>{originalView.discoveredAddress && <p role="alert">此地址来自未认证的局域网广播。确认只更新本机连接地址并尝试原证书双向 TLS；不重新配对、不扩大权限，不代表地址已验证或设备在线。选错地址会连接失败，可用原设备邀请恢复。</p>}<p>更新原设备 {originalView.deviceId} 的连接地址。</p><p className="pw-source-copy">已配对证书完整指纹：{fingerprint(originalView.certificateFingerprint)}</p><ResourceScope resource={Object.fromEntries(Object.entries(originalView).filter(([key]) => ['host', 'port', 'controlPort', 'bulkPort', 'serviceBase', 'path', 'connectionKind', 'kind', 'expiresAt'].includes(key)))} /></>}
           {review.kind === 'relay' && <><p>{originalView.serviceBase} · 至 {time(originalView.expiresAt)}</p><p>只在内存中使用这份临时租约；不产生设备权限，双端身份仍要核对。</p><p>原邀请设备 {originalView.inviterDeviceId}</p></>}

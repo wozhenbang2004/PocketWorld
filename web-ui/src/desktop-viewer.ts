@@ -6,7 +6,7 @@ export type DesktopScope = { key: string; instanceId: string; grantId: string; g
 export type DesktopControl = { owner: 'none' | 'human' | 'other_human' | 'agent'; revision: number; lease?: DesktopRecord; needsReconcile?: boolean };
 export type DesktopSession = {
   kind: 'desktopSession'; deviceId: string; sessionId: string; resourceBinding: DesktopResource; expiresAt: number;
-  width: number; height: number; control: DesktopControl; iceServers: RTCIceServer[]; streamId?: string;
+  width: number; height: number; control: DesktopControl; iceServers: RTCIceServer[]; streamId?: string; canReadInputReceipt?: boolean;
 };
 export type DesktopFrame = { streamId: string; frameId: string; width: number; height: number; geometryRevision: string; capturedAt: number; expiresAt: number; rtpTimestamp?: number };
 export type DesktopInput =
@@ -19,6 +19,8 @@ export type DesktopViewerState = {
   phase: 'idle' | 'opening' | 'connecting' | 'live' | 'disconnected' | 'failed';
   session: DesktopSession | null; playbackReady: boolean; frameReady: boolean; frameIssue: 'unavailable' | 'unmatched' | null; controlPending: boolean; inputPending: boolean;
   inputUncertain: boolean; controlExpired: boolean; error: string;
+  lastInput: { sequence: number; kind: DesktopInput['kind']; outcome: 'pending' | 'dispatched' | 'not_dispatched' | 'unknown' | 'unavailable' } | null;
+  checkingInput: boolean;
 };
 
 const record = (v: unknown): v is DesktopRecord => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -94,7 +96,8 @@ export function desktopSession(value: unknown, expected: { deviceId: string; res
     || value.streamId !== undefined && !id(value.streamId)
     || expected.streamId !== undefined && value.streamId !== expected.streamId) throw new Error('桌面会话已变化或回执不完整，请重新连接。');
   return { kind: 'desktopSession', deviceId: value.deviceId, sessionId: value.sessionId, resourceBinding: copy(value.resourceBinding), expiresAt: value.expiresAt,
-    width: value.width, height: value.height, control: copy(value.control) as DesktopControl, iceServers: iceServers(value.iceServers), ...(value.streamId ? { streamId: value.streamId } : {}) };
+    width: value.width, height: value.height, control: copy(value.control) as DesktopControl, iceServers: iceServers(value.iceServers),
+    canReadInputReceipt: value.canReadInputReceipt === true, ...(value.streamId ? { streamId: value.streamId } : {}) };
 }
 
 export function desktopFrame(value: unknown, streamId: string): DesktopFrame {
@@ -136,12 +139,13 @@ export function waitForDesktopIce(peer: RTCPeerConnection, signal: AbortSignal, 
   });
 }
 
-const initialState = (): DesktopViewerState => ({ phase: 'idle', session: null, playbackReady: false, frameReady: false, frameIssue: null, controlPending: false, inputPending: false, inputUncertain: false, controlExpired: false, error: '' });
+export const initialDesktopViewerState = (): DesktopViewerState => ({ phase: 'idle', session: null, playbackReady: false, frameReady: false, frameIssue: null, controlPending: false, inputPending: false, inputUncertain: false, controlExpired: false, error: '', lastInput: null, checkingInput: false });
 
 /** One viewer owns one native handle. Late replies only close their own handle. */
 export class DesktopViewerConnection {
-  state: DesktopViewerState = initialState();
+  state: DesktopViewerState = initialDesktopViewerState();
   private generation = 0;
+  private inputSequence = 0;
   private disposed = false;
   private peer: RTCPeerConnection | null = null;
   private abort: AbortController | null = null;
@@ -169,7 +173,7 @@ export class DesktopViewerConnection {
   private timer: ReturnType<typeof setInterval> | null = null;
   private disconnected: ReturnType<typeof setTimeout> | null = null;
   private statusPending = false;
-  private statusSettled: Promise<void> | null = null;
+  private statusSettled: Promise<DesktopRecord | null> | null = null;
   private lastStatusAt = 0;
   private bridgePending: Promise<unknown> | null = null;
   private run: DesktopRun;
@@ -212,11 +216,13 @@ export class DesktopViewerConnection {
     this.statusPending = false; this.statusSettled = null; this.lastStatusAt = 0; this.stream(null);
   }
   close(): void {
-    const old = this.state.session; ++this.generation; this.detach(); this.publish(initialState()); if (old) this.closeRemote(old.sessionId);
+    const old = this.state.session; ++this.generation; this.detach(); this.publish(initialDesktopViewerState()); if (old) this.closeRemote(old.sessionId);
   }
   dispose(): void { this.disposed = true; this.close(); }
   private fail(message: string): void {
-    const old = this.state.session; ++this.generation; this.detach(); this.publish({ ...initialState(), phase: 'failed', error: message }); if (old) this.closeRemote(old.sessionId);
+    const old = this.state.session, receipt = this.state.lastInput;
+    if (receipt && !['dispatched', 'not_dispatched'].includes(receipt.outcome)) message += ' 原观看会话已结束，新连接不能找回这次输入回执，也不会重发。';
+    ++this.generation; this.detach(); this.publish({ ...initialDesktopViewerState(), phase: 'failed', error: message }); if (old) this.closeRemote(old.sessionId);
   }
   private accept(value: DesktopRecord, expected = this.state.session): DesktopSession {
     if (!expected) throw new Error('桌面会话已关闭。');
@@ -227,7 +233,7 @@ export class DesktopViewerConnection {
     if (actual.control.revision === expected.control.revision && controlChanged) throw new Error('电脑的控制状态回执不一致，请重新核对。');
     if (controlChanged || actual.control.needsReconcile || actual.width !== expected.width || actual.height !== expected.height) this.invalidateFrame();
     this.publish({ session: actual, controlExpired: actual.control.owner === 'human' && actual.control.lease!.expiresAt <= this.clock(),
-      ...(actual.control.needsReconcile ? { inputUncertain: true, error: this.state.error || '桌面控制需要核对，请重新连接查看。' } : {}) }); return actual;
+      ...(actual.control.needsReconcile ? { inputUncertain: true, error: this.state.error || '电脑控制仍待核对，重新连接不会解除输入限制。' } : {}) }); return actual;
   }
   async open(deviceId: string, scope: DesktopScope): Promise<void> {
     const previousRequest = this.bridgePending;
@@ -408,22 +414,38 @@ export class DesktopViewerConnection {
     if (expired !== this.state.controlExpired) this.publish({ controlExpired: expired });
     if (this.clock() - this.lastStatusAt >= 5000 && !this.statusPending && !this.state.controlPending && !this.state.inputPending) void this.status();
   }
-  async status(): Promise<void> {
+  async status(): Promise<DesktopRecord | null> {
     const expected = this.state.session, generation = this.generation;
-    if (!expected || this.statusPending || this.state.inputPending || this.state.controlPending) return;
+    if (this.statusPending) return this.statusSettled;
+    if (!expected || this.state.inputPending || this.state.controlPending) return null;
     this.statusPending = true; this.lastStatusAt = this.clock();
     const pending = (async () => {
       try {
         const value = desktopValue(await this.request('devices.desktop.status', { sessionId: expected.sessionId }));
-        if (!this.current(generation)) return;
+        if (!this.current(generation)) return null;
         this.accept(value);
         // A polled frame is not proof that the video element displayed it. Metadata channel remains required.
-      } catch (error) { if (this.current(generation)) this.fail(error instanceof Error ? error.message : String(error)); }
+        return value;
+      } catch (error) { if (this.current(generation)) this.fail(error instanceof Error ? error.message : String(error)); return null; }
       finally { if (this.current(generation)) this.statusPending = false; }
     })();
     this.statusSettled = pending;
-    await pending;
+    const value = await pending;
     if (this.current(generation) && this.statusSettled === pending) this.statusSettled = null;
+    return value;
+  }
+  async checkLastInput(): Promise<void> {
+    const generation = this.generation, last = this.state.lastInput;
+    if (!this.state.session?.canReadInputReceipt || !last || this.state.checkingInput || this.state.inputPending || this.state.controlPending) return;
+    this.publish({ checkingInput: true });
+    try {
+      const value = await this.status();
+      if (!value || !this.current(generation) || this.state.lastInput !== last) return;
+      const outcome = value.lastInputSequence === last.sequence && ['dispatched', 'not_dispatched', 'unknown'].includes(value.lastInputOutcome)
+        ? value.lastInputOutcome as 'dispatched' | 'not_dispatched' | 'unknown' : 'unavailable';
+      this.publish({ lastInput: { ...last, outcome }, error: this.state.session?.control.needsReconcile ? '电脑控制仍待核对，输入未恢复。' : '' });
+    }
+    finally { if (this.current(generation)) this.publish({ checkingInput: false }); }
   }
   async control(action: 'take' | 'release'): Promise<void> {
     const generation = this.generation;
@@ -460,17 +482,22 @@ export class DesktopViewerConnection {
     }
     if (input.kind === 'click' && (!integer(input.x, 0, frame.value.width - 1) || !integer(input.y, 0, frame.value.height - 1))) return false;
     if (input.kind === 'insert_text') desktopText(input.text);
-    this.publish({ inputPending: true, error: '' });
+    const selected = { sequence: ++this.inputSequence, kind: input.kind };
+    this.publish({ inputPending: true, error: '', lastInput: { ...selected, outcome: 'pending' } });
     try {
-      const value = desktopValue(await this.request('devices.desktop.input', { sessionId: session.sessionId, controlLease: copy(session.control.lease), frameRef: copy(frame.value), input: copy(input) }));
+      const value = desktopValue(await this.request('devices.desktop.input', { sessionId: session.sessionId, controlLease: copy(session.control.lease), frameRef: copy(frame.value), input: copy(input),
+        ...(session.canReadInputReceipt ? { receiptSequence: selected.sequence } : {}) }));
       if (!this.current(generation)) return false;
       const actual = this.accept(value);
       const receipt = value.inputReceipt;
-      if (actual.control.needsReconcile || !record(receipt) || receipt.status !== 'completed' || typeof receipt.inputDispatched !== 'boolean') throw new Error('输入结果尚未确认，请查看桌面后重新连接核对。');
+      if (!record(receipt) || receipt.status !== 'completed' || typeof receipt.inputDispatched !== 'boolean') throw new Error('未收到确定的输入回执。');
+      this.publish({ lastInput: { ...selected, outcome: receipt.inputDispatched ? 'dispatched' : 'not_dispatched' } });
+      if (actual.control.needsReconcile) throw new Error('电脑控制仍需核对。');
       if (receipt.inputDispatched !== true) throw new Error('电脑未执行这次输入，请核对控制状态。');
       return true;
     } catch (error) {
-      if (this.current(generation)) this.publish({ inputUncertain: true, error: error instanceof Error ? error.message : String(error) });
+      if (this.current(generation)) this.publish({ inputUncertain: true, error: error instanceof Error ? error.message : String(error),
+        ...(this.state.lastInput?.outcome === 'pending' ? { lastInput: { ...selected, outcome: 'unknown' } } : {}) });
       return false;
     } finally { if (this.current(generation)) { this.invalidateFrame(); this.publish({ inputPending: false }); } }
   }

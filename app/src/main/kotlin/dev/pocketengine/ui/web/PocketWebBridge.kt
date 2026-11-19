@@ -451,11 +451,13 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebWorkSearch.COMMANDS) {
                 val conversationResult = if (action == "tasks.resultFiles") visibleChatTaskResult(args) else null
-                if (action in setOf("ownerWork.report.read", "tasks.projectPackages", "tasks.resultFiles") && conversationResult == null) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
+                if (action in setOf("ownerWork.report.read", "tasks.projectPackages", TaskProjectPackageFiles.COMMAND, "tasks.resultFiles") && conversationResult == null) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
                 workSearch.dispatch(action, args, conversationResult) { result, error ->
                     if (conversationResult != null && runCatching { visibleChatTaskResult(args) }.getOrNull() != conversationResult)
                         complete(id, null, "原对话消息已变化，请重新打开成果")
-                    else complete(id, result, error, retainValue = action != "tasks.resultFiles")
+                    else if (action == TaskProjectPackageFiles.COMMAND && (section != null || taskViewId != args.optString("taskId") || !controller.webPrivateOwnerVisible()))
+                        complete(id, null, "原工作已关闭，没有带出包内文件", retainValue = false)
+                    else complete(id, result, error, retainValue = action != "tasks.resultFiles" && action != TaskProjectPackageFiles.COMMAND)
                 }
                 return
             }

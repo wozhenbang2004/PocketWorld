@@ -120,6 +120,9 @@
   line-height: 18px;
   color: var(--pw-muted);
 }
+.pw-task-reading .pw-package-members h4 { overflow-wrap: anywhere; }
+.pw-task-reading .pw-package-members .pw-file-text { max-block-size: min(50dvh, 32rem); overflow: auto; }
+.pw-task-reading .pw-package-member-static { padding: var(--pw-gap-control) 0; }
 .pw-task-reading .pw-outcome-file:active { background: var(--pw-selected); }
 .pw-task-reading .pw-outcome-conversation {
   padding: 2px 0 4px;

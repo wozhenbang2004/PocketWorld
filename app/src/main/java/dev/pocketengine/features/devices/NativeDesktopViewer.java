@@ -13,6 +13,7 @@ import org.json.JSONObject;
 /** An owner-page resource on the original paired transport and TaskStore. The Web view
  * selects a retained native session; it cannot provide an envelope, grant or input ticket. */
 final class NativeDesktopViewer implements NativeDeviceWorkspaceHost.DesktopAction {
+    static final String INPUT_RECEIPT_PROFILE = "original-viewer-input-v1";
     private final TaskStoreDeviceTasks tasks;
     private final TaskStoreDesktopViewer.Session session;
     private final DeviceNativeRoute.Exchange exchange;
@@ -22,12 +23,22 @@ final class NativeDesktopViewer implements NativeDeviceWorkspaceHost.DesktopActi
     private volatile boolean closed;
     private boolean uncertain;
     private JSONObject last;
+    private final boolean inputReceiptReadback;
+    private String lastInputId, lastInputDigest;
+    private long lastInputSequence;
 
     NativeDesktopViewer(TaskStore store, DeviceIdentity.LocalIdentity identity,
             PairingCoordinator.OutgoingGrant grant, JSONObject binding,
             DeviceNativeRoute.Exchange transport, Executor cleanupWorker,
             NativeDeviceWorkspaceHost.DesktopCurrent current) throws Exception {
+        this(store, identity, grant, binding, transport, cleanupWorker, current, false);
+    }
+    NativeDesktopViewer(TaskStore store, DeviceIdentity.LocalIdentity identity,
+            PairingCoordinator.OutgoingGrant grant, JSONObject binding,
+            DeviceNativeRoute.Exchange transport, Executor cleanupWorker,
+            NativeDeviceWorkspaceHost.DesktopCurrent current, boolean inputReceiptReadback) throws Exception {
         tasks = store.deviceTasks(); exchange = transport; this.cleanupWorker = cleanupWorker;
+        this.inputReceiptReadback = inputReceiptReadback;
         session = tasks.openDesktopViewer(identity, grant, binding, current::require);
     }
     public String id() { return session.id(); }
@@ -66,13 +77,17 @@ final class NativeDesktopViewer implements NativeDeviceWorkspaceHost.DesktopActi
                 if (action.equals("release") && !"human".equals(last.getJSONObject("control").optString("owner")))
                     throw new SecurityException("当前窗口没有可交还的原人工控制权");
             } else if (action.equals("input")) {
-                fields(selected, Set.of("controlLease", "frameRef", "input"));
+                fields(selected, Set.of("controlLease", "frameRef", "input", "receiptSequence"));
+                long sequence = selected.has("receiptSequence") ? integer(selected.opt("receiptSequence"), 1, DeviceProtocol.MAX_SAFE_INTEGER) : 0;
+                if ((sequence != 0 || lastInputSequence != 0) && sequence <= lastInputSequence) throw new SecurityException("这次输入不是本窗口的新手势");
+                args.remove("receiptSequence"); // Local UI correlation only, never a remote operation or grant.
                 JSONObject control = last.getJSONObject("control");
                 if (uncertain || control.optBoolean("needsReconcile") || !"human".equals(control.optString("owner"))
                         || !DeviceProtocol.canonical(control.opt("lease")).equals(DeviceProtocol.canonical(selected.opt("controlLease"))))
                     throw new SecurityException("没有当前人工控制权，或上一项输入尚未确认");
                 frame(selected.getJSONObject("frameRef"), last.getString("streamId"));
                 input(selected.getJSONObject("input"));
+                lastInputId = null; lastInputDigest = null; lastInputSequence = sequence;
             } else throw new SecurityException("不支持的桌面操作");
             if (last.has("streamId")) args.put("streamId", last.getString("streamId"));
             boolean mutation = Set.of("take", "release", "input").contains(action);
@@ -94,14 +109,36 @@ final class NativeDesktopViewer implements NativeDeviceWorkspaceHost.DesktopActi
     private JSONObject send(JSONObject args) throws Exception {
         require();
         TaskStoreDesktopViewer.Send send = session.prepare(args);
+        String action = args.getString("action");
+        if ("input".equals(action)) {
+            // Keep only the original identity in this live native window, even if its reply is lost.
+            lastInputId = send.request().operationId(); lastInputDigest = send.request().argumentsDigest();
+        }
         TaskStoreDeviceTasks.OutboundSendTicket ticket = tasks.desktopViewerTicket(send);
         ticket.installNativeWriteGuard(this::require);
         DeviceCapabilityPort.Reply reply;
         try { reply = exchange.once(session.deviceId(), send.request(), ticket, io); }
         catch (Exception failure) { if (!ticket.isClaimed()) ticket.abandonBeforeWrite(); throw failure; }
         require(); send.accept(reply.peer(), reply.response());
-        JSONObject value = checkedView(reply.response().getJSONObject("result"), session, last);
-        if (args.optString("action").equals("negotiate")) {
+        JSONObject result = reply.response().getJSONObject("result");
+        JSONObject value = checkedView(result, session, last, "input".equals(action));
+        value.put("canReadInputReceipt", inputReceiptReadback);
+        if ("status".equals(action) && inputReceiptReadback && lastInputId != null) {
+            // Status itself is bound by send.accept to this grant, device instance, session and request.
+            // A prior click can be the PC's latest receipt if the new input never reached it.
+            JSONObject receipt = result.optJSONObject("inputReceipt");
+            String outcome = "unavailable";
+            if (receipt != null && INPUT_RECEIPT_PROFILE.equals(receipt.opt("profile"))
+                    && lastInputId.equals(receipt.opt("originalOperationId")) && lastInputDigest.equals(receipt.opt("argumentsDigest"))
+                    && args.has("streamId") && args.getString("streamId").equals(receipt.opt("streamId"))
+                    && Boolean.FALSE.equals(receipt.opt("remoteEffectsVerified"))) {
+                Object dispatch = receipt.opt("inputDispatched");
+                outcome = "completed".equals(receipt.opt("status")) && dispatch instanceof Boolean
+                        ? (Boolean.TRUE.equals(dispatch) ? "dispatched" : "not_dispatched") : "unknown";
+            }
+            value.put("lastInputOutcome", outcome).put("lastInputSequence", lastInputSequence);
+        }
+        if (action.equals("negotiate")) {
             if (!value.has("streamId") || !value.has("answer")) throw new SecurityException("电脑未返回完整的视频协商结果");
         }
         last = value;
@@ -127,7 +164,7 @@ final class NativeDesktopViewer implements NativeDeviceWorkspaceHost.DesktopActi
             });
         } catch (RuntimeException unavailable) { session.close(); }
     }
-    private static JSONObject checkedView(JSONObject value, TaskStoreDesktopViewer.Session session, JSONObject previous) throws Exception {
+    private static JSONObject checkedView(JSONObject value, TaskStoreDesktopViewer.Session session, JSONObject previous, boolean inputResponse) throws Exception {
         if (!"desktopSession".equals(value.optString("kind")) || !session.id().equals(value.optString("sessionId"))
                 || !session.deviceId().equals(value.optString("deviceId"))
                 || !DeviceProtocol.resourceEquals(session.resourceBinding(), value.optJSONObject("resourceBinding")))
@@ -158,7 +195,7 @@ final class NativeDesktopViewer implements NativeDeviceWorkspaceHost.DesktopActi
             throw new SecurityException("桌面视频身份已改变，请重新连接");
         if (stream != null) safe.put("streamId", stream);
         if (value.has("answer")) safe.put("answer", sdp(value.getJSONObject("answer"), "answer"));
-        if (value.has("inputReceipt")) {
+        if (inputResponse && value.has("inputReceipt")) {
             JSONObject receipt = value.getJSONObject("inputReceipt");
             String status = text(receipt.opt("status"), 32);
             if (!Set.of("completed", "unknown", "failed", "rejected").contains(status) || !(receipt.opt("inputDispatched") instanceof Boolean))

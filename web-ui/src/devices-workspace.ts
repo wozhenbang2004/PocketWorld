@@ -39,6 +39,21 @@ export function isReceivedPhoneTask(task: DeviceData, snapshot: DeviceData | nul
     && identity(origin.targetDeviceId) && origin.targetDeviceId === snapshot?.local?.deviceId && identity(origin.remoteOperationId) && identity(origin.grantId)
     && ['main_screen','background'].includes(task.raw.executionMode);
 }
+/** A local return bookmark, never a review, model selection, or execution authority. */
+export type ReceivedPhoneGoalReturn = { taskId: string; instanceId: string; sourceId: string; targetId: string; parentTaskId: string; operationId: string; grantId: string; epoch: number; peerDetail: boolean; leftAt: number };
+export function receivedPhoneGoalReturn(task: DeviceData, snapshot: DeviceData | null, peerDetail = false): ReceivedPhoneGoalReturn | undefined {
+  if (!isReceivedPhoneTask(task, snapshot) || !identity(task.id) || !identity(snapshot?.local?.instanceId)) return;
+  const raw = task.raw, origin = raw.origin;
+  if (raw.deviceExecutionKind && raw.deviceExecutionKind !== 'GOAL' || raw.deviceNativeInstanceId && raw.deviceNativeInstanceId !== snapshot!.local.instanceId
+    || !identity(origin.parentTaskId) || origin.rootTaskId !== origin.parentTaskId || !positiveInteger(origin.authorizationEpoch)) return;
+  return { taskId: task.id, instanceId: snapshot!.local.instanceId, sourceId: origin.callerDeviceId, targetId: origin.targetDeviceId,
+    parentTaskId: origin.parentTaskId, operationId: origin.remoteOperationId, grantId: origin.grantId, epoch: origin.authorizationEpoch, peerDetail, leftAt: Date.now() };
+}
+export function matchesReceivedPhoneGoal(task: DeviceData, snapshot: DeviceData | null, expected: ReceivedPhoneGoalReturn) {
+  const value = receivedPhoneGoalReturn(task, snapshot);
+  return !!value && value.taskId === expected.taskId && value.instanceId === expected.instanceId && value.sourceId === expected.sourceId
+    && value.targetId === expected.targetId && value.parentTaskId === expected.parentTaskId && value.operationId === expected.operationId && value.grantId === expected.grantId && value.epoch === expected.epoch;
+}
 /** Only a deliberate per-task read can extend the native 40-row window. Facts cannot authorize
  * a click: expired or changed execution facts disappear; local reduction still uses native review. */
 export function deviceOriginalTaskActions(task: DeviceData, details: DeviceData | undefined, snapshot: DeviceData | null, peerId: string, now: number): DeviceData {

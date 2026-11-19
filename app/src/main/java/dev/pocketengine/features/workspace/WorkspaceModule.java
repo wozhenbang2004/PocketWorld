@@ -25,6 +25,7 @@ public final class WorkspaceModule implements EngineModule {
     public JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception{return artifacts.createProjectPackage(frozen,ownerActionId);}
     public dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen projectPackage(String id,String sha)throws Exception{return artifacts.readProjectPackage(id,sha);}
     public JSONObject projectPackageMetadata(String id,String sha)throws Exception{return artifacts.projectPackage(id,sha);}
+    public dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen originalTaskPackage(JSONObject source)throws Exception{return artifacts.originalTaskPackage(source);}
     public JSONObject findProjectPackage(String action,String project,String checkout,String manifest)throws Exception{return artifacts.findProjectPackage(action,project,checkout,manifest);}
     public JSONObject removeProjectPackage(String id,String sha)throws Exception{return artifacts.removeProjectPackage(id,sha);}
     public long exportProjectPackage(String id,String sha,java.io.OutputStream destination)throws Exception{return artifacts.exportProjectPackage(id,sha,destination);}

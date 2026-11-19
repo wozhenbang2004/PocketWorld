@@ -27,6 +27,7 @@ export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props
   useEffect(() => setMenuOpen(false), [task.id, identity?.runId, identity?.epoch, task.status]);
   const { label: status, busy } = workCollectionPresentation(task);
   const surfaceLabel = surface ? phoneSurfaceLabel(surface) : '';
+  const compactSurface = surface ? phoneSurfaceLabel(surface,true) : '';
   const stopping = task.status === 'stopping' || surface?.stopRequested === true;
   const stage = stopping ? '正在停止' : surface?.paused && task.status === 'running' ? '已请求暂停，等待任务回执' : status;
   const control = (action: string) => { setMenuOpen(false); if (identity) onControl(action, identity); };
@@ -38,7 +39,7 @@ export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props
     <Button variant="ghost" className="pw-phone-activity-open" disabled={!can('tasks.open')} onClick={onOpen}
       aria-label={`${stage}：${task.goal}。 ${surfaceLabel}，查看任务`} title={surfaceLabel||task.goal}>
       <span className="pw-phone-activity-mark" aria-hidden="true">{busy ? <ProgressCircle isIndeterminate size="sm" aria-label={status} /> : <IconMonitor size={18} />}</span>
-      <span className="pw-phone-activity-copy"><strong dir="auto">{task.goal || '手机任务'}</strong><span>{[stage,surfaceLabel].filter(Boolean).join(' · ')}</span></span>
+      <span className="pw-phone-activity-copy"><strong dir="auto">{task.goal || '手机任务'}</strong><span>{[stage,compactSurface].filter(Boolean).join(' · ')}</span></span>
       <IconChevronRight size={15} aria-hidden="true" />
     </Button>
     {(canPause || canResume) && <PopoverTrigger isOpen={menuOpen} onOpenChange={setMenuOpen}>

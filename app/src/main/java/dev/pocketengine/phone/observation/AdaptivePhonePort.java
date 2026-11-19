@@ -78,23 +78,33 @@ public final class AdaptivePhonePort implements PhonePort {
     @Override public boolean isConnected() { return source.isConnected(); }
     public boolean textTargetingAvailable(){return localCaptureAllowed&&localOcrAllowed&&source instanceof NativeOcrTapPort&&ocrAvailable();}
     /** Display-only facts from the last already accepted native observation. Never expose pixels, text, nodes, or a launch target. */
-    public JSONObject lastObservedOwnerSurface(RunControl original)throws Exception {
+    public JSONObject lastObservedOwnerSurface(RunControl original,java.util.function.LongPredicate originalPolicyVisible)throws Exception {
         JSONObject retained=latest;if(retained==null||original==null||!original.matchesHostRun(scope.taskId,scope.runId,scope.epoch)||original.isCancelled()||!original.phoneSurfaceActive())return null;
         JSONObject binding=retained.optJSONObject("observationBinding");long revision=original.pauseRevision();
         long at=retained.optLong("observedAtUptimeMs",-1),now=uptime.getAsLong();
-        if(!retained.optBoolean("ok")||retained.optBoolean("changedDuringRead")||at<0||at>now||now-at>MAX_AGE_MS||
+        if(!retained.optBoolean("ok")||at<0||at>now||now-at>MAX_AGE_MS||
                 binding==null||!scope.taskId.equals(binding.optString("taskId"))||!scope.runId.equals(binding.optString("runId"))||scope.epoch!=binding.optInt("epoch",-1)||
                 scope.displayId!=binding.optInt("displayId",-1)||!scope.sessionId.equals(binding.optString("sessionId"))||
                 binding.optLong("pauseRevision",-1)!=revision||scope.displayId!=retained.optInt("displayId",-1)||
                 !scope.sessionId.equals(retained.optString("sessionId"))||retained.optString("observationId").isEmpty()||
                 !retained.optString("observationId").equals(binding.optString("observationId")))return null;
+        long rule=retained.optLong("appPolicyRevision",-1);
+        if(source instanceof dev.pocketengine.phone.access.GuardedPhonePort ? rule<0 : rule!=-1)return null;
         JSONObject fact=new JSONObject().put("displayId",scope.displayId);
-        String name=retained.optString("packageName");JSONObject installed=retained.optJSONObject("installedApp");
-        if(scope.displayId>0&&"display_has_no_app".equals(retained.optString("screenState"))&&retained.optBoolean("emptyDisplayVerified"))
-            fact.put("emptyDisplayVerified",true);
-        else if(installed!=null&&"android_package_manager".equals(installed.optString("source"))&&
-            name.equals(installed.optString("packageName"))&&name.length()<=255&&name.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))fact.put("packageName",name);
-        return latest==retained&&original.pauseRevision()==revision?fact:null;
+        JSONObject basis=OwnerReadBasis.from(retained);
+        if(basis!=null)fact.put("basis",basis);
+        // A changing frame cannot verify an app, an empty screen, or a tap location.
+        if(retained.optBoolean("changedDuringRead")){
+            if(basis==null)return null;
+            fact.put("changedDuringRead",true);
+        }else{
+            String name=retained.optString("packageName");JSONObject installed=retained.optJSONObject("installedApp");
+            if(scope.displayId>0&&"display_has_no_app".equals(retained.optString("screenState"))&&retained.optBoolean("emptyDisplayVerified"))
+                fact.put("emptyDisplayVerified",true);
+            else if(installed!=null&&"android_package_manager".equals(installed.optString("source"))&&
+                name.equals(installed.optString("packageName"))&&name.length()<=255&&name.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+"))fact.put("packageName",name);
+        }
+        return originalPolicyVisible.test(rule)&&latest==retained&&original.pauseRevision()==revision?fact:null;
     }
     public boolean matchesHostScope(String task,String run,int epoch){return scope.taskId.equals(task)&&scope.runId.equals(run)&&scope.epoch==epoch;}
     public PhonePort physicalPort(){return source instanceof dev.pocketengine.phone.access.GuardedPhonePort?((dev.pocketengine.phone.access.GuardedPhonePort)source).physicalPort():source;}

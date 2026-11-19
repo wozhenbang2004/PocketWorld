@@ -26,6 +26,7 @@ from device_protocol import arguments_digest, canonical_bytes
 
 PROTOCOL = "desktop-viewer-v1"
 LEGACY_TOMBSTONE = "desktop-viewer-legacy-tombstone-v1"
+INPUT_RECEIPT_PROFILE = "original-viewer-input-v1"
 
 
 @dataclass
@@ -46,6 +47,7 @@ class _Viewer:
     closed: bool = False
     uncertain: bool = False
     cleanup_pending: bool = False
+    last_input: tuple[str, str, str] | None = None
 
 
 class DesktopViewer:
@@ -64,7 +66,8 @@ class DesktopViewer:
 
     def describe(self):
         return {**self.streams.describe(), "method": "desktop.viewer", "requiresExplicitGrant": True,
-                "inputTransport": "original_paired_mutual_tls", "automaticInputReplay": False}
+                "inputTransport": "original_paired_mutual_tls", "automaticInputReplay": False,
+                "inputReceiptProfile": INPUT_RECEIPT_PROFILE}
 
     def _retain_legacy_claims(self):
         """Keep main's already-claimed identities in the original operations.
@@ -283,6 +286,36 @@ class DesktopViewer:
         self.adapter.invalidate_observations()
         if session.stream_id is not None and not session.closed:
             self.streams.invalidate_inputs(session.stream_id, session.owner, session.binding, lambda: self._current(session))
+
+    def _last_input_receipt(self, session):
+        # Never select by most recent row, desktop name or Windows session number.
+        if session.last_input is None:
+            return None
+        operation, digest, stream = session.last_input
+        if not stream or stream != session.stream_id:
+            return None
+        with self.manager.lock:
+            row = self.manager.ledger.execute(
+                "SELECT fingerprint,job_id,last_status,details FROM operations WHERE operation_id=?", (operation,)).fetchone()
+        if not row or row[:2] != (digest, "desktop-viewer:" + session.id):
+            return None
+        try:
+            detail = json.loads(row[3] or "{}")
+        except (TypeError, ValueError):
+            return None
+        if (not isinstance(detail, dict) or detail.get("protocol") != PROTOCOL or detail.get("action") != "input"
+                or detail.get("audience") != session.audience or detail.get("instanceId") != self.manager.instance_id):
+            return None
+        receipt, settlement = detail.get("inputReceipt"), detail.get("executionSettlement")
+        settled = (row[2] == detail.get("status") == "completed" and isinstance(receipt, dict)
+                   and receipt.get("status") == "completed" and type(receipt.get("inputDispatched")) is bool
+                   and receipt.get("dispatchConfirmed") is receipt["inputDispatched"]
+                   and receipt.get("inputDispatchAttempted") is True and receipt.get("remoteEffectsVerified") is False
+                   and isinstance(settlement, dict) and settlement.get("driverReplyObserved") is True
+                   and settlement.get("noFurtherDispatchForOperation") is True)
+        return {"profile": INPUT_RECEIPT_PROFILE, "originalOperationId": operation, "argumentsDigest": digest,
+                "streamId": stream, "status": "completed" if settled else "unknown",
+                "inputDispatched": bool(settled and receipt["inputDispatched"]), "remoteEffectsVerified": False}
 
     def _unsettled_agent(self, resource):
         # An act may have returned to its worker but not persisted its final
@@ -588,11 +621,15 @@ class DesktopViewer:
                         if status.get("lastFrame"):
                             session.width, session.height = status["lastFrame"]["width"], status["lastFrame"]["height"]
                     result = self._view(session, envelope)
+                    if receipt := self._last_input_receipt(session):
+                        self._current(session, permission)
+                        result["inputReceipt"] = receipt
                 elif action == "take":
                     result = self._take(session, envelope, permission)
                 elif action == "release":
                     result = self._release(session, envelope, permission)
                 elif action == "input":
+                    session.last_input = (envelope.get("operationId"), envelope.get("argumentsDigest"), session.stream_id)
                     result = self._input(session, envelope, permission)
                 elif action == "close":
                     session.closed = True
@@ -605,7 +642,7 @@ class DesktopViewer:
                 else:
                     raise DesktopError("Unknown desktop viewer action", 400)
                 with self.manager.lock:
-                    self._record(envelope.get("operationId"), "unknown" if result.get("inputReceipt", {}).get("status") == "unknown" else "completed")
+                    self._record(envelope.get("operationId"), "unknown" if action == "input" and result.get("inputReceipt", {}).get("status") == "unknown" else "completed")
                     self.manager.ledger.commit()
                 self.replies[envelope.get("operationId")] = copy.deepcopy(result)
                 while len(self.replies) > 128:

@@ -52,6 +52,7 @@ final class DeviceWorkspaceDesktopOwner implements NativeDeviceWorkspaceHost.Des
         current.require();
         // The exact signed resource supplies the HWND. The PC resolves its own PID;
         // Web JSON cannot introduce a second, separately chosen target identity.
-        return new NativeDesktopViewer(owner.tasks, local, selected, binding, owner.exchange(), cleanupWorker, current);
+        return new NativeDesktopViewer(owner.tasks, local, selected, binding, owner.exchange(), cleanupWorker, current,
+                NativeDesktopViewer.INPUT_RECEIPT_PROFILE.equals(streaming.opt("inputReceiptProfile")));
     }
 }

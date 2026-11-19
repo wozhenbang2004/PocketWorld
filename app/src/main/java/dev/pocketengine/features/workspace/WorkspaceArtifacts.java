@@ -121,6 +121,13 @@ public final class WorkspaceArtifacts {
     public synchronized JSONObject projectPackage(String id,String expectedSha)throws Exception {
         JSONObject artifact=packageMetadata(id,expectedSha);var frozen=readProjectPackage(id,expectedSha);return JsonFiles.copy(artifact).put("manifest",frozen.manifest());
     }
+    /** Read the selected archive once; require its catalog, manifest and producing operation together. */
+    public synchronized dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen originalTaskPackage(JSONObject source)throws Exception {
+        String id=source.getString("artifactId"),sha=source.getString("artifactSha256");
+        var frozen=readProjectPackage(id,sha);
+        dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(source,packageMetadata(id,sha).put("manifest",frozen.manifest()));
+        return frozen;
+    }
     public synchronized JSONObject findProjectPackage(String ownerActionId,String projectId,String checkoutId,String manifestIdentity)throws Exception {
         if(ownerActionId==null||!ownerActionId.matches("[a-f0-9-]{36}")||manifestIdentity==null||!manifestIdentity.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("缺少原快照动作定位");
         String id=UUID.nameUUIDFromBytes(("project-package:"+ownerActionId).getBytes(StandardCharsets.UTF_8)).toString();JSONArray all=catalog();

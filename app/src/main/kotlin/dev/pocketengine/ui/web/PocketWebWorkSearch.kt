@@ -23,7 +23,7 @@ internal class PocketWebWorkSearch(
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val rememberTasks: (JSONObject) -> Unit
 ) {
-    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read", "tasks.projectPackages", "tasks.resultFiles", "composer.object.add", "composer.object.remove") }
+    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read", "tasks.projectPackages", TaskProjectPackageFiles.COMMAND, "tasks.resultFiles", "composer.object.add", "composer.object.remove") }
     private val main = Handler(Looper.getMainLooper())
     private val host get() = controller.nativeButlerHost()
     private val pending = mutableSetOf<RunControl>()
@@ -60,6 +60,7 @@ internal class PocketWebWorkSearch(
                                 val cursor = args.opt("cursor") as? String ?: error("原成果读取位置缺失")
                                 host.tasks.projectPackagesForOwner(task, cursor, control)
                             }
+                            TaskProjectPackageFiles.COMMAND -> TaskProjectPackageFiles.read(host, args, control)
                             "tasks.resultFiles" -> resultFiles(args, conversationResult, control)
                             "work.search" -> search(args, control)
                             "work.tasks.list" -> {

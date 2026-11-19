@@ -367,7 +367,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private final java.util.concurrent.ConcurrentHashMap<String,BackgroundRun> backgroundRuns=new java.util.concurrent.ConcurrentHashMap<>();
     private RunControl currentPhoneControl(String id){BackgroundRun run=id==null?null:backgroundRuns.get(id);return run!=null?run.control:id!=null&&id.equals(activeTaskId)?activeControl:null;}
-    /** Snapshot for an already visible private task. Registry reads only: no TaskStore, service, PackageManager, helper, or physical phone call. */
+    /** Snapshot for an already visible private task. Retained registry and local policy only: no TaskStore, service, PackageManager, helper, or physical phone call. */
     public JSONObject retainedPhoneSurface(String id,String run,int epoch,String requested)throws Exception {
         if(id==null||run==null||epoch<1||!("main_screen".equals(requested)||"background".equals(requested)))return null;
         BackgroundRun bg=backgroundRuns.get(id);RunControl original=currentPhoneControl(id);
@@ -381,7 +381,11 @@ public final class EngineApplication extends Application implements dev.pocketen
             var adapter=session.readyAdapter();var port=session.physicalPort();
             if(port instanceof dev.pocketengine.phone.display.BackgroundPhonePort background&&background.ownerHandoffActive())surface="handoff_unconfirmed";
             else if(adapter!=null&&port!=null&&session.holdsObservationBinding()&&!stopped){
-                surface="bound";observation=adapter.lastObservedOwnerSurface(original);
+                surface="bound";observation=adapter.lastObservedOwnerSurface(original,revision->{
+                    var policy=new dev.pocketengine.phone.access.AndroidPhoneAccessStore(this).current();
+                    // The unconfigured path has no stamp; its observation cannot survive installing an app rule.
+                    return policy.available()&&(revision<0?policy.rules().isEmpty():policy.revision()==revision);
+                });
                 if(!session.holdsObservationBinding()||session.readyAdapter()!=adapter||session.physicalPort()!=port||(port instanceof dev.pocketengine.phone.display.BackgroundPhonePort b&&b.ownerHandoffActive())){
                     surface="unconfirmed";observation=null;
                 }
