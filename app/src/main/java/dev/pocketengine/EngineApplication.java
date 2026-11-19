@@ -2748,22 +2748,38 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         }
     }
     public JSONObject ownerWorkInput(String conversation,JSONObject input)throws Exception{return ownerWorkAssistant().sendOwnerWorkInput(conversation,new JSONObject(input.toString()));}
+
+    /** This request stopped before a work-control write or dispatch could begin. */
+    public static final class OwnerWorkControlRejected extends IllegalStateException {
+        private OwnerWorkControlRejected(String message,Exception cause){super(message,cause);}
+    }
+
     public JSONObject ownerWorkControl(String conversation,JSONObject input)throws Exception{
         String id=input.getString("taskId"),run=input.getString("runId"),action=input.getString("action");int epoch=input.getInt("epoch");
-        JSONObject task=tasks.ownerWork(id,conversation);
-        if(task==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原工作身份已变化，未操作其他执行");
+        final JSONObject task;
+        try{task=tasks.ownerWork(id,conversation);}
+        catch(Exception unavailable){throw new OwnerWorkControlRejected("暂时无法读取这件工作，请重新打开任务后再试。",unavailable);}
+        if(task==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new OwnerWorkControlRejected("这件工作的执行状态已变化，请重新打开任务。",null);
         if("cancel".equals(action)){
             RunControl original=capabilityControls.get(id);
             if(original!=null&&original.matchesHostRun(id,run,epoch))cancelCapabilityAttempt(original);
             else{var related=run.isEmpty()?null:captureOriginalRelatedStops(id,run,epoch);tasks.requestOwnerWorkCancel(id,run,epoch);if(related!=null)features.cancelRelatedTasks(related);}
         }else if("continue".equals(action)){
-            ModelConfig selected=captureOwnerWorkModel(tasks.ownerWorkExecutionModel(id,run,epoch));
+            if(!task.getJSONObject("controls").optBoolean("canContinue"))throw new OwnerWorkControlRejected("这件工作当前无法继续，请查看任务状态。",null);
+            final ModelConfig selected;
+            try{selected=captureOwnerWorkModel(tasks.ownerWorkExecutionModel(id,run,epoch));}
+            catch(InterruptedException interrupted){throw interrupted;}
+            catch(Exception unavailable){throw new OwnerWorkControlRejected("暂时无法使用这件工作原来的模型，请检查模型连接后重试。",unavailable);}
             synchronized(assistantAdmissions){
-                if(capabilityControls.containsKey(id))throw new IllegalStateException("这个工作仍在执行，无需重复启动");
-                requireOwnerWorkTakeoverModel(tasks.ownerWorkExecutionModel(id,run,epoch),selected);RunControl original=new RunControl();
-                requireOwnerWorkAttachmentRoute(task,selected);JSONObject admitted=tasks.continueOwnerWork(id,run,epoch,original);executeAdmittedOwnerWork(admitted,selected,original,null);
+                if(capabilityControls.containsKey(id))throw new OwnerWorkControlRejected("这件工作仍在执行，无需再次启动。",null);
+                try{requireOwnerWorkTakeoverModel(tasks.ownerWorkExecutionModel(id,run,epoch),selected);}
+                catch(Exception changed){throw new OwnerWorkControlRejected("这件工作的来源或模型已变化，请重新打开任务核对。",changed);}
+                RunControl original=new RunControl();
+                requireOwnerWorkAttachmentRoute(task,selected);
+                // From admission onward, errors must not claim that no write occurred.
+                JSONObject admitted=tasks.continueOwnerWork(id,run,epoch,original);executeAdmittedOwnerWork(admitted,selected,original,null);
             }
-        }else throw new IllegalArgumentException("不支持的私人工作操作");
+        }else throw new OwnerWorkControlRejected("不支持的私人工作操作。",null);
         pushTask(id);return tasks.ownerWork(id,conversation).put("controlRequested",action).put("newGrant",false);
     }
     private JSONObject ownerWorkTool(String sourceTask,String sourceRun,int sourceEpoch,String tool,String operation,JSONObject args,RunControl sourceControl)throws Exception{

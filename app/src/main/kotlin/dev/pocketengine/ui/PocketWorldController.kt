@@ -2874,14 +2874,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         state = state.copy(chatSubmitting = true, error = null, chatReceipts = state.chatReceipts + (client to JSONObject().put("clientMessageId", client).put("status", "unconfirmed")))
         persistPreparedChat(client, input, model, false)
     }
-    internal fun controlOwnerWork(expected: JSONObject, action: String, done: (JSONObject?, String?) -> Unit) {
+    internal fun controlOwnerWork(expected: JSONObject, action: String, done: (Result<JSONObject>) -> Unit) {
         check(webPrivateOwnerVisible()) { "请回到原私人工作台" }
         require(action in setOf("cancel", "continue")) { "任务动作无效" }
         val conversation = state.tasks.firstOrNull { it.id == expected.optString("taskId") }?.raw?.optString("conversationId")?.takeIf(String::isNotBlank) ?: error("原工作话题未读取")
         val input = originalOwnerWorkBinding(expected, conversation, state.tasks).put("action", action)
         io.execute {
             val result = runCatching { app.ownerWorkControl(conversation, input) }
-            main.post { if (!closed) { result.fold({ done(it, null) }, { done(null, message(it)) }); getTask(input.getString("taskId")); refreshCurrentConversationTurn() } }
+            main.post { if (!closed) { done(result); getTask(input.getString("taskId")); refreshCurrentConversationTurn() } }
         }
     }
     internal fun readMessageOrigin(reply: String, source: String, offset: Int, done: (JSONObject?, String?) -> Unit) {

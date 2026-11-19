@@ -8,6 +8,7 @@ import { ownerWorkPresentation } from './owner-work-presentation';
 import { OwnerWorkReport } from './OwnerWorkReport';
 import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
+import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
 import './task-reading.css';
 
 type PackageRead = { identity: string; taskId: string; items: unknown[]; hasMore: boolean; readLimited: boolean; nextCursor: string; unavailable: unknown[] };
@@ -75,7 +76,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -84,6 +85,12 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   onCopy: (text: string) => Promise<unknown>;
   onOpenAttachment?: (messageId: string, id: string, sha256: string) => void;
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
+  resultFiles?: {
+    taskId: string;
+    supported: boolean;
+    onOpen: (file: TaskResultFile, target: HTMLButtonElement) => void;
+    onBrowse: () => void;
+  };
 }) {
   const [clock, setClock] = useState(Date.now);
   const packageRead = useProjectPackages(task, active, readIdentity);
@@ -130,6 +137,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       {outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>}
     </div>;
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
+    {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${record.status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
       {outcome.projectPackages.length > 0 && <>

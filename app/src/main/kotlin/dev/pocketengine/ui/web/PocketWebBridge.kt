@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Choreographer
+import dev.pocketengine.EngineApplication.OwnerWorkControlRejected
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.core.RuntimeDiagnostics
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
@@ -438,8 +439,8 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebWorkSearch.COMMANDS) {
-                if (action in setOf("ownerWork.report.read", "tasks.projectPackages")) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
-                workSearch.dispatch(action, args) { result, error -> complete(id, result, error) }
+                if (action in setOf("ownerWork.report.read", "tasks.projectPackages", "tasks.resultFiles")) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
+                workSearch.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "tasks.resultFiles") }
                 return
             }
             if (action in PocketWebFormDrafts.COMMANDS) {
@@ -552,6 +553,9 @@ internal class PocketWebBridge(
                 teamEvidence.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebAttachments.COMMANDS) {
+                if (action == "attachmentWorkspace.open" && args.optBoolean("openOriginal")) {
+                    require(section == null && taskViewId == requiredString(args, "taskId")) { "请从原工作打开这份成果" }
+                }
                 attachmentPages.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebMemoryHistory.COMMANDS) {
@@ -742,10 +746,23 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "ownerWork.control") {
-                checkedPayload(args, setOf("taskId", "runId", "epoch", "action"))
-                require(controller.webPrivateOwnerVisible() && section == null && (taskViewId == null || taskViewId == requiredString(args, "taskId"))) { "原任务控制窗口已关闭" }
-                controller.controlOwnerWork(args, requiredString(args, "action")) { result, error ->
-                    complete(id, result, error, "outcome_unknown"); publishState()
+                try {
+                    checkedPayload(args, setOf("taskId", "runId", "epoch", "action"))
+                    require(controller.webPrivateOwnerVisible() && section == null && (taskViewId == null || taskViewId == requiredString(args, "taskId"))) { "原任务控制窗口已关闭" }
+                    controller.controlOwnerWork(args, requiredString(args, "action")) { result ->
+                        result.onSuccess { complete(id, it, null) }.onFailure { failure ->
+                            if (failure is OwnerWorkControlRejected) {
+                                completeOwnerWorkControlRejection(id, failure.message)
+                            } else {
+                                complete(id, null, "这次操作的回执尚未确认，请核对原任务。", "outcome_unknown")
+                            }
+                        }
+                        publishState()
+                    }
+                } catch (reason: Exception) {
+                    // The controller has not queued the native control when it throws here.
+                    completeOwnerWorkControlRejection(id, reason.message)
+                    publishState()
                 }
                 return
             }
@@ -1032,6 +1049,10 @@ internal class PocketWebBridge(
                     .put("error", JSONObject().put("code", "invalid_request").put("message", failure.message ?: "请求未接受")))
             }
         }
+    }
+
+    private fun completeOwnerWorkControlRejection(id: String, message: String?) {
+        complete(id, JSONObject().put("status", "rejected").put("message", message?.take(300) ?: "这次操作未接受，请重新打开任务。"), null)
     }
 
     private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted", retainValue: Boolean = true) {

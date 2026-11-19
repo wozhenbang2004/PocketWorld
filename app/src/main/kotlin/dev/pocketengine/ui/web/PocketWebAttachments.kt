@@ -89,14 +89,16 @@ internal class PocketWebAttachments(
             check(controller.webUiCanInteract()) { "请回到当前工作区再操作文件" }
             if (action == "attachmentWorkspace.open") {
                 check(controller.webPrivateOwnerVisible()) { "请回到私人工作区打开文件库" }
-                require(args.keys().asSequence().all { it in setOf("taskId", "fileId", "sha256") }) { "文件入口参数无效" }
+                require(args.keys().asSequence().all { it in setOf("taskId", "fileId", "sha256", "openOriginal") }) { "文件入口参数无效" }
                 val task = args.optString("taskId").takeIf { it.isNotBlank() }
                 require(task == null || task.length <= 240 && '\u0000' !in task) { "原工作身份无效" }
                 val file = args.optString("fileId").takeIf { it.isNotBlank() }
+                val openOriginal = args.opt("openOriginal")
+                require(openOriginal == null || openOriginal == true && task != null && file != null) { "原件入口需要原工作和固定文件版本" }
                 if (file != null) {
                     val sha = args.getString("sha256")
                     require(file.length <= 240 && '\u0000' !in file && sha.matches(Regex("[0-9a-f]{64}"))) { "原文件版本无效，请重新查找" }
-                    clear(); flow.openFile(JSONObject().put("id", file).put("sha256", sha), task)
+                    clear(); flow.openFile(JSONObject().put("id", file).put("sha256", sha), task, openOriginal == true)
                 } else {
                     require(!args.has("sha256")) { "请选择对应的原文件" }
                     // The coordinator rereads the original owner task on its IO executor.

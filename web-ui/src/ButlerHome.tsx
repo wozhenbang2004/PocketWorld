@@ -4,7 +4,7 @@ import { IconCheckCircle, IconChevronRight, IconClock, IconError, IconInfo, Icon
 import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { getRecentTaskProgress } from './task-presentation';
-import { isButlerHomeWork, workCollectionPresentation, type WorkCollectionFilter, type WorkCollectionGroup } from './work-collection';
+import { isButlerHomeWork, workCollectionPresentation } from './work-collection';
 import './butler-home.css';
 
 export type ButlerHomeTask = {
@@ -27,7 +27,7 @@ export type ButlerHomeProps = {
   tasks: ButlerHomeTask[];
   canOpen: boolean;
   onOpen: (task: ButlerHomeTask) => void;
-  onAllWork: (filter?: WorkCollectionFilter) => void;
+  onAllWork: () => void;
   onScrollTop?: (top: number) => void;
   initialScrollTop?: number;
 };
@@ -65,16 +65,11 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
       const status = presentation.label;
       const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.waitingForChildren || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
       return { task, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
-        handling, group: presentation.group, busy: presentation.busy, completed: presentation.completed, action: presentation.actionLabel };
+        group: presentation.group, busy: presentation.busy, completed: presentation.completed, action: presentation.actionLabel };
     });
-  const groups = ([
-    { id: 'attention', label: '等你处理', limit: 3 },
-    { id: 'running', label: '正在推进', limit: 2 },
-    { id: 'ended', label: '近期结果', limit: 2 },
-  ] satisfies { id: WorkCollectionGroup; label: string; limit: number }[])
-    .map(group => ({ ...group, items: work.filter(item => item.group === group.id) })).filter(group => group.items.length > 0);
-  const visible = groups.flatMap(group => group.items.slice(0, group.limit));
-  const revision = JSON.stringify([ready, canOpen, visible.map(({ task, attention: needsAttention, handling }) => [task.id, task.status, needsAttention, handling?.state, handling?.handlingLabel, handling?.resultAvailable, handling?.delivered])]);
+  const visible = (['attention', 'running', 'ended'] as const)
+    .flatMap(group => work.filter(item => item.group === group).slice(0, 2));
+  const revision = JSON.stringify([ready, canOpen, visible.map(({ task, status, detail }) => [task.id, status, detail])]);
   useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false });
   const empty = ready && !work.length && !hasPreparations && !phoneActivity;
 
@@ -101,7 +96,7 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
     if (target && !target.disabled) target.focus({ preventScroll: true });
   }, [revision]);
 
-  const renderTask = ({ task, attention: needsAttention, status, detail, busy, action, completed }: typeof work[number]) => {
+  const renderTask = ({ task, attention: needsAttention, group, status, detail, busy, action, completed }: typeof work[number]) => {
     const StatusIcon = ['paused', 'interrupted'].includes(task.status) ? IconPauseCircle : task.status === 'failed' ? IconError
       : needsAttention ? IconInfo : completed ? IconCheckCircle : IconClock;
     const date = new Date(updatedAt(task)), hasDate = updatedAt(task) > 0 && Number.isFinite(date.getTime());
@@ -110,10 +105,10 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
         <span className="pw-butler-work-mark" data-attention={needsAttention || undefined} aria-hidden="true">{busy ? <ProgressCircle isIndeterminate size="sm" aria-label={status} /> : <StatusIcon size={18} />}</span>
         <span className="pw-butler-work-copy">
           <strong dir="auto">{task.goal || '委派工作'}</strong>
-          <span className="pw-butler-work-meta"><MotionFeedback as="span" identity={status} initial={false}>{status}</MotionFeedback>{hasDate && <time dateTime={date.toISOString()}>{date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>}</span>
-          {needsAttention && detail && <span className="pw-butler-work-detail" dir="auto">{detail}</span>}
+          <span className="pw-butler-work-meta"><MotionFeedback as="span" identity={status} initial={false}>{status}</MotionFeedback>{group === 'ended' && hasDate && <time dateTime={date.toISOString()}>{date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>}</span>
+          {group !== 'ended' && detail && <span className="pw-butler-work-detail" dir="auto">{detail}</span>}
         </span>
-        <IconChevronRight className="pw-butler-work-chevron" size={16} aria-hidden="true" />
+        <span className="pw-butler-work-next" aria-hidden="true">{action}<IconChevronRight size={16} /></span>
       </Button>
     </li>;
   };
@@ -127,22 +122,17 @@ export function ButlerHome({ ready, modelReady, modelSetup, composer, preparatio
           {modelConnection}
           {composer}
         </section>
-        {phoneActivity}
-        {preparations}
-        {(!ready || work.length > 0) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
+        {(!ready || work.length > 0 || phoneActivity || hasPreparations) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
           onBlurCapture={event => { const node = event.target as HTMLElement; if (event.relatedTarget instanceof Node ? !event.currentTarget.contains(event.relatedTarget) : node.isConnected && !node.closest('[inert],[hidden]') && !node.matches(':disabled')) focused.current = null; }}>
-          <header className="pw-butler-work-heading"><h2 id={workHeading}>跟进工作</h2>{work.length > 0 && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={() => onAllWork('all')}>全部工作</Button>}</header>
+          <header className="pw-butler-work-heading"><h2 id={workHeading}>最近工作</h2>{ready && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={onAllWork}>全部工作</Button>}</header>
           {!ready ? <p className="pw-butler-reading" role="status"><ProgressCircle isIndeterminate size="sm" aria-label="正在恢复工作记录" /><span>正在恢复工作记录…</span></p> : <>
-            {groups.map(group => <section key={group.id} className="pw-butler-work-group" aria-labelledby={`${workHeading}-${group.id}`}>
-              <header className="pw-butler-group-heading"><h3 id={`${workHeading}-${group.id}`}>{group.label}</h3>
-                {group.items.length > group.limit && <Button variant="ghost" size="small" onClick={() => onAllWork(group.id)} aria-label={`前往全部工作，查看其他${group.label}的工作`}>查看更多<IconChevronRight size={14} aria-hidden="true" /></Button>}
-              </header>
-              <ol className="pw-butler-work-list">{group.items.slice(0, group.limit).map(renderTask)}</ol>
-            </section>)}
+            {phoneActivity}
+            {visible.length > 0 && <ol className="pw-butler-work-list">{visible.map(renderTask)}</ol>}
             {!!work.length && !canOpen && <p className="pw-butler-work-note" role="status">当前暂时无法打开原任务记录。</p>}
           </>}
         </section>}
+        {preparations}
       </div>
     </div>
   </main>;

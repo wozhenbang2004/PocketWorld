@@ -68,11 +68,12 @@ internal class AttachmentOutcomeCoordinator(
     fun openGroupOperation(task:UiTask,operation:String){
         val origin=task.raw.optJSONObject("origin")?:return;cancel();restoreFile=null;restoredDocumentDraft=null;state=AttachmentOutcomeState(open=true,taskId=task.id,group=GroupResultAccess.Selection(origin.getString("requestId"),task.id,origin.getString("spaceId"),"","",origin.getString("audience"),origin.getString("visibility"),operation,""));refresh()
     }
-    fun openFile(meta:JSONObject,fromTask:String?=null) {
+    fun openFile(meta:JSONObject,fromTask:String?=null,showOriginal:Boolean=false) {
         cancel();restoredDocumentDraft=null
         // A pending locator is navigation intent, never an already-read file.
         // Preserve it across first-read failure, cancellation and foreground restore.
         restoreFile=JSONObject().put("id",meta.optString("id")).put("sha256",meta.optString("sha256"))
+            .put("showOriginal",showOriginal)
         state=AttachmentOutcomeState(open=true,taskId=fromTask,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction)
         refresh()
     }
@@ -83,12 +84,16 @@ internal class AttachmentOutcomeCoordinator(
     fun refresh(){
         if(state.team!=null){readTeamFile();return}
         val task=state.taskId;val group=state.group;val pin=restoreFile?:state.file;val savedDraft=restoredDocumentDraft
+        val showOriginal=restoreFile?.optBoolean("showOriginal")==true
+        var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
         work(onSuccess={actual->
             if(group==null&&actual.optString("originalDocumentActionId").isNotEmpty()&&actual.optString("taskStatus")!in setOf("completed","failed")){pendingDocumentAction=actual.getString("originalDocumentActionId");state=state.copy(pendingDocumentTask=pendingDocumentAction)}
             if(savedDraft!=null&&restoredDocumentDraft===savedDraft){state=state.copy(documentDraft=JSONObject(savedDraft.toString()));restoredDocumentDraft=null}
+            if(original!=null)state=state.copy(originalFile=original)
         }){control,window -> if(group==null){
             val actual=app.ownerOutcomeSnapshot(task,control)
             val file=pin?.let{selected->(actual.optJSONArray("sources").objects()+actual.optJSONArray("artifacts").objects()).firstOrNull{it.optString("id")==selected.optString("id")&&it.optString("sha256")==selected.optString("sha256")&&it.optString("availability")=="available"}?:throw IllegalStateException("原文件版本当前不可读，请回原任务核对")}
+            if(showOriginal&&file!=null)original=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),control)
             if(savedDraft!=null){
                 DocumentDraft(savedDraft)
                 if(savedDraft.has("parentArtifactId")){

@@ -21,7 +21,7 @@ internal class PocketWebWorkSearch(
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val rememberTasks: (JSONObject) -> Unit
 ) {
-    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read", "tasks.projectPackages", "composer.object.add", "composer.object.remove") }
+    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read", "tasks.projectPackages", "tasks.resultFiles", "composer.object.add", "composer.object.remove") }
     private val main = Handler(Looper.getMainLooper())
     private val host get() = controller.nativeButlerHost()
     private val pending = mutableSetOf<RunControl>()
@@ -58,6 +58,7 @@ internal class PocketWebWorkSearch(
                                 val cursor = args.opt("cursor") as? String ?: error("原成果读取位置缺失")
                                 host.tasks.projectPackagesForOwner(task, cursor, control)
                             }
+                            "tasks.resultFiles" -> resultFiles(args, control)
                             "work.search" -> search(args, control)
                             "work.tasks.list" -> {
                                 fields(args, setOf("query", "filter", "projectId", "cursor", "limit"))
@@ -139,6 +140,33 @@ internal class PocketWebWorkSearch(
                 })
             } catch (failure: Exception) { pending.remove(control); control.cancel(); throw failure }
         } catch (failure: Exception) { done(null, failure.message ?: "查找暂不可用") }
+    }
+
+    private fun resultFiles(args: JSONObject, control: RunControl): JSONObject {
+        fields(args, setOf("taskId"))
+        val taskId = args.opt("taskId") as? String ?: error("原工作身份缺失")
+        require(taskId.isNotBlank() && taskId.length <= 240 && taskId == taskId.trim() && '\u0000' !in taskId) { "原工作身份无效" }
+        fun requireVisibleTask() {
+            control.check()
+            val task = host.tasks.getForUi(taskId, false) ?: error("原工作已不可读取")
+            check(task.optString("id") == taskId && task.optString("actorId") == "owner" && task.optString("spaceId") == "private" &&
+                task.optString("kind") != "inference" && task.optJSONObject("origin")?.optString("kind") != "group" &&
+                task.optString("taskProjection") != "source_unavailable" && task.optBoolean("contextAvailable", true)) { "原工作来源已不可读取" }
+        }
+        requireVisibleTask()
+        val snapshot = host.ownerOutcomeSnapshot(taskId, control)
+        check(snapshot.getString("taskId") == taskId) { "原工作成果身份不符" }
+        val artifacts = snapshot.getJSONArray("artifacts").objects()
+        val available = artifacts.filter { it.optString("sourceTaskId") == taskId && it.optString("availability") == "available" }
+        val limit = 8
+        val files = JSONArray()
+        available.take(limit).forEach { file ->
+            files.put(JSONObject().put("id", file.getString("id")).put("sha256", file.getString("sha256"))
+                .put("name", file.getString("name")).put("mimeType", file.getString("mimeType")).put("size", file.getLong("size")))
+        }
+        requireVisibleTask()
+        return JSONObject().put("taskId", taskId).put("files", files).put("readLimited",
+            snapshot.getJSONObject("indexDiagnostics").getBoolean("incomplete") || artifacts.size != available.size || available.size > limit)
     }
 
     private fun search(args: JSONObject, control: RunControl): JSONObject {

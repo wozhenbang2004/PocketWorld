@@ -1,5 +1,26 @@
 # Login → model → message → tools: reliability contract
 
+## Private preview · original work and its files
+
+The work overview reads saved results from the existing attachment inventory
+after opening the original private task. It shows up to eight task-owned files,
+identifies incomplete reads, and links to the full task file workspace. Selecting
+a file opens the existing reader with the original task ID, file ID and SHA-256.
+Closing the reader returns to the same work. Saved files can belong to earlier
+attempts of this work. The file list does not establish task completion.
+
+The same Android work window remains readable on foreground return when its
+native identity still matches. Decision handles expire separately. A control
+that is definitively rejected before native work begins can be requested again
+after the owner addresses the reason. Interrupted connections and errors after
+admission may have changed the work and remain pending verification.
+
+This preview adds no persisted task schema or parallel state store. The isolated
+APK uses the existing `dev.pocketengine.preview` application ID and its own
+accounts and data. To revert the source, return to `ade2a76` or revert the
+preview commits on the independent branch. Existing production data is outside
+the preview application sandbox.
+
 ## Private work settlement and cold phone recovery · 2026-11-19
 
 The shared capability runner sends progress against its admitted task, run and
