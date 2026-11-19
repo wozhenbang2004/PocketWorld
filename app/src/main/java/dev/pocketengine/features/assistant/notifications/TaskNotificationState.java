@@ -23,6 +23,29 @@ public final class TaskNotificationState {
         JSONObject question=OwnerQuestionReply.reference(task);if(question!=null)value.put("ownerQuestion",question);
         return value.put("token",TaskStore.capabilityFingerprint(value)).put("executionAuthorized",false).put("deliveryConfirmed",false);
     }
-    public static String title(String status){return switch(status){case "completed"->"助手已有新结果";case "needs_confirmation"->"结果待你确认";case "reconciling"->"有一项操作待核对";case "waiting_approval","awaiting_approval"->"有一项操作待授权";default->"助手需要你处理";};}
-    public static String summary(String status){return switch(status){case "completed","needs_confirmation"->"打开查看结果与执行记录";case "reconciling"->"先核对已有动作，再决定下一步";default->"打开查看原因和可选的下一步";};}
+    public static String title(String status) {
+        return switch (status) {
+            case "completed" -> "助手已有新结果";
+            case "needs_confirmation" -> "结果待你确认";
+            case "reconciling" -> "有一项操作待核对";
+            case "waiting_approval", "awaiting_approval" -> "有一项操作待授权";
+            case "failed" -> "任务执行失败";
+            case "interrupted" -> "任务执行已中断";
+            case "awaiting_user" -> "任务正等你回应";
+            default -> "助手任务有更新";
+        };
+    }
+
+    public static String summary(String status) {
+        return switch (status) {
+            case "completed" -> "打开原任务查看成果";
+            case "needs_confirmation" -> "打开原任务核对结果，再决定是否确认";
+            case "reconciling" -> "打开原任务核对已发生的操作";
+            case "waiting_approval", "awaiting_approval" -> "打开原任务查看申请的操作与范围";
+            case "failed" -> "打开原任务查看失败原因和执行记录";
+            case "interrupted" -> "打开原任务核对中断前的进展";
+            case "awaiting_user" -> "打开原任务查看需要你处理的事项";
+            default -> "打开原任务查看最新记录";
+        };
+    }
 }

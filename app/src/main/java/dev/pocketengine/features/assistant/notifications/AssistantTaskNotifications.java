@@ -26,7 +26,7 @@ public final class AssistantTaskNotifications {
         // Mark before the external binder call. A crash/uncertain return never authorizes a repost.
         if(!tasks.beginOwnerTaskNoticePosting(claim)||!tasks.ownerTaskNoticeCurrent(claim))return;
         Intent target=open(context,view);PendingIntent pending=PendingIntent.getActivity(context,0,target,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        Notification.Builder builder=new Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
+        Notification.Builder builder=new Notification.Builder(context,CHANNEL).setSmallIcon(dev.pocketengine.R.drawable.ic_task_notice)
             .setContentTitle(TaskNotificationState.title(view.getString("status"))).setContentText(TaskNotificationState.summary(view.getString("status")))
             .setCategory(Notification.CATEGORY_STATUS).setVisibility(Notification.VISIBILITY_PRIVATE).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(pending);
         String conversation=view.optString("conversationId");
