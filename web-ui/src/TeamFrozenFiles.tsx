@@ -9,7 +9,15 @@ type Data = Record<string, any>;
 type FileRow = {artifactId:string;assignmentId:string;memberId:string;path:string;kind:'text'|'deletion'|'binary_or_large';sha256:string;retainedChars?:number;currentVersion:number;currentExists:boolean;matchesOwnerBase:boolean;retainedApplied:boolean;truncated:boolean;beforeBytes?:number;afterBytes?:number};
 type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewRouteCaptured?:boolean;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false};
 type IntegrationCapture={integrationTaskId:string;reviewId:string;planHash:string;matchingFiles:number;total:number;active:boolean;unresolved:boolean;status:string;businessVerified:false};
-type Reading = {projectReviewOrigin?:ProjectTeamReviewOrigin;fullProject?:boolean;revisionComparison?:RevisionComparison;revisionWarning?:string;projectId:string;integrationCapture?:IntegrationCapture;ownerDecision?:{state:string;reviewId?:string;registrationKind?:string;separateIntegratorStartRequired?:boolean};fileHandle:string;teamRunId:string;planHash:string;files:FileRow[];incompleteCount:number;capturedAt:number;readOnly:true};
+type Finding={verdict:'changes_requested'|'inconclusive';findings:string;businessVerified:false;executionAuthorized:false;originalReviewer:{teamRunId:string;taskId:string;runId:string;epoch:number;role:'reviewer';planHash:string;canOpen:true}};
+type Decision={state:string;reviewId?:string;registrationKind?:string;separateIntegratorStartRequired?:boolean}&Partial<Finding>;
+function blockedFinding(decision:Decision|undefined,team:string,hash:string):Finding|null{
+  const r=decision?.originalReviewer;
+  return decision?.state==='independent_finding'&&decision.businessVerified===false&&decision.executionAuthorized===false&&
+    (decision.verdict==='changes_requested'||decision.verdict==='inconclusive')&&typeof decision.findings==='string'&&!!decision.findings.trim()&&decision.findings.length<=4000&&
+    r?.role==='reviewer'&&r.teamRunId===team&&r.planHash===hash&&r.canOpen===true&&!!r.taskId&&!!r.runId&&Number.isSafeInteger(r.epoch)&&r.epoch>0?decision as Finding:null;
+}
+type Reading = {projectReviewOrigin?:ProjectTeamReviewOrigin;fullProject?:boolean;revisionComparison?:RevisionComparison;revisionWarning?:string;projectId:string;integrationCapture?:IntegrationCapture;ownerDecision?:Decision;fileHandle:string;teamRunId:string;planHash:string;files:FileRow[];incompleteCount:number;capturedAt:number;readOnly:true};
 type Page = {id:string;body:string;end:number;size:number};
 
 export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back, memberName, entry, hasRevision=false}:{
@@ -44,6 +52,9 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
       if(seq!==generation.current){release(result?.fileHandle);return;}
       if(!result?.fileHandle||result.readOnly!==true||result.teamRunId!==team||!Array.isArray(result.files)||!/^[a-f0-9]{64}$/.test(result.planHash)){
         release(result?.fileHandle);throw new Error('这份目录不属于原协作，请返回重新读取。');
+      }
+      if(result.ownerDecision?.state==='independent_finding'&&!blockedFinding(result.ownerDecision,team,result.planHash)){
+        release(result.fileHandle);throw new Error('审阅意见与这版冻结文件不匹配，没有显示其他轮次。');
       }
       if(result.revisionComparison&&(!originalRevision(result.revisionComparison,team,result.planHash,result.projectId)||result.ownerDecision?.state!=='read_only'||
           result.revisionComparison.files.some(row=>row.newArtifactId&&!result.files.some(f=>f.artifactId===row.newArtifactId&&f.assignmentId===row.assignmentId&&f.path===row.path)))){
@@ -84,6 +95,15 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
     finally{if(seq===generation.current){pending.current=false;setBusy(false);}}
   };
 
+  const openOriginalReviewer=async()=>{
+    const original=current.current;
+    if(!original||!opened.current||pending.current||document.hidden||!active||!blockedFinding(original.ownerDecision,team,original.planHash))return;
+    const at=++generation.current;pending.current=true;setBusy(true);setError('');
+    try{await run('teams.openDeliveryWorker',{viewHandle:view,fileHandle:original.fileHandle});
+      if(generation.current===at&&current.current===original)close();
+    }catch(e){if(generation.current===at&&current.current===original)setError(e instanceof Error?e.message:'无法核对这次原审阅任务，没有打开其他任务。');}
+    finally{if(generation.current===at){pending.current=false;setBusy(false);}}
+  };
   const reviewApproval=async()=>{
     const original=current.current,project=original?.ownerDecision?.state==='eligible_project_first';if(!original||(!project&&original.ownerDecision?.state!=='eligible')||!allLoaded||pending.current||!opened.current||unknown||registered)return;
     const seq=++generation.current;pending.current=true;setBusy(true);setError('');setAck(false);
@@ -113,6 +133,7 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
     finally{if(seq===generation.current){pending.current=false;setBusy(false);}}
   };
 
+  const finding=source?blockedFinding(source.ownerDecision,team,source.planHash):null;
   return <><Button variant="secondary" size="small" disabled={disabled||!active||!view} onClick={()=>void open()}>{hasRevision?'核对上版写回与本次冻结':'查看冻结文件与原项目差异'}</Button>
     <SettingsDialog isOpen={shown} title={approval?approval.firstProject?"核对完整项目的首版文件许可":"核对这份写回许可":source?.revisionComparison?"核对原分工修订":"原协作的冻结文件"} onClose={dismiss} className="pw-team-modal">
       <div className="pw-form-stack">{approval?<><p>{approval.firstProject?'你正在给下列原冻结文本登记首版许可。这份登记不可用于发起整合。':'这份许可只适用于下列原冻结文本。批准后，管家可在原授权内请求唯一整合者将它们写回原项目；本次不会启动整合或写入文件。'}</p>
@@ -135,6 +156,11 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
         {source&&!approval&&(!source.revisionComparison||projectView)&&<><p>{source.files.length} 份冻结文件{source.incompleteCount? ` · ${source.incompleteCount} 项分工在原审阅中仍未交齐`:''}</p>
           {source.integrationCapture&&<p role="status">打开时，{source.integrationCapture.matchingFiles}/{source.integrationCapture.total} 份与原写回回执及当前项目版本一致。
             {source.integrationCapture.unresolved?'原整合仍有未确定效果，不要重复写入。':source.integrationCapture.active?'原整合者仍在处理。':source.integrationCapture.total===0?'没有可逐份对照的文件，不判定写回。':source.integrationCapture.matchingFiles<source.integrationCapture.total?'未匹配的文件不一定从未写过，请逐份核对。':'文件版本相符不等于项目包交付或业务验收。'}</p>}
+          {finding&&<section aria-label="这版文件的原独审意见"><h3>{finding.verdict==='changes_requested'?'独审要求修改':'独审未能判断'}</h3>
+            <p dir="auto" style={{whiteSpace:'pre-wrap'}}>{finding.findings}</p>
+            <p className="pw-field-hint">这是审阅者对下列冻结文件的原意见，不是你的批准，也没有启动修订。</p>
+            {bridge.getState().capabilities.commands.includes('teams.openDeliveryWorker')&&<Button variant="secondary" size="small" disabled={busy} onClick={()=>void openOriginalReviewer()}>查看这次原审阅任务</Button>}
+          </section>}
           {!source.files.length&&<p>没有读到这次协作的冻结文件。</p>}
           {source.files.filter(file=>!source.revisionComparison||file.artifactId===selected).map(file=><section className="pw-team-expanded-copy" key={file.artifactId}><h3>{file.path}</h3>
             <p className="pw-field-hint">贡献成员：{memberName(file.memberId) || file.memberId} · {file.retainedApplied?'与原整合回执及当前项目一致':file.matchesOwnerBase?'项目基线仍与原分工一致':'项目基线已改变'} · {file.currentExists?`项目版本 ${file.currentVersion}`:'打开时项目中无此文件'}</p>

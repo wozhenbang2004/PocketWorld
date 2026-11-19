@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconChevronLeft, IconChevronRight } from './icons';
-import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import './knowledge-depth.css';
 import './memory-reading.css';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MemoryAssertionFields } from './MemoryAssertionFields';
+import { conflictReceiptMatches, MemoryConflictDecision, reviewedConflict } from './MemoryConflictDecision';
 import { WorkingStatus } from './library/journey-motion';
 import { MemoryReadingWindow, memoryHistoryStatus, taskMemorySelectionDetails, taskMemorySummary, taskMemoryVisibleRecords } from './memory-history';
 
@@ -93,13 +94,18 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
       readHandle: selected.readHandle, ...(view === 'history' ? { text: draft } : { operation, ...(operation === 'correct' ? { text: draft } : {}), ...(operation === 'replace' ? { replacementHandle: replacement } : {}) }),
     }, openReview);
   };
+  const conflictPlan = reviewedConflict(review);
+  const unidentifiedDecision = review?.operation === 'conflict' && !conflictPlan;
   const confirm = () => {
     const handle = reviewHandle.current;
-    if (blocked.current || !review || !handle || handle !== review.reviewHandle || !acknowledged || !window.current.current(version)) return;
+    if (blocked.current || unidentifiedDecision || !review || !handle || handle !== review.reviewHandle || !acknowledged || !window.current.current(version)) return;
     reviewHandle.current = ''; setReview(null); setAcknowledged(false);
     void invoke(view === 'history' ? 'memoryHistory.confirm' : 'taskMemory.confirm', { reviewHandle: handle }, value => {
       clearReading(); setPage(null); setCognition(null); setReceipt(null); setTask(null);
-      setNotice(value.feedback || '已收到原处理回执，请重新读取当前版本。原始证据保留。');
+      if (conflictPlan) setNotice(conflictReceiptMatches(value, conflictPlan)
+        ? (conflictPlan.decision === 'coexist' ? `已记录这 ${conflictPlan.versions.length} 条并存。` : '已记录只保留你选的版本。') + '原证据保留；需要查看当前状态时请重新读取。'
+        : '原回执未能核对到这次选择。请重新读取这组状态，不要重复提交。');
+      else setNotice(value.feedback || '已收到原处理回执，请重新读取当前版本。原始证据保留。');
     });
   };
   useEffect(() => {
@@ -182,14 +188,23 @@ export function MemoryHistoryWorkspace({ run, scopeKey, registerTransientBack, i
       </AccordionItem></Accordion>
     </section>}
     <SettingsDialog className="pw-memory-modal" isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={review?.operation === 'conflict' ? '核对这组原冲突版本' : review?.operation === 'forget' ? '遗忘这条原记忆' : '核对本次修改'}><div className="pw-knowledge-review">
-      <section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p>{rows(review?.beforeRecords).map(row => <p key={row.id}>{row.text} · 修订 {row.revision}</p>)}</section>{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}
+      {review?.operation === 'conflict' ? <MemoryConflictDecision plan={conflictPlan} /> : <section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p>{rows(review?.beforeRecords).map(row => <p key={row.id}>{row.text} · 修订 {row.revision}</p>)}</section>}{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}
       <p>只处理所示的精确版本。原会话与任务证据保留；保存不证明内容为真。旧上下文是否清理，以原宿主回执为准。</p>
-      <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={locked}>我已核对这次内容与影响</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={closeReview}>返回核对</Button><Button disabled={locked || !acknowledged} onClick={confirm}>确认这一次修改</Button></div>
+      <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={locked || unidentifiedDecision}>我已核对这次内容与影响</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={closeReview}>返回核对</Button><Button disabled={locked || !acknowledged || unidentifiedDecision} onClick={confirm}>{conflictPlan?.decision === 'coexist' ? '确认并存' : conflictPlan?.decision === 'replace' ? '确认保留所选版本' : '确认这一次修改'}</Button></div>
     </div></SettingsDialog>
   </section>;
 }
 
 function ConflictReview({ group, busy, onReview }: { group: Data; busy: boolean; onReview: (args: Data) => void }) {
-  const [selected, setSelected] = useState(''), [coexist, setCoexist] = useState(false), [reason, setReason] = useState('');
-  return <section className="pw-source-record pw-knowledge-conflict"><h3>核对这组冲突</h3><p className="pw-muted">较晚推断不会自动替换主人纠正。请明确选择保留版本，或给出共存理由。</p><SelectField label="保留的当前事实" value={selected} options={rows(group.records).map(row => ({ id: row.id, label: `${row.reviewRole === 'protected_current' ? '当前保留：' : ''}${row.text}` }))} onChange={setSelected} isDisabled={busy || coexist} /><CheckboxField isSelected={coexist} onChange={setCoexist} isDisabled={busy}>有理由地共存，不选唯一当前值</CheckboxField><TextAreaField label="为什么保留或共存" value={reason} onChange={setReason} maxLength={1000} isDisabled={busy} /><Button variant="secondary" disabled={busy || (!coexist && !selected) || !reason.trim()} onClick={() => onReview({ conflictHandle: group.conflictHandle, decision: coexist ? 'coexist' : 'replace', selectedId: coexist ? '' : selected, reason })}>核对这组精确版本</Button></section>;
+  const [choice, setChoice] = useState(''), [reason, setReason] = useState('');
+  const originals = rows(group.records), coexist = choice === ':coexist', chosen = originals.find(row => `keep:${row.id}` === choice);
+  const options = originals.map(row => ({ id: `keep:${row.id}`, label: row.text, description: `${row.reviewRole === 'protected_current' ? '此前受保护的当前版本' : '待核对'} · 修订 ${row.revision}` }));
+  if (originals.length >= 2) options.push({ id: ':coexist', label: '这些内容并存', description: '不指定唯一版本，需要说明保留理由。' });
+  return <section className="pw-source-record pw-knowledge-conflict"><h3>核对这组冲突</h3>
+    <p className="pw-muted">新的推断不会自动替换主人纠正过的内容。先逐条对照，再决定以后如何参考。</p>
+    <RadioOptions label={originals.length >= 2 ? '保留哪一条，或允许并存' : '核对要保留的版本'} value={choice} options={options} onChange={setChoice} isDisabled={busy} />
+    <TextAreaField label="这样处理的理由" value={reason} onChange={setReason} maxLength={1000} isDisabled={busy} />
+    <Button variant="secondary" disabled={busy || !(coexist ? originals.length >= 2 : chosen) || !reason.trim()} onClick={() => onReview({
+      conflictHandle: group.conflictHandle, decision: coexist ? 'coexist' : 'replace', selectedId: coexist ? '' : chosen?.id, reason,
+    })}>核对这次选择</Button></section>;
 }

@@ -1,3 +1,4 @@
+import {BackgroundHeldWork} from './BackgroundHeldWork';
 import type {OpenProjectDraft} from './ProjectConventionDraftAction';
 import { ModelDiagnosticsWorkspace } from './ModelDiagnosticsWorkspace';
 import { UsageWorkspace } from './UsageWorkspace';
@@ -891,7 +892,7 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
     { title: '系统准备', done: connection.loaded && connection.supported && permissions, detail: !connection.loaded ? '先读取真实系统与连接状态' : !connection.supported ? '当前系统不支持后台独立屏，可明确选择主屏模式' : !permissions ? '完成界面读取权限与任务通知后返回' : '权限已读取，继续核对后台连接' },
     { title: alternate ? '已选连接授权' : '本机配对身份', done: !requiresCheck && (alternate ? connection.helperConnected : connection.identityPresent || connection.phase === 'paired' || connection.helperConnected), detail: requiresCheck ? '核对原连接，避免重复提交配对码' : alternate ? '保留已选择的兼容连接方式' : connection.identityPresent || connection.phase === 'paired' || connection.helperConnected ? '已读取本机身份，连接时会核对有效性' : '使用当前系统窗口的配对端口与六位码' },
     { title: '连接核对', done: connection.helperConnected && !connection.busy && !requiresCheck, detail: connection.helperConnected && !requiresCheck ? '助手已连接，正式使用时核对实际独立屏' : '配对后使用无线调试主页的另一连接端口' },
-    { title: '返回原目标', done: false, detail: connection.taskOwned ? '原任务持有执行资源，回到原任务查看' : '完成设置后返回，由你确认是否开始原目标' },
+    { title: '返回原目标', done: false, detail: display.taskOwned === true ? '有任务持有后台资源，查看可核对的原工作' : connection.taskOwned ? '此页未核实后台资源属于哪项工作' : '完成设置后返回，由你确认是否开始原目标' },
   ];
   const locked = connection.taskOwned || connection.busy || requesting || awaiting !== null;
   const canUseExistingShizuku = !locked && !connection.displayBarrier && !connection.recoveryRequired && !requiresCheck;
@@ -911,10 +912,10 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
   return <div className="pw-background-workspace" data-background-panel={panel}>
     <section className="pw-background-flow" aria-label="当前连接准备">
     <header className="pw-background-heading"><h2>{headline}</h2>
-      <p className="pw-background-backend">{({ wireless_adb: '手机内无线连接', shizuku: 'Shizuku 兼容连接', adb: '受信任电脑 ADB' } as Data)[connection.backend] || '连接方式尚未读取'}{connection.taskOwned ? ' · 原手机任务持有执行资源' : ''}</p>
+      <p className="pw-background-backend">{({ wireless_adb: '手机内无线连接', shizuku: 'Shizuku 兼容连接', adb: '受信任电脑 ADB' } as Data)[connection.backend] || '连接方式尚未读取'}{display.taskOwned === true ? ' · 后台资源由任务持有' : connection.taskOwned ? ' · 后台资源归属待核对' : ''}</p>
     </header>
     {showWirelessSetup && <ol className="pw-background-progress" aria-label="连接准备进度">{steps.map((step, index) => <li key={step.title} data-complete={step.done || undefined} aria-current={activeStep === index ? 'step' : undefined} title={step.title}><span aria-hidden="true">{step.done ? <IconCheck size={13}/> : index + 1}</span><span aria-hidden="true">{['系统准备', alternate ? '连接授权' : '本机配对', '连接核对', '返回目标'][index]}</span><span className="pw-sr-only">{step.title}，{step.done ? '已完成' : activeStep === index ? '当前步骤' : '待核对'}。{step.detail}</span></li>)}</ol>}
-    {connection.taskOwned && state.activeTaskId && <div className="pw-background-status-actions"><CapabilityAction action="tasks.open" args={{ id: state.activeTaskId }} supported={supported} run={run} primary>回到原任务</CapabilityAction></div>}
+    {connection.taskOwned && <BackgroundHeldWork state={state} canOpen={supported('tasks.open')} open={args=>run('tasks.open',args)}/>}
     {(connection.busy || requesting || awaiting || requiresCheck) && text(adb.message) && <p className="pw-background-native-message" role="status">{text(adb.message)}</p>}
     {requiresCheck && <p className="pw-background-attention" role="status">上次连接结果尚未确认。核对原助手，不要重复提交配对码。</p>}
     {awaiting && !connection.busy && <p className="pw-field-hint" role="status">请求已登记，正在等待实际连接回执。可刷新核对状态，请勿重复提交。</p>}

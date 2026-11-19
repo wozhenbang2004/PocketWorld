@@ -277,6 +277,25 @@ MSVC SDK 或 GUI 可用。显式 `build-development` 通过相同检查后依次
 阶段目录给构建者检查，不接着跑、不覆盖；原始构建记录含实际构建时间，不承诺逐字节可重复。
 上游构建脚本不是系统网络沙箱；需要物理离线时由专用构建机提供。
 
+### 从本机候选中准备准确的待签文件
+
+已经生成过 `candidate.json`，不需要为了把文件交给有权限的发布者重跑编译。构建者在受控
+Windows x64 电脑选择原记录，另行提供已经核准的原 ZIP SHA-256 和源码提交：
+
+```powershell
+$select = @('--candidate','C:\BuildOutput\candidate-new\candidate.json',
+            '--expected-zip-sha256',$approvedCandidateZipSha256,'--source-commit',$productCommit)
+python -I -B .\companion\packaging\windows\prepare_signing_inputs.py check @select
+# 只有明确要另存这组材料时才运行（未占用的新目录）：
+python -I -B .\companion\packaging\windows\prepare_signing_inputs.py prepare @select --output C:\BuildOutput\ToPublisher
+```
+
+`check` 用同一个只读文件句柄核完整候选 ZIP、三份构建凭据以及每个待签成员的实际字节；
+不会打开程序或写目录。`prepare` 仅另出原 Companion、两个原驱动、四个原管理脚本，
+回核后附 `signing-request.json`。不含其他运行时、私有配置或证书。它是**签名前的材料**
+而不是签名完成凭据或可安装包；不会挑选证书、签名、上传或自行联系签名者。
+独立签名后，最终文件仍须由原正式打包器逐项验证，不能把此请求改名代替签名结果。
+
 ### 独立阶段与已签正式包
 
 | 组件 | 本实现固定版本与源码 | 事实源 |

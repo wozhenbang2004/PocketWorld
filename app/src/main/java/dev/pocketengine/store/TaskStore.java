@@ -10398,7 +10398,12 @@ public final class TaskStore {
         }StringBuilder hex=new StringBuilder();for(byte value:digest.digest())hex.append(String.format(java.util.Locale.ROOT,"%02x",value&255));return hex.toString();
     }
     public synchronized JSONArray teamAssignmentReceipts(JSONObject binding,String tool)throws Exception {
-        teamAssignmentIdentity(binding);JSONArray result=new JSONArray(),ops=get(binding.getString("taskId"),false).getJSONArray("operations");for(int i=0;i<ops.length();i++){JSONObject op=ops.getJSONObject(i);if((tool.equals(op.optString("tool"))||tool.equals("team_freeze_outputs")&&op.optString("tool").equals("team_import_remote_contribution"))&&op.optString("state").equals("receipt")&&op.optJSONObject("receipt")!=null){JSONObject receipt=tool.equals("team_freeze_outputs")?teamNativeArtifactReceipt(op):op.getJSONObject("receipt");if(receipt==null)continue;JSONObject draft=receipt.optJSONObject("teamDraft");int revision=draft==null?receipt.optInt("assignmentRevision",1):draft.optInt("assignmentRevision",1);if(revision==binding.optInt("assignmentRevision",1))result.put(new JSONObject(receipt.toString()));}}return result;
+        teamAssignmentIdentity(binding);JSONArray ops="team_freeze_outputs".equals(tool)?TeamFrozenArtifactLedger.original(db,binding.getString("taskId"),null,null)
+                :get(binding.getString("taskId"),false).getJSONArray("operations");
+        return matchingTeamAssignmentReceipts(binding,tool,ops);
+    }
+    private JSONArray matchingTeamAssignmentReceipts(JSONObject binding,String tool,JSONArray ops)throws Exception {
+        JSONArray result=new JSONArray();for(int i=0;i<ops.length();i++){JSONObject op=ops.getJSONObject(i);if((tool.equals(op.optString("tool"))||tool.equals("team_freeze_outputs")&&op.optString("tool").equals("team_import_remote_contribution"))&&op.optString("state").equals("receipt")&&op.optJSONObject("receipt")!=null){JSONObject receipt=tool.equals("team_freeze_outputs")?teamNativeArtifactReceipt(op):op.getJSONObject("receipt");if(receipt==null)continue;JSONObject draft=receipt.optJSONObject("teamDraft");int revision=draft==null?receipt.optInt("assignmentRevision",1):draft.optInt("assignmentRevision",1);if(revision==binding.optInt("assignmentRevision",1))result.put(new JSONObject(receipt.toString()));}}return result;
     }
     private static boolean teamHasPendingQuestion(JSONObject task)throws Exception {JSONArray rows=task.optJSONArray("teamQuestions");for(int i=0;rows!=null&&i<rows.length();i++)if(rows.getJSONObject(i).optString("state").equals("pending"))return true;return false;}
     public synchronized JSONObject askTeamAssignment(JSONObject binding,String operation,String question,RunControl original)throws Exception {
@@ -10434,19 +10439,44 @@ public final class TaskStore {
         if(status.equals("completed")&&frozen.length()==0)status="awaiting_user";return new JSONObject().put("assignmentId",call.assignmentId).put("memberId",call.memberId).put("teamRunId",call.teamRunId).put("taskId",call.assignmentId).put("runId",task.optString("runId")).put("status",status).put("message",task.optString("summary")).put("artifacts",artifacts).put("questions",task.optJSONArray("teamQuestions")==null?new JSONArray():task.getJSONArray("teamQuestions")).put("messages",task.optJSONArray("teamConversationInputs")==null?new JSONArray():task.getJSONArray("teamConversationInputs")).put("parentBudget",teamBudgetSnapshot(call.teamRunId)).put("businessVerified",false);
     }
     public synchronized JSONObject resolveTeamArtifact(String teamRunId,String assignmentId,String memberId,String taskId,String frozenRunId,String artifactId,RunControl readControl)throws Exception {
-        readControl.check();teamWriteTask(teamRunId);JSONObject task=get(taskId,false);if(task==null)throw new SecurityException("原成员任务不存在");requirePrivateOwner(task);JSONObject identity=task.getJSONObject("teamAssignment");if(!task.getJSONObject("origin").optString("kind").equals("team_assignment")||!taskId.equals(assignmentId)||!assignmentId.equals(identity.getString("assignmentId"))||!memberId.equals(identity.getString("memberId"))||!teamRunId.equals(identity.getString("teamRunId")))throw new SecurityException("原成果不属于所选成员分工");
+        readControl.check();teamWriteTask(teamRunId);JSONObject task=required(taskId);requirePrivateOwner(task);
+        requireFrozenAuthor(task,teamRunId,assignmentId,memberId,taskId);
+        return resolveOriginalTeamArtifact(task,taskId,frozenRunId,artifactId,readControl,TeamFrozenArtifactLedger.original(db,taskId,frozenRunId,readControl));
+    }
+    private void requireFrozenAuthor(JSONObject task,String teamRunId,String assignmentId,String memberId,String taskId)throws Exception {
+        JSONObject identity=task.getJSONObject("teamAssignment");if(!task.getJSONObject("origin").optString("kind").equals("team_assignment")||!taskId.equals(assignmentId)||!assignmentId.equals(identity.getString("assignmentId"))||!memberId.equals(identity.getString("memberId"))||!teamRunId.equals(identity.getString("teamRunId")))throw new SecurityException("原成果不属于所选成员分工");
         JSONObject origin=task.getJSONObject("origin");if(!teamRunId.equals(origin.getString("teamRunId"))||!assignmentId.equals(origin.getString("assignmentId"))||!memberId.equals(origin.getString("memberId")))throw new SecurityException("原成果的稳定来源与assignment冲突");
-        JSONObject found=null;JSONArray ops=task.getJSONArray("operations");for(int i=0;i<ops.length();i++){JSONObject op=ops.getJSONObject(i);if(!op.optString("state").equals("receipt")||!op.optString("tool").matches("team_freeze_outputs|team_import_remote_contribution")||!frozenRunId.equals(op.optString("runId")))continue;JSONObject receipt=teamNativeArtifactReceipt(op);JSONArray refs=receipt==null?null:receipt.optJSONArray("teamArtifacts");for(int j=0;refs!=null&&j<refs.length();j++){JSONObject ref=refs.getJSONObject(j);if(artifactId.equals(ref.optString("artifactId"))){for(String key:new String[]{"teamRunId","assignmentId","memberId","targetProjectId"})if(!identity.getString(key).equals(ref.getString(key)))throw new SecurityException("原成果收据的分工或项目冲突");if(!taskId.equals(ref.getString("taskId"))||!frozenRunId.equals(ref.getString("runId")))throw new SecurityException("原成果执行代次冲突");if(found!=null&&!canonical(found).equals(canonical(ref)))throw new SecurityException("原成果有多个冲突回执");found=new JSONObject(ref.toString());}}}
+        if(!taskId.equals(task.getString("id")))throw new SecurityException("冻结作者不是这次原任务");
+    }
+    // Shared by direct reads and the full original author directory. Do not replace duplicate or conflicting
+    // native freeze/import receipts with the most recent reference or a similarly named member.
+    private JSONObject resolveOriginalTeamArtifact(JSONObject task,String taskId,String frozenRunId,
+                                                    String artifactId,RunControl readControl,JSONArray ops)throws Exception{
+        readControl.check();JSONObject identity=task.getJSONObject("teamAssignment");
+        JSONObject found=null;for(int i=0;i<ops.length();i++){JSONObject op=ops.getJSONObject(i);if(!op.optString("state").equals("receipt")||!op.optString("tool").matches("team_freeze_outputs|team_import_remote_contribution")||!frozenRunId.equals(op.optString("runId")))continue;JSONObject receipt=teamNativeArtifactReceipt(op);JSONArray refs=receipt==null?null:receipt.optJSONArray("teamArtifacts");for(int j=0;refs!=null&&j<refs.length();j++){JSONObject ref=refs.getJSONObject(j);if(artifactId.equals(ref.optString("artifactId"))){for(String key:new String[]{"teamRunId","assignmentId","memberId","targetProjectId"})if(!identity.getString(key).equals(ref.getString(key)))throw new SecurityException("原成果收据的分工或项目冲突");if(!taskId.equals(ref.getString("taskId"))||!frozenRunId.equals(ref.getString("runId")))throw new SecurityException("原成果执行代次冲突");if(found!=null&&!canonical(found).equals(canonical(ref)))throw new SecurityException("原成果有多个冲突回执");found=new JSONObject(ref.toString());}}}
         readControl.check();if(found==null)throw new SecurityException("原成果尚未回到原成员TaskStore收据");return found;
     }
     public synchronized void checkTeamArtifact(JSONObject exactRef,RunControl readControl)throws Exception {JSONObject actual=resolveTeamArtifact(exactRef.getString("teamRunId"),exactRef.getString("assignmentId"),exactRef.getString("memberId"),exactRef.getString("taskId"),exactRef.getString("runId"),exactRef.getString("artifactId"),readControl);if(!canonical(actual).equals(canonical(exactRef)))throw new SecurityException("原成果收据身份已变化");}
     public synchronized JSONArray teamAssignmentsForReview(String teamRun,RunControl readControl)throws Exception {
         readControl.check();JSONObject team=teamWriteTask(teamRun);boolean workItems=team.optJSONObject("teamWorkPlan")!=null;JSONArray result=new JSONArray(),scope=workItems?team.getJSONObject("teamWorkPlan").getJSONArray("items"):team.getJSONObject("teamWriteScope").getJSONArray("assignments");
-        for(int member=0;member<scope.length();member++){String memberId=scope.getJSONObject(member).getString("memberId");JSONObject selected=null;
-            try(Cursor rows=TaskDocumentCursor.tasks(db,"SELECT task_id,document FROM tasks","SELECT task_id,task_id AS document FROM tasks",null,1)){while(rows.moveToNext()){JSONObject task=new JSONObject(rows.getString(1)),origin=task.optJSONObject("origin");if(origin!=null&&origin.optString("kind").equals("team_assignment")&&teamRun.equals(origin.optString("teamRunId"))&&memberId.equals(origin.optString("memberId"))&&(!workItems||scope.getJSONObject(member).getString("assignmentId").equals(rows.getString(0)))){if(selected!=null)throw new SecurityException("原成员有多个assignment，必须先核对");selected=get(rows.getString(0),false);}}}
-            if(selected==null){result.put(new JSONObject().put("memberId",memberId).put("assignmentId",workItems?scope.getJSONObject(member).getString("assignmentId"):"").put("taskId","").put("status","not_started").put("artifacts",new JSONArray()));continue;}
-            JSONObject binding=new JSONObject(selected.getJSONObject("teamAssignment").toString()).put("taskId",selected.getString("id"));teamAssignmentIdentity(binding);JSONArray frozen=teamAssignmentReceipts(binding,"team_freeze_outputs"),refs=new JSONArray();for(int i=0;i<frozen.length();i++)if(frozen.getJSONObject(i).optJSONArray("teamArtifacts")!=null)refs=frozen.getJSONObject(i).getJSONArray("teamArtifacts");JSONArray verified=new JSONArray();
-            for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);verified.put(resolveTeamArtifact(teamRun,binding.getString("assignmentId"),memberId,selected.getString("id"),ref.getString("runId"),ref.getString("artifactId"),readControl));}
+        for(int member=0;member<scope.length();member++){readControl.check();JSONObject item=scope.getJSONObject(member);String memberId=item.getString("memberId");JSONObject selected=null;
+            if(workItems){
+                // A formal plan stores the actual author task primary key. Do not scan or parse a different
+                // conversation (or hand the user another assignment for the same member).
+                String id=item.getString("assignmentId");selected=read(id);
+                if(selected!=null){requirePrivateOwner(selected);
+                    if(!id.equals(selected.opt("id"))||!team.getString("id").equals(selected.opt("parentTaskId"))||!dev.pocketengine.features.teams.TeamWorkItems.sameIdentity(item,selected.getJSONObject("teamAssignment")))
+                        throw new SecurityException("原工作项或父团队已换代，没有读取其他分工");}
+            }else{
+                // Older non-work-item scopes carry only a member ID; retain their exact uniqueness check.
+                try(Cursor rows=TaskDocumentCursor.tasks(db,"SELECT task_id,document FROM tasks","SELECT task_id,task_id AS document FROM tasks",null,1)){while(rows.moveToNext()){JSONObject task=new JSONObject(rows.getString(1)),origin=task.optJSONObject("origin");if(origin!=null&&origin.optString("kind").equals("team_assignment")&&teamRun.equals(origin.optString("teamRunId"))&&memberId.equals(origin.optString("memberId"))){if(selected!=null)throw new SecurityException("原成员有多个assignment，必须先核对");selected=get(rows.getString(0),false);}}}
+            }
+            if(selected==null){result.put(new JSONObject().put("memberId",memberId).put("assignmentId",workItems?item.getString("assignmentId"):"").put("taskId","").put("status","not_started").put("artifacts",new JSONArray()));continue;}
+            String taskId=selected.getString("id");JSONObject binding=new JSONObject(selected.getJSONObject("teamAssignment").toString()).put("taskId",taskId);
+            teamAssignmentIdentity(binding);requireFrozenAuthor(selected,teamRun,binding.getString("assignmentId"),memberId,taskId);
+            JSONArray journal=TeamFrozenArtifactLedger.original(db,taskId,null,readControl),frozen=matchingTeamAssignmentReceipts(binding,"team_freeze_outputs",journal),refs=new JSONArray();
+            for(int i=0;i<frozen.length();i++)if(frozen.getJSONObject(i).optJSONArray("teamArtifacts")!=null)refs=frozen.getJSONObject(i).getJSONArray("teamArtifacts");JSONArray verified=new JSONArray();
+            for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);verified.put(resolveOriginalTeamArtifact(selected,taskId,ref.getString("runId"),ref.getString("artifactId"),readControl,journal));}
             result.put(new JSONObject().put("memberId",memberId).put("assignmentId",binding.getString("assignmentId")).put("taskId",selected.getString("id")).put("status",selected.getString("status")).put("artifacts",verified));
         }readControl.check();return result;
     }
@@ -10619,6 +10649,15 @@ public final class TaskStore {
             String finding=proof.optString("findings");if(!finding.isBlank()&&finding.length()<=4000)result.put("findings",finding);
         }
         return result;
+    }
+    public synchronized JSONObject ownerBlockedTeamReviewFinding(String run,String hash,RunControl reader)throws Exception{
+        reader.check();JSONObject team=teamWriteTask(run),ind=team.optJSONObject("teamIndependentReview");
+        if(team.has("teamOutputReview")||ind==null||!hash.equals(ind.opt("planHash"))||!ind.optString("verdict").matches("changes_requested|inconclusive"))return null;
+        JSONObject child=read(dev.pocketengine.features.teams.TeamDeliveryWorkers.taskId(run,"reviewer",hash));
+        if(!dev.pocketengine.features.teams.TeamDeliveryWorkers.original(child,run,team.getString("id"),"reviewer",hash))return null;
+        requireSettledFirstProjectTask(child); // exact completed SQL epoch, no unresolved effects or still-running execution
+        JSONObject found=dev.pocketengine.features.teams.TeamOwnerBlockedReview.read(team,child,teamVersionReviewForOwner(run,hash,reader),run,hash);
+        reader.check();return found;
     }
     private void checkTeamReviewCurrent(JSONObject binding)throws Exception {
         JSONArray assignments=teamAssignmentsForReview(binding.getString("teamRunId"),new RunControl()),current=new JSONArray();

@@ -32,7 +32,14 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         val reader = RunControl()
         @Volatile var captured: TeamOwnerFileReading? = null
             private set
-        @Synchronized fun install(value: TeamOwnerFileReading) { reader.check(); check(owner.live); captured = value }
+        private var findingSource: String? = null
+        @Synchronized fun install(value: TeamOwnerFileReading, decision: JSONObject) {
+            reader.check(); check(owner.live); captured = value
+            findingSource = if(decision.opt("state")=="independent_finding") decision.getJSONObject("originalReviewer").toString() else null
+        }
+        @Synchronized fun originalFinding(): JSONObject {
+            reader.check(); check(owner.live && captured!=null); return JSONObject(checkNotNull(findingSource) { "没有与这份文件匹配的独审原件" })
+        }
         private var approval: TaskStoreTeamWriteHost.TextOutputApproval? = null
         private var token: String? = null
         @Synchronized fun offer(exact: TaskStoreTeamWriteHost.TextOutputApproval): String {
@@ -44,7 +51,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             token = null; return requireNotNull(approval)
         }
         @Synchronized fun discard(value: String) { if (token == value) { approval?.close(); approval = null; token = null } }
-        @Synchronized override fun close() { reader.cancel(); captured = null; approval?.close(); approval = null; token = null }
+        @Synchronized override fun close() { reader.cancel(); captured = null; findingSource = null; approval?.close(); approval = null; token = null }
     }
     private var fileWindow: FileWindow? = null
     private class Reading(val kind: String, val original: String, val projectRun: Boolean) {
@@ -122,8 +129,18 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     }
     fun finalPackageExportSnapshot(): JSONObject? = readings.values.lastOrNull()?.takeIf { it.live && it.kind == "run" }?.finalPackageKey?.let(controller.projectPackages::teamExportSnapshot)
     fun retainsRunReading(handle: String): Boolean = readings[handle]?.kind == "run"
+    fun retainsDeliverySource(view: String, file: String): Boolean {
+        val owner=readings[view]?.takeIf { it.kind=="run" && it.live } ?: return false
+        return file.isEmpty() || fileWindow?.let { it.owner===owner && it.handle==file && !it.reader.isCancelled }==true
+    }
     fun taskForDeliveryNavigation(args: JSONObject): JSONObject {
         check(controller.webPrivateOwnerVisible()) { "请回到私人团队原记录" }
+        if(args.has("fileHandle")){
+            fields(args,"viewHandle","fileHandle")
+            val view=text(args,"viewHandle");val file=text(args,"fileHandle")
+            check(file.isNotBlank() && retainsDeliverySource(view,file)) { "原文件阅读已关闭" }
+            return checkNotNull(fileWindow).originalFinding()
+        }
         fields(args,"viewHandle","taskId","runId","epoch")
         val captured = readings[text(args,"viewHandle")]?.takeIf { it.kind == "run" && it.live } ?: error("原团队阅读已关闭")
         val directory = captured.deliveryWorkers?.let { JSONObject(it) } ?: error("请先读取原交付进展")
@@ -731,7 +748,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         controller.nativeTokenBudgetHost().tasks.requireProjectTeamFirstReturn(projectSource,runId,files.reader)
                         index.put("projectReviewOrigin",projectMark)
                     }
-                    files.install(result); index.put("fileHandle",files.handle).put("ownerDecision",decision).put("fullProject",owner.projectRun)
+                    files.install(result,decision); index.put("fileHandle",files.handle).put("ownerDecision",decision).put("fullProject",owner.projectRun)
                 }, accept = { result ->
                     check(fileWindow === files && owner.live && files.captured != null) { "原成果阅读已关闭" }
                     deliver(result,null)

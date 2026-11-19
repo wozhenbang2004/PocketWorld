@@ -544,7 +544,13 @@ public final class EngineApplication extends Application implements dev.pocketen
         admission.checkCurrent();if(admission.kind()!=dev.pocketengine.features.devices.DeviceExecutionAdmission.Kind.GOAL||!admission.executionMode().matches("capabilities|main_screen|background"))throw new SecurityException("设备目标执行位置必须属于原本机批准范围");
         pendingDeviceGoals.putIfAbsent(id,admission);
         JSONObject policy=tasks.deviceTasks().goalModelPolicy(admission);
-        if(policy==null){tasks.status(id,"awaiting_user","已接受原目标；请B主人首次明确选择本机模型和预算，后续可按原生策略自动准入");pushTask(id);return;}
+        if(policy==null){
+            if(!tasks.deviceTasks().noteFirstPickupWait(id,admission,dev.pocketengine.store.TaskStoreDeviceTasks.FirstPickupWait.OWNER_MODEL)){
+                pendingDeviceGoals.remove(id,admission);
+                throw new IllegalStateException("原目标已变化，不能标作等待机主接手");
+            }
+            pushTask(id);return;
+        }
         JSONObject reference=policy.getJSONObject("modelBinding");ModelConfig metadata=settings.apiMetadataForPricing(reference.getString("connectionId"),policy.getString("model"));
         if(metadata==null)throw new SecurityException("B原模型策略的API连接不可用；没有改用默认模型");ModelConfig captured=settings.currentForCaptured(metadata);
         startApprovedDeviceGoal(tasks.deviceTasks().authorizeGoalModelPolicy(id,admission,captured));
@@ -616,6 +622,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             pendingDeviceGoals.remove(id,admission);pushTask(id);
         }catch(Exception unavailable){
             original.cancel();
+            if(task!=null)pendingDeviceGoals.remove(id,admission); // A registered attempt cannot return to the never-started inbox.
             try{if(task!=null)tasks.endAttempt(id,task.getString("runId"),"interrupted","原设备目标未能接手；未换身份或重提目标",new JSONObject());}
             finally{
                 if(original.hasHostRun())tasks.deviceTasks().release(original.hostRunIdentity().runId(),original);

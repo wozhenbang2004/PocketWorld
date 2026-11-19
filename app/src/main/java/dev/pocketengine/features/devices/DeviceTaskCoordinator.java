@@ -38,10 +38,21 @@ public final class DeviceTaskCoordinator {
             if (admission.kind() == DeviceExecutionAdmission.Kind.DEVICE_TOOLS) host.acceptTools(accepted.getString("localTaskId"), admission);
             else host.acceptGoal(accepted.getString("localTaskId"), admission);
         } catch (Exception dependency) {
-            tasks.status(accepted.getString("localTaskId"), "awaiting_user", "原设备请求已持久接受，但本机运行条件尚未满足；请在本机核对，未新建或重提操作");
-            accepted.put("status", "waiting_dependency").put("executionStarted", false);
+            try { devices.noteFirstPickupWait(accepted.getString("localTaskId"), admission, TaskStoreDeviceTasks.FirstPickupWait.LOCAL_DEPENDENCY); }
+            catch (Exception noLongerVerifiable) { /* Acceptance is already durable. Never reinterpret it as a retry or a non-start. */ }
+            return firstAcceptanceFacts(accepted);
         }
-        return accepted;
+        // A normal goal can already be awaiting the owner's model, running or interrupted.
+        // The outer receipt reads the current lifecycle from SQL, not the pre-host snapshot.
+        return admission.kind()==DeviceExecutionAdmission.Kind.GOAL ? firstAcceptanceFacts(accepted) : accepted;
+    }
+
+    private static JSONObject firstAcceptanceFacts(JSONObject accepted) throws Exception {
+        JSONObject facts = new JSONObject();
+        for (String key : new String[]{"accepted","knownOperation","operationId","argumentsDigest","localTaskId","acceptedAt",
+                "origin","executionKind","budget"})
+            facts.put(key, accepted.get(key));
+        return facts.put("nextAction","read_original_task");
     }
     public JSONObject operation(PairingCoordinator.Permission permission) throws Exception {
         permission.checkCurrent(System.currentTimeMillis());

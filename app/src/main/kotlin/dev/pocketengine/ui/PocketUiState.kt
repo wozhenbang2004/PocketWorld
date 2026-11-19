@@ -8,7 +8,7 @@ internal data class UiAttachmentOpen(val checking: Boolean = false, val requeste
 internal data class UiConversation(val id: String, val title: String, val updatedAt: Long)
 internal data class UiProject(val id: String, val name: String)
 internal data class UiFile(val path: String, val version: Int)
-internal data class UiFileRevision(val version: Int, val at: Long, val characters: Int, val deleted: Boolean)
+internal data class UiFileRevision(val version: Int, val at: Long, val characters: Int, val deleted: Boolean, val original:FormalHistoryPin?=null)
 internal data class UiLaunchApp(val packageName: String, val label: String)
 internal data class UiTask(
     val id: String,

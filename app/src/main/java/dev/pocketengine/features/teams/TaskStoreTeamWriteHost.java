@@ -329,6 +329,8 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         reader.check();if(!shown.hasCompleteTextComparison())return new JSONObject().put("state","read_only");
         try{
             JSONObject facts=tasks.firstLocalTeamOutputDecision(shown.team(),shown.plan(),reader);
+            if("independent_review_required".equals(facts.opt("state"))){JSONObject finding=tasks.ownerBlockedTeamReviewFinding(shown.team(),shown.plan(),reader);
+                if(finding!=null)return finding;}
             JSONObject display=new JSONObject().put("state",facts.getString("state"));if(facts.has("reviewId"))display.put("reviewId",facts.getString("reviewId"));
             if(TeamFirstProjectReview.registrationOnly(facts))display.put("registrationKind",TeamFirstProjectReview.REGISTRATION).put("separateIntegratorStartRequired",true);return display;
         }catch(Exception notLocal){

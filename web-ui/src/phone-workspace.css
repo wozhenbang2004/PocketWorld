@@ -84,6 +84,9 @@
 .pw-background-progress li[data-complete="true"] { color: var(--pw-copy,#555); }
 .pw-background-status-actions { display: flex; gap: var(--pw-gap-control,12px); flex-wrap: wrap; margin-bottom: 12px; }
 .pw-background-status-actions button { min-height: 48px; font-size: 13px; }
+.pw-background-owned-work { display: grid; gap: 2px; min-width: 0; margin-bottom: var(--pw-gap-content, 12px); }
+.pw-background-owned-work button { min-height: 44px; width: 100%; text-align: start; }
+.pw-background-owned-label { flex: 1; min-width: 0; text-align: start; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .pw-background-workspace > .pw-field-error, .pw-background-workspace > .pw-field-hint { margin-block: 8px; }
 .pw-secondary-refactor .pw-background-tabs { gap: 12px; margin-top: 0; }
 .pw-background-tabs > div:first-child { align-self: flex-start; max-width: 100%; padding: 3px; border-radius: 14px; background: var(--pw-inset); }

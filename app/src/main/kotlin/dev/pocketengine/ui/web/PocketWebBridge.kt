@@ -283,6 +283,7 @@ internal class PocketWebBridge(
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
             PocketWebProjectReviewReturn.DIRECTORY, PocketWebProjectReviewReturn.ORIGINAL, "tasks.refresh", "tasks.open", "tasks.close", "tasks.recoverTeamFile", "tasks.teamRemainder.read", "tasks.teamRemainder.close", "tasks.teamRemainder.continue", "tasks.stop", "tasks.review", "tasks.confirm", "tasks.approve", "tasks.resolve", "tasks.resume", "tasks.scope", "tasks.plan.enter", "tasks.answerQuestion", "tasks.answerQuestionChoice", "tasks.deleteScreenshot", "privacy.screenshots.read", "privacy.screenshots.save",
             "projects.refresh", "projects.select", "projects.create", "projects.open", "projects.newFile", "projects.edit", "projects.save", "projects.close", "projects.history", "projects.revision", "projects.useRevision", "projects.retry",
+            "projects.historyComparison",
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
@@ -498,6 +499,12 @@ internal class PocketWebBridge(
             ownsRequest = true
             retiredWorkspaceCleanup(action, args)?.let { result ->
                 complete(id, result, null)
+                return
+            }
+            if (action == "projects.historyComparison") {
+                checkedPayload(args, setOf("projectId","path","version","versions"));requireFile(args)
+                require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到这个正式项目文件再比较" }
+                complete(id, dev.pocketengine.ui.originalHistoryComparison(controller.state.fileHistory,requiredString(args,"projectId"),checkedPath(args),requiredInt(args,"version"),requiredString(args,"versions")),null,retainValue=false)
                 return
             }
             if (action in PocketWebWorkSearch.COMMANDS) {
@@ -1154,9 +1161,9 @@ internal class PocketWebBridge(
             }
             if (action == "teams.openDeliveryWorker") {
                 requireSection("teams")
-                val handle=requiredString(args,"viewHandle"); val source=teamPages.taskForDeliveryNavigation(args)
+                val handle=requiredString(args,"viewHandle");val file=args.optString("fileHandle"); val source=teamPages.taskForDeliveryNavigation(args)
                 openOriginalTask(id,source.getString("taskId"),true,"teams",expectedRunId=source.getString("runId"),expectedEpoch=source.getInt("epoch"),
-                    sourceWindowCurrent={ section=="teams" && taskViewId==null && controller.webPrivateOwnerVisible() && teamPages.retainsRunReading(handle) },
+                    sourceWindowCurrent={ section=="teams" && taskViewId==null && controller.webPrivateOwnerVisible() && teamPages.retainsDeliverySource(handle,file) },
                     checkReaderInput={ task -> require(dev.pocketengine.features.teams.TeamDeliveryWorkers.sameAttempt(source,task.raw)) { "原执行或冻结计划已改变，没有打开替代任务" } })
                 return
             }

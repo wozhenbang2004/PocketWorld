@@ -778,6 +778,46 @@ public final class TaskStoreDeviceTasks {
             } }
         }
     }
+    public enum FirstPickupWait { OWNER_MODEL, LOCAL_DEPENDENCY }
+
+    /** The receiver already committed the original request. A host exception is not
+     * evidence that its task never ran; only the first, untouched native SQL row may wait. */
+    public boolean noteFirstPickupWait(String id, DeviceExecutionAdmission admission, FirstPickupWait reason) throws Exception {
+        java.util.Objects.requireNonNull(reason);
+        DeviceTaskEnvelope request=admission.request();
+        if (!id.equals(DeviceProtocol.receiverTaskId(request)) ||
+                reason==FirstPickupWait.OWNER_MODEL && admission.kind()!=DeviceExecutionAdmission.Kind.GOAL) return false;
+        String remote=remoteOperation(request), digest=request.argumentsDigest().isEmpty()
+                ? TaskStore.capabilityFingerprint(request.json()):request.argumentsDigest();
+        synchronized(owner) {
+            db.beginTransaction();
+            try {
+                JSONObject current=task(id); requireDevice(current); requireSameSession(current,admission);
+                JSONObject scope=current.getJSONObject("deviceExecutionScope");
+                if (!"queued".equals(current.getString("status")) || current.getBoolean("cancelRequested")
+                        || !current.optString("runId").isEmpty() || current.getInt("coordinatorEpoch")!=0
+                        || scope.getLong("toolsUsed")!=0 || scope.getLong("modelCallsUsed")!=0) return false;
+                String sql="SELECT 1 FROM device_inbound src WHERE src.caller_device_id=? AND src.remote_operation_id=? "
+                        +"AND src.local_task_id=? AND src.method=? AND src.grant_id=? AND src.authorization_epoch=? AND src.arguments_digest=? "
+                        +"AND src.local_operation_id IS NULL AND NOT EXISTS(SELECT 1 FROM runs WHERE task_id=src.local_task_id) "
+                        +"AND NOT EXISTS(SELECT 1 FROM operations WHERE task_id=src.local_task_id) "
+                        +"AND NOT EXISTS(SELECT 1 FROM device_inbound other WHERE other.local_task_id=src.local_task_id "
+                        +"AND (other.remote_operation_id<>src.remote_operation_id OR other.caller_device_id<>src.caller_device_id))";
+                try (Cursor row=db.rawQuery(sql,new String[]{request.callerDeviceId(),remote,id,request.method(),request.grantId(),
+                        Long.toString(request.authorizationEpoch()),digest})) {
+                    if (!row.moveToFirst()) return false;
+                }
+                current.put("status","awaiting_user");
+                if (reason==FirstPickupWait.LOCAL_DEPENDENCY)
+                    current.put("deviceFirstPickupDependency",true).put("summary","原设备请求已接受；本机运行条件尚未满足，未启动或重提。");
+                else {
+                    current.remove("deviceFirstPickupDependency");
+                    current.put("summary","已接受原目标；请本机机主核对模型和预算。");
+                }
+                access.write(current); db.setTransactionSuccessful(); return true;
+            } finally { db.endTransaction(); }
+        }
+    }
     private void requireSameSession(JSONObject task, DeviceExecutionAdmission admission) throws Exception {
         JSONObject original = task.getJSONObject("origin"), current = admission.origin(), scope = task.getJSONObject("deviceExecutionScope");
         for (String key : new String[]{"originDeviceId", "callerDeviceId", "targetDeviceId", "grantId", "authorizationEpoch", "rootTaskId", "remoteLocalTaskId"})
@@ -866,7 +906,7 @@ public final class TaskStoreDeviceTasks {
                 JSONObject current = task(id); requireDevice(current); requireSameSession(current, admission);
                 if (original == null || original.hasHostRun() || original.isCancelled() || original.isPaused()) throw new SecurityException("需要新的原生控制器");
                 if (admission.kind()==DeviceExecutionAdmission.Kind.GOAL&&localOwnerModel==null)throw new SecurityException("外来PairGrant不等于B本机owner模型准入");
-                if (!(current.optString("status").equals("queued")||localOwnerModel!=null&&current.optString("status").equals("awaiting_user")) || !current.optString("runId").isEmpty() || owner.hasUnresolved(id))
+                if (current.optBoolean("cancelRequested") || !(current.optString("status").equals("queued")||localOwnerModel!=null&&current.optString("status").equals("awaiting_user")) || !current.optString("runId").isEmpty() || owner.hasUnresolved(id))
                     throw new SecurityException("原设备任务只能首次准入；恢复必须先核对旧执行");
                 JSONObject scope = current.getJSONObject("deviceExecutionScope"); long now = System.currentTimeMillis(), expires = scope.getLong("deadline");
                 if (expires <= now || admission.kind()==DeviceExecutionAdmission.Kind.DEVICE_TOOLS&&scope.getInt("toolLimit")<1 || admission.kind() == DeviceExecutionAdmission.Kind.GOAL && scope.getInt("modelCallLimit") < 1)
@@ -1395,6 +1435,8 @@ public final class TaskStoreDeviceTasks {
     }
     public static String wireState(JSONObject task) {
         if (task.optBoolean("cancelRequested") && !task.optString("status").equals("cancelled")) return "cancel_requested";
+        if ("awaiting_user".equals(task.optString("status")) && task.optBoolean("deviceFirstPickupDependency")
+                && task.optString("runId").isEmpty() && task.optInt("coordinatorEpoch")==0) return "waiting_dependency";
         return switch (task.optString("status")) {
             case "queued" -> "accepted"; case "preparing" -> "waiting_resource"; case "completed" -> "succeeded";
             case "reconciling", "needs_confirmation" -> "needs_reconcile"; case "stopping" -> "cancel_requested";

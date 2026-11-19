@@ -5433,7 +5433,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     result.optString("id").takeIf { it.isNotBlank() }?.let(::selectProject)
                 }
                 "list" -> if (meta.second.optString("projectId") == state.projectId) state = state.copy(files = result.optJSONArray("files").objects().map { UiFile(it.optString("path"), it.optInt("version")) })
-                "history" -> if (requestId == historyRequestId) state = state.copy(fileHistory = result.optJSONArray("history").objects().map { UiFileRevision(it.optInt("version"), it.optLong("at"), it.optInt("characters"), it.optBoolean("deleted")) }.sortedByDescending { it.version })
+                "history" -> if (requestId == historyRequestId && meta.second.optString("projectId") == state.projectId && meta.second.optString("path") == state.filePath) {
+                    val project = meta.second.getString("projectId"); val path = meta.second.getString("path")
+                    val items = result.optJSONArray("history").objects()
+                    state = state.copy(fileHistory = if (items.size > 8) emptyList() else items.map { row ->
+                        UiFileRevision(row.optInt("version"), row.optLong("at"), row.optInt("characters"), row.optBoolean("deleted"), FormalHistoryPin.from(row, project, path))
+                    }.sortedByDescending { it.version })
+                }
                 "read", "write" -> if (meta.second.optString("projectId") == state.projectId && meta.second.optString("path") == state.filePath) {
                     val historyRead = requestId == revisionRequestId
                     if (!historyRead && requestId != fileRequestId) return

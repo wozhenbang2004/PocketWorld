@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import {FormalHistoryComparison} from './FormalHistoryComparison';
 import { Accordion, AccordionItem, Button } from './forms-library';
 
 type Row = Record<string, any>;
@@ -37,6 +38,7 @@ export function ProjectFormalReadOnly({state,draft,can,retry,history,revision}:{
       {hasCurrent&&can('projects.history')&&<Button variant="ghost" onClick={()=>{setSelected(null);setShowHistory(true);history()}}>查看版本记录</Button>}
     </div>
     {showHistory&&<section aria-label="只读版本记录">
+      <FormalHistoryComparison version={state.fileVersion} rows={state.fileHistory} project={state.projectId} path={state.filePath}/>
       {(Array.isArray(state.fileHistory)?state.fileHistory:[]).map((row:Row)=><Button key={row.version} variant="ghost"
         disabled={!can('projects.revision')||row.deleted===true} onClick={()=>{setSelected(row.version);revision(row.version)}}>版本 {row.version}{row.deleted?' · 已删除':''}</Button>)}
       {state.revisionLoading&&selected===state.revisionNumber?<p role="status">正在读取所选正式版本…</p>:shown?<><FileObservation value={past}/>

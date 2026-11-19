@@ -189,7 +189,7 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
                         it.put("readHandle", pin(session, "memory-record", JSONObject().put("record", it).put("subjectId", subject)))
                     }
                     val groups = JSONArray()
-                    rows(value.optJSONArray("pendingConflicts")).groupBy { it.getJSONObject("assertion").let { assertion -> assertion.optString("predicate") + "\u0000" + assertion.optString("condition") } }.values.forEach { group ->
+                    rows(value.optJSONArray("pendingConflicts")).groupBy(::conflictGroup).values.forEach { group ->
                         val original = JSONObject().put("subjectId", subject).put("records", JSONArray(group.map { copy(it).apply { remove("readHandle") } }))
                         groups.put(JSONObject().put("records", original.getJSONArray("records")).put("conflictHandle", pin(session, "conflict", original)))
                     }
@@ -212,10 +212,10 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
             "memoryHistory.conflict.review" -> {
                 fields(args, "conflictHandle", "decision", "selectedId", "reason"); val (session, original) = selected(args, "conflictHandle", "conflict")
                 val decision = text(args, "decision"); require(decision in setOf("replace", "coexist")); val chosen = text(args, "selectedId", empty = decision == "coexist")
-                val originals = rows(original.getJSONArray("records")); require(decision == "coexist" || originals.any { it.getString("id") == chosen })
+                val originals = rows(original.getJSONArray("records")); require(if (decision == "coexist") chosen.isEmpty() && originals.size >= 2 else originals.count { it.getString("id") == chosen } == 1) { "须选择一个确切版本，或明确选择至少两条并存" }
                 val payload = JSONObject().put("records", JSONArray(originals.map { JSONObject().put("id", it.getString("id")).put("revision", it.getLong("revision")) }))
                     .put("decision", decision).put("selectedId", if (decision == "coexist") "" else chosen).put("reason", text(args, "reason", 1000).trim())
-                conflictCurrent(session, original, done) { done(JSONObject().put("reviewHandle", pin(session, "memory-review", JSONObject().put("conflict", original).put("command", "resolveAssertionConflictReviewed").put("payload", payload))).put("operation", "conflict").put("beforeRecords", original.getJSONArray("records")).put("decision", decision).put("selectedId", chosen).put("reason", payload.getString("reason")).put("executionAuthorized", false), null) }
+                conflictCurrent(session, original, done) { done(JSONObject().put("reviewHandle", pin(session, "memory-review", JSONObject().put("conflict", original).put("command", "resolveAssertionConflictReviewed").put("payload", payload))).put("operation", "conflict").put("beforeRecords", original.getJSONArray("records")).put("decision", payload.getString("decision")).put("selectedId", payload.getString("selectedId")).put("reason", payload.getString("reason")).put("executionAuthorized", false), null) }
             }
             "memoryHistory.confirm" -> {
                 fields(args, "reviewHandle"); val (session, review) = selected(args, "reviewHandle", "memory-review", consume = true)
@@ -330,11 +330,21 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
             else -> error("未接入的原来源操作")
         }
     }
+    // Match the Book's owner / space / subject / predicate / condition tuple, not labels or iteration order.
+    private fun conflictGroup(row: JSONObject): List<String> = row.getJSONObject("assertion").let { a ->
+        listOf(row.getString("ownerId"), row.getString("spaceId"), a.getString("subjectId"), a.getString("predicate"), a.getString("condition"))
+    }
     private fun conflictCurrent(session: Session, original: JSONObject, done: (JSONObject?, String?) -> Unit, next: () -> Unit) {
         call(session, "cognitionProjection", JSONObject().put("subjectId", original.getString("subjectId")), { value, error ->
             if (value == null) done(null, error) else try {
-                val live = rows(value.optJSONArray("pendingConflicts"))
-                for (row in rows(original.getJSONArray("records"))) check(live.any { MemoryLearningReviewGuard.sameReview(row, it) }) { "原冲突版本已变化，请重新读取整组" }
+                val frozen = rows(original.getJSONArray("records")); check(frozen.isNotEmpty())
+                val key = conflictGroup(frozen.first()); val live = rows(value.getJSONArray("pendingConflicts")).filter { conflictGroup(it) == key }
+                check(value.getString("subjectId") == original.getString("subjectId") && key[2] == original.getString("subjectId") &&
+                    frozen.all { conflictGroup(it) == key } && frozen.map { it.getString("id") }.toSet().size == frozen.size &&
+                    live.size == frozen.size && frozen.all { before -> live.count { now -> MemoryLearningReviewGuard.sameReview(before, now) &&
+                        before.optString("reviewRole") == now.optString("reviewRole") && before.getString("assertionStatus") == now.getString("assertionStatus") } == 1 }) {
+                    "这一组的成员、版本或当前状态已变化，请重新读取整组"
+                }
                 next()
             } catch (failure: Exception) { done(null, failure.message) }
         })
