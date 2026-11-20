@@ -3029,8 +3029,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun openBrowserResearch() { native("openBrowserResearch") }
     fun openBrowserResearch(taskId: String) { native("openBrowserResearch", JSONObject().put("taskId", taskId)) }
     fun pickAttachments(projectId: String? = null) { activity.pickAttachments(null, projectId) }
-    internal fun attachmentImportContextUnavailable() { state = state.copy(error = "原文件选择上下文无法恢复；不会改用当前任务或项目，也不会自动重新选择。请先核对附件库和原入口") }
-    internal fun attachmentImportSelectionEnded(cancelled: Boolean) { state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
+    internal fun attachmentImportContextUnavailable() { attachmentOutcomes.libraryImportContextUnavailable(); state = state.copy(error = "原文件选择上下文无法恢复；不会改用当前任务或项目，也不会自动重新选择。请先核对附件库和原入口") }
+    internal fun attachmentImportSelectionEnded(cancelled: Boolean, original: OwnerAttachmentImport.Target? = null) { attachmentOutcomes.libraryImportSelectionEnded(original,cancelled); state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
     internal fun attachmentImportPickerStatus(status: AttachmentImportPicker.Launch) {
         state = when (status) {
             AttachmentImportPicker.Launch.REQUESTED -> state.copy(notice = null, error = null)
@@ -3043,6 +3043,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun importAttachments(intent: Intent, original: OwnerAttachmentImport.Target?) {
         if (closed) return
         val received = Intent(intent)
+        attachmentOutcomes.libraryImportSelected(original)
         state = state.copy(attachmentImporting = true, notice = null, error = null)
         try { io.execute {
             try {
@@ -3053,13 +3054,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 main.post {
                     if (!closed) {
                         state = state.copy(attachmentImporting = false, notice = receipt.notice, error = receipt.error)
-                        attachmentOutcomes.imported()
+                        attachmentOutcomes.imported(original,receipt)
                     }
                 }
                 // A display-refresh failure cannot turn already saved bytes into an import failure.
                 runCatching { app.features.sendState() }
-            } catch (error: Exception) { main.post { if (!closed) state = state.copy(attachmentImporting = false, error = "附件接收结果未完整确认，可能已有文件保留在附件库；未自动重试，请先核对附件库和原任务") } }
+            } catch (error: Exception) { main.post { if (!closed) { attachmentOutcomes.libraryImportUnconfirmed(original); state = state.copy(attachmentImporting = false, error = "附件接收结果未完整确认，可能已有文件保留在附件库；未自动重试，请先核对附件库和原任务") } } }
         } } catch (rejected: java.util.concurrent.RejectedExecutionException) {
+            attachmentOutcomes.libraryImportUnconfirmed(original)
             state = state.copy(attachmentImporting = false, error = "本次附件尚未开始接收，请返回原入口重新选择")
         }
     }

@@ -26,6 +26,7 @@ export type ButlerHomeProps = {
   onTryLocal?: () => void;
   stagingLocal?: boolean;
   modelSetup: ReactNode;
+  firstHostSave?: { hint: string; disabled: boolean; busy: boolean; save: () => void };
   composer: ReactNode;
   preparations?: (visible: ButlerHomeTask[]) => ReactNode;
   moreWork?: boolean;
@@ -57,7 +58,7 @@ function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresenta
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, stagingLocal=false, modelSetup, composer, preparations, phoneActivity, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, stagingLocal=false, modelSetup, firstHostSave, composer, preparations, phoneActivity, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -261,7 +262,9 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
     </li>;
   };
   const modelConnection = ready && !modelReady && !localDisplayDraft && !stagingLocal && <div className="pw-butler-model-setup">
-    {modelSetup}<p>{onTryLocal?'需要写作或研究时再连接。':'可以先写好草稿，连接后再发送。'}</p>
+    {modelSetup}{firstHostSave&&<Button variant="ghost" size="small" disabled={firstHostSave.disabled} aria-busy={firstHostSave.busy||undefined}
+      aria-description={firstHostSave.hint} onClick={firstHostSave.save}>{firstHostSave.busy?'正在保存原话…':'仅保存到本机'}</Button>}
+    <p>{firstHostSave?.hint||(onTryLocal?'需要写作或研究时再连接。':'可以先写好草稿，连接后再发送。')}</p>
   </div>;
 
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>

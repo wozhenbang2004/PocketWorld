@@ -3,8 +3,13 @@ const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 
 /** Delivery is read from the original queue/assignment, never inferred from a send animation. */
 export function teamMessageDelivery(run: Data, row: Data): string {
-  if (row.kind === 'assignment_question') return ({ pending: '等待回答原问题', answered: '回答已保存，尚未确认消费',
-    consumed: '原执行已确认消费回答', answered_historical: '回答仅保留历史，没有唤醒旧任务' } as Record<string, string>)[row.state] || '原问题状态待核对';
+  if (row.kind === 'assignment_question') return ({ pending: '等待回答原问题', answered: '回答已保存 · 尚未确认成员收到',
+    consumed: '原执行已确认收到回答 · 不代表采用', answered_historical: '回答仅保留历史，没有唤醒旧任务' } as Record<string, string>)[row.state] || '原问题状态待核对';
+  if (run.mode === 'collaborate' && researchConversation(run) && isDirectedNote(row) && rows(run.members)
+    .some(member => member?.id === row.recipientMemberId && (member.runner || 'model') === 'model')) {
+    const receipt = teamSupplementReceipt(run, row);
+    return receipt ? (receipt.round ? `第 ${receipt.round} 阶段 · ` : '') + receipt.status : '原收件回执待核对';
+  }
   const id = row.deliveryId || row.peerMessageId || row.messageId;
   if (!id) return '';
   const assignments = run.workPlan ? rows(run.workPlan.items).map(item => item.assignmentTask) : rows(run.members).map(member => member.assignmentTask);
@@ -23,46 +28,80 @@ export function teamMessageDelivery(run: Data, row: Data): string {
     pending: '已定向排队，尚未进入模型', unread: '已定向排队，尚未进入模型' } as Record<string, string>)[letter?.status] || '';
 }
 
-export type TeamDirectedSupplement = {
-  key: string; memberId: string; round: number; text: string; status: string;
-};
+export type TeamDirectedSupplement = { key: string; messageId: string; memberId: string; round?: number; title: string; status: string };
 
 const messageId = (value: unknown): value is string => typeof value === 'string' &&
   /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
+const researchRound = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 1 && Number(n) <= 6;
+const researchConversation = (run: Data) => ['collaborate','debate'].includes(run.mode) &&
+  run.researchExecutionFormat === 'pocketworld.team-research-agent.v1' && !run.workPlan && !run.productionScope;
+const isDirectedNote = (row: Data) => row?.kind === 'conversation' && ['parent_model','user'].includes(row.role) &&
+  ['discussion','queue'].includes(row.mode) && typeof row.recipientMemberId === 'string' && !!row.recipientMemberId && row.recipientMemberId !== '*';
 
-/** One visible parent note joined to its exact native recipient, planned phase
- * and input receipt. No new inbox read, child selection or dispatch. */
-export function teamDirectedSupplement(run: Data, messages: unknown, memberId: string, parentTaskId: string): TeamDirectedSupplement | null {
-  if (run.researchExecutionFormat !== 'pocketworld.team-research-agent.v1' || run.workPlan ||
-      !['collaborate','debate'].includes(run.mode) || !messageId(parentTaskId)) return null;
-  const member = rows(run.members).filter(row => row?.id === memberId);
-  if (member.length !== 1 || member[0].exited) return null;
+/** Join the visible message to the original read-only mailbox. A queue's
+ * aggregate status alone is not a receipt for this member or model input. */
+export function teamSupplementReceipt(run: Data, row: Data): TeamDirectedSupplement | null {
+  if (!researchConversation(run) || !isDirectedNote(row) || !messageId(row.messageId) || row.deliveryId !== row.messageId) return null;
+  const id = row.messageId, memberId = row.recipientMemberId, parent = row.senderParentTaskId || '';
+  if (row.memberId !== memberId || (row.role === 'parent_model' ? !messageId(parent) : !!parent)) return null;
+  const members = rows(run.members).filter(m => m?.id === memberId), letters = rows(run.inbox).filter(m => m?.id === id);
+  if (members.length !== 1 || (members[0].runner || 'model') !== 'model' || letters.length !== 1 ||
+    rows(run.mailbox).some(m => m?.id === id)) return null;
+  const [member] = members, [letter] = letters, round = row.researchRound, child = letter.researchTaskId;
+  if (letter.targetMemberId !== memberId || letter.mode !== row.mode || (letter.senderParentTaskId || '') !== parent ||
+      (letter.quoteMessageId || '') !== (row.quoteMessageId || '') || letter.researchRound !== round ||
+      (round != null && (!parent || !researchRound(round))) || (child != null && (!researchRound(round) || !messageId(child))) ||
+      typeof row.content !== 'string' || typeof letter.text !== 'string' || row.content !== letter.text) return null;
+  const receipt = (status: string, atRound: number | undefined = round): TeamDirectedSupplement => ({
+    key: JSON.stringify([run.id, memberId, id, parent, row.mode, round ?? null]), messageId: id, memberId, round: atRound,
+    title: parent ? '管家补充' : row.mode === 'discussion' ? '你的讨论' : '你的补充', status,
+  });
+  const attempts = rows(letter.deliveries).filter(d => d?.memberId === memberId && researchRound(d.round) &&
+    (round == null || d.round === round) && (!child || d.researchTaskId === child) && messageId(d.turnId) &&
+    messageId(d.researchTaskId) && Number.isSafeInteger(d.generation) && d.generation >= 0);
+  const acknowledged = attempts.filter(d => d.state === 'consumed');
+  const byMember = Array.isArray(letter.consumedBy) && letter.consumedBy.includes(memberId);
+  // A later pause, exit or revision cannot undo this original receipt. It
+  // proves receipt at that turn, not that a replacement used it or adopted it.
+  if (acknowledged.length === 1 && byMember)
+    return receipt('原成员已确认收到 · 不代表采用', acknowledged[0].round);
+  if (letter.status === 'historical')
+    return receipt(letter.notDeliveredReason === 'member_exited' ? '成员已退出 · 仅留原记录' : '仅留原记录 · 未核对到收到');
+  if (run.status === 'cancelled') return receipt('协作已停止 · 保留原消息，未核对到收到');
+  if (member.exited) return receipt('成员已退出 · 保留原消息，未核对到收到');
+  const stages = rows(member.roundStates);
+  const phase = (r: number) => stages.find(s => s?.round === r && stages.filter(other => other?.round === r).length === 1);
+  const pinned = researchRound(round) ? phase(round) : undefined;
+  if (pinned && child && pinned.researchTaskId !== child) return receipt('原阶段已换版 · 不算新版收到');
+  if (pinned && ['completed','cancelled','failed','exited'].includes(pinned.status))
+    return receipt('原阶段已结束 · 未核对到收到');
+  if (['completed','failed'].includes(run.status)) return receipt('原协作已结束 · 未核对到收到');
+  if (run.status === 'partial') return receipt('保留原消息 · 当前未核对到收到');
+  const selected = attempts.filter(d => {
+    const stage = phase(d.round);
+    return d.state === 'claimed' && stage?.researchTaskId === d.researchTaskId && stage?.turnId === d.turnId &&
+      stage?.generation === d.generation && member.generation === d.generation &&
+      stage?.status === 'running' && !member.paused && run.status === 'running';
+  });
+  if (selected.length === 1 && !byMember) return receipt('已选入原输入 · 尚未确认收到', selected[0].round);
+  if (!byMember && !acknowledged.length && ['pending','queued','unread'].includes(letter.status)) {
+    if (member.paused === true || member.status === 'paused') return receipt('已保存 · 原成员已暂停，尚未确认收到');
+    if (run.status === 'paused') return receipt('已保存 · 协作当前暂停，尚未确认收到');
+    if (member.status === 'interrupted' || run.status === 'interrupted') return receipt('已保存 · 原执行已中断，尚未确认收到');
+    return receipt(researchRound(round) ? '已排队 · 等原阶段处理' : '已排队 · 等原成员处理');
+  }
+  return receipt('已保存 · 是否收到待核对');
+}
+
+export function teamDirectedSupplement(run: Data, messages: unknown, memberId: string, parentTaskId?: string): TeamDirectedSupplement | null {
+  if (!researchConversation(run)) return null;
   const original = rows(messages);
-  const latest = [...original].reverse().find(row => row?.kind === 'conversation' && row.role === 'parent_model' &&
-    row.senderParentTaskId === parentTaskId && row.recipientMemberId === memberId && row.mode === 'queue');
-  // No replacement with an older, superficially similar note.
-  if (!latest || !messageId(latest.messageId) || latest.deliveryId !== latest.messageId ||
-      !Number.isSafeInteger(latest.researchRound) || latest.researchRound < 1 || latest.researchRound > 6 ||
-      typeof latest.content !== 'string' || !latest.content.trim() || latest.truncated === true ||
+  const latest = original.filter(row => isDirectedNote(row) && row.recipientMemberId === memberId && (run.mode === 'collaborate' ||
+    row.role === 'parent_model' && row.mode === 'queue' && researchRound(row.researchRound))).at(-1);
+  // Never substitute an older note when the latest one cannot be verified.
+  if (!latest || latest.role === 'parent_model' && latest.senderParentTaskId !== parentTaskId ||
       original.filter(row => row?.messageId === latest.messageId).length !== 1) return null;
-  const round = latest.researchRound;
-  const phase = rows(member[0].roundStates).filter(row => row?.round === round);
-  const matches = rows(run.inbox).filter(row => row?.id === latest.messageId);
-  if (phase.length !== 1 || matches.length !== 1) return null;
-  const letter = matches[0], child = letter.researchTaskId;
-  if (letter.targetMemberId !== memberId || letter.senderParentTaskId !== parentTaskId ||
-      letter.mode !== 'queue' || letter.researchRound !== round || letter.text !== latest.content ||
-      (child != null && (!messageId(child) || child !== phase[0].researchTaskId))) return null;
-  const selected = child ? rows(letter.deliveries).filter(row => row?.memberId === memberId && row.round === round &&
-    row.researchTaskId === child && messageId(row.turnId)) : [];
-  const consumed = Array.isArray(letter.consumedBy) && letter.consumedBy.includes(memberId) && selected.some(row => row.state === 'consumed');
-  const status = consumed ? '原执行已读到，是否采用看答复' :
-    letter.status === 'historical' ? '仅留原记录，没有重新安排' :
-    selected.some(row => row.state === 'claimed') ? '已纳入这阶段输入，尚未确认收到' :
-    ['completed','cancelled','failed','interrupted'].includes(phase[0].status) ? '这阶段已结束，未核对到收到' :
-    !child && ['queued','waiting_dependency'].includes(phase[0].status) ? '已保存，等待这阶段开始' :
-    '已保存，是否收到待核对';
-  return { key: JSON.stringify([run.id, memberId, round, latest.messageId]), memberId, round, text: latest.content, status };
+  return teamSupplementReceipt(run, latest);
 }
 
 export type AnswerDelivery = 'save' | 'continue' | 'continue_saved';

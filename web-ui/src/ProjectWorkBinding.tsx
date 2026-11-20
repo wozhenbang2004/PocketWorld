@@ -14,12 +14,34 @@ function guide(value: any, project: string, checkout: string, digest?: string): 
     typeof value.runtimeReady === 'boolean' && Array.isArray(value.observedTools) && value.observedTools.every((v: unknown) => typeof v === 'string') &&
     Array.isArray(value.kinds) && value.kinds.every((v: unknown) => typeof v === 'string' && Object.hasOwn(labels, v));
 }
+function checkoutToolFacts(source: Data | null, project: string, checkout: string): Data | null {
+  const facts=source?.checkoutTooling;
+  return source?.projectId===project && source?.checkoutId===checkout && sha(source.sourceDigest) &&
+    guide(facts,project,checkout,source.sourceDigest) ? facts : null;
+}
+// The native hint also marks browser-side .js files as Node-like. A root
+// index with no package manifest is not evidence of a Node dependency.
+const plainStatic = (facts: Data) => facts.manager===null && facts.kinds.includes('static') &&
+  facts.kinds.every((kind:string)=>kind==='static'||kind==='node');
 export function checkoutKindSummary(source: Data | null, project: string, checkout: string): string | null {
-  const value = source?.checkoutTooling;
-  if (!source || !sha(source.sourceDigest) || !guide(value, project, checkout, source.sourceDigest) || !value.kinds.length) return null;
+  const value=checkoutToolFacts(source,project,checkout);
+  if(!value?.kinds.length)return null;
+  if(plainStatic(value))return '静态网页 · 编辑不需要 Node.js';
   return value.kinds.map((kind: string) => labels[kind]).join('、') + (['npm', 'pnpm'].includes(value.manager) ? ' · 候选 ' + value.manager : '');
 }
+type FirstWebTools = {kind:'static'} | {kind:'node';manager:'npm'|'pnpm';missing:string[];runtimeReady:boolean};
+/** A fresh selected-copy observation, never eligibility or permission to execute. */
+export function checkoutFirstWebTools(source:Data|null,project:string,checkout:string):FirstWebTools|null {
+  const facts=checkoutToolFacts(source,project,checkout);
+  if(!facts)return null;
+  if(plainStatic(facts))return {kind:'static'};
+  if(source?.existingNodeBuild!==true||!facts.kinds.includes('node')||!(facts.manager==='npm'||facts.manager==='pnpm'))return null;
+  return {kind:'node',manager:facts.manager,runtimeReady:facts.runtimeReady,
+    missing:['node',facts.manager].filter(tool=>!facts.observedTools.includes(tool))};
+}
 function ToolObservation({ facts }: { facts: Data }) {
+  if(plainStatic(facts))return <><div><dt>副本内容</dt><dd>根目录有 index.html。</dd></div>
+    <div><dt>本机工具</dt><dd>可直接编辑这份静态网页，不需要先准备 Node.js。识别到入口不代表已经构建或登记预览。</dd></div></>;
   const kinds: string[] = facts.kinds, relevant = new Set<string>();
   if (kinds.includes('node')) { relevant.add('node'); if (facts.manager === 'npm' || facts.manager === 'pnpm') relevant.add(facts.manager); }
   if (kinds.includes('python')) { relevant.add('python3'); relevant.add('sh'); }
@@ -37,9 +59,8 @@ function ToolObservation({ facts }: { facts: Data }) {
 
 /** The selected checkout observation is not a plan, grant or proof that an artifact exists. */
 export function CheckoutGuide({ source, projectId, checkoutId }: { source: Data; projectId: string; checkoutId: string }) {
-  const facts = source.checkoutTooling;
-  return <>{source.projectId === projectId && source.checkoutId === checkoutId && sha(source.sourceDigest) && guide(facts, projectId, checkoutId, source.sourceDigest)
-    ? <ToolObservation facts={facts}/> : <div><dt>本机工具</dt><dd>没有取得这份副本的工具观察，具体命令须另外核对。</dd></div>}
+  const facts=checkoutToolFacts(source,projectId,checkoutId);
+  return <>{facts ? <ToolObservation facts={facts}/> : <div><dt>本机工具</dt><dd>没有取得这份副本的工具观察，具体命令须另外核对。</dd></div>}
     <div><dt>成果去向</dt><dd>{destination}</dd></div></>;
 }
 

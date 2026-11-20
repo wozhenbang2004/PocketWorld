@@ -19,7 +19,7 @@ import java.util.concurrent.Executors
 
 /** Original native decoders supply bounded content to the same React document. No file URI or network route is exposed. */
 internal class PocketWebOriginalFiles(private val context: Context, private val visible: () -> Boolean, private val changed: () -> Unit) {
-    private companion object {
+    companion object {
         val office = setOf("docx", "xlsx", "pptx")
         val officeMime = setOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -29,13 +29,18 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             "html", "htm", "css", "js", "ts", "tsx", "jsx", "py", "java", "kt", "sql", "ini", "toml", "properties")
         val binaryNames = setOf("zip", "7z", "rar", "gz", "tar", "bin", "doc", "xls", "ppt")
         val packageNames = setOf("apk", "apks", "apkm", "xapk", "aab")
-        fun packageFile(source: OwnerFilePreviewSource) = source.mimeType == "application/vnd.android.package-archive" ||
-            source.name.substringAfterLast('.', "").lowercase() in packageNames
+        private fun packageFile(name:String,mime:String) = mime == "application/vnd.android.package-archive" ||
+            name.substringAfterLast('.', "").lowercase() in packageNames
+        fun packageFile(source: OwnerFilePreviewSource) = packageFile(source.name,source.mimeType)
 
-        fun declaredKind(source: OwnerFilePreviewSource): String {
-            val mime = source.mimeType; val extension = source.name.substringAfterLast('.', "").lowercase()
+        fun declaredKind(source: OwnerFilePreviewSource) = declaredKind(source.name,source.mimeType,source.tombstone)
+        /** A catalog affordance, not a successful decode or a grant; the viewer still verifies actual bytes. */
+        fun libraryDocument(row:JSONObject)=row.optString("role")=="source"&&row.optString("availability")=="available"&&
+            declaredKind(row.optString("name"),row.optString("mimeType"),false) in setOf("pdf","office","text")
+        private fun declaredKind(name:String,mime:String,tombstone:Boolean): String {
+            val extension = name.substringAfterLast('.', "").lowercase()
             return when {
-                source.tombstone || packageFile(source) -> "unsupported"
+                tombstone || packageFile(name,mime) -> "unsupported"
                 mime == "application/pdf" -> "pdf"
                 mime.startsWith("image/") -> "image"
                 mime.startsWith("audio/") -> "audio"

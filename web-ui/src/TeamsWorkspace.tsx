@@ -7,7 +7,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchFiel
 import { AIAnswer, PressButton, ProgressBar } from './library';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
-import { teamAnswerOutcome, teamDirectedSupplement, teamMessageConfirmed, teamMessageDelivery, teamMessageRecorded, type AnswerDelivery, type TeamDirectedSupplement } from './team-message';
+import { teamAnswerOutcome, teamDirectedSupplement, teamMessageConfirmed, teamMessageDelivery, teamMessageRecorded, teamSupplementReceipt, type AnswerDelivery, type TeamDirectedSupplement } from './team-message';
 import { teamResearchRecords, teamResearchReplyExecution, type TeamResearchRecord } from './team-research';
 import { teamPhoneChoice, teamPhoneDevice, teamPhoneScopeLabel, teamPhoneSelections, teamPhoneTargetKey, teamPhoneTargetLabel, type TeamPhoneChoice } from './team-phone';
 import { TeamHarnessFields } from './TeamHarnessFields';
@@ -45,6 +45,7 @@ import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 type PendingMessage = { id: string; memberId: string; runId: string; key: string; text: string; questionId: string; assignmentId: string };
+type AnswerReceipt = Pick<PendingMessage, 'id' | 'runId' | 'memberId' | 'assignmentId' | 'questionId'> & { detail: string };
 type TeamTab = 'runs' | 'teams';
 type RunSection = 'progress' | 'result' | 'details';
 type EditorPurpose = 'start' | 'definition';
@@ -94,6 +95,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const messageDraftId = useRef('');
   const submittingAnswer = useRef(false); // Reserve both choices before the asynchronous draft write.
   const unverifiedSavedContinuation = useRef(new Set<string>());
+  const [answerReceipt, setAnswerReceipt] = useState<AnswerReceipt | null>(null);
   const [draftCatalogChecked, setDraftCatalogChecked] = useState(false), [messageChecked, setMessageChecked] = useState(false);
   const startDraftId = useRef('');
   const [catalog, setCatalog] = useState<Data>({}), [tab, setTab] = useState<TeamTab>('runs');
@@ -252,7 +254,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   useEffect(() => {
     if (!composeOpen) return;
-    const frame = requestAnimationFrame(() => root.current?.querySelector<HTMLTextAreaElement>('.pw-team-compose textarea')?.focus());
+    const frame = requestAnimationFrame(() => root.current?.querySelector<HTMLTextAreaElement>('.pw-team-compose textarea:not(:read-only):not(:disabled)')?.focus());
     return () => cancelAnimationFrame(frame);
   }, [composeOpen, replyId]);
   const acceptCatalog = (value: Data) => {
@@ -494,17 +496,36 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (materialsActive && section !== runSection && materialBeforeLeave.current) materialBeforeLeave.current(select);
     else select();
   };
-  const focusMessage = (id: string) => {
+  const focusMessage = (id: string, recipientId = '') => {
+    const runId = current?.id;
     chooseRunSection('details', () => {
+      if (document.hidden || !ownsNativeWindow() || currentReading.current?.run?.id !== runId) return;
       revealDetail('conversation');
-      chooseMemberFilter('');
-      requestAnimationFrame(() => { const target = root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`); target?.focus({ preventScroll: true }); target?.scrollIntoView({ block: 'center' }); });
+      chooseMemberFilter(recipientId);
+      requestAnimationFrame(() => {
+        if (document.hidden || !ownsNativeWindow() || currentReading.current?.run?.id !== runId) return;
+        const targets = root.current?.querySelectorAll<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
+        const target = targets?.length === 1 ? targets[0] : undefined;
+        if (!target || target.closest('[hidden],[inert]')) {
+          if (recipientId) setNotice('这条原消息当前不可定位，没有转到另一条。');
+          return;
+        }
+        target.focus({ preventScroll: true }); target.scrollIntoView({ block: 'center' });
+      });
     });
   };
   const hasWorkPlan = !!current?.workPlan;
   const reply = messages.find(message => message.messageId === replyId);
   const replyCanReceive = !reply || reply.kind !== 'assignment_question' || isCurrentQuestion(reply);
   const draftKey = `${current?.id || ''}:${recipient}:${replyId}:${mode}`, text = drafts[draftKey] || '';
+  const currentDraft = messageDraftId.current === draftKey && !messageDraft.loading;
+  const draftNeedsRecheck = (currentDraft && messageDraft.requiresRecheck) || uncertain?.key === draftKey;
+  const draftOnly = currentDraft && !!text.trim() && !draftNeedsRecheck && !submittingAnswer.current;
+  const latestAnswer = reply?.kind === 'assignment_question' && answerReceipt?.runId === current?.id &&
+    answerReceipt?.questionId === reply.questionId && answerReceipt?.memberId === reply.memberId &&
+    answerReceipt?.assignmentId === reply.assignmentId ? answerReceipt : null;
+  const latestAnswerMessageId = latestAnswer && reply && reply.answerId === latestAnswer.id && reply.answer && !isCurrentQuestion(reply)
+    ? label(reply.messageId) : '';
   useEffect(() => {
     if (!current?.id || !recipient || !composeOpen) return;
     messageDraftId.current = '';
@@ -567,10 +588,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const mayAnswer = !!reading && !!current && canMutate && reply?.kind === 'assignment_question' && replyCanReceive
     && recipient === reply.memberId && mode === 'discussion' && !!reply.assignmentId && !!reply.questionId && members.some(member => member.id === recipient && !member.exited)
     && !messageDraft.loading && !messageDraft.conflict && !messageDraft.requiresRecheck && messageDraftId.current === draftKey && !!text.trim() && text.length <= 4000;
-  const acceptAnswer = (result: Data, original: Pick<PendingMessage, 'id' | 'runId' | 'memberId' | 'assignmentId' | 'questionId'>, delivery: AnswerDelivery) => {
+  const acceptAnswer = (result: Data, original: Omit<AnswerReceipt, 'detail'>, delivery: AnswerDelivery) => {
     if (!teamMessageConfirmed(result, original)) throw new Error('原回答回执尚待核对，请刷新原记录。');
     if (result.reading?.run?.id === original.runId) acceptReading(result.reading);
-    setNotice(teamAnswerOutcome(result.result, delivery) + (result.reading?.run?.id === original.runId ? '' : ' 请刷新原记录。'));
+    const detail = teamAnswerOutcome(result.result, delivery) + (result.reading?.run?.id === original.runId ? '' : ' 请刷新原记录。');
+    setAnswerReceipt({ ...original, detail });
+    setNotice(detail);
   };
   const send = async (delivery: 'save' | 'continue') => {
     if (!mayAnswer || !reading || !reply || submittingAnswer.current || entered.current || backgrounded.current || !ownsNativeWindow()) return;
@@ -790,17 +813,18 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const partialResult = runSection === 'result' && reading?.viewHandle && ownerWorkLink?.currentRun !== false &&
     deliveries.some(source => canOpenMemberResult || source.answer && openReading) ? teamPartialReading(current, followUps) : null;
   const rememberSourcesOpened = (id: string) => setShownMemberSources(shown => shown[id] ? shown : { ...shown, [id]: true });
-  const openMemberSupplement = (item: TeamDirectedSupplement, trigger: HTMLButtonElement) => {
+  const openMemberSupplement = (item: TeamDirectedSupplement) => {
     const original = currentReading.current, link = original?.ownerWorkLink;
-    if (!openReading || !canRead || materialBusy || document.hidden || !ownsNativeWindow() || original?.kind !== 'run' ||
-        original.viewHandle !== reading?.viewHandle || link?.readOnly !== true || link.currentRun !== true ||
-        link.teamRunId !== original.run?.id) return;
-    const same = teamDirectedSupplement(original.run, original.messages, item.memberId, link.taskId);
-    if (!same || same.key !== item.key || same.text !== item.text) {
+    if (!canRead || materialBusy || document.hidden || !ownsNativeWindow() || original?.kind !== 'run' ||
+        original.viewHandle !== reading?.viewHandle) return;
+    const rowsForId = rows(original.messages).filter(row => row?.messageId === item.messageId);
+    const row = rowsForId.length === 1 ? rowsForId[0] : null;
+    const same = row && (row.role !== 'parent_model' || link?.readOnly === true && link?.teamRunId === original.run.id &&
+      link?.taskId === row.senderParentTaskId) ? teamSupplementReceipt(original.run, row) : null;
+    if (!same || same.key !== item.key || same.memberId !== item.memberId) {
       setNotice('这条补充已变化，没有打开另一条。'); return;
     }
-    setResultSource(null);
-    openReading({kind:'message',title:'给' + name(same.memberId) + '的第 ' + same.round + ' 阶段补充',text:same.text,returnFocus:trigger});
+    focusMessage(same.messageId, same.memberId);
   };
   const openMemberAnswer=(item:TeamResearchDelivery,trigger:HTMLButtonElement)=>{
     const original=currentReading.current;
@@ -1076,8 +1100,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             const model = memberModelLabel(member), progress = teamMemberProgress(current, member, followUps, true);
             const researchMember = !hasWorkPlan && current.researchExecutionFormat === 'pocketworld.team-research-agent.v1' && (member.runner || 'model') === 'model';
             const observed = researchMember && reading?.viewHandle ? teamResearchReplyExecution(current.id, member, reading.researchAnswerRoutes) : null;
-            const supplement = !hasWorkPlan && ownerWorkLink?.readOnly === true && ownerWorkLink.currentRun === true &&
-              ownerWorkLink.teamRunId === current.id ? teamDirectedSupplement(current, messages, member.id, ownerWorkLink.taskId) : null;
+            const supplement = !hasWorkPlan && reading?.viewHandle ? teamDirectedSupplement(current, messages, member.id,
+              ownerWorkLink?.readOnly === true && ownerWorkLink.teamRunId === current.id ? ownerWorkLink.taskId : undefined) : null;
             const memberRound = hasWorkPlan ? undefined : rows(member.roundStates).find(round => round.round === member.round && round.generation === member.generation);
             const memberTaskId = member.phoneTask?.taskId || (!hasWorkPlan ? member.assignmentTask?.taskId : undefined);
             const outputMessage = [...messages].reverse().find(message => message.memberId === member.id && ['answer', 'work_item_completed'].includes(message.kind) && message.content === member.text);
@@ -1122,10 +1146,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                 })}
               </ul>}
               {supplement && <div className="pw-team-supplement-receipt">
-                <div><strong>管家补充 · 第 {supplement.round} 阶段</strong><span>{supplement.status}</span></div>
-                {openReading && <Button variant="ghost" size="small" trailingIcon={IconChevronRight} disabled={!canRead || materialBusy}
-                  aria-label={'查看给' + name(member.id) + '的第 ' + supplement.round + ' 阶段补充'}
-                  onClick={event => openMemberSupplement(supplement, event.currentTarget)}>查看这条</Button>}
+                <div><strong>{supplement.title}{supplement.round ? ` · 第 ${supplement.round} 阶段` : ''}</strong><span>{supplement.status}</span></div>
+                <Button variant="ghost" size="small" trailingIcon={IconChevronRight} disabled={!canRead || materialBusy}
+                  aria-label={`查看给${name(member.id)}的这条${supplement.title === '你的讨论' ? '讨论' : '补充'}`}
+                  onClick={() => openMemberSupplement(supplement)}>查看原消息</Button>
               </div>}
               {memberRound?.message && <p className="pw-team-member-receipt">{memberRound.message}</p>}
               {memberRound?.nativeErrorMessage && <p className="pw-team-member-error">{memberRound.nativeErrorMessage}</p>}
@@ -1234,20 +1258,24 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             <AccordionItem id="conversation" title="沟通记录" description={`${messages.length} 条已读取记录`}>
               <div className="pw-team-conversation-body">
 
-      <Accordion variant="divided" className="pw-team-compose-disclosure" expandedKeys={composeOpen || !!uncertain ? ['team-compose'] : []} onExpandedChange={keys => setComposeOpen(keys.has('team-compose'))}><AccordionItem id="team-compose" title={reply?.kind === 'assignment_question' ? '回答原问题' : '旧消息草稿'} description={reply ? '保留原问题与收件成员' : text ? '有未发送内容' : '查看以前未发出的补充'}>
+      <Accordion variant="divided" className="pw-team-compose-disclosure" expandedKeys={composeOpen || !!uncertain ? ['team-compose'] : []} onExpandedChange={keys => setComposeOpen(keys.has('team-compose'))}><AccordionItem id="team-compose" title={reply?.kind === 'assignment_question' ? '回答原问题' : '本机消息草稿'} description={draftNeedsRecheck ? '提交结果待核对' : reply ? '保留原问题与收件成员' : draftOnly ? '仅在草稿里，未发送' : '查看以往的草稿'}>
       <section className="pw-team-compose" data-team-section="compose" aria-label="原问题与消息草稿">
-      {reply && <div className="pw-team-reply-context"><header><span>{reply.kind === 'assignment_question' ? '回答原问题' : '引用原消息'} · {teamMessageIdentity(reply, members) ? <TeamMemberIdentity member={teamMessageIdentity(reply, members)!} name={teamMessageAuthor(reply, members)} size={24} /> : teamMessageAuthor(reply, members)}</span><Button variant="ghost" disabled={busy || !!uncertain} onClick={() => setReplyId('')}>查看其他草稿</Button></header><p className="pw-team-quote-excerpt">{String(reply.content || '').slice(0, 360)}{String(reply.content || '').length > 360 ? '…' : ''}</p><Button variant="ghost" onClick={() => focusMessage(reply.messageId)}>查看完整原消息</Button></div>}
+      {reply && <div className="pw-team-reply-context"><header><span>{reply.kind === 'assignment_question' ? '回答原问题' : '引用原消息'} · {teamMessageIdentity(reply, members) ? <TeamMemberIdentity member={teamMessageIdentity(reply, members)!} name={teamMessageAuthor(reply, members)} size={24} /> : teamMessageAuthor(reply, members)}</span><Button variant="ghost" disabled={busy || !!uncertain} onClick={() => messageDraft.guard(() => setReplyId(''))}>查看其他草稿</Button></header><p className="pw-team-quote-excerpt">{String(reply.content || '').slice(0, 360)}{String(reply.content || '').length > 360 ? '…' : ''}</p><Button variant="ghost" onClick={() => focusMessage(reply.messageId)}>查看完整原消息</Button></div>}
       <SelectField label="收件成员" value={recipient} options={[{ id: '*', label: '全队的旧草稿' }, ...members.map(member => ({ id: member.id, label: name(member.id) + (member.exited ? ' · 已退出' : member.id === current.leaderId ? ' · ' + teamRoleLabel(current) : '') }))]} onChange={value => messageDraft.guard(() => setRecipient(value))} isDisabled={busy || !!uncertain || reply?.kind === 'assignment_question'} />
       {reply?.kind !== 'assignment_question' && <>
         <SelectField label="原消息用途" value={mode} options={[{ id: 'discussion', label: '讨论补充' }, { id: 'queue', label: '补充下一工作点' }, { id: 'feedback', label: '调整要求' }]} onChange={changeMessageMode} isDisabled={busy || !!uncertain} />
         <SelectField label="草稿引用的原消息" value={replyId} options={[{ id: '', label: '未引用消息' }, ...messages.map(message => ({ id: message.messageId, label: `${teamMessageAuthor(message, members)} · ${teamGoalTitle(message.content, '原消息')}` }))]} onChange={value => messageDraft.guard(() => { const original = messages.find(message => message.messageId === value); setReplyId(value); if (original?.kind === 'assignment_question') { setRecipient(original.memberId); setMode('discussion'); } })} isDisabled={busy || !!uncertain} />
         <p className="pw-field-hint">旧草稿保留供核对。新的要求在原工作里交给管家，原问题仍在这里逐条回答。</p>
-        {canSupplementParent && onOpenWork && <Button variant="secondary" disabled={busy || materialBusy || messageDraft.requiresRecheck || !!uncertain} onClick={() => openOwnerWork('supplement')}>回原工作补充</Button>}
+        {!ordinaryAnswers && canSupplementParent && onOpenWork && <Button variant="secondary" disabled={busy || materialBusy || messageDraft.requiresRecheck || !!uncertain} onClick={() => openOwnerWork('supplement')}>回原工作补充</Button>}
       </>}
-      {!replyCanReceive && <p className="pw-team-reading-notice" role="status">这条原问题已不再等待回答，已有草稿保留供核对。</p>}
+      {!replyCanReceive && !latestAnswer && <p className="pw-team-reading-notice" role="status">这条原问题已不再等待回答，未发送草稿仍可核对。</p>}
       {current.status === 'cancelled' && <p className="pw-team-reading-notice" role="status">协作已停止后续派发，消息与未发送草稿可继续查看。</p>}
-      <FormDraftNotice draft={messageDraft} />{messageDraft.requiresRecheck && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { void invoke('teams.readRun', { runId: current.id }, value => { if (value.reading?.run?.id !== current.id) throw new Error('原协作身份不匹配'); acceptReading(value.reading); setMessageChecked(true); }); }}>读取原消息核对结果</Button><Button variant="secondary" disabled={busy || !messageChecked || !!uncertain} onClick={() => { messageDraft.clearSubmitted(); setMessageChecked(false); }}>已核对原消息，继续编辑</Button></div>}
-      <TextAreaField label={reply?.kind === 'assignment_question' ? '回答这条原问题' : '以前未发送的内容'} value={text} onChange={value => setDrafts(old => ({ ...old, [draftKey]: value }))} maxLength={4000} showCount isReadOnly={reply?.kind !== 'assignment_question'} isDisabled={reply?.kind === 'assignment_question' && (!canMutate || !replyCanReceive) || messageDraft.loading} hint={reply?.kind === 'assignment_question' ? '只保存不会启动成员；选择继续，只会请求这名成员沿用原分工和剩余额度。' : '查看草稿不会发送消息或启动工作。'} />
+      <FormDraftNotice draft={messageDraft} />{messageDraft.requiresRecheck && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { void invoke('teams.readRun', { runId: current.id }, value => { if (value.reading?.run?.id !== current.id) throw new Error('原协作身份不匹配'); acceptReading(value.reading); setMessageChecked(true); }); }}>读取原消息核对结果</Button><Button variant="secondary" disabled={busy || !messageChecked || !!uncertain} onClick={() => { messageDraft.clearSubmitted(); setMessageChecked(false); }}>已核对原记录</Button></div>}
+      <TextAreaField label={reply?.kind === 'assignment_question' ? '回答这条原问题' : '本机草稿内容'} value={text} onChange={value => setDrafts(old => ({ ...old, [draftKey]: value }))} maxLength={4000} showCount isReadOnly={reply?.kind !== 'assignment_question'} isDisabled={reply?.kind === 'assignment_question' && (!canMutate || !replyCanReceive) || messageDraft.loading} hint={reply?.kind === 'assignment_question' ? '只保存不会启动成员；选择继续，只会请求这名成员沿用原分工和剩余额度。' : '查看草稿不会发送消息或启动工作。'} />
+      {draftOnly && <p className="pw-field-hint">这份草稿尚未提交。</p>}
+      {latestAnswer && <div className="pw-team-answer-receipt"><p className="pw-field-hint">刚才的操作：{latestAnswer.detail}</p>
+        {latestAnswerMessageId && <Button variant="ghost" size="small" trailingIcon={IconChevronRight} disabled={!canRead || materialBusy}
+          onClick={() => focusMessage(latestAnswerMessageId, latestAnswer.memberId)}>查看原问题和已保存回答</Button>}</div>}
       {reply?.kind === 'assignment_question' && replyCanReceive && <div className="pw-form-actions"><PressButton label="回答并继续原分工" disabled={!mayAnswer} onClick={() => { void send('continue'); }} /><Button variant="secondary" disabled={!mayAnswer} onClick={() => { void send('save'); }}>只保存回答</Button></div>}
       {mode !== 'feedback' && !replyId && recipientPending > 0 && <div className="pw-form-actions"><p className="pw-field-hint">{name(recipient)}有 {recipientPending} 条已排队消息尚未确认消费。{recipientMember && !pendingMessageBusy(recipientMember) ? '继续只使用已保存的消息，不提交当前草稿或追加额度。' : '成员正在工作或等待授权，消息保留在原队列。'}</p>{recipientMember && !pendingMessageBusy(recipientMember) && <Button variant="secondary" disabled={!canMutate} onClick={() => control('continueMessages', recipient)}>使用已排队消息继续</Button>}</div>}
       {uncertain && <p role="status">这条原消息仍待核对，草稿保留，不会重复发送。刷新原记录后仍可暂停或停止团队。</p>}
@@ -1256,17 +1284,29 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
 
           <div className="pw-team-member-filter" aria-label="按成员查看沟通"><Button variant="ghost" aria-pressed={!memberFilter} onClick={() => chooseMemberFilter('')}>全队</Button>{members.map(member => <Button key={member.id} variant="ghost" aria-pressed={memberFilter === member.id} onClick={() => chooseMemberFilter(member.id)}><TeamMemberIdentity member={member} name={name(member.id)} size={28} /></Button>)}</div>
           <p className="pw-team-conversation-hint">{memberFilter ? `只看与 ${name(memberFilter)} 有关的共享记录。` : '可按成员查看沟通、问题与保存回执。'}</p>
-      <section className="pw-team-messages" data-team-section="messages" tabIndex={-1} aria-label="原团队消息"><header className="pw-collaboration-group-heading"><h3>团队沟通</h3><span>{visibleMessages.length} 条消息</span></header>{visibleMessages.map(message => {
+      <section className="pw-team-messages" data-team-section="messages" tabIndex={-1} aria-label="原团队消息"><header className="pw-collaboration-group-heading"><h3>团队沟通</h3><span>{visibleMessages.length} 条消息</span></header>
+      {ordinaryAnswers && canSupplementParent && onOpenWork && <div className="pw-team-message-entry">
+        <Button variant="secondary" size="small" trailingIcon={IconChevronRight} disabled={!canRead || materialBusy || messageDraft.requiresRecheck || !!uncertain}
+          onClick={() => openOwnerWork('supplement')}>回原工作写补充</Button>
+        <p className="pw-field-hint">{memberFilter ? <>可在原工作写明要给 <bdi>{name(memberFilter)}</bdi> 的要求。当前筛选不决定收件人。</> : '在原工作写明收件成员和要求。打开输入框与保存草稿都不会发送。'}</p>
+      </div>}
+      {visibleMessages.map(message => {
         const identity = teamMessageIdentity(message, members), sender = teamMessageAuthor(message, members);
         const quoted = message.quoteMessageId ? object(message.quotedMessage || messages.find(row => row.messageId === message.quoteMessageId)) : null;
         const quotedText = String(quoted?.content || ''), quoteIsExcerpt = quoted?.truncated || quotedText.length > 360;
         const eventRecord = message.role === 'tool' || message.role === 'system';
+        const deliveryCopy = message.kind === 'assignment_question' && message.state === 'pending' && !isCurrentQuestion(message)
+          ? '保留原问题记录，当前不再等待这条回答。' : teamMessageDelivery(current, message);
+        const to = message.recipientMemberId || message.targetMemberId;
+        const originalRecipient = ordinaryAnswers && to && message.kind === 'conversation' && ['user','parent_model'].includes(message.role) &&
+          message.memberSnapshot?.id === to ? message.memberSnapshot : null;
+        const toName = originalRecipient ? teamMemberLabel(originalRecipient, members.filter(member => member.id !== to).concat(originalRecipient)) : to ? name(to) : '';
         const messageContent = <AIAnswer text={String(message.content || '')} actions={isCurrentQuestion(message) && <Button variant="ghost" disabled={!canMutate || !members.some(member => member.id === message.memberId && !member.exited)} aria-pressed={replyId === message.messageId} onClick={() => { messageDraft.guard(() => { setReplyId(message.messageId); setMode('discussion'); setRecipient(message.memberId); jumpToRunSection('compose'); }); }}>回答原问题</Button>} />;
         return <article className="pw-source-record pw-team-message" data-message-kind={eventRecord ? 'event' : message.kind} key={message.messageId} data-message-id={message.messageId} data-motion-key={`message:${message.messageId}`} data-reply-selected={replyId === message.messageId || undefined} tabIndex={-1}>
-        <header className="pw-team-message-heading"><h3>{identity ? <TeamMemberIdentity member={identity} name={sender} detail={members.some(member => member.id === identity.id && member.name !== identity.name) ? `原名称 · ${identity.id}` : members.filter(member => member.name === identity.name).length > 1 ? identity.id : undefined} /> : sender}{(message.recipientMemberId || message.targetMemberId) && <small>→ {name(message.recipientMemberId || message.targetMemberId)}</small>}</h3>{message.kind === 'assignment_question' ? <span>{isCurrentQuestion(message) ? '等待你的回答' : message.state === 'pending' ? '历史问题' : '问题记录'}</span> : message.role === 'tool' ? <span>资料回执</span> : message.role === 'system' ? <span>执行记录</span> : null}</header>
+        <header className="pw-team-message-heading"><h3>{identity ? <TeamMemberIdentity member={identity} name={sender} detail={members.some(member => member.id === identity.id && member.name !== identity.name) ? `原名称 · ${identity.id}` : members.filter(member => member.name === identity.name).length > 1 ? identity.id : undefined} /> : sender}{to && <small>→ <bdi>{toName}</bdi>{originalRecipient && toName !== name(to) ? '（发送时的名称）' : ''}</small>}</h3>{message.kind === 'assignment_question' ? <span>{isCurrentQuestion(message) ? '等待你的回答' : message.state === 'pending' ? '历史问题' : '问题记录'}</span> : message.role === 'tool' ? <span>资料回执</span> : message.role === 'system' ? <span>执行记录</span> : null}</header>
         {quoted && quoted.messageId && <div className="pw-team-reply-context"><header><span>{quoteIsExcerpt ? '引用节选' : '引用原消息'} · {teamMessageIdentity(quoted, members) ? <TeamMemberIdentity member={teamMessageIdentity(quoted, members)!} name={teamMessageAuthor(quoted, members)} size={24} /> : teamMessageAuthor(quoted, members)}</span><Button variant="ghost" onClick={() => focusMessage(String(message.quoteMessageId))}>查看原消息</Button></header><p className="pw-team-quote-excerpt">{quotedText.slice(0, 360)}{quoteIsExcerpt ? '…' : ''}</p></div>}
         {eventRecord ? <Accordion variant="divided" className="pw-team-event-record"><AccordionItem id={`event:${message.messageId}`} title={teamGoalTitle(message.content, '查看执行记录')}>{messageContent}</AccordionItem></Accordion> : messageContent}
-        <MotionFeedback initial={false} identity={teamMessageDelivery(current, message)} className="pw-muted">{message.kind === 'assignment_question' && message.state === 'pending' && !isCurrentQuestion(message) ? '保留原问题记录，当前不再等待这条回答。' : teamMessageDelivery(current, message)}</MotionFeedback>{message.answer && <div className="pw-team-saved-answer"><span>已保存的回答</span><p>{message.answer}</p>{message.canRequestSavedContinuation === true && (unverifiedSavedContinuation.current.has(savedContinuationKey(message)) ? <span>续接结果待核对，请查看原分工进展。</span> : <Button variant="secondary" disabled={!canMutate} onClick={() => continueSavedAnswer(message)}>用这条回答继续原分工</Button>)}</div>}
+        {deliveryCopy && <MotionFeedback initial={false} identity={deliveryCopy} className="pw-muted">{deliveryCopy}</MotionFeedback>}{message.answer && <div className="pw-team-saved-answer"><span>已保存的回答</span><p>{message.answer}</p>{message.canRequestSavedContinuation === true && (unverifiedSavedContinuation.current.has(savedContinuationKey(message)) ? <span>续接结果待核对，请查看原分工进展。</span> : <Button variant="secondary" disabled={!canMutate} onClick={() => continueSavedAnswer(message)}>用这条回答继续原分工</Button>)}</div>}
       </article>; })}{!visibleMessages.length && <p className="pw-secondary-empty">{memberFilter ? '这名成员还没有可显示的沟通记录。' : '这次协作还没有消息。'}</p>}</section>
 
 

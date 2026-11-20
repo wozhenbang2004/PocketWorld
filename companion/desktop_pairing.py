@@ -281,7 +281,7 @@ class PairingOwnerController:
                 try:
                     self.settings_receipt = self.config_store.enable_after_pairing(self.endpoint["host"], self.endpoint["controlPort"], self.endpoint["bulkPort"], desktop=self.review.record["enableDesktop"], identity_dir=self.identity.directory)
                 except Exception:
-                    self.error = "设备已配对，但本机设置写入未确认。检查原本机operation；不要自动重试或重放旧任务。"
+                    self.error = "Windows 已保存配对，但本机连接设置写入未确认，不能启动连接服务。手机是否已保存，请在手机核对。"
             return protocol.canonical_bytes(result)
 
     def close(self):

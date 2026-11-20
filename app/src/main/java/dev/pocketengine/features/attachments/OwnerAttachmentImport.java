@@ -41,9 +41,13 @@ public final class OwnerAttachmentImport {
     public static final class Receipt {
         public final int imported,linked,associationUnconfirmed;
         public final String notice,error;
-        private Receipt(int imported,int linked,int associationUnconfirmed,String notice,String error){
+        private final JSONObject registration;
+        private Receipt(int imported,int linked,int associationUnconfirmed,String notice,String error,JSONObject registration){
             this.imported=imported;this.linked=linked;this.associationUnconfirmed=associationUnconfirmed;this.notice=notice;this.error=error;
+            this.registration=registration;
         }
+        /** Facts from this accepted native selection. Never includes file contents, provider paths, or URI grants. */
+        public JSONObject registration()throws Exception{return new JSONObject(registration.toString());}
     }
 
     public static Receipt receive(AttachmentsModule module,Intent intent,Target original,Linker linker)throws Exception {
@@ -72,6 +76,13 @@ public final class OwnerAttachmentImport {
             String text=failures.getJSONObject(i).optString("message","附件未能导入");
             warnings.add(text.contains("content://")?"附件未能导入，请重新核对文件授权":text.substring(0,Math.min(200,text.length())));
         }
-        return new Receipt(count,linked,unconfirmed,notice,warnings.isEmpty()?null:String.join("；",warnings));
+        JSONArray refs=new JSONArray();
+        for(int i=0;i<count;i++){
+            JSONObject registered=files.getJSONObject(i);
+            refs.put(new JSONObject().put("id",registered.getString("id")).put("sha256",registered.getString("sha256")));
+        }
+        JSONObject registration=new JSONObject().put("selected",count+(failures==null?0:failures.length()))
+                .put("registered",count).put("files",refs);
+        return new Receipt(count,linked,unconfirmed,notice,warnings.isEmpty()?null:String.join("；",warnings),registration);
     }
 }

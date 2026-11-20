@@ -134,6 +134,9 @@
 .pw-team-member-filter > button { flex: 0 0 auto; }
 .pw-team-workspace.pw-depth-collaboration :is(.pw-team-member-filter, .pw-team-avatar-picker) button[aria-pressed="true"] { background: var(--pw-inset); box-shadow: none; }
 .pw-team-conversation-hint { color: var(--pw-copy); font-size: 12px; line-height: 1.65; }
+.pw-team-message-entry, .pw-team-answer-receipt { display: grid; gap: 4px 12px; justify-items: start; min-width: 0; }
+.pw-team-answer-receipt { grid-column: 1 / -1; }
+.pw-team-message-entry > button, .pw-team-answer-receipt > button { min-height: 44px; }
 .pw-team-workspace.pw-depth-collaboration .pw-team-messages { gap: 24px; }
 .pw-team-workspace.pw-depth-collaboration .pw-team-messages .pw-source-record { padding: 0; border: 0; }
 .pw-team-message-heading h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

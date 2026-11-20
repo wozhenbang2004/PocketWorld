@@ -199,7 +199,7 @@ def _page(context, facts, notice):
         from windows_first_workspace import signed
         if signed(context):
             heading = "在这台电脑上准备什么？"
-            actions.append(("InitializeDevicesOnly", "只准备设备连接\n不选择或登记文件夹；配对与桌面另行确认。"))
+            actions.append(("InitializeDevicesOnly", "登记这台电脑的设备身份\n不需要选择文件夹。登记后，仍要与手机配对。"))
             actions.append(("Initialize", "同时准备工作文件夹\n选定一个本机目录，再确认初始化。"))
         else:
             heading = "先选一个本机工作文件夹"
@@ -210,14 +210,16 @@ def _page(context, facts, notice):
         from windows_pairing_return import supported
         if supported(context):
             actions.append(("ActivePairing","找回已经打开的本机配对窗口\n只查这次安装，不新建邀请或启动服务。"))
-        body += "\n可能正在配对或运行服务，不能据此确认手机已经连接。请回到原配对窗口，或在手机「我的设备」查看这台电脑。不会另起一个。"
+        body += "\n原伴侣可能在配对或运行服务，不代表手机已配对或已连接。可回原配对窗口，或在手机「我的设备 → 配对伙伴」核对。不会另起服务。"
         body += "\n若选择了「交给手机」，从本机通知区域准备文字工作；不会自动联系设备。"
         body += "\n如果启动时保留了「设备工作回执」，可在 Windows 时钟旁的通知区域（包括折叠图标）中打开，区分工作方向，也可只读核对本机桌面连接。"
     else:
-        heading = "已有连接设置" if facts["devices"] else "可以与手机配对"
+        heading = "本机已有连接设置" if facts["devices"] else "可以打开本机配对"
+        if facts["devices"]:
+            body += "\n这里只显示本机配置。手机是否已保存配对、上次有没有接通，请在手机「我的设备 → 配对伙伴」核对。"
         body += "\n桌面能力" + ("已配置" if facts["desktop"] else "未启用") + "，不代表任何手机已获当前权限。"
         if facts["devices"] and facts["listeners"]:
-            actions.append(("Serve", "启动已有配对的连接服务\n先核对将开放的本机地址；不代替手机连接、授权或接管。"))
+            actions.append(("Serve", "启动本机连接服务\n先核对将开放的本机地址；不代替手机连接、授权或接管。"))
         elif facts["devices"]:
             body += "\n现有服务地址或外连设置不能在这里完整核对。请在原管理配置中逐项核对；此页不会代为启动。"
         actions.append(("PairDevices", "打开本机配对与范围核对\n在原窗口创建一次性邀请，双方分别确认；不会提前开通桌面。"))
@@ -320,9 +322,9 @@ def open_installed_desk():
                 notice = ""; continue
             workspace, phone_receipts, phone_work = None, False, False
             if action == "InitializeDevicesOnly":
-                if _dialog("只准备这台电脑的设备身份？", "建立此安装的私有身份和本机凭据；不登记任何工作文件夹。"
+                if _dialog("登记这台电脑的设备身份？", "建立此安装的私有身份和本机凭据；不登记任何工作文件夹。"
                            "\n本次不联网、不配对、不开桌面。以后可另选文件夹。此安装的设备服务需要支持按伙伴限定披露的版本，请勿作为旧版连接配置使用。",
-                           [("yes", "确认只准备设备")]) != "yes": continue
+                           [("yes", "确认登记设备身份")]) != "yes": continue
             if action == "Initialize":
                 workspace = _folder()
                 if workspace is None: continue
@@ -349,7 +351,7 @@ def open_installed_desk():
             code = _run_original(context, action, workspace, facts["settings"] if action == "Serve" else None, phone_receipts=phone_receipts, phone_work=phone_work)
             if action == "InitializeDevicesOnly" and code == 0:
                 after = _read(context)
-                notice = ("已准备设备身份，没有登记工作文件夹。要连接手机，请单独打开本机配对与范围核对。"
+                notice = ("已核对设备登记记录。要让手机找到这台电脑，下一步选「打开本机配对与范围核对」。"
                           if after["configured"] and after["firstFolder"] == "empty" else "原入口已返回，但未核对到无文件夹配置。")
                 continue
             if action == "StopDesktop":

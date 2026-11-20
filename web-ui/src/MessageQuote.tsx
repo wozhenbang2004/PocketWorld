@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Button, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { messageQuoteRange } from './message-quote';
+import { confirmedQuoteStage, messageQuoteRange, selectedQuoteRange } from './message-quote';
 import { originalPhoneReplyText } from './phone-reply-text';
 
 export type MessageQuoteTarget = { messageId: string; sourceRevision: number; key: string; epoch: number; prior?: { reader: number; request: string; revision: number; offset: number; chars: number } };
@@ -11,9 +11,11 @@ type QuoteWindow = { windowId: string; text: string; maxChars: number; draftRevi
 export function MessageQuote({ target, onClose, onStaged, phoneReceipt }: { target: MessageQuoteTarget; onClose: () => void; onStaged?: () => void; phoneReceipt?: 'full'|'excerpt' }) {
   const [view, setView] = useState<QuoteWindow | null>(null), [selection, setSelection] = useState({ start: 0, end: 0 });
   const [busy, setBusy] = useState(true), [attempted, setAttempted] = useState(false), [error, setError] = useState('');
+  const [staged, setStaged] = useState(false);
   const [pinRange, setPinRange] = useState<{offset:number;chars:number}|null>(null), [label, setLabel] = useState(''), [pinNotice, setPinNotice] = useState('');
   const savingPin = useRef(false), remembered = useRef<{start:number;end:number}|null>(null);
   const alive = useRef(true), windowId = useRef(''), generation = useRef(0), textArea = useRef<HTMLTextAreaElement>(null), submitted = useRef(false);
+  const openEpoch = useRef(bridge.getDocumentEpoch());
   const closeOwner = useRef(onClose); closeOwner.current = onClose;
   useEffect(() => {
     alive.current = true; const request = ++generation.current, documentEpoch = bridge.getDocumentEpoch();
@@ -42,16 +44,36 @@ export function MessageQuote({ target, onClose, onStaged, phoneReceipt }: { targ
     return () => element.removeEventListener('select', changed);
   }, [view, sourceText, !!pinRange]);
   const range = view ? messageQuoteRange(sourceText, selection.start, selection.end) : null;
+  const stillInDraft = () => {
+    const {composer, state} = bridge.getState();
+    return alive.current && !document.hidden && bridge.getDocumentEpoch() === openEpoch.current &&
+      composer?.ready === true && composer.key === target.key && composer.epoch === target.epoch && !state.chatSubmitting;
+  };
   const stage = () => {
-    if (!range || !windowId.current || submitted.current || busy) return;
+    if (!view || !windowId.current || submitted.current || busy) return;
+    const element = textArea.current, actual = element && selectedQuoteRange(sourceText, element);
+    if (!actual) { setError('没有加入草稿。请重新选中要用的原话。'); return; }
+    if (!stillInDraft() || bridge.getState().composer?.revision !== view.draftRevision) {
+      setView(null); setError('草稿已变化，这次没有加入。请在原消息重新选择。'); return;
+    }
+    const id = windowId.current, serial = generation.current;
     submitted.current = true; setAttempted(true); setBusy(true); setError('');
-    void bridge.command('messageQuote.stage', { windowId: windowId.current, ...range }).then(value => {
-      if (!alive.current) return;
-      if (value?.selectionValidated !== true || value.draftStaged !== true || value.persisted !== true || value.key !== target.key ||
-          value.epoch !== target.epoch || !view || value.fromRevision !== view.draftRevision || value.revision !== view.draftRevision + 1)
-        throw new Error('原选区尚未确认保存到这份草稿，请先核对原输入。');
-      onClose(); onStaged?.();
-    }).catch(failure => { if (alive.current) { setView(null); setError(failure instanceof Error ? failure.message : String(failure)); } }).finally(() => { if (alive.current) setBusy(false); });
+    void bridge.command('messageQuote.stage', { windowId: id, ...actual }).then(value => {
+      if (!alive.current || generation.current !== serial) return;
+      if (!confirmedQuoteStage(value, target, view.draftRevision) || !stillInDraft())
+        throw new Error('未确认所选原文已保存到这份草稿。');
+      if (phoneReceipt) { onClose(); onStaged?.(); }
+      else setStaged(true);
+    }).catch(failure => {
+      if (alive.current && generation.current === serial) {
+        setView(null); setError(failure instanceof Error ? failure.message : '未确认所选原文已保存到这份草稿。');
+      }
+    }).finally(() => { if (alive.current && generation.current === serial) setBusy(false); });
+  };
+  const dismiss = () => { if (!submitted.current || !busy) onClose(); };
+  const finish = () => {
+    if (!stillInDraft()) { setError('原草稿已切换；请选择原来的草稿继续。'); return; }
+    onClose(); onStaged?.();
   };
   const pin = () => {
     if (!pinRange || !view?.shelfEligible || savingPin.current || busy || !windowId.current) return;
@@ -66,7 +88,13 @@ export function MessageQuote({ target, onClose, onStaged, phoneReceipt }: { targ
       .finally(() => { savingPin.current = false; if (alive.current && generation.current === serial) setBusy(false); });
   };
   const canPin = view?.shelfEligible === true && bridge.getState().capabilities.commands.includes('messageQuote.pin');
-  return <SettingsDialog isOpen onClose={onClose} closeLabel={phoneReceipt?'返回原报告':undefined} title={pinRange ? '留在本对话' : phoneReceipt ? '在聊天里追问这份回执' : target.prior ? '再次引用这段原话' : '引用这条消息'}>
+  if (staged) return <SettingsDialog isOpen onClose={onClose} closeLabel="关闭引用回执" title="已加入这次草稿">
+    <p role="status">所选原文已关联并保存在这份草稿里。问题还没发送。</p>
+    {error && <p className="pw-error" role="alert">{error}</p>}
+    <div className="pw-form-actions"><Button onClick={finish}>{onStaged?'回到草稿':'完成'}</Button>
+      {onStaged&&<Button variant="ghost" onClick={onClose}>留在这里</Button>}</div>
+  </SettingsDialog>;
+  return <SettingsDialog isOpen onClose={dismiss} closeLabel={phoneReceipt?'返回原报告':undefined} title={pinRange ? '留在本对话' : phoneReceipt ? '在聊天里追问这份回执' : target.prior ? '再次引用这段原话' : '引用这条消息'}>
     {pinRange && view ? <><p>只在这段私聊保留原话的位置，不加入草稿或个人记忆，也不触发模型请求。</p>
       <blockquote className="pw-source-excerpt" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{view.text.slice(pinRange.offset,pinRange.offset+pinRange.chars)}</blockquote>
       <TextField label="备忘名（可选）" value={label} onChange={setLabel} maxLength={60} isDisabled={busy} hint="方便以后在本对话中认出它。没有标题时按保留时间显示。" />
@@ -75,8 +103,8 @@ export function MessageQuote({ target, onClose, onStaged, phoneReceipt }: { targ
     {view && <TextAreaField ref={textArea} label="长按或拖动选择原文" value={sourceText} isReadOnly isDisabled={busy || attempted} rows={6} />}
     {view && <p className="pw-muted">{range ? `已选择 ${range.chars} / 4000 个字符` : '请选择完整的一段原话，最多 4000 个字符。'}</p>}
     {pinNotice && <p role="status">{pinNotice}</p>}
-    {attempted && error && <p className="pw-muted">请返回核对本草稿的引用，未确认前不要重复添加。</p>}
-    <div className="pw-form-actions"><Button disabled={busy || attempted || !range} onClick={stage}>{busy ? (attempted ? '正在保存原草稿…' : '正在核对原文…') : phoneReceipt?'加入草稿，去写问题':'加入这次草稿'}</Button>{canPin && <Button variant="secondary" disabled={busy || attempted || !range} onClick={()=>{setPinNotice('');setError('');remembered.current=selection;setPinRange(range);}}>留在本对话</Button>}<Button variant="ghost" onClick={onClose}>{phoneReceipt?'返回原报告':'返回消息'}</Button></div></>}
+    {attempted && error && <p className="pw-muted">先回原草稿检查「原文引用」。没有再次添加或发送。</p>}
+    <div className="pw-form-actions"><Button disabled={busy || attempted || !range} onPointerDown={event=>event.preventDefault()} onClick={stage}>{busy ? (attempted ? '正在保存原草稿…' : '正在核对原文…') : phoneReceipt?'加入草稿，去写问题':'加入这次草稿'}</Button>{canPin && <Button variant="secondary" disabled={busy || attempted || !range} onClick={()=>{setPinNotice('');setError('');remembered.current=selection;setPinRange(range);}}>留在本对话</Button>}<Button variant="ghost" disabled={attempted&&busy} onClick={dismiss}>{phoneReceipt?'返回原报告':'返回消息'}</Button></div></>}
     {error && <p className="pw-error" role="alert">{error}</p>}
   </SettingsDialog>;
 }

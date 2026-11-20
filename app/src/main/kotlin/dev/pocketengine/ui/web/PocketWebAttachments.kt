@@ -53,6 +53,7 @@ internal class PocketWebAttachments(
     private var deviceTaskCurrent:(()->Boolean)?=null
     private var scopedResultCurrent: (() -> Boolean)? = null
     val hasScopedResult: Boolean get() = scopedResultCurrent != null
+    private fun ordinaryLibrary()=flow.privateLibrary()&&scopedResultCurrent==null&&!controller.state.chatAttachmentPickerOpen&&controller.webPrivateOwnerVisible()
     private fun canNavigateFromReport(state: AttachmentOutcomeState): Boolean =
         state.resultRun?.report != null && scopedResultCurrent?.invoke() == true && controller.webPrivateOwnerVisible() &&
             !state.deviceOriginalOnly && state.group == null && state.team == null && state.file?.optString("role") == "result" &&
@@ -93,6 +94,9 @@ internal class PocketWebAttachments(
         val privateOriginal = !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
         val ownedCopy= scoped == null && !state.deviceOriginalOnly && state.group == null && state.team == null && controller.webPrivateOwnerVisible()
         val copyReceipt=if(ownedCopy)flow.privateCopyReceipt(privateOriginal) else null
+        val ordinaryLibrary=ordinaryLibrary()
+        val readableLibrarySources=if(ordinaryLibrary&&state.file==null)JSONArray(files.filter{PocketWebOriginalFiles.libraryDocument(it)}
+            .map{JSONObject().put("id",it.getString("id")).put("sha256",it.getString("sha256"))}) else null
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
             .put("canOpenReportOriginalWork", canNavigateFromReport(state))
@@ -111,6 +115,7 @@ internal class PocketWebAttachments(
             .put("processingOpen", state.processingSource != null).put("pendingProcessingTask", state.pendingProcessingTask.takeUnless { report })
             .put("progress", state.progress).put("observing", state.observing).put("exportPending", flow.exportPending)
             .put("privateCopyStage", if(ownedCopy)flow.privateCopyStage() else null).put("privateCopyReceipt",copyReceipt)
+            .put("libraryImport",state.libraryImport?.takeIf{ordinaryLibrary}?.toJson()).put("readableLibrarySources",readableLibrarySources)
             .put("canRequestOcr", flow.canRequestOcr()).put("canSaveRead", flow.canSaveRead())
             .put("canReadTeamDifference", state.team != null && flow.canReadTeamDifference())
             .put("teamDifference", state.teamDifference).put("hasPreviousTeamArtifact", state.teamPrevious != null)
@@ -203,7 +208,7 @@ internal class PocketWebAttachments(
                 "selectFile" -> flow.selectFile(selected())
                 "attach" -> flow.attach(selected())
                 "chooseSource" -> flow.chooseSource()
-                "import" -> flow.importSource()
+                "import" -> flow.importSource(ordinaryLibrary())
                 "newDocument" -> flow.newDocument()
                 "continueDocument" -> flow.continueDocument()
                 "updateDocument" -> { review = null; flow.updateDocumentDraft(args.getJSONObject("draft")); check(flow.state.error == null) { flow.state.error.orEmpty() } }
@@ -230,7 +235,8 @@ internal class PocketWebAttachments(
                 "openOriginal" -> {
                     if (args.has("fileId") || args.has("sha256")) {
                         val file = selected()
-                        flow.openListedOriginal(file.getString("id"), file.getString("sha256")) {
+                        val librarySource=ordinaryLibrary()&&PocketWebOriginalFiles.libraryDocument(file)
+                        flow.openListedOriginal(file.getString("id"), file.getString("sha256"), librarySource=librarySource) {
                             window === current && acceptsWindow(current.ticket) && controller.webPrivateOwnerVisible() && scopedResultCurrent?.invoke()!=false
                         }
                     } else flow.openOriginalFile()

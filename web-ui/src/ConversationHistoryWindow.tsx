@@ -1,6 +1,6 @@
 import {OriginalPrivateHostAnswer} from './OriginalPrivateHostAnswer';
 import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
-import { IconClose, IconFolder, IconLink, IconMemory, IconRefresh, IconTool } from './icons';
+import { IconClose, IconFolder, IconLink, IconMemory, IconQuote, IconRefresh, IconTool } from './icons';
 import {Accordion,AccordionItem,Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
 import {bridge} from './bridge';
@@ -69,8 +69,30 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
  const visibleVisit=quoteVisit&&quoteVisit.scope===scope&&sameQuoteVisit(page,quoteVisit)?quoteVisit:null;
  const [reuse,setReuse]=useState<MessageQuoteTarget|null>(null);
  const canReuse=!!visibleVisit&&activeDraft?.conversation===visibleVisit.conversation&&!submitting&&can('messageQuote.open')&&can('messageQuote.stage')&&can('conversation.reader.close');
- const reviewing=canReuse&&reuse?.prior&&reuse.key===activeDraft?.key&&reuse.epoch===activeDraft?.epoch&&reuse.prior.reader===visibleVisit?.window&&reuse.prior.request===visibleVisit.request&&reuse.prior.revision===visibleVisit.requestRevision&&reuse.messageId===visibleVisit.target&&reuse.sourceRevision===visibleVisit.revision&&reuse.prior.offset===visibleVisit.offset&&reuse.prior.chars===visibleVisit.chars?reuse:null;
- useEffect(()=>{if(reuse&&!reviewing)setReuse(null)},[reuse,reviewing]);
+ const priorReview=canReuse&&reuse?.prior&&reuse.key===activeDraft?.key&&reuse.epoch===activeDraft?.epoch&&reuse.prior.reader===visibleVisit?.window&&reuse.prior.request===visibleVisit.request&&reuse.prior.revision===visibleVisit.requestRevision&&reuse.messageId===visibleVisit.target&&reuse.sourceRevision===visibleVisit.revision&&reuse.prior.offset===visibleVisit.offset&&reuse.prior.chars===visibleVisit.chars?reuse:null;
+ const [firstQuote,setFirstQuote]=useState<{scope:string;target:MessageQuoteTarget}|null>(null);
+ const [quoteProblem,setQuoteProblem]=useState<{scope:string;messageId:string}|null>(null);
+ const canQuoteNew=!!activeDraft&&readyPage(page)&&activeDraft.conversation===page.conversation&&!submitting&&
+  can('messageQuote.open')&&can('messageQuote.stage')&&can('messageQuote.close')&&can('conversation.reader.close');
+ const newQuoteTarget=(message:Json):MessageQuoteTarget|null=>{
+  const native=bridge.getState(),draft=native.composer,reader=native.state.conversationReader;
+  const view=native.view as {section?:unknown;taskId?:unknown}|undefined;
+  if(!canQuoteNew||!activeDraft||document.hidden||native.state.chatSubmitting||view?.section||view?.taskId||
+   !readyPage(reader)||readerScope(reader)!==scope||native.state.conversationId!==activeDraft.conversation||
+   draft?.ready!==true||draft.key!==activeDraft.key||draft.epoch!==activeDraft.epoch||draft.conversationId!==activeDraft.conversation||
+   typeof message.id!=='string'||!message.id||typeof message.content!=='string'||!message.content||
+   !Number.isSafeInteger(message.sourceRevision)||message.sourceRevision<1)return null;
+  const source=exactRow(native.state,message.id,message.sourceRevision),shown=exactRow(reader,message.id,message.sourceRevision);
+  // The history projection deliberately has no original-locator authority. Only
+  // an identical, separately quotable copy in the active private window can open.
+  return source?.quoteAvailable===true&&shown&&source.role===message.role&&shown.role===message.role&&
+   source.content===message.content&&shown.content===message.content?
+   {messageId:message.id,sourceRevision:message.sourceRevision,key:activeDraft.key,epoch:activeDraft.epoch}:null;
+ };
+ const firstMessage=firstQuote?.scope===scope&&exactRow(page,firstQuote.target.messageId,firstQuote.target.sourceRevision);
+ const reviewing=priorReview||(firstMessage&&activeDraft?.key===firstQuote?.target.key&&activeDraft?.epoch===firstQuote?.target.epoch&&
+  newQuoteTarget(firstMessage)?firstQuote?.target:null);
+ useEffect(()=>{if(reuse&&!priorReview)setReuse(null);if(firstQuote&&reviewing!==firstQuote.target)setFirstQuote(null)},[reuse,priorReview,firstQuote,reviewing]);
  const moveToQuoteRow=(visit:HistoryQuoteVisit,returning:boolean)=>{
   const native=bridge.getState().state.conversationReader;
   if(document.hidden||sending.current||!scroll.current||readerScope(native)!==scope||!sameQuoteVisit(native,visit)||!sameQuoteVisit(live.current,visit))return false;
@@ -93,7 +115,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   }
  },[quoteVisit,nativePage,scope]);
  useEffect(()=>{setQuoteNote('')},[scope]);
- useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setQuoteNote('');setHistorySource(null);setHistoryMemory(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
+ useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setQuoteNote('');setFirstQuote(null);setHistorySource(null);setHistoryMemory(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
 
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
  const [resultNotice,setResultNotice]=useState<{window:number;messageId:string;revision:number;error?:string}|null>(null);
@@ -263,7 +285,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   catch(failure){if(current())setResultNotice({...notice,error:failure instanceof Error?failure.message:'本次原文件暂不可读取。'})}
   finally{sending.current=false;setPending(false);setResultNotice(value=>value===notice?null:value)}
  };
- const back=()=>{if(!live.current)return false;if(shownMemory){if(!memoryBack.current?.())setHistoryMemory(null);return true}if(shownSource){setHistorySource(null);return true}if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!sending.current){closingFromReader.current=scope;void invoke('conversation.reader.close')}return true};
+ const back=()=>{if(!live.current)return false;if(shownMemory){if(!memoryBack.current?.())setHistoryMemory(null);return true}if(shownSource){setHistorySource(null);return true}if(reuse||firstQuote){setReuse(null);setFirstQuote(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!sending.current){closingFromReader.current=scope;void invoke('conversation.reader.close')}return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
@@ -295,7 +317,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   const origin=closingFromReader.current;closingFromReader.current='';
   if(origin&&!document.hidden&&!bridge.getState().state.conversationReader)onReturnToChat?.();
  }}>
-  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">只读查看，原输入和发送回执仍留在原对话。</Drawer.Description></div><IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/><IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':'返回原输入'} disabled={!page||pending} onClick={back}/></header>
+  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">只读查看，原输入和发送回执仍留在原对话。{canQuoteNew&&' 仍可在原对话核对的消息，可以选取原话加入草稿。'}</Drawer.Description></div><IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/><IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':'返回原输入'} disabled={!page||pending} onClick={back}/></header>
   <div className="pw-drawer-body pw-history-window-messages" ref={scroll} onScroll={saveReading}>
    {(error||shown.error)&&<p className="pw-error" role="alert">{error||shown.error}</p>}
    {shown.notice&&shown.notice!=='上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。'&&<p className="pw-muted">{shown.notice}</p>}
@@ -306,6 +328,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
    {rows.map((message,index)=>{const phone=message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
     const result=messageTaskResult(message),fileResult=onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
+    const canSelectQuote=canQuoteNew&&!pending&&!!newQuoteTarget(message);
     const readingFiles=resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
     return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} data-reader-revision={message.sourceRevision} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
     {shown.originalReportMessageId===message.id&&<p className="pw-field-hint">这件工作的原汇报</p>}
@@ -331,6 +354,11 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
     </div>}
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
+     {canSelectQuote&&<Button variant="ghost" size="small" leadingIcon={IconQuote} onClick={()=>{
+      const target=newQuoteTarget(message);
+      if(!target||sending.current){setQuoteProblem({scope,messageId:message.id});return}
+      setQuoteProblem(null);setReuse(null);setFirstQuote({scope,target});
+     }}>引用到草稿</Button>}
      {message.firstHostRequestLocal&&!message.hostGoalTaskId&&<p className="pw-field-hint">仅保存到本机，未派发</p>}
      {message.originalHostFinal&&<OriginalPrivateHostAnswer result={message.originalHostFinal}
        read={page&&page.window===shown.window&&!page.loading&&!page.error&&!page.limited&&!pending&&message.id&&message.sourceRevision===1&&
@@ -352,12 +380,14 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
      </>}
     </div>
     {inputNotice?.error&&inputNotice.window===shown.window&&inputNotice.messageId===message.id&&<p className="pw-input-work-error" role="status">{inputNotice.error}</p>}
+    {quoteProblem?.scope===scope&&quoteProblem.messageId===message.id&&<p className="pw-input-work-error" role="status">原消息或草稿已变化，这次没有关联。</p>}
     {readingFiles?.error&&<p className="pw-input-work-error" role="status">{readingFiles.error}</p>}
    </article>})}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">当前窗口未读到可显示的消息。</p>}
   </div>
   <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':'返回原输入'}</Button><Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button></footer>
-  {reviewing&&<MessageQuote target={reviewing} onClose={()=>setReuse(null)} onStaged={()=>{if(live.current?.window===reviewing.prior?.reader)void invoke('conversation.reader.close')}}/>}
+  {reviewing&&<MessageQuote key={`${scope}:${reviewing.messageId}:${reviewing.prior?.request||''}`} target={reviewing}
+   onClose={()=>{setReuse(null);setFirstQuote(null)}} onStaged={()=>{if(readerScope(live.current)===scope)void invoke('conversation.reader.close')}}/>}
   {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}
   {shownSource&&<AnswerSources key={`${shownSource.target.readerWindow}:${shownSource.target.messageId}:${shownSource.target.readerSourceRevision}`}
     target={shownSource.target} revision={shownSource.target.readerSourceRevision} onClose={()=>setHistorySource(null)}

@@ -7,7 +7,7 @@ import {ProjectTaskPackageOrigin} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
 import { ProjectCheckoutFiles, type CheckoutSavedPosition } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
-import { CheckoutGuide, checkoutKindSummary } from './ProjectWorkBinding';
+import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary } from './ProjectWorkBinding';
 import './local-workspace.css';
 import './project-development.css';
 import './project-workspace-manga.css';
@@ -275,27 +275,30 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         throw new Error('没有核对到本页同一份草稿，文字仍留在这里。');
       open();
     });
-  const prepareTools = () => {
-    if (disabled || !can('setup.runtime.read')) return;
-    const displayed={...draft.current};
-    void verifyDeparture(displayed,displayedSavedDraft(displayed),onPrepareTools);
-  };
-  const canPrepareTerminal = can('projects.development.draft') && can('connections.enter') &&
-    can('local.describeCheckout') && can('local.terminal.review') && available.some(copy=>copy.projectId===projectId&&copy.checkoutId===checkout);
-  const prepareTerminal = async () => {
-    if(disabled||entered.current||!canPrepareTerminal||draft.current.checkoutId!==checkout)return;
-    const displayed={...draft.current};
-    // An explicit request for the currently displayed sole copy saves that
-    // same choice, so Back doesn't guess again if the list has since changed.
-    if(!displayedSavedDraft(displayed).checkoutId){
+  const preserveSelectionBeforeDeparture = async (displayed:DevelopmentDraft,open:()=>void) => {
+    // An explicit departure from the displayed sole copy retains that exact
+    // selection. Returning must not infer a copy from an updated list.
+    if(displayed.checkoutId&&!displayedSavedDraft(displayed).checkoutId){
       const saved=await invoke('projects.development.draft',{viewHandle:handle.current,...displayed},value=>{
         if(value.saved!==true||value.projectId!==projectId||!sameDraft(draft.current,displayed))
-          throw new Error('没有保存原副本的选择，未打开终端准备。');
+          throw new Error('没有核对到原副本的选择，未离开项目。');
         touched.current=true;
       });
       if(!saved)return;
     }
-    await verifyDeparture(displayed,displayed,()=>onOpenTerminal({projectId,checkoutId:displayed.checkoutId}));
+    await verifyDeparture(displayed,displayed,open);
+  };
+  const canViewToolSetup = can('setup.read') && can('setup.runtime.read') && can('projects.development.draft');
+  const prepareTools = () => {
+    if(disabled||entered.current||!canViewToolSetup||draft.current.checkoutId!==checkout||checkout&&!selectedCopy)return;
+    void preserveSelectionBeforeDeparture({...draft.current},onPrepareTools);
+  };
+  const canPrepareTerminal = can('projects.development.draft') && can('connections.enter') &&
+    can('local.describeCheckout') && can('local.terminal.review') && !!selectedCopy;
+  const prepareTerminal = () => {
+    if(disabled||entered.current||!canPrepareTerminal||draft.current.checkoutId!==checkout)return;
+    const displayed={...draft.current};
+    void preserveSelectionBeforeDeparture(displayed,()=>onOpenTerminal({projectId,checkoutId:displayed.checkoutId}));
   };
   const reconcileSource=(useProject:boolean)=>{
     if(!sourceConflict||!active||busy||pending||filesOpen||!view||!view.draft?.ownerPickedConvention||document.hidden)return;
@@ -430,6 +433,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const archiveRoot = source?.projectId === projectId && source.checkoutId === checkout &&
     /^[a-f0-9]{64}$/.test(source.sourceDigest) ? source.retainedArchiveRoot : null;
   const versionBuild = versionBuildFor(source, projectId, checkout);
+  const webTools = selectedCopy && !differentBuildCopy ? checkoutFirstWebTools(source,projectId,checkout) : null;
+  const nodeTools = webTools?.kind==='node' ? webTools : null;
+  const buildToolsBlocked = !!nodeTools && (!nodeTools.runtimeReady || nodeTools.missing.length>0);
+  const missingPnpm = !!nodeTools?.missing.includes('pnpm');
+  const builtInSetupUnavailable = view?.runtime?.runtimeId==='managed_process_v1' && view.runtime.preparationAvailable===false;
+  const canReviewToolSetup = canViewToolSetup && can('setup.runtime.review') && can('setup.runtime.start');
+  const showToolSetupByBuild = buildToolsBlocked && !versionBuild && !missingPnpm && !builtInSetupUnavailable && canReviewToolSetup;
   const nodeBlocked = source?.projectId===projectId && source?.checkoutId===checkout ? existingBuildBlocked(source.existingNodeBuildBlocked) : '';
   const buildLookupUnavailable = source?.existingNodeBuild === true ?
     source.existingNodeBuildUnavailable === true || source.existingNodeBuildTask && !versionBuild :
@@ -501,11 +511,22 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {!filesOpen && savedFileHere && <p className="pw-field-hint pw-checkout-identity">
         上次确认保存：<bdi>{savedFileHere.path}</bdi> · <code>{savedFileHere.savedHash.slice(0,10)}</code>。重开时会核对原文件，没有另存一份历史副本。
       </p>}
+      {!filesOpen&&webTools?.kind==='static'&&<p className="pw-field-hint">根目录有 <code>index.html</code>，直接编辑不用准备 Node.js。这个入口不是已登记的预览或构建成果。</p>}
+      {!filesOpen&&nodeTools&&!versionBuild&&<p className="pw-field-hint" role="status">{buildToolsBlocked?
+        <>{nodeTools.missing.length?`这台手机尚未核对到 ${nodeTools.missing.map(tool=>tool==='node'?'Node.js':tool).join('、')}。`:'这台手机的开发环境尚未核对为可运行。'}
+          {missingPnpm?' 目前内置准备提供 Node.js 和 npm，不能把 npm 当成项目声明的 pnpm。':
+            builtInSetupUnavailable?' 当前安装包不能准备本机运行环境；文件仍可编辑。':
+            showToolSetupByBuild?' 可打开内置准备查看安装内容。返回此副本后重新核对，不会自动构建。':
+            ' 这个窗口不能开始内置准备；仍可编辑文件。'}</>:
+        `已核对这台手机上的 Node.js 和 ${nodeTools.manager}。依赖、构建和成果仍需另行核对。`}</p>}
       <div className="pw-form-actions">
         {selectedCopy && can('projects.development.files.open') && <Button variant="secondary" disabled={busy || !!review || filesOpen}
           onClick={() => { setHostEditor(null); setFileWindow({checkoutId:selectedCopy.checkoutId}); }}>编辑这份副本的文件</Button>}
         {savedFileHere && can('projects.development.files.open') && <Button variant="ghost" disabled={busy || !!review || filesOpen}
           onClick={() => { setHostEditor(null); setFileWindow({checkoutId:savedFileHere.checkoutId,resumeSaved:savedFileHere}); }}>回到上次保存的文件</Button>}
+        {showToolSetupByBuild&&<Button variant="secondary" disabled={disabled} data-workspace-entry="project-default-tools"
+          onClick={prepareTools}>{view.runtime?.installed===true?'检查与修复手机工具':'打开手机工具准备'}</Button>}
+        {buildToolsBlocked&&!versionBuild&&<Button variant="ghost" disabled={disabled} onClick={()=>void read()}>重新核对手机工具</Button>}
         {!differentBuildCopy && selectedCopy && (selectedCopy.draftWorkingCopy === true || source?.existingNodeBuild === true) && can('projects.development.reviewDraftBuild') &&
           (versionBuild ? <>
             {can('tasks.open') && <Button variant="secondary" disabled={disabled || !can('projects.development.inspect')}
@@ -513,7 +534,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
             {savedWebLink && <Button variant="ghost" disabled={disabled || !can('projects.development.inspect')}
               onClick={()=>openVersionBuild('savedWeb')}>查找同一源码的已存网页</Button>}
           </> : !buildLookupUnavailable && <Button variant="secondary"
-            disabled={disabled || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
+            disabled={disabled || buildToolsBlocked || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
             onClick={reviewNodeBuild}>{source?.existingNodeBuild===true?(versionChanged?'核对修改后的 Node 构建':'审阅这个副本的 Node 构建'):source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
       </div>
       {buildLookupUnavailable && <p role="status" className="pw-field-hint">这一版的构建记录暂未核对，请重新读取项目条件，不重复交办。</p>}
@@ -561,7 +582,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
         {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>安装依赖、构建或启动仍须核对具体方案；不会因为发现项目类型就运行脚本。</p>}
         <p>模型调用需要相应网络；已有文件和副本不会因离线而删除。退出页面不等于停止任务，重开请查看原任务。</p>
-        {can('setup.runtime.read')&&can('projects.development.draft')&&<Button variant="secondary" disabled={disabled}
+        {canViewToolSetup&&!showToolSetupByBuild&&<Button variant="secondary" disabled={disabled||!!checkout&&!selectedCopy}
           data-workspace-entry="project-default-tools" onClick={prepareTools}>{androidWrapper ? '查看手机基础工具（不安装 SDK）' : '查看工具准备'}</Button>}
         {source && <dl className="pw-facts"><div><dt>原项目</dt><dd>{projectId}</dd></div><div><dt>私人副本</dt><dd>{checkout}</dd></div><div><dt>已读取版本</dt><dd>{source.sourceDigest}</dd></div><CheckoutGuide source={source} projectId={projectId} checkoutId={checkout}/></dl>}
       </AccordionItem></Accordion>

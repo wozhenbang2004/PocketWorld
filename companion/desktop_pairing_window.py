@@ -51,6 +51,8 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
     extra_options, extra_selected = [], set()
     candidate, start_bridge, chosen_address = None, False, None
     saved_budget = None
+    # Android's paired directory shows the same suffix. It identifies a row, not the peer's full certificate.
+    local_code = controller.identity.device_id[-6:]
 
     def text(control, maximum=128):
         value = ctypes.create_unicode_buffer(maximum + 1)
@@ -137,7 +139,12 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
         if controller.completed:
             verified = bool(controller.settings_receipt and controller.settings_receipt.get("settingsVerified"))
             user.EnableWindow(start_button, verified)
-            notice(controller.error or "已通过原双向TLS正式配对；尚未启动业务服务。点击“启动桥接”才启用已授权通道，不重放旧任务。")
+            if controller.error:
+                notice(controller.error)
+            elif not verified:
+                notice("Windows 已保存配对，连接设置尚未核实，不能启动连接服务。")
+            else:
+                notice(f"Windows 已保存配对，连接服务未启动。请在手机「我的设备 → 配对伙伴」核对电脑编号末六位 {local_code}。")
         elif now >= controller.invitation["expiresAt"]:
             user.EnableWindow(review_button, False)
             notice("邀请已过期。关闭本窗口后可重新创建；过期邀请和候选都不提供业务权限。")
@@ -193,7 +200,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
                     user.SetWindowTextW(invitation_edit, json.dumps(invitation, ensure_ascii=False, separators=(",", ":")))
                     for key in ("choose_address", "host", "control", "bulk", "create", "issued"):
                         user.EnableWindow(controls[key], False)
-                    notice("120秒一次性邀请已创建。复制到手机的邀请导入入口；手机提交候选后，本机还必须核对两端指纹和准确授权。")
+                    notice("一次性邀请有效 120 秒。在手机选「我的设备 → 配对设备 → 对方已发邀请」，提交后回电脑核对指纹与范围。")
                 elif action == 111 and host.thread is None and controller.invitation is None:
                     controller.config_store.current()
                     from windows_issued_scope import show as show_issued_scope
@@ -204,7 +211,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
                     user.SendMessageW(invitation_edit, 0xB1, 0, -1)  # select ALL actual invitation
                     user.SendMessageW(invitation_edit, 0x301, 0, 0)  # owner-clicked WM_COPY, no web/token bridge
                     notice("已复制原回执只读连接信息；在手机的显式恢复入口填写地址，不要当新邀请导入。" if host.recovery is not None else
-                           "已复制一次性邀请；不要公开分享。它不是长期设备凭据，不能替代本机scope确认和双向TLS。")
+                           "已复制一次性邀请。在手机选「我的设备 → 配对设备 → 对方已发邀请」并粘贴，然后回电脑核对指纹和范围。请勿公开分享。")
                 elif action == 106:
                     if controller.invitation is None:
                         raise PlatformError("先创建本窗口的一次性邀请")
@@ -276,7 +283,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
                     freeze_scopes()
                     for control in [controls["budget"], controls["minutes"], controls["history"]]:
                         user.EnableWindow(control, False)
-                    notice("本机已确认准确授权，正在等待手机通过保留端口完成双向TLS；此时仍没有业务通道。")
+                    notice("电脑已确认。请保留本窗口，到手机「我的设备 → 配对进展」点这次的「继续原配对」。")
                 elif action in (301, 302) and offer_local_receipts:
                     key, other = ("phone_work", "phone_receipts") if action == 302 else ("phone_receipts", "phone_work")
                     if user.SendMessageW(controls[key], 0xf0, 0, 0) == 1: user.SendMessageW(controls[other], 0xf1, 0, 0)
@@ -320,7 +327,7 @@ def show_pairing_window(controller, host, *, offer_local_receipts=False, install
         surface = OwnerSurface(user, window, style, (1020, 800), (720, 440))
         width, height = surface.width, surface.height
         compact = height < 680
-        control("STATIC", "本机配对 · 选择范围后仍须在电脑核对；打开此页不会启动服务。", 16, 12, width - 32, 22)
+        control("STATIC", f"本机配对 · 电脑编号末六位 {local_code} · 打开此页不会启动服务。", 16, 12, width - 32, 22)
         controls["choose_address"] = control("BUTTON", "选择本机地址", 16, 39, 140, 28, 109, 0x10000)
         configured = controller.manager.config.get("devices", {}).get("listen", {})
         initial_host = configured.get("host", "")

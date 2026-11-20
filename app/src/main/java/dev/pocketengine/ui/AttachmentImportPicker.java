@@ -14,14 +14,16 @@ public final class AttachmentImportPicker {
     public enum Launch {REQUESTED,BUSY,NOT_STARTED,UNKNOWN}
     public interface Receiver {void receive(Intent files,Target original);}
     public interface End {void ended(boolean cancelled);}
+    public interface OriginalEnd {void ended(Target original,boolean cancelled);}
     private static final String SAVED="ownerAttachmentImport";
     private final ActivityResultRegistry registry;
     private final Receiver receiver;
-    private final End end;
+    private final OriginalEnd end;
     private Target pending;
     private ActivityResultLauncher<Intent> launcher;
     public AttachmentImportPicker(ActivityResultRegistry registry,Receiver receiver){this(registry,receiver,cancelled->{});}
-    public AttachmentImportPicker(ActivityResultRegistry registry,Receiver receiver,End end){this.registry=registry;this.receiver=receiver;this.end=end;}
+    public AttachmentImportPicker(ActivityResultRegistry registry,Receiver receiver,End end){this(registry,receiver,(original,cancelled)->end.ended(cancelled));}
+    public AttachmentImportPicker(ActivityResultRegistry registry,Receiver receiver,OriginalEnd end){this.registry=registry;this.receiver=receiver;this.end=end;}
 
     private ActivityResultLauncher<Intent> register(Target original){
         boolean[] delivered={false};
@@ -30,14 +32,15 @@ public final class AttachmentImportPicker {
             if(pending!=original)return;
             pending=null;ActivityResultLauncher<Intent> old=launcher;launcher=null;if(old!=null)old.unregister();
             if(result.getResultCode()==Activity.RESULT_OK&&result.getData()!=null)receiver.receive(new Intent(result.getData()),original);
-            else end.ended(result.getResultCode()==Activity.RESULT_CANCELED);
+            else end.ended(original,result.getResultCode()==Activity.RESULT_CANCELED);
         });
         if(delivered[0]){registered.unregister();return null;}
         launcher=registered;return registered;
     }
-    public Launch launch(String taskId,String projectId){
+    public Launch launch(String taskId,String projectId){return launch(new Target(taskId,projectId));}
+    public Launch launch(Target original){
         if(pending!=null)return Launch.BUSY;
-        Target original=new Target(taskId,projectId);pending=original;
+        pending=java.util.Objects.requireNonNull(original);
         try{
             ActivityResultLauncher<Intent> registered=register(original);if(registered==null)return Launch.REQUESTED;
             registered.launch(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE)

@@ -55,7 +55,7 @@ class ComposeActivity : ComponentActivity() {
         if (result.resultCode == Activity.RESULT_OK && result.data != null) controller.importAttachments(Intent(result.data!!), original)
         else controller.attachmentImportSelectionEnded(result.resultCode == Activity.RESULT_CANCELED)
     }
-    private val attachmentPicker = AttachmentImportPicker(activityResultRegistry, { files, original -> if (acceptBusinessResult("attachment")) controller.importAttachments(files, original) }, { cancelled -> if (acceptBusinessResult("attachment")) controller.attachmentImportSelectionEnded(cancelled) })
+    private val attachmentPicker = AttachmentImportPicker(activityResultRegistry, { files, original -> if (acceptBusinessResult("attachment")) controller.importAttachments(files, original) }, { original, cancelled -> if (acceptBusinessResult("attachment")) controller.attachmentImportSelectionEnded(cancelled, original) })
     // Reserve the former static registration position so other saved picker keys do not shift.
     // A legacy result has no request nonce and cannot authorize any current export.
     @Suppress("unused")
@@ -436,10 +436,16 @@ class ComposeActivity : ComponentActivity() {
         catch (_: RuntimeException) { mcpPickRequestId = null; controller.completeMcpConfig(requestId, null) }
     }
     internal fun pickAttachments(taskId: String?, projectId: String?) {
+        pickAttachments(OwnerAttachmentImport.Target(taskId, projectId))
+    }
+    internal fun pickAttachments(original: OwnerAttachmentImport.Target): AttachmentImportPicker.Launch {
         check(businessCurrent())
-        if (controller.state.attachmentImporting) { controller.attachmentImportPickerStatus(AttachmentImportPicker.Launch.BUSY); return }
-        armBusinessPicker("attachment")
-        controller.attachmentImportPickerStatus(attachmentPicker.launch(taskId, projectId))
+        val status = if (controller.state.attachmentImporting) AttachmentImportPicker.Launch.BUSY else {
+            armBusinessPicker("attachment")
+            attachmentPicker.launch(original)
+        }
+        controller.attachmentImportPickerStatus(status)
+        return status
     }
     internal fun offerExport(name: String, mimeType: String, path: String) {
         check(businessCurrent())

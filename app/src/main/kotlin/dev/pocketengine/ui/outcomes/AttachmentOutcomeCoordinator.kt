@@ -12,6 +12,7 @@ import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.TeamWorkspaceOutcomeHost
 import dev.pocketengine.features.attachments.AttachmentRepository
+import dev.pocketengine.features.attachments.OwnerAttachmentImport
 import dev.pocketengine.features.attachments.creation.DocumentDraft
 import dev.pocketengine.features.attachments.creation.StructuredOfficeDraft
 import dev.pocketengine.media.jobs.results.GroupResultAccess
@@ -81,6 +82,9 @@ internal data class OwnerAttachmentCopyReceipt(val requestId:String,val taskId:S
 }
 
 internal enum class AttachmentOriginalReturn(val value:String) { DETAILS("details"), LIST("list"), ENTRY("entry") }
+internal data class AttachmentLibraryImport(val requestId:String,val phase:String,val registration:JSONObject?=null){
+    fun toJson()=JSONObject().put("requestId",requestId).put("phase",phase).put("registration",registration)
+}
 
 internal data class AttachmentOutcomeState(
     val open:Boolean=false,val taskId:String?=null,val deviceOriginalOnly:Boolean=false,val group:GroupResultAccess.Selection?=null,
@@ -95,7 +99,7 @@ internal data class AttachmentOutcomeState(
     val processingReview:dev.pocketengine.features.attachments.processing.NativeFileProcess.Review?=null,val pendingProcessingTask:String?=null,
     val comparison:Pair<dev.pocketengine.features.attachments.OwnerFilePreviewSource,dev.pocketengine.features.attachments.OwnerFilePreviewSource>?=null,
     val fromWorkResult:Boolean=false,val resultRun:AttachmentResultRun?=null,val externalViewerResult:String?=null,
-    val copyReceipt:OwnerAttachmentCopyReceipt?=null
+    val copyReceipt:OwnerAttachmentCopyReceipt?=null,val libraryImport:AttachmentLibraryImport?=null
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -371,8 +375,46 @@ internal class AttachmentOutcomeCoordinator(
         work(onSuccess={actual->state=state.copy(snapshot=JSONObject(snapshot.toString()).put("documentActions",actual))}){c,_->app.attachmentOutcomes.documentActions(cursor,c) to null}
     }
 
-    fun importSource(){if(state.team==null&&state.group==null)activity.pickAttachments(state.taskId,null)}
-    fun imported(){if(state.open&&state.team==null&&state.group==null)refresh()}
+    fun privateLibrary()=state.open&&state.taskId==null&&state.group==null&&state.team==null&&!state.deviceOriginalOnly&&
+        state.resultRun==null&&!state.choosingSource
+    private fun currentLibraryImport(original:OwnerAttachmentImport.Target?):AttachmentLibraryImport?=
+        state.libraryImport?.takeIf{privateLibrary()&&original!=null&&original.taskId==null&&original.projectId==null&&it.requestId==original.requestId}
+    fun importSource(trackLibrary:Boolean){
+        if(state.team!=null||state.group!=null)return
+        if(!trackLibrary||!privateLibrary()||state.file!=null){activity.pickAttachments(state.taskId,null);return}
+        if(state.libraryImport?.phase in setOf("selecting","selection_unconfirmed","registering"))return
+        val original=OwnerAttachmentImport.Target(null,null)
+        state=state.copy(libraryImport=AttachmentLibraryImport(original.requestId,"selecting"))
+        val launch=activity.pickAttachments(original)
+        val pending=currentLibraryImport(original)?.takeIf{it.phase=="selecting"}?:return
+        val phase=when(launch){
+            AttachmentImportPicker.Launch.REQUESTED->"selecting"
+            AttachmentImportPicker.Launch.UNKNOWN->"selection_unconfirmed"
+            AttachmentImportPicker.Launch.BUSY->"busy_other_selection"
+            AttachmentImportPicker.Launch.NOT_STARTED->"not_started"
+        }
+        if(phase!=pending.phase)state=state.copy(libraryImport=pending.copy(phase=phase))
+    }
+    fun libraryImportSelected(original:OwnerAttachmentImport.Target?){
+        currentLibraryImport(original)?.let{state=state.copy(libraryImport=it.copy(phase="registering"))}
+    }
+    fun libraryImportSelectionEnded(original:OwnerAttachmentImport.Target?,cancelled:Boolean){
+        currentLibraryImport(original)?.let{state=state.copy(libraryImport=it.copy(phase=if(cancelled)"cancelled" else "no_selection"))}
+    }
+    fun libraryImportUnconfirmed(original:OwnerAttachmentImport.Target?){
+        currentLibraryImport(original)?.let{state=state.copy(libraryImport=it.copy(phase="unconfirmed"))}
+    }
+    fun libraryImportContextUnavailable(){
+        if(privateLibrary())state.libraryImport?.takeIf{it.phase in setOf("selecting","selection_unconfirmed","registering")}
+            ?.let{state=state.copy(libraryImport=it.copy(phase="unconfirmed"))}
+    }
+    fun imported(original:OwnerAttachmentImport.Target?,receipt:OwnerAttachmentImport.Receipt){
+        currentLibraryImport(original)?.let{pending->
+            val registration=runCatching{receipt.registration()}.getOrNull()
+            state=state.copy(libraryImport=pending.copy(phase=if(registration!=null)"confirmed" else "unconfirmed",registration=registration))
+        }
+        if(state.open&&state.team==null&&state.group==null)refresh()
+    }
     fun read(range:DocumentContent.Request){val file=state.file?:return;val group=state.group;val task=state.taskId
         work(document=true){c,w->val result=if(group==null)app.ownerOutcomeDocument(task,file.getString("id"),file.getString("sha256"),range,c) else groupCall(w){app.groupOutcomeDocument(group,range,c)};result to null}
     }
@@ -451,7 +493,7 @@ internal class AttachmentOutcomeCoordinator(
         }, current = current)
     }
     /** Read a saved item from its displayed library list or from the exact run's listed originals. */
-    fun openListedOriginal(id: String, sha256: String, onOpened: (() -> Unit)? = null, current: () -> Boolean) {
+    fun openListedOriginal(id: String, sha256: String, onOpened: (() -> Unit)? = null, librarySource: Boolean = false, current: () -> Boolean) {
         val run = state.resultRun
         val listed = state.snapshot ?: error("文件清单尚未读取")
         val library = run == null && state.taskId == null && state.file == null && onOpened == null && listed.opt("taskId") == ""
@@ -460,9 +502,10 @@ internal class AttachmentOutcomeCoordinator(
             state.group == null && state.team == null && !state.deviceOriginalOnly && !state.choosingSource &&
             state.documentDraft == null && state.processingSource == null && state.comparison == null && !state.documentOpen &&
             (state.file == null || state.originalFile != null)) { "请先返回本轮成果或完成当前文件操作" }
-        val entries = run?.files(listed)?.entries ?: listed.getJSONArray("artifacts").objects()
+        val entries = if(library&&librarySource)listed.getJSONArray("sources").objects()
+            else run?.files(listed)?.entries ?: listed.getJSONArray("artifacts").objects()
         val selected = entries.singleOrNull { it.optString("id") == id && it.optString("sha256") == sha256 &&
-            it.optString("role") == "result" && it.optString("availability") == "available" }
+            it.optString("role") == (if(library&&librarySource)"source" else "result") && it.optString("availability") == "available" }
             ?.let { JSONObject(it.toString()) } ?: error("所选原件不在这次已核对的成果中")
         val originalReturn = when {
             onOpened != null -> AttachmentOriginalReturn.ENTRY // Re-admitted inside the already-open original work.
@@ -655,7 +698,24 @@ internal class AttachmentOutcomeCoordinator(
         };val preview=!state.deviceOriginalOnly&&state.file?.optString("mimeType")?.startsWith("image/")==true&&state.thumbnail==null&&file!=null;if(wait===c)wait=null;c.cancel();if(preview&&generation==token)loadThumbnail()}}catch(e:Exception){main.post{if(!closed&&state.open&&generation==token&&wait===c){val message=if(onFinished!=null)"导出未完整确认，目标可能已有部分内容；请核对所选文件，没有自动重写。"else if(c.isCancelled)"读取已停止；原文件与任务保留"else safe(e);state=state.copy(busy=false,error=listOfNotNull(restoredExportNotice,message).joinToString(" "));restoredExportNotice=null;wait=null};c.cancel()}}finally{if(onFinished!=null)main.post{finished()}}}}catch(rejected:java.util.concurrent.RejectedExecutionException){if(onFinished==null)throw rejected;state=state.copy(busy=false,error="导出未开始，原文件保留；请稍后明确重试");if(wait===c)wait=null;c.cancel();finished()}
     }
     private fun groupCall(window:String?,call:()->JSONObject):JSONObject {val actual=window?:throw SecurityException("当前原生主人窗口不可用");return app.groupOwnerWorkflows.call(actual){call()}}
+    private fun restoreLibraryImport(bundle:Bundle?):AttachmentLibraryImport?=runCatching{
+        val saved=bundle?.getString("attachmentLibraryImport")?.takeIf{it.length<=3500}?:return@runCatching null
+        val value=JSONObject(saved);val request=value.getString("requestId");check(java.util.UUID.fromString(request).toString()==request)
+        val phase=value.getString("phase")
+        if(phase=="confirmed"){
+            val result=value.getJSONObject("registration");val selected=result.getInt("selected");val registered=result.getInt("registered")
+            val files=result.getJSONArray("files").objects()
+            check(selected in 1..10&&registered in 0..selected&&files.size==registered&&files.all{
+                it.optString("id").isNotBlank()&&it.optString("id").length<=240&&it.optString("sha256").matches(Regex("[0-9a-f]{64}"))
+            })
+            AttachmentLibraryImport(request,phase,JSONObject().put("selected",selected).put("registered",registered).put("files",JSONArray(files.map{
+                JSONObject().put("id",it.getString("id")).put("sha256",it.getString("sha256"))
+            })))
+        }else AttachmentLibraryImport(request,if(phase in setOf("selecting","selection_unconfirmed","cancelled","no_selection","not_started","busy_other_selection"))phase else "unconfirmed")
+    }.getOrNull()
     fun save(bundle:Bundle){
+        bundle.remove("attachmentLibraryImport")
+        if(privateLibrary())state.libraryImport?.let{bundle.putString("attachmentLibraryImport",it.toJson().toString())}
         bundle.remove("attachmentOutcomeVerifiedCopies")
         if(verifiedCopies.isNotEmpty())bundle.putStringArrayList("attachmentOutcomeVerifiedCopies",ArrayList(verifiedCopies.values.map{it.toJson().toString()}))
         pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator().toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
@@ -670,6 +730,7 @@ internal class AttachmentOutcomeCoordinator(
                 }?:AttachmentOriginalReturn.DETAILS else AttachmentOriginalReturn.DETAILS);bundle?.getString("attachmentDocumentDraft")?.let{saved->check(team==null&&state.group==null&&saved.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES){"原文档草稿超出可恢复范围"};val draft=JSONObject(saved);DocumentDraft(draft);restoredDocumentDraft=draft}
             // Pin only this restored navigation object, not a later opening of an identical file.
             restoredCopyLocator=restoreFile?.takeIf {file->export?.takeUnless{exportAbandoned}?.let{privateCopyFile(it,file)}!=null}
+            if(privateLibrary())state=state.copy(libraryImport=restoreLibraryImport(bundle))
             main.post{if(!closed&&resumed&&!state.busy){if(exportResult!=null)finishExport()else refresh()}}}}catch(_:Exception){restoredDocumentDraft=null;restoredCopyLocator=null;restoreFile=null;state=AttachmentOutcomeState(open=true,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,error="原成果定位或文档草稿暂不可恢复，请从原任务重新打开；已有保存动作仍只核对原结果")}}
     private fun locator():JSONObject=JSONObject().put("taskId",state.taskId.orEmpty()).put("fromWorkResult",state.fromWorkResult).also{value->
         if(state.originalReturn!=AttachmentOriginalReturn.DETAILS)value.put("originalReturn",state.originalReturn.value)
