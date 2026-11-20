@@ -17,14 +17,17 @@ const keys = [{ id: '\r', label: 'Enter' }, { id: '\t', label: 'Tab' }, { id: '\
 
 /** One original project execution, displayed through the existing VT surface.
  * Open/read do not create a process; close only retires this observation session. */
-export function ProjectExecutionWorkspace({ task, operation, active = true, run = bridge.command, prepareFailure }: { task: Data; operation?: Data; active?: boolean; run?: Run; prepareFailure?:(r:ExecutionExit)=>void }) {
-  const rows = projectExecutionRows(task, operation), failure = operation ? undefined : originalFirstBuildFailure(task);
+export function ProjectExecutionWorkspace({ task, operation, active = true, run = bridge.command, prepareFailure, focusFailure = false, projectName, editFailedCopy }: {
+  task: Data; operation?: Data; active?: boolean; run?: Run; prepareFailure?:(r:ExecutionExit)=>void;
+  focusFailure?:boolean; projectName?:string; editFailedCopy?:()=>void;
+}) {
+  const rows = focusFailure ? [] : projectExecutionRows(task, operation), failure = operation ? undefined : originalFirstBuildFailure(task);
   const entries = failure && !rows.some(row => row.operationId === failure.operationId) ? [...rows, failure] : rows;
   const [selection, setSelection] = useState(''), [expanded, setExpanded] = useState(!!failure);
   const disclosureId = `execution:${task.id}:${operation?.operationId || 'list'}`;
   const pendingOriginal = !operation && task.raw?.developmentContext?.ownerDraftFirstBuild &&
     (task.raw.hasUnresolvedOperations === true || task.raw.historyHasUnconfirmedOperations === true);
-  const selected = entries.find(row => row.operationId === selection) || failure || (pendingOriginal ? undefined : entries.at(-1));
+  const selected = focusFailure ? failure : entries.find(row => row.operationId === selection) || failure || (pendingOriginal ? undefined : entries.at(-1));
   const execution = selected?.operationId || '', originalKey = `${task.id}|${execution}`;
   const failureName = failure && execution === failure.operationId ? failure.failureStage === 'dependencies' ? '原依赖准备失败' : '原构建失败' : '';
   const [storedView, setView] = useState<Data | null>(null), [busy, setBusy] = useState(''), [error, setError] = useState(''), [painted, setPainted] = useState('');
@@ -63,6 +66,14 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
       if (opening || action === 'local.execution.readLogs') {
         if(action==='local.execution.observe'&&value.metadata?.observingOnly!==true)throw Error('未取得原执行的只读观察，不进入交互终端。');
         if (value.metadata?.taskId !== task.id || value.metadata?.executionId !== originalExecution || value.output?.executionId !== originalExecution) throw new Error('原日志或终端元数据身份不一致。');
+        if (focusFailure) {
+          const receipt=originalExecutionExit(value.output.observedExit,value.metadata,value.output.nativeStatus);
+          if (!failure || value.metadata.observingOnly !== true || !receipt || receipt.kind !== 'exit_code' || receipt.nativeStatus !== 'failed' ||
+              receipt.runId !== failure.runId || receipt.epoch !== failure.epoch || receipt.projectId !== failure.projectId ||
+              receipt.checkoutId !== failure.checkoutId || receipt.sourceDigest !== failure.sourceDigest || receipt.planDigest !== failure.planDigest ||
+              receipt.stepId !== failure.failureStage || receipt.value !== failure.exitCode)
+            throw new Error('未取得这次失败的原日志与退出回执，没有读取其他执行。');
+        }
         apply(value);
         if (opening) { setColumns(String(value.metadata.columns)); setHeight(String(value.metadata.rows)); live.current.uncertain = value.metadata.inputUncertain === true || value.output.inputUncertain === true; setUncertain(live.current.uncertain); setInputReceipt(null); live.current.stopRequested = stopped.has(originalKey) || value.stopRequested === true; setStopRequested(live.current.stopRequested); }
       } else if (action === 'local.execution.input' || action === 'local.execution.inputReceipt') {
@@ -110,10 +121,17 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const commands=bridge.getState().capabilities.commands,canObserve=commands.includes('local.execution.observe'),canInteract=commands.includes('local.execution.open')&&commands.includes('local.execution.input');
   const observed=originalExecutionExit(output.observedExit,metadata,output.nativeStatus);
   if (!entries.length) return null;
-  return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title="原执行与日志" description={failureName || (operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`)}>
-    {!operation && (entries.length > 1 || !selected) && <SelectField label="原项目执行" value={execution} isDisabled={!!busy || stopReview} options={entries.map(row => ({ id: row.operationId, label: `${row.routeKind==='termux'?'外部 Termux 回执':row.interactive&&canInteract?'当前 PTY':'本机只读执行'} · ${row.operationId}` }))} onChange={value => { if (pending.current || !current()) return; close(); live.current.execution = value; setSelection(value); }} />}
+  return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title={focusFailure ? failureName : '原执行与日志'} description={focusFailure && failure ? `实际退出码 ${failure.exitCode}` : failureName || (operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`)}>
+    {focusFailure && failure && <>
+      <dl className="pw-facts">
+        <div><dt>本次所用副本</dt><dd dir="auto">{projectName || failure.projectId} · <bdi>{failure.checkoutId}</bdi></dd></div>
+        <div><dt>原批准命令</dt><dd>{failure.approvedCommand ? <code dir="ltr" className="pw-field-hint">{failure.approvedCommand.join(' ')}</code> : '未能核对完整命令参数'}</dd></div>
+      </dl>
+      {editFailedCopy&&<div className="pw-form-actions"><Button variant="secondary" disabled={!active||!!busy} onClick={editFailedCopy}>编辑原副本的当前文件</Button></div>}
+    </>}
+    {!focusFailure && !operation && (entries.length > 1 || !selected) && <SelectField label="原项目执行" value={execution} isDisabled={!!busy || stopReview} options={entries.map(row => ({ id: row.operationId, label: `${row.routeKind==='termux'?'外部 Termux 回执':row.interactive&&canInteract?'当前 PTY':'本机只读执行'} · ${row.operationId}` }))} onChange={value => { if (pending.current || !current()) return; close(); live.current.execution = value; setSelection(value); }} />}
     {!selected?<p className="pw-field-hint">原操作仍有待核对项，没有用之前的日志当作本次结果。可以手动选择具体的历史执行。</p>:selected.routeKind==='termux'?(commands.includes('local.execution.savedTermux')?
-      <ProjectTermuxOriginalReceipt key={originalKey} task={task} row={selected} active={active&&expanded} run={run}/>:<p>当前版本没有外部 Termux 的原回调阅读能力，不转去本机终端。</p>):!view ? <><p className="pw-field-hint">读取原标准输出、错误输出和记录游标。打开页面不会新建或恢复执行。</p><div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request(canObserve?'local.execution.observe':'local.execution.open', { observingOnly: true }); }}>{failureName ? `查看${failureName}日志` : '查看原执行日志'}</Button>{selected.interactive && canInteract && <Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: false }); }}>打开原交互终端</Button>}</div></> : <>
+      <ProjectTermuxOriginalReceipt key={originalKey} task={task} row={selected} active={active&&expanded} run={run}/>:<p>当前版本没有外部 Termux 的原回调阅读能力，不转去本机终端。</p>):!view ? <><p className="pw-field-hint">读取原标准输出、错误输出和记录游标。打开页面不会新建或恢复执行。</p><div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request(focusFailure||canObserve?'local.execution.observe':'local.execution.open', { observingOnly: true }); }}>{failureName ? `查看${failureName}日志` : '查看原执行日志'}</Button>{selected.interactive && canInteract && <Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: false }); }}>打开原交互终端</Button>}</div></> : <>
       <div className="pw-local-screen-toolbar"><span><strong>{metadata.executable}</strong><small>{metadata.workingDirectory}</small></span><Button variant="ghost" size="small" onClick={close}>关闭视图</Button></div>
       <p className="pw-field-hint pw-execution-scope">{metadata.observingOnly ? '只读观察，不能输入或停止执行。' : '原交互终端；输入仍受原任务时限、额度与进程状态约束。'}关闭视图只结束查看，不停止原进程。</p>
       {observed&&<ProjectExecutionExitPanel key={JSON.stringify([view.handle,observed.executionId,observed.epoch,observed.kind,observed.value,observed.nativeStatus])} exit={observed} task={task} active={active&&!busy&&current()} prepare={prepareFailure}/>}

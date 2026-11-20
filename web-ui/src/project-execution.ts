@@ -5,14 +5,25 @@ const operationId = (value: unknown): value is string => typeof value==='string'
 
 /** Native detail locator only. Even if its operation is outside this history page,
  * the observation host rechecks the original task, execution and runtime receipt. */
-export function originalFirstBuildFailure(task: ProjectExecutionData): ProjectExecutionRow | undefined {
-  const raw=object(task.raw),fact=object(raw.originalFirstBuildFailure);
-  if(raw.taskProjection!=='detail_window'||raw.actorId!=='owner'||raw.spaceId!=='private'||raw.origin||
-    !raw.developmentContext?.ownerDraftFirstBuild||raw.id!==task.id||fact.taskId!==task.id||
+export type FirstBuildFailure = ProjectExecutionRow & {runId:string;epoch:number;projectId:string;checkoutId:string;
+  sourceDigest:string;planDigest:string;exitCode:number;approvedCommand?:string[]};
+export function originalFirstBuildFailure(task: ProjectExecutionData): FirstBuildFailure | undefined {
+  const raw=object(task.raw),fact=object(raw.originalFirstBuildFailure),scope=object(raw.developmentContext),pin=object(scope.ownerDraftFirstBuild);
+  if(raw.taskProjection!=='detail_window'||raw.kind!=='assistant'||raw.actorId!=='owner'||raw.spaceId!=='private'||raw.origin||
+    raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||
+    scope.runtime!=='managed_process_v1'||scope.draftOnly===true||raw.id!==task.id||fact.taskId!==task.id||
+    !operationId(pin.projectId)||pin.projectId!==scope.projectId||!operationId(pin.checkoutId)||pin.checkoutId!==scope.checkoutId||
+    typeof pin.sourceDigest!=='string'||!/^[a-f0-9]{64}$/.test(pin.sourceDigest)||pin.sourceDigest!==scope.initialSourceDigest||
     !operationId(fact.actionRunId)||fact.actionRunId!==raw.runId||!Number.isSafeInteger(fact.actionEpoch)||fact.actionEpoch<1||fact.actionEpoch!==raw.coordinatorEpoch||
     !operationId(fact.actionOperationId)||!Number.isInteger(fact.value)||fact.value<1||fact.value>255||
     !['dependency_exit','build_exit'].includes(fact.kind))return undefined;
-  return {operationId:fact.actionOperationId,runId:fact.actionRunId,interactive:false,routeKind:'managed',failureStage:fact.kind==='dependency_exit'?'dependencies':'build'};
+  const dependency=fact.kind==='dependency_exit',plan=dependency?pin.lockedDependencies?.planDigest:pin.planDigest;
+  if(typeof plan!=='string'||!/^[a-f0-9]{64}$/.test(plan))return undefined;
+  const argv=fact.approvedCommand,approvedCommand=fact.planDigest===plan&&Array.isArray(argv)&&argv.length>1&&argv.length<=20&&
+    argv[0]===pin.manager&&['npm','pnpm'].includes(argv[0])&&argv.every((word:unknown)=>typeof word==='string'&&/^[A-Za-z0-9._:/=-]{1,160}$/.test(word))?
+    argv as string[]:undefined;
+  return {operationId:fact.actionOperationId,runId:fact.actionRunId,epoch:fact.actionEpoch,interactive:false,routeKind:'managed',
+    failureStage:dependency?'dependencies':'build',projectId:pin.projectId,checkoutId:pin.checkoutId,sourceDigest:pin.sourceDigest,planDigest:plan,exitCode:fact.value,approvedCommand};
 }
 
 /** A locator for the original native journal. This projection grants no input or stop authority. */

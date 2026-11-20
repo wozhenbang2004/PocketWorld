@@ -76,21 +76,22 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
     </header>
     <div className="pw-project-overview-layout">
       <div className="pw-project-overview-work">
-        {savedWebContent}
-        <section className="pw-project-work-tools" aria-label="查找这个项目的工作">
-          <SearchField value={view.query} onChange={query => onViewChange({ query, selected: '', expanded: false })} isDisabled={!directoryAvailable}
+        {directoryAvailable && <section className="pw-project-work-tools" aria-label="查找这个项目的工作">
+          <SearchField value={view.query} onChange={query => onViewChange({ query, selected: '', expanded: false })}
             maxLength={500} aria-label="搜索这个项目保存的工作" placeholder="搜索项目工作目标或摘要…" clearLabel="清空项目工作搜索" />
           <div className="pw-project-work-filters" role="group" aria-label="项目工作状态">
             {([{ id: 'all', label: '全部' }, { id: 'attention', label: '待处理' }, { id: 'running', label: '进行中' }, { id: 'ended', label: '已结束' }] as const).map(option =>
-              <Button key={option.id} variant="ghost" aria-pressed={view.filter === option.id} disabled={!directoryAvailable}
+              <Button key={option.id} variant="ghost" aria-pressed={view.filter === option.id}
                 onClick={() => onViewChange({ filter: option.id, selected: '', expanded: false })}>{option.label}</Button>)}
           </div>
-        </section>
+        </section>}
         {attention.length > 0 && <section className="pw-project-work-group pw-project-work-attention" aria-label="需要你处理">
           <h3><IconAttention size={17} aria-hidden />需要你处理</h3>
           <ol className="pw-project-work-list pw-depth-tasks">{attention.map(renderTask)}</ol>
         </section>}
         {active.length > 0 && <section className="pw-project-work-group" aria-label="进行中的项目工作"><h3>进行中</h3><ol className="pw-project-work-list pw-depth-tasks">{active.map(renderTask)}</ol></section>}
+        {startContent && <section className="pw-project-new-work" aria-label="开始或继续项目工作">{startContent}</section>}
+        {savedWebContent && <section className="pw-project-saved-web" aria-label="找回这个项目的已保存网页">{savedWebContent}</section>}
         {recent.length > 0 && <section className="pw-project-work-group" aria-label="已结束的项目工作"><h3>{hasFilters ? '已结束' : '最近结束'}</h3><ol className="pw-project-work-list pw-depth-tasks">{(hasFilters ? recent : recent.slice(0, 3)).map(renderTask)}</ol>
           {!hasFilters && recent.length > 3 && <Accordion key={project.id} className="pw-project-work-history" expandedKeys={view.expanded ? ['earlier-project-results'] : []}
             onExpandedChange={keys => onViewChange({ expanded: keys.has('earlier-project-results') })}><AccordionItem id="earlier-project-results" title="更早记录" description={`本次已读取的其余 ${recent.length - 3} 项`}><ol className="pw-project-work-list pw-depth-tasks">{recent.slice(3).map(renderTask)}</ol></AccordionItem></Accordion>}
@@ -103,7 +104,6 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
         </div>}
         {directoryAvailable && <WorkDirectoryControls directory={directory} />}
         {work.length > 0 && !canOpenTask && <p className="pw-project-work-unavailable" role="status">当前宿主暂不支持打开任务记录。</p>}
-        {startContent && <div className="pw-project-new-work">{startContent}</div>}
         <Button className="pw-project-terminal-link" variant="ghost" size="small" leadingIcon={IconTerminal} trailingIcon={IconChevronRight}
           data-workspace-entry="project-terminal" onClick={onOpenTerminal}>项目终端</Button>
       </div>

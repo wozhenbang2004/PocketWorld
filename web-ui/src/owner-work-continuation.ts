@@ -15,6 +15,27 @@ const blocked: Record<string, string> = {
   original_read_required: unavailable,
 };
 
+/** The existing decision takes precedence; this never supplies an approval or an execution grant. */
+export function ownerWorkPendingTeamStart(task: unknown, originalReviewApprovals?: unknown): boolean {
+  const identity = ownerWorkIdentity(task), raw = record(record(task).raw);
+  if (!identity?.runId || raw.contextAvailable !== true || raw.contextWithdrawn === true ||
+      raw.sourceCurrentReadRequired === true || raw.origin != null) return false;
+  const now = Date.now();
+  const pending = (rows: unknown) => Array.isArray(rows) && rows.some(value => {
+    const row = record(value), capability = record(row.capability), definition = record(capability.teamDefinition);
+    if (row.runId !== identity.runId || row.tool !== 'teams_start' || row.state !== 'pending' ||
+        typeof row.id !== 'string' || !row.id || typeof row.expiresAt !== 'number' || !Number.isSafeInteger(row.expiresAt) || row.expiresAt <= now ||
+        capability.feature !== 'teams' || capability.command !== 'start' || !['collaborate', 'debate'].includes(String(definition.mode))) return false;
+    const members = definition.members;
+    return Array.isArray(members) && members.length > 0 && members.length <= 4 && members.every(value => {
+      const member = record(value);
+      return typeof member.id === 'string' && !!member.id && (member.runner == null || member.runner === 'model') &&
+        (member.device == null || member.device === 'phone');
+    });
+  });
+  return pending(raw.approvals) || pending(originalReviewApprovals);
+}
+
 /** Reading state only. Original native controls, not a checkpoint hint or UI label, admit work. */
 export function ownerWorkContinuationNote(task: unknown): string | null {
   const shown = record(task), raw = record(shown.raw), controls = record(raw.controls);

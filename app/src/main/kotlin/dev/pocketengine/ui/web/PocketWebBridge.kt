@@ -2205,7 +2205,8 @@ internal class PocketWebBridge(
                             requestId?.let { complete(it, null, "模型设置已变化，请等待保存回执后重新读取") }; return@fold
                         }
                         domainSnapshots["models"] = JSONObject(snapshot.toString()); domainErrors.remove("models")
-                        requestId?.let { complete(it, PocketWebState.publicValue(snapshot) as JSONObject, null) }
+                        requestId?.let { complete(it, (PocketWebState.publicValue(snapshot) as JSONObject)
+                            .put("modelSelectionRevision", observed.revision()), null) }
                     }, { error -> domainErrors["models"] = error.message ?: "本机模型目录暂不可读取"; requestId?.let { complete(it, null, domainErrors["models"]) } })
                     publishState()
                 }

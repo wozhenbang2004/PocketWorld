@@ -74,8 +74,8 @@ function originalHostWork(value:unknown,profile:Profile):OriginalWork[]{
   return result.sort((a,b)=>Number(b.unfinished)-Number(a.unfinished)||b.updatedAt-a.updatedAt);
 }
 
-export function SavedHostPicker({open,profiles,select,close,busy,error}:{
-  open:boolean;profiles:Profile[];select:(p:Profile)=>void;close:()=>void;busy:boolean;error:string;
+export function SavedHostPicker({open,profiles,select,configure,close,busy,error}:{
+  open:boolean;profiles:Profile[];select:(p:Profile)=>void;configure?:()=>void;close:()=>void;busy:boolean;error:string;
 }){
   const choices=unambiguousHosts(profiles);
   return <SettingsDialog isOpen={open} title="选择主机" closeLabel="返回原话" onClose={close}>
@@ -83,8 +83,12 @@ export function SavedHostPicker({open,profiles,select,close,busy,error}:{
       {choices.length?<><p>从已配置的 Companion 连接选择。这一步不联系主机，也不发送原话。</p>
         <div className="pw-connection-list">{choices.map(p=><HostRow key={p.id} icon={IconServer} title={label(p.name,'主机')}
           detail={p.serviceBase} disabled={busy} onOpen={()=>select(p)}/>)}</div></>:
-        !profiles.length&&<p role="status">原话仍只在手机。仅配对设备或保存 SSH 凭据不能接这类工作，需要已有的 HTTPS Companion 连接。</p>}
+        !profiles.length&&<p role="status">原话仍只在手机。这项工作需要已运行的 Companion 及其 HTTPS 地址和令牌；设备配对和 SSH 不适用。</p>}
       {choices.length<profiles.length&&<p role="status">同名同地址的连接未列出。先给它们不同的名称，才能选对主机。</p>}
+      {!choices.length&&configure&&<>
+        <Button variant="secondary" leadingIcon={IconServer} disabled={busy} onClick={configure}>打开主机连接设置</Button>
+        <p className="pw-field-hint">只保存手机上的连接配置。返回原话后再选择，不会自动连接或派发。</p>
+      </>}
       {error&&<p role="alert">{error}</p>}
     </div>
   </SettingsDialog>;

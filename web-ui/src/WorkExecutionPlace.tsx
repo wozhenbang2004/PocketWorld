@@ -2,6 +2,7 @@ import { IconFolder, IconMonitor, IconPhone, IconServer, IconTeam } from './icon
 import { homeWorkIdentity } from './butler-work-entry';
 import type { WorkCollectionTask } from './work-collection';
 import { phoneResourceHistory } from './phone-resource-history';
+import { originalHostLocation } from './original-seen-host-end';
 import './work-execution-place.css';
 
 function label(value: unknown): string {
@@ -10,12 +11,15 @@ function label(value: unknown): string {
 
 /** The place comes from the native work binding, not the conversation, the
  * currently selected project, the model's answer, or the screen viewing it. */
-export function WorkExecutionPlace({ task, projects, canReadPhoneResources }: { task: WorkCollectionTask & {executionMode?:string}; projects: {id:string;name:string}[]; canReadPhoneResources:boolean }) {
+export function WorkExecutionPlace({ task, projects, canReadPhoneResources, remoteProfiles }: {
+  task: WorkCollectionTask & {executionMode?:string;hostReceipt?:Record<string,unknown>}; projects: {id:string;name:string}[];
+  canReadPhoneResources:boolean;remoteProfiles?:unknown;
+}) {
   const binding = homeWorkIdentity(task);
   if (!binding || binding.domain === 'butler') return null;
   const r = task.raw!;
   const phoneRecords = binding.domain === 'phone' && canReadPhoneResources ? phoneResourceHistory(task,'embedded') : undefined;
-  let title = '', detail = '';
+  let title = '', detail = '', heading='执行位置';
   let Icon = IconMonitor;
   switch (binding.domain) {
     case 'project': {
@@ -34,14 +38,15 @@ export function WorkExecutionPlace({ task, projects, canReadPhoneResources }: { 
       detail = mode === 'background' ? '计划使用后台独立屏' : mode === 'main_screen' ? '计划使用手机主屏' : '原记录未核实执行屏幕';
       break;
     }
-    case 'remote':
+    case 'remote': {
       Icon = IconServer;
-      title = '远端 Companion';
-      detail = label(r.evidence?.hostWorkspaceAnchor) &&
-        r.evidence?.operationId === r.operationId && r.evidence?.profileId === r.externalRefs?.profileId
-        ? '原主机工作区。手机是交办入口，不在手机上改文件。'
-        : '任务绑定原远程连接；运行和成果以原回执为准。';
+      const original=originalHostLocation(task.id,r,task.hostReceipt,remoteProfiles);
+      title=original?(original.name||original.hostname):'远端 Companion';
+      if(original)heading='原选主机';
+      detail=original?[original.name?original.hostname:'',`工作区 ${original.workspace}`,
+        !original.current?'手机未找到匹配的原连接配置':''].filter(Boolean).join(' · '):'任务绑定原远程连接；运行和成果以原回执为准。';
       break;
+    }
     case 'ssh':
       Icon = IconServer;
       title = '原 SSH 主机';
@@ -60,7 +65,7 @@ export function WorkExecutionPlace({ task, projects, canReadPhoneResources }: { 
   }
   return <section className="pw-work-execution-place" aria-label="原执行位置">
     <Icon size={16} aria-hidden />
-    <div><span className="pw-work-execution-meta">执行位置</span><strong dir="auto">{title}</strong>
+    <div><span className="pw-work-execution-meta">{heading}</span><strong dir="auto">{title}</strong>
       {detail && <small dir="auto">{detail}</small>}
       {phoneRecords?.stored && <small>任务当时记录：{phoneRecords.stored.summary}</small>}
       {phoneRecords?.event && <small>同轮一笔清理：{phoneRecords.event.summary}</small>}</div>

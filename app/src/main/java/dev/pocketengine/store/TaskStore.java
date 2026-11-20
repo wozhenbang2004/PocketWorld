@@ -12305,6 +12305,9 @@ public final class TaskStore {
         return result;
     }
     private JSONObject currentFirstBuildFact(JSONObject task,JSONObject pin){
+        return currentFirstBuildFact(task,pin,false);
+    }
+    private JSONObject currentFirstBuildFact(JSONObject task,JSONObject pin,boolean ownerFailureDisplay){
         // No host query, replay or new effect. Never borrow an earlier success or another task's files.
         String id=task.optString("id"),run=task.optString("runId");
         try(Cursor rows=db.rawQuery("SELECT operation_id,state FROM operations WHERE task_id=? AND run_id=? AND tool='project_execute' ORDER BY rowid DESC LIMIT 32",new String[]{id,run})){
@@ -12316,7 +12319,7 @@ public final class TaskStore {
                 if(receipt!=null&&"not_dispatched".equals(receipt.opt("status"))&&Boolean.FALSE.equals(receipt.opt("accepted"))&&!receipt.has("projectExecution")){
                     laterNotDispatched=true;continue; // An explicitly unsent review has no process or log.
                 }
-                JSONObject fact=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.outcomeFact(pin,task,row);
+                JSONObject fact=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.outcomeFact(pin,task,row,ownerFailureDisplay);
                 return laterNotDispatched&&!failedFirstBuildExit(fact)?null:fact;
             }
             return null;
@@ -17555,9 +17558,10 @@ public final class TaskStore {
         result.put("events",chronological).put("operations",operationBodies).put("taskProjection","detail_window").put("auditBodyIncluded",true).put("historyEventPage",events).put("historyOperationPage",operations).put("hasUnresolvedOperations",hasUnresolved(id)).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(id));
         JSONObject development=result.optJSONObject("developmentContext"),first=development==null?null:development.optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
         if(!limited&&first!=null&&"assistant".equals(result.opt("kind"))&&"owner".equals(result.opt("actorId"))&&"private".equals(result.opt("spaceId"))&&result.isNull("origin")){
-            JSONObject failed=currentFirstBuildFact(result,first);
+            JSONObject failed=currentFirstBuildFact(result,first,true);
             if(failedFirstBuildExit(failed))result.put("originalFirstBuildFailure",new JSONObject().put("kind",failed.get("kind")).put("value",failed.get("value"))
-                .put("taskId",id).put("actionRunId",failed.get("actionRunId")).put("actionEpoch",failed.get("actionEpoch")).put("actionOperationId",failed.get("actionOperationId")));
+                .put("taskId",id).put("actionRunId",failed.get("actionRunId")).put("actionEpoch",failed.get("actionEpoch")).put("actionOperationId",failed.get("actionOperationId"))
+                .putOpt("approvedCommand",failed.optJSONArray("approvedCommand")).putOpt("planDigest",failed.opt("planDigest")));
         }
         if(result.optBoolean("historyHasUnconfirmedOperations")&&TaskStoreTeamFileEffects.integrator(result)&&!result.optString("runId").isEmpty())
             result.put(dev.pocketengine.features.teams.TeamIntegrationFileRecovery.KEY,TaskStoreTeamFileEffects.directory(db,result));

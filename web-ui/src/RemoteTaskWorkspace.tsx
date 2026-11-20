@@ -5,7 +5,7 @@ import { bridge } from './bridge';
 import { appendRemoteClipboard, managedRemoteRows, remoteApprovalClaim, remoteDraftState, remoteEditor, remoteObject as object, remoteProgress, remoteReadsPaused, remoteRows as rows, sameRemoteEditor, savedRemoteEditor, type RemoteData as Data, type RemoteEditor } from './remote-task-workspace';
 import './remote-task-workspace.css';
 import './collaboration-depth.css';
-import {originalSeenHostEnd} from './original-seen-host-end';
+import {originalHostReceipt,originalSeenHostEnd} from './original-seen-host-end';
 import { RemoteSavedResults } from './RemoteSavedResults';
 import { RemoteOfflinePickup } from './RemoteOfflinePickup';
 import {RemotePhoneDraftShelf} from './RemotePhoneDraftShelf';
@@ -245,21 +245,24 @@ export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProj
     const off=bridge.subscribe(retire);document.addEventListener('visibilitychange',retire);
     return()=>{off();document.removeEventListener('visibilitychange',retire)};
   },[attempt]);
-  const proof=receipt?.taskId===taskId&&receipt.runId===raw.runId?receipt:undefined;
-  const seenEnd=proof?.epoch===raw.coordinatorEpoch?originalSeenHostEnd(proof):'';
-  const accepted=proof?.stage==='host_acknowledged'&&typeof proof.jobId==='string'&&proof.jobId.length>0;
-  const statusOnly=proof?.epoch===raw.coordinatorEpoch&&proof?.statusOnRequest===true&&supported('remoteTask.originalLinuxHostStatus');
+  const proof=originalHostReceipt(taskId,raw,receipt),seenEnd=originalSeenHostEnd(proof);
+  const accepted=proof?.stage==='host_acknowledged',registered=proof?.stage==='phone_registered';
+  const statusOnly=receipt?.taskId===taskId&&receipt.runId===raw.runId&&receipt.epoch===raw.coordinatorEpoch&&
+    receipt.statusOnRequest===true&&supported('remoteTask.originalLinuxHostStatus');
+  const previous=typeof proof?.executorStatus==='string'&&proof.executorStatus!=='unknown'&&Object.hasOwn(originalStatusLabels,proof.executorStatus)
+    ?proof.executorStatus==='completed'?'执行已结束':originalStatusLabels[proof.executorStatus]:'';
   return <><section className="pw-remote-workspace" aria-label="原主机任务的本机回执">
     <div className="pw-section-heading"><h3>本机回执</h3>{canObserve&&<Button variant={statusOnly?'ghost':'secondary'} disabled={!foreground||!supportedChoice} onClick={()=>{
       if(taskVisible(taskId)){setFollow(null);selectedWindow.current=onlineView?'':ticket();setObserving(selectedWindow.current)}
     }}>{onlineView?(statusOnly?'停止查看详情':'停止查询，只看本机'):statusOnly?'查看原会话详情':'查询原主机的这次作业'}</Button>}</div>
     {statusOnly&&canObserve&&!onlineView&&<OriginalLinuxHostStatus key={attempt} taskId={taskId} run={raw.runId} epoch={raw.coordinatorEpoch} disabled={!foreground}/>}
-    <p className="pw-field-hint">{accepted?(proof!.detailRetired===true?'原主机曾接单，详细记录已归档。':'原主机曾接单。'):
+    <p className="pw-field-hint">{accepted?(proof.detailRetired===true?'手机已核对原主机曾接单，详情已归档。':'手机已核对原主机曾接单。'):
+      registered?'手机已登记，尚未核对到原主机接单。':
       nativeProject?(origin.kind==='native_remote_session_branch'?'这是一条已登记的独立会话分支。':'这是从原项目历史登记的工作。'):'这里展示手机留存的原任务记录。'}
       {onlineView?'停止查询只关闭观察，不停止主机作业。':statusOnly?'打开本页不联系原主机。查询只核对一次状态，不继续运行。':'本页只读手机记录。'}</p>
     {canObserve&&!supportedChoice&&<p className="pw-field-hint">当前安装版本不能固定这次执行轮次。仍可查看手机记录，没有改查别的作业。</p>}
     {!canObserve&&<p className="pw-field-hint">当前页面不能核对原私人执行轮次；没有改查最新作业。来自团队或渠道的事项，可从原事项继续核对。</p>}
-    {accepted&&<p className="pw-field-hint">原主机作业：<code>{proof!.jobId}</code>{!seenEnd&&proof!.detailRetired!==true&&proof!.executorStatus&&proof!.executorStatus!=='unknown'&&' · 上次回执：'+executionLabel(proof!.executorStatus)}</p>}
+    {accepted&&<p className="pw-field-hint">原主机作业：<code>{String(proof.jobId)}</code>{!seenEnd&&proof.detailRetired!==true&&previous&&' · 上次回执：'+previous}</p>}
     {seenEnd&&<p className="pw-field-hint">{seenEnd} 这是手机留存的原执行端回执，不等于成果已经验收。</p>}
     {nativeProject&&<details className="pw-field-hint"><summary>所登记的执行轮次</summary>本次操作 <code>{raw.runId}</code> · 第 {raw.coordinatorEpoch} 轮</details>}
   </section>

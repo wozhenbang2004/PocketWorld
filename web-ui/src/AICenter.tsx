@@ -21,6 +21,7 @@ type ViewPosition = { scroll: number; focusKey?: string };
 type Props = {
   state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: Back;
   returnToOrigin?: { label: string; go: () => void };
+  onReturnOriginalInput?: (choice: AIChoice) => Promise<boolean>;
   initialView?: 'main' | 'proxy'; onHostSectionChange: (section: 'models' | 'accounts' | 'proxy') => void;
   renderEditor: (connection: Data | undefined, preset: AIServicePreset | undefined, onClose: () => void, onSaved: (value: Data) => void, registerBack: Back, field?: AIEditorField) => ReactNode;
   renderAccounts: (accountId: string | undefined, adding: boolean, registerBack: Back, onModelChoice: (choice: AIChoice) => void) => ReactNode;
@@ -37,7 +38,7 @@ const presets: AIServicePreset[] = [
 
 const factLabels: Record<string, string> = { CONTEXT_WINDOW: '上下文容量', OUTPUT_TOKENS: '目录输出上限', IMAGE_INPUT: '图片输入', TOOL_CALLS: '工具调用' };
 /** Product composition of the native connection, account and catalog owners. */
-export function AICenter({ state, data, supported, run, registerTransientBack, initialView = 'main', returnToOrigin, onHostSectionChange, renderEditor, renderAccounts, renderTools, renderProxy }: Props) {
+export function AICenter({ state, data, supported, run, registerTransientBack, initialView = 'main', returnToOrigin, onReturnOriginalInput, onHostSectionChange, renderEditor, renderAccounts, renderTools, renderProxy }: Props) {
   const [tab, setTab] = useState('services'), [view, setView] = useState<View>({ kind: initialView });
   const [modelPresentation, setModelPresentation] = useState<AIModelPickerPresentation>({ query: '', filter: 'all' });
   const [accountSnapshot, setAccountSnapshot] = useState<Data>({}), [localSnapshot, setLocalSnapshot] = useState<Data | null>(null);
@@ -99,9 +100,9 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     onHostSectionChange(hostSection(next)); setView(next);
   };
   const back = () => {
-    if (completion) { if (returnToOrigin && !completion.accountOnly) returnToOrigin.go(); else setCompletion(null); return true; }
     // The child starts its native write before React commits the busy render.
     if (pending.current || pickerPending.current || busy) return true;
+    if (completion) { if (returnToOrigin && !completion.accountOnly) returnToOrigin.go(); else setCompletion(null); return true; }
     if (childBack.current?.()) return true;
     if (serviceChange) { setServiceChange(null); return true; }
     if (modelReview) { setModelReview(null); return true; }
@@ -132,6 +133,18 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   const completedChoice = (choice: AIChoice) => {
     if (returnToOrigin || choice.accountOnly) setCompletion(choice);
     else setNotice(`已选择 ${choice.source} 的 ${choice.model} 作为默认模型。`);
+  };
+  const returnOriginalInput = async () => {
+    if (!completion || !onReturnOriginalInput || pending.current || pickerPending.current) return;
+    const ticket = generation.current;
+    pending.current = true; setBusy(true); setError('');
+    try {
+      if (!await onReturnOriginalInput(completion)) throw new Error('原输入窗口已变化，未打开另一份草稿。');
+    } catch (failure) {
+      if (alive.current && ticket === generation.current) setError(failure instanceof Error ? failure.message : '原输入尚未核对，草稿仍保留。');
+    } finally {
+      if (ticket === generation.current) { pending.current = false; if (alive.current) setBusy(false); }
+    }
   };
   const runPicker: Run = async (action, args = {}) => {
     const ticket = generation.current, selecting = ['models.api.select', 'models.accounts.select', 'models.groups.select'].includes(action);
@@ -177,7 +190,7 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     const current = ++generation.current; pending.current = true; setBusy(true); setError(''); setModelReview(null);
     try {
       const value = await run('models.catalog.select', { reviewHandle: original.reviewHandle, options: { maxOutputTokens: output, reasoning: object(original.options).reasoning, imageTokenReserve: imageReserve } });
-      const choice = apiChoice(value, connections, { id: original.originalConnectionId, model: original.requestedModelId, label: text(connection.name) });
+      const choice = apiChoice(value, connections, { id: original.originalConnectionId, model: original.requestedModelId, label: text(connection.name), binding: object(original.model).binding });
       if (!choice) throw new Error('没有收到这项服务和模型的保存回执。');
       if (alive.current && current === generation.current) completedChoice(choice);
     } catch (failure) { if (alive.current && current === generation.current) { setSelectionUnknown(true); setError(`${failure instanceof Error ? failure.message : '选择结果待核对。'} 请重新读取当前状态，没有自动重试。`); } }
@@ -302,14 +315,19 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     if (completion) root.current?.querySelector<HTMLElement>('[data-ai-outcome]')?.focus({ preventScroll: true });
   }, [completion]);
   if (completion) return <section className="pw-ai-center" data-ai-view="selected" ref={root}>
-    <div className="pw-ai-finish" aria-labelledby="pw-ai-finish-title"><IconModel aria-hidden size={26}/>
-      <h2 id="pw-ai-finish-title" data-ai-outcome tabIndex={-1}>{completion.accountOnly ? '账号模型已记录，还不能用于管家' : '默认模型已选好'}</h2>
+    <div className="pw-ai-finish" aria-labelledby="pw-ai-finish-title" aria-busy={busy}><IconModel aria-hidden size={26}/>
+      <h2 id="pw-ai-finish-title" data-ai-outcome tabIndex={-1}>{completion.accountOnly ? '账号模型已记录，还不能用于管家' : onReturnOriginalInput ? '模型选择已保存' : '默认模型已选好'}</h2>
       <p className="pw-ai-finish-choice"><strong>{completion.model}</strong><span>{completion.source}</span></p>
-      <p>{completion.accountOnly ? '当前版本没有接通账号推理。原默认模型没有被替换，可以改用已接入的 API 服务。' : '新工作会沿用这项默认选择；有单独模型设置的对话不变。这里没有发送测试消息。'}</p>
+      <p>{completion.accountOnly ? '当前版本没有接通账号推理。原默认模型没有被替换，可以改用已接入的 API 服务。'
+        : onReturnOriginalInput ? '返回前核对这份输入是否跟随所选模型。有单独选择的对话不会被改动。'
+        : '新工作会沿用这项默认选择；有单独模型设置的对话不变。这里没有发送测试消息。'}</p>
+      {error && <p className="pw-field-error" role="alert">{error}</p>}
       <div className="pw-ai-detail-actions">
-        {completion.accountOnly && <Button onClick={chooseOtherSource}>选择其他服务</Button>}
-        {returnToOrigin && <Button variant={completion.accountOnly ? 'secondary' : 'primary'} onClick={returnToOrigin.go}>{returnToOrigin.label}</Button>}
-        {!completion.accountOnly && <Button variant="ghost" onClick={() => setCompletion(null)}>继续管理模型</Button>}
+        {completion.accountOnly && <Button disabled={busy} onClick={chooseOtherSource}>选择其他服务</Button>}
+        {onReturnOriginalInput ? <Button variant={completion.accountOnly ? 'secondary' : 'primary'} disabled={busy} onClick={() => void returnOriginalInput()}>
+          {busy ? '正在核对原输入…' : completion.accountOnly ? '返回原输入' : '核对并返回原输入'}
+        </Button> : returnToOrigin && <Button variant={completion.accountOnly ? 'secondary' : 'primary'} onClick={returnToOrigin.go}>{returnToOrigin.label}</Button>}
+        {!completion.accountOnly && <Button variant="ghost" disabled={busy} onClick={() => setCompletion(null)}>继续管理模型</Button>}
       </div>
     </div>
   </section>;

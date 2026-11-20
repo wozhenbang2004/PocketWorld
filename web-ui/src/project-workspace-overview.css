@@ -53,6 +53,8 @@
 .pw-project-work-empty p { max-width: 48ch; margin: 8px 0 0; color: var(--pw-copy); font-size: 13px; line-height: 23px; overflow-wrap: anywhere; }
 .pw-project-work-unavailable { margin: 14px 4px 0; color: var(--pw-copy); font-size: 12px; line-height: 20px; }
 .pw-project-new-work { margin-top: var(--pw-gap-section, 28px); min-width: 0; }
+.pw-project-saved-web { min-width: 0; }
+.pw-project-overview-work > :is(.pw-project-new-work, .pw-project-saved-web) + :is(.pw-project-saved-web, .pw-project-work-group) { margin-top: var(--pw-gap-section, 28px); }
 .pw-project-new-work:first-child { margin-top: 0; }
 .pw-project-overview-tools { min-width: 0; padding-top: 4px; }
 .pw-project-overview-tools h3 { margin-left: 10px; }

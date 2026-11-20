@@ -256,11 +256,32 @@ public final class OwnerDraftFirstBuild {
     }
     /** Only the original host-enveloped operation may produce a public scalar fact; no output bodies here. */
     public static JSONObject outcomeFact(JSONObject pin,JSONObject task,JSONObject row)throws Exception{
+        return outcomeFact(pin,task,row,false);
+    }
+    public static JSONObject outcomeFact(JSONObject pin,JSONObject task,JSONObject row,boolean ownerFailureDisplay)throws Exception{
         JSONObject request=ProjectDevelopment.originalPollRequest(task,row),plan=request.getJSONObject("plan"),binding=request.getJSONObject("binding");
         if(!task.getString("id").equals(binding.opt("taskId"))||!task.getString("runId").equals(binding.opt("runId"))||
             task.getInt("coordinatorEpoch")!=binding.optInt("coordinatorEpoch",-1)||!row.getString("operationId").equals(binding.opt("operationId")))return null;
         requirePlan(pin,plan,task.getString("id"));
-        return readFact(pin,task,row,request);
+        JSONObject fact=readFact(pin,task,row,request);
+        if(ownerFailureDisplay&&fact!=null&&fact.optInt("value",-1)>0){
+            JSONObject step=ProjectBuildPlan.step(plan,request.getString("stepId")),payload=step.getJSONObject("payload");
+            String manager=pin.getString("manager");
+            JSONArray approved=switch(fact.optString("kind")){
+                case "build_exit" -> new JSONArray().put("run").put("build");
+                case "dependency_exit" -> OwnerDraftNodeDependencies.argv(manager);
+                default -> null;
+            };
+            // Only the closed Node command vocabulary. Never widen the generic
+            // journal projection to script bodies, arbitrary argv or env.
+            if(approved!=null&&Set.of("npm","pnpm").contains(manager)&&manager.equals(payload.opt("executable"))&&
+                "project.runtime.run".equals(step.opt("localCommand"))&&ProjectSources.canonical(approved).equals(ProjectSources.canonical(payload.opt("argv")))){
+                JSONArray command=new JSONArray().put(manager);
+                for(int i=0;i<approved.length();i++)command.put(approved.getString(i));
+                fact.put("approvedCommand",command).put("planDigest",plan.getString("planDigest"));
+            }
+        }
+        return fact;
     }
     /** Carries only actual same-task receipts; an earlier dependency receipt is evidence, never approval. */
     public static JSONObject priorDependencyFact(JSONObject pin,JSONObject task,JSONObject row,JSONObject binding)throws Exception{
