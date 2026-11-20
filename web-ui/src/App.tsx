@@ -170,6 +170,7 @@ type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string}};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
+type DraftAcceptanceClick=OriginalProjectDraft&{window:TaskReviewWindow;reviewHandle:string;reviewDigest:string;reviewedRevision:number};
 type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
 type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity;result?:{work:TaskResult;navigation:number}};
@@ -230,6 +231,27 @@ function noSavedDraftInReview(task:Task,review:Review|null){
   !Object.hasOwn(raw,'projectEditDraftId')&&fact.taskId===task.id&&typeof fact.runId==='string'&&!!fact.runId&&fact.runId===raw.runId&&
   Number.isSafeInteger(fact.epoch)&&fact.epoch>0&&fact.epoch===raw.coordinatorEpoch&&
   typeof fact.resultReviewDigest==='string'&&/^[a-f0-9]{64}$/.test(fact.resultReviewDigest)&&fact.resultReviewDigest===raw.resultReviewDigest;
+}
+function fixedDraftReviewTarget(task?:Task):OriginalProjectDraft|null{
+ const raw=task?.raw,scope=raw?.developmentContext;
+ if(!task||!raw||!privateProjectTask(task)||raw.id!==task.id||raw.status!==task.status||raw.executionMode!=='capabilities'||
+    scope?.draftOnly!==true||scope.runtime!=='managed_process_v1'||raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||
+    raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||raw.teamRunId!=null||raw.parentTaskId!=null||raw.memberId!=null||
+    typeof raw.runId!=='string'||!raw.runId.trim()||!Number.isSafeInteger(raw.coordinatorEpoch)||raw.coordinatorEpoch<1||
+    typeof raw.projectEditDraftId!=='string'||!/^[a-f0-9]{64}$/.test(raw.projectEditDraftId))return null;
+ return {taskId:task.id,runId:raw.runId,epoch:raw.coordinatorEpoch,draftId:raw.projectEditDraftId};
+}
+function draftAcceptanceClick(review:Review,window:TaskReviewWindow):DraftAcceptanceClick|null{
+ const original=fixedDraftReviewTarget(review.task),raw=review.task?.raw;
+ const digest=raw?.resultReviewDigest,revision=raw?.resultRevision;
+ return original?.taskId===window.taskId&&review.task?.status==='needs_confirmation'&&
+  typeof digest==='string'&&/^[a-f0-9]{64}$/.test(digest)&&Number.isSafeInteger(revision)&&revision>0
+  ? {...original,window,reviewHandle:review.reviewHandle,reviewDigest:digest,reviewedRevision:revision}:null;
+}
+function savedDraftAcceptanceMatches(task:Task,click:DraftAcceptanceClick){
+ const current=fixedDraftReviewTarget(task),receipt=task.raw?.resultConfirmation,revision=task.raw?.resultRevision;
+ return task.status==='completed'&&current?.taskId===click.taskId&&current.runId===click.runId&&current.epoch===click.epoch&&current.draftId===click.draftId&&
+  receipt?.completed===true&&receipt.resultReviewDigest===click.reviewDigest&&Number.isSafeInteger(revision)&&revision>click.reviewedRevision&&receipt.confirmedResultRevision===revision;
 }
 const timeLabel=(value:any)=>typeof value==='number'&&value>0?new Date(value).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
 const sourceRefs=(m:Message)=>asArray<Json>(m.memoryReference?.sources||m.memoryReference?.sourceRefs||m.submission?.sourceRefs).map((s,i)=>({...s,id:String(s.id||s.sourceId||s.sourceRef||i),title:s.title||s.name||s.label||'来源'}));
@@ -513,6 +535,7 @@ export default function App(){
  const [taskMenuOpen,setTaskMenuOpen]=useState(false);
  const [localError,setLocalError]=useState(''),[localStatus,setLocalStatus]=useState(''),[review,setReview]=useState<Review|null>(null),[reviewPending,setReviewPending]=useState(false),[reviewSubmitted,setReviewSubmitted]=useState(false),[reviewNote,setReviewNote]=useState(''),[reviewFeedbackOpen,setReviewFeedbackOpen]=useState(false),[scopeTools,setScopeTools]=useState(''),[scopeModels,setScopeModels]=useState('');
  const [reviewReceipt,setReviewReceipt]=useState('');
+ const [draftAcceptance,setDraftAcceptance]=useState<DraftAcceptanceClick|null>(null);
  const [projectFeedback,setProjectFeedback]=useState<Record<string,string>>({}),projectFeedbackRef=useRef<Record<string,string>>({});
  const putProjectFeedback=(key:string,text:string)=>{if(!key)return;const next={...projectFeedbackRef.current,[key]:text};projectFeedbackRef.current=next;setProjectFeedback(next)};
  const [locateProjectFeedback,setLocateProjectFeedback]=useState('');
@@ -2107,11 +2130,16 @@ export default function App(){
   }
   const request=reviewRequest.current,originalTask=taskId;
   const planDecision=action==='tasks.plan.enter'||action==='tasks.approve'&&asArray<Json>(review.approvals).some(row=>(row.approvalId||row.id)===args.approvalId&&row.webReview?.kind==='execution_plan');
+  const at=reviewWindow.current;
+  const draftClick=action==='tasks.confirm'&&args.completed===true&&taskLayer==='overview'&&at&&currentReviewWindow(at)?draftAcceptanceClick(review,at):null;
   setReviewSubmitted(true);setReviewReceipt('');
   const payload={reviewHandle:review.reviewHandle,...args};
   if(planDecision)setTaskErrors(previous=>({...previous,[originalTask]:''}));
   void (planDecision?bridge.command(action,payload):act(action,payload,taskId)).then(value=>{
-   if(!planDecision||reviewRequest.current!==request)return;
+   if(reviewRequest.current!==request)return;
+   // This ACK is only admission. The exact persisted confirmation is checked in the task view.
+   if(draftClick&&obj(value).accepted===true&&currentReviewWindow(draftClick.window))setDraftAcceptance(draftClick);
+   if(!planDecision)return;
    const receipt=obj(value),original=obj(receipt.task||receipt);
    if((original.id||original.taskId)!==originalTask)throw new Error('未确认这次决定属于原任务，请重新读取原记录；不要重复提交。');
    if(receipt.presentationCurrent===false){setReviewReceipt('原决定已有保存回执，但审阅窗口已关闭。请核对原任务中的继续状态；没有重新提交。');return;}
@@ -2471,7 +2499,14 @@ export default function App(){
     can('conversation.select')?()=>void returnToTaskConversation(task):undefined}
    onReconcile={overviewActive&&can('tasks.open')?target=>openTask(target.taskId,'process',false,undefined,undefined,target):undefined}/>;
   const refreshControl=can('tasks.review')&&<IconButton icon={IconRefresh} aria-label={review?'重新核对':'读取可用操作'} title={review?'重新核对':'读取可用操作'} disabled={readingReview||questionPending} onClick={showTaskReview}/>;
-  const reviewStatus=<>{readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}{reviewStale&&!teamDeclineSettlesReview&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}{continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting} onClick={()=>selectConversation(continuation.original.conversationId)}>返回原对话，草稿保留</Button>}</section>}{!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}</>;
+  const draftAcceptanceSaved=overviewActive&&reviewSubmitted&&draftAcceptance&&review?.reviewHandle===draftAcceptance.reviewHandle&&
+    currentReviewWindow(draftAcceptance.window)&&!taskErrors[task.id]&&!state.taskActionErrors?.[task.id]&&savedDraftAcceptanceMatches(task,draftAcceptance);
+  const reviewStatus=<>
+    {readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}
+    {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
+    {continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting} onClick={()=>selectConversation(continuation.original.conversationId)}>返回原对话，草稿保留</Button>}</section>}
+    {draftAcceptanceSaved?<p className="pw-muted" role="status">验收已记录，原稿保留。</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
+  </>;
   const decision=(declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||attention(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
       {taskLayer==='overview'&&reviewStatus}
       {taskLayer==='overview'&&!reviewStale&&actionNames.includes('tasks.confirm')&&noSavedDraftInReview(task,review)&&<p className="pw-field-hint" role="status">本轮还没有可核对的独立改稿。</p>}
@@ -3273,10 +3308,12 @@ export default function App(){
    else if(kind==='project')void openSetup('tools');
   }:undefined}/>;
  const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}/>;
- const chatPage=<main className={`pw-chat-workspace${ready&&!messages.length&&!foregroundTurn?' pw-chat-empty':''}`}>
+ const chatOpening=ready&&!messages.length&&!foregroundTurn;
+ const readingChatOpening=chatOpening&&state.loadingFirstConversationMessages===true;
+ const chatPage=<main className={`pw-chat-workspace${chatOpening&&!readingChatOpening?' pw-chat-empty':''}`}>
   <div ref={scroll} tabIndex={-1} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
    {ready&&messages.length>0&&state.conversationId&&can('conversation.reader.open')&&<Button variant="ghost" size="small" leadingIcon={IconHistory} onClick={event=>void openChatHistory(event.currentTarget)}>浏览对话记录</Button>}
-   {!ready?<div className="pw-start"><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>正在恢复当前工作</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:!messages.length&&!foregroundTurn?<ConversationOpening setup={!composerModelName&&!displayGate?modelSetupAction:undefined}
+   {!ready||readingChatOpening?<div className="pw-start" role={readingChatOpening?'status':undefined}><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>{readingChatOpening?'正在读取当前对话':'正在恢复当前工作'}</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:chatOpening?<ConversationOpening setup={!composerModelName&&!displayGate?modelSetupAction:undefined}
     editing={editingChat} pending={pendingHere} onDraft={stageExample}/>:null}
    {ready&&replyRows.length>0&&<div ref={chatMessageList} className="pw-message-stream">{replyRows.map(row=>{
     if(row.kind==='live'){
@@ -3312,6 +3349,7 @@ export default function App(){
     const memoryShortcut=intent==='chat'&&row.lastOfRole&&!phoneResult&&!taskResult&&can('taskMemory.answer')?originalAnswerMemoryMessage(m,replyContext):null;
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
+      receiptsInMenu={!!savedTrace&&Number.isSafeInteger(m.sourceRevision)&&!!m.content.trim()&&can('tasks.open')&&can('history.read')}
       actionElsewhere={!!linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')||!!chatAttention&&chatAttention.id===noteIdentity?.taskId}
       onRead={noteIdentity&&can('tasks.open')?(layer,trigger)=>openTurnNotes(noteIdentity,layer,savedTrace?m:undefined,trigger):undefined}/>}
      {m.originalHostFinal?<div className="pw-user-text">{m.content}</div>:m.role==='assistant'&&phoneResult&&m.id&&m.sourceRevision===1?<PhoneMessageReturn result={phoneResult} conversation={String(state.conversationId||'')} messageId={m.id} revision={Number(m.sourceRevision)} body={m.content}

@@ -860,6 +860,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     /** Deliberately not serialized: a cold unknown/not_found never grants permission to send. */
     private val locallyUnsent=mutableMapOf<String,LocalUnsent>()
     private var latestChatGet: String? = null
+    internal fun loadingFirstConversationMessages(): Boolean {
+        val conversation = state.conversationId?.takeIf(String::isNotBlank) ?: return false
+        if (state.messages.isNotEmpty()) return false
+        val requestId = latestChatGet ?: return false
+        val request = pending[requestId] ?: return false
+        return request.first == "assistant.get" && request.second.opt("conversationId") == conversation
+    }
     var projectPreview by mutableStateOf<dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified?>(null)
         private set
     var projectPreviewTaskId by mutableStateOf<String?>(null)

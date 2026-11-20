@@ -2,13 +2,13 @@
 // Only the native private conversation, task, run and epoch may lend their
 // records to this particular reply. Message text is not evidence of tool use.
 import type {WorkIdentity} from './conversation-work';
-import {getRecentTaskProgress,getTaskOperations,presentOperation} from './task-presentation';
+import {getRecentTaskProgress,getTaskEventHistory,getTaskOperations,presentOperation} from './task-presentation';
 import {toolTitle} from './tool-catalog';
 
 type Task={id:string;status:string;raw?:Record<string,any>};
 type Group='attention'|'failed'|'occurred'|'notOccurred'|'checked'|'verified'|'returned';
 export type TurnNeed={state:'error'|'waiting'|'stopping';label:string;action:string;layer:'overview'|'review'};
-export type TurnNotes={need?:TurnNeed;groups:{kind:Group;title:string;count:number;names:string}[];lastTool:string;recent:string;limited:boolean};
+export type TurnNotes={need?:TurnNeed;groups:{kind:Group;title:string;count:number;names:string}[];lastTool:string;recent:string;limited:boolean;settledReceiptsOnly:boolean};
 const titles:Record<Group,string>={attention:'需要核对',failed:'调用未完成',occurred:'你已核对发生',notOccurred:'你已核对未发生',checked:'你已记录核对结果',verified:'有成功回执',returned:'收到工具回执'};
 const states:Record<string,TurnNeed>={
  failed:{state:'error',label:'这次工作未完成',action:'查看失败原因',layer:'overview'},
@@ -30,6 +30,7 @@ export function conversationTurnNotes(conversation:string,identity:WorkIdentity|
     raw.contextAvailable===false||raw.executionRole==='owner_work'||raw.runId!==identity.runId||raw.coordinatorEpoch!==identity.epoch)return null;
  const recent=getRecentTaskProgress(task);
  const settled=['completed','failed','cancelled','canceled','stopped'].includes(task.status);
+ const pendingApproval=Array.isArray(raw.approvals)&&raw.approvals.some((a:{state?:string;status?:string})=>a&&['pending','waiting'].includes(a.state||a.status||''));
  let need:TurnNeed|undefined;
  // A task-wide native warning may refer to an operation outside this bounded
  // window. Do not attach its effect to the most recent tool or claim success.
@@ -37,12 +38,15 @@ export function conversationTurnNotes(conversation:string,identity:WorkIdentity|
  else if(Object.hasOwn(states,task.status))need=states[task.status];
  else if(!settled&&['waiting_approval','awaiting_approval','waiting_permission','awaiting_permission'].includes(task.status))need=permission;
  else if(!settled&&['awaiting_user','waiting_user'].includes(task.status))need=question;
- else if(!settled&&Array.isArray(raw.approvals)&&raw.approvals.some((a:{state?:string;status?:string})=>a&&['pending','waiting'].includes(a.state||a.status||'')))need=permission;
+ else if(!settled&&pendingApproval)need=permission;
  const groups=new Map<Group,Map<string,number>>();
  const add=(kind:Group,name:string)=>{const entries=groups.get(kind)||new Map<string,number>();entries.set(name,(entries.get(name)||0)+1);groups.set(kind,entries)};
+ let allCallsReturned=true;
  for(const op of getTaskOperations(task)){
-  if(op.runId!==identity.runId||!op.bodyAvailable)continue;
+  if(op.runId!==identity.runId)continue;
+  if(!op.bodyAvailable){allCallsReturned=false;continue;}
   const row=presentOperation(op),label=nameOf(row.name);
+  allCallsReturned&&=row.status==='returned';
   const receipt=op.receipt as {source?:string;outcome?:string}|undefined;
   if(row.status==='returned'&&op.state==='resolved'&&receipt?.source==='owner_reconciliation')
    add(receipt.outcome==='occurred'?'occurred':receipt.outcome==='not_occurred'?'notOccurred':'checked',label);
@@ -64,5 +68,12 @@ export function conversationTurnNotes(conversation:string,identity:WorkIdentity|
  if(recent.source==='event'&&recent.status==='unknown'&&recent.stateLabel==='结果未核实')add('attention',recent.detail||recent.title);
  const ordered=(Object.keys(titles) as Group[]).filter(kind=>groups.has(kind)).map(kind=>({kind,title:titles[kind],count:[...groups.get(kind)!.values()].reduce((a,b)=>a+b,0),
   names:[...groups.get(kind)!].map(([name,n])=>n>1?name+'（'+n+' 次）':name).join('、')}));
- return {need,groups:ordered,lastTool:recent.source==='operation'&&recent.status!=='error'&&recent.status!=='unknown'?nameOf(recent.title):'',recent:recentLabel,limited:recent.partial};
+ // Only settle the placement of already projected receipts. An incomplete
+ // projection or an original pending/failed record keeps the current treatment.
+ const settledReceiptsOnly=task.status==='completed'&&raw.status==='completed'&&raw.kind==='assistant'&&raw.origin==null&&
+  raw.ownerWorkPreparation==null&&raw.contextWithdrawn!==true&&raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable'&&
+  raw.historyHasUnconfirmedOperations===false&&raw.hasUnresolvedOperations!==true&&!pendingApproval&&raw.evidence?.ownerQuestion==null&&
+  !need&&!recent.partial&&recent.status==='returned'&&allCallsReturned&&groups.size>0&&!groups.has('attention')&&!groups.has('failed')&&
+  !getTaskEventHistory(task).entries.some(event=>event.isCurrentRun&&(event.status==='failed'||event.status==='unknown'));
+ return {need,groups:ordered,lastTool:recent.source==='operation'&&recent.status!=='error'&&recent.status!=='unknown'?nameOf(recent.title):'',recent:recentLabel,limited:recent.partial,settledReceiptsOnly};
 }

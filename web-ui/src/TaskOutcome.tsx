@@ -153,8 +153,12 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const buildScope = record.raw?.developmentContext?.ownerDraftFirstBuild;
   const buildOwner = buildScope && projectPackageTaskIdentity(task);
   const reconciliation = taskNeedsReconciliation(task);
-  const checkBuildAfterFailure = status==='failed' && buildScope?.existingCheckoutBuild===true && !reconciliation && !record.raw?.cancelRequested;
-  const firstWeb = active && (status==='completed' || checkBuildAfterFailure) && buildOwner &&
+  const ordinaryBuild = buildScope?.existingCheckoutBuild===true && !record.raw?.cancelRequested;
+  const checkBuildAfterFailure = status==='failed' && ordinaryBuild && !reconciliation;
+  // The original archive's own pending journal may look unresolved to the generic timeline.
+  // The native eligibility read, not that projection, gates this exact pending-goal build.
+  const beforeGoalAcceptance = status==='needs_confirmation' && ordinaryBuild && !!buildOwner;
+  const firstWeb = active && (status==='completed' || checkBuildAfterFailure || beforeGoalAcceptance) && buildOwner &&
     typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
     ? {...buildOwner,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
   const packageRead = useProjectPackages(task, active, readIdentity, firstWeb?.taskId);
@@ -186,8 +190,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     ? '' : outcome.text;
   const readyForConfirmation = status === 'needs_confirmation' && outcome.resultStatus === 'needs_confirmation';
   const progress = !settlementTitle && outcome.source === 'result-event' && outcome.resultStatus !== 'completed' && !readyForConfirmation;
+  const originalBuildAnswer = beforeGoalAcceptance && !!resultText;
   const title = outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果'
-    : settlementTitle ? '原执行记录' : progress ? '当前进展' : outcome.source === 'task-summary' ? '当前摘要' : work ? '执行结果' : '结果内容';
+    : originalBuildAnswer ? '原答复' : settlementTitle ? '原执行记录' : progress ? '当前进展' : outcome.source === 'task-summary' ? '当前摘要' : work ? '执行结果' : '结果内容';
   const reply = outcome.reply;
   const files = reply?.attachments || [];
   const root = useRef<HTMLElement>(null);
@@ -199,6 +204,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const hasExecutionRecord = !!(resultText || outcome.image || remotePhone || phoneStatus || outcome.partial);
   const executionResult = (hasExecutionRecord || showEmptyResult && !settlementTitle) && <div className="pw-outcome-document">
       <header className="pw-outcome-heading"><h3>{hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
+      {originalBuildAnswer && <p className="pw-reading-note">构建和网页归档以本机回执为准。</p>}
       {resultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={progress ? undefined : () => onCopy(resultText)} onCopyCode={onCopy}/></div>
         : !settlementTitle && <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
       {outcome.image && <RetainedPhoneImage task={record} src={outcome.image} label={imageLabel} active={active} readIdentity={readIdentity} motionKey={`image:${screenshot?.imageId || 'retained'}`}/>}
@@ -228,7 +234,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active&&<TaskPhoneFinalScreen task={record}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}:${status}`} ownerWindow={packageRead.firstWebWindow}
-      target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
+      target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} beforeGoalAcceptance={beforeGoalAcceptance}
+      hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
       {outcome.projectPackages.length > 0 && <div hidden={!!readingPackage}>

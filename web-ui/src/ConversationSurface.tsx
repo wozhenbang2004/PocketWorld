@@ -43,7 +43,7 @@ export function ConversationLinkedReason({conversation,task}:{conversation:strin
  return <p className="pw-linked-reason"><strong>{label}</strong>{reason.length>0&&original!==label&&<span>{reason.slice(0,180).join('')}{reason.length>180?'…':''}</span>}</p>;
 }
 type Props={conversation:string;identity?:WorkIdentity|null;task?:{id:string;status:string;raw?:Record<string,any>};phase:ReplyPhase|null;
- actionElsewhere?:boolean;onRead?:(layer:'process'|'overview'|'review',trigger:HTMLButtonElement)=>void};
+ actionElsewhere?:boolean;receiptsInMenu?:boolean;onRead?:(layer:'process'|'overview'|'review',trigger:HTMLButtonElement)=>void};
 /** Lives in the existing keyed reply article, next to (never inside) its answer.
  * The disclosure owns only its local open/close state. All reads and decisions
  * still go through the original task window with its expected run and epoch. */
@@ -51,12 +51,15 @@ export function ConversationTurnActivity(props:Props){
  if(!props.identity&&!props.phase)return <ReplyActivity phase={null}/>;
  return <BoundTurnActivity {...props}/>;
 }
-function BoundTurnActivity({conversation,identity,task,phase,onRead,actionElsewhere}:Props){
+function BoundTurnActivity({conversation,identity,task,phase,onRead,actionElsewhere,receiptsInMenu}:Props){
  const detailId=useId(),[expanded,setExpanded]=useState(false);
  const notes=useMemo(()=>conversationTurnNotes(conversation,identity,task),[conversation,identity?.taskId,identity?.runId,identity?.epoch,task]);
+ // Keep an open disclosure in place. Otherwise the same reply's existing
+ // execution history menu is enough for a settled answer.
+ const deferReceipts=!phase&&!expanded&&receiptsInMenu&&notes?.settledReceiptsOnly;
  const need=notes?.need,groups=notes?.groups||[],recent=notes?.recent;
  const routine=groups.find(g=>g.kind==='returned'),important=groups.filter(g=>g.kind!=='returned');
- const visible=!!phase||!!need||groups.length>0;
+ const visible=!deferReceipts&&(!!phase||!!need||groups.length>0);
  const shown=need||(phase?.state==='thinking'&&notes?.lastTool?{...phase,label:'最近调用：'+notes.lastTool}:phase);
  return <div className="pw-turn-margin" data-has-notes={visible||undefined}>
   <ReplyActivity phase={shown}/>

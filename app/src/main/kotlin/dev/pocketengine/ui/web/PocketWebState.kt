@@ -152,6 +152,7 @@ internal object PocketWebState {
             } })
             .put("conversationId", state.conversationId ?: JSONObject.NULL)
             .put("messages", JSONArray().also { out -> state.messages.forEach { out.put(message(it)) } })
+            .put("loadingFirstConversationMessages", controller.loadingFirstConversationMessages())
             .put("chatBusy", state.chatBusy).put("chatSubmitting", state.chatSubmitting)
             .put("chatActiveTurn", publicValue(state.chatActiveTurn)).put("chatSendMode", state.chatSendMode)
             .put("foregroundTurn", publicValue(state.foregroundTurn))

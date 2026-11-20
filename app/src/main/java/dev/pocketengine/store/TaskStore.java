@@ -13551,8 +13551,8 @@ public final class TaskStore {
             if(!row.moveToFirst()||!"receipt".equals(row.getString(2))||row.isNull(3))throw new SecurityException("原成果动作未取得确定回执");JSONObject args=projectStoredArguments(task.getString("id"),row.getString(0),new JSONObject(row.getString(1))),receipt=new JSONObject(row.getString(3)),route=receipt.getJSONObject("projectExecution");if(!context.getJSONObject("selection").getString("selectionHash").equals(route.optString("teamProjectSelectionHash")))throw new SecurityException("原包属于另一团队副本/授权版本");dev.pocketengine.features.teams.TeamProjectWorkspaces.validatePlan(context,args.getJSONObject("plan"));JSONObject op=new JSONObject().put("operationId",operation).put("runId",row.getString(0)).put("tool","project_execute").put("state",row.getString(2)).put("arguments",args).put("receipt",receipt);JSONObject evidence=dev.pocketengine.features.local.project.ProjectPackageDelivery.evidence(args.getJSONObject("plan"),op);if(!task.getString("id").equals(evidence.getString("taskId")))throw new SecurityException("原包不是本团队整合任务");return evidence;
         }
     }
-    /** This owner action is attached to the original completed build run. It does not enter the
-     * model's project_execute lane and cannot create/reopen a run, job, capability or approval. */
+    /** This owner action belongs to the original settled successful build, not to goal acceptance.
+     * It cannot create/reopen a run, job, capability or execution approval. */
     private JSONObject firstWebTask(String id)throws Exception{
         JSONObject task=required(id);requirePrivateOwner(task);
         if(!"assistant".equals(task.opt("kind"))||!task.isNull("origin")||task.has("ownerLocalTerminal")||
@@ -13576,17 +13576,17 @@ public final class TaskStore {
         if(!run.equals(task.opt("runId"))||epoch!=task.optInt("coordinatorEpoch",-1))throw new SecurityException("原构建轮次已离开");
         var pin=task.getJSONObject("developmentContext").optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
         if(pin==null)return null;
-        String failedRunBuild=null;
-        if(!"completed".equals(task.opt("status"))){
-            // A failed follow-up inference does not erase the actual build.
+        String status=task.optString("status"),settledBuildOperation=null;
+        if(!"completed".equals(status)){
+            // A failed inference or pending goal acceptance does not erase the actual build.
             // Recover only the settled ordinary project's current run, never an older success.
-            if(!"failed".equals(task.opt("status"))||task.optBoolean("cancelRequested")||
-                !dev.pocketengine.features.local.project.OwnerDraftFirstBuild.existingCheckout(pin)||hasUnresolved(id))return null;
-            try(Cursor ending=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='failed'",
-                new String[]{id,run,Integer.toString(epoch)})){if(!ending.moveToFirst())return null;}
+            if(!("failed".equals(status)||"needs_confirmation".equals(status))||task.optBoolean("cancelRequested")||
+                !OwnerDraftFirstBuild.existingCheckout(pin)||hasUnresolved(id))return null;
+            try(Cursor ending=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status=?",
+                new String[]{id,run,Integer.toString(epoch),status})){if(!ending.moveToFirst())return null;}
             JSONObject fact=currentFirstBuildFact(task,pin);
             if(fact==null||!"build_exit".equals(fact.opt("kind"))||fact.getInt("value")!=0)return null;
-            failedRunBuild=fact.getString("actionOperationId");
+            settledBuildOperation=fact.getString("actionOperationId");
         }
         // Bounded native lookup, never a user hint, latest file, model text or dependency receipt.
         OriginalNodeWebOutput.Build found=null;int count=0;
@@ -13600,7 +13600,7 @@ public final class TaskStore {
                 found=candidate;
             }
         }
-        if(failedRunBuild!=null&&(found==null||!failedRunBuild.equals(found.facts().getString("buildOperationId"))))found=null;
+        if(settledBuildOperation!=null&&(found==null||!settledBuildOperation.equals(found.facts().getString("buildOperationId"))))found=null;
         if(exactOperation!=null&&(found==null||!exactOperation.equals(found.facts().getString("buildOperationId"))))
             throw new SecurityException("选中的不是这一轮的原成功构建");
         return found;
