@@ -1426,8 +1426,11 @@ public final class AssistantModule implements EngineModule {
             this.owner=owner;this.conversation=conversation;this.message=message;this.task=task;this.remote=remote;this.visible=visible;
             this.pin=dev.pocketengine.store.TaskStore.capabilityFingerprint(target);
         }
-        public JSONObject require(RemoteModule issuer)throws Exception{
+        public void requireWindow(RemoteModule issuer){
             if(remote!=issuer||!visible.getAsBoolean())throw new SecurityException("原成果读取窗口已关闭");
+        }
+        public JSONObject require(RemoteModule issuer)throws Exception{
+            requireWindow(issuer);
             return owner.sourceRead(()->{
                 JSONObject target=owner.originalPrivateHostTarget(owner.requirePrivateHostMessage(conversation,message,task));
                 if(target==null||!pin.equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(target))||!visible.getAsBoolean())
@@ -1436,35 +1439,54 @@ public final class AssistantModule implements EngineModule {
             });
         }
     }
+    private static String checkedSavedPrivateHostFinal(JSONObject original)throws Exception{
+        if(original==null||original.length()!=4||!PrivateHostFinalText.FORMAT.equals(original.opt("format"))
+                ||!(original.opt("jobId") instanceof String job)||!job.matches("[a-zA-Z0-9_-]{1,80}")
+                ||!(original.opt("text") instanceof String text)||text.getBytes(StandardCharsets.UTF_8).length>12000
+                ||!PrivateHostFinalText.safeReply(text)||!PrivateHostFinalText.digest(text).equals(original.opt("sha256")))return null;
+        return text;
+    }
+    public record SavedPrivateHostFinal(String text,int addedRowBytes){}
+    /** Refresh just this already-saved row in a historical reader; never a host request. */
+    public SavedPrivateHostFinal readSavedPrivateHostFinal(String conversation,String message,String task,java.util.function.BooleanSupplier visible)throws Exception{
+        if(!visible.getAsBoolean())throw new SecurityException("原成果读取窗口已关闭");
+        return sourceRead(()->{
+            JSONObject original=requirePrivateHostMessage(conversation,message,task).optJSONObject("privateHostFinalText");
+            String text=checkedSavedPrivateHostFinal(original);
+            if(text==null||!visible.getAsBoolean())throw new SecurityException("原结果或阅读窗口无法核对");
+            int added=new JSONObject().put("privateHostFinalText",original).toString().getBytes(StandardCharsets.UTF_8).length;
+            return new SavedPrivateHostFinal(text,added);
+        });
+    }
     /** A stored private result remains readable on this original receipt; repeated opens never contact the host. */
     public JSONObject readPrivateHostFinal(String conversation,String message,String task,RemoteModule remote,java.util.function.BooleanSupplier visible)throws Exception{
         if(remote==null||visible==null||!visible.getAsBoolean()||!task.matches("[a-f0-9-]{36}"))throw new SecurityException("请回到原私人委托读取原结果");
         JSONObject row=sourceRead(()->requirePrivateHostMessage(conversation,message,task));
-        if(row.has("privateHostFinalText")){
-            JSONObject original=row.optJSONObject("privateHostFinalText");
-            if(original==null||original.length()!=4||!PrivateHostFinalText.FORMAT.equals(original.opt("format"))
-                    ||!(original.opt("text") instanceof String text)||text.getBytes(StandardCharsets.UTF_8).length>12000
-                    ||!PrivateHostFinalText.safeReply(text)||!PrivateHostFinalText.digest(text).equals(original.opt("sha256")))
-                return hostFinalStage("no_verified_text");
-            return hostFinalStage("saved");
-        }
+        if(row.has("privateHostFinalText"))
+            return hostFinalStage(checkedSavedPrivateHostFinal(row.optJSONObject("privateHostFinalText"))==null?"no_verified_text":"saved");
         JSONObject target=sourceRead(()->originalPrivateHostTarget(requirePrivateHostMessage(conversation,message,task)));
         if(target==null)return hostFinalStage("admission_unverified");
         PrivateHostFinalRead original=new PrivateHostFinalRead(this,conversation,message,task,remote,visible,target);
         PrivateHostFinalText.Result result=remote.readPrivateHostFinal(original);
         if(!"verified".equals(result.stage()))return hostFinalStage(result.stage());
-        return commit(()->{
-            JSONObject current=original.require(remote),chat=find(conversation),entry=findMessage(chat,message);
-            JSONObject previously=entry.optJSONObject("privateHostFinalText");
-            if(previously!=null){
-                if(!current.getString("jobId").equals(previously.opt("jobId"))||!result.sha256().equals(previously.opt("sha256")))throw new SecurityException("已保存原成果与新读数不一致，未覆盖");
+        // Touch the exact original row only, even when it is outside the current chat window.
+        synchronized(historyTasks){
+            return historyRepository.transaction(()->{
+                JSONObject current=original.require(remote),entry=requirePrivateHostMessage(conversation,message,task);
+                if(entry.has("privateHostFinalText")){
+                    JSONObject previous=entry.optJSONObject("privateHostFinalText");
+                    if(!result.text().equals(checkedSavedPrivateHostFinal(previous))||!current.getString("jobId").equals(previous.opt("jobId"))
+                            ||!result.sha256().equals(previous.opt("sha256")))throw new SecurityException("已保存原成果与新读数不一致，未覆盖");
+                    return hostFinalStage("saved");
+                }
+                original.requireWindow(remote);
+                entry.put("privateHostFinalText",new JSONObject().put("format",PrivateHostFinalText.FORMAT).put("jobId",current.getString("jobId"))
+                        .put("sha256",result.sha256()).put("text",result.text()));
+                historyRepository.saveMessage(conversation,entry);
+                original.requireWindow(remote);
                 return hostFinalStage("saved");
-            }
-            if(!visible.getAsBoolean())throw new SecurityException("原成果窗口已离开，未保存");
-            entry.put("privateHostFinalText",new JSONObject().put("format",PrivateHostFinalText.FORMAT).put("jobId",current.getString("jobId"))
-                    .put("sha256",result.sha256()).put("text",result.text()));
-            return hostFinalStage("saved");
-        });
+            });
+        }
     }
     public void appendTaskResult(String conversationId,String taskId,String text)throws Exception{
         appendTaskResult(conversationId,taskId,new JSONObject().put("content",text));

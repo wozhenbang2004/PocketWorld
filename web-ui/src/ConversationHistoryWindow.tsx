@@ -90,6 +90,14 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   catch(failure){if(live.current?.window===original.window)setError(failure instanceof Error?failure.message:'原历史暂不可读取，请重新打开。')}
   finally{sending.current=false;setPending(false)}
  };
+ const readHostFinal=async(message:Json)=>{
+  const h=live.current;
+  if(document.hidden||!h||h.window!==shown.window||h.conversation!==shown.conversation||h.loading||h.error||h.limited||sending.current||
+   !h.messages?.some((row:Json)=>row.id===message.id&&row.sourceRevision===message.sourceRevision&&row.hostGoalTaskId===message.hostGoalTaskId&&row.originalHostFinal))
+    throw new Error('原历史消息已变化，请在同一条原话取回。');
+  return bridge.command('conversation.readPrivateHostFinal',{readerWindow:h.window,conversationId:h.conversation,
+   messageId:message.id,sourceRevision:message.sourceRevision,taskId:message.hostGoalTaskId});
+ };
  const copy=async(text:string)=>{
   const original=live.current;if(!original)throw new Error('原阅读窗口已关闭。');
   try{await onCopy(text)}catch(failure){if(live.current?.window===original.window)setError(failure instanceof Error?failure.message:'复制未完成，请选择文字后复制。');throw failure}
@@ -178,7 +186,9 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
      {message.firstHostRequestLocal&&!message.hostGoalTaskId&&<p className="pw-field-hint">仅保存到本机，未派发</p>}
-     {message.originalHostFinal&&<OriginalPrivateHostAnswer result={message.originalHostFinal}/>}
+     {message.originalHostFinal&&<OriginalPrivateHostAnswer result={message.originalHostFinal}
+       read={page&&page.window===shown.window&&!page.loading&&!page.error&&!page.limited&&!pending&&message.id&&message.sourceRevision===1&&
+         message.hostGoalTaskId&&can('conversation.readPrivateHostFinal')?()=>readHostFinal(message):undefined}/>}
      {hasPublicSources(message)&&can('sources.open')&&<Button variant="ghost" size="small" leadingIcon={IconLink}
       disabled={!page||page.window!==shown.window||pending||page.loading||!!page.error||page.limited}
       onClick={event=>openHistorySource(message,event.currentTarget)}>查看出处</Button>}

@@ -1400,8 +1400,11 @@ internal class PocketWebBridge(
                 requireSection("teams"); teamPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown", retainValue = action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")); if (action != "teams.readFinalPackageFiles") publishState() }; return
             }
             if (action == "conversation.readPrivateHostFinal") {
-                privateHostFinal.read(args,{
-                    !closed && documentId!=null && section==null && taskViewId==null &&
+                val reader=if(args.has("readerWindow"))requiredLong(args,"readerWindow").also{ require(it>0) } else null
+                val revision=if(reader!=null)requiredLong(args,"sourceRevision") else 1L
+                val document=documentId
+                privateHostFinal.read(args,reader,revision,{
+                    !closed && document!=null && documentId==document && section==null && taskViewId==null &&
                         controller.state.filePath==null && controller.webPrivateOwnerVisible()
                 }) { result,error -> complete(id,result,error,retainValue=false);publishState() }
                 return

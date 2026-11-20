@@ -59,10 +59,11 @@ public final class CloudWorkspaceJobs {
     public static boolean accepted(JSONObject t,JSONObject e,JSONObject s) {
         return receipt(t,e,s) && t.optString("runId").equals(t.opt("externalOperationId")) && e.opt("id").equals(t.opt("externalId"));
     }
-    // The transport journal is not the authority on a recovered acceptance. Only the matching durable native pin can clear its wait.
+    // Both normal and recovered acceptance need the matching durable pin to release the original editor.
     static boolean confirmsTransportAcceptance(JSONObject operation,JSONObject task) {
+        Object status=operation.opt("status");boolean recordedAccepted="accepted".equals(status);
         if(!firstReadOnlyHostTask(task)||!"job_submit".equals(operation.opt("kind"))||operation.opt("originalHostStatusOnRequest")!=Boolean.TRUE
-                ||!("unknown".equals(operation.opt("status"))||"submitting".equals(operation.opt("status")))
+                ||(!recordedAccepted&&!"unknown".equals(status)&&!"submitting".equals(status))
                 ||operation.optBoolean("nativeCancelledBeforeDispatch")||operation.has("backendSelection")||operation.has("resumeJobId")||operation.has("threadId"))
             return false;
         JSONObject host=operation.optJSONObject("hostWorkspace"),original=task.optJSONObject("externalRefs").optJSONObject("hostWorkspace");
@@ -73,7 +74,7 @@ public final class CloudWorkspaceJobs {
                 ||!original.opt("serviceBase").equals(operation.opt("serviceBase"))||!original.opt("serviceBase").equals(host.opt("serviceBase"))
                 ||operation.has("sourceServiceBase")&&!original.opt("serviceBase").equals(operation.opt("sourceServiceBase")))return false;
         Object job=operation.opt("jobId");
-        return job==null||"".equals(job)||admission.opt("id").equals(job);
+        return admission.opt("id").equals(job)||(!recordedAccepted&&(job==null||"".equals(job)));
     }
     public static void noteAdmission(JSONObject t,JSONObject receipt,JSONObject host)throws Exception {
         if(!accepted(t,receipt,host))return;

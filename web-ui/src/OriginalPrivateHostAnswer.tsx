@@ -5,7 +5,8 @@ const reasons: Record<string,string> = {
   admission_unverified: '还没有核对到原主机的接单回执。可先打开原主机工作，不会再交办。',
   not_ready: '这项原工作还没有交回最终文字，不会重跑。',
   no_verified_text: '未能取回可核对的最终文字。状态或日志不是成果。',
-  saved: '原结果已保存。'
+  saved: '原结果已保存。',
+  saved_reader_limited: '原结果已存手机。此历史窗口已满，可刷新后重新打开这条原话。'
 };
 
 /** Only these exact original bytes can appear here. Plain text can't load remote markup or images. */

@@ -65,7 +65,7 @@ public final class RemoteModule implements EngineModule {
         JSONArray visible=state.getJSONArray("operations");
         for(int i=0;i<visible.length();i++){
             JSONObject row=visible.getJSONObject(i);row.remove("originalAdmissionVerifiedLocally");
-            if(transportAwaitingConfirmation(row)&&locallyVerifiedOriginalAdmission(row))
+            if(locallyVerifiedOriginalAdmission(row))
                 row.put("originalAdmissionVerifiedLocally",true);
         }
         return state;
@@ -83,7 +83,8 @@ public final class RemoteModule implements EngineModule {
         return "unknown".equals(row.opt("status"))||"submitting".equals(row.opt("status"));
     }
     private boolean locallyVerifiedOriginalAdmission(JSONObject row) {
-        if(originalTasks==null||!"job_submit".equals(row.opt("kind"))||row.opt("originalHostStatusOnRequest")!=Boolean.TRUE)return false;
+        if(originalTasks==null||!"job_submit".equals(row.opt("kind"))||row.opt("originalHostStatusOnRequest")!=Boolean.TRUE
+                ||(!transportAwaitingConfirmation(row)&&!"accepted".equals(row.opt("status"))))return false;
         try{return originalTasks.originalLinuxAdmissionConfirmsTransport(row);}
         catch(Exception unavailable){return false;}
     }
@@ -1385,7 +1386,11 @@ public final class RemoteModule implements EngineModule {
         synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);target=bind(profile,service);}
         dispatchGate.beforeDispatch(path);original.require(this);
         synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);}
-        JSONObject raw=target.request(path,null,15);original.require(this);
+        dev.pocketengine.core.RunControl read=new dev.pocketengine.core.RunControl();
+        read.setAuthorityCheck(()->original.requireWindow(this)); // Same GET, bound to the native window at transport checkpoints.
+        JSONObject raw;
+        try{raw=target.request(path,null,15,read);}finally{read.cancel();}
+        original.require(this);
         synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);}
         raw.put("profileId",profile);
         if(!op.equals(raw.opt("operationId"))||!job.equals(raw.opt("id"))||!matchesHostJob(host,raw)

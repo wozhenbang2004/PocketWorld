@@ -61,6 +61,23 @@ internal data class ConversationReadPage(
     val rowBytes: Map<String,Int> = emptyMap(), val limited: Boolean = false, val index: Int = 0, val offset: Int = 0, val anchor: String = "", val bytes: Int = 0, val initialized: Boolean = false,
     val quoteTrail: ConversationQuoteTrail = ConversationQuoteTrail()
 ) {
+    private companion object { const val MAX_PAGE_BYTES = 1024L * 1024L }
+
+    fun privateHostResultRow(message:String, revision:Long, task:String):UiMessage? =
+        if (!initialized || loading || error != null || limited || revision != 1L) null
+        else messages.singleOrNull { it.id==message && it.sourceRevision==revision && it.hostGoalTaskId==task && it.originalHostFinal!=null }
+
+    /** Leave the older page, cursor and scroll anchor in place; the stored text isn't a new message. */
+    fun withSavedPrivateHostFinal(message:String, revision:Long, task:String, text:String, addedRowBytes:Int):ConversationReadPage? {
+        val row=privateHostResultRow(message,revision,task) ?: return null
+        if (row.originalHostFinal?.text!=null) return takeIf { row.originalHostFinal.text==text }
+        val checkedBytes=bytes.toLong()+addedRowBytes
+        val old=rowBytes[message] ?: return null
+        if (addedRowBytes<=0 || checkedBytes>MAX_PAGE_BYTES) return null
+        return copy(messages=messages.map { if(it===row) it.copy(originalHostFinal=PrivateHostReceipt.FinalView(text)) else it },
+            rowBytes=rowBytes+(message to (old+addedRowBytes)),bytes=checkedBytes.toInt())
+    }
+
     fun accept(native: JSONObject, older: Boolean): ConversationReadPage {
         require(native.optString("conversationId") == conversation) { "原历史窗口属于其他对话" }
         val raw = native.getJSONArray("messages"); require(raw.length() <= 80) { "原历史窗口超出读取范围" }
@@ -81,11 +98,11 @@ internal data class ConversationReadPage(
         var newerReleased = false
         // The bound is a display window, not a history boundary. Keep the newly
         // requested older page and release newer rows from this window as needed.
-        while (older && combined.size > loaded.size && (combined.size > 240 || actualBytes > 1024L * 1024L)) {
+        while (older && combined.size > loaded.size && (combined.size > 240 || actualBytes > MAX_PAGE_BYTES)) {
             actualBytes -= bytesFor(combined.removeAt(combined.lastIndex))
             newerReleased = true
         }
-        if (combined.size > 240 || actualBytes > 1024L * 1024L) return copy(loading = false, limited = true, notice = "这页原消息超出本次阅读窗口大小，原文未删除；可在对话原文页按范围查看。")
+        if (combined.size > 240 || actualBytes > MAX_PAGE_BYTES) return copy(loading = false, limited = true, notice = "这页原消息超出本次阅读窗口大小，原文未删除；可在对话原文页按范围查看。")
         val page = native.optJSONObject("messagePage") ?: JSONObject()
         require(!page.has("hasMore") || page.opt("hasMore") is Boolean) { "原历史分页状态无效" }
         val next = page.optString("nextCursor"); require(next.length <= 2048 && (!page.optBoolean("hasMore") || next.isNotEmpty())) { "原历史游标不可核对" }

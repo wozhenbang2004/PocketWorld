@@ -3218,6 +3218,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             !hasChannelPhoneOrigin&&!state.chatSubmitting&&!state.chatBusy&&!state.phoneSubmitting&&state.selectedChatAttachments.isEmpty()){"请从当前未发的私人文字草稿保存"}
         return model.reviewFirstHostAnchor(key,revision)
     }
+    internal fun applyPrivateHostFinalToReader(window:Long,conversation:String,message:String,revision:Long,task:String,
+                                             saved:dev.pocketengine.features.assistant.AssistantModule.SavedPrivateHostFinal):Boolean {
+        val page=conversationReader ?: return false
+        if (!webPrivateOwnerVisible() || !canReadConversationWindow(page) || page.window!=window || page.conversation!=conversation) return false
+        conversationReader=page.withSavedPrivateHostFinal(message,revision,task,saved.text(),saved.addedRowBytes()) ?: return false
+        return true
+    }
+
     internal fun refreshPrivateHostFinal(conversation:String) {
         if(!closed&&webPrivateOwnerVisible()&&state.conversationId==conversation)
             feature("assistant","get",JSONObject().put("conversationId",conversation))
