@@ -332,9 +332,16 @@ internal class AttachmentOutcomeCoordinator(
         try{val pin=checkedDocumentDraft(draft);state=state.copy(documentDraft=pin,documentDraftEdited=state.documentDraftEdited||pin.toString()!=state.documentDraft.toString(),error=null)}catch(failure:Exception){state=state.copy(error=safe(failure))}
     }
     private fun showPublishedDocument(action:String,file:JSONObject,notice:String){
+        val inLibrary=privateLibrary()
+        val catalog=state.snapshot?.takeIf{inLibrary&&it.opt("taskId")==""}
+        val retainedImport=state.libraryImport.takeIf{inLibrary}
+        val published=if(inLibrary)JSONObject(file.toString()).put("role","result")
+            .put("sourceKind","created_document").put("sourceTaskId",action) else file
         pendingDocumentAction=null;restoredDocumentDraft=null;restoreFile=null
         // This is a new Book file. Never keep showing the previous reader under its child's name.
-        state=AttachmentOutcomeState(open=true,taskId=action,file=file,pendingProcessingTask=pendingProcessingAction,notice=notice)
+        // The creation task is the file's provenance, not the library's navigation scope.
+        state=AttachmentOutcomeState(open=true,taskId=action.takeUnless{inLibrary},snapshot=catalog,file=published,
+            pendingProcessingTask=pendingProcessingAction,notice=notice,libraryImport=retainedImport)
     }
     private fun isPublishedDocument(action:String,file:JSONObject):Boolean{
         val source=file.optJSONObject("source")?:return false

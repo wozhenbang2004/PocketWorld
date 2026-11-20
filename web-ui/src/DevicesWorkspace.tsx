@@ -4,7 +4,7 @@ import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, pickupUnavailable, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, localReviewedReceipt, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
-import { deviceManualPhonePreparation, deviceSavedOwnerChoice } from './devices-workspace';
+import { deviceManualPhonePreparation, deviceOriginalManualPhonePreparation, deviceSavedOwnerChoice } from './devices-workspace';
 import { DesktopViewer } from './DesktopViewer';
 import { ReceivedGoalInputReview, originalDeviceInputReady } from './ReceivedGoalInputReview';
 import { PendingReceivedGoalInput } from './PendingReceivedGoalInput';
@@ -26,7 +26,7 @@ import { desktopScopes } from './desktop-viewer';
 import { windowsObservationCompatibility } from './windows-observation-compatibility';
 import { phoneSurfaceStatus } from './phone-surface-status';
 import { recordedPhoneWork } from './phone-work-choice';
-import { deviceReadingPlace, sameDeviceReadingPlace, type DeviceReadingSlot } from './devices-workspace';
+import { deviceReadingPlace, sameDeviceReadingPlace, type DeviceReadingPlace, type DeviceReadingSlot } from './devices-workspace';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
 import './devices-reading.css';
@@ -131,7 +131,7 @@ function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean
 
 export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus, onReturnToPartnerTask, reading }: { reading?: DeviceReadingSlot; sourceFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
   const pinnedConnection=sourceFocus?.purpose==='partner_connection';
-  const [pinnedLocalRead,setPinnedLocalRead]=useState(0);
+  const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown }>();
   const peerPlace = useRef(!sourceFocus && !modelReturn ? reading?.selected : undefined);
   const placeRead = useRef(!peerPlace.current);
   const focusReturnedPeer = useRef(!!peerPlace.current);
@@ -170,6 +170,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const restoredModelReturn = useRef<ReceivedPhoneGoalReturn | undefined>(undefined);
   const [modelReturnFocus, setModelReturnFocus] = useState<ReceivedPhoneGoalReturn>();
   const focusedModelReturn = useRef<ReceivedPhoneGoalReturn | undefined>(undefined);
+  const [manualFocus, setManualFocus] = useState<{ taskId: string; deadlineAt: number; place: DeviceReadingPlace }>();
   const [localExpanded, setLocalExpanded] = useState(false), [moreWork, setMoreWork] = useState({ key: '', count: 0 });
   const lastPeer = useRef(peerPlace.current?.partner.deviceId || '');
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef({ list: 0, detail: 0 }), previousReadingView = useRef('list');
@@ -205,8 +206,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   // Supplying a deviceId asks that peer for fresh capabilities. Local reads must also work offline.
   const refresh = () => { void invoke('devices.snapshot',{},(_value,actual)=>{
-    if (actual) placeRead.current = true;
-    if(pinnedConnection && Number.isSafeInteger(actual?.capturedAt))setPinnedLocalRead(actual!.capturedAt);
+    if (actual) { placeRead.current = true; setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision }); }
   }); };
   const closeReview = () => {
     const old = handle.current; handle.current = ''; scope.current.invalidate(document.visibilityState === 'visible');
@@ -221,7 +221,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (phoneArchive?.archiveHandle) void run('devices.discard', { archiveHandle: phoneArchive.archiveHandle }).catch(() => {});
     closeOwnText();setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     closeReview(); // Retire pending review handles before changing the list/detail scope.
-    setNotice(''); setError(''); setTaskDetails({});
+    setNotice(''); setError(''); setTaskDetails({}); setManualFocus(undefined);
     setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
     focusReturnedPeer.current = false;
     placeRead.current = true;
@@ -233,7 +233,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
-    if(pinnedConnection)setPinnedLocalRead(0);
+    setLocalRead(undefined); setManualFocus(undefined);
     autoReadSource.current = ''; // Restored native windows never retain the previous local archive handle.
     placeRead.current = !peerPlace.current;
     setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');setClosedReceipt(null);closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
@@ -375,6 +375,25 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const tasks = deviceTaskRows(state.tasks, snapshot, peerId);
   const manualPreparationForPeer = (task: Data) => deviceManualPhonePreparation(task, peer);
+  const localReadReady = !!localRead && !!snapshot && snapshot.capturedAt >= localRead.capturedAt;
+  const manualReadReady = localReadReady && localRead.revision === state.deviceWorkspaceRevision;
+  const overviewManualPreparation = (task: Data) => {
+    const preparation = deviceOriginalManualPhonePreparation(task);
+    if (!preparation) return;
+    const candidates = peers.filter(row => row.deviceId === preparation.target.deviceId);
+    const partner = manualReadReady && !unreadSource(task) && candidates.length === 1 && deviceManualPhonePreparation(task, candidates[0]) ? candidates[0] : undefined;
+    return { preparation, partner, place: deviceReadingPlace(local, partner) };
+  };
+  const locateOriginalManualPreparation = (taskId: string, deadlineAt: number, place: DeviceReadingPlace) => {
+    if (busy || selectedPeer.current || sourceFocus || document.visibilityState !== 'visible') return;
+    const matches = rows(state.tasks).filter(row => row.id === taskId);
+    const fresh = matches.length === 1 ? overviewManualPreparation(matches[0]) : undefined;
+    if (!fresh?.partner || !fresh.place || fresh.preparation.deadlineAt !== deadlineAt || !sameDeviceReadingPlace(place, local, fresh.partner)) {
+      setError('原准备或配对身份已变化，未打开其他设备。请重读本机记录。'); return;
+    }
+    // Locate the same row inside the loaded device directory. No task read, peer refresh or execution here.
+    rememberReadingPosition('list'); selectPeer(fresh.partner.deviceId); setManualFocus({ taskId, deadlineAt, place: fresh.place });
+  };
   // Model settings are local. Restore only the exact saved recipient/task on a new owner view.
   useEffect(() => {
     if (!modelReturn || restoredModelReturn.current === modelReturn || !Array.isArray(state.tasks) || !snapshot || !Number.isSafeInteger(snapshot.capturedAt) || snapshot.capturedAt < modelReturn.leftAt || document.visibilityState !== 'visible') return;
@@ -417,7 +436,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const captured = item?.phoneActionScope ? item.actions.capturedAt : snapshot?.taskActions?.[task.id]?.capturedAt;
     return [captured + PHONE_ACTION_WINDOW_MS, item?.phoneActionScope?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline, grant?.expiresAt];
   });
-  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...tasks.map(task=>manualPreparationForPeer(task)?.deadlineAt), ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
+  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...tasks.map(task=>unreadSource(task) ? undefined : (peerId ? manualPreparationForPeer(task) : deviceOriginalManualPhonePreparation(task))?.deadlineAt), ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
   useEffect(() => {
@@ -527,7 +546,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       acceptReview(value);
     });
   };
-  const pinnedReadReady=!pinnedConnection || pinnedLocalRead>0 && Number.isSafeInteger(snapshot?.capturedAt) && snapshot!.capturedAt>=pinnedLocalRead;
+  const pinnedReadReady = !pinnedConnection || localReadReady;
   const focusedPeer=sourceFocus && pinnedReadReady?peers.find(it=>it.deviceId===sourceFocus.deviceId && it.instanceId===sourceFocus.instanceId
     && it.certificateFingerprint===sourceFocus.certificateFingerprint && !retired(it)
     && (!peerPlace.current || placeRead.current && sameDeviceReadingPlace(peerPlace.current, local, it))):undefined;
@@ -821,9 +840,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     else {closeReview();openModels(origin);}
   };
   const returnedTask = modelReturnFocus && tasks.find(item => !unreadSource(item) && matchesReceivedPhoneGoal(item, snapshot, modelReturnFocus));
+  const focusedManualTask = manualFocus && peer && manualReadReady && sameDeviceReadingPlace(manualFocus.place, local, peer)
+    ? tasks.find(task => task.id === manualFocus.taskId && !unreadSource(task) && manualPreparationForPeer(task)?.deadlineAt === manualFocus.deadlineAt)
+    : undefined;
   const waiting: Data[] = [], interruptible: Data[] = [], remaining: Data[] = [];
   const newestSavedChoice = tasks.find(task => !!task.savedDeviceChoice && !['completed', 'failed', 'cancelled', 'canceled'].includes(task.status));
-  const preparedHere = tasks.filter(task => task === newestSavedChoice || !unreadSource(task) && (manualPreparationForPeer(task)?.deadlineAt || 0) > now);
+  const recentOverviewManual = !peerId ? tasks.find(task => !!overviewManualPreparation(task)?.place) : undefined;
+  const preparedHere = tasks.filter(task => task === newestSavedChoice || task === focusedManualTask || task === recentOverviewManual
+    || !unreadSource(task) && (manualPreparationForPeer(task)?.deadlineAt || 0) > now);
   const preparedIds = new Set(preparedHere.map(task => task.id));
   const canStop = (task: Data) => { const facts = actionsFor(task); return available(facts.stop) || available(facts.pendingCancel); };
   // The native 40-action window bounds controls, not the number of saved originals one may open.
@@ -838,6 +862,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (!heading) return;
     focusedModelReturn.current = modelReturnFocus; heading.focus({ preventScroll: true }); heading.scrollIntoView({ block: 'nearest' });
   }, [modelReturnFocus, returnedTask?.id]);
+  useLayoutEffect(() => {
+    if (!focusedManualTask || document.hidden) return;
+    const heading = Array.from(readingRoot.current?.querySelectorAll<HTMLElement>('[data-original-manual-preparation]') || [])
+      .find(el => el.dataset.originalManualPreparation === focusedManualTask.id);
+    heading?.focus({ preventScroll: true }); heading?.scrollIntoView({ block: 'nearest' });
+  }, [manualFocus, focusedManualTask?.id]);
   useCollectionMotion(readingRoot, JSON.stringify([state.webWorkspaceResumeRevision, peerId, query.trim()]),
     JSON.stringify([localExpanded, peerSections.map(section => [section.id, section.peers.map(row => row.deviceId)]), pairings.map(row => [row.candidateId || row.inviteId, row.state]), shownTasks.map(task => [task.id, task.status])]),
     { active: !desktopOpen && !!snapshot });
@@ -846,6 +876,17 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           <header className="pw-device-section-heading"><div><h3>{peer ? '这台设备的原工作' : '设备相关工作'}</h3><p>{peer ? '打开本机保留的原任务，不会重连或恢复执行。' : '本机保存的任务与结果，打开不会重新执行。'}</p></div><span>已读到 {tasks.length} 项</span></header>
           <div className="pw-device-task-list">
             {shownTasks.map(task => {
+              const manual = !peerId ? overviewManualPreparation(task) : undefined;
+              if (manual) {
+                const { preparation, partner, place } = manual;
+                const expired = preparation.deadlineAt <= now;
+                return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
+                  <header><h4 dir="auto">{unreadSource(task) ? '原手控准备待核对' : task.goal || '手控准备'}</h4><span>{!place ? '原手机待核对' : expired ? '准备已到期' : '尚未开始'}</span></header>
+                  {partner && place ? <><p><bdi>{name(partner)}</bdi> · 设备编号 {deviceChoiceCode(partner.deviceId)} · 原有效期至 {time(preparation.deadlineAt)}</p>
+                    <Button variant="secondary" disabled={busy} onClick={() => locateOriginalManualPreparation(task.id, preparation.deadlineAt, place)}>在原手机记录中查看</Button></>
+                    : <p>{!manualReadReady ? '需先读取本机配对记录。' : '本机这次没有核对到原配对与准备。未改选其他手机。'}</p>}
+                </article>;
+              }
               const selected = task.savedDeviceChoice;
               if (selected) return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
                 <header><h4 dir="auto">{task.goal || '原工作'}</h4><span>本机已保存设备选择</span></header>
@@ -876,7 +917,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 });
               };
               return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
-                <header><h4 dir="auto" tabIndex={receivedPhone ? -1 : undefined} data-received-goal={receivedPhone ? task.id : undefined}>{readable ? task.goal || '原设备任务' : '原工作来源待核对'}</h4><span>{preparedPhone ? preparationExpired ? '准备已到期' : '尚未开始' : readable ? taskLabels[task.status] || '状态待读取' : '本机仅留关联'}</span></header>
+                <header><h4 dir="auto" tabIndex={receivedPhone || preparedPhone ? -1 : undefined} data-received-goal={receivedPhone ? task.id : undefined} data-original-manual-preparation={preparedPhone ? task.id : undefined}>{readable ? task.goal || '原设备任务' : '原工作来源待核对'}</h4><span>{preparedPhone ? preparationExpired ? '准备已到期' : '尚未开始' : readable ? taskLabels[task.status] || '状态待读取' : '本机仅留关联'}</span></header>
                 {readable && task.summary && !preparedPhone && <p className="pw-device-task-summary" dir="auto">{task.summary}</p>}
                 {readable && deviceWorkspaceTaskMode(task.raw) === 'manual_phone' && <p>{preparedPhone
                   ? preparationExpired ? '原准备仍可查看，打开不会延长有效期。' : '已为这部手机保存原准备。返回不会读取屏幕或启动。'
@@ -1237,6 +1278,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           ? '本机或原配对身份已变化，没有打开其他设备。可返回所有设备重新选择。'
           : '这台原设备不在本次本机读取范围。没有改选其他伙伴。'}</p>}
         {!sourceFocus && peer && <>
+          {manualFocus && manualReadReady && !focusedManualTask && <p className="pw-device-feedback" role="status">原手控准备已不在这次本机记录中，未打开其他工作。</p>}
           {preparedHere.length > 0 && originalWork}
           <section className="pw-device-connection pw-device-observation" aria-label="这台设备的工作范围与连接">
             <MotionFeedback identity={JSON.stringify([peer.deviceId, peer.connection?.state, peer.revoked])} initial={false} className="pw-device-connection-heading" role="status">

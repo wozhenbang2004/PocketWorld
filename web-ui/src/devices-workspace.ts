@@ -330,9 +330,10 @@ export function deviceWorkspaceTaskMode(value: unknown): 'manual_phone' | 'agent
   return '';
 }
 type ManualPreparation = { deadlineAt: number; target: { deviceId: string; instanceId: string; certificateFingerprint: string } };
-function originalManualPreparation(task: DeviceData): ManualPreparation | undefined {
+/** Local navigation record for one explicitly chosen phone; never a session or a live grant. */
+export function deviceOriginalManualPhonePreparation(task: DeviceData): ManualPreparation | undefined {
   const raw = task.raw;
-  if (!object(raw) || deviceWorkspaceTaskMode(raw) !== 'manual_phone' || raw.status !== 'paused' || raw.runId !== ''
+  if (!identity(task.id) || !object(raw) || raw.id !== task.id || deviceWorkspaceTaskMode(raw) !== 'manual_phone' || raw.status !== 'paused' || raw.runId !== ''
     || raw.coordinatorEpoch !== 0 || raw.cancelRequested !== false) return;
   const marker = raw.ownerPhoneControl;
   if (marker !== undefined && (!object(marker) || marker.format !== 'pocketworld.owner-phone-control.v1' || marker.requestId !== task.id)) return;
@@ -348,7 +349,7 @@ function samePreparedPhone(saved: ManualPreparation, peer: DeviceData | undefine
     && peer.certificateFingerprint === saved.target.certificateFingerprint;
 }
 export function deviceManualPhonePreparation(task: DeviceData, peer: DeviceData | undefined): ManualPreparation | undefined {
-  const saved = originalManualPreparation(task);
+  const saved = deviceOriginalManualPhonePreparation(task);
   return saved && samePreparedPhone(saved, peer) ? saved : undefined;
 }
 /** A same-device navigation hint, never a dispatch, result, live grant or permission. */
@@ -375,7 +376,7 @@ export function deviceTaskRows(tasks: unknown, snapshot: DeviceData | null, peer
   const result = originals.flatMap(task => {
     const raw = object(task.raw) ? task.raw : {}, origin = object(raw.origin) ? raw.origin : {}, operations = deviceRows(raw.operations);
     const prepared = deviceWorkspaceTaskMode(raw) !== '';
-    const manual = peerId && originalManualPreparation(task);
+    const manual = peerId && deviceOriginalManualPhonePreparation(task);
     if (manual) return samePreparedPhone(manual, peer) ? [task] : []; // A deviceId alone cannot retarget a preparation.
     const selected = deviceRows(raw.deviceSourceScope?.routes);
     const targets = deviceStrings(raw.deviceWorkspaceNavigation?.targetDeviceIds);
@@ -386,7 +387,7 @@ export function deviceTaskRows(tasks: unknown, snapshot: DeviceData | null, peer
     return savedDeviceChoice ? [{ ...task, savedDeviceChoice }] : [];
   });
   for (const link of links) if (identity(link.parentTaskId) && (!peerId || link.targetDeviceId === peerId
-    && !originals.some(task => task.id === link.parentTaskId && originalManualPreparation(task))) && !result.some(task => task.id === link.parentTaskId)) result.push({ id: link.parentTaskId, goal: '原设备关联任务', raw: {}, summaryOnly: true });
+    && !originals.some(task => task.id === link.parentTaskId && deviceOriginalManualPhonePreparation(task))) && !result.some(task => task.id === link.parentTaskId)) result.push({ id: link.parentTaskId, goal: '原设备关联任务', raw: {}, summaryOnly: true });
   return result;
 }
 export function deviceGrantInput(review: DeviceData, draft: DeviceData, now = Date.now()): DeviceData {

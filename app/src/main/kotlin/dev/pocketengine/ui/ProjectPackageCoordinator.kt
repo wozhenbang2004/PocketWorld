@@ -606,9 +606,20 @@ internal class ProjectPackageCoordinator(
         val id = UUID.randomUUID().toString()
         val skip = dev.pocketengine.features.local.project.ProjectSourceImport.checkedSkipDirectory(excludedDirectory)
         require(skip.isEmpty() || kind == "saf_tree") { "只能从本机文件夹导入时跳过一个目录" }
+        // Re-selecting a ZIP to use its inner root is tentative. Keep the
+        // already frozen choice until a new result is actually read and staged.
+        val previous = state.staged?.takeIf { staged ->
+            val evidence = staged.optJSONObject("sourceEvidence") ?: return@takeIf false
+            kind == "external_zip" && stripRoot && state.sourceImportRequested && state.projectId == null && state.checkoutId == null &&
+                staged.opt("complete") == true && evidence.opt("sourceKind") == "external_zip" &&
+                evidence.opt("ordinaryZipIsPocketWorldPackage") == false && evidence.optJSONObject("original")?.opt("singleRootStripped") == ""
+        }
         pickerImport = JSONObject().put("ownerExcludedDirectory", skip.takeIf { it.isNotEmpty() }).put("selectionId", id).put("ownerSourcePicker", true).put("checkoutId", state.checkoutId.orEmpty()).put("projectId", state.projectId.orEmpty()).put("sourceKind", kind).put("includeGeneratedRoots", generated).put("stripSingleRoot", stripRoot)
+            .put("priorStageId", previous?.getString("selectionId")).put("priorStageSha", previous?.getString("sha256"))
         restoredPicker = false
-        state = state.copy(staged = null, imported = null, importPlan = null, notice = null, error = null, sourceSkipCandidate = null)
+        state = state.copy(staged = previous, imported = null, importPlan = null, notice = previous?.let {
+            "尚未更换来源。之前核对的 ZIP 和原目录结构仍保留。"
+        }, error = null, sourceSkipCandidate = null)
         try { activity.pickOwnerProjectSource(id, kind == "saf_tree") }
         catch (_: RuntimeException) { retireOwnerSourcePicker(); state = state.copy(error = "无法打开系统文件选择器，未读取或创建项目。") }
     }
@@ -638,7 +649,13 @@ internal class ProjectPackageCoordinator(
     private fun acceptImportResult(uri: Uri?) {
         importUri = uri
         if (uri == null) {
-            if (!restoredPicker && pickerImport?.optString("sourceKind") in setOf("saf_tree", "external_zip")) state = state.copy(notice = "没有选取源码，未创建项目。")
+            val pin = pickerImport
+            if (!restoredPicker && pin != null && pin.optString("sourceKind") in setOf("saf_tree", "external_zip")) {
+                val kept = state.staged?.let { pin.has("priorStageId") && pin.opt("priorStageId") == it.opt("selectionId") &&
+                    pin.opt("priorStageSha") == it.opt("sha256") } == true
+                state = state.copy(notice = if (kept) "已取消重新选择。仍是之前核对的 ZIP，目录没有改动。"
+                    else "没有选取源码，未创建项目。")
+            }
             pickerImport = null
         } else if (restoredPicker) {
             pickerImport = null; importUri = null

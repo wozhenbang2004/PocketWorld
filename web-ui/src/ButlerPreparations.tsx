@@ -57,6 +57,12 @@ export type ConversationNext = {action:'prepare';label:string; hint?:string} |
 const approvalStates=['waiting_approval','awaiting_approval','waiting_permission'];
 const questionStates=['awaiting_user','waiting_user'];
 const checkStates=['reconciling','reconciliation_required','unknown'];
+const activeBuildStatus=new Map([
+  ['queued','原工作已登记，等待执行'],
+  ['preparing','正在准备本机执行'],
+  ['running','原工作正在执行'],
+  ['verifying','正在核对本机结果'],
+]);
 function taskNext(target:OriginalTask, canReview:boolean, build?:ChatBuild):ConversationNext {
   if(canReview&&approvalStates.includes(target.status)){
     const label=build?.decision==='dependencies'?'审阅依赖安装':build?.decision==='build'?'审阅本机网页构建':
@@ -80,6 +86,10 @@ export function conversationNext(row:ConversationPreparation, can:(command:strin
         return {action:'package',target:build,packageOperationId:build.packageOperationId,label:'打开固定网页',hint:build.ordinal?'第 '+build.ordinal+' 稿':undefined};
       if(build.settledBuild||[...approvalStates,...questionStates,'needs_confirmation','failed'].includes(build.status))
         return taskNext(build,can('tasks.review'),build);
+      const hint=activeBuildStatus.get(build.status);
+      // This is the exact recorded descendant, not the reply or the draft.
+      // Keep the read action stable as it moves between these live phases.
+      if(hint)return {action:'task',target:build,label:'查看本机构建进展',hint};
     }
     if(row.originalDraft&&can('projectDraft.readDifference'))
       return {action:'draft',target:task,draftId:row.originalDraft.draftId,label:'查看这次改稿'};
@@ -98,7 +108,7 @@ export function ConversationPreparationActions({rows,disabled,can,onOpen,onRead}
     return <Button key={conversationPreparationKey(row)} className="pw-chat-preparation-action" variant="secondary" size="small"
       leadingIcon={row.kind==='phone'?IconMonitor:IconFolder} trailingIcon={IconChevronRight} disabled={disabled}
       onClick={event=>next.action==='prepare'?onOpen(row,event.currentTarget):onRead(row,next,event.currentTarget)}>
-      <span><strong>{next.label}</strong>{named&&row.goal?<small dir="auto">{row.goal}</small>:next.hint?<small>{next.hint}</small>:null}</span>
+      <span><strong>{next.label}</strong>{named&&row.goal?<small><bdi>{row.goal}</bdi>{next.hint&&` · ${next.hint}`}</small>:next.hint?<small>{next.hint}</small>:null}</span>
     </Button>;
   };
   return rows.length===1?<div className="pw-chat-preparation-actions">{action(rows[0])}</div>:

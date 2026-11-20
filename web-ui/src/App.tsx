@@ -2576,15 +2576,17 @@ export default function App(){
    }
    for(const item of conversationPreparations.rows){
      const key=workIdentityKey({taskId:item.sourceTaskId,runId:item.sourceRunId,epoch:item.sourceEpoch}),request=item.visibleOwnerRequest;
-     const owner=request&&owners.get(request.messageId);
+     const owner=request&&owners.get(request.messageId), exactOwner=owner&&owner.revision===request?.revision;
      // The private native locator witnesses one original input. Multi-input
      // proposals stay with their uniquely saved assistant reply, not a guessed user row.
      const index=item.kind==='phone'?ordinaryPhonePlacement.get(key):
-       owner&&owner.revision===request?.revision?owner.index:
+       exactOwner?owner.index:
        !unidentifiedReplies.has(item.sourceTaskId)?eligible.get(key):null;
      if(index==null)continue;
      const matches=anchoredPreparations.get(index)||[];
-     anchoredPreparations.set(index,[...matches,item]);
+     // The descendant was proved only for the original owner request, not for
+     // a visible model reply which can still locate the earlier preparation.
+     anchoredPreparations.set(index,[...matches,!exactOwner&&item.chatBuild?{...item,chatBuild:undefined}:item]);
      placedProposalKeys.add(conversationPreparationKey(item));
    }
  }
@@ -2914,12 +2916,21 @@ export default function App(){
  const visibleOwnerPreparationSources=useMemo(()=>JSON.stringify(messages.flatMap(m=>
   m.role==='user'&&m.quoteAvailable===true&&m.id&&Number.isSafeInteger(m.sourceRevision)&&Number(m.sourceRevision)>0
    ? [[m.id,m.sourceRevision]] : [])),[messages]);
- const preparationRefreshKey=JSON.stringify([preparationRevision,tasks.flatMap(task=>task.raw?.hasOwnerWorkPreparations
-  ? [[task.id,task.raw.ownerWorkPreparationCount]]
-  : task.raw?.ownerWorkPreparation&&task.raw?.developmentContext?.draftOnly===true
-   ? [[task.id,task.status,task.raw.runId,task.raw.coordinatorEpoch,task.raw.projectEditDraftId]]
-   : task.raw?.developmentContext?.ownerDraftFirstBuild
-    ? [[task.id,task.status,task.raw.runId,task.raw.coordinatorEpoch,task.updatedAt]] : [])]);
+ const watchesOriginalBuild=route==='chat'&&can('butler.preparation.project.followup')&&[...anchoredPreparations.values()]
+  .some(rows=>rows.some(row=>row.visibleOwnerRequest&&row.originalDraft));
+ const preparationRefreshKey=JSON.stringify([preparationRevision,tasks.flatMap(task=>{
+  const raw=task.raw,project=raw?.developmentContext;
+  if(raw?.hasOwnerWorkPreparations)return [[task.id,raw.ownerWorkPreparationCount]];
+  if(raw?.ownerWorkPreparation&&project?.draftOnly===true)return [[task.id,task.status,raw.runId,raw.coordinatorEpoch,raw.projectEditDraftId]];
+  if(project?.ownerDraftFirstBuild)return [[task.id,task.status,raw?.runId,raw?.coordinatorEpoch,task.updatedAt]];
+  // The normal list header does not carry ownerDraftFirstBuild. Only use its
+  // phase changes to re-read the original native projection, never to link a task.
+  if(watchesOriginalBuild&&raw?.kind==='assistant'&&raw.actorId==='owner'&&raw.spaceId==='private'&&raw.origin==null&&
+     project?.format==='pocketworld.development-context.v1'&&project.runtime==='managed_process_v1'&&project.draftOnly!==true&&
+     typeof project.initialSourceDigest==='string'&&/^[a-f0-9]{64}$/.test(project.initialSourceDigest))
+   return [[task.id,task.status,raw.runId,raw.coordinatorEpoch,running(task)?null:task.updatedAt]];
+  return [];
+ }).sort((a,b)=>String(a[0]).localeCompare(String(b[0])))]);
  const openConversationPreparation=(target:ButlerPreparationTarget,trigger:HTMLButtonElement)=>{
    if(route==='chat'){
      if(document.hidden||target.sourceConversationId!==conversation||bridge.getState().state.conversationId!==conversation||taskOpen||preparationTarget)return;
@@ -3095,6 +3106,7 @@ export default function App(){
     const inlineResult=!earlierRun&&!phoneResult&&taskResult?.kind==='owner_work'&&taskResult.status==='completed'&&!taskResult.noticeKind&&!!m.id;
     const delivery=savedConversationDelivery(m,String(state.conversationId||''),obj(state.chatReceipts));
     const openQueuedReceipt=m.role==='user'&&m.submission?.status==='queued'&&!!m.submission?.taskId&&can('queued.open');
+    const verifiedQueueLabel=openQueuedReceipt&&delivery?.status==='queued';
     const savedTrace=!phoneResult&&!taskResult&&m.id&&Number(m.sourceRevision)>0?replyContext:null;
     const noteIdentity=!phoneResult&&!taskResult&&replyContext&&!representedProjectRuns.has(workIdentityKey(replyContext))&&messageTaskAnchors.get(replyContext.taskId)===index?replyContext:null;
     const preparations=anchoredPreparations.get(index);
@@ -3131,8 +3143,8 @@ export default function App(){
      <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={continued}>
      {m.hostGoalTaskId&&m.id&&can('conversation.openHostGoal')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder}
        disabled={taskOpen||chatWorkReading} onClick={event=>void openHostWorkFromChat(m,event.currentTarget)}>打开原主机工作</Button>}
-     {m.role==='user'&&m.submission?.status==='queued'&&m.submission?.taskId&&can('queued.open')&&<Button variant="ghost" className="pw-message-queue-action" leadingIcon={IconClock} onClick={()=>run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}>已入队 · 查看或调整</Button>}
-     {delivery&&row.lastOfRole&&!(m.submission?.status==='queued'&&m.submission?.taskId&&can('queued.open'))&&<SavedConversationDelivery receipt={delivery}/>}
+     {openQueuedReceipt&&<Button variant="ghost" className="pw-message-queue-action" leadingIcon={IconClock} onClick={()=>run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}>{verifiedQueueLabel?'已入队 · 查看或调整':'查看原输入队列'}</Button>}
+     {delivery&&row.lastOfRole&&!verifiedQueueLabel&&<SavedConversationDelivery receipt={delivery}/>}
      {m.role==='user'&&linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&
       <ConversationLinkedReason conversation={String(state.conversationId||'')} task={linkedFeedback}/>}
      {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
