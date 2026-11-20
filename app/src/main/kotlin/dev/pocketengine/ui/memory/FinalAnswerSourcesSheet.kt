@@ -12,12 +12,21 @@ import kotlin.coroutines.resumeWithException
 
 internal fun finalAnswerSourceSelection(message: UiMessage): JSONObject? = runCatching {
     if (message.role != "assistant" || message.content.isBlank()) return null
-    val reference = message.memoryReference ?: return null
-    val task = reference.getString("taskId")
-    if (message.taskId != null && message.taskId != task) return null
-    JSONObject().put("taskId", task).put("runId", reference.getString("runId"))
-        .put("epoch", reference.getInt("coordinatorEpoch")).put("requestId", reference.getString("requestId"))
-        .put("answerId", reference.getString("answerId")).put("answerFingerprint", CompactionPlan.fingerprint(message.content))
+    val reference = message.memoryReference
+    if (reference != null) {
+        val task = reference.getString("taskId")
+        if (message.taskId != null && message.taskId != task) return null
+        JSONObject().put("taskId", task).put("runId", reference.getString("runId"))
+            .put("epoch", reference.getInt("coordinatorEpoch")).put("requestId", reference.getString("requestId"))
+            .put("answerId", reference.getString("answerId")).put("answerFingerprint", CompactionPlan.fingerprint(message.content))
+    } else {
+        val reply = message.replyContext?.takeIf { it.publicAnswerSourcesRecorded && it.taskId == message.taskId && it.deliveryId == null } ?: return null
+        val id = message.id?.takeIf { message.sourceRevision > 0 } ?: return null
+        val replyId = reply.replyId ?: return null
+        JSONObject().put("taskId", reply.taskId).put("runId", reply.runId).put("epoch", reply.epoch)
+            .put("answerFingerprint", CompactionPlan.fingerprint(message.content))
+            .put("publicReply", JSONObject().put("messageId", id).put("revision", message.sourceRevision).put("replyId", replyId))
+    }
 }.getOrNull()
 
 internal fun finalAnswerSourceSelection(task: UiTask): JSONObject? = runCatching {

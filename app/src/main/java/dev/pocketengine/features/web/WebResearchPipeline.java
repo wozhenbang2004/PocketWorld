@@ -116,9 +116,10 @@ public final class WebResearchPipeline {
                     .put("retrievedAt",page.optJSONObject("http")==null?JSONObject.NULL:
                             page.getJSONObject("http").opt("retrievedAt"));
             if(page.optBoolean("ok")&&"read".equals(page.optString("status"))){
+                JSONObject http=page.getJSONObject("http");
                 item.put("title",page.optString("title",candidate.optString("title")))
-                        .put("text",page.optString("text"))
-                        .put("http",page.getJSONObject("http"))
+                        .put("requestedUrl",url).put("url",http.getString("finalUrl"))
+                        .put("text",page.optString("text")).put("http",http)
                         .put("rendered",false).put("sourceRole","public_http_text");
                 readSuccess++;readSuccessCounts[query]++;
             }else{
@@ -139,8 +140,9 @@ public final class WebResearchPipeline {
                 .put("searchRequests",searchCalls).put("readRequests",readAttempts)
                 .put("pagesRead",readSuccess).put("untrustedPublicResearch",true)
                 .put("originalTaskOnly",true).put("retrievedAt",System.currentTimeMillis())
-                .put("message",readSuccess>0
-                        ?"正文仅来自本次已实际读取的匿名HTTP响应，摘要不冒充正文。"
-                        :"本轮未取得可读正文；如需动态/登录页面，须使用原任务实际批准的浏览器工具，不能自动扩大权限。");
+                .put("message",results.length()==0?"没有取得可核对的搜索结果，未读取任何网页。":
+                        pageLimit==0?"本次只搜索，返回的来源是搜索摘要，未尝试读取网页正文。":
+                        readSuccess>0?"正文仅来自本次实际读取的匿名HTTP响应，其他来源仍为搜索摘要。":
+                        "只取得搜索摘要，未取得可读正文。优先用可公开读取的替代来源；动态或登录页面不能自动扩大权限。");
     }
 }

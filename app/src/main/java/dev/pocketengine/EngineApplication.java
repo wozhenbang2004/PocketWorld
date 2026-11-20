@@ -1192,7 +1192,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             public JSONObject requirementsForPlan(JSONObject plan)throws Exception{return automationPlanRequirements(plan);}
         },this::readAutomationArtifact);features.setAutomationPlanHost(automationPlans);automationPlans.bindProposalSources((refs,action)->memorySources.withCurrentUserSources(refs,action));
         addModule("automation",()->new dev.pocketengine.features.automation.AutomationModule(context,automationPlans::resolveEvidence,automationPlans));
-        EngineModule remote=addModule("remote",()->new dev.pocketengine.features.remote.RemoteModule(context));
+        EngineModule remote=addModule("remote",()->new dev.pocketengine.features.remote.RemoteModule(context,tasks));
         EngineModule channels=addModule("channels",()->new dev.pocketengine.features.channels.ChannelsModule(context));
         if(channels instanceof dev.pocketengine.features.channels.ChannelsModule){((dev.pocketengine.features.channels.ChannelsModule)channels).setMemory(memory);((dev.pocketengine.features.channels.ChannelsModule)channels).setMemorySynchronizer(memorySources::synchronize);((dev.pocketengine.features.channels.ChannelsModule)channels).setInferenceFactory((original,sourceEventId)->dev.pocketengine.runtime.usage.NativeInferenceWork.open(tasks,TaskStore.NativeInferenceKind.CHANNEL_CHAT,sourceEventId,original));}
         EngineModule teams=addModule("teams",()->new dev.pocketengine.features.teams.TeamsModule(context));

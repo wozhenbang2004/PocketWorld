@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.ui.ConversationReadPage
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.memory.checkedFinalAnswerSourceReceipt
 import dev.pocketengine.ui.memory.finalAnswerSourceSelection
@@ -13,13 +14,14 @@ import org.json.JSONObject
 /** Bounded presentation of the existing original-answer source reader. */
 internal class PocketWebSources(private val controller: PocketWorldController) {
     private val main = Handler(Looper.getMainLooper())
-    private data class Window(val id: String, val answer: JSONObject, val current: () -> JSONObject?, val owner: Any)
+    private data class Window(val id: String, val answer: JSONObject, val current: () -> JSONObject?, val owner: Any, val history: Boolean)
     private var window: Window? = null
     private var read: RunControl? = null
     private val pins = linkedMapOf<String, JSONObject>()
     private var generation = 0L
     fun clear() { ++generation; read?.cancel(); read = null; window = null; pins.clear() }
     fun close(id: String) { if (window?.id == id) clear() }
+    fun historyWindow(id: String) = window?.let { it.id == id && it.history } == true
 
     fun open(messageId: String?, taskId: String?, done: (JSONObject?, String?) -> Unit) {
         check(controller.webPrivateOwnerVisible()) { "请在原私人回答中查看来源" }
@@ -27,8 +29,28 @@ internal class PocketWebSources(private val controller: PocketWorldController) {
         val current: () -> JSONObject? = if (messageId != null) {
             { controller.state.messages.firstOrNull { it.id == messageId }?.let(::finalAnswerSourceSelection) }
         } else { { controller.state.tasks.firstOrNull { it.id == taskId }?.let(::finalAnswerSourceSelection) } }
+        openWindow(current, false, done)
+    }
+
+    /** Existing historical reader scope, not the current composer or a free message lookup. */
+    fun openHistory(page: ConversationReadPage, message: String, revision: Long, visible: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val sourceRevision = controller.conversationSourceRevision
+        val selected = page.messages.singleOrNull { it.id == message && it.role == "assistant" && it.sourceRevision == revision }
+            ?.let(::finalAnswerSourceSelection)?.takeIf { it.has("publicReply") } ?: error("原历史回答没有可核对的公开出处")
+        val current = {
+            val held = controller.conversationReader
+            if (!visible() || sourceRevision != controller.conversationSourceRevision || held == null ||
+                held.window != page.window || held.conversation != page.conversation || held.messages !== page.messages ||
+                !held.initialized || held.loading || held.error != null || held.limited || !controller.canReadConversationWindow(held)) null
+            else selected
+        }
+        openWindow(current, true, done)
+    }
+
+    private fun openWindow(current: () -> JSONObject?, history: Boolean, done: (JSONObject?, String?) -> Unit) {
+        check(controller.webPrivateOwnerVisible()) { "请回到这条原私人回答查看出处" }
         val answer = current() ?: error("这条原回答没有可核对的来源身份")
-        clear(); window = Window(UUID.randomUUID().toString(), JSONObject(answer.toString()), current, controller.webWindowTicket())
+        clear(); window = Window(UUID.randomUUID().toString(), JSONObject(answer.toString()), current, controller.webWindowTicket(), history)
         read(window!!.id, null, 0, 0, done)
     }
 
@@ -38,6 +60,7 @@ internal class PocketWebSources(private val controller: PocketWorldController) {
         check(current(original)) { "原回答或主人窗口已变化" }
         val pin = source?.let { pins[it]?.let { selected -> JSONObject(selected.toString()) } ?: error("请从原来源列表选择保留的修订") }
         read?.cancel(); val control = RunControl(); read = control; val observed = ++generation
+        if (original.history) control.setAuthorityCheck { check(current(original)) { "原历史回答或保留范围已变化" } }
         val request = JSONObject().put("answer", JSONObject(original.answer.toString())).put("readId", UUID.randomUUID().toString())
             .put("cursor", cursor).put("offset", offset).put("maxChars", 8000).also { if (pin != null) it.put("source", pin) }
         try { controller.runPluginCatalogWork(Runnable {

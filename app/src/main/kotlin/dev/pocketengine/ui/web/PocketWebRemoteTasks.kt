@@ -26,6 +26,7 @@ internal class PocketWebRemoteTasks(
     private val phoneDrafts=PocketWebRemotePhoneDrafts(controller,captureWindow,acceptsWindow,taskView)
     private val offlinePickup = PocketWebRemotePickup(controller, captureWindow, acceptsWindow, taskView)
     private val main = Handler(Looper.getMainLooper())
+    @Volatile private var hostStatusAttempt:Any?=null
     private var generation = 0L
     private var nativeWindow: String? = null
     private var originalTask: String? = null
@@ -76,7 +77,7 @@ internal class PocketWebRemoteTasks(
             "gateway.prepareContinuation" to setOf("snapshotId", "snapshotVersion"), "openHarnessConfig" to setOf("operationId", "restoreOperationId", "selectionFromTask"))
         private fun independentReview(command: String) = command.startsWith("gateway.") && command != "gateway.prepareContinuation" || command.endsWith("HarnessConfig") || command == "cancelHarnessConfigPreview"
         val COMMANDS = fields.keys.map { "remoteTask.$it" }.toSet() +
-            setOf("remoteTask.open", "remoteTask.stopObservation", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteTask.stageSavedSources", "remoteTask.cancelSourcePreparation", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS + PocketWebRemotePickup.COMMANDS + PocketWebRemotePhoneDrafts.COMMANDS
+            setOf("remoteTask.originalLinuxHostStatus", "remoteTask.open", "remoteTask.stopObservation", "remoteTask.close", "remoteTask.openLocalSnapshot", "remoteTask.stageSavedSources", "remoteTask.cancelSourcePreparation", "remoteSessions.read", "remoteSessions.open") + PocketWebRemotePreview.COMMANDS + PocketWebRemoteInputs.COMMANDS + PocketWebRemotePickup.COMMANDS + PocketWebRemotePhoneDrafts.COMMANDS
 
         /** All lineage and delivery decisions use the same native rules as execution. */
         internal fun presentSnapshot(original: JSONObject): JSONObject {
@@ -125,7 +126,7 @@ internal class PocketWebRemoteTasks(
 
     private fun closeTask() {
         preview?.clear()
-        generation++; snapshot = null; configuration = null; busy = false
+        generation++; hostStatusAttempt=null; snapshot = null; configuration = null; busy = false
         val previous = nativeWindow; nativeWindow = null; originalTask = null; observation=null
         previous?.let(controller::leaveRemoteTask)
     }
@@ -209,6 +210,30 @@ internal class PocketWebRemoteTasks(
             done(JSONObject().put("closed", true), null); changed(); return
         }
         require(foreground()) { "请回到原私人工作区" }
+        if(action=="remoteTask.originalLinuxHostStatus"){
+            fields(args,setOf("taskId","runId","coordinatorEpoch"))
+            val id=string(args,"taskId",80);val run=string(args,"runId",80);val raw=args.opt("coordinatorEpoch")
+            require((raw is Int||raw is Long)&&(raw as Number).toLong() in 0L..Int.MAX_VALUE.toLong())
+            val epoch=(raw as Number).toInt()
+            val window=captureWindow();val one=Any();val activity=controller.webPresentationActivity()
+            check(taskCurrent(id)&&acceptsWindow(window)&&hostStatusAttempt==null&&nativeWindow==null) { "请在这项工作的本机回执中主动查询一次" }
+            hostStatusAttempt=one
+            val current=java.util.function.BooleanSupplier{hostStatusAttempt===one&&taskCurrent(id)&&acceptsWindow(window)}
+            val unavailable="未能核对这个原主机工作的状态；没有读取详情或重提。"
+            try{controller.runEcosystemControlWork(Runnable{
+                val result=runCatching{
+                    check(current.asBoolean)
+                    val host=controller.nativeButlerHost().remoteOwnerWorkflows?:error("原主机任务宿主未就绪")
+                    host.originalLinuxHostStatus(activity,id,run,epoch,current)
+                }
+                main.post{
+                    val show=current.asBoolean
+                    if(hostStatusAttempt===one)hostStatusAttempt=null
+                    if(show)result.fold({done(it,null)},{done(null,unavailable)}) else done(null,"原工作页已变化，未显示旧状态")
+                }
+            })}catch(failure:Exception){if(hostStatusAttempt===one)hostStatusAttempt=null;done(null,unavailable)}
+            return
+        }
         if (action == "remoteSessions.read") {
             fields(args, emptySet()); val window = captureWindow(); val read = ++listingGeneration
             listing = null; listedRows = emptyMap()

@@ -1,8 +1,11 @@
+import {OriginalPrivateHostAnswer} from './OriginalPrivateHostAnswer';
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import { IconClose, IconFile, IconRefresh, IconTool } from './icons';
+import { IconClose, IconFile, IconLink, IconRefresh, IconTool } from './icons';
 import {Accordion,AccordionItem,Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
+import {bridge} from './bridge';
 import {AIAnswer,MessageActions} from './library';
+import {AnswerSources,type HistoricalAnswerSource} from './AnswerSources';
 import {useClosingSnapshot} from './library/surface-motion';
 import {PhoneReturnedReport,type PhoneReportTarget} from './PhoneReturnedReport';
 import {PhoneMessageReturn} from './PhoneMessageReturn';
@@ -13,6 +16,14 @@ import './conversation-history-window.css';
 
 type Json=Record<string,any>;
 type Position={index:number;offset:number;anchor:string};
+type HistorySource={target:HistoricalAnswerSource;trigger:HTMLButtonElement;top:number;generation:number};
+const sourceGeneration=()=>Number(bridge.getState().state.traceSourceRevision||0);
+const hasPublicSources=(row:Json)=>row.role==='assistant'&&typeof row.id==='string'&&!!row.id&&row.retainedSources===true&&
+ row.memoryReference==null&&Number.isSafeInteger(row.sourceRevision)&&row.sourceRevision>0;
+function sameHistoricalAnswer(page:Json|null,target:HistoricalAnswerSource){
+ return page?.window===target.readerWindow&&page.conversation===target.readerConversationId&&!page.loading&&!page.error&&!page.limited&&
+  Array.isArray(page.messages)&&page.messages.filter((row:Json)=>row.id===target.messageId&&row.sourceRevision===target.readerSourceRevision&&hasPublicSources(row)).length===1;
+}
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
 type Props={page:Json|null;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void};
 /** A second, read-only history window. The active composer stays with its original
@@ -23,6 +34,9 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
  const restored=useRef<number|null>(null),position=useRef<Position>({index:0,offset:0,anchor:''});
  const timer=useRef<ReturnType<typeof setTimeout>|null>(null),sending=useRef(false);
  const [pending,setPending]=useState(false),[error,setError]=useState('');
+ const [historySource,setHistorySource]=useState<HistorySource|null>(null);
+ const shownSource=historySource&&historySource.generation===sourceGeneration()&&sameHistoricalAnswer(page,historySource.target)?historySource:null;
+ useEffect(()=>{if(historySource&&!shownSource)setHistorySource(null)},[historySource,shownSource]);
  const [phoneOriginal,setPhoneOriginal]=useState<PhoneReportTarget|null>(null);
  const [quoteVisit,setQuoteVisit]=useState<HistoryQuoteVisit|null>(null);
  const visibleVisit=quoteVisit&&sameQuoteVisit(page,quoteVisit)?quoteVisit:null;
@@ -42,7 +56,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
  };
  const returnFromQuote=()=>{const v=visibleVisit;if(!v)return false;setQuoteVisit(null);moveToQuoteRow(v,true);return true};
  useEffect(()=>{if(quoteVisit&&!visibleVisit)setQuoteVisit(null)},[quoteVisit,visibleVisit]);
- useEffect(()=>{const retire=()=>{if(document.hidden)setQuoteVisit(null)};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
+ useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setHistorySource(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
 
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
  const returnToInput=useRef<(ConversationHistoryTaskOrigin&{taskId:string;revision:number})|null>(null);
@@ -55,6 +69,13 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   const items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
   const row=items.find(item=>item.getBoundingClientRect().bottom>node.getBoundingClientRect().top)||items.at(-1);if(!row)return;
   position.current={index:Number(row.dataset.readerIndex),offset:Math.max(0,Math.round(node.getBoundingClientRect().top-row.getBoundingClientRect().top)),anchor:row.dataset.readerId||''};
+ };
+ const openHistorySource=(message:Json,trigger:HTMLButtonElement)=>{
+  const h=live.current;
+  if(document.hidden||!h||!scroll.current||!scroll.current.contains(trigger)||!can('sources.open'))return;
+  const target={readerWindow:h.window,readerConversationId:h.conversation,messageId:message.id,readerSourceRevision:message.sourceRevision};
+  if(!sameHistoricalAnswer(h,target))return;
+  remember();setHistorySource({target,trigger,top:scroll.current.scrollTop,generation:sourceGeneration()});
  };
  const persist=()=>{
   if(timer.current){clearTimeout(timer.current);timer.current=null}
@@ -114,7 +135,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   if(!button||button.disabled)return false;
   button.focus({preventScroll:true});return true;
  };
- const back=()=>{if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
+ const back=()=>{if(shownSource){setHistorySource(null);return true}if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
@@ -141,7 +162,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
       body={message.content} locked={!page||page.window!==shown.window||page.loading||!!page.error||page.limited||pending}
       onOriginal={readPhone?t=>{remember();setPhoneOriginal(t)}:undefined}>
       <AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>
-     </PhoneMessageReturn>:message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
+     </PhoneMessageReturn>:message.originalHostFinal?<p className="pw-user-text">{message.content}</p>:message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
     {Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><Button key={`${file.id}:${file.sha256}`} variant="ghost" leadingIcon={IconFile} disabled={!page||pending||!can('conversation.reader.attachment')} onClick={()=>void invoke('conversation.reader.attachment',{messageId:message.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
     {page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{message.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p></AccordionItem></Accordion>}
     {page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
@@ -155,6 +176,10 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
     </div>}
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
+     {message.originalHostFinal&&<OriginalPrivateHostAnswer result={message.originalHostFinal}/>}
+     {hasPublicSources(message)&&can('sources.open')&&<Button variant="ghost" size="small" leadingIcon={IconLink}
+      disabled={!page||page.window!==shown.window||pending||page.loading||!!page.error||page.limited}
+      onClick={event=>openHistorySource(message,event.currentTarget)}>查看出处</Button>}
      {message.role==='assistant'&&message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
      {phone&&can('tasks.open')&&<Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>所属工作的当前进展</Button>}
@@ -170,5 +195,13 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':'返回原输入'}</Button><Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button></footer>
   {reviewing&&<MessageQuote target={reviewing} onClose={()=>setReuse(null)} onStaged={()=>{if(live.current?.window===reviewing.prior?.reader)void invoke('conversation.reader.close')}}/>}
   {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}
+  {shownSource&&<AnswerSources key={`${shownSource.target.readerWindow}:${shownSource.target.messageId}:${shownSource.target.readerSourceRevision}`}
+    target={shownSource.target} revision={shownSource.target.readerSourceRevision} onClose={()=>setHistorySource(null)}
+    onCloseAutoFocus={event=>{
+     event.preventDefault();
+     if(!document.hidden&&sameHistoricalAnswer(live.current,shownSource.target)&&scroll.current?.contains(shownSource.trigger)&&!shownSource.trigger.disabled){
+      scroll.current.scrollTop=shownSource.top;shownSource.trigger.focus({preventScroll:true});
+     }
+    }}/>}
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }

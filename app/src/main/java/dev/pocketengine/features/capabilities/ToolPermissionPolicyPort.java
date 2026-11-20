@@ -82,6 +82,8 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
         ToolApprovalPermit.clear(this);current(original);
         boolean effecting=PHONE_EFFECTS.contains(name)||existing.sideEffecting(name);
         CapabilityApprovalPolicy.Decision choice=policy.decisionFor(name,effecting);
+        JSONObject webRefusal=publicWebRefusal(name,supplied);
+        if(webRefusal!=null)return webRefusal;
         if(choice==CapabilityApprovalPolicy.Decision.DENY)return refusal("tool_policy_denied","此工具已被你的精确规则禁止："+name);
         if("phone_prepare_cold_start".equals(name))for(String stage:new String[]{"phone_force_stop_app","phone_restart_app"})
             if(policy.decisionFor(stage,true)==CapabilityApprovalPolicy.Decision.DENY)
@@ -152,6 +154,26 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
         ToolApprovalPermit.begin(this,binding.taskId,binding.runId,name,arguments,original,()->current(original),proof);
         return null;
     }
+    private static final Set<String> PUBLIC_WEB_READS=Set.of("web_search","web_fetch","web_research","web_sources");
+    private static JSONObject publicReadRefusal(String tool,String message)throws Exception{
+        return new JSONObject().put("ok",false).put("accepted",false).put("nativeDispatched",false)
+                .put("status","not_dispatched").put("code","public_read_restricted").put("restrictedTool",tool)
+                .put("automaticReplayAllowed",false).put("message",message);
+    }
+    private boolean separateWebDecision(String tool){
+        return switch(policy.decisionFor(tool,false)){case DENY,ASK,REVIEW->true;default->false;};
+    }
+    private JSONObject publicWebRefusal(String name,JSONObject supplied)throws Exception{
+        if(!PUBLIC_WEB_READS.contains(name)||existing.planningAccess(name,supplied)!=ExecutionPlanning.Access.READ)return null;
+        if(policy.decisionFor(name,false)==CapabilityApprovalPolicy.Decision.DENY)
+            return publicReadRefusal(name,"此工具已被你的精确规则禁止，没有联网或读取来源。可继续使用已经取得的证据。");
+        if(!"web_research".equals(name))return null;
+        if(separateWebDecision("web_search"))
+            return publicReadRefusal("web_search","主人对公开搜索另有精确规则，复合研究没有发送查询。不要通过其他网络能力绕过；遵循独立公开搜索的原规则或说明缺口。");
+        if((supplied==null||supplied.optInt("maxPages",2)>0)&&separateWebDecision("web_fetch"))
+            return publicReadRefusal("web_fetch","主人对网页正文读取另有精确规则，其准入不能被复合研究替代。可用 web_search 或明确 maxPages=0 只查摘要；不要把摘要当作正文。");
+        return null;
+    }
     private static JSONObject assessment(JSONObject answer)throws Exception{
         if(answer.optJSONArray("tool_calls")!=null&&answer.getJSONArray("tool_calls").length()>0)throw new IllegalArgumentException("reviewer_cannot_call_tools");
         Object text=answer.opt("content");if(!(text instanceof String)||((String)text).length()>8000)throw new IllegalArgumentException("reviewer_result_invalid");
@@ -183,7 +205,11 @@ public final class ToolPermissionPolicyPort implements CapabilityPort {
     @Override public boolean sideEffecting(String name){return existing.sideEffecting(name);}
     @Override public ExecutionPlanning.Access planningAccess(String name,JSONObject args)throws Exception{return existing.planningAccess(name,args);}
     @Override public void validate(String name,JSONObject args)throws Exception{existing.validate(name,args);}
-    @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception{current(control);return existing.execute(name,args,control);}
+    @Override public JSONObject execute(String name,JSONObject args,RunControl control)throws Exception{
+        current(control);
+        JSONObject webRefusal=publicWebRefusal(name,args);
+        return webRefusal!=null?webRefusal:existing.execute(name,args,control);
+    }
     @Override public void afterTool(String name,JSONObject args,JSONObject receipt,RunControl control)throws Exception{
         ToolApprovalPermit.clear(this);existing.afterTool(name,args,receipt,control);if(mainModelOnly)return;
         String text=reviewer.redactSensitive(receipt.toString());if(text.length()>3000)text=text.substring(0,3000)+"[证据已截断]";

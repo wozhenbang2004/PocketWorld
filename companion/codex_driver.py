@@ -12,6 +12,7 @@ import uuid
 from remote_interactions import QuestionMailbox, Progress, question
 import group_input_audience
 from codex_child_sources import CodexChildSources
+from private_host_final import Capture as PrivateHostFinalCapture
 from driver_dispatch import PipeWriter, WriteTicket, DispatchError
 from team_harness import TOOLS as TEAM_TOOLS, TOOL_NAMES as TEAM_TOOL_NAMES
 
@@ -27,6 +28,7 @@ class CodexAppServerDriver:
         self.team_tools = team_tools
         self.team_calls = set()
         self.restricted_read_only = restricted_read_only
+        self.original_final = PrivateHostFinalCapture() if restricted_read_only and not assignment_write and team_tools is None else None
         self.assignment_write = assignment_write
         self.assignment_project = bool(assignment_project)
         self.assignment_paths = set(assignment_paths or [])
@@ -421,6 +423,8 @@ class CodexAppServerDriver:
             return
         if params.get("turnId") is not None and self.turn_id is not None and params["turnId"] != self.turn_id:
             return
+        if self.original_final is not None and self.protocol_verified and self.turn_dispatched:
+            self.original_final.observe(method, params, self.thread_id, self.turn_id)
         if method in {"item/started", "item/completed"}:
             item = params.get("item")
             if isinstance(item, dict) and isinstance(item.get("id"), str):

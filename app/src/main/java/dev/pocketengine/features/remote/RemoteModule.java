@@ -38,13 +38,18 @@ public final class RemoteModule implements EngineModule {
     private long backendReadGeneration;
     private volatile boolean closed;
     private final java.util.concurrent.atomic.AtomicBoolean readRefreshQueued=new java.util.concurrent.atomic.AtomicBoolean();
+    private final dev.pocketengine.store.TaskStore originalTasks;
     private final CredentialReader credentials;
     private final DispatchGate dispatchGate;
-    public RemoteModule(FeatureContext context) {
-        this(context,(id,base)->context.secrets.get(slot(id,base)),path->{});
+    public RemoteModule(FeatureContext context) {this(context,null);}
+    public RemoteModule(FeatureContext context,dev.pocketengine.store.TaskStore originalTasks) {
+        this(context,(id,base)->context.secrets.get(slot(id,base)),path->{},originalTasks);
     }
     RemoteModule(FeatureContext context,CredentialReader credentials,DispatchGate dispatchGate) {
-        this.credentials=credentials;this.dispatchGate=dispatchGate;
+        this(context,credentials,dispatchGate,null);
+    }
+    private RemoteModule(FeatureContext context,CredentialReader credentials,DispatchGate dispatchGate,dev.pocketengine.store.TaskStore originalTasks) {
+        this.credentials=credentials;this.dispatchGate=dispatchGate;this.originalTasks=originalTasks;
         cloudWorkspace=new CloudWorkspaceChoice(context.android.getSharedPreferences("owner_cloud_workspace",android.content.Context.MODE_PRIVATE));
         this.context=context;file=new AtomicFile(new File(context.android.getFilesDir(),"remote-profiles.json"));operationFile=new AtomicFile(new File(context.android.getFilesDir(),"remote-operations.json"));
         try{JSONArray stored=new JSONArray(new String(file.readFully(),StandardCharsets.UTF_8));for(int i=0;i<stored.length()&&profiles.length()<20;i++){JSONObject p=stored.optJSONObject(i);if(p!=null&&p.optString("id").matches("[A-Za-z0-9_-]{1,80}"))profiles.put(p);}}catch(Exception ignored){}
@@ -404,16 +409,34 @@ public final class RemoteModule implements EngineModule {
         Watch watch=new Watch(identity,identity.getString("profileBinding"));
         if(!op.optString("profileId").equals(watch.profileId)||!op.optString("jobId").equals(watch.jobId)
                 ||!op.optString("operationId").equals(watch.operationId)||!op.optString("serviceBase").equals(watch.serviceBase))return;
-        requireProfileRevision(watch.profileId,watch.profileBinding);
-        if(watches.size()<12)watches.putIfAbsent(watch.key(),watch);
+        // Consult the original TaskStore outside our monitor. This also covers old active
+        // rows written before the on-demand flag; only the fixed, explicitly read-only Linux
+        // first task can remove a watch. It has no effect on other active owner jobs.
+        boolean onDemand=Boolean.TRUE.equals(op.opt("originalHostStatusOnRequest"))||
+                originalTasks!=null&&originalTasks.firstLinuxStatusOnRequest(op);
+        synchronized(this){
+            JSONObject known=null;
+            for(int i=0;i<operations.length();i++){JSONObject item=operations.getJSONObject(i);
+                if(watch.operationId.equals(item.opt("operationId"))) { known=item;break; }}
+            if(known==null||!"accepted".equals(known.opt("status"))||!watch.jobId.equals(known.opt("jobId"))
+                    ||!watch.profileBinding.equals(known.opt("profileBinding"))||!watch.serviceBase.equals(known.opt("serviceBase")))return;
+            requireProfileRevision(watch.profileId,watch.profileBinding);
+            if(onDemand){
+                known.put("originalHostStatusOnRequest",true);
+                Watch prior=watches.get(watch.key());if(prior!=null&&watch.operationId.equals(prior.operationId))watches.remove(watch.key(),prior);
+                return;
+            }
+            if(watches.size()<12)watches.putIfAbsent(watch.key(),watch);
+        }
     }
     private synchronized void acceptReceipt(JSONObject job)throws Exception {
         String profileId=job.optString("profileId"),jobId=job.optString("id"),service=job.optString("serviceBase");
         if(!service.equals(endpoint(profile(profileId).getString("baseUrl"))))throw new IllegalStateException("电脑连接已更改，旧地址回执没有接入新连接；请恢复原地址再核对");
         requireProfileRevision(profileId,required(job,"profileBinding",64));
         Watch current=watches.get(profileId+":"+jobId);if(current!=null)current.requireReceipt(job);
-        Watch observed=active(job.optString("status"))?new Watch(job,profileBindingHash(profileId)):null;
         JSONObject op=operation(job.optString("operationId"));
+        boolean onDemand=op!=null&&Boolean.TRUE.equals(op.opt("originalHostStatusOnRequest"));
+        Watch observed=!onDemand&&active(job.optString("status"))?new Watch(job,profileBindingHash(profileId)):null;
         if(HarnessCapabilityObservation.GEMINI_WORKER.equals(job.optString("worker"))||job.has("backendSelection")){
             if(op==null||!op.has("backendSelection"))throw new SecurityException("没有此原操作已捕获的后端选择，未从新回执补学身份");requireBackendReceipt(op,job);
         }else if(op!=null&&op.has("backendSelection"))throw new SecurityException("原Gemini回执丢失后端选择");
@@ -447,6 +470,42 @@ public final class RemoteModule implements EngineModule {
                 acceptSteer(intent,new JSONObject(message.toString()).put("serviceBase",service));
             }
         }
+    }
+    /** Exact one-shot native owner observation. No acceptReceipt(), watch, events, snapshots
+     * or route through feature/model tools. Older Companion returns the full original job on
+     * this existing GET; only the small below projection leaves this method. */
+    public JSONObject readOriginalLinuxHostStatus(dev.pocketengine.features.RemoteOwnerWorkflows.OriginalLinuxStatusRead receipt)throws Exception {
+        JSONObject original=java.util.Objects.requireNonNull(receipt).require(this),host=original.getJSONObject("hostWorkspace");
+        if(!dev.pocketengine.store.CloudWorkspaceJobs.valid(host)||!"codex_app_server".equals(host.opt("worker")))
+            throw new SecurityException("缺少原 Linux 主机身份");
+        String profile=identifier(host,"profileId"),binding=host.getString("profileBinding"),service=host.getString("serviceBase");
+        String operation=identifier(original,"operationId"),expectedJob=original.getString("knownJobId");
+        if(!operation.equals(original.opt("runId")))throw new SecurityException("原作业操作不匹配");
+        String path="/v1/operations/"+operation;receipt.require(this);
+        BoundRequest target;
+        synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);target=bind(profile,service);}
+        dispatchGate.beforeDispatch(path);receipt.require(this);
+        synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);}
+        JSONObject actual=target.request(path,null,15); // One GET; no list, probe, redirect, transport retry or follow-up.
+        receipt.require(this);
+        synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);}
+        if(!operation.equals(actual.opt("operationId")))throw new SecurityException("不是这笔原主机操作");
+        String job=actual.optString("id"),status=actual.optString("status");
+        JSONObject out=new JSONObject().put("format","pocketworld.original-linux-host-status.v1")
+                .put("taskId",original.getString("taskId")).put("runId",operation).put("epoch",original.getInt("epoch"))
+                .put("queryOnly",true).put("executionAuthorized",false);
+        if(job.isEmpty()){
+            if(!expectedJob.isEmpty()||!"not_found".equals(status))throw new SecurityException("未核对原作业状态");
+            return out.put("stage","not_found"); // Preserves the existing phone receipt; not proof it was never sent.
+        }
+        actual.put("profileId",profile); // Bound by the authenticated local request, not a response's claimed account.
+        if(!matchesHostJob(host,actual)||!job.matches("[A-Za-z0-9_-]{1,80}")||
+                !expectedJob.isEmpty()&&(!expectedJob.equals(job)||!original.getString("knownWorkspaceIdentity").equals(actual.opt("workspaceIdentity")))||
+                actual.has("readOnly")&&actual.opt("readOnly")!=Boolean.TRUE)throw new SecurityException("未核对到同一原目录、作业与范围");
+        if(dev.pocketengine.store.CloudWorkspaceJobs.archived(actual))return out.put("stage","archived").put("jobId",job);
+        if(actual.optBoolean("archived")||!java.util.Set.of("queued","running","stopping","awaiting_approval","awaiting_input","completed","failed","cancelled","interrupted","blocked","timed_out","unknown").contains(status))
+            throw new SecurityException("未核对一个可识别的原状态");
+        return out.put("stage","observed").put("jobId",job).put("executorStatus",status);
     }
     private JSONObject reconcile(JSONObject input)throws Exception {
         String profileId=identifier(input,"profileId"),operationId=identifier(input,"operationId");
@@ -847,7 +906,12 @@ public final class RemoteModule implements EngineModule {
                 if(input.has("_profileBinding"))details.put("profileBinding",required(input,"_profileBinding",64));
                 // Local observation only: not a renderer-supplied request field, capability or grant.
                 JSONObject observed=nativeGatewayFence==null&&!body.has("resumeJobId")?observedWorkspaceForOwner(input):null;
-                if(observed!=null)details.put("hostWorkspace",observed);
+                if(observed!=null){
+                    details.put("hostWorkspace",observed);
+                    if("codex_app_server".equals(body.opt("worker"))&&Boolean.TRUE.equals(body.opt("readOnly"))
+                            &&!body.has("teamContext")&&!body.has("threadId")&&!body.has("resumeJobId"))
+                        details.put("originalHostStatusOnRequest",true);
+                }
                 if(body.has("harnessSelection")){details.put("harnessSelection",new JSONObject(body.getJSONObject("harnessSelection").toString()));for(String key:new String[]{"worker","environmentId","environmentBinding","readOnly"})details.put(key,body.get(key));}
                 if(backend!=null){details.put("backendSelection",new JSONObject(backend.toString())).put("serviceBase",required(input,"serviceBase",2048));for(String key:new String[]{"environmentId","environmentBinding","worker","model","readOnly"})details.put(key,body.get(key));}
                 if(body.has("threadId")||body.has("resumeJobId")){
@@ -921,7 +985,15 @@ public final class RemoteModule implements EngineModule {
     }
     /** Foreground recovery schedules only original GETs on the existing bounded poll executor. */
     public void requestReadRefresh(){
-        if(closed||!readRefreshQueued.compareAndSet(false,true))return;try{poller.execute(()->{try{synchronized(RemoteModule.this){for(int i=0;i<operations.length();i++)try{restoreWatch(operations.getJSONObject(i));}catch(Exception originalUnavailable){/* Never rebind or create. */}}poll();}finally{readRefreshQueued.set(false);}});}catch(java.util.concurrent.RejectedExecutionException closedExecutor){readRefreshQueued.set(false);}
+        if(closed||!readRefreshQueued.compareAndSet(false,true))return;
+        try{poller.execute(()->{
+            try{
+                JSONArray originals;
+                synchronized(RemoteModule.this){try{originals=new JSONArray(operations.toString());}catch(org.json.JSONException unreadable){return;}}
+                for(int i=0;i<originals.length();i++)try{restoreWatch(originals.getJSONObject(i));}catch(Exception originalUnavailable){/* Never rebind or create. */}
+                poll();
+            }finally{readRefreshQueued.set(false);}
+        });}catch(java.util.concurrent.RejectedExecutionException closedExecutor){readRefreshQueued.set(false);}
     }
     /** One original prepared package operation. Existing ledger retains every slot before raw IO. */
     public JSONObject prepareProjectAssignment(JSONObject input,dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen original,
@@ -1189,6 +1261,23 @@ public final class RemoteModule implements EngineModule {
     private String jobOrigin(String profileId,String jobId)throws Exception {
         for(int i=0;i<operations.length();i++){JSONObject op=operations.getJSONObject(i);if(profileId.equals(op.optString("profileId"))&&jobId.equals(op.optString("jobId")))return op.optString("serviceBase");}
         JSONObject receipt=recent.get(profileId+":"+jobId);return receipt==null?null:receipt.optString("serviceBase");
+    }
+    /** The original chat action is not part of handle()/model tools and never updates watch/task state. */
+    public PrivateHostFinalText.Result readPrivateHostFinal(dev.pocketengine.features.assistant.AssistantModule.PrivateHostFinalRead original)throws Exception {
+        JSONObject exact=java.util.Objects.requireNonNull(original).require(this),host=exact.getJSONObject("host");
+        String op=identifier(exact,"taskId"),job=identifier(exact,"jobId"),profile=identifier(host,"profileId");
+        String binding=host.getString("profileBinding"),service=host.getString("serviceBase"),path="/v1/operations/"+op;
+        BoundRequest target;
+        synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);target=bind(profile,service);}
+        dispatchGate.beforeDispatch(path);original.require(this);
+        synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);}
+        JSONObject raw=target.request(path,null,15);original.require(this);
+        synchronized(this){if(closed)throw new IllegalStateException("原连接已关闭");requireProfileRevision(profile,binding);}
+        raw.put("profileId",profile);
+        if(!op.equals(raw.opt("operationId"))||!job.equals(raw.opt("id"))||!matchesHostJob(host,raw)
+                ||!exact.getString("workspaceIdentity").equals(raw.opt("workspaceIdentity"))||raw.optBoolean("archived"))
+            return new PrivateHostFinalText.Result("no_verified_text",null,null);
+        return PrivateHostFinalText.read(raw,target.token);
     }
     /** Caller holds the same monitor used by profile mutation and operation reservation. */
     private synchronized BoundRequest bind(String profileId,String expectedService)throws Exception {

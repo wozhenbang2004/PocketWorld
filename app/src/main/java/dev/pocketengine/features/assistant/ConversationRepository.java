@@ -8,6 +8,7 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.memory.ConversationHistory;
 import dev.pocketengine.features.memory.SourceRef;
 import dev.pocketengine.features.memory.TaskMemoryTrace;
+import dev.pocketengine.runtime.context.CompactionPlan;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.*;
@@ -21,6 +22,8 @@ public final class ConversationRepository {
     public static final int MAX_ROWS=100,MAX_BYTES=1_048_576;
     // A complete model answer shares the existing message window with source/receipt metadata.
     private static final int MAX_REPLY_BYTES=MAX_BYTES/2;
+    private static final String PENDING_PUBLIC_ANSWER="nativeAnonymousAnswerPending";
+    private static final String FINAL_PUBLIC_ANSWER="nativeAnonymousAnswerFinal";
     static void requireReplyContent(String text){
         if(text==null||text.isBlank())throw new IllegalArgumentException("模型没有返回文字答复");
         if(!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new IllegalArgumentException("答复含不完整Unicode字符，未替换后保存");
@@ -163,6 +166,38 @@ public final class ConversationRepository {
             return new JSONObject().put("generation",row.getString(0)).put("sourceConversationId",state.getString("conversationId"))
                     .put("sourceRef",new SourceRef("message",sourceId,state.getLong("revision"),"owner","private").toJson()).put("bodyFingerprint",row.getString(1));
         }
+    }
+    private static boolean originalAnonymousSource(JSONObject row,long revision){
+        return row!=null&&revision>0&&revision==row.optLong("revision")&&!row.optBoolean("deleted")
+                &&!row.optBoolean("nativeProvenanceImported")&&!row.optBoolean("memoryContextRetired")&&row.optLong("memorySourceRetiredThrough")<revision
+                &&"assistant".equals(row.optString("role"))&&"owner".equals(row.optString("ownerId"))&&"private".equals(row.optString("spaceId"))
+                &&row.optJSONObject("nativeContext")!=null;
+    }
+    private static boolean sameAnonymousReply(JSONObject row,String conversation,String task,String run,int epoch,String reply){
+        return !reply.isEmpty()&&conversation.equals(row.optString("conversationId"))&&task.equals(row.optString("nativeTaskId"))
+                &&run.equals(row.optString("nativeRunId"))&&epoch==row.optInt("nativeEpoch")&&reply.equals(row.optString("nativeReplyId"));
+    }
+    /** Companion to the original final checkpoint write. Only this one saved source's metadata
+     * is promoted; not the message body, the current task, or all replies from this run. */
+    public void sealOriginalAnonymousAnswerSources(dev.pocketengine.store.TaskStore original,String conversation,String task,String run,int epoch,String reply,String fingerprint)throws Exception{
+        if(monitor!=original||!Thread.holdsLock(monitor)||!db.inTransaction())throw new SecurityException("出处标记必须随原检查点事务保存");
+        if(!active()||!fingerprint.matches("[a-f0-9]{64}"))return;
+        JSONObject state=sourceByReply(reply);
+        if(!originalAnonymousSource(state,1)||!sameAnonymousReply(state,conversation,task,run,epoch,reply)||!fingerprint.equals(state.opt(PENDING_PUBLIC_ANSWER)))return;
+        state.remove(PENDING_PUBLIC_ANSWER);state.put(FINAL_PUBLIC_ANSWER,fingerprint);
+        ContentValues marker=new ContentValues();marker.put("source_json",state.toString());
+        db.update("assistant_sources",marker,"generation=? AND source_id=? AND conversation_id=? AND native_reply_id=? AND revision=1 AND deleted=0 AND context_retired=0 AND retired_through<revision",
+                new String[]{activeGeneration(),state.getString("sourceId"),conversation,reply});
+    }
+    /** Recheck the original typed reply without loading a second copy of its saved body. */
+    public boolean matchesOriginalAnonymousAnswer(String conversation,String id,long revision,String task,String run,int epoch,String reply,String fingerprint,String text)throws Exception{
+        if(!Thread.holdsLock(monitor)||!db.inTransaction())throw new SecurityException("出处核对必须在原任务事务内");
+        JSONObject state=source(id);
+        if(!originalAnonymousSource(state,revision)||!sameAnonymousReply(state,conversation,task,run,epoch,reply)||!fingerprint.equals(state.opt(FINAL_PUBLIC_ANSWER)))return false;
+        try{
+            JSONObject original=nativeMessageSource(new SourceRef("message",id,revision,"owner","private"));
+            return conversation.equals(original.getString("sourceConversationId"))&&("sha256:"+shaBytes(text.getBytes(StandardCharsets.UTF_8))).equals(original.getString("bodyFingerprint"));
+        }catch(SourceUnavailable withdrawn){return false;}
     }
     /** Metadata captured at actual MAIN admission. Initial image/document attachments
      * need the same generation dependency as document tool outputs. */
@@ -807,6 +842,10 @@ public final class ConversationRepository {
         if(more&&!lastId.isEmpty())next=encode(new JSONObject().put("at",lastAt).put("id",lastId));return new JSONObject().put("conversations",rows).put("gaps",gaps).put("scannedRows",scanned).put("materializedHeaderUtf8Bytes",bytes).put("nextCursor",next).put("hasMore",more).put("retentionLimitApplied",false).put("paginationSemantics","mutable_updated_at_keyset_not_snapshot");
     }
     private JSONObject messageFromRow(Cursor row)throws Exception{JSONObject message=new JSONObject(row.getString(1));message.put("content",row.getString(0)).put("revision",row.getLong(2));JSONObject state=source(message.getString("id"));if(state==null||state.getBoolean("deleted"))return null;
+        if(originalAnonymousSource(state,row.getLong(2))&&state.opt(FINAL_PUBLIC_ANSWER) instanceof String fingerprint&&fingerprint.matches("[a-f0-9]{64}")
+                &&sameAnonymousReply(state,message.optString("conversationId"),message.optString("taskId"),message.optString("nativeRunId"),message.optInt("nativeEpoch"),message.optString("nativeReplyId")))
+            message.put("publicAnswerSourcesRecorded",true);
+        else message.remove("publicAnswerSourcesRecorded"); // Old hints, imports and pending replies are not final proof.
         if(message.has("projectConventionRecorded")){
             JSONObject proof=state.optJSONObject("nativeProjectConventionReceipt");String reply=state.optString("nativeReplyId");
             boolean original=Boolean.TRUE.equals(message.opt("projectConventionRecorded"))&&proof!=null
@@ -926,6 +965,7 @@ public final class ConversationRepository {
         JSONObject state=new JSONObject().put("kind","message").put("sourceId",replyId).put("revision",1L).put("ownerId","owner").put("spaceId","private")
                 .put("conversationId",selected.conversationId).put("role","assistant").put("deleted",false).put("updatedAt",now)
                 .put("nativeReplyId",selected.completed.id).put("nativeReplyDigest",digest).put("nativeRunId",selected.runId).put("nativeEpoch",selected.epoch).put("nativeTaskId",selected.taskId);
+        if(selected.completed.publicAnswerSources&&text.equals(selected.completed.text))state.put(PENDING_PUBLIC_ANSWER,CompactionPlan.fingerprint(text));
         JSONObject quote=selected.completed.projectConvention();
         if(quote!=null&&selected.taskId.equals(quote.optString("taskId"))&&selected.runId.equals(quote.optString("runId"))&&selected.epoch==quote.optInt("epoch")&&selected.completed.id.equals(quote.optString("replyId"))&&
             text.equals(selected.completed.text)&&shaBytes(text.getBytes(StandardCharsets.UTF_8)).equals(quote.optString("answerFingerprint"))){

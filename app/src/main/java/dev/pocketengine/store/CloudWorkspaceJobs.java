@@ -32,6 +32,14 @@ public final class CloudWorkspaceJobs {
             && t.optInt("coordinatorEpoch",-1)>=0 && same(s,target) && !s.optString("serviceBase").isEmpty()
             && s.opt("profileId").equals(refs.opt("profileId")) && s.opt("environmentId").equals(refs.opt("environmentId")) && s.opt("worker").equals(refs.opt("worker"));
     }
+    /** The phone recorded a genuine Linux-local Companion root and an explicitly read-only first
+     * Codex task. Other workers, write-capable scopes and subsequent owner turns keep their
+     * original observation policy. Selection is not proof of server sandbox or completion. */
+    static boolean firstReadOnlyHostTask(JSONObject t) {
+        JSONObject refs=t==null?null:t.optJSONObject("externalRefs"),s=refs==null?null:refs.optJSONObject("hostWorkspace");
+        return matches(t,s)&&"codex_app_server".equals(s.opt("worker"))&&Boolean.TRUE.equals(refs.opt("readOnly"))
+                &&t.opt("id").equals(t.opt("runId"))&&t.optInt("coordinatorEpoch",-1)==0&&t.isNull("remoteInputScope");
+    }
     /** Called only by TaskStore's already-authorized continuation transaction, before its run id changes. */
     static void advance(JSONObject task,JSONObject source,String next)throws Exception {
         JSONObject host=source==null?null:source.optJSONObject("hostWorkspace");
@@ -65,7 +73,7 @@ public final class CloudWorkspaceJobs {
     public static JSONObject receiptForTask(JSONObject t)throws Exception {
         JSONObject refs=t==null?null:t.optJSONObject("externalRefs"),s=refs==null?null:refs.optJSONObject("hostWorkspace");
         if(s==null||!matches(t,s))return null;
-        JSONObject row=project(t),out=new JSONObject();
+        JSONObject row=project(t),out=new JSONObject().put("statusOnRequest",firstReadOnlyHostTask(t));
         for(String k:new String[]{"taskId","runId","epoch","stage","jobId","detailRetired","executorStatus","previouslySeenEnd"})if(row.has(k))out.put(k,row.get(k));
         return out;
     }

@@ -51,6 +51,7 @@ import gemini_acp_profile
 import harness_registry
 import external_harnesses
 import team_harness
+import private_host_final
 from codex_driver import CodexAppServerDriver, DriverError
 from claude_driver import ClaudeStreamDriver, command as claude_command, inspect_cli as inspect_claude_cli, session_uuid
 
@@ -881,7 +882,13 @@ class JobManager:
                 if detail.get("protocol") == assignment_projects.PROTOCOL:
                     return assignment_projects.public(detail)
             if found[0] in self.jobs:
-                return self._public(self.jobs[found[0]])
+                job = self.jobs[found[0]]
+                result = self._public(job)
+                if job.get("operationId") == operation and result.get("id") == found[0]:
+                    final = private_host_final.original_operation_proof(job, result)
+                    if final is not None:
+                        result["originalPrivateFinal"] = final  # Only metadata; original output was already returned here.
+                return result
             result = {"id": found[0], "operationId": operation, "status": "unknown", "archived": True, "lastKnownStatus": found[1],
                       "message": "Execution receipt is no longer retained; the operation remains reserved and must not be replayed"}
             if found[2] and detail.get("protocol") == gemini_acp_profile.PROTOCOL:
@@ -1314,7 +1321,7 @@ class JobManager:
                 raise
 
     def _public(self, job):
-        result = {k: v for k, v in job.items() if k not in {"fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeProjectConfirmationOperation", "_nativeProjectReturnOrigin", "_nativeInputChunks", "_nativeInputPeer", "_piSession", "_harnessHello"}}
+        result = {k: v for k, v in job.items() if k not in {private_host_final.FIELD, "fingerprint", "resourceId", "resultSnapshots", "assignmentWorkspaces", "inputRequest", "inputEnvironmentBinding", "projectEnvironmentBinding", "projectEnvironmentConfigHash", "_coldProcess", "_coldOrigin", "_coldConfigHome", "_originalProcessGroup", "_harnessConfigRequest", "_ccSwitchImportRequest", "_nativeProjectManifest", "_nativeProjectConfirmationOperation", "_nativeProjectReturnOrigin", "_nativeInputChunks", "_nativeInputPeer", "_piSession", "_harnessHello"}}
         if job.get("worker") == gemini_acp_profile.WORKER:
             result["backendSelection"] = json.loads(json.dumps(job["backendSelection"]))
         if job.get("worker") == "codex_app_server" and job.get("status") == "interrupted" and any(key in job for key in ("harnessConfigOperationId", "_harnessConfigRequest")):
@@ -1987,6 +1994,10 @@ class JobManager:
                         result = harness_registry.redact(self._environment(job["environmentId"]), job["worker"], result)
                     safe = json.loads(self.harness_configs.redact(json.dumps(self.cc_switch_imports.redact_value(result))).replace(self.token, "[token hidden]"))
                     safe = self._bounded_driver_state(job, redact_team(safe))
+                    if isinstance(driver, CodexAppServerDriver) and driver.original_final is not None:
+                        final = driver.original_final.proof(job, codex["request"], result, safe)
+                        if final is not None:
+                            safe[private_host_final.FIELD] = final
                     provenance = self.cc_switch_imports.model_provenance(self.jobs[jobid], result.get("reportedModel"))
                     if provenance is not None:
                         safe["ccSwitchModelProvenance"] = provenance

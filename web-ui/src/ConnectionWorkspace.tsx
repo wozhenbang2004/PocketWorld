@@ -338,7 +338,11 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
       else Object.assign(input, { prompt: goal, readOnly: worker === 'codex_app_server' && readOnly }, model.trim() ? { model: model.trim() } : {}, worker === 'codex_app_server' && effort.trim() ? { effort: effort.trim() } : {}, worker === 'codex_app_server' && model.trim() && probe?.modelOptions?.digest ? { modelOptionsDigest: probe.modelOptions.digest } : {});
       if (gemini) Object.assign(input, { backendId: geminiId, capabilityRevision: probe!.capabilityRevision, modeId: 'default', readOnly: false });
       if (configuredHarness) Object.assign(input, { harnessSelection: harnessSelection(probe, selectedWorker), externalExecutionRiskAcknowledged: true, readOnly: false, ...(modeId ? { modeId } : {}) });
-      if(mode==='ordinary'&&worker!=='command'&&returnOrigin&&goal.trim()===returnOrigin.text)input.hostGoalOrigin=returnOrigin.handle;
+      if(returnOrigin){
+        if(mode!=='ordinary'||worker==='command'||goal.trim()!==returnOrigin.text)
+          throw new Error('原话或委托方式已改变。请恢复原请求，或明确改为独立委托。');
+        input.hostGoalOrigin=returnOrigin.handle;
+      }
       const prepared = await request('remote.reviewTask', input);
       if (!formCurrent()) return;
       if (mode === 'baseline') setBaseline(prepared); else if (mode === 'inputs') setInputRequest(prepared); else setReview(prepared);
@@ -432,7 +436,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
     {unresolved.map(item => <div className="pw-selected-object" key={item.operationId}><p>此连接有原提交待核对。</p><Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: item.operationId }).then(setReceipt).catch(() => {}); }}>只读核对原提交</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }}>打开原任务</Button></div>)}
     {visible && active && sameHost && supported('remote.workspaceJobs') && supported('remote.openWorkspaceJob') && <CloudWorkspaceJobs key={JSON.stringify(sameHost)} scope={sameHost} run={run}/>}
     <div ref={composer} hidden={!!operation} className="pw-remote-composer">
-    {fromComposer&&!operation&&<div className="pw-field-hint" role="status">{returnOrigin&&worker!=='command'&&goal.trim()===returnOrigin.text?'直接交办后，手机会在原私人对话留一个原任务入口。':returnOrigin?'当前参数已改变，这次不会连回原对话。':'这次是独立主机工作，不会在聊天里补建关联。'} {returnOrigin&&<Button variant="ghost" size="small" disabled={locked||!!review} onClick={()=>changed(()=>setReturnOrigin(null))}>改为独立委托</Button>}</div>}
+    {fromComposer&&!operation&&<div className="pw-field-hint" role="status">{returnOrigin&&worker!=='command'&&goal.trim()===returnOrigin.text?'直接交办后，手机会在原私人对话留一个原任务入口。':returnOrigin?'当前参数已改变。恢复原请求，或明确改为独立委托。':'这次是独立主机工作，不会在聊天里补建关联。'} {returnOrigin&&<Button variant="ghost" size="small" disabled={locked||!!review} onClick={()=>changed(()=>setReturnOrigin(null))}>改为独立委托</Button>}</div>}
     {carriedTextOnly&&<p className="pw-field-hint">已带入目标文字；附件与引用仍在原对话。要使用远端原件，请在本次审阅中单独选择。</p>}
     {cloudGoal&&<section className="pw-connection-attention" aria-label="管家原目标">
       <h3>使用管家里的目标</h3>

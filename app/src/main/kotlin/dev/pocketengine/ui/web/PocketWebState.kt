@@ -63,6 +63,7 @@ internal object PocketWebState {
             row.phoneResult?.let { value.put("phoneResult", it.toJson()) }
             row.replyContext?.let { value.put("replyContext", it.toJson()) }
             row.hostGoalTaskId?.let { value.put("hostGoalTaskId",it) }
+            row.originalHostFinal?.let { view -> value.put("originalHostFinal",JSONObject().apply{view.text?.let{ put("text",it) }}) }
             row.readerInputWork?.let { value.put("readerInputTaskId", it.taskId) }
             if (row.learningExcluded && row.role == "user") {
                 value.put("automaticLearningExcluded", true)

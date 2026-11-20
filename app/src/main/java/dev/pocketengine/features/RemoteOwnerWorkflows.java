@@ -191,6 +191,35 @@ public final class RemoteOwnerWorkflows {
     }
     private RemoteModule module(){EngineModule module=host.module("remote");if(!(module instanceof RemoteModule))throw new IllegalStateException("原电脑执行模块不可用");return (RemoteModule)module;}
     private dev.pocketengine.features.channels.ChannelsModule channels(){EngineModule module=host.module("channels");if(!(module instanceof dev.pocketengine.features.channels.ChannelsModule))throw new IllegalStateException("原消息渠道不可用");return (dev.pocketengine.features.channels.ChannelsModule)module;}
+    /** Opaque native observation of one visible original work. Not a renderer-provided source
+     * or execution grant. Its root connection and original SQL row must stay current. */
+    public static final class OriginalLinuxStatusRead {
+        private final RemoteOwnerWorkflows host;
+        private final Object owner;
+        private final String task,run,pin;
+        private final int epoch;
+        private final java.util.function.BooleanSupplier visible;
+        private OriginalLinuxStatusRead(RemoteOwnerWorkflows host,Object owner,String task,String run,int epoch,
+                java.util.function.BooleanSupplier visible)throws Exception{
+            this.host=host;this.owner=owner;this.task=task;this.run=run;this.epoch=epoch;this.visible=visible;
+            pin=TaskStore.capabilityFingerprint(current());
+        }
+        private JSONObject current()throws Exception{
+            if(visible==null||!visible.getAsBoolean())throw new SecurityException("原工作页面已关闭");
+            host.checkManagedSessionsOwner(owner);return host.tasks.originalLinuxHostStatusTarget(task,run,epoch);
+        }
+        public JSONObject require(RemoteModule issuer)throws Exception{
+            if(issuer==null||host.module()!=issuer)throw new SecurityException("不是原主机模块");
+            JSONObject source=current();if(!pin.equals(TaskStore.capabilityFingerprint(source)))
+                throw new SecurityException("原任务、工作目录或作业身份已变化，未改查其它任务");
+            return source;
+        }
+    }
+    /** Native owner chooses one status read, not a live session or background window. */
+    public JSONObject originalLinuxHostStatus(Object nativeOwner,String id,String run,int epoch,
+            java.util.function.BooleanSupplier visible)throws Exception{
+        return module().readOriginalLinuxHostStatus(new OriginalLinuxStatusRead(this,nativeOwner,id,run,epoch,visible));
+    }
     /** Page observation only. No execution RunControl, new task, or retry authority is created. */
     private synchronized void checkReadCurrent(Window window,long lifecycle,long generation)throws Exception {
         if(required(window.id)!=window||window.closed||window.lifecycleRevision!=lifecycle||window.readGeneration!=generation

@@ -122,6 +122,7 @@ import {ConversationWork} from './ConversationWork';
 import {ButlerHome} from './ButlerHome';
 import {homeWorkIdentity} from './butler-work-entry';
 import type {CloudGoal} from './cloud-goal';
+import {OriginalPrivateHostAnswer} from './OriginalPrivateHostAnswer';
 import {ButlerReturnedReport,currentHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
 import type {TaskResultFile} from './TaskResultFiles';
 import {PhoneTaskStatus} from './PhoneTaskStatus';
@@ -156,7 +157,7 @@ const Secondary=lazy(()=>import('./Secondary'));
 
 type Json=Record<string,any>;
 type Task={id:string;goal:string;status:string;summary?:string;executionMode?:string;updatedAt?:number;raw?:Json;hostReceipt?:Json};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
@@ -1967,6 +1968,7 @@ export default function App(){
   const goal=chatDraft.value.trim(), native=bridge.getState();
   if(intent!=='chat'||document.hidden||!goal||goal.length>8000||!can('remote.reviewTask')||native.state.chatSubmitting||native.state.phoneSubmitting)return;
   const original=native.composer, documentEpoch=bridge.getDocumentEpoch();
+  if(!native.state.conversationId){setLocalError('新对话暂不能保留原主机回执。目标还在这里，未联系主机。');return;}
   if(original?.ready!==true||typeof original.key!=='string'||!original.key)return;
   const isCurrent=()=>{const next=bridge.getState().composer;return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&next?.key===original.key&&next?.epoch===original.epoch&&chatDraft.currentValue()===goal;};
   const carriesTextOnly=asArray<Json>(native.state.selectedChatAttachments).length>0||['sourceRefs','objectRefs','previewRefs'].some(key=>asArray<Json>(obj(original)[key]).length>0);
@@ -1974,6 +1976,7 @@ export default function App(){
   const source=can('conversation.captureHostGoal')?await bridge.command<Json>('conversation.captureHostGoal',{key:original.key,epoch:original.epoch,goal}).catch(()=>null):null;
   if(from!==navigationWindow.current||!isCurrent())return;
   const originHandle=source?.linked===true&&source.executionAuthorized===false&&source.networkUsed===false&&typeof source.originHandle==='string'&&/^[a-f0-9-]{36}$/.test(source.originHandle)?source.originHandle:undefined;
+  if(!originHandle){setLocalError('还不能固定这条原话，未联系主机。请从原私人对话再试。');return;}
   void openRelatedWorkspace('remote',origin,()=>{if(isCurrent())setCloudGoal({id:crypto.randomUUID(),text:goal,carriesTextOnly,originHandle,navigation:navigationWindow.current});});
  };
  const composerRegion=<div className="pw-composer-region">
@@ -2157,7 +2160,7 @@ export default function App(){
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
       actionElsewhere={!!linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')||!!chatAttention&&chatAttention.id===noteIdentity?.taskId}
       onRead={noteIdentity&&can('tasks.open')?layer=>openTurnNotes(noteIdentity,layer):undefined}/>}
-     {m.role==='assistant'&&phoneResult&&m.id&&m.sourceRevision===1?<PhoneMessageReturn result={phoneResult} conversation={String(state.conversationId||'')} messageId={m.id} revision={Number(m.sourceRevision)} body={m.content}
+     {m.originalHostFinal?<div className="pw-user-text">{m.content}</div>:m.role==='assistant'&&phoneResult&&m.id&&m.sourceRevision===1?<PhoneMessageReturn result={phoneResult} conversation={String(state.conversationId||'')} messageId={m.id} revision={Number(m.sourceRevision)} body={m.content}
        onOriginal={readPhone?setMessageOriginTarget:undefined} onRun={can('tasks.open')?(entry,t)=>openTask(t.phoneResult.taskId,entry,false,undefined,undefined,{runId:t.phoneResult.runId,epoch:t.phoneResult.epoch}):undefined}>
        <CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>
      </PhoneMessageReturn>:m.role==='assistant'?<CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>:m.content?<div className="pw-user-text">{m.content}</div>:null}
@@ -2166,6 +2169,8 @@ export default function App(){
        onRead={(row,next,trigger)=>void openOriginalChatWork(m,row,next,trigger)}/>}
      {preparationInlineAnchor===index&&preparationDetail}
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={IconFile} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
+     {m.originalHostFinal&&m.hostGoalTaskId&&m.id&&<OriginalPrivateHostAnswer result={m.originalHostFinal}
+       read={can('conversation.readPrivateHostFinal')?()=>bridge.command('conversation.readPrivateHostFinal',{conversationId:state.conversationId,messageId:m.id,taskId:m.hostGoalTaskId}):undefined}/>}
      {m.submission&&<Receipt receipt={m.submission}/>}
      <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={continued}>
      {m.hostGoalTaskId&&m.id&&can('conversation.openHostGoal')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder} onClick={()=>{const task=m.hostGoalTaskId!,conversation=String(state.conversationId||''),documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;

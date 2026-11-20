@@ -623,6 +623,12 @@ public final class HostToolSupervisor implements CapabilityPort {
             boolean targetField=workTarget&&("taskId".equals(key)||"runId".equals(key)||"epoch".equals(key));
             if(key.startsWith("_")||tool.preset==null&&!targetField&&key.matches("taskId|runId|principalId|spaceId|ownerId|scope|epoch|coordinatorEpoch|feature|command"))throw new SecurityException("工具参数不能覆盖宿主身份或执行路由");}
         PluginRules.validateArguments(args,tool.schema);
+        if(tool==nativeRoutes.get(name)&&publicWebRoute(tool))switch(tool.command){
+            case "search"->dev.pocketengine.features.web.WebQueryGuard.requirePublic(args.getString("query"),512);
+            case "fetch"->dev.pocketengine.browser.PublicHttpReader.validate(args);
+            case "research"->dev.pocketengine.features.web.WebResearchPipeline.validate(args);
+            default->{}
+        }
         if(workTarget){identifier(args.getString("taskId"));if("$owner_work_get".equals(tool.command)&&args.has("runId")!=args.has("epoch"))throw new IllegalArgumentException("读取原工作须同时给出runId及epoch");
             if(!"$owner_work_get".equals(tool.command)||args.has("runId")){
             String targetRun=args.getString("runId");int targetEpoch=args.getInt("epoch");
@@ -840,6 +846,30 @@ public final class HostToolSupervisor implements CapabilityPort {
             host.synchronizeMemory(privateScope());Set<String> admitted=skillCapabilityNames();SkillsModule selected=(SkillsModule)module;JSONObject scope=skillScope(selected);
             result=host.executeSkillForTask(taskId,runId,epoch,new JSONObject(args.toString()).put("_hostOperationId",operationId),admitted,control,()->{selected.requireTaskScopeForHost(tasks.get(taskId,false),scope);if(profileCheck!=null)profileCheck.checkSkillExecutionCurrent();if(!admitted.equals(skillCapabilityNames()))throw new SecurityException("原脚本所依据的能力已变化，请重新审阅");},profileCheck);
         }
+        else if(tool==nativeRoutes.get(name)&&publicWebRoute(tool)&&module instanceof dev.pocketengine.features.web.WebSearchModule web){
+            // Do not decorate these validated anonymous inputs with the private feature envelope.
+            // The native TaskStore, budget and original RunControl are retained separately.
+            if("sources".equals(tool.command)){
+                EngineModule savedMemory=host.module("memory");
+                if(savedMemory instanceof dev.pocketengine.features.memory.MemoryModule retained){
+                    JSONObject scope=privateScope();
+                    result=dev.pocketengine.features.web.WebSourceLedger.sources(tasks,taskId,runId,epoch,args,control,
+                            (sequence,revision)->retained.isSavedEventForgotten(scope,taskId,runId,sequence,revision));
+                }else result=new JSONObject().put("ok",false).put("status","unavailable").put("networkUsed",false)
+                        .put("message","原联网来源的撤回状态暂不能核对，没有返回旧来源。");
+            }else{
+                if("fetch".equals(tool.command))reserveWebBudget(0,1,0);
+                else if("search".equals(tool.command))reserveWebBudget(1,0,0);
+                else reserveWebBudget(args.getJSONArray("queries").length(),args.optInt("maxPages",2),0);
+                result=switch(tool.command){
+                    case "fetch"->web.fetch(args,control);
+                    case "research"->new dev.pocketengine.features.web.WebResearchPipeline(web).research(args,control);
+                    case "search"->web.search(args,control);
+                    default->throw new SecurityException("未知原生公开工具");
+                };
+                result=dev.pocketengine.features.web.WebSourceLedger.record(tasks,taskId,runId,epoch,operationId,name,result,control);
+            }
+        }
         else{
             JSONObject input;
             if(tool.preset!=null){input=new JSONObject(tool.preset.toString()).put("arguments",args).put("_operationId",operationId.isEmpty()?UUID.randomUUID().toString():operationId);}
@@ -850,38 +880,22 @@ public final class HostToolSupervisor implements CapabilityPort {
                 control.onCancel(cancel);
                 try{control.check();result=module instanceof PluginsModule plugins&&plugins.localMcpForHost(input)?host.invokeLocalMcpForTask(taskId,runId,epoch,name,invocationId,args,input,approvalCapability,consumedApprovalId,control,outputCapture):module instanceof PluginsModule?((PluginsModule)module).invokeForHost(input,control,outputCapture,name,tasks):module.handle(tool.command,input);}
                 finally{control.removeCancelAction(cancel);}
-            }else if(tool.feature.equals("web")&&module instanceof dev.pocketengine.features.web.WebSearchModule web){
-                // Never send the private _taskId/_runId envelope to an external search provider.
-                // Read tools get only model arguments; the native control remains retained here.
-                if("fetch".equals(tool.command))reserveWebBudget(0,1,0);
-                if("search".equals(tool.command))reserveWebBudget(1,0,0);
-                if("research".equals(tool.command)){
-                    dev.pocketengine.features.web.WebResearchPipeline.validate(args);
-                    reserveWebBudget(args.getJSONArray("queries").length(),args.optInt("maxPages",2),0);
-                }
-                if("providerSearch".equals(tool.command))reserveWebBudget(0,0,1);
-                result=switch(tool.command){
-                    case "fetch"->web.fetch(args,control);
-                    case "research"->new dev.pocketengine.features.web.WebResearchPipeline(web).research(args,control);
-                    case "sources"->dev.pocketengine.features.web.WebSourceLedger.sources(tasks,taskId,runId,epoch,args,control);
-                    case "providerSearch"->{
-                        if(hostedSearchModel==null||hostedSearchControl!=control||hostedSearchCurrent==null)
-                            throw new SecurityException("厂商联网原模型已失效");
-                        hostedSearchCurrent.check();
-                        yield new dev.pocketengine.features.web.ProviderHostedWebSearch()
-                                .search(args,hostedSearchModel,control,hostedSearchCurrent);
-                    }
-                    case "search"->web.search(args,control);
-                    default->throw new SecurityException("未知原生联网工具");
-                };
-                if(!"sources".equals(tool.command))
-                    result=dev.pocketengine.features.web.WebSourceLedger.record(tasks,taskId,runId,epoch,
-                            operationId,name,result,control);
+            }else if(tool.feature.equals("web")&&module instanceof dev.pocketengine.features.web.WebSearchModule
+                    &&"providerSearch".equals(tool.command)){
+                // Hosted vendor calls are a separate, opt-in and specifically approved route.
+                reserveWebBudget(0,0,1);
+                if(hostedSearchModel==null||hostedSearchControl!=control||hostedSearchCurrent==null)
+                    throw new SecurityException("厂商联网原模型已失效");
+                hostedSearchCurrent.check();
+                result=new dev.pocketengine.features.web.ProviderHostedWebSearch().search(args,hostedSearchModel,control,hostedSearchCurrent);
+                result=dev.pocketengine.features.web.WebSourceLedger.record(tasks,taskId,runId,epoch,operationId,name,result,control);
             }else result=module instanceof dev.pocketengine.features.remote.RemoteModule?((dev.pocketengine.features.remote.RemoteModule)module).handleForTask(tool.command,input,control):module.handle(tool.command,input);
         }
         return deliverReceipt(name,result,control);
     }
-    /** Do not lose a known native result at the post-dispatch cancellation fence. */
+    private static boolean publicWebRoute(Tool tool){
+        return tool.preset==null&&"web".equals(tool.feature)&&Set.of("search","fetch","research","sources").contains(tool.command);
+    }
     /** Conservative per-original-run HTTP budgets, charged before dispatch and never reset by retry. */
     private synchronized void reserveWebBudget(int queries,int reads,int hosted){
         if(queries<0||reads<0||hosted<0||webSearchReserved+queries>24
@@ -890,6 +904,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         webSearchReserved+=queries;webReadsReserved+=reads;hostedSearchReserved+=hosted;
     }
 
+    /** Do not lose a known native result at the post-dispatch cancellation fence. */
     private JSONObject deliverReceipt(String name,JSONObject result,RunControl original)throws Exception{
         if(result==null)throw new IllegalStateException("工具没有返回真实结果");
         try{original.check();tasks.checkCapability(taskId,runId,epoch,name,original);return result;}

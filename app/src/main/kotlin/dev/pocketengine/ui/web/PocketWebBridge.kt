@@ -199,6 +199,7 @@ internal class PocketWebBridge(
     private val dataPages = PocketWebData(controller)
     private val remoteTasks = PocketWebRemoteTasks(controller, ::captureWindow, ::acceptsWindow, { taskViewId }) { publishState() }
     private val connectionPages = PocketWebConnections(controller, remoteTasks.inputPages)
+    private val privateHostFinal = PocketWebPrivateHostFinal(controller,::captureWindow,::acceptsWindow)
     private val teamPages = PocketWebTeams(controller)
     private val teamEvidence = PocketWebTeamEvidence(controller)
     private val groupPages = PocketWebGroups(controller)
@@ -283,7 +284,7 @@ internal class PocketWebBridge(
             "models.groups.snapshot", "models.conversation.snapshot", "models.conversation.close"
         )
         val commands: Set<String> = PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + PocketWebFirstNodeWebOutput.COMMANDS + linkedSetOf(
-            "conversation.captureHostGoal", "conversation.openHostGoal",
+            "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
@@ -683,7 +684,7 @@ internal class PocketWebBridge(
                 conversationOrganization.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
             if (action in PocketWebRemoteTasks.COMMANDS) {
-                remoteTasks.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "remoteTask.clipboard" && action !in PocketWebRemotePickup.COMMANDS && action !in PocketWebRemotePhoneDrafts.COMMANDS); publishState() }; return
+                remoteTasks.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action != "remoteTask.clipboard" && action != "remoteTask.originalLinuxHostStatus" && action !in PocketWebRemotePickup.COMMANDS && action !in PocketWebRemotePhoneDrafts.COMMANDS); publishState() }; return
             }
             if (action in PocketWebTeamEvidence.COMMANDS) {
                 teamEvidence.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
@@ -1398,6 +1399,13 @@ internal class PocketWebBridge(
             if (action in PocketWebTeams.COMMANDS) {
                 requireSection("teams"); teamPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown", retainValue = action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")); if (action != "teams.readFinalPackageFiles") publishState() }; return
             }
+            if (action == "conversation.readPrivateHostFinal") {
+                privateHostFinal.read(args,{
+                    !closed && documentId!=null && section==null && taskViewId==null &&
+                        controller.state.filePath==null && controller.webPrivateOwnerVisible()
+                }) { result,error -> complete(id,result,error,retainValue=false);publishState() }
+                return
+            }
             if (action == "conversation.openHostGoal") {
                 require(args.keys().asSequence().toSet()==setOf("messageId","taskId","conversationId"))
                 val task=requiredString(args,"taskId"); val message=requiredString(args,"messageId"); val conversation=requiredString(args,"conversationId")
@@ -1449,12 +1457,26 @@ internal class PocketWebBridge(
                     complete(id, result, error, retainValue = action != "messageQuote.open" && !local, replayHint = if (local) "请重新打开本对话备忘核对；没有重放上次内容或操作" else null); publishState() }; return
             }
             if (action == "sources.open") {
-                checkedPayload(args, setOf("messageId", "taskId"))
-                sourceReader.open(args.optString("messageId").takeIf { it.isNotBlank() }, args.optString("taskId").takeIf { it.isNotBlank() }) { result, error -> complete(id, result, error) }; return
+                val keySet = args.keys().asSequence().toSet()
+                val history = setOf("readerWindow", "readerConversationId", "readerSourceRevision")
+                if (keySet.any { it in history }) {
+                    require(keySet == history + "messageId" && section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请从原私人历史回答打开出处" }
+                    val page = controller.conversationReader ?: error("原历史阅读窗口已关闭")
+                    val revision = requiredLong(args, "readerSourceRevision")
+                    require(page.window == requiredLong(args, "readerWindow") && page.conversation == requiredString(args, "readerConversationId") && revision > 0) { "原历史回答已变化" }
+                    val stamp = captureWindow()
+                    sourceReader.openHistory(page, requiredString(args, "messageId"), revision,
+                        { !closed && taskViewId == null && section == null && acceptsWindow(stamp) }) { result, error -> complete(id, result, error, retainValue = false) }
+                } else {
+                    checkedPayload(args, setOf("messageId", "taskId"))
+                    sourceReader.open(args.optString("messageId").takeIf { it.isNotBlank() }, args.optString("taskId").takeIf { it.isNotBlank() }) { result, error -> complete(id, result, error) }
+                }
+                return
             }
             if (action == "sources.read") {
                 checkedPayload(args, setOf("windowId", "sourceHandle", "cursor", "offset"))
-                sourceReader.read(requiredString(args, "windowId"), args.optString("sourceHandle").takeIf { it.isNotBlank() }, requiredInt(args, "cursor"), requiredInt(args, "offset")) { result, error -> complete(id, result, error) }; return
+                val windowId = requiredString(args, "windowId"); val history = sourceReader.historyWindow(windowId)
+                sourceReader.read(windowId, args.optString("sourceHandle").takeIf { it.isNotBlank() }, requiredInt(args, "cursor"), requiredInt(args, "offset")) { result, error -> complete(id, result, error, retainValue = !history) }; return
             }
             if (action == "execution.read") {
                 checkedPayload(args, emptySet()); controller.readOwnerExecutionPolicy { result, error -> complete(id, result, error); publishState() }; return

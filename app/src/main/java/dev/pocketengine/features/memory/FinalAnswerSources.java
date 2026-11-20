@@ -9,6 +9,7 @@ import dev.pocketengine.features.web.ProviderHostedWebSearch;
 import dev.pocketengine.features.web.WebResearchPipeline;
 import dev.pocketengine.features.web.WebSourceLedger;
 import dev.pocketengine.runtime.context.CompactionPlan;
+import dev.pocketengine.store.OwnerWorkTask;
 import dev.pocketengine.store.TaskStore;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -63,6 +64,7 @@ public final class FinalAnswerSources {
         JSONObject expected=supplied.getJSONObject("answer");validateAnswer(expected);
         int cursor=number(supplied,"cursor",0,0,MAX_ROWS),offset=number(supplied,"offset",0,0,Integer.MAX_VALUE),max=number(supplied,"maxChars",8000,64,16000);
         JSONObject wanted=supplied.optJSONObject("source");if(wanted!=null)validateSource(wanted);
+        if(expected.has("publicReply")&&wanted!=null&&!"public_web_source".equals(wanted.getString("kind")))throw new SecurityException("这是原回答的匿名网页出处，不包含其他来源");
         try(Window window=new Window(ownerRead)){
             db.beginTransaction();try{
                 Answer answer=answer(db,conversations,outputs,expected,window);
@@ -131,12 +133,19 @@ public final class FinalAnswerSources {
         JSONObject message=messages.getJSONObject(index);String body=message.optString("content");
         if(!"assistant".equals(message.optString("role"))||message.has("tool_calls")||message.optBoolean("memoryContextRetired")||!(message.opt("content") instanceof String)||!expected.getString("answerFingerprint").equals(CompactionPlan.fingerprint(body))||!expected.getString("answerFingerprint").equals(proof.optString("answerFingerprint")))return null;
         JSONObject reference=message.optJSONObject("memoryReference");
+        JSONObject publicReply=expected.optJSONObject("publicReply");
         if(expected.has("requestId")||expected.has("answerId")){
             if(reference==null||!task.equals(reference.optString("taskId"))||!run.equals(reference.optString("runId"))||epoch!=reference.optInt("coordinatorEpoch")||!expected.optString("requestId").equals(reference.optString("requestId"))||!expected.optString("answerId").equals(reference.optString("answerId")))return null;
+        }
+        if(publicReply!=null){
+            String reply=publicReply.getString("replyId");
+            if(reference!=null||!OwnerWorkTask.isButlerSource(authority)||!reply.equals(proof.optString("ownerReplyId"))||conversations==null
+                    ||!conversations.matchesOriginalAnonymousAnswer(authority.getString("conversationId"),publicReply.getString("messageId"),publicReply.getLong("revision"),task,run,epoch,reply,expected.getString("answerFingerprint"),body))return null;
         }
         JSONObject pin=new JSONObject().put("taskId",task).put("runId",run).put("epoch",epoch).put("answerFingerprint",expected.getString("answerFingerprint"))
                 .put("messageIndex",index).put("messageRevision",CompactionPlan.fingerprint(message));
         if(reference!=null)pin.put("requestId",reference.getString("requestId")).put("answerId",reference.getString("answerId"));
+        if(publicReply!=null)pin.put("publicReply",new JSONObject(publicReply.toString()));
         if(expected.has("messageIndex")&&(!same(expected,pin)))return null;
         requireContexts(db,conversations,outputs,authority,pin,window);return new Answer(authority,pin,messages,index);
     }
@@ -175,11 +184,15 @@ public final class FinalAnswerSources {
     private static List<Entry> entries(SQLiteDatabase db,Answer answer,ForgetFence forget,Window window)throws Exception{
         List<Entry> rows=new ArrayList<>();Map<String,String> calls=new HashMap<>();Set<String> seen=new HashSet<>();
         String task=answer.pin.getString("taskId"),run=answer.pin.getString("runId");int epoch=answer.pin.getInt("epoch");
-        for(int i=0;i<answer.index;i++){
+        boolean publicOnly=answer.pin.has("publicReply");int segmentStart=0;
+        if(publicOnly)for(int i=answer.index-1;i>=0;i--){
+            window.check();if(WebSourceLedger.answerBoundary(answer.messages.optJSONObject(i))){segmentStart=i+1;break;}
+        }
+        for(int i=segmentStart;i<answer.index;i++){
             window.check();JSONObject message=answer.messages.optJSONObject(i);if(message==null)continue;
             if("assistant".equals(message.optString("role"))){JSONArray proposed=message.optJSONArray("tool_calls");for(int c=0;proposed!=null&&c<proposed.length();c++){JSONObject call=proposed.getJSONObject(c);calls.put(call.getString("id"),call.getJSONObject("function").getString("name"));}continue;}
             JSONObject pin=new JSONObject().put("messageIndex",i).put("messageRevision",CompactionPlan.fingerprint(message));
-            if(Boolean.TRUE.equals(message.opt("hostObservation"))&&"user".equals(message.optString("role"))&&!message.has("ownerMessageId")){
+            if(!publicOnly&&Boolean.TRUE.equals(message.opt("hostObservation"))&&"user".equals(message.optString("role"))&&!message.has("ownerMessageId")){
                 JSONArray content=message.optJSONArray("content");JSONObject first=content==null?null:content.optJSONObject(0);String text=first==null?"":first.optString("text");
                 if(!text.startsWith(OBSERVATION_PREFIX))continue;JSONObject observation;
                 try{observation=new JSONObject(text.substring(OBSERVATION_PREFIX.length()));}catch(Exception malformed){continue;}
@@ -187,6 +200,7 @@ public final class FinalAnswerSources {
                 Entry entry=new Entry(pin,"当时的手机观察");entry.observation=observation;entry.body=observation.toString(2);rows.add(entry);continue;
             }
             if(!"tool".equals(message.optString("role")))continue;String tool=calls.get(message.optString("tool_call_id"));if(tool==null)continue;JSONObject receipt;
+            if(publicOnly&&!WebSourceLedger.anonymousTool(tool))continue;
             try{receipt=new JSONObject(message.getString("content"));}catch(Exception unavailable){continue;}
             if("web_sources".equals(tool))continue; // Lookup can repeat earlier sources without a new ledger event.
             if(WEB_TOOLS.contains(tool)){
@@ -255,20 +269,23 @@ public final class FinalAnswerSources {
             JSONObject row=saved.getJSONObject(i);
             if(originals.put(row.getString("sourceId"),row)!=null)return;
         }
+        boolean publicOnly=answer.pin.has("publicReply");
         for(int i=0;i<refs.length();i++){
             JSONObject ref=refs.optJSONObject(i);
             if(ref==null)continue;
             String id=ref.optString("sourceId");JSONObject source=originals.get(id);
-            if(!id.matches(UUID)||source==null)continue;
+            if(!id.matches(UUID)||source==null||(publicOnly&&!WebSourceLedger.anonymousKind(tool,source.optString("kind"))))continue;
             JSONObject published=new JSONObject(source.toString());
             published.remove("excerpt");published.remove("bodySha256");published.remove("rawUrlRetainedPrivately");
-            if(!same(ref,published)||!seen.add(id))continue;
+            if(!same(ref,published))continue;
             String display=source.getString("displayUrl"),raw=source.getString("url");
+            String text=publicWebText(receipt,source).replace(raw,display);
+            if((publicOnly&&text.isBlank())||!seen.add(id))continue;
             String title=source.getString("title").replace(raw,display);
             JSONObject pin=new JSONObject(messagePin.toString()).put("kind","public_web_source").put("sourceId",id)
                     .put("sourceRevision",TaskStore.capabilityFingerprint(source)).put("eventSeq",event.getLong("seq")).put("eventRevision",eventRevision);
             Entry entry=new Entry(pin,title.isBlank()?display:title);
-            entry.webSource=source;entry.event=event;entry.body=publicWebText(receipt,source).replace(raw,display);
+            entry.webSource=source;entry.event=event;entry.body=text;
             rows.add(entry);
         }
     }
@@ -351,9 +368,14 @@ public final class FinalAnswerSources {
     private static void keys(JSONObject value,Set<String> allowed){if(value==null)throw new IllegalArgumentException("缺少来源请求");for(var it=value.keys();it.hasNext();)if(!allowed.contains(it.next()))throw new SecurityException("来源请求不能增加授权或改变读取范围");}
     private static int number(JSONObject value,String key,int fallback,int min,int max){if(!value.has(key)){if(fallback<min)throw new IllegalArgumentException("原来源缺少"+key);return fallback;}Object n=value.opt(key);if(!(n instanceof Integer||n instanceof Long))throw new IllegalArgumentException("来源数值无效");long result=((Number)n).longValue();if(result<min||result>max)throw new IllegalArgumentException("来源数值超出范围");return (int)result;}
     private static void validateAnswer(JSONObject answer)throws Exception{
-        keys(answer,Set.of("taskId","runId","epoch","answerFingerprint","requestId","answerId","messageIndex","messageRevision"));uuid(answer.getString("taskId"));uuid(answer.getString("runId"));number(answer,"epoch",-1,1,Integer.MAX_VALUE);
+        keys(answer,Set.of("taskId","runId","epoch","answerFingerprint","requestId","answerId","messageIndex","messageRevision","publicReply"));uuid(answer.getString("taskId"));uuid(answer.getString("runId"));number(answer,"epoch",-1,1,Integer.MAX_VALUE);
         if(!answer.getString("answerFingerprint").matches("[a-f0-9]{64}")||answer.has("messageRevision")&&!answer.getString("messageRevision").matches("[a-f0-9]{64}")||answer.has("requestId")!=answer.has("answerId")||answer.has("messageIndex")!=answer.has("messageRevision"))throw new SecurityException("原回答指纹或请求身份不完整");
         if(answer.has("requestId"))for(String key:new String[]{"requestId","answerId"})if(!answer.getString(key).matches("[\\p{L}\\p{N}_.:/@-]{1,240}"))throw new SecurityException("原回答请求身份无效");
+        if(answer.has("publicReply")){
+            JSONObject reply=answer.getJSONObject("publicReply");keys(reply,Set.of("messageId","revision","replyId"));
+            uuid(reply.getString("messageId"));uuid(reply.getString("replyId"));Object revision=reply.opt("revision");
+            if(answer.has("requestId")||!(revision instanceof Integer||revision instanceof Long)||((Number)revision).longValue()<1)throw new SecurityException("匿名网页出处缺少原回答版本");
+        }
     }
     private static void validateSource(JSONObject source)throws Exception{
         keys(source,Set.of("kind","sourceId","sourceRevision","messageIndex","messageRevision","eventSeq","eventRevision"));number(source,"messageIndex",-1,0,MAX_ROWS);

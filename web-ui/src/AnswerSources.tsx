@@ -7,7 +7,8 @@ import { ShimmerText } from './library';
 import './source-reading.css';
 
 type Data = Record<string, any>;
-export type AnswerSourceTarget = { messageId?: string; taskId?: string };
+export type HistoricalAnswerSource = { messageId:string; readerWindow:number; readerConversationId:string; readerSourceRevision:number; taskId?:never };
+export type AnswerSourceTarget = { messageId?:string; taskId?:string } | HistoricalAnswerSource;
 type SourceSelection = { handle: string; key: string; title: string };
 
 function webCoverage(value: unknown): string {
@@ -33,7 +34,9 @@ function sourceKey(entry: Data): string {
 }
 
 /** Retained answer evidence through the same native source reader as the existing owner sheet. */
-export function AnswerSources({ target, revision, onClose }: { target: AnswerSourceTarget; revision: number; onClose: () => void }) {
+export function AnswerSources({ target, revision, onClose, onCloseAutoFocus }: {
+  target:AnswerSourceTarget; revision:number; onClose:()=>void; onCloseAutoFocus?:(event:Event)=>void
+}) {
   const [loaded, setLoaded] = useState<{ key: string; value: Data } | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(true);
   const [selected, setSelected] = useState<SourceSelection | null>(null), [cursor, setCursor] = useState(0), [offset, setOffset] = useState(0);
   const [previous, setPrevious] = useState<number[]>([]), [refresh, setRefresh] = useState(0);
@@ -87,8 +90,9 @@ export function AnswerSources({ target, revision, onClose }: { target: AnswerSou
     setRefresh(value => value + 1);
   };
   const refreshLabel = error ? '重新打开原来源列表' : '重新核对原来源';
-  return <Drawer.Root open onOpenChange={open => { if (!open) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
-    <Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer pw-answer-sources" aria-describedby="answer-source-description">
+  const Sheet='readerWindow' in target ? Drawer.NestedRoot : Drawer.Root;
+  return <Sheet open onOpenChange={open => { if (!open) onClose(); }} shouldScaleBackground={false}><Drawer.Portal>
+    <Drawer.Overlay className="pw-overlay" /><Drawer.Content className="pw-drawer pw-answer-sources" aria-describedby="answer-source-description" onCloseAutoFocus={onCloseAutoFocus}>
       <div className="pw-drawer-handle" /><header className="pw-drawer-header">
         {selected && <IconButton icon={IconArrowLeft} aria-label="返回来源列表" onClick={list} />}
         <div><Drawer.Title>{selected ? current && detail?.context?.title || selected.title || '原保留内容' : '回答来源'}</Drawer.Title></div>
@@ -128,5 +132,5 @@ export function AnswerSources({ target, revision, onClose }: { target: AnswerSou
         </>}
       </div>
     </Drawer.Content>
-  </Drawer.Portal></Drawer.Root>;
+  </Drawer.Portal></Sheet>;
 }

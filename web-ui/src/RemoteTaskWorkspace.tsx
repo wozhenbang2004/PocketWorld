@@ -192,6 +192,43 @@ function RemoteQuestion({ request, snapshot, busy, run }: { request: Data; snaps
   </section>;
 }
 
+const originalStatusLabels: Record<string,string> = { queued:'排队中', running:'进行中', stopping:'正在停止', awaiting_approval:'待确认',
+  awaiting_input:'待补充', completed:'执行已结束，成果未核对', failed:'执行失败', cancelled:'已停止', interrupted:'已中断', blocked:'被原主机阻止',
+  timed_out:'超时', unknown:'原主机尚未确认' };
+
+/** One click, one original operation read. Nothing from this component is stored or replayed. */
+function OriginalLinuxHostStatus({taskId,run,epoch,disabled}:{taskId:string;run:string;epoch:number;disabled:boolean}){
+  const [label,setLabel]=useState(''),[busy,setBusy]=useState(false);
+  const flight=useRef<{window:string}|null>(null);
+  useEffect(()=>{
+    let win=windowIdentity();
+    const invalidate=()=>{if(!taskVisible(taskId)||win!==windowIdentity()){
+      win=windowIdentity();flight.current=null;setLabel('');setBusy(false);
+    }};
+    const off=bridge.subscribe(invalidate);document.addEventListener('visibilitychange',invalidate);
+    return()=>{flight.current=null;off();document.removeEventListener('visibilitychange',invalidate);};
+  },[taskId,run,epoch]);
+  const read=async()=>{
+    if(flight.current||disabled||!taskVisible(taskId)||!supported('remoteTask.originalLinuxHostStatus'))return;
+    const one={window:windowIdentity()};flight.current=one;setBusy(true);setLabel('');
+    const still=()=>flight.current===one&&taskVisible(taskId)&&windowIdentity()===one.window;
+    try{
+      const reply=await bridge.command<Data>('remoteTask.originalLinuxHostStatus',{taskId,runId:run,coordinatorEpoch:epoch});
+      if(!still())return;
+      if(reply?.format!=='pocketworld.original-linux-host-status.v1'||reply.taskId!==taskId||reply.runId!==run||reply.epoch!==epoch||
+         reply.queryOnly!==true||reply.executionAuthorized!==false)throw Error('不是这次原工作');
+      if(reply.stage==='not_found')setLabel('原主机没有返回接单记录。不是“确认未发”，不会重提。');
+      else if(reply.stage==='archived'&&typeof reply.jobId==='string')setLabel('原主机曾接单，详细记录已归档。');
+      else if(reply.stage==='observed'&&typeof reply.jobId==='string'&&Object.hasOwn(originalStatusLabels,reply.executorStatus))
+        setLabel('原主机这次回执：'+originalStatusLabels[reply.executorStatus]);
+      else throw Error('未核对原状态');
+    }catch{if(still())setLabel('尚未核对到这个原工作的状态。手机保留的记录未改变。');}
+    finally{if(flight.current===one){flight.current=null;setBusy(false);}}
+  };
+  return <><Button variant="secondary" disabled={busy||disabled} onClick={()=>void read()}>{busy?'正在查询…':'查询这个原工作'}</Button>
+    {label&&<p className="pw-field-hint" role="status">{label}</p>}</>;
+}
+
 export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProject }: { taskId: string; raw: Data; receipt?:Data; savedFiles: Data[]; openProject?:(pin:HostSourcePin)=>void }) {
   const [observing,setObserving]=useState(''),selectedWindow=useRef(''),[follow,setFollow]=useState<PhoneDraftPin|null>(null);
   const origin=object(raw.origin),privateTask=raw.id===taskId&&raw.actorId==='owner'&&raw.spaceId==='private'&&raw.feature==='remote';
@@ -211,13 +248,15 @@ export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProj
   const proof=receipt?.taskId===taskId&&receipt.runId===raw.runId?receipt:undefined;
   const seenEnd=proof?.epoch===raw.coordinatorEpoch?originalSeenHostEnd(proof):'';
   const accepted=proof?.stage==='host_acknowledged'&&typeof proof.jobId==='string'&&proof.jobId.length>0;
+  const statusOnly=proof?.epoch===raw.coordinatorEpoch&&proof?.statusOnRequest===true&&supported('remoteTask.originalLinuxHostStatus');
   return <><section className="pw-remote-workspace" aria-label="原主机任务的本机回执">
-    <div className="pw-section-heading"><h3>本机回执</h3>{canObserve&&<Button variant="secondary" disabled={!foreground||!supportedChoice} onClick={()=>{
+    <div className="pw-section-heading"><h3>本机回执</h3>{canObserve&&<Button variant={statusOnly?'ghost':'secondary'} disabled={!foreground||!supportedChoice} onClick={()=>{
       if(taskVisible(taskId)){setFollow(null);selectedWindow.current=onlineView?'':ticket();setObserving(selectedWindow.current)}
-    }}>{onlineView?'停止查询，只看本机':'查询原主机的这次作业'}</Button>}</div>
+    }}>{onlineView?(statusOnly?'停止查看详情':'停止查询，只看本机'):statusOnly?'查看原会话详情':'查询原主机的这次作业'}</Button>}</div>
+    {statusOnly&&canObserve&&!onlineView&&<OriginalLinuxHostStatus key={attempt} taskId={taskId} run={raw.runId} epoch={raw.coordinatorEpoch} disabled={!foreground}/>}
     <p className="pw-field-hint">{accepted?(proof!.detailRetired===true?'原主机曾接单，详细记录已归档。':'原主机曾接单。'):
       nativeProject?(origin.kind==='native_remote_session_branch'?'这是一条已登记的独立会话分支。':'这是从原项目历史登记的工作。'):'这里展示手机留存的原任务记录。'}
-      {onlineView?'停止查询只关闭观察，不停止主机作业。':'本页只读手机记录。'}</p>
+      {onlineView?'停止查询只关闭观察，不停止主机作业。':statusOnly?'打开本页不联系原主机。查询只核对一次状态，不继续运行。':'本页只读手机记录。'}</p>
     {canObserve&&!supportedChoice&&<p className="pw-field-hint">当前安装版本不能固定这次执行轮次。仍可查看手机记录，没有改查别的作业。</p>}
     {!canObserve&&<p className="pw-field-hint">当前页面不能核对原私人执行轮次；没有改查最新作业。来自团队或渠道的事项，可从原事项继续核对。</p>}
     {accepted&&<p className="pw-field-hint">原主机作业：<code>{proof!.jobId}</code>{!seenEnd&&proof!.detailRetired!==true&&proof!.executorStatus&&proof!.executorStatus!=='unknown'&&' · 上次回执：'+executionLabel(proof!.executorStatus)}</p>}

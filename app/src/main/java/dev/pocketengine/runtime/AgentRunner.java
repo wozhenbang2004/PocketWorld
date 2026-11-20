@@ -28,6 +28,7 @@ import dev.pocketengine.core.ToolOutcome;
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ExecutionPlan;
 import dev.pocketengine.core.ExecutionPlanning;
+import dev.pocketengine.features.web.WebSourceLedger;
 import dev.pocketengine.phone.observation.AdaptivePhonePort;
 import dev.pocketengine.phone.DeferredPhoneSession;
 import dev.pocketengine.runtime.context.ContextBudgetPolicy;
@@ -73,6 +74,7 @@ public final class AgentRunner {
     /** Native proof of one completed model turn. Ordinary JSON cannot construct this value. */
     public static final class OwnerReply {
         public final String id,taskId,text;
+        public final boolean publicAnswerSources;
         private final java.util.List<String> messageIds;
         private final String memoryReference,memoryContext,projectConvention;
         private final RunControl producer;
@@ -80,7 +82,11 @@ public final class AgentRunner {
             this(taskId,text,ids,producer,reference,context,null);
         }
         private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,String physical){
+            this(taskId,text,ids,producer,reference,context,physical,false);
+        }
+        private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,String physical,boolean publicAnswerSources){
             this.id=reference==null?java.util.UUID.randomUUID().toString():reference.optString("answerId");this.taskId=taskId;this.text=text;messageIds=immutableOwnerIds(ids);this.producer=java.util.Objects.requireNonNull(producer);
+            this.publicAnswerSources=reference==null&&publicAnswerSources;
             memoryReference=reference==null?null:reference.toString();memoryContext=context==null?null:context.toString();
             String projected=null;try{JSONObject actual=dev.pocketengine.features.local.project.ProjectConventionDelivery.forReply(producer,taskId,physical,id,text);if(actual!=null)projected=actual.toString();}
             catch(Exception unavailable){/* No exact source evidence: the original answer still stands. */}projectConvention=projected;
@@ -532,6 +538,7 @@ public final class AgentRunner {
             String lastFeedback=saved.optString("feedback");
             String recallIntent=latestOwnerRecallQuery(history,lastFeedback.isEmpty()?goal:lastFeedback);
             String durableOwnerReturnNonce="";
+            JSONObject lastAnonymousWebResult=null;
 
             SafeModelRecovery modelRecovery=new SafeModelRecovery();
             int firstRound=originalModelRounds;
@@ -930,7 +937,12 @@ public final class AgentRunner {
                         return finish(taskId,"awaiting_user","规划答复已保存；任务仍在规划阶段，请审阅原计划版本后明确确认执行。\n"+clean(answer,config),evidence,steps,config,sink);
                     }
                     requirePlanningCurrent(planning,turnPlanning);
-                    if(ownerInputs!=null&&!requestedOwnerIds.isEmpty())ownerInputs.completed(new OwnerReply(taskId,clean(answer,config),requestedOwnerIds,control,memoryReference,memoryDependency,nativeApprovedResponse?null:nativeRequest[0]),control);
+                    OwnerReply savedOwnerReply=null;
+                    if(ownerInputs!=null&&!requestedOwnerIds.isEmpty()){
+                        savedOwnerReply=new OwnerReply(taskId,finalMessage.getString("content"),requestedOwnerIds,control,memoryReference,memoryDependency,nativeApprovedResponse?null:nativeRequest[0],
+                                memoryReference==null&&hasCurrentAnonymousWebResult(history,finalAnswerIndex,lastAnonymousWebResult));
+                        ownerInputs.completed(savedOwnerReply,control);
+                    }
                     // Queue means next owner turn, not cancellation of the current tool batch.
                     // The final empty poll atomically closes admission in the same native store.
                     boolean retain=developmentContinuation!=null&&developmentContinuation.retainAfterTurn();
@@ -958,7 +970,10 @@ public final class AgentRunner {
                             session.matchesHostScope(taskId,finalRun.runId(),finalRun.epoch())){
                         phoneFinalPage=dev.pocketengine.phone.observation.PhoneFinalPageReceipt.from(control,finalRun,session.executionMode(),skippedFinalScreen,evidence);
                     }
-                    if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));if(phoneFinalPage!=null)evidence.getJSONObject("nativeFinalAnswer").put("phoneFinalPage",phoneFinalPage);if(routes!=null){JSONObject candidate=routes.candidate(control);if(candidate!=null)evidence.put("nativePhoneRoute",candidate);}checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget,repeatedTools);}
+                    if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));
+                        // A text hash alone cannot distinguish identical queued replies in the same run.
+                        if(savedOwnerReply!=null&&savedOwnerReply.publicAnswerSources)evidence.getJSONObject("nativeFinalAnswer").put("ownerReplyId",savedOwnerReply.id);
+                        if(phoneFinalPage!=null)evidence.getJSONObject("nativeFinalAnswer").put("phoneFinalPage",phoneFinalPage);if(routes!=null){JSONObject candidate=routes.candidate(control);if(candidate!=null)evidence.put("nativePhoneRoute",candidate);}checkpoint(taskId,journal,history,steps,evidence,config,sink,contextBudget,repeatedTools);}
                     if(instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)
                         return finish(taskId,"needs_confirmation",clean(answer,config),evidence,steps,config,sink);
                     String verificationNotice = !intent.deviceReadAllowed()?"以下仅为讨论答复；没有读取或操作设备。":!DeferredPhoneSession.initialized(phone)?"以下答复基于实际工具结果；本次未启用手机，外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
@@ -1300,6 +1315,7 @@ public final class AgentRunner {
                     if(nativeRunning&&!ownedServiceOperations.contains(recordedOperation))ownedServiceOperations.add(recordedOperation);
                     repeatedTools.afterTool(name,args,receipt,planningReadIssued||!sideEffecting(name)&&(capabilities==null||!capabilities.supports(name)||!capabilities.sideEffecting(name)),false);
                     JSONObject committedToolMessage=toolResult(call,receipt,config,true);history.put(committedToolMessage);
+                    if(instructionProfile==NativeInstructionProfile.OWNER_BUTLER&&WebSourceLedger.hasAnonymousSources(name,receipt))lastAnonymousWebResult=committedToolMessage;
                     if(nativeOwnerRequired!=null)appendUnissuedReplies(history,calls,index+1,failure("sensitive_handoff_tail_not_dispatched","主人接管前，本批余下旧决定均未派发；交还后重新观察规划。").put("accepted",false).put("nativeDispatched",false),config);
                     boolean receiptNeedsOwner=toolOutcome.requiresUser();
                     boolean receiptNeedsReconciliation=toolOutcome.requiresReconciliation();
@@ -1912,6 +1928,15 @@ public final class AgentRunner {
     }
 
     private static JSONObject toolResult(JSONObject call,JSONObject receipt,ModelConfig config)throws Exception{return toolResult(call,receipt,config,false);}
+    private static boolean hasCurrentAnonymousWebResult(JSONArray history,int end,JSONObject retained){
+        if(retained==null)return false;
+        for(int i=end-1;i>=0;i--){
+            JSONObject row=history.optJSONObject(i);
+            if(row==retained)return true; // Same original host dispatch, never copied or restored history.
+            if(WebSourceLedger.answerBoundary(row))break;
+        }
+        return false;
+    }
     private static JSONObject toolResult(JSONObject call,JSONObject receipt,ModelConfig config,boolean actualNativeResult)throws Exception {
         JSONObject clean=actualNativeResult?safeToolReceipt(call.getJSONObject("function").getString("name"),receipt,config):safeReceipt(receipt,config);
         return ToolResultDelivery.message(call.getString("id"),clean,ToolOutcome.classify(receipt));

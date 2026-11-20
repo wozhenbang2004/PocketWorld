@@ -59,3 +59,35 @@ For privacy, RuntimeDiagnostics logs statuses and generic error codes without se
 10. Verify normal chat, owner butler, and research tasks do not create a second AgentRunner/TaskStore or bypass the original tool permission policy.
 
 No APK build or device tests were performed for this change. Compile status and actual network success must be established by the user's build.
+
+## Ordinary private request: read public pages without an artificial wait
+
+The existing private owner task gives its native web read routes only the
+validated tool arguments. Task/run/epoch and the budget stay in the native
+host, not in the query, URL or result-list request. The former shared JSON
+envelope accidentally added two private fields into the strict arguments,
+preventing anonymous page reads, compound research and source lookup.
+
+Default native public lookup does not open an approval. A denial of search or
+reading is a definite refusal, not a pending action to reconcile. Compound
+research cannot bypass an exact `web_search` or `web_fetch` restriction or
+substitute its own approval for a separately configured leaf review. If only
+page reading is restricted, the same request can still use `web_search` or
+`web_research` with `maxPages: 0`, reporting snippets only. No browser,
+login, uploads, scripts or separately billable vendor route is added or
+substituted. This route does not append private file or memory bodies to
+queries. The existing obvious-secret guard is not proof that arbitrary
+model-composed words are public; if public terms cannot be separated, the
+assistant must not export them.
+
+Read evidence records the successful HTTP response's final URL, not merely
+the search hit. An HTTP body or displayed excerpt cut short remains partial.
+An unavailable or JavaScript/login-gated page is not presented as text read.
+An anonymous timeout says the request may have been made but no text was
+obtained; it does not suggest reconciling an unknown write or auto-replaying.
+A successful `web_sources` reply means the **local original-run source list**
+was read, not that network search occurred or a fact was proven. An empty
+list is explicit, and the model gets neither forgotten events nor additional
+retained excerpts or hidden query URLs from this directory. The owner's
+existing **answer → 回答来源** reader still verifies the source against the
+exact retained run and labels search snippets versus anonymous page excerpts.

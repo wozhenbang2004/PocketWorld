@@ -69,7 +69,7 @@ internal data class ConversationReadPage(
             UiMessage(row.getString("role"), row.getString("content"), row.optLong("at"), row.optString("taskId").takeIf(String::isNotBlank), row.getString("id"),
                 row.optJSONObject("submission"), row.optJSONArray("attachments")?.length() ?: 0, row.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment),
                 if (row.optBoolean("importAssignedIdentity")) 0L else row.optLong("revision", 0), projectConventionRecorded = row.opt("projectConventionRecorded")==true, memoryReference = row.optJSONObject("memoryReference"), phoneResult = UiPhoneResult.fromNativeMessage(row), replyContext = UiReplyContext.fromNativeMessage(row), taskResult = UiTaskResult.fromNativeMessage(row),
-                hostGoalTaskId = PrivateHostReceipt.fromMessage(row,conversation), readerInputWork = ReaderInputWork.fromMessage(row, conversation), learningExcluded = originalLearningExcluded(row, conversation), defaultWritesBlocked = originalDefaultWritesBlocked(row, conversation))
+                hostGoalTaskId = PrivateHostReceipt.fromMessage(row,conversation), originalHostFinal = PrivateHostReceipt.finalView(row,conversation), readerInputWork = ReaderInputWork.fromMessage(row, conversation), learningExcluded = originalLearningExcluded(row, conversation), defaultWritesBlocked = originalDefaultWritesBlocked(row, conversation))
         }
         require(loaded.none { it.id.isNullOrBlank() }) { "原历史消息缺少稳定身份" }
         require(loaded.map { it.id }.distinct().size == loaded.size) { "原历史窗口重复消息身份，未混合显示" }

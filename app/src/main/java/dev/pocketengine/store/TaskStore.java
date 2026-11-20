@@ -6692,6 +6692,37 @@ public final class TaskStore {
         JSONObject staged=gatewayContinuationRow(id);if(staged!=null){JSONObject stage=staged.getJSONObject("arguments").getJSONObject("gatewayStage");source.put("nativeGatewayProfileBinding",stage.getString("profileBinding")).put("nativeGatewayPreparationExpiresAt",stage.getLong("expiresAt"));}
         return new JSONObject(source.toString());
     }
+    /** The cold watcher can consult only the same original private first operation, not ask
+     * the service, scan recent jobs or infer a task from a hostname. */
+    public synchronized boolean firstLinuxStatusOnRequest(JSONObject originalOperation)throws Exception{
+        JSONObject host=originalOperation.optJSONObject("hostWorkspace");
+        if(host==null||!"codex_app_server".equals(host.opt("worker")))return false;
+        String id=originalOperation.optString("operationId");
+        if(!id.matches("[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}"))return false;
+        JSONObject t=read(id);
+        if(!CloudWorkspaceJobs.firstReadOnlyHostTask(t))return false;
+        JSONObject pinned=t.getJSONObject("externalRefs").getJSONObject("hostWorkspace");
+        return CloudWorkspaceJobs.same(host,pinned)&&pinned.getString("serviceBase").equals(originalOperation.opt("serviceBase"))
+                &&pinned.getString("profileId").equals(originalOperation.opt("profileId"))
+                &&pinned.getString("profileBinding").equals(originalOperation.opt("profileBinding"))
+                &&(t.optString("externalId").isEmpty()||t.optString("externalId").equals(originalOperation.opt("jobId")));
+    }
+    /** Re-read the exact local owner-scope identity only. No watch, request, approval, save or new task. */
+    public synchronized JSONObject originalLinuxHostStatusTarget(String id,String run,int epoch)throws Exception{
+        JSONObject t=required(id);if(!CloudWorkspaceJobs.firstReadOnlyHostTask(t))throw new SecurityException("这不是已固定范围的 Linux 原只读工作");
+        var shown=dev.pocketengine.features.remote.RemoteObservationAttempt.shown(t,new JSONObject()
+                .put("taskId",id).put("shownRunId",run).put("shownEpoch",epoch));
+        JSONObject src=remoteOwnerTarget(id);shown.require(src);JSONObject host=src.getJSONObject("hostWorkspace");
+        JSONObject fixed=new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch)
+                .put("hostWorkspace",host).put("operationId",src.getString("jobOperationId")).put("knownJobId",src.getString("jobId"));
+        if(!src.getString("jobId").isEmpty()){
+            JSONObject accepted=t.optJSONObject("cloudHostAdmission");
+            if(!CloudWorkspaceJobs.accepted(t,accepted,host))accepted=t.optJSONObject("evidence");
+            if(!CloudWorkspaceJobs.accepted(t,accepted,host))throw new SecurityException("原工作接单身份不完整");
+            fixed.put("knownWorkspaceIdentity",accepted.getString("workspaceIdentity"));
+        }
+        return fixed;
+    }
     /** Read-only executor observation: the same original operation still exists after its detail retired. No run/approval/terminal state is manufactured. */
     public synchronized void noteCloudJobDetailRetired(String id,JSONObject source,JSONObject actual)throws Exception {
         JSONObject task=required(id),host=source.optJSONObject("hostWorkspace");
@@ -14660,8 +14691,25 @@ public final class TaskStore {
             if(OwnerInputQueue.checkpoint(inputs,value.optJSONArray("messages"),run,epoch))write(task);
             ContentValues saved=new ContentValues();saved.put("checkpoint",encoded);saved.put("updated_at",System.currentTimeMillis());
             if(db.update("runs",saved,"task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})!=1)throw new SecurityException("原上下文执行已不存在");
+            try{sealOriginalAnonymousAnswerSources(task,id,run,epoch,value);}
+            catch(Exception unavailable){/* Optional original-message indicator; never lose the saved answer/checkpoint. */}
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
+    }
+    /** Read only the shape of the just-persisted private checkpoint; no body/other-task lookup. */
+    private void sealOriginalAnonymousAnswerSources(JSONObject task,String id,String run,int epoch,JSONObject checkpoint)throws Exception{
+        JSONObject observation=checkpoint.optJSONObject("observation"),proof=observation==null?null:observation.optJSONObject("nativeFinalAnswer");
+        if(proof==null||!proof.has("ownerReplyId")||!OwnerWorkTask.isButlerSource(task)
+                ||!Boolean.TRUE.equals(proof.opt("inputBoundaryEmpty"))||!"pocketworld.runner-final-answer.v1".equals(proof.optString("format"))
+                ||!id.equals(proof.optString("taskId"))||!run.equals(proof.optString("runId"))||epoch!=proof.optInt("coordinatorEpoch"))return;
+        String reply=proof.optString("ownerReplyId");
+        if(!reply.matches("[0-9a-f-]{36}"))return;
+        JSONArray messages=checkpoint.optJSONArray("messages");int index=proof.optInt("messageIndex",-1);
+        // Ordinary private Butler has no trailing phone frame. A changed/compacted boundary is not a new proof.
+        if(messages==null||messages.length()>2000||index<0||index!=messages.length()-1||messages.length()!=proof.optInt("historyLength",-1))return;
+        JSONObject assistant=messages.optJSONObject(index);
+        if(assistant==null||!"assistant".equals(assistant.optString("role"))||assistant.has("tool_calls")||assistant.has("memoryReference")||assistant.optBoolean("memoryContextRetired"))return;
+        conversationRepository.sealOriginalAnonymousAnswerSources(this,task.getString("conversationId"),id,run,epoch,reply,proof.optString("answerFingerprint"));
     }
     /** Same private run/source authority used by memory_raw_query/read. No network is called here. */
     public CompactionJournal compactionJournal(String id,String runId,int epoch,RunControl original,
