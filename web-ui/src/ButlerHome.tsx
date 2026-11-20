@@ -7,7 +7,7 @@ import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { getRecentTaskProgress } from './task-presentation';
 import { isButlerHomeWork, workCollectionPresentation, type WorkCollectionFilter } from './work-collection';
-import { domainLabel, homeDomainResult, homeWorkIdentity } from './butler-work-entry';
+import { domainLabel, homeDomainResult, homeWorkIdentity, type HomeDomain } from './butler-work-entry';
 import './butler-home.css';
 
 export type ButlerHomeTask = {
@@ -35,7 +35,7 @@ export type ButlerHomeProps = {
   hasPreparations?: boolean;
   tasks: ButlerHomeTask[];
   canOpen: boolean;
-  onOpen: (task: ButlerHomeTask, nativeAlreadyOpen?: boolean, report?:VerifiedHomeReport, stillOriginal?:()=>boolean, returnReportFocus?:()=>boolean) => void;
+  onOpen: (task: ButlerHomeTask, nativeAlreadyOpen?: boolean, report?:VerifiedHomeReport, stillOriginal?:()=>boolean, returnWorkFocus?:()=>boolean) => void;
   canReadReports?:boolean;
   onAllWork: (filter?: WorkCollectionFilter) => void;
   onScrollTop?: (top: number) => void;
@@ -43,7 +43,12 @@ export type ButlerHomeProps = {
 };
 
 const updatedAt = (task: ButlerHomeTask) => typeof task.updatedAt === 'number' && Number.isFinite(task.updatedAt) ? task.updatedAt : 0;
-type ReportReturn = { target:VerifiedHomeReport['target']; intent:'row'|'report'; offset?:number; documentEpoch:number };
+const resumeRevision = () => Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0);
+type WorkReturn = {
+  target:Pick<VerifiedHomeReport['target'],'taskId'|'runId'|'epoch'>;
+  report?:VerifiedHomeReport['target']; domain?:HomeDomain; intent:'row'|'report'; offset?:number;
+  documentEpoch:number; resume:number;
+};
 
 /** A private original may have a saved result without a butler message.
  * This is an entry to its existing result surface, never a write receipt. */
@@ -63,13 +68,13 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
   const savedScroll = useRef(Number.isFinite(initialScrollTop) ? Math.max(0, initialScrollTop) : 0);
-  const restored = useRef(false), reportScroll = useRef(onScrollTop);
-  reportScroll.current = onScrollTop;
+  const restored = useRef(false), homeScroll = useRef(onScrollTop);
+  homeScroll.current = onScrollTop;
   const workHeading = useId(), decisionList = useId(), returnedList = useId(), checkingList = useId();
   const [allResults,setAllResults]=useState(false),[unavailableReport,setUnavailableReport]=useState<ReturnType<typeof reportedHomeWork>>(null);
   const [showDecisions,setShowDecisions]=useState(false),[checkingExpanded,setCheckingExpanded]=useState<boolean>();
   const [opening,setOpening]=useState<{id:string;intent:'row'|'report'}|null>(null),[notice,setNotice]=useState('');
-  const [reportReturn,setReportReturn]=useState<ReportReturn|null>(null),restoredReport=useRef<ReportReturn|null>(null);
+  const [workReturn,setWorkReturn]=useState<WorkReturn|null>(null),restoredWork=useRef<WorkReturn|null>(null);
   const live=useRef(false),activeRef=useRef(active),flight=useRef(false);activeRef.current=active;
   useLayoutEffect(()=>{live.current=true;return()=>{live.current=false}},[]);
   const seenTaskIds = new Set<string>();
@@ -105,10 +110,11 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
     });
   // An older request must not be displaced by a newer pause or unknown receipt.
   // Counts describe this host window, not the entire private work directory.
-  const retained=reportReturn?.documentEpoch===bridge.getDocumentEpoch()?reportReturn:null;
-  const returned = retained && work.find(({task})=>task.id===retained.target.taskId&&
+  const retained=workReturn?.documentEpoch===bridge.getDocumentEpoch()&&workReturn.resume===resumeRevision()?workReturn:null;
+  const returned = retained && work.find(({task,exact})=>task.id===retained.target.taskId&&
     task.raw?.runId===retained.target.runId&&task.raw?.coordinatorEpoch===retained.target.epoch&&
-    isButlerHomeWork(task)&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.sourceCurrentReadRequired!==true);
+    (retained.report||!retained.domain?isButlerHomeWork(task):exact?.domain===retained.domain)&&
+    task.raw?.contextAvailable!==false&&task.raw?.contextWithdrawn!==true&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.sourceCurrentReadRequired!==true);
   // Keep just the original work within its current group, without displacing
   // the actual newest rows or expanding the entire recent list.
   const recent = (items:typeof work, count:number) => {
@@ -131,7 +137,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   // diagnostics; real decisions and the newest original results stay one tap away.
   const visible=[...shownDecisions,...shownRunning,...shownResults,...shownChecking,...shownEnded];
   const revision = JSON.stringify([ready, canOpen, canReadReports, visible.map(({ task, status, detail, report }) => [task.id, status, detail, report?.reportMessageId])]);
-  useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false, enter:!retained||restoredReport.current===retained });
+  useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false, enter:!retained||restoredWork.current===retained });
   const empty = ready && !work.length && !hasPreparations && !phoneActivity && !moreWork && !homeNotice;
 
   useLayoutEffect(() => {
@@ -141,7 +147,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   }, [ready]);
   useLayoutEffect(() => {
     const node = scroller.current;
-    return () => { if (node && restored.current) reportScroll.current?.(node.scrollTop); };
+    return () => { if (node && restored.current) homeScroll.current?.(node.scrollTop); };
   }, []);
   // A changing status can reorder or remove a focused task. Restore only
   // a lost focus; never move focus out of the shared composer or another page.
@@ -158,25 +164,25 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   }, [revision]);
 
   useLayoutEffect(()=>{
-    if(!ready||!active||!reportReturn||restoredReport.current===reportReturn)return;
-    restoredReport.current=reportReturn;
+    if(!ready||!active||!retained||restoredWork.current===retained)return;
+    restoredWork.current=retained;
     // A return only positions the current list. Neither a different run nor
-    // a later user focus should be treated as the control that opened the report.
-    if(document.hidden||bridge.getDocumentEpoch()!==reportReturn.documentEpoch||document.activeElement!==document.body)return;
+    // a later user focus should be treated as the control that opened the work.
+    if(document.hidden||document.activeElement!==document.body)return;
     const view=scroller.current;
     const row=returned&&Array.from(workRoot.current?.querySelectorAll<HTMLElement>('[data-task-id]')||[]).find(node=>node.dataset.taskId===returned.task.id);
-    const originalReport=!!returned?.report&&sameHomeReport(returned.report,reportReturn.target);
-    const reportButton=row&&originalReport&&reportReturn.intent==='report'&&row.querySelector<HTMLButtonElement>('.pw-butler-decision-report:not(:disabled)');
+    const originalReport=!!retained.report&&!!returned?.report&&sameHomeReport(returned.report,retained.report);
+    const reportButton=row&&originalReport&&retained.intent==='report'&&row.querySelector<HTMLButtonElement>('.pw-butler-decision-report:not(:disabled)');
     const rowButton=reportButton||(row&&row.querySelector<HTMLButtonElement>('.pw-butler-work-row:not(:disabled)'));
     const target=rowButton||allWorkButton.current;
     if(!view||!target||target.closest('[inert],[hidden]'))return;
     const frame=view.getBoundingClientRect(), bounds=target.getBoundingClientRect(), style=getComputedStyle(view);
     const min=parseFloat(style.scrollPaddingBlockStart)||0;
     const max=Math.max(min,frame.height-bounds.height-(parseFloat(style.scrollPaddingBlockEnd)||0));
-    const currentOffset=bounds.top-frame.top, offset=rowButton?reportReturn.offset??currentOffset:currentOffset;
+    const currentOffset=bounds.top-frame.top, offset=rowButton?retained.offset??currentOffset:currentOffset;
     view.scrollTop+=currentOffset-Math.min(max,Math.max(min,offset));
     target.focus({preventScroll:true});
-  },[active,ready,reportReturn,returned]);
+  },[active,ready,retained,returned]);
 
   const open=async(item:typeof work[number],trigger:HTMLButtonElement,intent:'row'|'report'='row')=>{
     if(!activeRef.current||!canOpen||flight.current)return;
@@ -187,10 +193,10 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
     const binding=reportTarget||item.decision||item.saved||item.exact;
     if(!binding){onOpen(item.task);return}
     const id=item.task.id,{runId,epoch}=binding,documentEpoch=bridge.getDocumentEpoch();
-    const frame=report&&scroller.current?.getBoundingClientRect();
+    const frame=scroller.current?.getBoundingClientRect();
     const offset=frame?trigger.getBoundingClientRect().top-frame.top:undefined;
-    const resume=()=>Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0),startResume=resume();
-    const originalDocument=()=>!document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&resume()===startResume;
+    const startResume=resumeRevision();
+    const originalDocument=()=>!document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&resumeRevision()===startResume;
     const current=()=>live.current&&activeRef.current&&originalDocument();
     const originalRow=()=>{
       const native=bridge.getState().state;
@@ -215,12 +221,13 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
       const latest=originalRow();
       if(!latest)throw new Error('原工作或汇报已变化，没有改读其他轮次。');
       if(verified&&unavailable)setUnavailableReport(null);
-      // Normal progress within the same run can advance while its window opens.
-      if(verified)focused.current=null;
-      onOpen(latest,true,verified,()=>originalDocument()&&same(),verified?()=>{
-        if(!live.current||document.hidden||bridge.getDocumentEpoch()!==documentEpoch)return false;
-        setReportReturn({target:verified.target,intent,offset,documentEpoch});return true;
-      }:undefined);handedOff=true;
+      focused.current=null;setWorkReturn(null);
+      onOpen(latest,true,verified,()=>originalDocument()&&same(),()=>{
+        if(!live.current||!originalDocument())return false;
+        // The same work can move groups after the owner acts. Keep its current
+        // projection in view, not the approval or progress label that opened it.
+        setWorkReturn({target:{taskId:id,runId,epoch},report:verified?.target,domain:item.exact?.domain,intent,offset,documentEpoch,resume:startResume});return true;
+      });handedOff=true;
     }catch(error){
       if(current()){
         const reason=error instanceof Error?error.message:'原工作暂不可读取。';
@@ -268,7 +275,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   </div>;
 
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>
-    <div ref={scroller} className="pw-butler-scroll" onScroll={event => { if (restored.current) reportScroll.current?.(event.currentTarget.scrollTop); }}>
+    <div ref={scroller} className="pw-butler-scroll" onScroll={event => { if (restored.current) homeScroll.current?.(event.currentTarget.scrollTop); }}>
       <div className="pw-butler-content">
         <section className="pw-butler-intake" aria-label="交办">
           <header className="pw-butler-welcome"><h2>想交给我什么事？</h2></header>
@@ -288,7 +295,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
             {decisions.length>0&&<section className="pw-butler-work-group pw-butler-work-inbox" aria-label="等你处理">
               <header className="pw-butler-group-heading"><h3>等你处理</h3><span className="pw-butler-group-count" aria-label={`眼前的 ${decisions.length} 项待处理工作`}>{decisions.length}</span></header>
               <ol id={decisionList} className="pw-butler-work-list">{shownDecisions.map(renderTask)}</ol>
-              {decisions.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-controls={decisionList} aria-expanded={decisionsExpanded} onClick={()=>{setReportReturn(null);setShowDecisions(!decisionsExpanded)}}>{decisionsExpanded?'收起待处理工作':`再看 ${decisions.length-shownDecisions.length} 项`}</Button>}
+              {decisions.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-controls={decisionList} aria-expanded={decisionsExpanded} onClick={()=>{setWorkReturn(null);setShowDecisions(!decisionsExpanded)}}>{decisionsExpanded?'收起待处理工作':`再看 ${decisions.length-shownDecisions.length} 项`}</Button>}
             </section>}
             {(shownRunning.length>0||phoneActivity)&&<section className="pw-butler-work-group" aria-label="正在跟进">
               <header className="pw-butler-group-heading"><h3>正在跟进</h3>{running.length>shownRunning.length&&<Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('running')}>查看全部</Button>}</header>
@@ -299,11 +306,11 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
               <header className="pw-butler-group-heading"><h3>成果</h3>{moreWork&&
                 <Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('ended')}>找更早的成果</Button>}</header>
               <ol id={returnedList} className="pw-butler-work-list">{shownResults.map(renderTask)}</ol>
-              {results.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-expanded={resultsExpanded} aria-controls={returnedList} onClick={()=>{setReportReturn(null);setAllResults(!resultsExpanded)}}>{resultsExpanded?'收起成果':`再看 ${results.length-shownResults.length} 项成果`}</Button>}
+              {results.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-expanded={resultsExpanded} aria-controls={returnedList} onClick={()=>{setWorkReturn(null);setAllResults(!resultsExpanded)}}>{resultsExpanded?'收起成果':`再看 ${results.length-shownResults.length} 项成果`}</Button>}
             </section>}
             {(checking.length>0||shownEnded.length>0||moreWork)&&<div className="pw-butler-work-group pw-butler-work-secondary">
               {checking.length>0&&<>
-                <Button variant="ghost" className="pw-butler-all-work pw-butler-check-toggle" aria-expanded={showChecking} aria-controls={checkingList} trailingIcon={IconChevronDown} onClick={()=>{setReportReturn(null);setCheckingExpanded(!showChecking)}}>暂停或待核对 · {checking.length}</Button>
+                <Button variant="ghost" className="pw-butler-all-work pw-butler-check-toggle" aria-expanded={showChecking} aria-controls={checkingList} trailingIcon={IconChevronDown} onClick={()=>{setWorkReturn(null);setCheckingExpanded(!showChecking)}}>暂停或待核对 · {checking.length}</Button>
                 <div id={checkingList} hidden={!showChecking}>
                   <ol className="pw-butler-work-list">{shownChecking.map(renderTask)}</ol>
                   {checking.length>shownChecking.length&&<Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('attention')}>查看待处理工作</Button>}

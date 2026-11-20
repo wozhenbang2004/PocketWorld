@@ -24,8 +24,11 @@ const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
 const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
   deliveryFields.every(key => draft[key] === (original[key] || ''));
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string };
+export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; window:string};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
-  buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void; projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
+  buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
+  importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
+  projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
   onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout) => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
@@ -35,6 +38,28 @@ const failureText = (failure: unknown) => failure instanceof Error ? failure.mes
 const scopedBuildReceipt = (receipt: Data) => receipt.independentNodeBuild === true || !!(receipt.versionedBuildSourceDigest || receipt.editedBuildSourceDigest);
 const copyIdentity = (value: unknown): value is string =>
   typeof value==='string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+const sourceHash = (value: unknown): value is string => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
+
+/** The existing native catalog and checkout registration must both identify the import. */
+export function originalImportedEditor(projectId:string):ProjectImportedEditor|null {
+  const {state,view}=bridge.getState(), nativeView=view as Data|undefined;
+  if(document.hidden||state.projectId!==projectId||state.filePath||!nativeView||nativeView.taskId||nativeView.section!=null)return null;
+  const projects=rows(state.features?.workspace?.projects).filter(row=>row?.id===projectId);
+  const origin=projects.length===1?projects[0].sourceImport:null;
+  if(!copyIdentity(projectId)||!copyIdentity(origin?.clientId)||!sourceHash(origin?.packageSha256)||origin.executionAuthorityRestored!==false)return null;
+  const matches=rows(state.features?.local?.checkouts).filter(row=>row?.projectId===projectId&&
+    row.sourceImport?.clientId===origin.clientId&&row.sourceImport?.packageSha256===origin.packageSha256);
+  if(matches.length!==1)return null;
+  const copy=matches[0], source=copy.sourceImport;
+  if(!copyIdentity(copy.id)||source.mode!=='new_project'||source.executionAuthorityRestored!==false||
+    !['external_zip','saf_tree'].includes(source.sourceKind)||!sourceHash(source.manifestIdentity)||!sourceHash(source.sourceEvidenceSha256)||
+    ['teamProjectCopy','skillExecutionCopy','isolatedGit','nativeGitImportPending'].some(key=>key in copy))return null;
+  return {projectId,checkoutId:copy.id,importIdentity:JSON.stringify([origin.clientId,origin.packageSha256,source.manifestIdentity,source.sourceEvidenceSha256]),
+    window:ownerWindow()};
+}
+export const sameImportedEditor = (target:ProjectImportedEditor, observed:ProjectImportedEditor|null) =>
+  !!observed&&target.projectId===observed.projectId&&target.checkoutId===observed.checkoutId&&
+  target.importIdentity===observed.importIdentity&&target.window===observed.window;
 function existingBuildBlocked(value: unknown): string {
   switch(value){
     case 'workspaces': return '这个副本使用工作区，本机快捷构建目前只支持单个 Node 项目。';
@@ -74,7 +99,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),noticeArea=useRef<HTMLDivElement>(null);
@@ -89,6 +114,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
   const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
+  const [importEditorNotice,setImportEditorNotice]=useState('');
   const buildReturnAnchor=useRef<HTMLElement>(null), focusingBeforeDeparture=useRef(false);
   const fileCheckout=fileWindow?.checkoutId||'';
   const [buildOrigin,setBuildOrigin]=useState<ProjectBuildCopy|null>(null);
@@ -220,7 +246,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const retire = () => {
       generation.current++; entered.current = null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null;
-      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setSource(null); setBusy(false); setFileWindow(null); }
+      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); }
       if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
     };
     // Switching the start method retires its window, never its plain draft or
@@ -250,7 +276,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const differentBuildCopy=buildCheckout&&checkout!==buildCheckout&&available.find(row=>row.projectId===projectId&&row.checkoutId===buildCheckout);
   useEffect(() => { if (active && readable && !handle.current) void readRef.current(); }, [active, readable]);
   useEffect(() => {
-    if (!active || !view || !checkout || busy || review || filesOpen || buildReturn || differentBuildCopy || unresolved(submission)) return;
+    if (!active || !view || !checkout || busy || review || filesOpen || buildReturn || importedEditor || differentBuildCopy || unresolved(submission)) return;
     const key = `${view.viewHandle}|${projectId}|${checkout}`;
     if (sourceAttempt.current === key) return;
     sourceAttempt.current = key; setSource(null);
@@ -259,7 +285,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       if (value.projectId !== projectId || value.checkoutId !== checkout) throw new Error('源码不属于这个所选副本，请重新读取。');
       setSource(value);
     });
-  }, [active, view, checkout, busy, review, filesOpen, buildReturn, differentBuildCopy, submission, projectId]);
+  }, [active, view, checkout, busy, review, filesOpen, buildReturn, importedEditor, differentBuildCopy, submission, projectId]);
   useEffect(() => {
     setExpired(false); if (!review) return;
     const remaining = Number(review.expiresAt) - Date.now();
@@ -336,6 +362,23 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     setFileWindow(null); setHostEditor(null); setHostFiles(null); sourceAttempt.current = ''; setSource(null);
   };
   useEffect(()=>{
+    if(!importedEditor||!active||!view||busy||entered.current||review||fileCheckout||buildReturn||handle.current!==view.viewHandle)return;
+    onImportedEditorHandled?.(importedEditor);
+    if(ownerWindow()!==importedEditor.window||document.hidden)return;
+    const checkoutId=importedEditor.checkoutId;
+    if(!sameImportedEditor(importedEditor,originalImportedEditor(projectId))||view.projectId!==projectId||view.executionAuthorized!==false||
+       !latest.current.can('projects.development.files.open')||!rows(view.checkouts).some(copy=>copy.projectId===projectId&&copy.checkoutId===checkoutId)){
+      setImportEditorNotice('原导入副本已不能核对，没有打开其他文件。');return;
+    }
+    if(view.draftRecoveryRequired===true||unresolved(submission)||sourceConflict||[draft.current.checkoutId,view.draft?.checkoutId].some(id=>id&&id!==checkoutId)){
+      setImportEditorNotice('当前项目保留了其他副本选择或待核对的工作。请先核对，再明确选择原导入副本 '+checkoutId.slice(0,8)+'。');return;
+    }
+    setImportEditorNotice('');setHostEditor(null);
+    // Only list this checked-out copy. Opening this door does not choose a
+    // source file, change a saved work draft or grant a build.
+    setFileWindow({checkoutId});
+  },[importedEditor,onImportedEditorHandled,active,view,busy,review,fileCheckout,buildReturn,projectId,submission,sourceConflict]);
+  useEffect(()=>{
     if(!buildReturn||!active||!view||busy||review||fileCheckout||document.hidden||
        handle.current!==view.viewHandle||!latest.current.can('projects.development.files.open'))return;
     const live=bridge.getState(), nativeView=live.view as Data|undefined;
@@ -400,6 +443,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     });
   };
   const chooseCheckout = (value:string) => {
+    setImportEditorNotice('');
     const clear = !!currentPicked && checkout!==value;
     if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
     setCheckout(value); setBuildOrigin(null); setBuildCopyMissing(false); setSource(null); setHostOrigin(null); setHostFiles(null);
@@ -489,6 +533,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       <h3>这台手机上的工作副本</h3><p>直接改文件不需要模型。构建或交办目标时，另行核对。</p>
     </header>
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
+    {importEditorNotice && <p className="pw-local-inline-notice" role="status">{importEditorNotice}</p>}
     {buildCopyMissing&&<p className="pw-local-inline-notice" role="status">原构建所用的私人副本暂不可用，没有打开替代副本。</p>}
     {nodeTools&&firstBuildAction&&<section aria-label="这份私人副本的构建下一步">
       <p className="pw-field-hint" role="status">本机副本 <bdi>{selectedCopy?.name||name}</bdi> · <code>{checkout.slice(0,8)}</code>。{buildToolsBlocked?

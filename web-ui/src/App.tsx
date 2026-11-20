@@ -92,7 +92,7 @@ import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,type ProjectBuildCopy} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,originalImportedEditor,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor} from './ProjectDevelopmentWorkspace';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import {ContinuedProjectBinding} from './ProjectWorkBinding';
@@ -295,6 +295,8 @@ export default function App(){
  useEffect(()=>{if(route!=='projects'||state.filePath||state.projectId!==projectBuildReturn?.projectId)setProjectBuildReturn(null);},[route,state.filePath,state.projectId,projectBuildReturn?.projectId]);
  useEffect(()=>{if(route!=='projects'||state.projectId!==projectDraftReturn?.projectId)setProjectDraftReturn(null);},[route,state.projectId,projectDraftReturn?.projectId]);
  const [projectWorkPresentations,setProjectWorkPresentations]=useState<Record<string,ProjectWorkPresentation>>({});
+ const [projectImportedEditor,setProjectImportedEditor]=useState<ProjectImportedEditor|null>(null);
+ const handledImportedEditor=useCallback((target:ProjectImportedEditor)=>setProjectImportedEditor(value=>value===target?null:value),[]);
  const [projectWorkReviewOpen,setProjectWorkReviewOpen]=useState(false);
  const projectWorkBack=useRef<(()=>boolean)|null>(null);
  const registerProjectWorkBack=useCallback((handler:(()=>boolean)|null)=>{projectWorkBack.current=handler},[]);
@@ -388,7 +390,7 @@ export default function App(){
  const projectTaskReturn=useRef<ProjectTaskReturn|null>(null);
  const projectGitToolReturn=useRef<PublicGitDraft|null>(null);
  const homeReport=useRef<VerifiedHomeReport|null>(null);
- const homeReportReturn=useRef<{report:VerifiedHomeReport;focus:()=>boolean;returning?:true}|null>(null);
+ const homeWorkReturn=useRef<{taskId:string;report?:VerifiedHomeReport;focus:()=>boolean;returning?:true}|null>(null);
  const workRequestVisit=useRef<WorkRequestVisit|null>(null),[openingWorkRequest,setOpeningWorkRequest]=useState('');
  const [workRequestError,setWorkRequestError]=useState<{work:WorkIdentity;message:string}|null>(null);
  const taskList=useRef<HTMLElement>(null),workListReturn=useRef<(()=>boolean)|null>(null),workDrillFocus=useRef<'origin'|'ended'|null>(null);
@@ -409,6 +411,15 @@ export default function App(){
  const projectWorkView=projectWorkViews[String(state.projectId||'')]||{query:'',filter:'all' as const,expanded:false,selected:''};
  const updateProjectWorkView=(patch:Partial<ProjectWorkCollectionView>)=>setProjectWorkViews(previous=>({...previous,[String(state.projectId||'')]:{...(previous[String(state.projectId||'')]||{query:'',filter:'all',expanded:false,selected:''}),...patch}}));
  const projectSection=projectSections[String(state.projectId||'')]||'work';
+ useEffect(()=>{
+  if(!projectImportedEditor)return;
+  const mode=projectWorkPresentations[projectImportedEditor.projectId];
+  const retire=()=>handledImportedEditor(projectImportedEditor);
+  const hidden=()=>{if(document.hidden)retire();};
+  if(route!=='projects'||projectSection!=='work'||state.filePath||state.projectId!==projectImportedEditor.projectId||!mode?.open||mode.mode!=='default'||document.hidden){retire();return;}
+  document.addEventListener('visibilitychange',hidden);window.addEventListener('pagehide',retire);
+  return()=>{document.removeEventListener('visibilitychange',hidden);window.removeEventListener('pagehide',retire);};
+ },[route,projectSection,state.filePath,state.projectId,projectWorkPresentations,projectImportedEditor,handledImportedEditor]);
  const projectPositionKey=`${String(state.projectId||'')}:${projectSection}`;
  const updateProjectView=(patch:Partial<typeof projectView>)=>setProjectViews(previous=>({...previous,[String(state.projectId||'')]:{...(previous[String(state.projectId||'')]||{query:'',view:'files',expanded:[],selected:''}),...patch}}));
  const fileQuery=projectView.query,fileView=projectView.view;const setFileQuery=(query:string)=>updateProjectView({query}),setFileView=(view:'files'|'tree'|'grid')=>updateProjectView({view});
@@ -692,12 +703,12 @@ export default function App(){
  const releasePhoneNotice=useCallback(()=>{const pin=phoneNoticeRef.current;if(!pin)return;phoneNoticeRef.current=null;setPhoneNoticePin(null);setPhoneNoticePanel(null);
   if(can('phone.notice.close'))void bridge.command('phone.notice.close',{noticeHandle:pin.token}).catch(()=>{});
  },[can]);
- const closeTask=useCallback((restoreButlerReport=false)=>{const commit=async()=>{if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current())return false;
-  const origin=homeReportReturn.current;
+ const closeTask=useCallback((restoreButlerWork=false)=>{const commit=async()=>{if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current())return false;
+  const origin=homeWorkReturn.current;
   // Closing for a route handoff must not pull focus back behind the destination.
-  if(restoreButlerReport&&route==='butler'&&taskLayer==='homeReport'&&origin?.report.target.taskId===taskId&&
-    (origin.report===homeReport.current||origin.returning&&!homeReport.current))origin.returning=true;
-  else homeReportReturn.current=null;
+  if(restoreButlerWork&&route==='butler'&&origin?.taskId===taskId&&
+    (origin.report?taskLayer==='homeReport'&&(origin.report===homeReport.current||origin.returning&&!homeReport.current):openedTaskId.current===taskId||origin.returning))origin.returning=true;
+  else homeWorkReturn.current=null;
   releasePhoneNotice();homeReport.current=null;taskHistoryOrigin.current=null;taskReconciliationOrigin.current=null;rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setFocusedOriginalDraft(null);setTaskLayer('overview');setWorkSupplementTarget(null);setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionAnswer('');return closed;};if(guardTaskLeave(()=>{void commit()}))return Promise.resolve(false);return commit();},[can,act,rememberTaskPosition,invalidateContinuation,releasePhoneNotice,route,taskId,taskLayer]);
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
  const navigate=useCallback((requested:string,afterNavigate?:()=>void,options?:{keepOrigin?:boolean;taskClosed?:boolean;stillCurrent?:()=>boolean}):Promise<boolean>=>{
@@ -3313,10 +3324,35 @@ export default function App(){
  const projectListBusy=asArray<string>(state.moduleBusy).includes('workspace.list')||packageOpening;
  const projectListInput=obj(obj(state.moduleResultInputs)['workspace.list']);
  const projectListError=projectListInput.projectId===state.projectId?String(obj(state.moduleErrors)['workspace.list']||''):'';
+ const importedFileTarget=currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&
+  projectListInput.projectId===currentProject.id&&!projectListBusy&&!projectListError&&!files.length&&!fileQuery&&
+  !projectWorkDrafts[currentProject.id]?.operation&&can('projects.development.read')&&can('projects.development.files.open')?
+  originalImportedEditor(currentProject.id):null;
+ const openOriginalImportedFiles=(target:ProjectImportedEditor)=>{
+  const live=bridge.getState().state,list=obj(obj(live.moduleResultInputs)['workspace.list']);
+  if(route!=='projects'||projectSection!=='files'||taskOpen||projectPreview.expanded||projectWorkReviewOpen||
+   !can('projects.development.read')||!can('projects.development.files.open')||projectWorkDrafts[target.projectId]?.operation||
+   list.projectId!==target.projectId||list._failed===true||!Array.isArray(live.files)||live.files.length||
+   asArray<string>(live.moduleBusy).includes('workspace.list')||!sameImportedEditor(target,originalImportedEditor(target.projectId))){
+    setLocalError('原项目或导入副本状态已变化，没有打开其他文件。');return;
+  }
+  setProjectImportedEditor(target);
+  setProjectSections(previous=>({...previous,[target.projectId]:'work'}));
+  setProjectWorkPresentations(previous=>({...previous,[target.projectId]:{open:true,mode:'default'}}));
+ };
+ const projectFilesEmpty=<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/>
+  <h3>{fileQuery?'没有匹配的文件':importedFileTarget?'导入源码在本机副本':'暂无列出的文件'}</h3>
+  <p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':importedFileTarget?'这里还没有正式文件。编辑和后续本机构建都用这份导入副本。':'从一个新文件开始，也可以重新读取当前项目。'}</p>
+  {fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<div className="pw-action-row">
+   {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget)}>编辑导入的本机源码</Button>}
+   {can('projects.newFile')&&<Button variant={importedFileTarget?'ghost':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('file')}>{importedFileTarget?'新建正式文件':'新建文件'}</Button>}
+   {can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}
+  </div>}
+ </div>;
  useCollectionMotion(projectScroll,JSON.stringify(['projects',state.projectId]),JSON.stringify(projects.map(project=>[project.id,project.name])),{selector:'.pw-project-library-row',active:route==='projects'&&ready&&!state.filePath&&!projectPreview.expanded&&!packageOpening});
  const projectFiles=<>{(files.length>0||!!fileQuery)&&<><div className="pw-project-tools"><SearchField value={fileQuery} onChange={setFileQuery} aria-label="搜索当前项目文件" placeholder="搜索文件"/><PopoverTrigger isOpen={fileDisplayOpen} onOpenChange={setFileDisplayOpen}><IconButton icon={fileView==='tree'?IconFolder:IconGrid} aria-label="文件显示方式" title="文件显示方式"/><Popover aria-label="文件显示方式"><PopoverHeader title="文件显示"/><RadioOptions label="显示方式" value={fileView} onChange={value=>{setFileView(value as 'files'|'tree'|'grid');setFileDisplayOpen(false)}} options={[{id:'files',label:'文件列表'},{id:'tree',label:'目录层级'},{id:'grid',label:'网格'}]}/></Popover></PopoverTrigger>{can('projects.newFile')&&<IconButton icon={IconAdd} aria-label="新文件" title="新文件" onClick={()=>openCreate('file')}/>}</div>
       <div className="pw-project-list-caption"><MotionFeedback as="span" identity={`${projectListBusy}:${fileQuery}:${shownFiles.length}`} initial={false} role="status">{projectListBusy?'正在刷新 · ':''}{fileQuery?`匹配 ${shownFiles.length} 个文件`:`${files.length} 个文件`}</MotionFeedback>{fileQuery&&<Button variant="ghost" size="small" onClick={()=>setFileQuery('')}>清空搜索</Button>}{can('projects.refresh')&&<IconButton icon={IconRefresh} size="small" aria-label="重新读取项目文件" onClick={()=>run('projects.refresh')}/>}</div>
-      </>}<div className="pw-project-objects" aria-busy={projectListBusy||undefined}>{!ready||packageOpening||projectListBusy&&!files.length?<p className="pw-muted" role="status">正在读取项目文件…</p>:projectListError?<div className="pw-empty pw-project-empty" role="alert"><h3>无法读取文件</h3><p>{projectListError}</p>{can('projects.refresh')&&<Button variant="secondary" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div>:!shownFiles.length?<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>{fileQuery?'没有匹配的文件':'暂无列出的文件'}</h3><p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':'从一个新文件开始，也可以重新读取当前项目。'}</p>{fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<><div className="pw-action-row">{can('projects.newFile')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('file')}>新建文件</Button>}{can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div></>}</div>:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser identity={JSON.stringify([state.projectId,fileQuery.trim().toLocaleLowerCase()])} files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div>
+      </>}<div className="pw-project-objects" aria-busy={projectListBusy||undefined}>{!ready||packageOpening||projectListBusy&&!files.length?<p className="pw-muted" role="status">正在读取项目文件…</p>:projectListError?<div className="pw-empty pw-project-empty" role="alert"><h3>无法读取文件</h3><p>{projectListError}</p>{can('projects.refresh')&&<Button variant="secondary" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div>:!shownFiles.length?projectFilesEmpty:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser identity={JSON.stringify([state.projectId,fileQuery.trim().toLocaleLowerCase()])} files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div>
       {currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&!taskOpen&&can('projects.removedFiles.list')&&<ProjectRemovedFiles key={currentProject.id} project={currentProject.id}/>}</>;
  const projectsPage=<motion.main layoutScroll ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded){if(state.projectId&&projectSection==='work')projectDirectory.rememberScroll(event.currentTarget.scrollTop);else projectListTop.current.set(projectPositionKey,event.currentTarget.scrollTop)}}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
@@ -3337,6 +3373,7 @@ export default function App(){
           presentation={projectWorkPresentations[currentProject.id]??{open:!!(projectWorkDrafts[currentProject.id]?.operation||projectWorkDrafts[currentProject.id]?.expanded),mode:projectWorkDrafts[currentProject.id]?.operation||projectWorkDrafts[currentProject.id]?.expanded||!can('projects.development.read')?'profile':'default'}}
           onPresentationChange={presentation=>setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}))}
           defaultStart={can('projects.development.read')?(active,onBusy)=><ProjectDevelopmentWorkspace key={currentProject.id} returnTarget={projectDraftReturn?.projectId===currentProject.id?projectDraftReturn:undefined}
+            importedEditor={projectImportedEditor?.projectId===currentProject.id?projectImportedEditor:undefined} onImportedEditorHandled={handledImportedEditor}
             buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)} onTaskRegistered={projectDirectory.reset} onPrepareTools={()=>void openSetup('tools')} onConnectModel={()=>void openRelatedWorkspace('model-settings')} onOpenTerminal={openProjectTerminal}/>:undefined}
           profileStart={can('projectWork.open')&&can('projectWork.confirm')?(active,onBusy)=><ProjectWorkStart
             key={currentProject.id} project={currentProject} embedded
@@ -3404,10 +3441,11 @@ export default function App(){
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
   </NavigationChrome>:workspaceNotices}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnReportFocus)=>{
-    if(report){homeReport.current=report;homeReportReturn.current=null;taskReading.current.delete(`${task.id}:homeReport`);
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
+    if(report){homeReport.current=report;homeWorkReturn.current=null;taskReading.current.delete(`${task.id}:homeReport`);
      openTask(task.id,'homeReport',alreadyOpen,undefined,undefined,undefined,()=>homeReport.current===report&&currentHomeReport(report),undefined,undefined,
-      returnReportFocus?()=>{homeReportReturn.current={report,focus:returnReportFocus}}:undefined);return}
+      returnWorkFocus?()=>{homeWorkReturn.current={taskId:task.id,report,focus:returnWorkFocus}}:undefined);return}
+    homeWorkReturn.current=alreadyOpen&&returnWorkFocus?{taskId:task.id,focus:returnWorkFocus}:null;
     openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview',alreadyOpen,undefined,undefined,undefined,stillOriginal)
    }} onAllWork={(scope='all')=>{void openRelatedWorkspace('tasks',undefined,()=>{setEndedScopeOrigin(null);setFilter(scope);setTaskQuery('')})}} initialScrollTop={butlerScrollTop.current} onScrollTop={top=>{butlerScrollTop.current=top}}/>:route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace memory={notificationMemory.current} onOpenTeamAttention={locator=>{setTeamAttentionFocus({...locator,requestId:crypto.randomUUID()});void openRelatedWorkspace('teams')}} onOpenTask={(id,review)=>openTask(id,review?'review':'overview')} state={state.remoteInbox} navigationTrigger={navigationTrigger} onBack={returnFromSecondary} registerBack={registerSecondaryBack}/></div>:route==='developer-logs'?<div className="pw-workspace pw-route-workspace"><DeveloperDiagnosticsWorkspace onBack={returnFromSecondary} navigationTrigger={navigationTrigger}/></div>:route==='setup'?<div className="pw-workspace pw-route-workspace"><SetupWorkspace key={`setup:${setupMode}:${setupCapability||''}:${setupRuntimeTask||''}`} snapshot={snapshot} mode={setupMode} initialCapability={setupCapability} initialView={setupView} onViewChange={setSetupView} returnLabel={setupOrigin.current.label} originGoal={setupOrigin.current.goal} runtimeTaskId={setupRuntimeTask} onNavigate={navigateFromSetup} onClose={closeSetup} registerBackHandler={registerSecondaryBack}/></div>:route==='profile'?<div className="pw-workspace pw-route-workspace"><ProfileWorkspace initialTarget={personalTarget} targetRequestKey={String(personalTargetKey)} onOpenAdvancedMemory={()=>{void navigate('advanced-memory')}} onOpenCommitments={()=>{void navigate('commitments')}} onOpenReminders={()=>{void navigate('automation')}} state={state} presentationKey={`${personalDocumentEpoch}:${Number(snapshot?.view?.resumeRevision||0)}:${String(snapshot?.view?.taskId||'')}:${String(snapshot?.view?.section||'')}`} supported={can} run={bridge.command} onBack={returnFromProfile} onSettings={()=>{void navigate('group:data')}} registerBack={registerSecondaryBack} registerBeforeLeave={registerProfileBeforeLeave}/></div>:<SecondaryRouteBoundary navigation={route+':'+navigationRevision} onBack={returnFromSecondary}><Suspense fallback={<SecondaryRoutePending onBack={returnFromSecondary}/>}><Secondary reviewedSkill={route==='skills'?relatedOrigin.current?.reviewedSkill:undefined} onChoosePhonePlace={choosePhonePlaceFromSettings} cloudGoal={route==='remote'&&cloudGoal?.navigation===navigationRevision?cloudGoal:undefined} onCloudGoalUsed={consumeCloudGoal} sentPhoneFocus={sentPhoneFocus?.navigation===navigationRevision?sentPhoneFocus:undefined} teamRunFocus={teamRunFocus} onTeamRunFocusConsumed={requestId=>setTeamRunFocus(current=>current?.requestId===requestId?undefined:current)} onAskButlerForTeam={askButlerForTeam} onOpenTeamOwnerWork={openTeamOwnerWork} capabilityMemory={capabilityMemory.current} onStartCapability={startCapability} onTeamAttentionConsumed={requestId=>setTeamAttentionFocus(current=>current?.requestId===requestId?undefined:current)} teamAttentionFocus={teamAttentionFocus} registerBeforeLeave={registerSecondaryBeforeLeave} route={route} terminalCheckout={originalTerminalCheckout} localDraft={localWorkspaceDraft} onLocalDraftChange={setLocalWorkspaceDraft} initialProjectId={setupReturnPending.current?setupOrigin.current.contextProjectId:relatedOrigin.current?.contextProjectId} originGoal={setupReturnPending.current?setupOrigin.current.goal:relatedOrigin.current?.goal} returnLabel={setupReturnPending.current?'返回能力准备':relatedOrigin.current?.label} onOpenProjectDraft={openStagedProjectDraft} onOpenProjects={()=>{if(relatedOrigin.current?.route==='projects')returnFromSecondary();else void openRelatedWorkspace('projects')}} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?(capability,origin)=>{void openSetup(capability,undefined,undefined,origin)}:undefined} settingsRestore={settingsRestore?.revision===navigationRevision?settingsRestore:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined} onReturnOriginalModelInput={returnOriginalModelInput}/></Suspense></SecondaryRouteBoundary> }
   </div>{allWork}
@@ -3425,8 +3463,8 @@ export default function App(){
    if(taskOpen)return;
    const chatOrigin=chatWorkReturn.current;chatWorkReturn.current=null;
    if(chatOrigin&&route==='chat'&&restoreChatWorkAt(chatOrigin)){event.preventDefault();return;}
-   const reportOrigin=homeReportReturn.current;homeReportReturn.current=null;
-   if(route==='butler'&&!workOpen&&!commandOpen&&!preparationTarget&&reportOrigin?.returning&&reportOrigin.focus()){event.preventDefault();return}
+   const homeOrigin=homeWorkReturn.current;homeWorkReturn.current=null;
+   if(route==='butler'&&!workOpen&&!commandOpen&&!preparationTarget&&homeOrigin?.returning&&homeOrigin.focus()){event.preventDefault();return}
    if(route==='tasks'&&workListReturn.current?.()){event.preventDefault();return}
    const origin=projectTaskReturn.current;projectTaskReturn.current=null;
    if(!origin||route!=='projects'||state.projectId!==origin.projectId||state.filePath||projectSection!=='work'||projectPreview.expanded)return;
