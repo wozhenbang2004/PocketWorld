@@ -217,9 +217,15 @@ internal class PocketWebRemoteTasks(
             val epoch=(raw as Number).toInt()
             val window=captureWindow();val one=Any();val activity=controller.webPresentationActivity()
             check(taskCurrent(id)&&acceptsWindow(window)&&hostStatusAttempt==null&&nativeWindow==null) { "请在这项工作的本机回执中主动查询一次" }
+            val pendingAdmission = controller.pendingOriginalLinuxHostReceipt(id, run, epoch)
             hostStatusAttempt=one
             val current=java.util.function.BooleanSupplier{hostStatusAttempt===one&&taskCurrent(id)&&acceptsWindow(window)}
             val unavailable="未能核对这个原主机工作的状态；没有读取详情或重提。"
+            fun finish(reply: JSONObject?, error: String?) {
+                val show = current.asBoolean
+                if (hostStatusAttempt === one) hostStatusAttempt = null
+                if (show) done(reply, error) else done(null, "原工作页已变化，未显示旧状态")
+            }
             try{controller.runEcosystemControlWork(Runnable{
                 val result=runCatching{
                     check(current.asBoolean)
@@ -227,11 +233,20 @@ internal class PocketWebRemoteTasks(
                     host.originalLinuxHostStatus(activity,id,run,epoch,current)
                 }
                 main.post{
-                    val show=current.asBoolean
-                    if(hostStatusAttempt===one)hostStatusAttempt=null
-                    if(show)result.fold({done(it,null)},{done(null,unavailable)}) else done(null,"原工作页已变化，未显示旧状态")
+                    result.fold({ reply ->
+                        val stage = reply.optString("stage")
+                        val status = reply.optString("executorStatus")
+                        val job = reply.optString("jobId")
+                        val positive = stage == "archived" || stage == "observed" && status.isNotBlank() && status != "unknown"
+                        val same = reply.optString("taskId") == id && reply.optString("runId") == run && reply.optInt("epoch", -1) == epoch
+                        if (current.asBoolean && pendingAdmission != null && positive && same && job.isNotBlank()) {
+                            controller.refreshOriginalLinuxHostAdmission(id, run, epoch, pendingAdmission, job, { current.asBoolean }) {
+                                finish(reply, null)
+                            }
+                        } else finish(reply, null)
+                    }, { finish(null, unavailable) })
                 }
-            })}catch(failure:Exception){if(hostStatusAttempt===one)hostStatusAttempt=null;done(null,unavailable)}
+            })}catch(failure:Exception){finish(null,unavailable)}
             return
         }
         if (action == "remoteSessions.read") {

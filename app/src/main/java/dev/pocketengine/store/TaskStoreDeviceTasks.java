@@ -1080,7 +1080,20 @@ public final class TaskStoreDeviceTasks {
         synchronized(owner){JSONObject parent=task(parentTaskId);if(!deviceTask(parent)&&!("owner".equals(parent.optString("actorId"))&&"private".equals(parent.optString("spaceId"))))throw new SecurityException("不是本机owner或原设备父任务");
             if(!target.isEmpty())DeviceProtocol.deviceId(target,"targetDeviceId");
             if(!afterOperation.isEmpty())DeviceProtocol.identifier(afterOperation,"afterOperation");
-            return workspaceTaskLinks(parentTaskId,0,limit,target,afterOperation);}
+            JSONObject page=workspaceTaskLinks(parentTaskId,0,limit,target,afterOperation);
+            // Only the explicit device-filtered page gets the original private task's phone pin.
+            // The same already-read parent supplies it; the overview and dispatch archives stay unchanged.
+            JSONObject marker=parent.optJSONObject("ownerDeviceWork");
+            if(!target.isEmpty()&&page.getJSONArray("links").length()>0&&parentTaskId.equals(parent.opt("id"))
+                    &&"owner".equals(parent.opt("actorId"))&&"private".equals(parent.opt("spaceId"))&&!parent.has("origin")
+                    &&"assistant".equals(parent.opt("kind"))&&"capabilities".equals(parent.opt("executionMode"))&&"".equals(parent.opt("conversationId"))
+                    &&marker!=null&&"pocketworld.owner-device-work.v1".equals(marker.opt("format"))&&parentTaskId.equals(marker.opt("requestId"))
+                    &&marker.optString("requestDigest").matches("[a-f0-9]{64}")){
+                try{DirectedPhoneTarget pin=DirectedPhoneTarget.fromTask(parent);
+                    if(pin!=null&&target.equals(pin.deviceId()))page.put("originalDirectPhoneTarget",pin.view());
+                }catch(org.json.JSONException|IllegalArgumentException|SecurityException unavailable){/* Keep the existing unclassified history rows. */}
+            }
+            return page;}
     }
     private JSONObject workspaceTaskLinks(String parent,int offset,int limit,String target,String after)throws Exception{
         if(offset<0||offset>100000||limit<1||limit>100)throw new SecurityException("设备任务关联分页越界");

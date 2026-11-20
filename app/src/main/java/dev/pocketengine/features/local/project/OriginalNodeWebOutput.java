@@ -18,7 +18,7 @@ import org.json.JSONObject;
 /** One owner-selected static deliverable. Not a model tool, build, device operation or preview grant. */
 public final class OriginalNodeWebOutput {
     public static final String TOOL="owner_keep_first_node_web_output", ENTRY="dist/index.html";
-    public static final String PENDING="owner_web_output_pending";
+    public static final String PENDING="owner_web_output_pending", NOT_PUBLISHED="owner_web_output_not_published";
     public static final String WITNESS="firstNodeWebOutput", EDITED_ROUTE="editedNodeWebVersion", EXISTING_ROUTE="existingNodeWebVersion";
     private static final String EDITED_TREES="editedOutputTrees", EXISTING_TREES="existingOutputTrees";
     private static final Set<String> BINDING=Set.of("taskId","runId","epoch","buildOperationId","buildReceiptIdentity",

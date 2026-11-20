@@ -171,7 +171,8 @@ type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{a
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
 type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
-type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity};
+type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity;result?:{work:TaskResult;navigation:number}};
+type ChatResultTaskOpen={returnTo:ChatWorkReturn;beforeTaskRequest:number};
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
 type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
@@ -748,21 +749,32 @@ export default function App(){
  },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation]);
  const openPersonalMemory=(target:PersonalTarget)=>{void navigate('profile',()=>{setPersonalTarget(target);setPersonalTargetKey(key=>key+1)})};
  const returnFromProfile=()=>{const origin=profileOrigin.current;void navigate(origin.route==='profile'?'butler':origin.route==='memory'?'advanced-memory':origin.route,()=>{if(origin.drawerOpen&&!desktopNavigation){profileRestoreScroll.current=origin.scrollTop;setWorkOpen(true)}})};
+ const atChatResultReturn=(origin:ChatWorkReturn)=>!document.hidden&&origin.document===bridge.getDocumentEpoch()&&
+  origin.result?.navigation===navigationWindow.current&&bridge.getState().state.conversationId===origin.conversation&&
+  !bridge.getState().state.conversationReader;
  const restoreChatWorkAt=(origin:ChatWorkReturn)=>{
   const live=bridge.getState(),node=scroll.current;
+  const result=origin.result;
+  if(result&&(result.work.taskId!==taskId||!atChatResultReturn(origin)))return false;
+  const missing=()=>{
+   if(result)setLocalStatus('当前对话还没读到这份成果所属的原消息，没有跳到其他轮次。');
+   return false;
+  };
   const rows=asArray<Message>(live.state.messages).filter(m=>m.id===origin.message);
-  if(document.hidden||bridge.getDocumentEpoch()!==origin.document||live.state.conversationId!==origin.conversation||
-     node?.dataset.conversationId!==origin.conversation||origin.hostTaskId&&rows.length!==1||
-     !rows.some(m=>Number(m.sourceRevision||0)===origin.revision&&(!origin.hostTaskId||m.hostGoalTaskId===origin.hostTaskId)))return false;
+  if(document.hidden||bridge.getDocumentEpoch()!==origin.document||live.state.conversationId!==origin.conversation)return false;
+  if(node?.dataset.conversationId!==origin.conversation||origin.hostTaskId&&rows.length!==1||
+     !rows.some(m=>Number(m.sourceRevision||0)===origin.revision&&(!origin.hostTaskId||m.hostGoalTaskId===origin.hostTaskId)))return missing();
   if(origin.replyRun){
    const reply=rows.length===1?messageReplyContext(rows[0]):null;
    if(!reply||workIdentityKey(reply)!==workIdentityKey(origin.replyRun))return false;
   }
+  if(result&&!resultMessageIn(rows,origin.message,result.work,origin.revision))return missing();
   const article=Array.from(chatMessageList.current?.children||[]).find(row=>(row as HTMLElement).dataset.messageId===origin.message) as HTMLElement|undefined;
-  if(!article)return false;
+  if(!article)return missing();
   stopFollowing();
   node.scrollTop=origin.top;node.scrollTop+=article.getBoundingClientRect().top-node.getBoundingClientRect().top-origin.offset;
-  const target=origin.trigger.isConnected&&!origin.trigger.disabled?origin.trigger:article;
+  const sameTrigger=origin.trigger.isConnected&&!origin.trigger.disabled&&(!origin.result||article.contains(origin.trigger));
+  const target=sameTrigger?origin.trigger:article;
   target.focus({preventScroll:true});
   return true;
  };
@@ -957,7 +969,9 @@ export default function App(){
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
   void act('tasks.review',{id,...(approvalId?{approvalId}:{})},id).then(value=>{if(!currentReviewWindow(window))return;setReview(value);const raw=obj(value.task?.raw);setScopeTools(String(raw.toolLimit||raw.executionScope?.toolLimit||raw.scope?.toolLimit||''));setScopeModels(String(raw.modelCallLimit||raw.executionScope?.modelCallLimit||raw.scope?.modelCallLimit||''));}).catch(()=>{if(reviewRequest.current===request)setReview(null)}).finally(()=>{if(reviewRequest.current===request)setReviewPending(false)});
  },[can,act,currentReviewWindow,invalidateContinuation]);
- const openTask=useCallback((id:string,entry:TaskLayer|'review'='overview',nativeWindowAlreadyOpen=false,historyOrigin?:ConversationHistoryTaskOrigin,searchQuery?:string,expected?:{runId:string;epoch:number;draftId?:string},stillCurrent?:()=>boolean,originalApprovalId?:string,failed?:(reason?:unknown)=>void,onOpened?:()=>void):void=>{
+ const openTask=useCallback((id:string,entry:TaskLayer|'review'='overview',nativeWindowAlreadyOpen=false,historyOrigin?:ConversationHistoryTaskOrigin,searchQuery?:string,expected?:{runId:string;epoch:number;draftId?:string},stillCurrent?:()=>boolean,originalApprovalId?:string,failed?:(reason?:unknown)=>void,onOpened?:()=>void,chatResultOpen?:ChatResultTaskOpen):void=>{
+  const originalResultVisit=()=>!chatResultOpen||reviewRequest.current===chatResultOpen.beforeTaskRequest;
+  if(!originalResultVisit())return;
   const noticeOrigin=phoneNoticeRef.current;
   const dropNotice=noticeOrigin&&(noticeOrigin.taskId!==id||originalPhoneNotice(bridge.getState().state?.originalPhoneNotification)?.token!==noticeOrigin.token||
     !!expected&&(expected.runId!==noticeOrigin.runId||expected.epoch!==noticeOrigin.epoch));
@@ -966,10 +980,10 @@ export default function App(){
   if(projectSource&&!nativeWindowAlreadyOpen)searchQuery??=projectSource.query||'';
   if(stillCurrent){if(!stillCurrent())return}else searchOpenRequest.current++;
   if(!nativeWindowAlreadyOpen&&!expected&&taskOpen&&taskId===id&&taskReconciliationOrigin.current?.openedId===id)expected=taskReconciliationOrigin.current.expected;
-  if(guardTaskLeave(()=>openTask(id,entry,nativeWindowAlreadyOpen,historyOrigin,searchQuery,expected,stillCurrent,originalApprovalId,failed,onOpened)))return;
+  if(guardTaskLeave(()=>openTask(id,entry,nativeWindowAlreadyOpen,historyOrigin,searchQuery,expected,stillCurrent,originalApprovalId,failed,onOpened,chatResultOpen)))return;
   const commit=async()=>{
   if(preparationBeforeLeave.current&&!await leaveInlinePreparation())return;
-  if(stillCurrent&&!stillCurrent())return;
+  if(!originalResultVisit()||stillCurrent&&!stillCurrent())return;
   if(dropNotice&&phoneNoticeRef.current===noticeOrigin)releasePhoneNotice();
   // The task ID survives drawer closure. Only a confirmed current window
   // can be the origin of an in-drawer reconciliation, not the last visited row.
@@ -999,7 +1013,9 @@ export default function App(){
      setTaskOpen(false);setFocusedOriginalDraft(null);failed(reason);}
   };
   void openOriginal().then(opened=>{if(reviewRequest.current!==request)return;if(!opened||stillCurrent&&!stillCurrent()){failedOpen();return}
-   openedTaskId.current=id;openedTaskResumeRevision.current=window.resumeRevision;setTaskOpening(false);if(onOpened)onOpened();else if(readReview)loadTaskReview(id,originalApprovalId)}).catch(failedOpen);
+   openedTaskId.current=id;openedTaskResumeRevision.current=window.resumeRevision;setTaskOpening(false);
+   if(chatResultOpen)chatWorkReturn.current=chatResultOpen.returnTo;
+   if(onOpened)onOpened();else if(readReview)loadTaskReview(id,originalApprovalId)}).catch(failedOpen);
   };
   if(workSupplementBeforeLeave.current)void workSupplementBeforeLeave.current().then(saved=>{if(saved)void commit()});else void commit();
  },[act,loadTaskReview,tasks,taskId,taskOpen,taskLayer,route,rememberTaskPosition,invalidateContinuation,leaveInlinePreparation,releasePhoneNotice,can]);
@@ -1593,10 +1609,11 @@ export default function App(){
  },[taskId,taskLayer,taskOpen,state.attachmentWorkspace,showTaskLayer]);
  const openChatResult=async(resultMessageId:string,result:TaskResult,target:HTMLButtonElement,reader?:HistoryResultOrigin)=>{
   const conversationId=reader?.conversationId||String(state.conversationId||'');
-  const fallback=()=>openTask(result.taskId,'overview',false,undefined,undefined,{runId:result.runId,epoch:result.epoch});
-  if(!can('tasks.resultFiles')||!can('attachmentWorkspace.open')){if(reader)return;fallback();return;}
+  const canReadFiles=can('tasks.resultFiles')&&can('attachmentWorkspace.open');
+  if(reader&&!canReadFiles)return;
   if(!conversationId||openingChatResult.current||resultFileReturnFocus.current)return;
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+  const beforeTaskRequest=reviewRequest.current,beforeSearchRequest=searchOpenRequest.current;
   const source=(native:Json,revision?:number)=>resultMessageIn(reader?fileResultReader(native,reader)?.messages:
    native.conversationId===conversationId&&!native.conversationReader?native.messages:null,resultMessageId,result,reader?.sourceRevision??revision);
   const selected=source(bridge.getState().state);
@@ -1611,17 +1628,33 @@ export default function App(){
    document:documentEpoch,conversation:conversationId,message:resultMessageId,revision:selected.sourceRevision,
    top:scroller.scrollTop,offset:article.getBoundingClientRect().top-scroller.getBoundingClientRect().top,trigger:target
   }:undefined;
+  const currentSource=(current:ReturnType<typeof bridge.getState>)=>!document.hidden&&navigationWindow.current===navigation&&
+   bridge.getDocumentEpoch()===documentEpoch&&!current.state.attachmentWorkspace?.open&&!!source(current.state,selected.sourceRevision);
   const stillCurrent=()=>{
    const current=bridge.getState();
-   return !document.hidden&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!obj(current.view).taskId&&
-    !current.state.attachmentWorkspace?.open&&!!source(current.state,selected.sourceRevision);
+   return !obj(current.view).taskId&&currentSource(current);
   };
   if(!stillCurrent())return;
+  if(chatReading){stopFollowing();rememberChatPosition();}
+  // A text-only result opens its work instead of the file layer. Keep the same
+  // exact reply only after the original task opens; a draft guard may stop it.
+  const fallback=()=>{
+   if(!chatReading||reviewRequest.current!==beforeTaskRequest||searchOpenRequest.current!==beforeSearchRequest||!stillCurrent())return;
+   const returnTo={...chatReading,result:{work:result,navigation}},request=++searchOpenRequest.current;
+   const ownVisit=(current:ReturnType<typeof bridge.getState>)=>{
+    const shown=obj(current.view).taskId;
+    return searchOpenRequest.current===request&&(!shown||shown===result.taskId);
+   };
+   const original=()=>{const current=bridge.getState();return ownVisit(current)&&currentSource(current)};
+   openTask(result.taskId,'overview',false,undefined,undefined,{runId:result.runId,epoch:result.epoch},original,undefined,reason=>{
+    if(ownVisit(bridge.getState())&&atChatResultReturn(returnTo))setLocalStatus(reason instanceof Error?reason.message:'原工作或这条答复已变化，没有打开其他记录。');
+   },undefined,{returnTo,beforeTaskRequest});
+  };
+  if(!canReadFiles){fallback();return;}
   openingChatResult.current=resultMessageId;setOpeningChatResultId(resultMessageId);setLocalError('');
   const locator={taskId:result.taskId,resultMessageId,conversationId,...(reader?{resultReaderWindow:reader.window,resultSourceRevision:reader.sourceRevision}:{})};
   const origin={conversationId,resultMessageId,result,target,reader,document:documentEpoch,revision:selected.sourceRevision,chatReading};
   let opening=false;
-  if(chatReading){stopFollowing();rememberChatPosition();}
   try{
    const listed=await bridge.command('tasks.resultFiles',locator);
    if(!stillCurrent())return;

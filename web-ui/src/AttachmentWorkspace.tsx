@@ -140,7 +140,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const title=view.documentDraft?'编辑文档':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
   if(!view.ready||draftFlight.current)return;
-  const returnToWork=view.fromWorkResult===true&&!!view.taskId&&openTaskId!==view.taskId;
+  const returnToWork=view.restoredWorkReturn!==true&&view.fromWorkResult===true&&!!view.taskId&&openTaskId!==view.taskId;
   if(view.busy){if(!returnToWork)run('close');return}
   void Promise.resolve(beforeBack.current?.()).then(frame=>act(returnToWork?'continueTask':'close',{},frame)).catch(()=>{});
  };
@@ -324,6 +324,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const sourceReturnLabel=reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':
   view.resultFilesOnly===true&&!view.fromWorkResult&&view.taskId!==openTaskId?'返回原消息':view.taskId?'返回原工作':'返回原工作区';
  const entryBack=(mode==='original'||mode==='detail')&&view.originalReturn==='entry';
+ const mayDismissRestored=view.restoredWorkReturn===true&&!!(error||view.error);
  const originalHasDirectBack=mode==='original'&&(view.originalReturn==='entry'||view.originalReturn==='list');
  const detailsLabel=scopedResultOnly?'文件来源':'来源与操作';
  const backLabel=view.deviceOriginalOnly?'返回原工作':entryBack||mode==='list'?sourceReturnLabel:
@@ -424,7 +425,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance,file.sourceRunEvidence),objectVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>
   {originalHasDirectBack&&<IconButton icon={IconInfo} aria-label={detailsLabel} title={detailsLabel} disabled={busy||draftBusy} onClick={()=>run('originalDetails')}/>}
   {!scopedResultOnly&&onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy||draftBusy} onClick={returnToSearch}>返回搜索</Button>}
-  {!entryBack&&<IconButton icon={IconClose} aria-label={sourceReturnLabel} title={sourceReturnLabel} disabled={pending>0||draftBusy} onClick={close}/>}
+  {(!entryBack||mayDismissRestored)&&<IconButton icon={IconClose} aria-label={view.restoredWorkReturn===true?'关闭文件':sourceReturnLabel} title={view.restoredWorkReturn===true?'关闭文件':sourceReturnLabel} disabled={pending>0||draftBusy} onClick={close}/>}
  </header>
  {mode==='original'&&view.ready&&runIndex>=0&&<nav className="pw-result-file-navigation" aria-label="本轮已列出的文件">
   {browseRunFile(-1)}<span role="status">第 {runIndex+1} 份 · 已列出 {runFiles.length} 份</span>{browseRunFile(1)}
@@ -472,7 +473,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  </section>
  </>}
  {media.map(job=><Accordion className="pw-attachment-tools" key={job.operationId}><AccordionItem id={`media-${job.operationId}`} title="原媒体操作与取回" description={job.status==='completed'?'已完成':job.status||'尚待核对'}><section className="pw-file-media-job"><div className="pw-action-row"><Button variant="secondary" disabled={busy} onClick={()=>run('refreshMedia',{operationId:job.operationId})}>查询原操作</Button><Button variant="secondary" disabled={busy} onClick={()=>run('fetchMedia',{operationId:job.operationId})}>取回实际成果</Button>{view.observing?<Button variant="ghost" onClick={()=>run('stopObservation')}>停止观察</Button>:<Button variant="ghost" disabled={busy} onClick={()=>run('observeMedia',{operationId:job.operationId})}>观察进度</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('cancelMedia',{operationId:job.operationId})}>请求取消原操作</Button></div>{view.progress&&<FileDetails value={view.progress} title="实际进度回执"/>}<FileDetails value={job} title="生成与保存回执"/></section></AccordionItem></Accordion>)}
- {view.group&&<FileDetails value={snapshot.delivery||snapshot} title="原群保存与投递回执"/>}{!scopedResultOnly&&view.taskId&&<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>{resultFilesOnly?'回原工作核对其他文件':'回原任务继续处理'}</Button>}
+ {view.group&&<FileDetails value={snapshot.delivery||snapshot} title="原群保存与投递回执"/>}{!scopedResultOnly&&view.taskId&&view.restoredWorkReturn!==true&&<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>{resultFilesOnly?'回原工作核对其他文件':'回原任务继续处理'}</Button>}
  </>}
  {continuationVisible&&<div ref={continuationHeading} tabIndex={-1} className="pw-file-continuation-target">
   <AttachmentVersionContinuation key={continuationKey} original={view.continuationDraft} foregroundReady={view.ready===true}

@@ -22,6 +22,8 @@ import dev.pocketengine.features.attachments.OwnerAttachmentImport
 import dev.pocketengine.media.RealtimeSessionModule
 import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.features.assistant.OwnerComposerStore
+import dev.pocketengine.store.CloudWorkspaceJobs
+import dev.pocketengine.store.TaskStore
 import java.util.concurrent.Executors
 import org.json.JSONArray
 import org.json.JSONObject
@@ -5292,6 +5294,43 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (requestNavigation) state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1)
     }
     internal fun closeWebTaskView() { closeOwnerWorkRequestHistory(); webTaskViewId = null; forgetHeldPhoneImage() }
+    internal fun pendingOriginalLinuxHostReceipt(id: String, run: String, epoch: Int): String? {
+        if (webTaskViewId != id || !webPrivateOwnerVisible()) return null
+        val task = state.tasks.firstOrNull { it.id == id }?.raw ?: return null
+        return runCatching {
+            val receipt = CloudWorkspaceJobs.receiptForTask(task) ?: return@runCatching null
+            if (receipt.opt("statusOnRequest") != true || receipt.optString("stage") != "phone_registered" ||
+                receipt.optString("taskId") != id || receipt.optString("runId") != run || receipt.optInt("epoch", -1) != epoch) return@runCatching null
+            TaskStore.capabilityFingerprint(task.getJSONObject("externalRefs").getJSONObject("hostWorkspace"))
+        }.getOrNull()
+    }
+
+    /** Re-project only the exact durable admission after the existing owner-requested status read. */
+    internal fun refreshOriginalLinuxHostAdmission(id: String, run: String, epoch: Int, hostStamp: String, jobId: String,
+                                                  current: () -> Boolean, complete: () -> Unit) {
+        val store = app.tasks
+        fun showingOriginal() = current() && app.tasks === store && pendingOriginalLinuxHostReceipt(id, run, epoch) == hostStamp
+        if (!showingOriginal()) { complete(); return }
+        try { io.execute {
+            val saved = runCatching {
+                if (!current() || app.tasks !== store) return@runCatching null
+                val task = store.getForUi(id, false) ?: return@runCatching null // No image maintenance or host contact.
+                val receipt = CloudWorkspaceJobs.receiptForTask(task) ?: return@runCatching null
+                val place = task.getJSONObject("externalRefs").getJSONObject("hostWorkspace")
+                task.takeIf {
+                    receipt.opt("statusOnRequest") == true && receipt.optString("taskId") == id &&
+                        receipt.optString("runId") == run && receipt.optInt("epoch", -1) == epoch &&
+                        receipt.optString("jobId") == jobId && TaskStore.capabilityFingerprint(place) == hostStamp &&
+                        CloudWorkspaceJobs.accepted(task, task.optJSONObject("cloudHostAdmission"), place)
+                }
+            }.getOrNull()
+            main.post {
+                // A missing local projection must not erase the one-shot observation.
+                runCatching { if (saved != null && showingOriginal()) mergeTask(saved) }
+                complete()
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { complete() }
+    }
     /** Opening a bounded owner view is distinct from accepting a complete result review. */
     internal fun readTaskForOpen(id: String, current: () -> Boolean, complete: (UiTask?, String?) -> Unit) =
         readTaskForWeb(id, false, current, complete)

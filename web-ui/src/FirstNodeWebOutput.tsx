@@ -12,9 +12,10 @@ type Position = {taskId: string; runId: string; epoch: number};
 type BuildPosition = Position & {projectId: string; checkoutId: string};
 type FileFact = {path: string; bytes: number; sha256: string};
 type Fact = Partial<BuildPosition> & {
-  eligible: boolean; message?: string; state?: 'ready'|'review'|'saved'|'pending'; buildOperationId?: string; operationId?: string;
+  eligible: boolean; message?: string; state?: 'ready'|'review'|'saved'|'pending'|'not_published'; buildOperationId?: string; operationId?: string;
   packageOperationId?: string; reviewHandle?: string; manifestIdentity?: string; entryPath?: string; outputProfile?: string;
   sourceDigest?: string; artifactId?: string; archiveSha256?: string; archiveBytes?: number; files?: FileFact[];
+  reason?: 'artifact_count_limit'|'project_package_bytes_limit'; reviewedArchiveSha256?: string;
 };
 const hash = /^[0-9a-f]{64}$/;
 const id = /^[A-Za-z0-9_-]{1,80}$/;
@@ -66,12 +67,17 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
           data.projectId!==target.projectId || data.checkoutId!==target.checkoutId || !data.sourceDigest || !hash.test(data.sourceDigest) ||
           !data.buildOperationId || !id.test(data.buildOperationId) || data.entryPath!=='dist/index.html' ||
           !data.operationId || !id.test(data.operationId) || data.operationId===data.buildOperationId ||
-          !['ready','review','pending','saved'].includes(data.state||'')) throw Error('未核对到这一轮原网页成果。');
+          !['ready','review','pending','saved','not_published'].includes(data.state||'')) throw Error('未核对到这一轮原网页成果。');
       if(command!==read && data.buildOperationId!==fact?.buildOperationId) throw Error('没有采用另一轮构建。');
       if(attempt && (data.buildOperationId!==attempt.buildOperationId || data.operationId!==attempt.operationId || data.sourceDigest!==attempt.sourceDigest ||
-          (command===save ? data.state!=='saved' : data.state==='review') ||
-          data.state==='saved'&&data.archiveSha256!==attempt.archiveSha256))
+          (command===save ? data.state!=='saved'&&data.state!=='not_published' : data.state==='review') ||
+          data.state==='saved'&&data.archiveSha256!==attempt.archiveSha256 ||
+          data.state==='not_published'&&data.reviewedArchiveSha256!==attempt.archiveSha256))
         throw Error('未取得同一笔原保存的回执，没有改用其他网页。');
+      if(data.state==='not_published'&&(command===review||(data.reason!=='artifact_count_limit'&&data.reason!=='project_package_bytes_limit')||
+          !data.reviewedArchiveSha256||!hash.test(data.reviewedArchiveSha256)||data.packageOperationId!==undefined||data.artifactId!==undefined||
+          data.archiveSha256!==undefined||data.archiveBytes!==undefined||data.reviewHandle!==undefined))
+        throw Error('未取得这一笔保存未发布的完整回执。');
       if(data.state==='review'&&(!data.reviewHandle||!data.manifestIdentity||!hash.test(data.manifestIdentity)||
           !data.archiveSha256||!hash.test(data.archiveSha256)||!Array.isArray(data.files)||
           (data.outputProfile==='stock_web_v1'?data.files.length!==4:data.outputProfile!=='vite_fresh_dist_v1'||data.files.length<2||data.files.length>64)||
@@ -125,6 +131,9 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
       {!busy&&<Button size="small" variant="secondary" onClick={()=>void call(read)}>核对原保存</Button>}</>}
     {fact?.state==='pending'&&<><p className="pw-reading-note" role="status">这一笔固定结果尚未核对。只查询原包，不会再存一份或重跑。</p>
       <Button size="small" variant="secondary" disabled={!!busy} onClick={()=>void call(read)}>核对原保存</Button></>}
+    {fact?.state==='not_published'&&<p className="pw-reading-note" role="status">这次构建成功，但网页包没有保存。
+      {fact.reason==='artifact_count_limit'?'保存时文件成果已达 200 项上限。':'当时存入这份网页包会超过固定项目包共用的 64 MiB 上限。'}
+      没有改动已有成果，这笔保存不会重试。</p>}
     {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">{listed?'已保存，在下方「项目固定成果」打开这次网页。':'已经保留原构建退出时核对的网页文件。打开此固定版不联网、不重跑，也不会读取当前同名文件。'}</p>
       {!listed&&savedTarget&&<Button size="small" variant="secondary" disabled={!!busy||!open} onClick={()=>{if(available())open?.(savedTarget)}}>打开固定网页</Button>}</>}
     {failure&&<><p className="pw-error" role="alert">{failure}</p>

@@ -9,6 +9,7 @@ import dev.pocketengine.features.attachments.processing.NativeFileProcess
 import dev.pocketengine.features.attachments.processing.NativeMediaTrim
 import dev.pocketengine.ui.AttachmentOutcomeState
 import dev.pocketengine.ui.AttachmentResultRun
+import dev.pocketengine.ui.AttachmentWorkReturn
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.objects
 import org.json.JSONArray
@@ -105,6 +106,7 @@ internal class PocketWebAttachments(
             .put("externalViewerResult", state.externalViewerResult)
             .put("taskId", state.taskId).put("group", state.group != null).put("team", state.team != null)
             .put("deviceOriginalOnly",state.deviceOriginalOnly).put("fromWorkResult", state.fromWorkResult).put("resultFilesOnly", state.resultRun?.taskId?.let { it == state.taskId } == true)
+            .put("restoredWorkReturn", state.restoredWorkReturn)
             .put("busy", state.busy).put("error", state.error).put("notice", state.notice)
             .put("snapshot", state.snapshot).put("file", state.file).put("document", state.document)
             .put("continuationDraft",continuationDraft)
@@ -123,7 +125,9 @@ internal class PocketWebAttachments(
     }
 
     fun dispatch(action: String, args: JSONObject, resultRun: AttachmentResultRun? = null,
-                 readerCurrent: (() -> Boolean)? = null, done: (JSONObject?, String?) -> Unit) {
+                 readerCurrent: (() -> Boolean)? = null,
+                 restoreWork: ((AttachmentWorkReturn, () -> Boolean, () -> Unit) -> Unit)? = null,
+                 done: (JSONObject?, String?) -> Unit) {
         try {
             check(controller.webUiCanInteract()) { "请回到当前工作区再操作文件" }
             if(flow.state.deviceOriginalOnly){
@@ -193,16 +197,27 @@ internal class PocketWebAttachments(
             var result = JSONObject().put("accepted", true).put("verified", false)
             when (command) {
                 "close" -> { clear(); if(flow.state.open)flow.close() }
-                "back" -> { review = null; processingReview = null; viewer.clear(); when {
-                    flow.state.deviceOriginalOnly -> {clear();flow.close()}
-                    flow.state.comparison != null -> flow.closeComparison()
-                    flow.state.processingSource != null -> flow.closeProcessing()
-                    flow.state.documentDraft != null -> flow.closeDocumentDraft()
-                    flow.state.originalFile != null -> flow.backFromOriginalFile()
-                    flow.state.documentOpen -> flow.backFromDocument()
-                    flow.state.file != null -> flow.backFromFile()
-                    else -> flow.close()
-                } }
+                "back" -> if (flow.needsRestoredWorkReturn()) {
+                    val reopen = restoreWork ?: error("原工作返回入口不可用；可以关闭文件，回原入口核对")
+                    fun stillInFile() = window === current && acceptsWindow(current.ticket) && controller.webPrivateOwnerVisible() &&
+                        (flow.state.originalFile == null || viewer.matchesOriginal(flow.state.file))
+                    flow.verifyRestoredWorkReturn(::stillInFile, { entry, checked ->
+                        reopen(entry, checked) { check(checked()); clear(); flow.close() }
+                    }, { failure -> done(null, failure) })
+                    changed(); return
+                } else {
+                    review = null; processingReview = null; viewer.clear()
+                    when {
+                        flow.state.deviceOriginalOnly -> {clear();flow.close()}
+                        flow.state.comparison != null -> flow.closeComparison()
+                        flow.state.processingSource != null -> flow.closeProcessing()
+                        flow.state.documentDraft != null -> flow.closeDocumentDraft()
+                        flow.state.originalFile != null -> flow.backFromOriginalFile()
+                        flow.state.documentOpen -> flow.backFromDocument()
+                        flow.state.file != null -> flow.backFromFile()
+                        else -> flow.close()
+                    }
+                }
                 "refresh" -> flow.refresh()
                 "cancel" -> flow.cancel()
                 "selectFile" -> flow.selectFile(selected())
@@ -280,7 +295,10 @@ internal class PocketWebAttachments(
                         };return
                     }
                 }
-                "continueTask" -> flow.continueTask()
+                "continueTask" -> {
+                    check(!flow.state.restoredWorkReturn) { "请按返回核对原工作，不切换到其他执行轮次" }
+                    flow.continueTask()
+                }
                 "openProcessing" -> flow.openProcessing()
                 "reviewProcessing" -> { processingReview = null; flow.forgetProcessingReview(); flow.reviewProcessing(args.getJSONObject("options")) }
                 "applyProcessing" -> {

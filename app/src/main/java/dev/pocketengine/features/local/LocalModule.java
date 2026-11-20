@@ -1218,7 +1218,7 @@ public final class LocalModule implements EngineModule {
         ownerCurrent.require();c.check();beforePublication.require();
         // The SQL intent is now durable. An immutable Frozen object is the sole write input.
         // No live file or pipeline is dispatched while copying the ZIP.
-        JSONObject saved=packageWorkspace().createProjectPackage(actual.frozen,dev.pocketengine.features.local.project.ProjectPackageDelivery.actionId(original.build.operationId()));
+        JSONObject saved=packageWorkspace().createFirstNodeWebPackage(actual.frozen,dev.pocketengine.features.local.project.ProjectPackageDelivery.actionId(original.build.operationId()));
         return verifyOriginalWebArchive(original.build,pin,saved);
     }
     /** Query only after a possibly interrupted owner save. No workspace fallback, creation or runtime query. */

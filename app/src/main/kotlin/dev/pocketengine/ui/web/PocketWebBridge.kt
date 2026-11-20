@@ -749,7 +749,15 @@ internal class PocketWebBridge(
                     remove("resultMessageId"); remove("conversationId"); remove("resultReaderWindow"); remove("resultSourceRevision")
                 }
                 val readerScoped = readerCurrent != null || attachmentPages.hasScopedResult
-                attachmentPages.dispatch(action, attachmentArgs, resultRun, readerCurrent) { result, error ->
+                attachmentPages.dispatch(action, attachmentArgs, resultRun, readerCurrent, restoreWork = { entry, checked, dismiss ->
+                    fun current() = section == null && taskViewId == null && checked()
+                    check(current()) { "已有其他工作窗口，没有替换；可以关闭文件后回原入口核对" }
+                    openOriginalTask(id, entry.run.taskId, requestNavigation = true, expectedRunId = entry.run.runId,
+                        expectedEpoch = entry.run.epoch, sourceWindowCurrent = ::current, checkReaderInput = { task ->
+                            check(current() && entry.matchesTask(task.raw)) { "原工作轮次已变化，未打开其他工作" }
+                            dismiss()
+                        })
+                }) { result, error ->
                     complete(id, result, error, retainValue = !readerScoped); publishState()
                 }; return
             }

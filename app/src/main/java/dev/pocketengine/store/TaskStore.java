@@ -1,6 +1,8 @@
 package dev.pocketengine.store;
 
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
+import dev.pocketengine.features.local.project.ProjectPackageDelivery;
+import dev.pocketengine.features.workspace.WorkspaceArtifacts;
 import dev.pocketengine.phone.MainPhoneOwnerStep;
 import android.content.ContentValues;
 import android.content.Context;
@@ -13558,9 +13560,11 @@ public final class TaskStore {
         try(Cursor row=db.rawQuery("SELECT run_id,tool,state,receipt IS NULL,length(CAST(arguments AS BLOB)),length(CAST(receipt AS BLOB)) FROM operations WHERE task_id=? AND operation_id=?",new String[]{task,operation})){
             if(!row.moveToFirst()||!OriginalNodeWebOutput.TOOL.equals(row.getString(1)))return null;
             if(row.getLong(4)+row.getLong(5)>16384)throw new SecurityException("原固定网页记录超出核对范围");
-            JSONObject out=new JSONObject().put("state",row.getString(2)).put("runId",row.getString(0))
+            String state=row.getString(2);
+            JSONObject out=new JSONObject().put("state",state).put("runId",row.getString(0))
                 .put("pin",new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_ARGUMENTS,operation)));
-            if(row.getInt(3)==0)out.put("artifact",new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_RECEIPT,operation)));
+            if(row.getInt(3)==0)out.put(OriginalNodeWebOutput.NOT_PUBLISHED.equals(state)?"rejection":"artifact",
+                new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_RECEIPT,operation)));
             return out;
         }
     }
@@ -13576,7 +13580,7 @@ public final class TaskStore {
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
-    /** Pending is not a receipt; only the original native workspace readback may finish it. */
+    /** A saved archive or a native proof that publication never entered can settle the original intent. */
     public synchronized JSONObject firstWebOutputForOwner(OriginalNodeWebOutput.Build build)throws Exception{
         JSONObject facts=build.facts();String id=facts.getString("taskId");
         firstWebTask(id);JSONObject row=webOutputRow(id,build.operationId());
@@ -13585,6 +13589,17 @@ public final class TaskStore {
         if(!facts.getString("runId").equals(row.getString("runId")))throw new SecurityException("固定网页记录属于其他轮次");
         if(OriginalNodeWebOutput.PENDING.equals(row.opt("state"))&&!row.has("artifact"))
             return facts.put("state","pending").put("entryPath",OriginalNodeWebOutput.ENTRY).put("savedPin",pin);
+        if(OriginalNodeWebOutput.NOT_PUBLISHED.equals(row.opt("state"))){
+            JSONObject rejection=row.getJSONObject("rejection");String reason=rejection.getString("reason");
+            if(!"not_published".equals(rejection.opt("status"))||!Boolean.FALSE.equals(rejection.opt("ok"))||
+                !Boolean.FALSE.equals(rejection.opt("nativePublicationEntered"))||
+                !WorkspaceArtifacts.QuotaBeforePublication.knownReason(reason)||
+                !ProjectPackageDelivery.actionId(build.operationId()).equals(rejection.opt("ownerActionId"))||
+                !pin.getString("manifestIdentity").equals(rejection.opt("manifestIdentity")))
+                throw new SecurityException("原网页未发布凭据不能核对");
+            return facts.put("state","not_published").put("entryPath",OriginalNodeWebOutput.ENTRY)
+                .put("reason",reason).put("reviewedArchiveSha256",pin.getString("archiveSha256"));
+        }
         if(!"receipt".equals(row.getString("state")))throw new SecurityException("原固定网页还不能核对");
         JSONObject evidence=OriginalNodeWebOutput.savedEvidence(build,pin,row.getJSONObject("artifact"));
         return facts.put("state","saved").put("entryPath",OriginalNodeWebOutput.ENTRY).put("packageOperationId",build.operationId())
@@ -13605,6 +13620,26 @@ public final class TaskStore {
                     new String[]{taskId,operation,OriginalNodeWebOutput.TOOL,OriginalNodeWebOutput.PENDING})!=1)throw new SecurityException("原网页保存动作已变化");
             }else if(!"receipt".equals(row.opt("state"))||!canonical(evidence.getJSONObject("packageArtifact")).equals(canonical(row.opt("artifact"))))
                 throw new SecurityException("原网页固定回执与当前原件不同");
+            JSONObject result=firstWebOutputForOwner(build);db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
+    }
+    /** Called outside the directory lock, only for typed evidence from this same confirmed write. */
+    public synchronized JSONObject recordFirstWebQuotaRefusal(OriginalNodeWebOutput.Review reviewed,WorkspaceArtifacts.QuotaBeforePublication rejected)throws Exception{
+        JSONObject pin=reviewed.pin();String taskId=pin.getString("taskId"),run=pin.getString("runId"),operation=pin.getString("operationId");
+        db.beginTransaction();try{
+            var build=firstWebBuildRow(firstWebTask(taskId),run,pin.getInt("epoch"),pin.getString("buildOperationId"),false);
+            OriginalNodeWebOutput.requirePin(build,pin);
+            String action=ProjectPackageDelivery.actionId(build.operationId()),manifest=pin.getString("manifestIdentity");
+            JSONObject row=webOutputRow(taskId,operation);
+            if(!rejected.matches(action,manifest)||row==null||!OriginalNodeWebOutput.PENDING.equals(row.opt("state"))||
+                row.has("artifact")||!run.equals(row.opt("runId"))||!canonical(pin).equals(canonical(row.getJSONObject("pin"))))
+                throw new SecurityException("原网页保存身份已变化，未登记未发布");
+            ContentValues receipt=new ContentValues();receipt.put("state",OriginalNodeWebOutput.NOT_PUBLISHED);
+            receipt.put("receipt",new JSONObject().put("status","not_published").put("ok",false).put("nativePublicationEntered",false)
+                .put("reason",rejected.reason()).put("ownerActionId",action).put("manifestIdentity",manifest).toString());
+            if(db.update("operations",receipt,"task_id=? AND run_id=? AND operation_id=? AND tool=? AND state=? AND receipt IS NULL",
+                new String[]{taskId,run,operation,OriginalNodeWebOutput.TOOL,OriginalNodeWebOutput.PENDING})!=1)
+                throw new SecurityException("原网页保存动作已变化，只能核对原回执");
             JSONObject result=firstWebOutputForOwner(build);db.setTransactionSuccessful();return result;
         }finally{db.endTransaction();}
     }

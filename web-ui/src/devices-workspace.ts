@@ -275,6 +275,29 @@ export function deviceTaskHistoryLinks(details: DeviceData | undefined, taskId: 
   if (!details || details.taskId !== taskId) return [];
   return deviceRows(details.history?.links).filter(link => link.parentTaskId === taskId && (!peerId || link.targetDeviceId === peerId));
 }
+/** Only a saved settlement for the selected original phone, never its current status or business output. */
+export function deviceSavedChildOutcomeLabel(details: DeviceData | undefined, link: DeviceData, peer: DeviceData | undefined): string | undefined {
+  const page = details?.history, original = readingIdentity(page?.originalDirectPhoneTarget), selected = readingIdentity(peer);
+  if (!original || !selected || peer?.revoked !== false || peer.connection?.state === 'REVOKED' || page?.readOnly !== true
+    || !(['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(field => original[field] === selected[field])
+    || page.targetDeviceId !== original.deviceId || link.targetDeviceId !== original.deviceId || details?.taskId !== link.parentTaskId
+    || !identity(link.operationId) || !['settled', 'committed_allocation'].includes(link.holdState)) return;
+  const accepted = link.childBinding, terminal = link.terminalReceipt;
+  if (!object(accepted) || !object(terminal) || accepted.acceptedObjectKind !== 'task'
+    || accepted.parentTaskId !== link.parentTaskId || accepted.parentOperationId !== link.operationId || accepted.targetOperationId !== link.operationId
+    || accepted.executorDeviceId !== original.deviceId || terminal.executorDeviceId !== original.deviceId
+    || accepted.instanceId !== original.instanceId || terminal.instanceId !== original.instanceId
+    || !identity(accepted.localTaskId) || accepted.objectId !== accepted.localTaskId || terminal.childTaskId !== accepted.localTaskId
+    || !identity(accepted.runId) || terminal.childRunId !== accepted.runId
+    || !positiveInteger(accepted.executorEpoch) || terminal.executorEpoch !== accepted.executorEpoch
+    || !digest(accepted.argumentsDigest) || terminal.argumentsDigest !== accepted.argumentsDigest
+    || terminal.terminal !== true || terminal.stopped !== true || terminal.hasUnresolved !== false) return;
+  switch (terminal.status) {
+    case 'succeeded': return '本机回执：原手机报告这次执行成功。这不代表成果已交回。';
+    case 'failed': return '本机回执：原手机报告这次执行失败。';
+    case 'cancelled': return '本机回执：原手机报告这次执行已取消。这不代表此前操作已撤销。';
+  }
+}
 export function deviceHistoryReceipt(value: unknown, review: DeviceData): DeviceData {
   if (!object(value) || value.kind !== 'historyReceipt' || value.viewHandle !== review.viewHandle || !['taskId', 'operationId', 'targetDeviceId'].every(key => value[key] === review.view[key]) || !object(value.receipt) || typeof value.stopSubmitted !== 'boolean') throw new Error('回执不属于当前原任务、原操作与设备窗口。');
   const receipt = value.receipt;

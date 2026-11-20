@@ -4,7 +4,7 @@ import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, pickupUnavailable, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, localReviewedReceipt, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
-import { deviceManualPhonePreparation, deviceOriginalManualPhonePreparation, deviceSavedOwnerChoice } from './devices-workspace';
+import { deviceManualPhonePreparation, deviceOriginalManualPhonePreparation, deviceSavedChildOutcomeLabel, deviceSavedOwnerChoice } from './devices-workspace';
 import { DesktopViewer } from './DesktopViewer';
 import { ReceivedGoalInputReview, originalDeviceInputReady } from './ReceivedGoalInputReview';
 import { PendingReceivedGoalInput } from './PendingReceivedGoalInput';
@@ -1010,7 +1010,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                   {!showLocalRead && <Button variant="ghost" disabled={busy} onClick={readLocalTask}>{details ? '从最近的原派发重新读取' : '读取本机的原派发记录'}</Button>}
                   {details && <>
                     {!links.length && <p>{peerId ? '本次读取中没有这台设备的关联操作。' : '本次读取中没有关联的设备操作。'}</p>}
-                    {links.map(link => <div className="pw-device-history-entry" key={link.operationId}><p>设备 {link.targetDeviceId} · 原操作 {link.operationId}</p><p>{link.terminalReceipt?.terminal === true && link.terminalReceipt?.stopped === true && link.terminalReceipt?.hasUnresolved === false ? '执行端已有结束回执，业务成果仍待核对。' : String(link.holdState || '').includes('unknown') ? '执行效果仍未确认，原占用次数保留。' : link.childBinding ? '执行端已接受，尚未核对最终结果。' : '已保留这次原操作的关联记录。'}</p><Button variant="secondary" disabled={busy} onClick={() => openHistory(task.id, link)}>查看原派发记录</Button></div>)}
+                    {links.map(link => <div className="pw-device-history-entry" key={link.operationId}>
+                      <p>设备 {link.targetDeviceId} · 原操作 {link.operationId}</p>
+                      <p>{(localReadCurrent ? deviceSavedChildOutcomeLabel(details, link, peer) : undefined) ?? (
+                        link.terminalReceipt?.terminal === true && link.terminalReceipt?.stopped === true && link.terminalReceipt?.hasUnresolved === false ? '执行端已有结束回执，业务成果仍待核对。'
+                          : String(link.holdState || '').includes('unknown') ? '执行效果仍未确认，原占用次数保留。'
+                          : link.childBinding ? '执行端已接受，尚未核对最终结果。' : '已保留这次原操作的关联记录。')}</p>
+                      <Button variant="secondary" disabled={busy} onClick={() => openHistory(task.id, link)}>查看原派发记录</Button>
+                    </div>)}
                     {(details.history.hasMore || details.history.canReadNewer) && <><p>只翻阅本机保留的原派发{peerId ? '，已按这台设备筛选' : ''}，不会联系对方或重发任务。</p>
                       <div className="pw-form-actions">{details.history.canReadNewer && <Button variant="ghost" disabled={busy} onClick={() => turnHistoryPage('newer')}>较新的派发</Button>}
                         {details.history.hasMore && <Button variant="secondary" disabled={busy} onClick={() => turnHistoryPage('older')}>更早的派发</Button>}</div></>}

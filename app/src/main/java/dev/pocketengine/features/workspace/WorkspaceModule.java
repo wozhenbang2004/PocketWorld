@@ -25,6 +25,10 @@ public final class WorkspaceModule implements EngineModule {
     @Override public String id(){return "workspace";}
     /** Typed native active-file route; generic feature JSON cannot supply a Frozen object or host path. */
     public JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception{return artifacts.createProjectPackage(frozen,ownerActionId);}
+    public JSONObject createFirstNodeWebPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception{
+        if(nativeClosed)throw new IllegalStateException("原工作区已关闭");
+        return artifacts.createFirstNodeWebPackage(frozen,ownerActionId);
+    }
     public dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen projectPackage(String id,String sha)throws Exception{return artifacts.readProjectPackage(id,sha);}
     public JSONObject projectPackageMetadata(String id,String sha)throws Exception{return artifacts.projectPackage(id,sha);}
     public dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen originalTaskPackage(JSONObject source)throws Exception{return artifacts.originalTaskPackage(source);}

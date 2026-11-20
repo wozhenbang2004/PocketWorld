@@ -82,6 +82,31 @@ internal data class OwnerAttachmentCopyReceipt(val requestId:String,val taskId:S
 }
 
 internal enum class AttachmentOriginalReturn(val value:String) { DETAILS("details"), LIST("list"), ENTRY("entry") }
+/** A saveable navigation hint for the work behind an already-opened original, never a read grant. */
+internal data class AttachmentWorkReturn(val run:AttachmentResultRun,val fileId:String,val sha256:String) {
+    fun matchesFile(file:JSONObject?)=file!=null&&file.optString("id")==fileId&&file.optString("sha256")==sha256
+    fun matchesTask(task:JSONObject)=run.matchesCompletedResult(task)&&!task.optBoolean("contextWithdrawn")&&
+        !task.optBoolean("sourceCurrentReadRequired")
+    fun matchesResult(snapshot:JSONObject,file:JSONObject?):Boolean=matchesFile(file)&&file?.optString("role")=="result"&&
+        runCatching{run.files(snapshot).entries.count{matchesFile(it)}==1}.getOrDefault(false)
+    fun toJson()=JSONObject().put("taskId",run.taskId).put("runId",run.runId).put("epoch",run.epoch)
+        .put("fileId",fileId).put("sha256",sha256)
+    companion object {
+        fun from(saved:JSONObject):AttachmentWorkReturn {
+            val task=saved.getString("taskId");val run=saved.getString("runId");val epoch=saved.getInt("epoch")
+            val file=saved.getString("fileId");val sha=saved.getString("sha256")
+            check(listOf(task,run,file).all{it.isNotBlank()&&it.length<=240&&'\u0000' !in it}&&
+                epoch>0&&sha.matches(Regex("[a-f0-9]{64}"))){"原工作回程身份无效"}
+            return AttachmentWorkReturn(AttachmentResultRun(task,run,epoch),file,sha)
+        }
+        fun capture(snapshot:JSONObject,file:JSONObject):AttachmentWorkReturn?=runCatching{
+            check(snapshot.opt("taskStatus")=="completed")
+            from(JSONObject().put("taskId",snapshot.getString("taskId")).put("runId",snapshot.getString("taskRunId"))
+                .put("epoch",snapshot.getInt("coordinatorEpoch")).put("fileId",file.getString("id")).put("sha256",file.getString("sha256")))
+                .takeIf{it.matchesResult(snapshot,file)}
+        }.getOrNull()
+    }
+}
 internal data class AttachmentLibraryImport(val requestId:String,val phase:String,val registration:JSONObject?=null){
     fun toJson()=JSONObject().put("requestId",requestId).put("phase",phase).put("registration",registration)
 }
@@ -99,7 +124,8 @@ internal data class AttachmentOutcomeState(
     val processingReview:dev.pocketengine.features.attachments.processing.NativeFileProcess.Review?=null,val pendingProcessingTask:String?=null,
     val comparison:Pair<dev.pocketengine.features.attachments.OwnerFilePreviewSource,dev.pocketengine.features.attachments.OwnerFilePreviewSource>?=null,
     val fromWorkResult:Boolean=false,val resultRun:AttachmentResultRun?=null,val externalViewerResult:String?=null,
-    val copyReceipt:OwnerAttachmentCopyReceipt?=null,val libraryImport:AttachmentLibraryImport?=null
+    val copyReceipt:OwnerAttachmentCopyReceipt?=null,val libraryImport:AttachmentLibraryImport?=null,
+    val workReturn:AttachmentWorkReturn?=null,val restoredWorkReturn:Boolean=false
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -242,7 +268,11 @@ internal class AttachmentOutcomeCoordinator(
         work(onSuccess={actual->
             if(group==null&&actual.optString("originalDocumentActionId").isNotEmpty()&&actual.optString("taskStatus")!in setOf("completed","failed")){pendingDocumentAction=actual.getString("originalDocumentActionId");state=state.copy(pendingDocumentTask=pendingDocumentAction)}
             if(savedDraft!=null&&restoredDocumentDraft===savedDraft){state=state.copy(documentDraft=JSONObject(savedDraft.toString()),documentDraftEdited=unpublishedEdits);restoredDocumentDraft=null}
-            if(original!=null)state=state.copy(originalFile=original)
+            if(original!=null){
+                state=state.copy(originalFile=original)
+                if(directPrivateWorkEntry()&&!state.restoredWorkReturn&&state.workReturn==null)
+                    state.file?.let{file->state=state.copy(workReturn=AttachmentWorkReturn.capture(actual,file))}
+            }
         }){control,window -> if(group==null){
             if(resultRun!=null)requireConversationResult(resultRun,control)
             val actual=app.ownerOutcomeSnapshot(task,control)
@@ -488,6 +518,41 @@ internal class AttachmentOutcomeCoordinator(
             state.group==null&&state.team==null&&!state.deviceOriginalOnly){"请先打开这份固定原件"}
         state=state.copy(originalFile=null)
     }
+    private fun directPrivateWorkEntry()=state.open&&state.fromWorkResult&&state.taskId!=null&&state.resultRun==null&&
+        state.originalReturn==AttachmentOriginalReturn.ENTRY&&state.group==null&&state.team==null&&!state.deviceOriginalOnly
+    fun needsRestoredWorkReturn()=state.restoredWorkReturn&&directPrivateWorkEntry()&&state.documentDraft==null&&
+        state.comparison==null&&state.processingSource==null&&!state.documentOpen
+    /** A deliberate Back can return only to the original completed run and exact same file. */
+    fun verifyRestoredWorkReturn(windowCurrent:()->Boolean,ready:(AttachmentWorkReturn,()->Boolean)->Unit,failed:(String)->Unit) {
+        val entry=state.workReturn
+        val mismatch="无法核对原工作轮次和固定文件，未打开其他工作。可关闭文件，回原入口核对。"
+        if(entry==null||!needsRestoredWorkReturn()||state.busy||exportPending||
+            state.taskId!=entry.run.taskId||!entry.matchesFile(state.file)||!windowCurrent()){
+            failed(mismatch);return
+        }
+        val generationAtRead=generation+1
+        val snapshot=state.snapshot;val file=state.file
+        fun current()=!closed&&generation==generationAtRead&&needsRestoredWorkReturn()&&state.workReturn===entry&&state.taskId==entry.run.taskId&&
+            entry.matchesFile(state.file)&&windowCurrent()
+        var handedOff=false
+        work(onFinished={same->
+            if(!handedOff)failed(if(same)state.error?:mismatch else "原文件窗口已变化，未打开其他工作。")
+        },onSuccess={
+            if(current()){
+                handedOff=true
+                try{ready(entry,::current)}catch(failure:Exception){failed(safe(failure))}
+            }
+        },completionFailure=mismatch){control,_->
+            check(current()){mismatch}
+            val task=entry.run.taskId
+            check(entry.matchesTask(app.tasks.getForUi(task,false)?:error(mismatch))){mismatch}
+            check(snapshot!=null&&entry.matchesResult(snapshot,file)){mismatch}
+            app.attachmentOutcomes.originalFile(task,entry.fileId,entry.sha256,control)
+            control.check()
+            check(current()&&entry.matchesTask(app.tasks.getForUi(task,false)?:error(mismatch))){mismatch}
+            JSONObject() to null
+        }
+    }
     /** Re-admit the displayed private report original in its already-open work, not as an export. */
     fun openReportOriginalInWork(current: () -> Boolean, entered: () -> Unit) {
         val reportRun = state.resultRun?.takeIf { it.report != null } ?: error("请先打开原汇报的本轮成果")
@@ -691,7 +756,7 @@ internal class AttachmentOutcomeCoordinator(
         state.team?.let{selected->val navigate=originalAssignment;if(navigate==null){state=state.copy(error="原分工入口尚未挂载，请从原团队任务继续");return};work(onSuccess={actual->close();navigate(actual)}){c,_->requireTeamHost().assignmentLocator(selected,c) to null};return}
         state.taskId?.let{close();originalTask(it)}
     }
-    private fun work(document:Boolean=false,replaceDocumentWithFile:Boolean=false,teamDifference:Boolean=false,groupAuthority:Boolean?=null,onFinished:((Boolean)->Unit)?=null,onSuccess:((JSONObject)->Unit)?=null,call:(RunControl,String?)->Pair<JSONObject,JSONObject?>){
+    private fun work(document:Boolean=false,replaceDocumentWithFile:Boolean=false,teamDifference:Boolean=false,groupAuthority:Boolean?=null,onFinished:((Boolean)->Unit)?=null,onSuccess:((JSONObject)->Unit)?=null,completionFailure:String?=null,call:(RunControl,String?)->Pair<JSONObject,JSONObject?>){
         wait?.cancel();observation?.cancel();observation=null;val token=++generation;val c=RunControl();wait=c
         fun finished(){onFinished?.invoke(!closed&&state.open&&generation==token)}
         val group=state.group;val window=if(groupAuthority?:(group!=null||export?.optJSONObject("group")!=null))try{ownerWindow()}catch(e:Exception){state=state.copy(error=listOfNotNull(restoredExportNotice,safe(e)).joinToString(" "),busy=false);restoredExportNotice=null;if(onFinished!=null){if(wait===c)wait=null;c.cancel();finished()};return}else null
@@ -702,7 +767,7 @@ internal class AttachmentOutcomeCoordinator(
             if(file!=null)restoreFile=null
             restoredExportNotice?.let{state=state.copy(error=it);restoredExportNotice=null}
             onSuccess?.invoke(result)
-        };val preview=!state.deviceOriginalOnly&&state.file?.optString("mimeType")?.startsWith("image/")==true&&state.thumbnail==null&&file!=null;if(wait===c)wait=null;c.cancel();if(preview&&generation==token)loadThumbnail()}}catch(e:Exception){main.post{if(!closed&&state.open&&generation==token&&wait===c){val message=if(onFinished!=null)"导出未完整确认，目标可能已有部分内容；请核对所选文件，没有自动重写。"else if(c.isCancelled)"读取已停止；原文件与任务保留"else safe(e);state=state.copy(busy=false,error=listOfNotNull(restoredExportNotice,message).joinToString(" "));restoredExportNotice=null;wait=null};c.cancel()}}finally{if(onFinished!=null)main.post{finished()}}}}catch(rejected:java.util.concurrent.RejectedExecutionException){if(onFinished==null)throw rejected;state=state.copy(busy=false,error="导出未开始，原文件保留；请稍后明确重试");if(wait===c)wait=null;c.cancel();finished()}
+        };val preview=!state.deviceOriginalOnly&&state.file?.optString("mimeType")?.startsWith("image/")==true&&state.thumbnail==null&&file!=null;if(wait===c)wait=null;c.cancel();if(preview&&generation==token)loadThumbnail()}}catch(e:Exception){main.post{if(!closed&&state.open&&generation==token&&wait===c){val message=completionFailure?:if(onFinished!=null)"导出未完整确认，目标可能已有部分内容；请核对所选文件，没有自动重写。"else if(c.isCancelled)"读取已停止；原文件与任务保留"else safe(e);state=state.copy(busy=false,error=listOfNotNull(restoredExportNotice,message).joinToString(" "));restoredExportNotice=null;wait=null};c.cancel()}}finally{if(onFinished!=null)main.post{finished()}}}}catch(rejected:java.util.concurrent.RejectedExecutionException){if(onFinished==null)throw rejected;state=state.copy(busy=false,error=completionFailure?:"导出未开始，原文件保留；请稍后明确重试");if(wait===c)wait=null;c.cancel();finished()}
     }
     private fun groupCall(window:String?,call:()->JSONObject):JSONObject {val actual=window?:throw SecurityException("当前原生主人窗口不可用");return app.groupOwnerWorkflows.call(actual){call()}}
     private fun restoreLibraryImport(bundle:Bundle?):AttachmentLibraryImport?=runCatching{
@@ -725,7 +790,7 @@ internal class AttachmentOutcomeCoordinator(
         if(privateLibrary())state.libraryImport?.let{bundle.putString("attachmentLibraryImport",it.toJson().toString())}
         bundle.remove("attachmentOutcomeVerifiedCopies")
         if(verifiedCopies.isNotEmpty())bundle.putStringArrayList("attachmentOutcomeVerifiedCopies",ArrayList(verifiedCopies.values.map{it.toJson().toString()}))
-        pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator().toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
+        pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator(savedNavigation=true).toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
     fun restore(bundle:Bundle?){
         restoreVerifiedCopies(bundle)
         bundle?.getString("attachmentPendingProcessingTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingProcessingAction=it;state=state.copy(pendingProcessingTask=it)};bundle?.getString("attachmentPendingDocumentTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingDocumentAction=it;state=state.copy(pendingDocumentTask=it)};try{bundle?.getString("attachmentOutcomeExport")?.let{val pin=JSONObject(it);val requestId=pin.optString("exportRequestId")
@@ -735,12 +800,20 @@ internal class AttachmentOutcomeCoordinator(
                 originalReturn=if(restoreFile!=null&&team==null&&!pin.has("group"))AttachmentOriginalReturn.entries.firstOrNull{
                     it.value==pin.optString("originalReturn")
                 }?:AttachmentOriginalReturn.DETAILS else AttachmentOriginalReturn.DETAILS);bundle?.getString("attachmentDocumentDraft")?.let{saved->check(team==null&&state.group==null&&saved.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES){"原文档草稿超出可恢复范围"};val draft=JSONObject(saved);DocumentDraft(draft);restoredDocumentDraft=draft}
+            if(directPrivateWorkEntry()&&restoreFile!=null){
+                val entry=pin.optJSONObject("workReturn")?.let{AttachmentWorkReturn.from(it)}
+                check(entry==null||entry.run.taskId==state.taskId&&entry.matchesFile(restoreFile)){"原工作与文件返回身份不同"}
+                // Even without a proven return pin, a restored entry must not fall back to a task-ID-only jump.
+                state=state.copy(workReturn=entry,restoredWorkReturn=true)
+            }
             // Pin only this restored navigation object, not a later opening of an identical file.
             restoredCopyLocator=restoreFile?.takeIf {file->export?.takeUnless{exportAbandoned}?.let{privateCopyFile(it,file)}!=null}
             if(privateLibrary())state=state.copy(libraryImport=restoreLibraryImport(bundle))
             main.post{if(!closed&&resumed&&!state.busy){if(exportResult!=null)finishExport()else refresh()}}}}catch(_:Exception){restoredDocumentDraft=null;restoredCopyLocator=null;restoreFile=null;state=AttachmentOutcomeState(open=true,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,error="原成果定位或文档草稿暂不可恢复，请从原任务重新打开；已有保存动作仍只核对原结果")}}
-    private fun locator():JSONObject=JSONObject().put("taskId",state.taskId.orEmpty()).put("fromWorkResult",state.fromWorkResult).also{value->
+    private fun locator(savedNavigation:Boolean=false):JSONObject=JSONObject().put("taskId",state.taskId.orEmpty()).put("fromWorkResult",state.fromWorkResult).also{value->
         if(state.originalReturn!=AttachmentOriginalReturn.DETAILS)value.put("originalReturn",state.originalReturn.value)
+        if(savedNavigation&&directPrivateWorkEntry())state.workReturn?.takeIf{it.matchesFile(restoreFile?:state.file)}
+            ?.let{value.put("workReturn",it.toJson())}
         val result=state.resultRun?.takeIf{it.taskId==state.taskId}
         if(result!=null)value.put("resultRunId",result.runId).put("resultEpoch",result.epoch)
         state.team?.let{value.put("team",it.toJson())};state.teamPrevious?.let{value.put("teamPrevious",it.toJson())}

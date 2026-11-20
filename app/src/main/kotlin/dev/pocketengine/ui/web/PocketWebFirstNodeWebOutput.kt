@@ -6,6 +6,7 @@ import android.os.SystemClock
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput
+import dev.pocketengine.features.workspace.WorkspaceArtifacts
 import dev.pocketengine.store.TaskStore
 import java.util.UUID
 import org.json.JSONObject
@@ -84,13 +85,17 @@ internal class PocketWebFirstNodeWebOutput(
                         check(state.optString("state")=="ready"){"已有这笔原保存；不再次写入"}
                         val approved=remembered?:error("请查看同一原审阅")
                         OriginalNodeWebOutput.requirePin(build,approved.review.pin())
-                        val actual=local().saveFirstWebOutputForOwner(approved.review,control,{requireCurrent()}){
-                            requireCurrent();check(SystemClock.elapsedRealtime()<approved.until){"原固定网页审阅已过期"}
-                            store.beginFirstWebOutputForOwner(approved.review,control)
+                        try {
+                            val actual=local().saveFirstWebOutputForOwner(approved.review,control,{requireCurrent()}){
+                                requireCurrent();check(SystemClock.elapsedRealtime()<approved.until){"原固定网页审阅已过期"}
+                                store.beginFirstWebOutputForOwner(approved.review,control)
+                            }
+                            // Settle the original intent even if navigation moved away. The main thread
+                            // still suppresses late results for the old window.
+                            store.finishFirstWebOutputForOwner(actual)
+                        } catch (rejected:WorkspaceArtifacts.QuotaBeforePublication) {
+                            store.recordFirstWebQuotaRefusal(approved.review,rejected)
                         }
-                        // An actual archive might have been written just before navigation. Complete its
-                        // original SQL receipt; suppress any late UI result rather than publishing elsewhere.
-                        store.finishFirstWebOutputForOwner(actual)
                     }
                     else-> error("未知网页成果操作")
                 }.also{it.remove("savedPin");it.put("eligible",true)}

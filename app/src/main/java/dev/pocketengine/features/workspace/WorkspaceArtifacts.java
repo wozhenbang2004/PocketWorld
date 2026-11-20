@@ -3,6 +3,7 @@ package dev.pocketengine.features.workspace;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.security.MessageDigest;
 import java.util.UUID;
 import org.json.JSONArray;
@@ -80,8 +81,32 @@ public final class WorkspaceArtifacts {
         boolean found=false;JSONArray all=catalog();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).optString("id")))found=true;if(!found)throw new IllegalArgumentException("文件成果不存在");
         JSONObject artifact=JsonFiles.read(new File(root,id+".json"));artifact=checkedFile(id,artifact.getString("sha256"));if(!"text_file".equals(artifact.optString("kind")))return metadata(artifact).put("contentAvailable",false).put("requiresNativeByteRead",!"file_tombstone".equals(artifact.optString("kind"))).put("message","file_tombstone".equals(artifact.optString("kind"))?"这是原文件删除修订，无正文；原历史和审阅来源仍保留，不导出为空文件":"所选成果保留的是完整原字节，请使用原生查看或导出入口");return artifact;
     }
+    private enum ProjectPackageLimit {
+        COUNT("artifact_count_limit","最多保留200份文件成果，请先明确整理已有成果"),
+        BYTES("project_package_bytes_limit","固定项目包及清单已达64MiB；未自动删除旧成果或项目");
+        final String code,message;
+        ProjectPackageLimit(String code,String message){this.code=code;this.message=message;}
+    }
+    /** Issued only by a real quota gate before either of the original named files or the catalog is written. */
+    public static final class QuotaBeforePublication extends IllegalStateException {
+        private final ProjectPackageLimit limit;
+        private final String actionId,manifestIdentity;
+        private QuotaBeforePublication(ProjectPackageLimit limit,String actionId,String manifestIdentity){
+            super(limit.message);this.limit=limit;this.actionId=actionId;this.manifestIdentity=manifestIdentity;
+        }
+        public String reason(){return limit.code;}
+        public boolean matches(String action,String manifest){return actionId.equals(action)&&manifestIdentity.equals(manifest);}
+        public static boolean knownReason(String code){return ProjectPackageLimit.COUNT.code.equals(code)||ProjectPackageLimit.BYTES.code.equals(code);}
+    }
     /** Native active-tree selection creates another typed version in this same artifact catalog. */
-    public synchronized JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception {
+    public JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception {
+        return createProjectPackage(frozen,ownerActionId,false);
+    }
+    /** Same save path; only the original owner web receipt consumes the narrow pre-publication proof. */
+    JSONObject createFirstNodeWebPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception {
+        return createProjectPackage(frozen,ownerActionId,true);
+    }
+    private synchronized JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId,boolean classifyQuota)throws Exception {
         if(ownerActionId==null||!ownerActionId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("缺少这次原生文件快照动作身份");
         String id=UUID.nameUUIDFromBytes(("project-package:"+ownerActionId).getBytes(StandardCharsets.UTF_8)).toString();
         JSONObject manifest=frozen.manifest(),source=manifest.getJSONObject("source");JSONArray all=catalog();int sequence=1;
@@ -91,9 +116,10 @@ public final class WorkspaceArtifacts {
             if(id.equals(prior.optString("id"))){if("retired".equals(prior.optString("availability")))throw new IllegalStateException("原固定成果已明确撤下，不重放此保存动作");if(!"project_bundle".equals(prior.optString("kind"))||!frozen.identity.equals(prior.optString("manifestIdentity")))throw new SecurityException("这次原快照动作已对应其他文件版本，未另存或覆盖");readProjectPackage(id,prior.getString("sha256"));return JsonFiles.copy(prior);}
             if("project_bundle".equals(prior.optString("kind"))&&source.getString("projectId").equals(prior.optString("projectId")))sequence=Math.max(sequence,prior.optInt("versionSequence")+1);
         }
-        if(all.length()>=200)throw new IllegalStateException("最多保留200份文件成果，请先明确整理已有成果");
+        File archive=new File(root,id+".project.zip"),record=new File(root,id+".project.json");
+        if(all.length()>=200)throw projectPackageQuota(ProjectPackageLimit.COUNT,classifyQuota,id,ownerActionId,frozen.identity,archive,record);
         if(!root.isDirectory()&&!root.mkdirs())throw new IllegalStateException("无法创建原文件成果目录");
-        File archive=new File(root,id+".project.zip"),record=new File(root,id+".project.json"),pending=File.createTempFile("project-package-",".pending",root);
+        File pending=File.createTempFile("project-package-",".pending",root);
         boolean published=false,catalogAttempted=false,createdPayload=false;
         try{
             if(Files.exists(archive.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)||Files.exists(record.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){
@@ -112,11 +138,26 @@ public final class WorkspaceArtifacts {
                 .put("sizeBytes",pending.length()).put("sha256",sha).put("persisted",true).put("businessVerified",false).put("atomicSourceFence",false);
             JSONObject retainedRecord=new JSONObject().put("artifact",artifact).put("manifest",manifest);
             long total=pending.length()+retainedRecord.toString().getBytes(StandardCharsets.UTF_8).length;File[] retained=root.listFiles(file->file.isFile()&&file.getName().matches("[a-f0-9-]{36}\\.project\\.(zip|json)"));if(retained==null)throw new IllegalStateException("无法核对文件成果空间");for(File file:retained)if(!file.equals(archive)&&!file.equals(record))total+=file.length();
-            if(total>MAX_PROJECT_PACKAGE_BYTES)throw new IllegalStateException("固定项目包及清单已达64MiB；未自动删除旧成果或项目");
+            if(total>MAX_PROJECT_PACKAGE_BYTES)throw projectPackageQuota(ProjectPackageLimit.BYTES,classifyQuota,id,ownerActionId,frozen.identity,archive,record);
             Files.move(pending.toPath(),archive.toPath(),java.nio.file.StandardCopyOption.ATOMIC_MOVE);createdPayload=true;
             JsonFiles.write(record,retainedRecord);all.put(artifact);
             catalogAttempted=true;JsonFiles.write(catalog,new JSONObject().put("artifacts",all));published=true;return JsonFiles.copy(artifact);
         }finally{Files.deleteIfExists(pending.toPath());if(createdPayload&&!published&&!catalogAttempted){Files.deleteIfExists(record.toPath());Files.deleteIfExists(archive.toPath());}}
+    }
+    /** Called only at the two quota gates under the catalog writer's monitor, never on readback. */
+    private IllegalStateException projectPackageQuota(ProjectPackageLimit limit,boolean classify,String id,String action,String manifest,File archive,File record)throws Exception {
+        IllegalStateException unverified=new IllegalStateException(limit.message);
+        if(!classify||!Files.isDirectory(root.toPath(),LinkOption.NOFOLLOW_LINKS)||
+            !Files.isRegularFile(catalog.toPath(),LinkOption.NOFOLLOW_LINKS)||
+            !Files.notExists(archive.toPath(),LinkOption.NOFOLLOW_LINKS)||!Files.notExists(record.toPath(),LinkOption.NOFOLLOW_LINKS))return unverified;
+        // catalog() uses an empty fallback for general reads. That is not negative evidence.
+        JSONArray actual=JsonFiles.read(catalog).optJSONArray("artifacts");
+        if(actual==null||limit==ProjectPackageLimit.COUNT&&actual.length()<200)return unverified;
+        for(int i=0;i<actual.length();i++){
+            JSONObject row=actual.optJSONObject(i);
+            if(row==null||!validId(row.optString("id"))||id.equals(row.opt("id"))||action.equals(row.opt("ownerActionId")))return unverified;
+        }
+        return new QuotaBeforePublication(limit,action,manifest);
     }
     public synchronized JSONObject projectPackage(String id,String expectedSha)throws Exception {
         JSONObject artifact=packageMetadata(id,expectedSha);var frozen=readProjectPackage(id,expectedSha);return JsonFiles.copy(artifact).put("manifest",frozen.manifest());
