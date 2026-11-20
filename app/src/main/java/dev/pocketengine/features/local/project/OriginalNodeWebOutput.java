@@ -21,6 +21,7 @@ public final class OriginalNodeWebOutput {
     public static final String TOOL="owner_keep_first_node_web_output", ENTRY="dist/index.html";
     public static final String PENDING="owner_web_output_pending", NOT_PUBLISHED="owner_web_output_not_published";
     public static final String WITNESS="firstNodeWebOutput", EDITED_ROUTE="editedNodeWebVersion", EXISTING_ROUTE="existingNodeWebVersion";
+    public static final String OUTPUT_LIMITATION="firstNodeWebOutputLimitation", NESTED_VITE_OUTPUT="nested_vite_output";
     private static final String EDITED_TREES="editedOutputTrees", EXISTING_TREES="existingOutputTrees";
     private static final Set<String> BINDING=Set.of("taskId","runId","epoch","buildOperationId","buildReceiptIdentity",
         "checkoutSequence","projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity","operationId");
@@ -181,7 +182,14 @@ public final class OriginalNodeWebOutput {
             if(count!=3)throw new SecurityException("原退出时未观测到内置静态 Web 的完整四项");
         }
     }
+    /** A positive observation in this ordinary Vite checkout, not a general archive/IO error. */
+    public static final class UnsupportedNestedViteDirectory extends SecurityException {
+        private UnsupportedNestedViteDirectory(){super("原 Vite 输出含不能固定的子目录，未保存部分成果");}
+    }
     public static void requireOutputPaths(java.io.File root,OutputSource source)throws Exception{
+        requireOutputPaths(root,source,false);
+    }
+    private static void requireOutputPaths(java.io.File root,OutputSource source,boolean observeOrdinaryViteExit)throws Exception{
         if(!source.vite()){requireStockPaths(root);return;}
         Path dist=root.toPath().resolve("dist"),assets=dist.resolve("assets");
         if(!Files.isDirectory(dist,LinkOption.NOFOLLOW_LINKS)||!Files.isDirectory(assets,LinkOption.NOFOLLOW_LINKS))
@@ -190,17 +198,19 @@ public final class OriginalNodeWebOutput {
         try(var top=Files.newDirectoryStream(dist);var leaves=Files.newDirectoryStream(assets)){
             for(Path path:top){
                 if(path.equals(assets))continue;
-                bytes+=viteFile(path,true);
+                bytes+=viteFile(path,true,observeOrdinaryViteExit);
                 if(++count>VITE_FILES||bytes>VITE_BYTES)throw new SecurityException("原 Vite 网页包超过文件或字节上限");
             }
             for(Path path:leaves){
-                bytes+=viteFile(path,false);
+                bytes+=viteFile(path,false,false);
                 if(++count>VITE_FILES||bytes>VITE_BYTES)throw new SecurityException("原 Vite 网页包超过文件或字节上限");
             }
         }
     }
-    private static long viteFile(Path path,boolean top)throws Exception {
+    private static long viteFile(Path path,boolean top,boolean observeOrdinaryViteExit)throws Exception {
         BasicFileAttributes info=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(top&&observeOrdinaryViteExit&&info.isDirectory()&&!info.isSymbolicLink()&&info.fileKey()!=null&&
+            path.equals(path.toFile().getCanonicalFile().toPath()))throw new UnsupportedNestedViteDirectory();
         if(!info.isRegularFile()||info.size()<=0||info.size()>ProjectPackageArchive.MAX_FILE_BYTES||
            ((Number)Files.getAttribute(path,"unix:nlink",LinkOption.NOFOLLOW_LINKS)).longValue()!=1||
            !vitePath(path.getFileName().toString(),top))throw new SecurityException("原 Vite 输出含不能固定的文件类型、链接、目录或大小；未保存部分成果");
@@ -284,7 +294,10 @@ public final class OriginalNodeWebOutput {
         if(versioned?launch==null||launch.before==null:!isOwnerCopy(exact,checkout))return null;
         OutputSource source=versioned?versionedSource(invocation,exact,snapshot):requireSupportedSource(snapshot);
         if(source==null||!versioned&&source.vite()&&(launch==null||!launch.cleanDist))return null; // V1 Vite still needs an empty output location.
-        var root=invocation.workspace();requireOutputPaths(root.directory(),source);root.verify(invocation);
+        var root=invocation.workspace();
+        try{requireOutputPaths(root.directory(),source,versioned&&!invocation.existingWebVersion().isEmpty());}
+        catch(UnsupportedNestedViteDirectory unsupported){root.verify(invocation);throw unsupported;}
+        root.verify(invocation);
         var exit=versioned?WebDistObservation.read(root.directory().toPath()):null;
         JSONObject info=new JSONObject().put("projectId",exact.getString("projectId")).put("checkoutId",exact.getString("checkoutId"))
             .put("sourceDigest",exact.getString("sourceDigest")).put("name",checkout.getString("name"));

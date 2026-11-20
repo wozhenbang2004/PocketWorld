@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button } from './forms-library';
 import { bridge } from './bridge';
 import type { PackagePreviewTarget } from './project-preview';
+import type { OriginalBuildWebGap } from './project-execution';
 
 const read = 'projects.firstWebOutput.read';
 const review = 'projects.firstWebOutput.review';
@@ -38,9 +39,9 @@ export function firstNodeWebOwnerWindow(taskId: string): string {
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
-export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, beforeGoalAcceptance, buildExitedWithoutWeb, listedOpenKey}: {
+export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, beforeGoalAcceptance, buildWebGap, canEditBuildCopy, listedOpenKey}: {
   target: BuildPosition; ownerWindow: string; hideIneligible?: boolean; checkBuildAfterFailure?: boolean; beforeGoalAcceptance?: boolean;
-  buildExitedWithoutWeb?: boolean; listedOpenKey?: string;
+  buildWebGap?: OriginalBuildWebGap; canEditBuildCopy?: boolean; listedOpenKey?: string;
   open?: (p: PackagePreviewTarget)=>void; onSaved: (operationId: string, sha256: string) => void}) {
   const [fact, setFact] = useState<Fact|null>(null);
   const [busy, setBusy] = useState('');
@@ -117,7 +118,7 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     return ()=>{alive.current=false;flight.current=false;++sequence.current;};
     // The shared owner-window projection can arrive after the navigation acknowledgement.
   },[target.taskId,target.runId,target.epoch,target.projectId,target.checkoutId,ownerWindow]);
-  const noSavedWeb=fact?.eligible===false&&buildExitedWithoutWeb&&!failure;
+  const noSavedWeb=fact?.eligible===false&&buildWebGap!==undefined&&!failure;
   const visible=available() && (!!fact||!!failure) && !(hideIneligible&&fact?.eligible===false&&!noSavedWeb&&!failure);
   const savedTarget: SavedTarget | undefined = fact?.state==='saved' && fact.projectId===target.projectId && fact.checkoutId===target.checkoutId &&
     fact.runId===target.runId && fact.epoch===target.epoch && fact.packageOperationId && fact.sourceDigest &&
@@ -148,7 +149,9 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
     {checkBuildAfterFailure && fact?.eligible===true && <p className="pw-reading-note">这项工作没有完成，但本机构建步骤已核对为成功退出。下面只处理原构建的网页。</p>}
     {beforeGoalAcceptance && fact?.eligible===true && <p className="pw-reading-note">本机构建已核对为成功退出。核对或保存网页不会替你验收目标。</p>}
-    {noSavedWeb?<p className="pw-reading-note" role="status"><strong>构建通过（退出码 0），固定网页未保存。</strong> 可在「过程」查看本次构建记录。</p>:
+    {noSavedWeb&&buildWebGap==='nested_vite_output'?<p className="pw-reading-note" role="status"><strong>构建通过，固定网页未保存。</strong>
+      {' '}输出含额外子目录，不在本机固定网页支持范围。{canEditBuildCopy?'可在下方继续编辑构建所用的副本。':'可在「过程」查看本次构建记录。'}</p>:
+      noSavedWeb?<p className="pw-reading-note" role="status"><strong>构建通过（退出码 0），固定网页未保存。</strong> 可在「过程」查看本次构建记录。</p>:
       fact?.eligible===false&&fact.message&&<p className="pw-reading-note">{fact.message}</p>}
     {fact?.state==='ready'&&<><p className="pw-reading-note">这次构建的网页包还未固定保存。请先核对退出时看到的文件，不重新构建。</p>
       <Button size="small" variant="secondary" disabled={!!busy} onClick={()=>void call(review)}>{busy===review?'正在核对原网页…':'核对网页包'}</Button></>}

@@ -396,12 +396,16 @@ public final class ManagedProcessJobs implements AutoCloseable {
             // Process cancellation remains independent; it never needs this source-write lock.
             job.sourceWrites.writeLock().lock();
             try{
-                JSONObject webOutputAtExit=null;
+                JSONObject webOutputAtExit=null;boolean nestedViteOutputAtExit=false;
                 if(groupAbsent&&!job.cancel&&"completed".equals(finalStatus))try{
                     long sequence;synchronized(job){sequence=job.receipt.getLong("checkoutSequence");}
                     if(!versionedWeb||webBefore!=null&&webCheckoutUncontended(job,sequence,false)){
-                        JSONObject observed=OriginalNodeWebOutput.observeAtOriginalExit(job.invocation,sequence,webBefore);
-                        if(!versionedWeb||webCheckoutUncontended(job,sequence,false))webOutputAtExit=observed;
+                        try{
+                            JSONObject observed=OriginalNodeWebOutput.observeAtOriginalExit(job.invocation,sequence,webBefore);
+                            if(!versionedWeb||webCheckoutUncontended(job,sequence,false))webOutputAtExit=observed;
+                        }catch(OriginalNodeWebOutput.UnsupportedNestedViteDirectory unsupported){
+                            job.invocation.checkCurrent();nestedViteOutputAtExit=webCheckoutUncontended(job,sequence,false);
+                        }
                     }
                 }catch(Exception unsupportedOrMissing){/* Success of the original process does not attest a complete Web artifact. */}
                 boolean markerClean=job.devSession==null||job.devSession.cleanupMarker();
@@ -412,8 +416,10 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 if(job.pipeInput!=null)job.pipeInput.close();
                 synchronized(job) {
                     try {job.receipt.put("ownedWorkerLive",false).put("resourcesReleased",leaseClosed&&groupAbsent).put("status",leaseClosed?finalStatus:"unknown").put("finishedAt",System.currentTimeMillis());
-                        if(webOutputAtExit!=null&&leaseClosed&&groupAbsent&&!job.cancel)
-                            job.receipt.put(OriginalNodeWebOutput.WITNESS,webOutputAtExit);
+                        if(leaseClosed&&groupAbsent&&!job.cancel){
+                            if(webOutputAtExit!=null)job.receipt.put(OriginalNodeWebOutput.WITNESS,webOutputAtExit);
+                            else if(nestedViteOutputAtExit)job.receipt.put(OriginalNodeWebOutput.OUTPUT_LIMITATION,OriginalNodeWebOutput.NESTED_VITE_OUTPUT);
+                        }
                         if(job.devSession!=null)job.receipt.put("devMarkerCacheCleanupComplete",markerClean);RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);}
                     catch(Exception error) {try{job.receipt.put("receiptPersistence","failed");}catch(Exception ignored){}}
                 }

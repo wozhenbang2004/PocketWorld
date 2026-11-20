@@ -228,7 +228,8 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   const [versionsCursor,pageVersions]=useState(''),[versionsRead,didReadVersions]=useState(false);
   const [view, setView] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [capabilities, setCapabilities] = useState<Data[]>([]);
   const [choices, setChoices] = useState<Choices>(() => choicesOf({})), [inspection, setInspection] = useState<Data | null>(null), [copy, setCopy] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
-  const [busy, setBusy] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState(''), [draftError, setDraftError] = useState(''), [stale, setStale] = useState(false), [saved, setSaved] = useState(true);
+  const [working, setWorking] = useState(''), [saving, setSaving] = useState(false), [error, setError] = useState(''), [draftError, setDraftError] = useState(''), [stale, setStale] = useState(false), [saved, setSaved] = useState(true);
+  const busy=!!working;
   const alive = useRef(true), entered = useRef(false), generation = useRef(0), handle = useRef(''), viewRef = useRef(view), reviewRef = useRef(review), receiptRef = useRef(receipt);
   const choicesRef = useRef(choices), baseline = useRef(''), touched = useRef(false), needsSave = useRef(false), flight = useRef<Promise<void> | null>(null), paused = useRef(false);
   const scroller = useRef<HTMLDivElement>(null), heading = useRef<HTMLHeadingElement>(null), reviewPosition = useRef(0), wasReview = useRef(false);
@@ -239,13 +240,13 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
     if (entered.current || document.hidden || !latest.current.can(action)) return;
     const original = handle.current, window = ownerWindow(), ticket = generation.current;
     if (!raw && !original) return;
-    entered.current = true; setBusy(true); setError('');
+    entered.current = true; setWorking(action); setError('');
     try {
       const value = await latest.current.run(action, raw ? args : { viewHandle: original, ...args });
       if (!alive.current || ticket !== generation.current || window !== ownerWindow() || document.hidden) return;
       accept?.(value); return value as Data;
     } catch (failure) { if (alive.current && ticket === generation.current) setError(failureText(failure)); }
-    finally { entered.current = false; if (alive.current) setBusy(false); }
+    finally { entered.current = false; if (alive.current) setWorking(''); }
   };
   const read = () => invoke('butler.preparation.read', { sourceTaskId: target.sourceTaskId, proposalId: target.proposalId }, value => {
     if (!preparation(value, target) || !text(value.viewHandle)) throw new Error('没有取得这份原提案的页面，请重新读取。');
@@ -403,6 +404,15 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
     identifier(projectView.clientMessageId) && receipt.clientMessageId === projectView.clientMessageId && identifier(receipt.taskId) &&
     (projectView.target == null || !!projectTarget);
   const projectRegistered = projectView?.available === true && (!!projectTarget || !!acceptedProjectReceipt);
+  const pendingProjectStart = !projectRegistered && projectView?.available === true && projectView.state === 'proposed' &&
+    receipt?.kind === 'project' && identifier(projectView.clientMessageId) && receipt.clientMessageId === projectView.clientMessageId &&
+    ['pending','unknown'].includes(receipt.status);
+  const submittingProject = pendingProjectStart && !stale && working === 'butler.preparation.project.start';
+  const projectStartReceipt = projectView && receipt && !projectRegistered && <section className="pw-preparation-receipt" aria-label="原启动记录">
+    <p role="status">{submittingProject ? '正在提交这次项目工作，尚未收到接单回执。' : pendingProjectStart && stale ? '原启动尚无确认回执。重新读取原记录，不会再次提交。' : text(receipt.message) || (receipt.status === 'accepted' ? '原任务已保存。' : '原启动回执待核对。')}</p>
+    {receipt.error && <p className="pw-error">{text(receipt.error)}</p>}
+    {!submittingProject && !(pendingProjectStart && stale) && ['pending','unknown'].includes(receipt.status) && <Button variant="secondary" disabled={blocked} onClick={() => void invoke('butler.preparation.query', {}, acceptReceipt)}>查询原启动请求</Button>}
+  </section>;
   // A receipt proves registration, but only the original preparation read binds an execution.
   const boundProjectRun = projectTarget?.canOpenOriginalRun === true && identifier(projectTarget.originalRunId) && positive(projectTarget.originalEpoch) &&
     projectTarget.originalRunId === projectTarget.runId && projectTarget.originalEpoch === projectTarget.epoch
@@ -415,21 +425,22 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
     setCopy(null); edit({ ...choicesRef.current, projectId, checkoutId: '' });
     if (projectId) inspectProject();
   };
-  const title = reviewing ? '核对本次执行' : projectRegistered ? '原项目工作' : inline ? '准备这次工作' : '管家为你准备的工作';
+  const title = reviewing ? '核对本次执行' : projectRegistered || pendingProjectStart ? '原项目工作' : inline ? '准备这次工作' : '管家为你准备的工作';
   const description = view?.kind === 'phone' ? '原请求 · 手机操作' : view?.kind === 'project' ? '原请求 · 项目开发' : '读取原提案与准备状态';
   const body = <div ref={scroller} className={inline ? 'pw-preparation-body' : 'pw-drawer-body pw-task-body pw-preparation-body'}>
         {error && <p className="pw-error" role="alert">{error}</p>}{draftError && <p className="pw-error" role="alert">{draftError}</p>}
         {draftError && !saved && <Button variant="ghost" disabled={busy || saving} onClick={() => { const original = handle.current; handle.current = ''; closeNative(original); onClose(); }}>放弃本页未保存的选择并返回</Button>}
-        {(!view || stale) && <section><p className="pw-muted" role={projectRegistered ? 'status' : undefined}>{projectRegistered ? '原任务已登记，执行进展待重新核对。' : stale ? '原准备窗口已变化，保留选择后重新核对即可继续。' : busy ? '正在读取原提案…' : '原提案尚未完整读取。'}</p><Button variant="secondary" disabled={busy || saving || projectRegistered && !can('butler.preparation.read')} onClick={() => void read()}>{projectRegistered ? '核对执行进展' : '重新读取原提案'}</Button></section>}
+        {pendingProjectStart&&projectStartReceipt}
+        {(!view || stale) && <section>{!pendingProjectStart&&<p className="pw-muted" role={projectRegistered ? 'status' : undefined}>{projectRegistered ? '原任务已登记，执行进展待重新核对。' : stale ? '原准备窗口已变化，保留选择后重新核对即可继续。' : busy ? '正在读取原提案…' : '原提案尚未完整读取。'}</p>}<Button variant="secondary" disabled={busy || saving || (projectRegistered || pendingProjectStart) && !can('butler.preparation.read')} onClick={() => void read()}>{projectRegistered ? '核对执行进展' : pendingProjectStart ? '重新读取原启动记录' : '重新读取原提案'}</Button></section>}
         {view && <>
-          {!projectRegistered&&!(view.kind==='phone'&&(review||phoneHistory))&&<div className="pw-owner-work-handling"><div><strong>{stateLabels[view.state] || '状态待核对'}</strong><p>{text(view.reason) || (targetTaskId ? '这份准备已关联原任务，按实际执行进展查看结果。' : '核对目标、所需能力与本次范围后，再决定开始。')}</p></div></div>}
+          {!projectRegistered&&!pendingProjectStart&&!(view.kind==='phone'&&(review||phoneHistory))&&<div className="pw-owner-work-handling"><div><strong>{stateLabels[view.state] || '状态待核对'}</strong><p>{text(view.reason) || (targetTaskId ? '这份准备已关联原任务，按实际执行进展查看结果。' : '核对目标、所需能力与本次范围后，再决定开始。')}</p></div></div>}
           {contract && !review && !phoneHistory && <WorkContract goal={contract.goal} contract={contract} />}
           {view.kind==='phone'&&!review&&<ButlerPhoneReceipt view={view} raw={receipt} target={target} inline={inline} disabled={blocked}
             onCheck={can('butler.preparation.query')?()=>void invoke('butler.preparation.query',{},acceptReceipt):undefined}
             onRun={onOpenPhoneRun&&can('tasks.open')?t=>void close(()=>onOpenPhoneRun(t)):undefined}
             onReport={onOpenPhoneReport&&can('phone.result.original')?t=>void close(()=>{if(phoneReportInSource(t))onOpenPhoneReport(t)}):undefined}/>}
           {phoneHistory&&contract&&!review&&<Accordion><AccordionItem id="phone-original-terms" title="查看原委托与验收方式"><WorkContract goal={contract.goal} contract={contract}/></AccordionItem></Accordion>}
-          {view.kind!=='phone'&&receipt&&!projectRegistered && <section className="pw-preparation-receipt" aria-label="原启动记录"><p role="status">{text(receipt.message) || (receipt.status === 'accepted' ? '原任务已保存。' : '原启动回执待核对。')}</p>{receipt.error && <p className="pw-error">{text(receipt.error)}</p>}{['pending', 'unknown'].includes(receipt.status) && <Button variant="secondary" disabled={blocked} onClick={() => void invoke('butler.preparation.query', {}, acceptReceipt)}>查询原启动请求</Button>}</section>}
+          {!pendingProjectStart&&projectStartReceipt}
           {view.kind === 'project' && targetTaskId && (!stale || !projectRegistered) && (boundProjectRun
             ? <Button variant="secondary" trailingIcon={IconChevronRight} disabled={busy || saving || !can('tasks.open')}
                 onClick={() => void close(() => onOpenTask(targetTaskId,boundProjectRun))}>查看原工作与结果</Button>
@@ -468,7 +479,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
             onCheck={can('butler.preparation.phone.review')?h=>{if(reviewRef.current?.reviewHandle===h)prepareReview()}:undefined}
             onSettings={can('butler.preparation.phone.settings')?(h,place)=>{if(reviewRef.current?.reviewHandle===h)void invoke('butler.preparation.phone.settings',{reviewHandle:h,target:place},v=>{if(v.status!=='settings_opened')throw new Error('系统设置页是否已打开尚未核对。');setReview(null)})}:undefined}
             onPlace={phoneShown.conditions?.screen.settings!=='background_setup'||onSetup?(h,place)=>{if(reviewRef.current?.reviewHandle!==h||entered.current)return;if(place==='main_screen_choice')setReview(null);else openPhoneSetup()}:undefined}/>}
-          {review&&view.kind==='project'&&<PermissionReview title={text(review.goal)} context={review.source?.ownerRevision?'这次新目标 · 我已另存的一稿':`${projectName} · 原私人副本`} reason={review.source?.ownerRevision?'确认后，新目标和所选稿全文可发给下面这个模型；在线模型会收到这些内容。不会附带其他版本或工程文件，不写回、不运行命令。':review.draftOnly === true ? '只准备独立改稿和差异。模型可按需读这份固定副本；如果选择的是在线模型，被读取的源码会交给该模型。不写回原件或副本，不运行命令。' : '按已选择的源码与模型建立原项目任务，命令执行与项目导回继续使用各自的原审阅入口。'} fields={[{ label: '本次模型', value: text(review.model?.label) }, { label: '运行位置', value: text(review.runtime) }, ...(review.source?.ownerRevision?[{label:'接收方',value:text(review.model.destination)},{label:'所选文件',value:text(review.source.path)},{label:'你的保存版本',value:'第 '+review.source.ordinal+' 稿 · '+review.source.bytes+' 字节'},{label:'此稿 SHA-256',value:text(review.source.ownerRevision.sha256)}]:[{ label: '固定副本', value: choices.checkoutId }, { label: '源码版本', value: text(review.source?.sourceDigest) }])]} pending={busy} onReject={() => setReview(null)} onApprove={!blocked ? start : undefined} approveLabel={review.source?.ownerRevision?'确认，把这一稿交给管家':review.draftOnly === true ? '确认，只准备改稿' : '确认并开始这次工作'}><WorkContract goal={text(review.goal)} contract={contractOf(review)} />{review.source?.ownerRevision&&<details><summary>核对会发给模型的完整稿</summary><pre className="pw-code-editor">{review.source.selectedText||'（这份已存稿是空文件）'}</pre></details>}</PermissionReview>}
+          {review&&view.kind==='project'&&<PermissionReview title={text(review.goal)} context={review.source?.ownerRevision?'这次新目标 · 我已另存的一稿':`${projectName} · 原私人副本`} reason={review.source?.ownerRevision?'确认后，新目标和所选稿全文可发给下面这个模型；在线模型会收到这些内容。不会附带其他版本或工程文件，不写回、不运行命令。':review.draftOnly === true ? '只准备独立改稿和差异。模型可按需读这份固定副本；如果选择的是在线模型，被读取的源码会交给该模型。不写回原件或副本，不运行命令。' : '按已选择的源码与模型建立原项目任务，命令执行与项目导回继续使用各自的原审阅入口。'} fields={[{ label: '本次模型', value: text(review.model?.label) }, { label: '运行位置', value: text(review.runtime) }, ...(review.source?.ownerRevision?[{label:'接收方',value:text(review.model.destination)},{label:'所选文件',value:text(review.source.path)},{label:'你的保存版本',value:'第 '+review.source.ordinal+' 稿 · '+review.source.bytes+' 字节'},{label:'此稿 SHA-256',value:text(review.source.ownerRevision.sha256)}]:[{ label: '固定副本', value: choices.checkoutId }, { label: '源码版本', value: text(review.source?.sourceDigest) }])]} pending={busy} onReject={() => setReview(null)} onApprove={!blocked ? start : undefined} approveLabel={review.source?.ownerRevision?'确认，把这一稿交给管家':review.draftOnly === true ? '确认，开始独立改稿' : '确认并开始这次工作'}><WorkContract goal={text(review.goal)} contract={contractOf(review)} />{review.source?.ownerRevision&&<details><summary>核对会发给模型的完整稿</summary><pre className="pw-code-editor">{review.source.selectedText||'（这份已存稿是空文件）'}</pre></details>}</PermissionReview>}
           <nav className="pw-task-source-links" aria-label="原委托与准备"><Button variant="ghost" disabled={busy || saving || !can('tasks.open')} onClick={() => void close(() => onOpenTask(target.sourceTaskId))}>查看原委托记录</Button>{!inline && onConversation && <Button variant="ghost" leadingIcon={IconChat} disabled={busy || saving} onClick={() => void close(() => onConversation(target.sourceConversationId))}>回到原委托话题</Button>}{view.canPrepare === true && !unresolved && !review && <Button variant="ghost" disabled={blocked} onClick={() => void afterSave(() => invoke('butler.preparation.dismiss', {}, value => { if (!preparation(value, target)) throw new Error('原提案取消回执尚未核对。'); setView(value); }))}>取消这份提案</Button>}</nav>
         </>}
       </div>;

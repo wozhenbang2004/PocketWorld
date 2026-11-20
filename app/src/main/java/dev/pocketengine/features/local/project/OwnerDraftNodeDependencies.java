@@ -30,19 +30,14 @@ public final class OwnerDraftNodeDependencies {
         Map<String,String> files=ProjectSources.files(snapshot);
         String manifest=files.get("package.json");
         if(manifest==null||bytes(manifest)>65536)throw new IllegalArgumentException("需要完整可核对的 package.json（64 KiB 以内）");
-        JSONObject pkg=McpJson.parse(manifest);TreeSet<String> required=new TreeSet<>();int declared=0;
-        for(String kind:DEPENDENCIES){
-            String policy="peerDependencies".equals(kind)?"optionalDependencies":kind;
-            TreeSet<String> names=dependencyNames(pkg,kind);
-            if(!"optionalDependencies".equals(policy))required.addAll(names);
-            if("optionalDependencies".equals(kind))required.removeAll(names);
-            declared+=names.size();
-        }
+        JSONObject pkg=McpJson.parse(manifest);
+        DependencyDeclarations declarations=declarations(pkg);
+        TreeSet<String> required=declarations.required();int declared=declarations.count();
         if(declared==0)return null;
         if(required.isEmpty())throw new IllegalArgumentException("这里只准备明确必需的直接依赖；仅可选包或 peer 依赖时不猜测，未下载。");
         if(declared>128)throw new IllegalArgumentException("这份项目的直接依赖超过本次受审准备上限");
         requirePlainProject(pkg,files.keySet());
-        String lockPath="npm".equals(manager)?"package-lock.json":"pnpm-lock.yaml",other="npm".equals(manager)?"pnpm-lock.yaml":"package-lock.json";
+        String lockPath=lockPath(manager),other=lockPath("npm".equals(manager)?"pnpm":"npm");
         String body=files.get(lockPath);
         if(body==null||files.containsKey(other)||bytes(body)>524288)
             throw new IllegalArgumentException("需要这一版唯一的 "+lockPath+"（512 KiB 以内），未改用无锁安装");
@@ -71,6 +66,26 @@ public final class OwnerDraftNodeDependencies {
         return new JSONObject().put("manager",manager).put("managerVersion",version).put("registry",REGISTRY)
             .put("lockPath",lockPath).put("lockSha256",hash(body)).put("manifestSha256",hash(manifest))
             .put("packages",count).put("direct",direct).put("platformPackage",platformPackage);
+    }
+    private record DependencyDeclarations(TreeSet<String> required,int count){}
+    private static DependencyDeclarations declarations(JSONObject pkg)throws Exception{
+        TreeSet<String> required=new TreeSet<>();int count=0;
+        for(String kind:DEPENDENCIES){
+            TreeSet<String> names=dependencyNames(pkg,kind);
+            if(!"optionalDependencies".equals(kind)&&!"peerDependencies".equals(kind))required.addAll(names);
+            if("optionalDependencies".equals(kind))required.removeAll(names);
+            count+=names.size();
+        }
+        return new DependencyDeclarations(required,count);
+    }
+    private static String lockPath(String manager){return "npm".equals(manager)?"package-lock.json":"pnpm-lock.yaml";}
+    /** Source-only prerequisite: does not read installed packages, validate lock contents or create a plan. */
+    static String missingRequiredLock(JSONObject pkg,Set<String> savedPaths,String manager)throws Exception{
+        if(!Set.of("npm","pnpm").contains(manager))return "";
+        String path=lockPath(manager);
+        if(savedPaths.contains(path))return ""; // A present binary/invalid lock is not evidence of absence.
+        DependencyDeclarations declarations=declarations(pkg);
+        return declarations.count()<=128&&!declarations.required().isEmpty()?path:"";
     }
     static void requirePlainProject(JSONObject pkg,Set<String> paths)throws Exception{
         for(String key:Set.of("workspaces","pnpm","overrides","resolutions","config","bundledDependencies","bundleDependencies","devEngines"))

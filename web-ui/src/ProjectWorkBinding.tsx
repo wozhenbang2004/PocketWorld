@@ -29,15 +29,26 @@ export function checkoutKindSummary(source: Data | null, project: string, checko
   if(plainStatic(value))return '静态网页 · 编辑不需要 Node.js';
   return value.kinds.map((kind: string) => labels[kind]).join('、') + (['npm', 'pnpm'].includes(value.manager) ? ' · 候选 ' + value.manager : '');
 }
-type FirstWebTools = {kind:'static'} | {kind:'node';manager:'npm'|'pnpm';missing:string[];runtimeReady:boolean};
+type NodeToolObservation = {manager:'npm'|'pnpm';missing:string[];runtimeReady:boolean};
+type FirstWebTools = {kind:'static'} | ({kind:'node'} & NodeToolObservation);
+function nodeToolObservation(facts:Data):NodeToolObservation|null {
+  if(!facts.kinds.includes('node')||!(facts.manager==='npm'||facts.manager==='pnpm'))return null;
+  return {manager:facts.manager,runtimeReady:facts.runtimeReady,
+    missing:['node',facts.manager].filter(tool=>!facts.observedTools.includes(tool))};
+}
+/** The current copy's already read tool facts, including when it came from an original draft.
+ * Missing source/tooling evidence is unknown, not an unavailable tool. This is never build eligibility. */
+export function checkoutNodeToolObservation(source:Data|null,project:string,checkout:string):NodeToolObservation|null {
+  const facts=checkoutToolFacts(source,project,checkout);
+  return facts ? nodeToolObservation(facts) : null;
+}
 /** A fresh selected-copy observation, never eligibility or permission to execute. */
 export function checkoutFirstWebTools(source:Data|null,project:string,checkout:string):FirstWebTools|null {
   const facts=checkoutToolFacts(source,project,checkout);
   if(!facts)return null;
   if(plainStatic(facts))return {kind:'static'};
-  if(source?.existingNodeBuild!==true||!facts.kinds.includes('node')||!(facts.manager==='npm'||facts.manager==='pnpm'))return null;
-  return {kind:'node',manager:facts.manager,runtimeReady:facts.runtimeReady,
-    missing:['node',facts.manager].filter(tool=>!facts.observedTools.includes(tool))};
+  const node=source?.existingNodeBuild===true?nodeToolObservation(facts):null;
+  return node?{kind:'node',...node}:null;
 }
 function ToolObservation({ facts }: { facts: Data }) {
   if(plainStatic(facts))return <><div><dt>副本内容</dt><dd>根目录有 index.html。</dd></div>

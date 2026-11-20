@@ -73,12 +73,13 @@ public final class ProjectOwnerWorkflows {
                 catch(Exception unavailable){source.put("editedDraftBuildUnavailable",true);}
             }
             if(copy==null){
-                String state=OwnerDraftFirstBuild.existingBuildState(snapshot);
-                if("available".equals(state)){
+                var state=OwnerDraftFirstBuild.existingBuildState(snapshot);
+                if("available".equals(state.state())){
                     source.put("existingNodeBuild",true);
+                    if(!state.missingLock().isEmpty())source.put("existingNodeBuildMissingLock",state.missingLock());
                     try{source.putOpt("existingNodeBuildTask",tasks.existingNodeBuildForOwner(project,checkout,source.getString("sourceDigest")));}
                     catch(Exception unavailable){source.put("existingNodeBuildUnavailable",true);}
-                }else if(!state.isEmpty())source.put("existingNodeBuildBlocked",state);
+                }else if(!state.state().isEmpty())source.put("existingNodeBuildBlocked",state.state());
             }
         }
         if(savedPath!=null){

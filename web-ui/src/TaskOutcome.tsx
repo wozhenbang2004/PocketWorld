@@ -20,7 +20,7 @@ import {PhoneTaskOriginalReport} from './PhoneTaskConversationReturn';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
 import { HeldPhoneResultImage } from './HeldPhoneResultImage';
 import { MessageAttachment } from './MessageAttachment';
-import { originalBuildExitedWithoutWeb } from './project-execution';
+import { originalBuildWebGap } from './project-execution';
 import './task-reading.css';
 
 const stoppedAttemptTitles: Record<string, string> = {
@@ -255,7 +255,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}:${status}`} ownerWindow={packageRead.firstWebWindow}
       target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} beforeGoalAcceptance={beforeGoalAcceptance}
-      hideIneligible={buildScope.existingCheckoutBuild===true} buildExitedWithoutWeb={ordinaryBuild&&originalBuildExitedWithoutWeb(record)}
+      hideIneligible={buildScope.existingCheckoutBuild===true} buildWebGap={ordinaryBuild?originalBuildWebGap(record):undefined}
+      canEditBuildCopy={!!onContinueBuildCopy}
       open={onOpenProjectPackage} listedOpenKey={listedOpenKey} onSaved={packageRead.refreshAfterFirstWebSave}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>

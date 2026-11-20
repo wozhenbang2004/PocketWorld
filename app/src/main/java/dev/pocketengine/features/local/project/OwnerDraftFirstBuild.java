@@ -190,22 +190,29 @@ public final class OwnerDraftFirstBuild {
         if(!node||!manager)throw new IllegalStateException("这台手机尚未同时核实 Node 和项目的包管理器；没有安装依赖或切换运行位置。");
         if(!actual.optBoolean("managedOutputCollectionAvailable"))throw new IllegalStateException("本机尚无原构建结果的收件能力，不能开始这条验证与交付流程。");
     }
+    record ExistingBuildSource(String state,String missingLock){
+        ExistingBuildSource(String state){this(state,"");}
+    }
     /** Read-only eligibility from the saved source, not an approval or a runtime check. */
-    static String existingBuildState(JSONObject snapshot){
+    static ExistingBuildSource existingBuildState(JSONObject snapshot){
         try{
             var files=ProjectSources.files(snapshot);JSONObject pkg=ordinaryPackage(files);
             Set<String> paths=sourcePaths(snapshot);
-            Object manager=pkg.opt("packageManager");
-            if(manager!=null&&!(manager instanceof String))return "";
-            if(!Set.of("npm","pnpm").contains(ProjectCheckoutTooling.manager(paths,pkg.optString("packageManager"))))return "";
+            Object declared=pkg.opt("packageManager");
+            if(declared!=null&&!(declared instanceof String))return new ExistingBuildSource("");
+            String manager=ProjectCheckoutTooling.manager(paths,pkg.optString("packageManager"));
+            if(!Set.of("npm","pnpm").contains(manager))return new ExistingBuildSource("");
             scriptFields(pkg);
             try{OwnerDraftNodeDependencies.requirePlainProject(pkg,paths);}
             catch(SecurityException config){
-                return paths.contains("pnpm-workspace.yaml")?"workspaces":paths.contains(".npmrc")?"npmrc":"manager_configuration";
+                return new ExistingBuildSource(paths.contains("pnpm-workspace.yaml")?"workspaces":paths.contains(".npmrc")?"npmrc":"manager_configuration");
             }
-            catch(IllegalArgumentException config){return pkg.has("workspaces")?"workspaces":"manifest_configuration";}
-            return "available";
-        }catch(Exception unavailable){return "";}
+            catch(IllegalArgumentException config){return new ExistingBuildSource(pkg.has("workspaces")?"workspaces":"manifest_configuration");}
+            String missing="";
+            try{missing=OwnerDraftNodeDependencies.missingRequiredLock(pkg,paths,manager);}
+            catch(Exception unknown){/* Leave unsupported declarations to the existing review. */}
+            return new ExistingBuildSource("available",missing);
+        }catch(Exception unavailable){return new ExistingBuildSource("");}
     }
     static void requireExistingConfiguration(JSONObject snapshot)throws Exception{
         var files=ProjectSources.files(snapshot);

@@ -7,7 +7,7 @@ import {ProjectTaskPackageOrigin,type TaskPackageOriginalWork} from './ProjectTa
 import { bridge } from './bridge';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutSavedPosition, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
-import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary } from './ProjectWorkBinding';
+import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
 import './local-workspace.css';
 import './project-development.css';
 import './project-workspace-manga.css';
@@ -547,6 +547,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const versionBuild = versionBuildFor(source, projectId, checkout);
   const webTools = selectedCopy && !differentBuildCopy ? checkoutFirstWebTools(source,projectId,checkout) : null;
   const nodeTools = webTools?.kind==='node' ? webTools : null;
+  const draftNodeTools = selectedCopy?.draftWorkingCopy===true && !differentBuildCopy
+    ? checkoutNodeToolObservation(source,projectId,checkout) : null;
   const buildToolsBlocked = !!nodeTools && (!nodeTools.runtimeReady || nodeTools.missing.length>0);
   const missingPnpm = !!nodeTools?.missing.includes('pnpm');
   const builtInSetupUnavailable = view?.runtime?.runtimeId==='managed_process_v1' && view.runtime.preparationAvailable===false;
@@ -556,12 +558,17 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     source.existingNodeBuildUnavailable === true || source.existingNodeBuildTask && !versionBuild :
     source?.editedDraftCopy === true && (source.editedDraftBuildUnavailable === true || source.editedDraftBuild && !versionBuild);
   const buildStepVisible = !filesOpen && !pending && !sourceConflict && !buildCopyMissing && !view?.draftRecoveryRequired;
-  const firstBuild = !!nodeTools && !versionBuild && !buildLookupUnavailable && can('projects.development.reviewDraftBuild');
+  const observedLockPath = source?.existingNodeBuildMissingLock;
+  const missingRequiredLock = !!selectedCopy && !differentBuildCopy && source?.projectId===projectId && source.checkoutId===checkout &&
+    sourceHash(source.sourceDigest) && source.existingNodeBuild===true &&
+    (observedLockPath==='package-lock.json'||observedLockPath==='pnpm-lock.yaml') ? observedLockPath : '';
+  const firstBuild = !!(nodeTools || missingRequiredLock) && !versionBuild && !buildLookupUnavailable && can('projects.development.reviewDraftBuild');
   const firstBuildVisible = firstBuild && buildStepVisible;
-  const showToolSetupByBuild = firstBuildVisible && buildToolsBlocked && !missingPnpm && !builtInSetupUnavailable && canReviewToolSetup;
+  const showToolSetupByBuild = firstBuildVisible && !missingRequiredLock && buildToolsBlocked && !missingPnpm &&
+    view?.runtime?.preparationAvailable===true && canReviewToolSetup;
   const modelStillNeeded = firstBuild && !buildToolsBlocked && view?.model?.configured!==true;
-  const firstBuildAction = !firstBuildVisible ? '' : showToolSetupByBuild ? 'tools' : buildToolsBlocked ? 'refresh' : modelStillNeeded ? 'model' : 'review';
-  const canPrepareSavedBuild=!!(nodeTools&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
+  const firstBuildAction = !firstBuildVisible || missingRequiredLock ? '' : showToolSetupByBuild ? 'tools' : buildToolsBlocked ? 'refresh' : modelStillNeeded ? 'model' : 'review';
+  const canPrepareSavedBuild=!!(nodeTools&&!missingRequiredLock&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
     !view?.draftRecoveryRequired&&can('projects.development.inspect')&&can('projects.development.reviewDraftBuild'));
   const savedSource = source?.savedEditInSource;
   const checkedSave = savedFileHere && savedSource?.path===savedFileHere.path && savedSource.savedHash===savedFileHere.savedHash &&
@@ -573,6 +580,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     (!source || submission.versionedBuildSourceDigest===sourceVersion) ? submission : null;
   const versionWorkAtTop = buildStepVisible && !!versionBuild && source?.existingNodeBuild===true && can('tasks.open');
   const acceptedWorkAtTop = buildStepVisible && !versionBuild && !!acceptedBuild && can('tasks.open');
+  const showMissingLock = buildStepVisible && !!missingRequiredLock && !versionWorkAtTop && !acceptedWorkAtTop;
+  const exactBuildNext = !!(firstBuildAction || versionWorkAtTop || acceptedWorkAtTop || showMissingLock);
+  const openSelectedCopyFiles = () => {
+    if (!selectedCopy || draft.current.checkoutId!==selectedCopy.checkoutId || !can('projects.development.files.open')) return;
+    setHostEditor(null); setFileWindow({checkoutId:selectedCopy.checkoutId});
+  };
   const prepareSavedBuild = async ({position:saved,filesHandle,id}:CheckoutSaveForBuild) => {
     const viewHandle=handle.current, window=ownerWindow();
     if(!active||!canPrepareSavedBuild||!viewHandle||view?.viewHandle!==viewHandle||saved.projectId!==projectId||
@@ -643,6 +656,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   });
   const canReviewSelectedBuild=!differentBuildCopy&&!!selectedCopy&&
     (selectedCopy.draftWorkingCopy===true||source?.existingNodeBuild===true)&&can('projects.development.reviewDraftBuild');
+  const showBuildReviewFallback=canReviewSelectedBuild&&!versionBuild&&!firstBuild&&!acceptedWorkAtTop&&!buildLookupUnavailable;
+  const originalDraftToolBlock=showBuildReviewFallback&&draftNodeTools&&(!draftNodeTools.runtimeReady||draftNodeTools.missing.length>0)?draftNodeTools:null;
+  const prepareOriginalDraftTools=originalDraftToolBlock&&!originalDraftToolBlock.missing.includes('pnpm')&&canReviewToolSetup&&
+    view?.runtime?.runtimeId==='managed_process_v1'&&view.runtime.preparationAvailable===true;
   const findSameSourceWeb=!!versionBuild&&canReviewSelectedBuild&&can('projects.development.inspect');
   const findSavedWeb=()=>{
     if(disabled||entered.current||!alive.current||!latest.current.active||!selectedCopy||
@@ -666,7 +683,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
     {importEditorNotice && <p className="pw-local-inline-notice" role="status">{importEditorNotice}</p>}
     {buildCopyMissing&&<p className="pw-local-inline-notice" role="status">原构建所用的私人副本暂不可用，没有打开替代副本。</p>}
-    {(firstBuildAction||versionWorkAtTop||acceptedWorkAtTop||checkedSave&&buildStepVisible)&&<section ref={buildStepSection} aria-label="这份私人副本的构建下一步">
+    {(exactBuildNext||checkedSave&&buildStepVisible)&&<section ref={buildStepSection} aria-label="这份私人副本的构建下一步">
       <p className="pw-field-hint">本机副本 <bdi>{selectedCopy?.name||name}</bdi> · <code>{checkout.slice(0,8)}</code>。
         {sourceVersion?<> 已保存源码版本 <code>{sourceVersion.slice(0,10)}</code>。</>:
           acceptedWorkAtTop?<> 已交办版本 <code>{acceptedBuild!.versionedBuildSourceDigest.slice(0,10)}</code>。</>:null}</p>
@@ -679,6 +696,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         {acceptedBuild?.error&&<p className="pw-field-hint">{acceptedBuild.error}</p>}
         <div className="pw-form-actions"><Button ref={buildNextAction} disabled={disabled||versionWorkAtTop&&!can('projects.development.inspect')}
           onClick={()=>versionWorkAtTop?openVersionBuild('work'):acceptedBuild&&onOpenTask(acceptedBuild.taskId,acceptedBuild.checkoutId)}>打开原构建工作</Button></div>
+      </>:showMissingLock?<>
+        <p className="pw-field-hint" role="status">这份源码声明了要用的依赖，但副本根目录没有 <bdi>{missingRequiredLock}</bdi>。先补齐同版本的锁文件，再核对构建；不会自动生成锁或安装依赖。</p>
+        {can('projects.development.files.open')&&<div className="pw-form-actions"><Button ref={buildNextAction} disabled={disabled}
+          onClick={openSelectedCopyFiles}>打开这份副本的文件</Button></div>}
       </>:nodeTools&&firstBuildAction&&<>
         <p className="pw-field-hint" role="status">{buildToolsBlocked?
           <>{nodeTools.missing.length?`尚未核对到 ${nodeTools.missing.map(tool=>tool==='node'?'Node.js':tool).join('、')}。`:'开发环境尚未核对为可运行。'}
@@ -755,19 +776,28 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           aria-label={`打开 ${importedEntry.path} 源码`} onClick={()=>{setHostEditor(null);setFileWindow({checkoutId:importedEntry.checkoutId,firstEntry:importedEntry});}}>
           打开入口源码
         </Button>}
-        {selectedCopy && can('projects.development.files.open') && <Button variant={importedEntry?'ghost':'secondary'} disabled={busy || !!review || filesOpen}
-          onClick={() => { setHostEditor(null); setFileWindow({checkoutId:selectedCopy.checkoutId}); }}>{importedEntry?'编辑其他源文件':'编辑这份副本的文件'}</Button>}
+        {selectedCopy && !showMissingLock && can('projects.development.files.open') && <Button variant={importedEntry?'ghost':'secondary'} disabled={busy || !!review || filesOpen}
+          onClick={openSelectedCopyFiles}>{importedEntry?'编辑其他源文件':'编辑这份副本的文件'}</Button>}
         {savedFileHere && can('projects.development.files.open') && <Button variant="ghost" disabled={busy || !!review || filesOpen}
           onClick={() => { setHostEditor(null); setFileWindow({checkoutId:savedFileHere.checkoutId,resumeSaved:savedFileHere}); }}>回到上次保存的文件</Button>}
         {canReviewSelectedBuild &&
           (versionBuild ? !versionWorkAtTop && can('tasks.open') && <Button ref={buildNextAction} variant="secondary" disabled={disabled || !can('projects.development.inspect')}
             onClick={()=>openVersionBuild('work')}>查看原构建任务</Button> :
-          !firstBuild && !acceptedWorkAtTop && !buildLookupUnavailable && <Button ref={buildNextAction} variant="secondary"
-            disabled={disabled || buildToolsBlocked || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
-            onClick={reviewNodeBuild}>{source?.existingNodeBuild===true?(versionChanged?'核对修改后的 Node 构建':'审阅这个副本的 Node 构建'):source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
+          showBuildReviewFallback && (originalDraftToolBlock ? prepareOriginalDraftTools &&
+            <Button ref={buildNextAction} variant="secondary" disabled={disabled} onClick={prepareTools}>
+              {view.runtime?.installed===true?'检查与修复手机工具':'打开手机工具准备'}
+            </Button> : <Button ref={buildNextAction} variant="secondary"
+              disabled={disabled || buildToolsBlocked || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
+              onClick={reviewNodeBuild}>{source?.existingNodeBuild===true?(versionChanged?'核对修改后的 Node 构建':'审阅这个副本的 Node 构建'):
+                !draftNodeTools?'核对这份改稿的构建条件':source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'审阅这份改稿的 Node 构建'}</Button>))}
         {!differentBuildCopy&&selectedCopy&&savedWebLink&&<Button variant="ghost" disabled={disabled} onClick={findSavedWeb}>
           {findSameSourceWeb?'查找同一源码的已存网页':'查找这份副本的已存网页'}</Button>}
       </div>
+      {originalDraftToolBlock && !filesOpen && <p role="status" className="pw-field-hint">
+        {originalDraftToolBlock.missing.length?<>本机尚未核对到 {originalDraftToolBlock.missing.map(tool=>tool==='node'?'Node.js':tool).join('、')}。</>:
+          '本机开发环境尚未核对为可运行。'}
+        {originalDraftToolBlock.missing.includes('pnpm')&&' 内置工具准备不会用 npm 替代 pnpm。'} 仍可编辑这份改稿副本。
+      </p>}
       {buildLookupUnavailable && <p role="status" className="pw-field-hint">这一版的构建记录暂未核对，请重新读取项目条件，不重复交办。</p>}
       {nodeBlocked && can('projects.development.reviewDraftBuild') && <p className="pw-field-hint" role="status">{nodeBlocked} 你仍可浏览和编辑这个副本。</p>}
       <TextAreaField label="这次的目标" value={goal} isDisabled={disabled} onChange={value => { if (value.length <= 12000) { setGoal(value); retain({ ...draft.current, goal: value }); } }} hint="例如：做一个能在手机预览的番茄钟，先用本地数据。不要填写密码或令牌。" />
@@ -808,12 +838,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           disabled={busy||!!review||filesOpen} invoke={invoke} can={can} open={onOpenPackageOriginal}/>}
       {canPrepareTerminal && <div className="pw-form-actions"><Button variant="ghost" disabled={disabled} data-workspace-entry="project-copy-terminal"
         onClick={()=>void prepareTerminal()}>准备这份副本的终端</Button></div>}
-      {view.model?.configured !== true && !(firstBuildVisible&&modelStillNeeded&&can('projects.development.draft')) && <p className="pw-local-inline-notice">交办目标需要默认模型；直接编辑文件、找回已保存的网页不需要。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
+      {view.model?.configured !== true && (!exactBuildNext || firstBuildAction!=='model'&&!!goal.trim()) &&
+        <p className="pw-local-inline-notice">交办目标需要默认模型；直接编辑文件、找回已保存的网页不需要。<Button variant={exactBuildNext?'ghost':'secondary'}
+          disabled={busy || pending || !!review || filesOpen || exactBuildNext&&(disabled||!can('projects.development.draft'))}
+          onClick={exactBuildNext?connectBuildModel:onConnectModel}>连接模型</Button></p>}
       <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : checkoutKindSummary(source, projectId, checkout) || '可先编辑文件；运行命令前核对工具'}>
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
         {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>安装依赖、构建或启动仍须核对具体方案；不会因为发现项目类型就运行脚本。</p>}
         <p>模型调用需要相应网络；已有文件和副本不会因离线而删除。退出页面不等于停止任务，重开请查看原任务。</p>
-        {canViewToolSetup&&!showToolSetupByBuild&&<Button variant="secondary" disabled={disabled||!!checkout&&!selectedCopy}
+        {canViewToolSetup&&!showToolSetupByBuild&&!showMissingLock&&<Button variant="secondary" disabled={disabled||!!checkout&&!selectedCopy}
           data-workspace-entry="project-default-tools" onClick={prepareTools}>{androidWrapper ? '查看手机基础工具（不安装 SDK）' : '查看工具准备'}</Button>}
         {source && <dl className="pw-facts"><div><dt>原项目</dt><dd>{projectId}</dd></div><div><dt>私人副本</dt><dd>{checkout}</dd></div><div><dt>已读取版本</dt><dd>{source.sourceDigest}</dd></div><CheckoutGuide source={source} projectId={projectId} checkoutId={checkout}/></dl>}
       </AccordionItem></Accordion>
