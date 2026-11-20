@@ -144,6 +144,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     });
   };
   const openFiles = async () => {
+    let checkedEntry = entry;
     const pin = sourceMember && { taskId: sourceMember.taskId, operationId: sourceMember.operationId, artifactId: sourceMember.artifactId,
       artifactSha256: sourceMember.artifactSha256, path: sourceMember.path, fileSha256: sourceMember.fileSha256 };
     const result = await invoke(hostFile ? 'openHostChange' : pin ? 'openSource' : 'open', hostFile ? { hostFile } : pin ? { sourceMember: pin } : {}, value => {
@@ -153,15 +154,19 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       if (pin && (value.executionAuthorized !== false || !value.savedMember || !Object.entries(pin).every(([k, v]) => v === value.savedMember[k]) ||
           value.savedMember.projectId !== projectId || value.savedMember.checkoutId !== checkoutId || value.savedMember.bytes !== sourceMember!.bytes ||
           typeof value.savedMember.text !== 'string' || new TextEncoder().encode(value.savedMember.text).length !== sourceMember!.bytes)) throw new Error('原任务保存的文件与所选副本不符。');
-      if(entry && (value.readOnly!==true||value.sourceDigest!==entry.sourceDigest)){
+      if(entry && value.readOnly!==true){
         void latest.current.run(command+'close',{viewHandle,filesHandle:value.filesHandle}).catch(()=>{});
-        throw new Error('副本或入口已变化。请回项目重新核对，未读取替代文件。');
+        throw new Error('未核对到原副本的文件列表，未读取替代文件。');
+      }
+      if(entry && value.sourceDigest!==entry.sourceDigest){
+        checkedEntry=undefined;
+        setError('入口文件所属版本已变化，只显示同一副本的文件列表。');
       }
       handle.current = value.filesHandle; setListing(value);
     });
-    const target = pin || hostFile || resume || entry;
+    const target = pin || hostFile || resume || checkedEntry;
     if (result && target && handle.current === result.filesHandle && live(generation.current))
-      await readFile(target.path, { position: resume, entry });
+      await readFile(target.path, { position: resume, entry: checkedEntry });
   };
   const edit = (value: string) => {
     const original = currentFile.current;

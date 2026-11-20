@@ -92,7 +92,7 @@ import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,originalImportedEditor,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor} from './ProjectDevelopmentWorkspace';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import {ContinuedProjectBinding} from './ProjectWorkBinding';
@@ -2166,14 +2166,19 @@ export default function App(){
   const outcome=taskScroll.current?.querySelector<HTMLElement>('.pw-task-outcome');
   if(outcome){origin.focusOutcome=false;outcome.tabIndex=-1;outcome.focus({preventScroll:true});outcome.scrollIntoView({block:'start',behavior:'instant'})}
  },[taskOpen,taskOpening,taskId,taskLayer,selectedTask?.id,snapshot?.view?.taskId]);
- const openProjectWork=(id:string,entry:ProjectWorkEntry='overview',query='',checkoutId?:string)=>{
+ const openProjectWork=(id:string,entry:ProjectWorkEntry='overview',query='',checkoutId?:string,expected?:{runId:string;epoch:number})=>{
   const projectId=String(state.projectId||'');
   if(!projectId||bridge.getState().state.projectId!==projectId||bridge.getState().state.filePath)return;
-  projectTaskReturn.current={projectId,checkoutId,query,taskId:id,entry,focusOutcome:entry==='outcomes'};
+  const origin={projectId,checkoutId,query,taskId:id,entry,focusOutcome:entry==='outcomes'};
+  projectTaskReturn.current=origin;
   const navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch(),request=++searchOpenRequest.current;
   const current=()=>searchOpenRequest.current===request&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&
    !document.hidden&&bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath;
-  openTask(id,entry==='outcomes'?'overview':entry,false,undefined,query,undefined,current);
+  openTask(id,entry==='outcomes'?'overview':entry,false,undefined,query,expected,current,undefined,expected?()=>{
+   if(!current()||projectTaskReturn.current!==origin)return;
+   projectTaskReturn.current=null;
+   setLocalError('原构建的工作已换轮或暂不可读取。未打开其他轮次，固定网页仍保留。');
+  }:undefined);
  };
  const openProjectReceipt=(id:string,checkoutId?:string)=>openProjectWork(id,'overview','',checkoutId);
  const drillEndedWork=()=>{
@@ -3452,7 +3457,10 @@ export default function App(){
   scope={filter as WorkCollectionFilter} query={taskQuery} selectScope={selectWorkScope} clearQuery={()=>setTaskQuery('')} drillEnded={drillEndedWork}
   start={()=>{void navigate('butler')}} history={()=>{void openRelatedWorkspace('history')}} open={(id,entry,query,run)=>openTask(id,entry,false,undefined,query,run,undefined,undefined,()=>setLocalError('这份工作未能打开，已留在工作列表。'))}
   registerReturn={registerWorkReturn} extra={can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}/>;
- const showProjectSection=(section:'work'|'files')=>{projectPreview.hide();setProjectSections(previous=>({...previous,[String(state.projectId||'')]:section}))};
+ const showProjectSection=(section:'work'|'files')=>{
+  if(section==='work'&&projectPreview.expanded&&projectPreview.fromSavedWebShelf){projectPreview.returnToSavedWebShelf();return}
+  projectPreview.hide();setProjectSections(previous=>({...previous,[String(state.projectId||'')]:section}))
+ };
  const dismissProjectDraftReturn=(id:string)=>{setProjectDraftReturn(null);setProjectWorkPresentations(previous=>({...previous,[id]:{open:false,mode:'default'}}));};
  const openStagedProjectDraft=(target:ProjectDraftReturn)=>{
   const ticket=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
@@ -3471,16 +3479,21 @@ export default function App(){
  const projectListBusy=asArray<string>(state.moduleBusy).includes('workspace.list')||packageOpening;
  const projectListInput=obj(obj(state.moduleResultInputs)['workspace.list']);
  const projectListError=projectListInput.projectId===state.projectId?String(obj(state.moduleErrors)['workspace.list']||''):'';
- const importedFileTarget=currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&
-  projectListInput.projectId===currentProject.id&&!projectListBusy&&!projectListError&&!files.length&&!fileQuery&&
-  !projectWorkDrafts[currentProject.id]?.operation&&can('projects.development.read')&&can('projects.development.files.open')?
+ const canOpenImported=canEditImportedCheckout(can);
+ const importedCopy=currentProject&&route==='projects'&&!previewBlocked&&!projectPreview.expanded&&!packageOpening&&!state.localSourceIntake?.window&&
+  !projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&!projectWorkDrafts[currentProject.id]?.operation&&canOpenImported?
   originalImportedEditor(currentProject.id):null;
- const openOriginalImportedFiles=(target:ProjectImportedEditor)=>{
+ const importedWorkTarget=importedCopy&&projectSection==='work'&&!projectWorkPresentations[importedCopy.projectId]?.open&&
+  !projectWorkDrafts[importedCopy.projectId]?.expanded?importedCopy:null;
+ const importedFileTarget=importedCopy&&projectSection==='files'&&projectListInput.projectId===importedCopy.projectId&&
+  !projectListBusy&&!projectListError&&!files.length&&!fileQuery?importedCopy:null;
+ const openOriginalImportedFiles=(target:ProjectImportedEditor,from:'work'|'files')=>{
   const live=bridge.getState().state,list=obj(obj(live.moduleResultInputs)['workspace.list']);
-  if(route!=='projects'||projectSection!=='files'||taskOpen||projectPreview.expanded||projectWorkReviewOpen||
-   !can('projects.development.read')||!can('projects.development.files.open')||projectWorkDrafts[target.projectId]?.operation||
-   list.projectId!==target.projectId||list._failed===true||!Array.isArray(live.files)||live.files.length||
-   asArray<string>(live.moduleBusy).includes('workspace.list')||!sameImportedEditor(target,originalImportedEditor(target.projectId))){
+  if(route!=='projects'||projectSection!==from||live.localSourceIntake?.window||
+   !sameImportedEditor(target,from==='work'?importedWorkTarget:importedFileTarget)||
+   !sameImportedEditor(target,originalImportedEditor(target.projectId))||
+   from==='files'&&(list.projectId!==target.projectId||list._failed===true||!Array.isArray(live.files)||live.files.length||
+    asArray<string>(live.moduleBusy).includes('workspace.list'))){
     setLocalError('原项目或导入副本状态已变化，没有打开其他文件。');return;
   }
   setProjectImportedEditor(target);
@@ -3491,7 +3504,7 @@ export default function App(){
   <h3>{fileQuery?'没有匹配的文件':importedFileTarget?'导入源码在本机副本':'暂无列出的文件'}</h3>
   <p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':importedFileTarget?'这里还没有正式文件。编辑和后续本机构建都用这份导入副本。':'从一个新文件开始，也可以重新读取当前项目。'}</p>
   {fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<div className="pw-action-row">
-   {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget)}>编辑导入的本机源码</Button>}
+   {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget,'files')}>编辑导入的本机源码</Button>}
    {can('projects.newFile')&&<Button variant={importedFileTarget?'ghost':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('file')}>{importedFileTarget?'新建正式文件':'新建文件'}</Button>}
    {can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}
   </div>}
@@ -3509,11 +3522,19 @@ export default function App(){
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
+        onEditImported={importedWorkTarget?()=>openOriginalImportedFiles(importedWorkTarget,'work'):undefined}
         savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
           canPreview={can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&!packageOpening}
-          openWork={can('tasks.open')?(task,checkout)=>openProjectWork(task,'outcomes','',checkout):undefined}
-          show={(choices,current)=>{const shown=projectPreview.showPackage(choices,undefined,current);if(shown)packageReturn.current=null;return shown;}}/>}
+          openWork={can('tasks.open')?({taskId,checkoutId,runId,epoch})=>openProjectWork(taskId,'outcomes','',checkoutId,{runId,epoch}):undefined}
+          show={(choices,current,visit)=>{
+           const shown=projectPreview.showPackage(choices,undefined,current,visit);
+           if(shown){
+            if(projectScroll.current)projectDirectory.rememberScroll(projectScroll.current.scrollTop);
+            packageReturn.current=null;
+           }
+           return shown;
+          }}/>}
         startContent={can('projects.development.read')||can('projectWork.open')&&can('projectWork.confirm')?<ProjectWorkLauncher key={currentProject.id}
           active={route==='projects'&&!taskOpen&&!state.filePath&&projectSection==='work'&&!projectPreview.expanded&&!projectPickerOpen&&!newProjectOpen&&!newFileOpen&&!workOpen&&!commandOpen}
           resumeProfile={!!projectWorkDrafts[currentProject.id]?.operation}
@@ -3574,7 +3595,9 @@ export default function App(){
   <div className="pw-main-workspace" ref={workspace}>
   {isPrimaryRoute?<NavigationChrome>
   {(route!=='chat'||desktopNavigation)&&<header className="pw-app-header">
-   {route==='tasks'&&endedScopeOrigin?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回工作总览" title="返回工作总览" onClick={restoreWorkScope}/>:route==='projects'&&state.filePath?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回项目文件" disabled={fileAdoption.pending||!!state.fileSaving} onClick={()=>{if(!fileAdoption.isPending()&&!bridge.getState().state.fileSaving&&!projectFileBack.current?.())run('projects.close',fileIdentity)}}/>:(route==='projects'||route==='tasks')&&relatedOrigin.current?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label={relatedOrigin.current.label} title={relatedOrigin.current.label} onClick={returnFromSecondary}/>:route==='projects'&&state.projectTaskReturn?.taskId?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="回到原任务" onClick={()=>openTask(state.projectTaskReturn.taskId)}/>:navigationTrigger}
+   {route==='projects'&&projectPreview.expanded&&projectPreview.fromSavedWebShelf?<IconButton ref={navigationBackGlass} icon={IconArrowLeft}
+    aria-label="返回已保存的网页" title="返回已保存的网页" disabled={!projectPreview.canReturnToSavedWebShelf} onClick={projectPreview.returnToSavedWebShelf}
+   />:route==='tasks'&&endedScopeOrigin?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回工作总览" title="返回工作总览" onClick={restoreWorkScope}/>:route==='projects'&&state.filePath?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回项目文件" disabled={fileAdoption.pending||!!state.fileSaving} onClick={()=>{if(!fileAdoption.isPending()&&!bridge.getState().state.fileSaving&&!projectFileBack.current?.())run('projects.close',fileIdentity)}}/>:(route==='projects'||route==='tasks')&&relatedOrigin.current?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label={relatedOrigin.current.label} title={relatedOrigin.current.label} onClick={returnFromSecondary}/>:route==='projects'&&state.projectTaskReturn?.taskId?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="回到原任务" onClick={()=>openTask(state.projectTaskReturn.taskId)}/>:navigationTrigger}
    {route==='tasks'?<WorkFindTitle editing={taskFiltersOpen} query={taskQuery} onQuery={setTaskQuery} edit={()=>setTaskFiltersOpen(true)} close={closeWorkFind}/>:route==='chat'?<div className="pw-current-work pw-chat-title"><h1 title={currentTitle} aria-label={messages.length?currentTitle:'PocketWorld'}>{messages.length>0&&currentConversation&&can('conversation.organization.read')?<Button variant="ghost" className="pw-chat-title-trigger" aria-label="整理当前对话" onClick={()=>setOrganizationTarget(currentConversation.id)}><span className="pw-chat-title-text">{currentTitle}</span><IconChevronDown size={16} aria-hidden="true"/></Button>:messages.length?currentTitle:'PocketWorld'}</h1></div>:route==='projects'&&!state.filePath?<PopoverTrigger isOpen={projectPickerOpen} onOpenChange={setProjectPickerOpen}><Button variant="ghost" className="pw-object-title" aria-label="切换项目"><h1>{currentTitle}</h1><IconChevronDown size={16}/></Button><Popover aria-label="切换项目"><PopoverHeader title="项目"/><div className="pw-project-menu">{projects.map(project=><Button key={project.id} variant="ghost" aria-current={project.id===state.projectId?'true':undefined} onClick={()=>{setProjectPickerOpen(false);run('projects.select',{id:project.id})}}><IconFolder size={17}/><span>{project.name}</span>{project.id===state.projectId&&<small>当前</small>}</Button>)}{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>{setProjectPickerOpen(false);run('projects.localSource.open')}}>从手机导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>新项目</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
    {isChatSurface?<div ref={headerActionsGlass} className="pw-header-actions pw-navigation-glass" role="group" aria-label="对话操作">
     {can('remoteInbox.state')&&Number(state.remoteInbox?.unread||0)>0&&<IconButton icon={IconNotification} aria-label={'外部消息 · '+state.remoteInbox.unread+' 条未读'} title="外部未读消息" onClick={openUnreadMessages}/>}

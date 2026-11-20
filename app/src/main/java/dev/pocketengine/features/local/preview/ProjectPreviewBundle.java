@@ -73,5 +73,8 @@ public final class ProjectPreviewBundle {
         if(!resources.containsKey(entryPath.substring(slash+1)))throw new SecurityException("预览入口不在实际资源清单中");return new Verified(checkout,project,source,entryPath,relativeRoot,resources,total[0]);
     }
     private static String encoded(String path)throws Exception{return new URI(null,null,"/"+path,null).getRawPath().substring(1);}
-    public static String mime(String path){String name=path.toLowerCase(java.util.Locale.ROOT);int dot=name.lastIndexOf('.');String ext=dot<0?"":name.substring(dot+1);return switch(ext){case "html","htm"->"text/html";case "css"->"text/css";case "js","mjs","cjs"->"text/javascript";case "json","map"->"application/json";case "svg"->"image/svg+xml";case "png"->"image/png";case "jpg","jpeg"->"image/jpeg";case "gif"->"image/gif";case "webp"->"image/webp";case "ico"->"image/x-icon";case "woff"->"font/woff";case "woff2"->"font/woff2";case "ttf"->"font/ttf";case "wasm"->"application/wasm";default->"";};}
+    public static String mime(String path){
+        // The Vite public-directory convention places this plain-text file next to index.html.
+        if(path.equals("robots.txt")||path.equals("dist/robots.txt"))return "text/plain";
+        String name=path.toLowerCase(java.util.Locale.ROOT);int dot=name.lastIndexOf('.');String ext=dot<0?"":name.substring(dot+1);return switch(ext){case "html","htm"->"text/html";case "css"->"text/css";case "js","mjs","cjs"->"text/javascript";case "json","map"->"application/json";case "svg"->"image/svg+xml";case "png"->"image/png";case "jpg","jpeg"->"image/jpeg";case "gif"->"image/gif";case "webp"->"image/webp";case "ico"->"image/x-icon";case "woff"->"font/woff";case "woff2"->"font/woff2";case "ttf"->"font/ttf";case "wasm"->"application/wasm";default->"";};}
 }

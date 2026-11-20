@@ -9,6 +9,8 @@ type Version={taskId:string;operationId:string;runId:string;epoch:number;project
   sourceDigest:string;artifactId:string;archiveSha256:string;archiveBytes:number;createdAt:number;versionSequence:number;entryPath:'dist/index.html'};
 type Shelf={checkoutId:string;checkouts:Copy[];items:Version[];hasMore:boolean;nextCursor:string;readLimited:boolean};
 type BuildSelection={projectId:string;checkoutId:string;taskId:string;sourceDigest:string;runId:string;epoch:number};
+export type SavedWebWork=Pick<Version,'taskId'|'checkoutId'|'runId'|'epoch'>;
+export type SavedWebShelfVisit={restore:()=>void;openOriginalWork?:()=>void};
 export type FindSavedBuildWeb=(selection:BuildSelection)=>boolean;
 // This link only reveals the existing receipt shelf in the same project workspace.
 export const ProjectSavedWebLink=createContext<RefObject<FindSavedBuildWeb|null>|null>(null);
@@ -34,14 +36,15 @@ function page(value:unknown,project:string,selected:string,cursor:string):Shelf 
 
 /** Exact local receipts only. Opening one listed row re-enters B4; visiting the shelf reads no webpage body. */
 export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: {
-  project:string;active:boolean;canPreview:boolean;openWork?:(task:string,checkout:string)=>void;
-  show:(choices:PackagePreviewChoices,stillCurrent:()=>boolean)=>boolean;
+  project:string;active:boolean;canPreview:boolean;openWork?:(work:SavedWebWork)=>void;
+  show:(choices:PackagePreviewChoices,stillCurrent:()=>boolean,visit:SavedWebShelfVisit)=>boolean;
 }) {
   const [expanded,expand]=useState(false),[shelf,setShelf]=useState<Shelf|null>(null),[copy,setCopy]=useState('');
   const [selection,select]=useState<BuildSelection|null>(null);
   const link=useContext(ProjectSavedWebLink),heading=useRef<HTMLParagraphElement>(null),focusOnOpen=useRef(false);
   const [busy,setBusy]=useState(''),[error,setError]=useState('');
-  const current=useRef({project,active,copy,selection});current.current={project,active,copy,selection};
+  const current=useRef({project,active,copy,selection,shelf});current.current={project,active,copy,selection,shelf};
+  const restoreVersion=useRef<(()=>void)|null>(null);
   const alive=useRef(false),request=useRef<object|null>(null),expandedRef=useRef(false);
   const readWindow=()=>{const state=bridge.getState(),view=state.view as {resumeRevision?:number;taskId?:string|null;section?:string|null}|undefined;
     return {doc:bridge.getDocumentEpoch(),resume:view?.resumeRevision,project:state.state.projectId,file:state.state.filePath,task:view?.taskId,section:view?.section};};
@@ -85,23 +88,48 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
     if(!active||!expanded||!focusOnOpen.current||!heading.current||document.hidden)return;
     focusOnOpen.current=false;heading.current.focus({preventScroll:true});heading.current.scrollIntoView({block:'nearest'});
   });
+  useLayoutEffect(()=>{
+    const restore=restoreVersion.current;
+    if(!active||!restore)return;
+    // The parent work tab restores its own scroll when it becomes visible.
+    const frame=requestAnimationFrame(()=>{
+      if(restoreVersion.current!==restore)return;
+      restoreVersion.current=null;
+      if(current.current.active)restore();
+    });
+    return()=>cancelAnimationFrame(frame);
+  },[active]);
   // A later model failure in the same task does not erase an earlier save. Do not
   // filter on the task's *current* run; every displayed row still owns its original run and operation.
   const matches=(v:Version)=>!selection||v.checkoutId===selection.checkoutId&&v.taskId===selection.taskId&&v.sourceDigest===selection.sourceDigest;
   const versions=shelf?.items.filter(matches)||[];
   const selectedName=selection&&shelf?.checkouts.find(c=>c.id===selection.checkoutId)?.name;
-  const open=(picked:Version)=>void observe(picked.operationId,async(here,original)=>{
-    if(!canPreview||!matches(picked)||picked.checkoutId!==shelf?.checkoutId||!shelf.items.some(v=>v===picked))return;
-    const target={taskId:picked.taskId,operationId:picked.operationId};
-    const response=await bridge.command('projects.package.preview.inspect',target);if(!here())return;
-    const exact=packagePreviewChoices(response,target);
-    if(!exact||exact.mode!=='web_output'||exact.projectId!==project||exact.checkoutId!==picked.checkoutId||
-      exact.sourceDigest!==picked.sourceDigest||exact.artifactId!==picked.artifactId||exact.artifactSha256!==picked.archiveSha256||exact.entryPath!==picked.entryPath||
-      exact.originalBuild&&(exact.originalBuild.runId!==picked.runId||exact.originalBuild.epoch!==picked.epoch))
-      throw Error('选中的已保存网页与当前回执不同，没有改用其它版本。');
-    if(selection&&!exact.originalBuild)throw Error('未核对到这条记录的原构建轮次，没有按该轮打开网页。可回原工作，或单独核对副本的归档版本。');
-    if(!show(exact,()=>original()&&current.current.copy===picked.checkoutId&&current.current.selection===selection))throw Error('项目窗口已变化，原网页没有打开。');
-  });
+  const open=(picked:Version,trigger:HTMLButtonElement)=>{
+    const scroll=trigger.closest<HTMLElement>('.pw-projects-page');
+    const offset=scroll?trigger.getBoundingClientRect().top-scroll.getBoundingClientRect().top:0;
+    void observe(picked.operationId,async(here,original)=>{
+      if(!canPreview||!matches(picked)||picked.checkoutId!==shelf?.checkoutId||!shelf.items.includes(picked))return;
+      const target={taskId:picked.taskId,operationId:picked.operationId};
+      const response=await bridge.command('projects.package.preview.inspect',target);if(!here())return;
+      const exact=packagePreviewChoices(response,target);
+      if(!exact||exact.mode!=='web_output'||exact.projectId!==project||exact.checkoutId!==picked.checkoutId||
+        exact.sourceDigest!==picked.sourceDigest||exact.artifactId!==picked.artifactId||exact.artifactSha256!==picked.archiveSha256||exact.entryPath!==picked.entryPath||
+        exact.originalBuild&&(exact.originalBuild.runId!==picked.runId||exact.originalBuild.epoch!==picked.epoch))
+        throw Error('选中的已保存网页与当前回执不同，没有改用其它版本。');
+      if(selection&&!exact.originalBuild)throw Error('未核对到这条记录的原构建轮次，没有按该轮打开网页。可回原工作，或单独核对副本的归档版本。');
+      const sameShelf=()=>original()&&expandedRef.current&&current.current.copy===picked.checkoutId&&current.current.selection===selection&&
+        current.current.shelf?.items.includes(picked)===true;
+      if(!show(exact,sameShelf,{
+        restore:()=>{restoreVersion.current=()=>{
+          if(!sameShelf())return;
+          if(!trigger.isConnected||trigger.disabled||trigger.closest('[hidden],[inert]')){heading.current?.focus({preventScroll:true});return;}
+          if(scroll?.contains(trigger))scroll.scrollTop+=trigger.getBoundingClientRect().top-scroll.getBoundingClientRect().top-offset;
+          trigger.focus({preventScroll:true});
+        };},
+        openOriginalWork:exact.originalBuild&&openWork?()=>{if(sameShelf())openWork(picked);}:undefined,
+      }))throw Error('项目窗口已变化，原网页没有打开。');
+    });
+  };
   return <Accordion variant="divided" expandedKeys={expanded?['saved-build-web']:[]} onExpandedChange={keys=>{
     const next=keys.has('saved-build-web');expandedRef.current=next;expand(next);
     if(!next&&request.current){request.current=null;setBusy('');}
@@ -125,15 +153,15 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
         <strong>{selection&&`第 ${v.epoch} 轮 · `}保存版本 {v.versionSequence}</strong> <time dateTime={new Date(v.createdAt).toISOString()}>{new Date(v.createdAt).toLocaleString()}</time>
         {selection&&(v.epoch!==selection.epoch||v.runId!==selection.runId)&&<p className="pw-field-hint">{v.epoch<selection.epoch?'较早轮次保存的网页':'另一轮保存的网页'}，不是进入时所选轮次的结果。</p>}
         <p className="pw-field-hint">源码 {v.sourceDigest.slice(0,10)} · 固定包 {v.archiveSha256.slice(0,10)}</p>
-        <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={!canPreview||!!busy||!active} onClick={()=>open(v)}>
+        <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={!canPreview||!!busy||!active} onClick={event=>open(v,event.currentTarget)}>
           {busy===v.operationId?'正在核对原网页…':'打开这版网页'}</Button>
-          {!selection&&openWork&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>openWork(v.taskId,v.checkoutId)}>查看原工作</Button>}</div>
+          {!selection&&openWork&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>openWork(v)}>查看原工作</Button>}</div>
       </li>)}</ul>}
       {error&&<p role="alert">{error}</p>}
       <div className="pw-form-actions">
         {shelf?.hasMore&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read(shelf.checkoutId,shelf.nextCursor)}>更多原版本</Button>}
         <Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read(selection?.checkoutId||copy)}>{copy?'刷新这份副本':'刷新副本清单'}</Button>
-        {selection&&openWork&&<Button variant="secondary" size="small" disabled={!!busy||!active} onClick={()=>openWork(selection.taskId,selection.checkoutId)}>查看原构建任务</Button>}
+        {selection&&openWork&&<Button variant="secondary" size="small" disabled={!!busy||!active} onClick={()=>openWork(selection)}>查看原构建任务</Button>}
         {selection&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>{select(null);read(selection.checkoutId);}}>查看这份副本的所有版本</Button>}
         {error&&copy&&!selection&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read('')}>重新选择副本</Button>}
       </div>

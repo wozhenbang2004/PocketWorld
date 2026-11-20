@@ -200,6 +200,11 @@ export function ButlerPreparationEntries({ conversationId = '', sourceTaskId, re
 type Choices = { mode: string; projectId: string; checkoutId: string };
 const choicesOf = (value: Data): Choices => ({ mode: ['main_screen', 'background'].includes(value.mode) ? value.mode : 'background', projectId: text(value.projectId), checkoutId: text(value.checkoutId) });
 const encodeChoices = (value: Choices, kind: string) => kind === 'phone' ? JSON.stringify([value.mode]) : JSON.stringify([value.projectId, value.checkoutId]);
+const projectMethods = {
+  draft: {id:'draft',label:'只出改稿和差异',description:'不写回原件，不运行命令。'},
+  saved: {id:'saved',label:'接着改我另存的一稿',description:'只把你选的版本交给模型，不读工程或其他稿。'},
+  project: {id:'project',label:'按现有项目流程工作',description:'仍需核对这次使用的源码、模型与权限。'},
+};
 
 /** Reuses the existing work goal, project selectors, PermissionReview and Vaul
  * object page. Only the native typed proposal can enter the original admission. */
@@ -385,57 +390,68 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   const checkouts = rows(inspection?.checkouts), contract = contractOf(view), targetTaskId = text(receipt?.taskId) || text(view?.target?.taskId);
   const phoneShown=review&&view?.kind==='phone'?reviewedPhone(review,view,target,choices.mode):null;
   const phoneHistory=view?.kind==='phone'&&(!!receipt||!!view.target?.taskId);
-  const boundProjectRun = view?.kind === 'project' && view.target?.taskId === targetTaskId && view.target?.canOpenOriginalRun === true &&
-    !!text(view.target.originalRunId) && Number.isSafeInteger(view.target.originalEpoch) && view.target.originalEpoch > 0
-    ? {runId: text(view.target.originalRunId), epoch: Number(view.target.originalEpoch)} : null;
+  const projectView = view?.kind === 'project' && preparation(view, target) ? view : null;
+  const projectTarget = projectView && identifier(targetTaskId) && projectView.target?.taskId === targetTaskId && projectView.targetTaskId === targetTaskId
+    ? projectView.target : null;
+  const acceptedProjectReceipt = projectView && receipt?.kind === 'project' && receipt.status === 'accepted' && receipt.queryOnly === true &&
+    identifier(projectView.clientMessageId) && receipt.clientMessageId === projectView.clientMessageId && identifier(receipt.taskId) &&
+    (projectView.target == null || !!projectTarget);
+  const projectRegistered = projectView?.available === true && (!!projectTarget || !!acceptedProjectReceipt);
+  // A receipt proves registration, but only the original preparation read binds an execution.
+  const boundProjectRun = projectTarget?.canOpenOriginalRun === true && identifier(projectTarget.originalRunId) && positive(projectTarget.originalEpoch) &&
+    projectTarget.originalRunId === projectTarget.runId && projectTarget.originalEpoch === projectTarget.epoch
+    ? {runId: projectTarget.originalRunId, epoch: projectTarget.originalEpoch} : null;
   const projectName = projects.find(project => project.id === choices.projectId)?.name || '原项目';
+  const projectMethod = projectMethods[usingRevision ? 'saved' : draftOnly ? 'draft' : 'project'];
   const suggestedProject = projects.find(project => project.id === view?.projectId);
   const chooseProject = (projectId: string) => {
     if (!canPrepare || projectId === choicesRef.current.projectId) return;
     setCopy(null); edit({ ...choicesRef.current, projectId, checkoutId: '' });
     if (projectId) inspectProject();
   };
-  const title = reviewing ? '核对本次执行' : inline ? '准备这次工作' : '管家为你准备的工作';
+  const title = reviewing ? '核对本次执行' : projectRegistered ? '原项目工作' : inline ? '准备这次工作' : '管家为你准备的工作';
   const description = view?.kind === 'phone' ? '原请求 · 手机操作' : view?.kind === 'project' ? '原请求 · 项目开发' : '读取原提案与准备状态';
   const body = <div ref={scroller} className={inline ? 'pw-preparation-body' : 'pw-drawer-body pw-task-body pw-preparation-body'}>
         {error && <p className="pw-error" role="alert">{error}</p>}{draftError && <p className="pw-error" role="alert">{draftError}</p>}
         {draftError && !saved && <Button variant="ghost" disabled={busy || saving} onClick={() => { const original = handle.current; handle.current = ''; closeNative(original); onClose(); }}>放弃本页未保存的选择并返回</Button>}
-        {(!view || stale) && <section><p className="pw-muted">{stale ? '原准备窗口已变化，保留选择后重新核对即可继续。' : busy ? '正在读取原提案…' : '原提案尚未完整读取。'}</p><Button variant="secondary" disabled={busy || saving} onClick={() => void read()}>重新读取原提案</Button></section>}
+        {(!view || stale) && <section><p className="pw-muted" role={projectRegistered ? 'status' : undefined}>{projectRegistered ? '原任务已登记，执行进展待重新核对。' : stale ? '原准备窗口已变化，保留选择后重新核对即可继续。' : busy ? '正在读取原提案…' : '原提案尚未完整读取。'}</p><Button variant="secondary" disabled={busy || saving || projectRegistered && !can('butler.preparation.read')} onClick={() => void read()}>{projectRegistered ? '核对执行进展' : '重新读取原提案'}</Button></section>}
         {view && <>
-          {!(view.kind==='phone'&&(review||phoneHistory))&&<div className="pw-owner-work-handling"><div><strong>{stateLabels[view.state] || '状态待核对'}</strong><p>{text(view.reason) || (targetTaskId ? '这份准备已关联原任务，按实际执行进展查看结果。' : '核对目标、所需能力与本次范围后，再决定开始。')}</p></div></div>}
+          {!projectRegistered&&!(view.kind==='phone'&&(review||phoneHistory))&&<div className="pw-owner-work-handling"><div><strong>{stateLabels[view.state] || '状态待核对'}</strong><p>{text(view.reason) || (targetTaskId ? '这份准备已关联原任务，按实际执行进展查看结果。' : '核对目标、所需能力与本次范围后，再决定开始。')}</p></div></div>}
           {contract && !review && !phoneHistory && <WorkContract goal={contract.goal} contract={contract} />}
           {view.kind==='phone'&&!review&&<ButlerPhoneReceipt view={view} raw={receipt} target={target} inline={inline} disabled={blocked}
             onCheck={can('butler.preparation.query')?()=>void invoke('butler.preparation.query',{},acceptReceipt):undefined}
             onRun={onOpenPhoneRun&&can('tasks.open')?t=>void close(()=>onOpenPhoneRun(t)):undefined}
             onReport={onOpenPhoneReport&&can('phone.result.original')?t=>void close(()=>{if(phoneReportInSource(t))onOpenPhoneReport(t)}):undefined}/>}
           {phoneHistory&&contract&&!review&&<Accordion><AccordionItem id="phone-original-terms" title="查看原委托与验收方式"><WorkContract goal={contract.goal} contract={contract}/></AccordionItem></Accordion>}
-          {view.kind!=='phone'&&receipt && <section className="pw-preparation-receipt" aria-label="原启动记录"><p role="status">{text(receipt.message) || (receipt.status === 'accepted' ? '原任务已保存。' : '原启动回执待核对。')}</p>{receipt.error && <p className="pw-error">{text(receipt.error)}</p>}{['pending', 'unknown'].includes(receipt.status) && <Button variant="secondary" disabled={blocked} onClick={() => void invoke('butler.preparation.query', {}, acceptReceipt)}>查询原启动请求</Button>}</section>}
-          {view.kind === 'project' && targetTaskId && (boundProjectRun
+          {view.kind!=='phone'&&receipt&&!projectRegistered && <section className="pw-preparation-receipt" aria-label="原启动记录"><p role="status">{text(receipt.message) || (receipt.status === 'accepted' ? '原任务已保存。' : '原启动回执待核对。')}</p>{receipt.error && <p className="pw-error">{text(receipt.error)}</p>}{['pending', 'unknown'].includes(receipt.status) && <Button variant="secondary" disabled={blocked} onClick={() => void invoke('butler.preparation.query', {}, acceptReceipt)}>查询原启动请求</Button>}</section>}
+          {view.kind === 'project' && targetTaskId && (!stale || !projectRegistered) && (boundProjectRun
             ? <Button variant="secondary" trailingIcon={IconChevronRight} disabled={busy || saving || !can('tasks.open')}
                 onClick={() => void close(() => onOpenTask(targetTaskId,boundProjectRun))}>查看原工作与结果</Button>
-            : <section className="pw-preparation-receipt"><p role="status">{view.target?.originalRunId
+            : <section className="pw-preparation-receipt"><p role="status">{projectTarget?.originalRunId
                 ? '初次执行已不是当前轮。这份提案不会打开后续轮次来代替原结果。'
-                : '已经有任务记录，但这次实际执行尚未核对。'}</p>
-                <Button variant="ghost" disabled={busy || saving} onClick={() => void read()}>核对原执行</Button></section>)}
+                : projectRegistered ? '原任务已登记，执行进展尚未核对。' : '已经有任务记录，但这次实际执行尚未核对。'}</p>
+                <Button variant={projectRegistered ? 'secondary' : 'ghost'} disabled={busy || saving || projectRegistered && !can('butler.preparation.read')} onClick={() => void read()}>{projectRegistered ? '核对执行进展' : '核对原执行'}</Button></section>)}
           {view.canPrepare === true && !unresolved && !review && <section className="pw-preparation-choices" aria-label="本次执行准备">
             {view.kind === 'phone' ? <RadioOptions label="在哪个屏幕执行" value={choices.mode} options={[{ id: 'background', label: '后台独立屏' }, { id: 'main_screen', label: '手机主屏' }]} onChange={mode => edit({ ...choicesRef.current, mode })} isDisabled={!canPrepare} /> : <>
-              <RadioOptions label="本次怎么做" value={usingRevision?'saved':draftOnly ? 'draft' : 'project'} isDisabled={!canPrepare}
-                options={[{id:'draft',label:'只出改稿和差异',description:'不写回原件，不运行命令。'},...(can('butler.preparation.project.savedRevisions')?[{id:'saved',label:'接着改我另存的一稿',description:'只把你选的版本交给模型，不读工程或其他稿。'}]:[]),{id:'project',label:'按现有项目流程工作'}]}
-                onChange={switchProjectSource} />
+              <p className="pw-muted"><strong>{projectMethod.label}</strong> · {projectMethod.description}</p>
               {usingRevision?<><SelectField label="用我保留的哪一稿" value={picked?pinKey(picked.ownerRevision):''} options={[{id:'',label:'请选择一份，不默认使用最新稿'},...versions.map(v=>({id:pinKey(v.ownerRevision),label:v.path+' · 我的第 '+v.ordinal+' 稿 · '+(v.goal||v.ownerRevision.taskId)+' · '+v.ownerRevision.sha256.slice(0,8)}))]} isDisabled={!canPrepare||!versions.length} onChange={id=>pick(versions.find(v=>pinKey(v.ownerRevision)===id)||null)}/>
                 {versionsRead&&!versions.length&&<p className="pw-muted">{versionsCursor?'这一批工作没有主人另存的稿。':'在这段对话可核对的先前项目工作中，还没有你另存的稿。'}</p>}
                 {(!versionsRead||versionsCursor)&&<Button variant="ghost" disabled={!canPrepare} onClick={()=>listVersions(!!versionsCursor)}>{versionsCursor?'查看更早的工作':'读取本对话的已存稿'}</Button>}</>:<>
               <SelectField label="选择真实项目" value={choices.projectId} options={[{ id: '', label: '选择要工作的项目' }, ...projects.map(project => ({ id: project.id, label: project.name })), ...(choices.projectId && !projects.some(project => project.id === choices.projectId) ? [{ id: choices.projectId, label: '原项目暂不可用，请重新核对' }] : [])]} isDisabled={!canPrepare} onChange={chooseProject} />
               {suggestedProject && !choices.projectId && <Button variant="secondary" disabled={!canPrepare} onClick={() => chooseProject(suggestedProject.id)}>用提案中的项目：{suggestedProject.name}</Button>}
               {choices.projectId && (!inspection || inspection.projectId !== choices.projectId) && <Button variant="ghost" disabled={!canPrepare} onClick={inspectProject}>重新读取私人副本</Button>}
-              {inspection && inspection.projectId === choices.projectId && <><SelectField label="本次工作的私人副本" value={choices.checkoutId} options={[{ id: '', label: checkouts.length ? '选择已有私人副本' : '尚未准备私人副本' }, ...checkouts.map(row => ({ id: row.checkoutId, label: text(row.name) || projectName })), ...(choices.checkoutId && !checkouts.some(row => row.checkoutId === choices.checkoutId) ? [{ id: choices.checkoutId, label: '原副本暂不可用，请核对' }] : [])]} isDisabled={!canPrepare} onChange={checkoutId => edit({ ...choicesRef.current, checkoutId })} /><p className="pw-muted">{draftOnly ? '仅使用所选副本的源码，不需要运行环境。' : '仍需核对这次使用的源码、模型与权限。'}</p></>}
+              {inspection && inspection.projectId === choices.projectId && <SelectField label="本次工作的私人副本" value={choices.checkoutId} options={[{ id: '', label: checkouts.length ? '选择已有私人副本' : '尚未准备私人副本' }, ...checkouts.map(row => ({ id: row.checkoutId, label: text(row.name) || projectName })), ...(choices.checkoutId && !checkouts.some(row => row.checkoutId === choices.checkoutId) ? [{ id: choices.checkoutId, label: '原副本暂不可用，请核对' }] : [])]} isDisabled={!canPrepare} onChange={checkoutId => edit({ ...choicesRef.current, checkoutId })} />}
               {choices.projectId && (!copy || copy.registered === false) && inspection && !checkouts.length && <Button variant="secondary" disabled={!canPrepare} onClick={() => copyProject(false)}>准备原项目的私人副本</Button>}
               {choices.projectId && <Button variant="ghost" disabled={!canPrepare} onClick={() => copyProject(true)}>查询原副本准备</Button>}
               {copy?.projectId === choices.projectId && <p className="pw-muted" role="status">{copy.found === true ? '原私人副本已准备，请重新读取副本列表后选择。' : copy.partial === true ? '原副本准备中断，已有文件保留。请在原项目入口核对。' : copy.queryRequired ? '原副本准备已有记录，请先查询原请求。' : '这次查询没有读到完整副本，未重复创建。'}</p>}</>}
             </>}
             {!saved && <Button variant="secondary" disabled={blocked} onClick={() => void flush(true).catch(() => {})}>保存保留的选择</Button>}
-            <div className="pw-preparation-start"><Button variant="primary" disabled={!canPrepare || view.kind === 'project' && (usingRevision?!picked:!choices.projectId || !choices.checkoutId)} onClick={prepareReview}>核对{view.kind === 'phone' ? '手机范围' : '源码与模型'}</Button><span role="status">{usingRevision?'本次选稿不会自动发给模型':saving ? '正在保存选择…' : saved ? '准备选择已保留' : '本页选择尚未确认保存'}</span></div>
-            <Accordion variant="divided"><AccordionItem id="capabilities" title="核对所需能力" description="设备与运行环境的当前情况">
+            <div className="pw-preparation-start"><Button variant="primary" disabled={!canPrepare || view.kind === 'project' && (usingRevision?!picked:!choices.projectId || !choices.checkoutId)} onClick={prepareReview}>核对{view.kind === 'phone' ? '手机范围' : draftOnly ? '改稿范围' : '源码与模型'}</Button><span role="status">{usingRevision?'本次选稿不会自动发给模型':saving ? '正在保存选择…' : saved ? '准备选择已保留' : '本页选择尚未确认保存'}</span></div>
+            <Accordion variant="divided">{view.kind==='project'&&<AccordionItem id="project-method" title="其他做法">
+              <RadioOptions label="本次怎么做" value={projectMethod.id} isDisabled={!canPrepare}
+                options={[projectMethods.draft,...(can('butler.preparation.project.savedRevisions')?[projectMethods.saved]:[]),projectMethods.project]}
+                onChange={switchProjectSource} />
+            </AccordionItem>}<AccordionItem id="capabilities" title="核对所需能力" description="设备与运行环境的当前情况">
               <Button variant="ghost" leadingIcon={IconRefresh} disabled={blocked} onClick={() => void invoke('butler.capabilities', { purpose: view.kind }, value => { if (value.observationOnly !== true || !Array.isArray(value.capabilities)) throw new Error('能力状态尚未完整读取。'); setCapabilities(value.capabilities); }, true)}>读取当前能力状态</Button>
               {capabilities.map(row => <section key={row.id}><h3>{text(row.label)}</h3><p>{text(row.detail)}</p>{row.state && <p className="pw-muted">{({ busy: '当前资源占用中', preparation_required: '需要完成准备', review_required: '可以进入本次审阅', selection_required: '需要选择真实执行对象', unavailable: '当前不可用' } as Record<string, string>)[row.state] || '请按实际范围核对'}</p>}</section>)}
               {onSetup && <Button variant="secondary" disabled={busy || saving} onClick={view.kind==='phone'?openPhoneSetup:()=>void close(()=>onSetup('project'))}>打开{view.kind === 'phone' ? '手机' : '本机工具'}准备</Button>}

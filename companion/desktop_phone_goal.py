@@ -103,12 +103,28 @@ class PhoneWorkEntry:
         if not self.current(peer): raise BeforeSend("原手机身份或本机入口已变化。")
         return choices_for(desc, peer, self.receipts.service.identity.device_id, self.receipts.manager.now()), channel
 
-    def read_original(self):
-        peer, operation = self.past
-        if not self.current(peer): return
-        fingerprint, value = self.receipts.router._row(operation)
-        row = (None, operation, fingerprint)
-        if self.receipts._source_current(peer, row): self.receipts.choose_outgoing(peer, row)
+    def _original_current(self, original):
+        if original is None: return False
+        peer, row = original
+        try:
+            return bool(self.current(peer) and self.receipts._source_current(peer, row))
+        except Exception:
+            return False  # Missing or unreadable local evidence is not an outcome.
+
+    def _original_reference(self, peer, operation, grant_id):
+        # Neither the confirmation UUID nor an uncommitted insert is a dispatch record.
+        manager = self.receipts.manager
+        try:
+            with manager.lock:
+                if manager.ledger.in_transaction: return None
+                fingerprint, saved = self.receipts.router._row(operation)  # The manager lock is reentrant.
+            if saved.get("grantId") != grant_id: return None
+        except Exception: return None
+        original = (peer, (None, operation, fingerprint))
+        return original if self._original_current(original) else None
+
+    def read_original(self, original):
+        if self._original_current(original): self.receipts.choose_outgoing(*original)
 
     def prepare(self):
         peers = self.receipts._peers()
@@ -166,27 +182,33 @@ class PhoneWorkEntry:
                     or actual.device_id != peer[0] or actual.certificate_fingerprint != peer[1]
                     or ticket.target_instance_id != peer[2] or wire.canonical_bytes(ticket.grant) != wire.canonical_bytes(grant)):
                 raise PermissionError("The reviewed original phone scope changed")
-        self.past = (peer, operation)
         try:
             value = self.receipts.router.submit_owner_goal(dict(peerDeviceId=peer[0], operationId=operation, goal=text,
                     grantId=grant["grantId"],resourceBinding=binding,capabilityVersion=wire.VERSION,toolCalls=0,modelCalls=models,ttlMs=ttl), fence)
-            accepted = value.get("accepted") is True and value.get("operationId") == operation and value.get("peerDeviceId") == peer[0]
-            refused = value.get("accepted") is False and value.get("status") == "rejected"
+            matched = value.get("operationId") == operation and value.get("peerDeviceId") == peer[0]
+            accepted = matched and value.get("accepted") is True
+            refused = matched and value.get("accepted") is False and value.get("status") == "rejected"
         except Exception: accepted = refused = False
+        original = self._original_reference(peer, operation, grant["grantId"])
+        if original is None:
+            self.receipts._dialog("这笔派单的接收未能核对", f"本次准备编号：{operation}\n尚未核对到本机原派单。不能据此认定手机已接收、拒绝或没有执行。不会自动回查或重发。", [], current)
+            return
+        self.past = original
         title = "手机已回报接受这笔原派单" if accepted else "手机拒绝这笔工作" if refused else "这笔派单的接收未能核对"
         if self.receipts._dialog(title, f"原操作：{operation}\n这不是机主已读、执行完成或结果。不会自动回查、重试或重派。",
-                                [("read","查看这笔原工作\n按原历史权限向同一手机核对。")], current) == "read": self.read_original()
+                                [("read","核对这笔原派单\n按原历史权限向同一手机核对。")], current) == "read": self.read_original(original)
 
     def show(self):
         if not self.presenting.acquire(blocking=False): return
         def display():
             try:
                 options = [("new", "准备新的文字工作\n选择已配对手机并逐步核对；现在不联系设备。")]
-                if self.past: options.insert(0, ("read", "上次的原工作\n只核对原设备和原派单，不会再发。"))
+                previous = self.past
+                if self._original_current(previous): options.insert(0, ("read", "核对上次原派单\n只核对原设备和原派单，不会再发。"))
                 options.append(("history","本机原工作回执\n从已有记录选择，不会新建或重派。"))
                 selected = self.receipts._dialog("交给手机", "手机保有原任务和结果。这里不开放终端、设备管理员或远程输入。", options, self.current)
                 if selected == "new": self.prepare()
-                if selected == "read": self.read_original()
+                if selected == "read": self.read_original(previous)
                 if selected == "history": self.receipts.show()
             except BeforeSend as error:
                 if self.current(): self.receipts._dialog("尚未发送目标", str(error), [])

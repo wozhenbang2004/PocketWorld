@@ -41,7 +41,7 @@ function SourcePanel({state}:{state:Intake}){
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('query',{actionId:state.pendingId})}>核对原结果</Button>
         {state.mayRetry&&<Button variant="secondary" disabled={busy} onClick={()=>void act('retry',{actionId:state.pendingId})}>沿同一方案重试</Button>}
         {state.mayRelease&&<Button variant="ghost" disabled={busy} onClick={()=>void act('releaseMissing',{actionId:state.pendingId})}>放下这次创建定位</Button>}</div></>
-      :state.project&&state.checkout?<><h3>{state.name} · 本机私人项目</h3><p>新工作副本已登记。打开后，在「工作 → 编辑副本或交办工作」核对这份副本的入口，再编辑文件。没有启动任务。</p>
+      :state.project&&state.checkout?<><h3>{state.name} · 本机私人项目</h3><p>新工作副本已登记。打开项目后，可从「工作」编辑这份副本。没有启动任务。</p>
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('openProject',{project:state.project,checkout:state.checkout})}>打开这个项目</Button>
           <Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>导入另一份源码</Button></div></>
       :source?<><h3>{state.reviewId?'核对新项目':'已固定本次源码'}</h3>

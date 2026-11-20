@@ -208,7 +208,8 @@ public final class OriginalNodeWebOutput {
     static boolean vitePath(String leaf,boolean top){
         if(!VITE_LEAF.matcher(leaf).matches())return false;
         String mime=dev.pocketengine.features.local.preview.ProjectPreviewBundle.mime(leaf);
-        return PUBLIC_MEDIA.contains(mime)||(top?leaf.equals("index.html"):Set.of("text/javascript","text/css").contains(mime));
+        return PUBLIC_MEDIA.contains(mime)||(top?leaf.equals("index.html")||leaf.equals("robots.txt"):
+            Set.of("text/javascript","text/css").contains(mime));
     }
     private static boolean isNodeBuild(JSONObject exact)throws Exception {
         JSONObject payload=exact.getJSONObject("payload");

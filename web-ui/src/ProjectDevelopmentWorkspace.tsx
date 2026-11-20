@@ -60,6 +60,9 @@ export function originalImportedEditor(projectId:string):ProjectImportedEditor|n
 export const sameImportedEditor = (target:ProjectImportedEditor, observed:ProjectImportedEditor|null) =>
   !!observed&&target.projectId===observed.projectId&&target.checkoutId===observed.checkoutId&&
   target.importIdentity===observed.importIdentity&&target.window===observed.window;
+export const canEditImportedCheckout = (can:(action:string)=>boolean) =>
+  ['projects.development.read','projects.development.files.open','projects.development.files.read',
+    'projects.development.files.edit','projects.development.files.save'].every(can);
 function existingBuildBlocked(value: unknown): string {
   switch(value){
     case 'workspaces': return '这个副本使用工作区，本机快捷构建目前只支持单个 Node 项目。';
@@ -371,17 +374,29 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     onImportedEditorHandled?.(importedEditor);
     if(ownerWindow()!==importedEditor.window||document.hidden)return;
     const checkoutId=importedEditor.checkoutId;
-    if(!sameImportedEditor(importedEditor,originalImportedEditor(projectId))||view.projectId!==projectId||view.executionAuthorized!==false||
-       !latest.current.can('projects.development.files.open')||!rows(view.checkouts).some(copy=>copy.projectId===projectId&&copy.checkoutId===checkoutId)){
+    const sequence=generation.current;
+    const originalIsCurrent=()=>alive.current&&latest.current.active&&generation.current===sequence&&handle.current===view.viewHandle&&
+      sameImportedEditor(importedEditor,originalImportedEditor(projectId))&&canEditImportedCheckout(latest.current.can);
+    if(!originalIsCurrent()||view.projectId!==projectId||view.executionAuthorized!==false||
+       !rows(view.checkouts).some(copy=>copy.projectId===projectId&&copy.checkoutId===checkoutId)){
       setImportEditorNotice('原导入副本已不能核对，没有打开其他文件。');return;
     }
-    if(view.draftRecoveryRequired===true||unresolved(submission)||sourceConflict||[draft.current.checkoutId,view.draft?.checkoutId].some(id=>id&&id!==checkoutId)){
+    const hasDifferentCopy=()=>[draft.current.checkoutId,view.draft?.checkoutId].some(id=>id&&id!==checkoutId);
+    if(view.draftRecoveryRequired===true||unresolved(submission)||sourceConflict||hasDifferentCopy()){
       setImportEditorNotice('当前项目保留了其他副本选择或待核对的工作。请先核对，再明确选择原导入副本 '+checkoutId.slice(0,8)+'。');return;
     }
-    setImportEditorNotice('');setHostEditor(null);
-    // Only list this checked-out copy. Opening this door does not choose a
-    // source file, change a saved work draft or grant a build.
-    setFileWindow({checkoutId,unselectedImport:!draft.current.checkoutId&&!view.draft?.checkoutId?importedEditor:undefined});
+    const openCopy=(inspection?:Data)=>{
+      if(!originalIsCurrent()||hasDifferentCopy())return;
+      setImportEditorNotice('');setHostEditor(null);
+      const firstEntry=checkoutWebEntry(inspection??null,projectId,checkoutId);
+      setFileWindow({checkoutId,firstEntry:firstEntry??undefined,
+        unselectedImport:!draft.current.checkoutId&&!view.draft?.checkoutId?importedEditor:undefined});
+    };
+    // Only the existing read's exact entry can skip the same copy's file
+    // list. Neither opening path changes the selected work or grants a build.
+    if(latest.current.can('projects.development.inspect'))
+      void invoke('projects.development.inspect',{viewHandle:view.viewHandle,checkoutId}).then(openCopy);
+    else openCopy();
   },[importedEditor,onImportedEditorHandled,active,view,busy,review,fileCheckout,buildReturn,projectId,submission,sourceConflict]);
   useEffect(()=>{
     if(!buildReturn||!active||!view||busy||review||fileCheckout||document.hidden||

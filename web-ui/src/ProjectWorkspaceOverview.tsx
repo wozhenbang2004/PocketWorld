@@ -29,6 +29,7 @@ export type ProjectWorkspaceOverviewProps = {
   onOpenTask: (id: string, entry: ProjectWorkEntry, query: string) => void;
   onOpenTerminal: () => void;
   onAskButler?: () => void;
+  onEditImported?: () => void;
   startContent?: ReactNode;
   savedWebContent?: ReactNode;
 };
@@ -37,7 +38,7 @@ export type ProjectWorkEntry = WorkEntry | 'outcomes';
 export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionFilter; expanded: boolean; selected: string; selectedEntry?: ProjectWorkEntry };
 
 /** Project work directory; saved Web versions separately use exact original B4 receipts. */
-export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
+export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, onEditImported, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
   const savedWebLink = useRef<FindSavedBuildWeb|null>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
@@ -71,10 +72,14 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
     </li>;
   };
 
+  const askButler = onAskButler && <Button variant="ghost" size="small" onClick={onAskButler}>问管家</Button>;
   return <section ref={root} className="pw-project-overview" aria-label={`${project.name}的项目工作`}>
     <header className="pw-project-overview-heading">
       <div><p className="pw-project-overview-eyebrow">项目工作台</p><h2>{project.name}</h2></div>
-      {onAskButler && <Button variant="ghost" size="small" onClick={onAskButler}>问管家</Button>}
+      {onEditImported ? <div className="pw-action-row">
+        <Button variant="primary" leadingIcon={IconFile} onClick={onEditImported}>编辑导入源码</Button>
+        {askButler}
+      </div> : askButler}
     </header>
     <div className="pw-project-overview-layout">
       <div className="pw-project-overview-work">

@@ -4,6 +4,7 @@ import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, IconButton, SelectField } from './forms-library';
 import { ProgressCircle } from './library';
 import { ProjectPackageCheckout } from './ProjectPackageCheckout';
+import type { SavedWebShelfVisit } from './ProjectSavedBuildWeb';
 import { MotionFeedback } from './library/journey-motion';
 import { packagePreviewChoices, packagePreviewMatches, previewReturned, previewViewport, projectPreviewState, samePreviewWindow, type PackagePreviewChoices, type ProjectPreviewState, type PreviewWindow } from './project-preview';
 import './project-preview.css';
@@ -43,6 +44,7 @@ export function useProjectPreview(options: Options) {
   const exportFlight = useRef<{ target: PackageExportTarget; previousRequestId: string } | null>(null);
   const [choices, setChoices] = useState<PackagePreviewChoices | null>(null), [selectedEntry, setSelectedEntry] = useState(''), [packageShowing, setPackageShowing] = useState(false);
   const [fromOriginalChat,setFromOriginalChat]=useState(false);
+  const [savedWebShelf,setSavedWebShelf]=useState<SavedWebShelfVisit|null>(null);
   const generation = useRef(0), pending = useRef(false), optionsRef = useRef(options);
   optionsRef.current = options;
   const candidate = projectPreviewState(options.value);
@@ -63,14 +65,14 @@ export function useProjectPreview(options: Options) {
     !document.hidden && Number((bridge.getState().view as { resumeRevision?: number })?.resumeRevision || 0) === original.resumeRevision && samePreviewWindow(original, ticket());
 
   const hide = useCallback(() => {
-    generation.current++; setExpanded(false);
+    generation.current++; setExpanded(false); setSavedWebShelf(null);
     if (pending.current) { setUnknown(true); setError('原操作回执尚未核对；没有重发，草稿仍保留。'); }
     pending.current = false; setBusy('');
   }, []);
   useEffect(() => { if (!options.active || options.blocked && choices?.sourceMember) hide(); }, [options.active, options.blocked, choices?.sourceMember, hide]);
   useEffect(() => {
     generation.current++; pending.current = false; setBusy(''); setExpanded(false); setOpened(null); setError(''); setUnknown(false);
-    setChoices(null); setSelectedEntry(''); setPackageShowing(false); setFromOriginalChat(false);
+    setChoices(null); setSelectedEntry(''); setPackageShowing(false); setFromOriginalChat(false); setSavedWebShelf(null);
     exportFlight.current = null; setExportReceipt(null);
   }, [options.projectId]);
   useEffect(() => {
@@ -104,7 +106,7 @@ export function useProjectPreview(options: Options) {
   const open = () => {
     const context = optionsRef.current;
     if (pending.current || exportBusy || !context.active || document.hidden) return;
-    setChoices(null); setSelectedEntry(''); setPackageShowing(false); setFromOriginalChat(false);
+    setChoices(null); setSelectedEntry(''); setPackageShowing(false); setFromOriginalChat(false); setSavedWebShelf(null);
     // Historical fixed packs must be explicitly selected. A project-level
     // tab must not reopen another copy's last selected artifact.
     const retained = projectPreviewState(context.value);
@@ -144,7 +146,7 @@ export function useProjectPreview(options: Options) {
       setUnknown(failure?.code === 'outcome_unknown'); setError(failure instanceof Error ? failure.message : String(failure));
     }).finally(() => { if (generation.current === request) { pending.current = false; setBusy(''); } });
   };
-  const showPackage = (original: PackagePreviewChoices, originalChat?:()=>boolean, explicitWebPick?:()=>boolean) => {
+  const showPackage = (original: PackagePreviewChoices, originalChat?:()=>boolean, explicitWebPick?:()=>boolean, shelfVisit?:SavedWebShelfVisit) => {
     const context = optionsRef.current;
     const selectedWeb=originalChat??explicitWebPick;
     if (!context.active || context.blocked || document.hidden || original.projectId !== context.projectId ||
@@ -152,6 +154,7 @@ export function useProjectPreview(options: Options) {
     generation.current++; pending.current = false; setBusy(''); setError(''); setUnknown(false); setOpened(null);
     setChoices(original); setSelectedEntry(original.mode === 'web_output' ? original.entryPath : ''); setPackageShowing(false); setExpanded(true);
     setFromOriginalChat(!!originalChat);
+    setSavedWebShelf(shelfVisit??null);
     // “打开固定网页” explicitly selects its single manifest entry; no build,
     // chooser, composer change, second selection or generic project source.
     if(selectedWeb)openPackageEntry(original, original.entryPath, selectedWeb);
@@ -245,16 +248,26 @@ export function useProjectPreview(options: Options) {
     }).finally(() => { if (generation.current === request) { pending.current = false; setBusy(''); } });
   };
   const returnToPackageTask = () => {
-    if (busy || exportBusy || optionsRef.current.blocked || (!fromOriginalChat&&!optionsRef.current.can('tasks.open'))) return false;
+    if (savedWebShelf || busy || exportBusy || optionsRef.current.blocked || (!fromOriginalChat&&!optionsRef.current.can('tasks.open'))) return false;
     const taskId = choices?.taskId || view?.taskId;
     if (!taskId) return false;
     const operationId = choices?.operationId || view?.packageOperationId;
     hide(); optionsRef.current.onPackageTask(taskId, operationId,fromOriginalChat); return true;
   };
+  const canReturnToSavedWebShelf=!!savedWebShelf&&expanded&&options.active&&!busy&&!exportBusy&&!options.blocked;
+  const returnToSavedWebShelf=()=>{
+    if(!savedWebShelf||!canReturnToSavedWebShelf)return;
+    hide();savedWebShelf.restore();
+  };
+  const openSavedWebOriginalWork=savedWebShelf?.openOriginalWork&&options.can('tasks.open')?()=>{
+    if(!canReturnToSavedWebShelf)return;
+    hide();savedWebShelf.openOriginalWork?.();
+  }:undefined;
   const handleBack = () => {
     if (!expanded) return false;
     if (exportBusy) return true;
     if (view?.selecting && !busy && !unknown) action('projects.preview.mode', { enabled: false });
+    else if(savedWebShelf)returnToSavedWebShelf();
     else if (choices || view?.packageOperationId) {
       if (!busy && !returnToPackageTask()) hide();
     } else hide();
@@ -262,7 +275,8 @@ export function useProjectPreview(options: Options) {
   };
   return { expanded, view, busy, error, unknown, open, hide, action, handleBack, showPackage, choices, selectedEntry, setSelectedEntry, openPackage,
     exportPackage, exportState, exportBusy, exportTarget, canOpenSavedBuildCopy, openSavedBuildCopy, resumeRevision: options.resumeRevision,
-    returnToPackageTask, fromOriginalChat, blocked: options.blocked, can: options.can };
+    returnToPackageTask, fromOriginalChat, fromSavedWebShelf:!!savedWebShelf, canReturnToSavedWebShelf, returnToSavedWebShelf,
+    openSavedWebOriginalWork, blocked: options.blocked, can: options.can };
 }
 
 export function ProjectPreviewPane({ control, composer }: { control: ReturnType<typeof useProjectPreview>; composer: Data }) {
@@ -359,13 +373,17 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
     {view && !control.fromOriginalChat && <MotionFeedback identity={`${sessionId}:${count}`} initial={false} className="pw-preview-draft-status" role="status">{count > 0 ? `草稿中有 ${count} 处元素引用，尚未发送` : '选择的元素会留在原对话草稿中'}</MotionFeedback>}
     {view && (!control.fromOriginalChat || fixed) && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
         <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd><dt>来源副本</dt><dd>{String(view.metadata.checkoutId || '')}</dd><dt>来源源码</dt><dd>{String(view.metadata.sourceDigest || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
+        {control.fromSavedWebShelf&&<div className="pw-preview-actions">
+          {control.openSavedWebOriginalWork&&<Button variant="ghost" size="small" disabled={working||blocked} onClick={control.openSavedWebOriginalWork}>查看原工作</Button>}
+          <Button variant="ghost" size="small" disabled={working||unknown||!can('projects.preview.return')} onClick={()=>control.action('projects.preview.return')}>返回原对话</Button>
+        </div>}
       </AccordionItem></Accordion>}
-    <footer className="pw-preview-footer">
+    {(!control.fromSavedWebShelf||control.canOpenSavedBuildCopy)&&<footer className="pw-preview-footer">
       {control.canOpenSavedBuildCopy && <Button variant="secondary" size="small" disabled={working || blocked || unknown || !!view?.selecting}
         onClick={control.openSavedBuildCopy}>{busy==='package.copy'?'正在核对原副本…':'打开原副本的当前源码'}</Button>}
-      {(choosing || fixed) && (control.fromOriginalChat||can('tasks.open')) && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={working || blocked} onClick={control.returnToPackageTask}>{control.fromOriginalChat?'返回原话':'返回原工作'}</Button>}
-      {!control.fromOriginalChat&&<Button variant="ghost" size="small" disabled={control.exportBusy} onClick={control.hide}>{choosing || fixed ? '留在项目' : '返回项目'}</Button>}
-      {view && !control.fromOriginalChat && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
-    </footer>
+      {!control.fromSavedWebShelf&&(choosing || fixed) && (control.fromOriginalChat||can('tasks.open')) && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={working || blocked} onClick={control.returnToPackageTask}>{control.fromOriginalChat?'返回原话':'返回原工作'}</Button>}
+      {!control.fromSavedWebShelf&&!control.fromOriginalChat&&<Button variant="ghost" size="small" disabled={control.exportBusy} onClick={control.hide}>{choosing || fixed ? '留在项目' : '返回项目'}</Button>}
+      {view && !control.fromSavedWebShelf && !control.fromOriginalChat && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
+    </footer>}
   </section>;
 }
