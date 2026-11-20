@@ -128,7 +128,7 @@ import {homeWorkIdentity} from './butler-work-entry';
 import type {CloudGoal} from './cloud-goal';
 import {SavedHostPicker,savedHostProfiles} from './SavedHostWork';
 import {OriginalPrivateHostAnswer} from './OriginalPrivateHostAnswer';
-import {ButlerReturnedReport,currentHomeReport,verifyHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
+import {ButlerReturnedReport,currentHomeReport,reportedHomeWork,verifyHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
 import type {TaskResultFile} from './TaskResultFiles';
 import {PhoneTaskStatus} from './PhoneTaskStatus';
 import {PhoneInlineStopReceipt,useInlinePhoneStops,type ShownPhoneRun} from './PhoneInlineStopReceipts';
@@ -1068,6 +1068,30 @@ export default function App(){
   if(!conversation)return;
   const work=associate?{runId:task.raw?.runId,epoch:task.raw?.coordinatorEpoch}:undefined;
   await returnToOriginalTaskConversation(task.id,conversation,work);
+ };
+ const reportHistoryOpening=useRef(false);
+ const readReportInConversation=async(task:Task)=>{
+  const target=reportedHomeWork(task);
+  if(!target||reportHistoryOpening.current||!can('ownerWork.report.history')||!can('tasks.close'))return;
+  const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const unchanged=()=>!document.hidden&&documentEpoch===bridge.getDocumentEpoch()&&navigationWindow.current===navigation;
+  const atTask=()=>unchanged()&&openedTaskId.current===target.taskId&&obj(bridge.getState().view).taskId===target.taskId;
+  if(!atTask()||bridge.getState().state.conversationReader)return;
+  reportHistoryOpening.current=true;setReturningConversation(task.id);
+  let opened:{window:number;conversationId:string}|null=null,retained=false;
+  try{
+   const page=await bridge.command('ownerWork.report.history',{taskId:target.taskId,runId:target.runId,epoch:target.epoch,reportMessageId:target.reportMessageId});
+   if(!page||!Number.isSafeInteger(page.window)||page.window<1||page.conversationId!==target.conversationId||
+      page.reportMessageId!==target.reportMessageId||!Number.isSafeInteger(page.reportRevision)||page.reportRevision<1||page.readOnly!==true)
+    throw Error('没有在原对话核对到这份汇报。');
+   opened={window:page.window,conversationId:page.conversationId};
+   if(!atTask()||!await closeTask()||!unchanged())return;
+   retained=await navigate('chat',undefined,{taskClosed:true,stillCurrent:unchanged});
+  }catch(failure){if(unchanged())setLocalError(failure instanceof Error?failure.message:'没有定位到原汇报。')}
+  finally{
+   if(opened&&!retained&&documentEpoch===bridge.getDocumentEpoch()&&can('conversation.reader.close'))void bridge.command('conversation.reader.close',opened).catch(()=>{});
+   reportHistoryOpening.current=false;setReturningConversation('');
+  }
  };
  const openTaskProject=async(task:Task)=>{
   const projectId=task.raw?.developmentContext?.projectId;
@@ -2186,8 +2210,12 @@ export default function App(){
     {pickerVisible=><ProjectExecutionWorkspace task={task} focusFailure run={act} active={!pickerVisible&&!phoneViewerObscured&&!phoneViewerExpanded}
       projectName={projects.find(project=>project.id===failureOverview.projectId)?.name} editFailedCopy={buildCopy?()=>void openOriginalBuildCopy(buildCopy):undefined}
       prepareFailure={can('tasks.review')?prepareFailedBuild:undefined}/>}</ConversationModelPickerVisibility>}{originalEvidence}</TaskPackageProjectContext.Provider>;
+  const reportHistory=task.raw?.executionRole==='owner_work'&&!task.raw?.developmentContext&&!task.raw?.ownerPhoneControl&&!task.raw?.ownerDeviceWork&&
+   isPrimaryRoute&&!!reportedHomeWork(task)&&can('ownerWork.report.history')&&can('tasks.close');
   const workFacts=<OwnerWorkFacts key="task-handling" task={task} onTeam={can('teams.readRun')?openWorkTeam:undefined}
-   onReport={can('conversation.select')?()=>void returnToTaskConversation(task):undefined}
+   reportLabel={reportHistory?'在原对话定位汇报':undefined}
+   onReport={reportHistory?overviewActive&&!returningConversation&&!state.conversationReader?()=>void readReportInConversation(task):undefined:
+    can('conversation.select')?()=>void returnToTaskConversation(task):undefined}
    onReconcile={overviewActive&&can('tasks.open')?target=>openTask(target.taskId,'process',false,undefined,undefined,target):undefined}/>;
   const refreshControl=can('tasks.review')&&<IconButton icon={IconRefresh} aria-label={review?'重新核对':'读取可用操作'} title={review?'重新核对':'读取可用操作'} disabled={readingReview||questionPending} onClick={showTaskReview}/>;
   const reviewStatus=<>{readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}{reviewStale&&!teamDeclineSettlesReview&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}{continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting} onClick={()=>selectConversation(continuation.original.conversationId)}>返回原对话，草稿保留</Button>}</section>}{!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}</>;

@@ -767,15 +767,31 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 })
             }
             "teams.readFrozenDiff" -> {
-                val revision = args.has("basis")
-                if (revision) { fields(args,"viewHandle","fileHandle","basis","path","offset"); require(text(args,"basis") == "written_to_frozen") }
-                else fields(args,"viewHandle","fileHandle","artifactId","offset")
+                val basis = if (args.has("basis")) text(args,"basis") else null
+                when (basis) {
+                    "written_original" -> fields(args,"viewHandle","fileHandle","basis","path","artifactId","offset")
+                    "written_to_frozen" -> fields(args,"viewHandle","fileHandle","basis","path","offset")
+                    null -> fields(args,"viewHandle","fileHandle","artifactId","offset")
+                    else -> error("请选择原文件阅读方式")
+                }
                 val owner = readings[text(args,"viewHandle")] ?: error("原协作记录已关闭")
                 val files = fileWindow?.takeIf { it.owner === owner && owner.live && it.handle == text(args,"fileHandle") } ?: error("请重新打开这份原文件目录")
-                val offset = args.opt("offset"); require(offset is Int && offset >= 0) { "原差异位置不正确" }
+                val offset = args.opt("offset"); require(offset is Int && offset >= 0) { "原阅读位置不正确" }
                 val captured = files.captured ?: error("原文件目录已关闭")
-                val part = if (revision) captured.revisionPage(text(args,"path",240),offset) else captured.page(text(args,"artifactId"),offset)
-                deliver(part.put("fileHandle",files.handle),null)
+                if (basis == "written_original") {
+                    val path = text(args,"path",240)
+                    val id = text(args,"artifactId",36)
+                    hostWork(work = {
+                        check(currentWindow() && owner.live && files.captured === captured) { "原文件目录已关闭" }
+                        captured.writtenRevisionPage(path,id,offset,files.reader)
+                    }, accept = { part ->
+                        check(fileWindow === files && owner.live && files.captured === captured) { "原文件目录已关闭" }
+                        files.reader.check(); deliver(part.put("fileHandle",files.handle),null)
+                    })
+                } else {
+                    val part = if (basis == "written_to_frozen") captured.revisionPage(text(args,"path",240),offset) else captured.page(text(args,"artifactId"),offset)
+                    deliver(part.put("fileHandle",files.handle),null)
+                }
             }
             "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM -> {
                 val project = action == PocketWebFirstProjectOutput.REVIEW || action == PocketWebFirstProjectOutput.CONFIRM

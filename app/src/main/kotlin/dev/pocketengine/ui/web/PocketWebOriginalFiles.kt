@@ -72,7 +72,8 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             if (closed || pins.isEmpty()) return
             val current = pins.values.toList()
             runCatching { worker.execute {
-                current.filter { it.error == null }.forEach { pin -> try { requireCurrent(pin); pin.session?.current() }
+                // A prior decode error does not make an already loaded source exempt from retirement checks.
+                current.filterNot { it.lifetime.isCancelled }.forEach { pin -> try { requireCurrent(pin); pin.session?.current() }
                     catch (_: Exception) { main.post { if (pins[pin.id] === pin) { retire(pin); pin.sourceUnavailable = true; pin.error = "原来源、受众或版本已失效，请返回后重新打开"; changed() } } } }
             } }
             main.postDelayed(this, 1500)
@@ -90,7 +91,8 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     private fun view(pin: Pin): JSONObject = JSONObject().put("id", pin.id).put("identity", pin.source.identity)
         .put("name", pin.source.name).put("mimeType", pin.source.mimeType).put("sha256", pin.source.sha256)
         .put("kind", pin.kind).put("sourceUnavailable", pin.sourceUnavailable).put("size", pin.source.sizeBytes).put("busy", pin.busy).put("error", pin.error)
-        .put("url", "https://pocketengine.local/pocket-files/${pin.id}/content").put("information", pin.information)
+        .put("url", if (pin.sourceUnavailable) "" else "https://pocketengine.local/pocket-files/${pin.id}/content")
+        .put("information", pin.information)
     fun snapshot(): JSONObject? = primary?.let(::view)
     /** Preview recovery is narrower than the file-detail external action, which also handles managed APKs. */
     fun matchesOriginal(file: JSONObject?): Boolean {
@@ -170,9 +172,10 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             }
             main.post {
                 if (pins[pin.id] !== pin || pin.lifetime.isCancelled || !visible() || !pin.accepts(pin.ticket)) { done(null, "原文件窗口已变化，没有换用其他文件"); return@post }
+                if (sourceUnavailable) retire(pin)
+                else if (error == null && command != "find" && command != "check") pin.information = value
                 pin.busy = false; pin.error = error; pin.sourceUnavailable = sourceUnavailable
-                if (error == null && command != "find" && command != "check") pin.information = value
-                done(value, error); changed()
+                done(if (sourceUnavailable) null else value, error); changed()
             }
         } } catch (_: java.util.concurrent.RejectedExecutionException) { pin.busy = false; done(null, "当前原件读取已关闭") }
     }
@@ -228,7 +231,7 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             WebResourceResponse(mime, null, if (partial) 206 else 200, if (partial) "Partial Content" else "OK", responseHeaders, stream)
         } catch (_: Exception) { blocked() }
     }
-    private fun retire(pin: Pin) { pin.lifetime.cancel(); runCatching { pin.session?.close() }; pin.session = null; pin.busy = false }
+    private fun retire(pin: Pin) { pin.lifetime.cancel(); pin.information = null; runCatching { pin.session?.close() }; pin.session = null; pin.busy = false }
     fun clear() { main.removeCallbacks(watchdog); val old = pins.values.toList(); pins.clear(); primary = null; comparison = null; old.forEach(::retire) }
     fun close() { closed = true; clear(); worker.shutdownNow() }
 }

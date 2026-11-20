@@ -84,6 +84,9 @@
 .pw-trace-detail h4 { margin: 0 0 10px; font-size: 13px; line-height: 20px; font-weight: 550; }
 .pw-trace-error-detail .pw-trace-body-copy { background: var(--pw-inset); }
 .pw-trace-body-copy { margin: 6px 0; padding: 10px 11px; border-radius: 9px; background: var(--pw-inset); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font: 11px/1.65 var(--font-code); color: var(--pw-ink); }
+.pw-trace-document-read > section { margin: 14px 0 18px; }
+.pw-trace-document-read h5 { margin: 0 0 5px; color: var(--pw-copy); font-size: 12px; font-weight: 550; }
+.pw-trace-document-read > section > p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.75; color: var(--pw-ink); }
 .pw-trace-disclosures { margin-top: 6px; }
 .pw-trace-disclosures [slot="trigger"] { min-height: 48px; }
 .pw-trace-disclosures [role="region"] > div { min-width: 0; padding-inline: 0; }

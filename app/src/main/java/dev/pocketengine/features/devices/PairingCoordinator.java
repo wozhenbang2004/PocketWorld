@@ -190,6 +190,7 @@ public final class PairingCoordinator {
     public static final class OutgoingGrant {
         private final PairingCoordinator owner;private final DeviceIdentity.AuthenticatedPeer target;private final JSONObject receipt,grant;private final String instance;
         private OutgoingGrant(PairingCoordinator owner,DeviceIdentity.AuthenticatedPeer target,JSONObject receipt,JSONObject body){this.owner=owner;this.target=target;this.receipt=copy(receipt);this.grant=copy(body.optJSONObject("grant"));instance=body.optString("targetInstanceId");}
+        public String targetCertificateFingerprint(){return target.certificateFingerprint();}
         public boolean isOriginalTarget(String id,String expectedInstance,String fingerprint){return target.deviceId().equals(id)&&instance.equals(expectedInstance)&&target.certificateFingerprint().equals(fingerprint);}
         public String targetDeviceId(){return target.deviceId();}public String targetInstanceId(){return instance;}public String grantId(){return grant.optString("grantId");}public long authorizationEpoch(){return grant.optLong("authorizationEpoch");}public long deadline(){return grant.optLong("expiresAt");}public JSONObject grant(){return copy(grant);}
         public OperationManagementRequest operationCancel(DeviceIdentity.LocalIdentity local,String targetOperationId,String targetArgumentsDigest,String cancelOperationId,JSONObject exactResource,long now,long ttlMs)throws Exception{

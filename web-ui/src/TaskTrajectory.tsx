@@ -13,7 +13,7 @@ import { useSurfaceEnter } from './library/surface-motion';
 import { MarkdownBody } from './library/MarkdownBody';
 import { traceSteps } from './trace-stepper';
 import { durationLabel, executionTraceDetail, executionTracePage, mergeTraceNodes, nodeDurationLabel, tokenLabel, traceBody, traceBounds, traceCount,
-  traceDisplayName, traceEventMatches, traceEvents, traceFailed, traceInProgress, traceRecordStatus, traceRequestTiming, traceRole, traceRoleLabel, traceRows, traceSkillReference, traceStatus, traceSummary,
+  traceDisplayName, traceDocumentRead, traceEventMatches, traceEvents, traceFailed, traceInProgress, traceRecordStatus, traceRequestTiming, traceReturnedDocumentRead, traceRole, traceRoleLabel, traceRows, traceSkillReference, traceStatus, traceSummary,
   traceTime, traceTurnCount, traceUsageBreakdown, type ExecutionTraceDetail, type ExecutionTracePage, type TraceAggregate, type TraceFilter, type TraceNode } from './execution-trace';
 import { taskHistoryIdentity, type TaskHeader } from './task-history';
 import { SavedDefaultChange } from './SavedDefaultChange';
@@ -163,6 +163,17 @@ function TraceBody({ value, missing, preview = false }: { value: unknown; missin
     {body.truncated && <p className="pw-trace-note">正文较长，当前展示前 65,536 个字符。</p>}</> : <p className="pw-trace-note">{missing}</p>;
 }
 
+function DocumentReadResult({ result, original }: { result: NonNullable<ReturnType<typeof traceDocumentRead>>; original: unknown }) {
+  return <section className="pw-trace-document-read" aria-label="本次实际返回的文档片段">
+    <p className="pw-trace-note">{result.partial ? '这次只返回了部分内容。' : '这里只展示这次返回的片段，不代表已读全文。'}{result.ocr && ' 识别文字须核对原件。'}</p>
+    {result.chunks.map(part => <section key={`${part.unit}:${part.chunk}`}>
+      <h5>{result.pdf ? `第 ${part.unit} 页` : `文档单元 ${part.unit}`} · 片段 {part.chunk + 1}</h5>
+      <p dir="auto">{part.text || '（原片段无文字）'}</p>
+    </section>)}
+    <Accordion variant="divided" className="pw-trace-disclosures"><AccordionItem id="document-read-receipt" headingLevel={5} title="核对原始回执"><TraceBody value={original} missing="原回执当前不可读。"/></AccordionItem></Accordion>
+  </section>;
+}
+
 function TokenDetails({ node, nodes, complete }: { node: TraceNode; nodes: TraceNode[]; complete: boolean }) {
   const [scope, setScope] = useState(0);
   const values = traceUsageBreakdown(scope === 0 ? [node] : nodes);
@@ -263,11 +274,13 @@ function TraceDetails({ selection, page, complete, close, active, openRelated, b
   const [tab, setTab] = useState('summary'), [snap, setSnap] = useState<number | string | null>(.64);
   const title = useRef<HTMLHeadingElement>(null), priorWasRelated = useRef(false);
   const key = selection ? `${selection.runId}:${selection.epoch}:${selection.node.id}` : '';
+  const opensDocumentResult = traceReturnedDocumentRead(selection?.node);
   useEffect(() => {
-    setTab(fromSkill ? 'output' : 'summary'); setSnap(fromSkill ? .94 : .64);
+    const showResult = !!fromSkill || opensDocumentResult;
+    setTab(showResult ? 'output' : 'summary'); setSnap(showResult ? .94 : .64);
     if (key && (fromSkill || priorWasRelated.current)) title.current?.focus({preventScroll: true});
     priorWasRelated.current = !!fromSkill;
-  }, [key, fromSkill]);
+  }, [key, fromSkill, opensDocumentResult]);
   // Preserve fetched body fields, while a live page can update measured metadata.
   const metadata = compact || read.detail?.node || selection?.node;
   const node = read.detail?.sourceState === 'current' ? { ...read.detail.node, ...(compact || {}), ...Object.fromEntries(bodyKeys
@@ -277,6 +290,8 @@ function TraceDetails({ selection, page, complete, close, active, openRelated, b
   const isSkillDecision = node?.kind === 'tool' && node.name === 'skills_reference_decision';
   const linkedReceipt = !fromSkill || (!relatedExpired && read.detail?.sourceState === 'current' && read.detail.node.operationBodySource === 'original_operation_row' &&
     read.detail.node.operationState === 'receipt' && read.detail.node.operationId === selection?.node.operationId);
+  const documentRead = linkedReceipt && !read.busy && !read.error ? traceDocumentRead(read.detail) : null;
+  const output = linkedReceipt && (!opensDocumentResult || !read.busy && !read.error) ? node?.output : undefined;
   const tabs = node?.kind === 'model' ? [['summary', '摘要'], ['options', '选项'], ['usage', '用量'], ['timing', '耗时']]
     : node?.kind === 'tool' ? [['summary', '摘要'], ['input', '参数'], ['output', '结果'], ...(role === 'subtool' ? [] : [['schema', 'Schema']]), ['timing', '耗时']]
       : [['summary', '摘要'], ['preview', '预览'], ['raw', '原始']];
@@ -316,7 +331,7 @@ function TraceDetails({ selection, page, complete, close, active, openRelated, b
                 <dl className="pw-trace-facts pw-trace-request-tokens"><div><dt>输入 token</dt><dd>{tokenLabel(traceCount(node.usage, 'INPUT')?.value ?? null)}</dd></div><div><dt>输出 token</dt><dd>{tokenLabel(traceCount(node.usage, 'OUTPUT')?.value ?? null)}</dd></div></dl>
                 <Accordion variant="divided"><AccordionItem id="trace-request-context" title="保留的原上下文" headingLevel={4}><p className="pw-trace-note">请求来源中的原上下文可能与裁剪、投影后的实际发送内容不同。</p><TraceBody value={node.input} missing={missing}/></AccordionItem>
                   <AccordionItem id="trace-request-output" title="返回内容" headingLevel={4}><TraceBody value={node.output} missing={missing}/></AccordionItem></Accordion>
-              </> : node.kind === 'tool' ? !isSkillDecision && <section className="pw-trace-event-detail"><h4>结果摘要</h4><TraceBody value={fromSkill ? linkedReceipt ? node.output : undefined : node.preview ?? node.message ?? node.output} missing={missing}/></section>
+              </> : node.kind === 'tool' ? !isSkillDecision && !documentRead && <section className="pw-trace-event-detail"><h4>结果摘要</h4><TraceBody value={fromSkill ? output : node.preview ?? node.message ?? output} missing={missing}/></section>
                 : <section className="pw-trace-event-detail"><TraceBody value={node.message ?? node.preview} missing={missing} preview/></section>}
               <SourceDetails node={node} selection={selection}/>
             </TabPanel>
@@ -327,7 +342,7 @@ function TraceDetails({ selection, page, complete, close, active, openRelated, b
             </> : node.kind === 'tool' ? <>
               <TabPanel id="input"><h4>调用参数</h4><TraceBody value={node.input} missing={missing}/></TabPanel>
               <TabPanel id="output"><h4>工具结果</h4>{fromSkill && linkedReceipt && <p className="pw-trace-note">这是同一笔操作当前保留的原回执，不是关联当时的另存快照。</p>}
-                <TraceBody value={linkedReceipt ? node.output : undefined} missing={!linkedReceipt && !read.busy ? '这笔操作的原回执当前不可核对。' : traceInProgress(node.status) ? '等待原执行返回。' : missing}/></TabPanel>
+                {documentRead ? <DocumentReadResult result={documentRead} original={output}/> : <TraceBody value={output} missing={!linkedReceipt && !read.busy ? '这笔操作的原回执当前不可核对。' : traceInProgress(node.status) ? '等待原执行返回。' : missing}/>}</TabPanel>
               {role !== 'subtool' && <TabPanel id="schema"><h4>调用时的工具定义</h4><TraceBody value={node.schema} missing={missing}/></TabPanel>}
               <TabPanel id="timing"><TimingDetails node={node}/></TabPanel>
             </> : <>

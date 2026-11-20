@@ -292,7 +292,7 @@ internal class PocketWebBridge(
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
-            "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
+            "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original", "phone.result.taskOriginal",
             "phone.resultImage.held", "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
@@ -1027,6 +1027,15 @@ internal class PocketWebBridge(
                 }
                 return
             }
+            if (action == "ownerWork.report.history") {
+                checkedPayload(args,setOf("taskId","runId","epoch","reportMessageId"))
+                val task=requiredString(args,"taskId");val ticket=captureWindow();val document=documentId
+                fun current()=!closed&&document!=null&&documentId==document&&acceptsWindow(ticket)&&section==null&&taskViewId==task
+                controller.openOwnerReportHistory(task,requiredString(args,"runId"),requiredInt(args,"epoch"),requiredString(args,"reportMessageId"),::current){value,error->
+                    complete(id,value,error,retainValue=false,replayHint="请从原工作重新定位这份汇报");publishState()
+                }
+                return
+            }
             if (action == "ownerWork.control") {
                 try {
                     checkedPayload(args, setOf("taskId", "runId", "epoch", "action"))
@@ -1383,7 +1392,16 @@ internal class PocketWebBridge(
             if (action == "devices.openTask") {
                 requireSection("devices")
                 val taskId = devicePages.taskForNavigation(args)
-                if (args.has("manualPhoneTarget")) {
+                if (args.has("savedDeviceChoice")) {
+                    val deviceRevision = controller.deviceWorkspaceRevision
+                    val sourceCurrent = { section == "devices" && taskViewId == null && controller.deviceWorkspaceRevision == deviceRevision &&
+                        runCatching { devicePages.taskForNavigation(args) == taskId }.getOrDefault(false) }
+                    openOriginalTask(id, taskId, true, "devices", sourceWindowCurrent = sourceCurrent,
+                        checkReaderInput = { source ->
+                            require(sourceCurrent()) { "原设备工作窗口已变化" }
+                            devicePages.checkSavedDeviceChoice(args, source.raw)
+                        })
+                } else if (args.has("manualPhoneTarget")) {
                     val sourceCurrent = { section == "devices" && taskViewId == null && runCatching { devicePages.taskForNavigation(args) == taskId }.getOrDefault(false) }
                     openOriginalTask(id, taskId, true, "devices", sourceWindowCurrent = sourceCurrent,
                         checkReaderInput = { source -> devicePages.checkManualPreparationForNavigation(args, source.raw) })

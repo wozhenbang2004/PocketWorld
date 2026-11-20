@@ -1023,6 +1023,30 @@ public final class ConversationRepository {
         JSONArray messages=new JSONArray();for(int i=reverse.length()-1;i>=0;i--)messages.put(reverse.getJSONObject(i));String next=more&&last>=0?encode(new JSONObject().put("before",last)):"";
         return result.put("messages",messages).put("messagePage",new JSONObject().put("hasMore",more).put("nextCursor",next).put("scannedRows",scanned).put("materializedOriginalRecordUtf8Bytes",bytes).put("gaps",gaps).put("retentionLimitApplied",false));
     }
+    /** Re-open the ordinary history window at the actual saved report, not the current tail.
+     * Only the original TaskStore report selection may supply the source in its read transaction. */
+    public JSONObject windowAtOwnerWorkReport(JSONObject source,RunControl control)throws Exception{
+        if(!Thread.holdsLock(monitor)||!db.inTransaction()||control==null||control.hasHostRun())
+            throw new SecurityException("原汇报须在原记录的只读窗口核对");
+        SourceRef ref=SourceRef.fromJson(source.getJSONObject("sourceRef"));
+        String conversation=source.getString("sourceConversationId"),fingerprint=source.getString("bodyFingerprint"),generation=activeGeneration();
+        if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||
+                !generation.equals(source.opt("generation"))||!fingerprint.matches("sha256:[0-9a-f]{64}"))
+            throw new SecurityException("原汇报消息身份不可核对");
+        control.checkpoint();
+        long sequence=historyPosition(conversation,ref,fingerprint,new CancellationSignal());
+        if(sequence<1||sequence==Long.MAX_VALUE)throw new SecurityException("原汇报已被撤回、换版或不可读取");
+        JSONObject page=window(conversation,encode(new JSONObject().put("before",sequence+1)),20);
+        JSONObject anchor=page.getJSONArray("messages").optJSONObject(page.getJSONArray("messages").length()-1);
+        JSONObject original=anchor==null?null:anchor.optJSONObject("ownerOriginalLocator");
+        if(original==null||!"assistant".equals(anchor.opt("role"))||!ref.sourceId.equals(anchor.opt("id"))||
+                !ref.sourceId.equals(original.opt("recordId"))||!generation.equals(original.opt("generation"))||
+                !conversation.equals(original.opt("conversationId"))||ref.revision!=original.getLong("recordVersion")||
+                !fingerprint.equals(original.opt("fingerprint")))
+            throw new SecurityException("原汇报未进入有界历史页，没有换成其他消息");
+        control.checkpoint();
+        return page.put("reportMessageId",ref.sourceId).put("reportRevision",ref.revision).put("bodyFingerprint",fingerprint);
+    }
     public JSONObject importedMessage(String conversation,String record)throws Exception{
         String gen=activeGeneration();try(Cursor row=db.rawQuery("SELECT r.record_version,r.historical_revision,r.at_ms,r.role,r.source_sha,r.byte_offset,r.byte_length,r.fragment_sha,length(f.data) FROM assistant_import_records r JOIN assistant_conversations c ON c.generation=r.generation AND c.conversation_id=r.conversation_id JOIN assistant_import_fragments f ON f.generation=r.generation AND f.source_sha=r.source_sha AND f.byte_offset=r.byte_offset WHERE r.generation=? AND r.conversation_id=? AND r.record_id=? AND r.deleted=0 AND c.deleted=0 LIMIT 1",new String[]{gen,conversation,record})){
             if(!row.moveToFirst()||row.isNull(8))return null;if(row.getLong(6)>MAX_BYTES||row.getLong(8)!=row.getLong(6))throw new IllegalStateException("原件段超过读取预算或长度已变化");

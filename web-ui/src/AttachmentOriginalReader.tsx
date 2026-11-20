@@ -36,18 +36,20 @@ function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReader
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
  const [recoveryEncoding,setRecoveryEncoding]=useState('');
  const [failedRead,setFailedRead]=useState<{command:string;args:Json}|null>(null);
- const live=useRef({id:source.id,windowId}),sequence=useRef(0),pending=useRef(false);live.current={id:source.id,windowId};
+ const retired=source.sourceUnavailable===true;
+ const live=useRef({id:source.id,windowId,retired}),sequence=useRef(0),pending=useRef(false);live.current={id:source.id,windowId,retired};
  const type=String(source.kind),details=obj(source.information);
  const invoke=async(command:string,args:Json={})=>{
-  if(pending.current)return null;const owner={...live.current},request=++sequence.current;pending.current=true;setBusy(true);setFailedRead(null);setError('');
-  try{const result=await bridge.command<Json>('attachmentWorkspace.viewer',{windowId:owner.windowId,viewerId:owner.id,command,...args});if(request!==sequence.current||live.current.id!==owner.id||live.current.windowId!==owner.windowId||document.visibilityState==='hidden')return null;if(command==='find')setFound(result);else setValue(result);return result}
-  catch(cause){if(request===sequence.current){setFailedRead({command,args});setError(cause instanceof Error?cause.message:'原件读取未完成')}return null}
+  if(pending.current||live.current.retired)return null;const owner={...live.current},request=++sequence.current;pending.current=true;setBusy(true);setFailedRead(null);setError('');
+  try{const result=await bridge.command<Json>('attachmentWorkspace.viewer',{windowId:owner.windowId,viewerId:owner.id,command,...args});if(request!==sequence.current||live.current.id!==owner.id||live.current.windowId!==owner.windowId||live.current.retired||document.visibilityState==='hidden')return null;if(command==='find')setFound(result);else setValue(result);return result}
+  catch(cause){if(request===sequence.current&&!live.current.retired){setFailedRead({command,args});setError(cause instanceof Error?cause.message:'原件读取未完成')}return null}
   finally{if(request===sequence.current){pending.current=false;setBusy(false)}}
  };
  useEffect(()=>{setValue(obj(source.information));setError('');setFound(null);setZoom(1);setTurn(0);pending.current=false;void invoke('load');return()=>{sequence.current++;pending.current=false}},[source.id,windowId]);
  useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;setBusy(false);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
- useEffect(()=>{if(Object.keys(details).length)setValue(details)},[source.information]);
- const actual=value,failed=String(source.error||error||'');
+ useEffect(()=>{if(!retired&&Object.keys(details).length)setValue(details)},[source.information,retired]);
+ useEffect(()=>{if(retired){sequence.current++;pending.current=false;setBusy(false);setValue({});setFound(null);setQuery('');setFailedRead(null)}},[retired]);
+ const actual=retired?{}:value,failed=String(source.error||(retired?'原来源已失效，请返回后重新打开。':error)||'');
  const officeIssue=type==='office'&&actual.status?(Object.hasOwn(officePreviewIssue,String(actual.status))?officePreviewIssue[String(actual.status)]:!['docx','xlsx','pptx'].includes(actual.format)?'未读到支持的 Office 文档结构。':''):'';
  const unavailable=actual.previewAvailable===false?'这个格式没有内置预览。':officeIssue;
  const ready=!failed&&!unavailable&&type!=='unsupported'&&Object.keys(actual).length>0,page=Number(actual.page||1),pages=Number(actual.pages||0);
@@ -58,7 +60,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReader
  const encodingChoice=recoveryEncoding||String(actual.encoding||'UTF-8');
  return <section className="pw-original-file" aria-label={`原件：${source.name}`}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
- {(busy||source.busy)&&<p role="status">正在读取原件…</p>}
+ {!retired&&(busy||source.busy)&&<p role="status">正在读取原件…</p>}
  {!failed&&unavailable&&<p role="status">{unavailable}{recovery?.canSave&&' 可以另存这份原件，文件内容不变。'}</p>}
  {failed&&<section aria-label="原件读取失败">
   <p className="pw-error" role="alert">{failed}</p>

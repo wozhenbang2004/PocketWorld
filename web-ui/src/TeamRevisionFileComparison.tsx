@@ -2,14 +2,19 @@ import {useEffect,useRef,useState} from 'react';
 import {Accordion,AccordionItem,Button} from './forms-library';
 
 type Review={planHash:string;status:string;verdict?:string;completeOriginalFilesRead?:boolean;findings?:string};
-type File={path:string;workItemId:string;assignmentId:string;memberId:string;workStatus:string;headState:string;state:string;priorArtifactId?:string;writtenVersion?:number;writtenHash?:string;frozenVersion?:number;frozenHash?:string;newArtifactId?:string;retainedChars?:number;truncated?:boolean};
+type File={path:string;workItemId:string;assignmentId:string;memberId:string;workStatus:string;headState:string;state:string;priorArtifactId?:string;writtenVersion?:number;writtenHash?:string;canReadWrittenOriginal?:true;frozenVersion?:number;frozenHash?:string;newArtifactId?:string;retainedChars?:number;truncated?:boolean};
 export type RevisionComparison={teamRunId:string;projectId:string;planHash:string;previousPlanHash:string;revisedPlanHash:string;revisionRequestId:string;readOnly:true;files:File[];previousReview:Review;revisedReview:Review};
 type Data=Record<string,any>;
 const hash=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+const priorText=(f:File)=>f.canReadWrittenOriginal===true&&typeof f.priorArtifactId==='string'&&
+  /^[a-f0-9-]{36}$/.test(f.priorArtifactId)&&hash(f.writtenHash)&&Number.isSafeInteger(f.writtenVersion)&&Number(f.writtenVersion)>0;
+type Basis='written_to_frozen'|'written_original';
+type Part={path:string;basis:Basis;text:string;end:number;total:number};
 export function originalRevision(v:RevisionComparison,team:string,plan:string,project:string):boolean {
   return !!v&&v.readOnly===true&&v.teamRunId===team&&v.projectId===project&&v.planHash===plan&&hash(v.previousPlanHash)&&hash(v.revisedPlanHash)&&v.previousPlanHash!==v.revisedPlanHash&&
     !!v.revisionRequestId&&v.previousReview?.planHash===v.previousPlanHash&&v.revisedReview?.planHash===v.revisedPlanHash&&Array.isArray(v.files)&&v.files.length>0&&
     v.files.length<=32&&new Set(v.files.map(f=>f.path)).size===v.files.length&&v.files.every(f=>!!f?.path&&!!f.workItemId&&!!f.memberId&&!!f.assignmentId&&
+      (f.canReadWrittenOriginal!==true||priorText(f))&&
       (f.state!=='text_changed'||!!f.priorArtifactId&&!!f.newArtifactId&&typeof f.retainedChars==='number'&&Number.isInteger(f.retainedChars)&&f.retainedChars>0));
 }
 const explanation=(file:File):string=>{
@@ -39,23 +44,31 @@ function reviewState(review:Review):string {
 export function TeamRevisionFileComparison({source,view,handle,run,memberName,openProject}:{
   source:RevisionComparison;view:string;handle:string;run:(action:string,args:Data)=>Promise<any>;memberName:(id:string)=>string;openProject:(id:string)=>void;
 }){
-  const [selected,choose]=useState(''),[part,setPart]=useState<{path:string;text:string;end:number}|null>(null);
+  const [selected,choose]=useState(''),[part,setPart]=useState<Part|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState('');const seq=useRef(0),loading=useRef(false);
   useEffect(()=>()=>{seq.current++;},[source,handle,view]);
-  const read=async(f:File,offset:number)=>{
+  const read=async(f:File,offset:number,basis:Basis='written_to_frozen')=>{
     if(loading.current)return;
     if(!offset){choose(f.path);setPart(null);}
-    setError('');if(f.state!=='text_changed')return;
+    const original=basis==='written_original';
+    setError('');if(original?!priorText(f):f.state!=='text_changed')return;
+    if(offset&&(!part||part.path!==f.path||part.basis!==basis||part.end!==offset))return;
     const n=++seq.current;loading.current=true;setBusy(true);
     try{
-      const v=await run('teams.readFrozenDiff',{viewHandle:view,fileHandle:handle,basis:'written_to_frozen',path:f.path,offset});
+      const v=await run('teams.readFrozenDiff',{viewHandle:view,fileHandle:handle,basis,path:f.path,offset,
+        ...(original?{artifactId:f.priorArtifactId}:{})});
       if(n!==seq.current)return;
-      if(v.readOnly!==true||v.basis!=='written_to_frozen'||v.fileHandle!==handle||v.teamRunId!==source.teamRunId||v.planHash!==source.planHash||
-        v.previousPlanHash!==source.previousPlanHash||v.revisedPlanHash!==source.revisedPlanHash||v.revisionRequestId!==source.revisionRequestId||
-        v.path!==f.path||v.assignmentId!==f.assignmentId||v.priorArtifactId!==f.priorArtifactId||v.newArtifactId!==f.newArtifactId||
-        v.offset!==offset||v.retainedChars!==f.retainedChars||typeof v.diff!=='string'||v.endOffset!==offset+v.diff.length||v.endOffset<=offset||v.endOffset>v.retainedChars)
-        throw new Error('返回的差异不属于所选文件的这两个版本，未替换原文。');
-      setPart(old=>({path:f.path,text:(offset&&old?.path===f.path&&old.end===offset?old.text:'')+v.diff,end:v.endOffset}));
+      const body=original?v.text:v.diff;
+      if(v.readOnly!==true||v.basis!==basis||v.fileHandle!==handle||v.teamRunId!==source.teamRunId||v.planHash!==source.planHash||
+        v.previousPlanHash!==source.previousPlanHash||v.revisionRequestId!==source.revisionRequestId||
+        v.path!==f.path||v.assignmentId!==f.assignmentId||v.priorArtifactId!==f.priorArtifactId||
+        (original?v.executionAuthorized!==false||v.writtenHash!==f.writtenHash||v.writtenVersion!==f.writtenVersion||!Number.isSafeInteger(v.retainedChars)||
+          v.retainedChars<0||v.retainedChars>65536||offset>0&&v.retainedChars!==part?.total:
+          v.revisedPlanHash!==source.revisedPlanHash||v.newArtifactId!==f.newArtifactId||v.retainedChars!==f.retainedChars)||
+        typeof body!=='string'||v.offset!==offset||v.endOffset!==offset+body.length||
+        v.endOffset>v.retainedChars||v.endOffset===offset&&v.endOffset<v.retainedChars)
+        throw new Error('返回的内容不属于所选文件的原版本，没有替换成其他原件。');
+      setPart({path:f.path,basis,text:(offset?part?.text||'':'')+body,end:v.endOffset,total:v.retainedChars});
     }catch(e){if(n===seq.current)setError(e instanceof Error?e.message:String(e));}
     finally{if(n===seq.current){loading.current=false;setBusy(false);}}
   };
@@ -69,18 +82,26 @@ export function TeamRevisionFileComparison({source,view,handle,run,memberName,op
       <p className="pw-field-hint">独审评价对应的冻结文件，不代表项目验收或主人的写回许可。</p>
     </AccordionItem></Accordion>
     {source.files.map(f=><section className="pw-team-expanded-copy" key={f.path}><h3>{f.path}</h3><p>{explanation(f)}</p>
-      {selected!==f.path?<Button size="small" variant="ghost" disabled={busy} onClick={()=>void read(f,0)}>查看{f.state==='text_changed'?'两版差异':'文件依据'}</Button>:<>
+      {selected!==f.path?<Button size="small" variant="ghost" disabled={busy}
+        onClick={()=>void read(f,0,f.state!=='text_changed'&&priorText(f)?'written_original':'written_to_frozen')}>
+        查看{f.state==='text_changed'?'两版差异':priorText(f)?'上版原文':'文件依据'}</Button>:<>
         <p className="pw-field-hint">{memberName(f.memberId)||f.memberId}{typeof f.writtenVersion==='number'?` · 上版写回项目 v${f.writtenVersion}`:''}
           {f.headState==='matches_written'?' · 打开时项目仍是该写回版本':f.headState==='changed'?' · 打开时项目已不是上版写回现场':' · 没有可核对的上版项目现场'}</p>
-        {busy&&!part&&<p role="status">读取这两个冻结版本的差异…</p>}{error&&<p role="alert">{error}</p>}
-        {part?.path===f.path&&<><pre className="pw-team-file-diff" tabIndex={0} aria-label={f.path+' 从上版写回到本次冻结的差异'}>{part.text}</pre>
-          {part.end<(f.retainedChars??0)&&<Button variant="ghost" disabled={busy} onClick={()=>void read(f,part.end)}>继续读取（{part.end}/{f.retainedChars}）</Button>}
-          {f.truncated&&<p className="pw-field-hint">原生比较只保留部分差异，不能算完整阅读。</p>}</>}
+        {busy&&!part&&<p role="status">正在读取所选原件…</p>}{error&&<p role="alert">{error}</p>}
+        {part?.path===f.path&&<>
+          {part.basis==='written_original'&&<p className="pw-field-hint">上版实际写回的原文，不是项目当前内容。</p>}
+          {part.text?<pre className="pw-team-file-diff" tabIndex={0}
+            aria-label={f.path+(part.basis==='written_original'?' 的上版原文':' 从上版写回到本次冻结的差异')}>{part.text}</pre>:<p>上版写回文件为空。</p>}
+          {part.end<part.total&&<Button variant="ghost" disabled={busy} onClick={()=>void read(f,part.end,part.basis)}>继续读取（{part.end}/{part.total}）</Button>}
+          {part.basis==='written_to_frozen'&&f.truncated&&<p className="pw-field-hint">原生比较只保留部分差异，不能算完整阅读。</p>}</>}
         {(f.writtenHash||f.frozenHash)&&<Accordion variant="divided"><AccordionItem id="fingerprints" title="核对文件版本与指纹">
           {f.writtenHash&&<p className="pw-field-hint">上版写回 · 项目 v{f.writtenVersion}<br/><code style={{overflowWrap:'anywhere'}}>{f.writtenHash}</code></p>}
           {f.frozenHash&&<p className="pw-field-hint">本次冻结 · 草稿 v{f.frozenVersion}<br/><code style={{overflowWrap:'anywhere'}}>{f.frozenHash}</code></p>}
         </AccordionItem></Accordion>}
-        <div className="pw-form-actions">{f.newArtifactId&&<Button variant="ghost" disabled={busy} onClick={()=>openProject(f.newArtifactId!)}>另看打开时的项目对照</Button>}
+        <div className="pw-form-actions">
+          {priorText(f)&&part?.basis!=='written_original'&&<Button variant="ghost" disabled={busy} onClick={()=>void read(f,0,'written_original')}>查看上版原文</Button>}
+          {f.state==='text_changed'&&part?.basis!=='written_to_frozen'&&<Button variant="ghost" disabled={busy} onClick={()=>void read(f,0)}>查看两版差异</Button>}
+          {f.newArtifactId&&<Button variant="ghost" disabled={busy} onClick={()=>openProject(f.newArtifactId!)}>另看打开时的项目对照</Button>}
           <Button variant="ghost" disabled={busy} onClick={()=>{choose('');setPart(null);setError('');}}>收起</Button></div>
       </>}</section>)}
   </section>;

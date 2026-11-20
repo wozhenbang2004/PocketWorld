@@ -1,5 +1,6 @@
 package dev.pocketengine.features.teams;
 
+import dev.pocketengine.core.RunControl;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.LinkedHashMap;
@@ -69,6 +70,10 @@ public final class TeamOwnerFileReading {
     public JSONObject revisionPage(String path,int offset)throws Exception{
         if(revision==null)throw new SecurityException("原窗口没有这次修订的冻结对照");
         return revision.page(path,offset);
+    }
+    public JSONObject writtenRevisionPage(String path,String artifactId,int offset,RunControl reader)throws Exception{
+        if(revision==null)throw new SecurityException("原窗口没有这次修订的已写回原件");
+        return revision.writtenPage(path,artifactId,offset,reader);
     }
     static int pageEnd(String body,int offset){
         if(body==null||offset<0||offset>body.length()||offset>0&&offset<body.length()&&Character.isLowSurrogate(body.charAt(offset))&&Character.isHighSurrogate(body.charAt(offset-1)))throw new SecurityException("没有这段可读的原文差异");

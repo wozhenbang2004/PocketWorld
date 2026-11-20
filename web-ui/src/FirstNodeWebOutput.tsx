@@ -25,7 +25,7 @@ export function firstNodeWebOwnerWindow(taskId: string): string {
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
-export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, listedSavedVersion}: {target: Position; ownerWindow: string; hideIneligible?: boolean; open?: (p: PackagePreviewTarget)=>void;
+export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, listedSavedVersion}: {target: Position; ownerWindow: string; hideIneligible?: boolean; checkBuildAfterFailure?: boolean; open?: (p: PackagePreviewTarget)=>void;
   onSaved: (operationId: string, sha256: string) => void;
   listedSavedVersion?: (taskId: string, operationId: string, sha256: string) => boolean}) {
   const [fact, setFact] = useState<Fact|null>(null);
@@ -76,6 +76,7 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     listedSavedVersion?.(target.taskId, fact.packageOperationId, fact.archiveSha256)===true;
   return <section className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
+    {checkBuildAfterFailure && fact?.eligible===true && <p className="pw-reading-note">这项工作没有完成，但本机构建步骤已核对为成功退出。下面只处理原构建的网页。</p>}
     {fact?.eligible===false&&fact.message&&<p className="pw-reading-note">{fact.message}</p>}
     {fact?.state==='ready'&&<><p className="pw-reading-note">核对原构建退出时看到的网页文件，再决定是否保存。不重新构建。</p>
       <Button size="small" variant="secondary" disabled={!!busy} onClick={()=>void call(review)}>{busy===review?'正在核对原网页…':'核对网页包'}</Button></>}

@@ -12,10 +12,13 @@ import org.json.JSONObject;
 /** A private, held comparison of two sets of immutable artifacts. A changing project head
  * is a third source, never substituted for the previous written bytes. Nothing here dispatches work. */
 final class TeamOwnerRevisionFiles {
+    private static final int WRITTEN_TEXT_BYTES=65536;
     private final JSONObject index;
+    private final TeamWorkFiles.Workspace workspace;
     private final Map<String,String> text=new HashMap<>();
     private final Map<String,JSONObject> entries=new HashMap<>();
-    private TeamOwnerRevisionFiles(JSONObject index){this.index=index;}
+    private final Map<String,JSONObject> writtenText=new HashMap<>();
+    private TeamOwnerRevisionFiles(JSONObject index,TeamWorkFiles.Workspace workspace){this.index=index;this.workspace=workspace;}
 
     private static boolean same(Object a,Object b)throws Exception{return TeamWorkFiles.canonical(a).equals(TeamWorkFiles.canonical(b));}
     private static JSONObject ref(JSONObject file)throws Exception{
@@ -93,7 +96,7 @@ final class TeamOwnerRevisionFiles {
                 .put("revisedPlanHash",newHash).put("revisionRequestId",round.request()).put("files",rows).put("readOnly",true)
                 .put("previousReview",tasks.teamVersionReviewForOwner(team,round.previousPlan(),reader))
                 .put("revisedReview",allFrozen?tasks.teamVersionReviewForOwner(team,newHash,reader):new JSONObject().put("planHash",newHash).put("status","not_all_frozen"));
-        TeamOwnerRevisionFiles result=new TeamOwnerRevisionFiles(index);
+        TeamOwnerRevisionFiles result=new TeamOwnerRevisionFiles(index,workspace);
         for(var s:selected.entrySet()){
             reader.check();String path=s.getKey();JSONObject item=s.getValue(),a=prior.get(path),b=current.get(path);
             if(a!=null&&!bound(a,item,team,project)||b!=null&&!bound(b,item,team,project))throw new SecurityException("文件不属于同一原分工，未比较");
@@ -102,6 +105,11 @@ final class TeamOwnerRevisionFiles {
                     .put("memberId",item.getString("memberId")).put("workStatus",item.getString("status")).put("headState","not_checked");
             if(receipt!=null){
                 row.put("priorArtifactId",a.getString("artifactId")).put("writtenVersion",receipt.getInt("version")).put("writtenHash",receipt.getString("sha256"));
+                long bytes=a.optLong("bytes",-1);
+                if("text_file".equals(a.opt("artifactKind"))&&bytes>=0&&bytes<=WRITTEN_TEXT_BYTES&&a.getString("sha256").equals(receipt.opt("sha256"))){
+                    result.writtenText.put(path,new JSONObject(a.toString()));
+                    row.put("canReadWrittenOriginal",true);
+                }
                 JSONObject d=heads.get(path);
                 if(d!=null){boolean matches=d.getBoolean("currentExists")!=TeamWorkReview.isDeletion(a)&&d.getInt("currentVersion")==receipt.getInt("version")&&d.getString("currentRevisionId").equals(receipt.getString("revisionId"))&&d.getString("currentHash").equals(receipt.getString("sha256"));row.put("headState",matches?"matches_written":"changed");}
                 else try{row.put("headState",TeamWorkReview.sameHead(TeamWorkFiles.snapshot(workspace,project,path),receipt)?"matches_written":"changed");}
@@ -127,6 +135,29 @@ final class TeamOwnerRevisionFiles {
         reader.check();return result;
     }
     JSONObject index()throws Exception{return new JSONObject(index.toString());}
+    /** Read the already matched prior write artifact, never the live project head
+     * or an ID supplied as a new lookup. Each page checks the same immutable bytes. */
+    JSONObject writtenPage(String path,String artifactId,int offset,RunControl reader)throws Exception{
+        reader.check();JSONObject ref=writtenText.get(path),row=entries.get(path);
+        if(ref==null||row==null||!artifactId.equals(row.opt("priorArtifactId"))||!artifactId.equals(ref.opt("artifactId")))
+            throw new SecurityException("所选文件没有这次修订所指的上版原文");
+        String body;
+        try{
+            JSONObject actual=TeamWorkReview.artifact(workspace,ref);body=actual.getString("content");
+            byte[] bytes=body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if(!"text_file".equals(actual.opt("kind"))||bytes.length!=ref.getLong("bytes")||bytes.length>WRITTEN_TEXT_BYTES||
+                    !TeamWorkFiles.hash(bytes).equals(row.opt("writtenHash")))throw new SecurityException("上版原文字节不匹配");
+        }catch(Exception unavailable){
+            reader.check();throw new SecurityException("上版原文暂不可读取，没有用当前项目或其他稿件替代");
+        }
+        int end=TeamOwnerFileReading.pageEnd(body,offset);
+        reader.check();return new JSONObject().put("basis","written_original").put("readOnly",true).put("executionAuthorized",false)
+                .put("teamRunId",index.getString("teamRunId")).put("planHash",index.getString("planHash"))
+                .put("revisionRequestId",index.getString("revisionRequestId")).put("previousPlanHash",index.getString("previousPlanHash"))
+                .put("path",path).put("assignmentId",row.getString("assignmentId")).put("priorArtifactId",artifactId)
+                .put("writtenVersion",row.getInt("writtenVersion")).put("writtenHash",row.getString("writtenHash"))
+                .put("offset",offset).put("endOffset",end).put("retainedChars",body.length()).put("text",body.substring(offset,end));
+    }
     JSONObject page(String path,int offset)throws Exception{
         String body=text.get(path);JSONObject row=entries.get(path);if(row==null||body==null)throw new SecurityException("该路径没有可读的上版与本次原件差异");
         int end=TeamOwnerFileReading.pageEnd(body,offset);

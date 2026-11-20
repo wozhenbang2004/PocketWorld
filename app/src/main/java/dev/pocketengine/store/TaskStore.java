@@ -3268,15 +3268,38 @@ public final class TaskStore {
         control.check();if(control.isPaused()||control.pauseRevision()!=pause)throw new InterruptedException("汇报读取已暂停，未返回迟到正文");
         if(System.nanoTime()-started>500_000_000L)throw new IllegalStateException("汇报原文核对超过本页读取范围，请重新打开");
     }
+    /** The same published result receipt locates one history page at its saved message. */
+    public synchronized JSONObject ownerWorkReportHistoryForOwner(String id,String run,int epoch,String message,long expectedRevision,String expectedFingerprint,RunControl control)throws Exception{
+        if(id==null||id.isBlank()||id.length()>80||run==null||run.isBlank()||run.length()>80||epoch<1||
+                message==null||message.isBlank()||message.length()>512||control==null||control.hasHostRun()||expectedFingerprint==null||
+                (expectedRevision==0?!expectedFingerprint.isEmpty():(expectedRevision<1||!expectedFingerprint.matches("sha256:[0-9a-f]{64}"))))
+            throw new SecurityException("原汇报阅读定位无效");
+        long pause=control.pauseRevision(),started=System.nanoTime();checkOwnerWorkReportRead(control,pause,started);
+        db.beginTransactionNonExclusive();try{
+            JSONObject selected=ownerWorkReportSelection(id,run,epoch,message,true),source=selected.getJSONObject("source");
+            if(expectedRevision>0&&(source.getJSONObject("sourceRef").getLong("revision")!=expectedRevision||
+                    !expectedFingerprint.equals(source.opt("bodyFingerprint"))))
+                throw new SecurityException("原汇报已换版，没有跳到其他消息");
+            JSONObject page=conversationRepository.windowAtOwnerWorkReport(source,control);
+            if(!selected.getString("conversationId").equals(page.opt("conversationId"))||!message.equals(page.opt("reportMessageId")))
+                throw new SecurityException("没有定位到这份原汇报");
+            checkOwnerWorkReportRead(control,pause,started);db.setTransactionSuccessful();return page;
+        }finally{db.endTransaction();}
+    }
     /** Only an exact current receipt can select a report. The report producer may be
      * an older butler run; reading it never requires or reopens that run's grant. */
     private JSONObject ownerWorkReportSelection(String id,String run,int epoch,String message)throws Exception {
+        return ownerWorkReportSelection(id,run,epoch,message,false);
+    }
+    private JSONObject ownerWorkReportSelection(String id,String run,int epoch,String message,boolean ordinaryHistory)throws Exception {
         JSONObject work;
         try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=1048576 THEN document END FROM tasks WHERE task_id=?",new String[]{id})){
             if(!row.moveToFirst())throw new IllegalArgumentException("原工作不存在");
             if(row.isNull(0))throw new IllegalStateException("原工作超过本次汇报读取范围，请查看原工作记录");work=new JSONObject(row.getString(0));
         }
         requirePrivateOwner(work);
+        if(ordinaryHistory&&(!OwnerWorkTask.isOwnerWork(work)||work.has("developmentContext")||work.has("ownerPhoneControl")||work.has("ownerDeviceWork")))
+            throw new SecurityException("请返回这件普通工作的已保存汇报");
         if(!id.equals(work.optString("id"))||!run.equals(work.optString("runId"))||epoch!=work.optInt("coordinatorEpoch"))throw new SecurityException("原工作执行代次已变化，请重新打开当前工作");
         ownerResultMetadata(work);requireOwnerResultSources(work);JSONObject handling=ownerWorkHandling(work);
         if(!"reported".equals(handling.optString("state"))||!message.equals(handling.optString("reportMessageId")))throw new SecurityException("这份汇报不属于原工作当前已保存的处理结果");
@@ -13441,8 +13464,8 @@ public final class TaskStore {
     private OriginalNodeWebOutput.Build firstWebBuildRow(JSONObject task,String run,int epoch,String build,boolean current)throws Exception{
         JSONObject dc=task.getJSONObject("developmentContext"),pin=dc.getJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
         String id=task.getString("id");
-        if(current&&(!run.equals(task.opt("runId"))||epoch!=task.optInt("coordinatorEpoch",-1)||!"completed".equals(task.opt("status"))))
-            throw new SecurityException("请核对这项已结束的原构建轮次；未切到其他工作");
+        if(current&&(!run.equals(task.opt("runId"))||epoch!=task.optInt("coordinatorEpoch",-1)))
+            throw new SecurityException("请核对这项原构建轮次；未切到其他工作");
         try(Cursor generation=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){
             if(!generation.moveToFirst())throw new SecurityException("这不是原构建的执行轮次");
         }
@@ -13452,7 +13475,20 @@ public final class TaskStore {
     public synchronized OriginalNodeWebOutput.Build firstWebBuildForOwner(String id,String run,int epoch,String exactOperation)throws Exception{
         JSONObject task=firstWebTask(id);
         if(!run.equals(task.opt("runId"))||epoch!=task.optInt("coordinatorEpoch",-1))throw new SecurityException("原构建轮次已离开");
-        if(!"completed".equals(task.opt("status"))||task.getJSONObject("developmentContext").optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD)==null)return null;
+        var pin=task.getJSONObject("developmentContext").optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
+        if(pin==null)return null;
+        String failedRunBuild=null;
+        if(!"completed".equals(task.opt("status"))){
+            // A failed follow-up inference does not erase the actual build.
+            // Recover only the settled ordinary project's current run, never an older success.
+            if(!"failed".equals(task.opt("status"))||task.optBoolean("cancelRequested")||
+                !dev.pocketengine.features.local.project.OwnerDraftFirstBuild.existingCheckout(pin)||hasUnresolved(id))return null;
+            try(Cursor ending=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='failed'",
+                new String[]{id,run,Integer.toString(epoch)})){if(!ending.moveToFirst())return null;}
+            JSONObject fact=currentFirstBuildFact(task,pin);
+            if(fact==null||!"build_exit".equals(fact.opt("kind"))||fact.getInt("value")!=0)return null;
+            failedRunBuild=fact.getString("actionOperationId");
+        }
         // Bounded native lookup, never a user hint, latest file, model text or dependency receipt.
         OriginalNodeWebOutput.Build found=null;int count=0;
         try(Cursor candidates=db.rawQuery("SELECT operation_id,length(CAST(arguments AS BLOB)),length(CAST(receipt AS BLOB)) FROM operations WHERE task_id=? AND run_id=? AND tool='project_execute' AND state='receipt' AND receipt IS NOT NULL AND instr(receipt, '\"stepId\":\"build\"')>0 ORDER BY rowid DESC LIMIT 9",new String[]{id,run})){
@@ -13465,6 +13501,7 @@ public final class TaskStore {
                 found=candidate;
             }
         }
+        if(failedRunBuild!=null&&(found==null||!failedRunBuild.equals(found.facts().getString("buildOperationId"))))found=null;
         if(exactOperation!=null&&(found==null||!exactOperation.equals(found.facts().getString("buildOperationId"))))
             throw new SecurityException("选中的不是这一轮的原成功构建");
         return found;
@@ -17611,7 +17648,7 @@ public final class TaskStore {
         JSONObject workView=ownerWorkForUi(result);if(workView!=result)return workView;
         // Full cores derive the same navigation-only identity as summaries before any source gate
         // hides their body. Limited cores already carry the native header's verified projection.
-        if(!limited){result.remove("conversationPhoneLink");JSONObject link=TaskAuditStore.conversationPhoneLink(result);if(link!=null)result.put("conversationPhoneLink",link);}
+        if(!limited){result.remove("conversationPhoneLink");JSONObject link=TaskAuditStore.conversationPhoneLink(result);if(link!=null)result.put("conversationPhoneLink",link);OwnerSavedDeviceChoice.project(result,result);}
         JSONObject sourceView=phoneOwnerQuestionForUi(result);if(sourceView!=result)return sourceView;
         if(OwnerWorkTask.isOwnerWork(result)&&result.optBoolean("contextAvailable")&&result.getJSONObject("controls").optBoolean("canContinue")){
             result.getJSONObject("controls").put("continuationHistory",TaskRunDocumentReader.resumeHistoryForUi(db,id,result.getString("runId"),result.getInt("coordinatorEpoch")));
@@ -18044,7 +18081,7 @@ public final class TaskStore {
             if(TaskStoreDeviceTasks.deviceTask(value)){JSONObject previous=read(value.getString("id"));long revision=previous==null?0:previous.optLong("deviceStateRevision");value.put("deviceStateRevision",Math.addExact(revision,1));}
             if(channel||group){String key=group?"groupStateRevision":"channelStateRevision";JSONObject previous=read(value.getString("id"));long revision=previous==null?0:previous.optLong(key,0);if(revision==Long.MAX_VALUE)throw new IllegalStateException("渠道任务回执版本已耗尽");value.put(key,revision+1);}
             if(value.optJSONObject("origin")!=null&&"owner_reviewed_realtime".equals(value.getJSONObject("origin").optString("kind"))){JSONObject previous=read(value.getString("id"));long revision=previous==null?0:Math.max(1,previous.optLong("voiceStateRevision",previous.optLong("updatedAt",1)));if(revision==Long.MAX_VALUE)throw new IllegalStateException("语音任务记录版本已耗尽");value.put("voiceStateRevision",revision+1);}
-            value.put("updatedAt",System.currentTimeMillis());ContentValues v=new ContentValues();v.put("task_id",value.getString("id"));v.put("document",TaskAuditStore.coreAndImport(db,value));v.put("audit_format",1);JSONObject header=TaskAuditStore.header(db,value);MainPhoneOwnerStep.project(value,header);projectOwnerWorkHeader(value,header);projectOwnerResultHandlingHeader(value,header);projectOwnerWorkPreparationHeader(value,header);projectDeviceWorkspaceNavigation(value,header);if("needs_confirmation".equals(value.optString("status")))header.put("resultReviewDigest",resultReviewDigest(value));projectResultImageIdentity(value,header);v.put("ui_header",header.toString());v.put("updated_at",value.getLong("updatedAt"));if(db.update("tasks",v,"task_id=?",new String[]{value.getString("id")})==0&&db.insertOrThrow("tasks",null,v)<0)throw new IllegalStateException("任务事务写入失败");TaskIdentityIndex.sync(db,value.getString("id"),value);
+            value.put("updatedAt",System.currentTimeMillis());ContentValues v=new ContentValues();v.put("task_id",value.getString("id"));v.put("document",TaskAuditStore.coreAndImport(db,value));v.put("audit_format",1);JSONObject header=TaskAuditStore.header(db,value);MainPhoneOwnerStep.project(value,header);projectOwnerWorkHeader(value,header);projectOwnerResultHandlingHeader(value,header);projectOwnerWorkPreparationHeader(value,header);projectDeviceWorkspaceNavigation(value,header);OwnerSavedDeviceChoice.project(value,header);if("needs_confirmation".equals(value.optString("status")))header.put("resultReviewDigest",resultReviewDigest(value));projectResultImageIdentity(value,header);v.put("ui_header",header.toString());v.put("updated_at",value.getLong("updatedAt"));if(db.update("tasks",v,"task_id=?",new String[]{value.getString("id")})==0&&db.insertOrThrow("tasks",null,v)<0)throw new IllegalStateException("任务事务写入失败");TaskIdentityIndex.sync(db,value.getString("id"),value);
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }

@@ -335,19 +335,39 @@ export function deviceManualPhonePreparation(task: DeviceData, peer: DeviceData 
   const saved = originalManualPreparation(task);
   return saved && samePreparedPhone(saved, peer) ? saved : undefined;
 }
+/** A same-device navigation hint, never a dispatch, result, live grant or permission. */
+export function deviceSavedOwnerChoice(task: DeviceData, snapshot: DeviceData | null, peer: DeviceData | undefined) {
+  const raw = task.raw, saved = raw?.ownerSavedDeviceChoice;
+  if (!identity(task.id) || task.summaryOnly === true || !object(raw) || raw.id !== task.id ||
+      raw.actorId !== 'owner' || raw.spaceId !== 'private' || 'origin' in raw || 'ownerDeviceWork' in raw ||
+      !['assistant', 'phone'].includes(raw.kind) || raw.contextAvailable === false || raw.sourceCurrentReadRequired === true ||
+      raw.taskProjection === 'source_unavailable' || typeof raw.runId !== 'string' || typeof raw.conversationId !== 'string' ||
+      !Number.isSafeInteger(raw.coordinatorEpoch) || (raw.runId ? raw.coordinatorEpoch < 1 : raw.coordinatorEpoch !== 0) ||
+      !object(saved) || saved.format !== 'pocketworld.owner-saved-device-choice.v1' || saved.readOnly !== true ||
+      saved.executionAuthorized !== false || !positiveInteger(saved.scopeRevision) ||
+      !peer || peer.revoked === true || peer.connection?.state === 'REVOKED') return;
+  const target = readingIdentity(saved.target), paired = readingIdentity(peer), here = readingIdentity(snapshot?.local);
+  if (!target || !paired || !here || here.deviceId !== saved.localDeviceId ||
+      !(['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(field => target[field] === paired[field])) return;
+  return { scopeRevision: saved.scopeRevision, runId: raw.runId, epoch: raw.coordinatorEpoch,
+    conversationId: raw.conversationId, localDeviceId: here.deviceId, target };
+}
 export function deviceTaskRows(tasks: unknown, snapshot: DeviceData | null, peerId = ''): DeviceData[] {
   const links = deviceRows(Array.isArray(snapshot?.taskLinks) ? snapshot.taskLinks : snapshot?.taskLinks?.links);
   const peer = peerId ? deviceRows(snapshot?.peers).find(item => item.deviceId === peerId) : undefined;
   const originals = deviceRows(tasks).filter(task => identity(task.id));
-  const result = originals.filter(task => {
+  const result = originals.flatMap(task => {
     const raw = object(task.raw) ? task.raw : {}, origin = object(raw.origin) ? raw.origin : {}, operations = deviceRows(raw.operations);
     const prepared = deviceWorkspaceTaskMode(raw) !== '';
     const manual = peerId && originalManualPreparation(task);
-    if (manual) return samePreparedPhone(manual, peer); // A matching deviceId alone cannot retarget an original preparation.
+    if (manual) return samePreparedPhone(manual, peer) ? [task] : []; // A deviceId alone cannot retarget a preparation.
     const selected = deviceRows(raw.deviceSourceScope?.routes);
     const targets = deviceStrings(raw.deviceWorkspaceNavigation?.targetDeviceIds);
-    return peerId ? prepared && (selected.some(route => route.targetDeviceId === peerId) || targets.includes(peerId) || raw.ownerDeviceWork?.directPhone?.deviceId === peerId) || links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
+    const linked = peerId ? prepared && (selected.some(route => route.targetDeviceId === peerId) || targets.includes(peerId) || raw.ownerDeviceWork?.directPhone?.deviceId === peerId) || links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
       : prepared || origin.kind === 'paired_device' || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_')) || links.some(link => link.parentTaskId === task.id);
+    if (linked) return [task];
+    const savedDeviceChoice = deviceSavedOwnerChoice(task, snapshot, peer);
+    return savedDeviceChoice ? [{ ...task, savedDeviceChoice }] : [];
   });
   for (const link of links) if (identity(link.parentTaskId) && (!peerId || link.targetDeviceId === peerId
     && !originals.some(task => task.id === link.parentTaskId && originalManualPreparation(task))) && !result.some(task => task.id === link.parentTaskId)) result.push({ id: link.parentTaskId, goal: '原设备关联任务', raw: {}, summaryOnly: true });

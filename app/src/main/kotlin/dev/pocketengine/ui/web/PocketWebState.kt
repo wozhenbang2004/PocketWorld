@@ -237,6 +237,7 @@ internal object PocketWebState {
             .put("cursor", page.cursor).put("hasMore", page.hasMore).put("loading", page.loading)
             .put("error", page.error ?: JSONObject.NULL).put("notice", page.notice ?: JSONObject.NULL)
             .put("limited", page.limited).put("index", page.index).put("offset", page.offset).put("anchor", page.anchor)
+            .put("originalReportMessageId",page.reportAnchor?.message ?: JSONObject.NULL)
         } ?: JSONObject.NULL)
         data.put("queuedInputsPage", controller.queuedInputsPage?.let { page -> JSONObject()
             .put("window", page.window).put("task", page.task).put("conversation", page.conversation)

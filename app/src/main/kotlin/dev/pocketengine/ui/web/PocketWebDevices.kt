@@ -158,6 +158,14 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     }
     fun taskForNavigation(args: JSONObject): String {
         check(visible() && controller.webPrivateOwnerVisible())
+        if (args.has("savedDeviceChoice")) {
+            fields(args, "taskId", "savedDeviceChoice")
+            current(requireNotNull(window()), generation.get())
+            val id = text(args, "taskId")
+            val original = controller.state.tasks.singleOrNull { it.id == id } ?: error("原任务不在当前本机记录内，请重新读取")
+            checkSavedDeviceChoice(args, original.raw)
+            return id
+        }
         if (args.has("manualPhoneTarget")) {
             fields(args, "taskId", "manualPhoneTarget")
             val original = requireNotNull(window()); current(original, generation.get())
@@ -193,6 +201,34 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }
         fields(args, "taskId")
         return text(args, "taskId").also { require(it in taskIds()) { "请从原设备任务记录打开" } }
+    }
+    /** A scope-only row is not a device task-control candidate. Check the saved fixed target
+     * against the same native device window and the bounded original task read. */
+    fun checkSavedDeviceChoice(args: JSONObject, actual: JSONObject) {
+        val id = text(args, "taskId")
+        val input = args.getJSONObject("savedDeviceChoice")
+        fields(input, "scopeRevision", "runId", "epoch", "conversationId", "localDeviceId", "target")
+        val target = input.getJSONObject("target")
+        fields(target, "deviceId", "instanceId", "certificateFingerprint")
+        val device = text(target, "deviceId"); val partner = peer(latest, device)
+        val keys = listOf("deviceId", "instanceId", "certificateFingerprint")
+        val saved = actual.optJSONObject("ownerSavedDeviceChoice") ?: error("本机没有这次原设备选择，请重新读取")
+        val run = input.opt("runId"); val conversation = input.opt("conversationId")
+        val revision = integer(input, "scopeRevision", 1, DeviceProtocol.MAX_SAFE_INTEGER)
+        val epoch = integer(input, "epoch", 0, Int.MAX_VALUE.toLong()).toInt()
+        require(device.matches(Regex("pw1_[a-f0-9]{64}")) && text(target, "instanceId").matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,127}")) &&
+            text(target, "certificateFingerprint").matches(Regex("[a-f0-9]{64}")) && keys.all { partner.opt(it) == target.opt(it) } &&
+            partner.opt("revoked") != true && partner.optJSONObject("connection")?.opt("state") != "REVOKED" &&
+            input.opt("localDeviceId") is String && latest.optJSONObject("local")?.opt("deviceId") == input.opt("localDeviceId") &&
+            actual.opt("id") == id && actual.opt("actorId") == "owner" && actual.opt("spaceId") == "private" &&
+            actual.opt("kind") in setOf("assistant", "phone") && !actual.has("origin") && !actual.has("ownerDeviceWork") &&
+            actual.opt("contextAvailable") != false && actual.opt("sourceCurrentReadRequired") != true && actual.opt("taskProjection") != "source_unavailable" &&
+            run is String && (if (run.isEmpty()) epoch == 0 else epoch > 0) && actual.opt("runId") == run && actual.optInt("coordinatorEpoch", -1) == epoch &&
+            conversation is String && actual.opt("conversationId") == conversation &&
+            saved.opt("format") == "pocketworld.owner-saved-device-choice.v1" && saved.opt("readOnly") == true &&
+            saved.opt("executionAuthorized") == false && saved.opt("localDeviceId") == input.opt("localDeviceId") &&
+            saved.optLong("scopeRevision", -1) == revision &&
+            keys.all { saved.optJSONObject("target")?.opt(it) == target.opt(it) }) { "原任务、设备或已选范围已变化，没有打开其他工作" }
     }
     fun checkManualPreparationForNavigation(args: JSONObject, actual: JSONObject) {
         val saved = OwnerPhoneControlScope.directedPreparation(actual)

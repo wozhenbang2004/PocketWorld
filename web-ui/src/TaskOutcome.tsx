@@ -151,7 +151,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const record = task && typeof task === 'object' ? task as Record<string, any> : {};
   const status = typeof record.status === 'string' && record.status ? record.status : record.raw?.status;
   const buildScope = record.raw?.developmentContext?.ownerDraftFirstBuild;
-  const firstWeb = active && status==='completed' && buildScope &&
+  const reconciliation = taskNeedsReconciliation(task);
+  const checkBuildAfterFailure = status==='failed' && buildScope?.existingCheckoutBuild===true && !reconciliation && !record.raw?.cancelRequested;
+  const firstWeb = active && (status==='completed' || checkBuildAfterFailure) && buildScope &&
     typeof record.id==='string' && typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
     ? {taskId:record.id,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
   const packageRead = useProjectPackages(task, active, readIdentity, firstWeb?.taskId);
@@ -171,7 +173,6 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   }, [screenshot?.imageId, screenshot?.expiresAt, clock]);
   const imageLabel = screenshot?.currentRun ? '本轮结果截图' : '任务保留的较早截图';
   const work = ownerWorkPresentation(task);
-  const reconciliation = taskNeedsReconciliation(task);
   // The store can reconcile an attempted stop after the runner emits its result.
   // Keep the authoritative state separate from the output and saved files.
   const settlementTitle = reconciliation ? '有操作结果待核对'
@@ -225,8 +226,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active && canReadPhoneTaskOriginal && <PhoneTaskOriginalReport task={record}/>}
     {active&&<TaskPhoneFinalScreen task={record}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
-    {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}`} ownerWindow={packageRead.firstWebWindow}
-      target={firstWeb} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}
+    {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}:${status}`} ownerWindow={packageRead.firstWebWindow}
+      target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}
       listedSavedVersion={(taskId, operationId, sha256)=>packageRead.eligible && !!onOpenProjectPackage &&
         outcome.projectPackages.some(item=>item.mode==='web_output'&&item.taskId===taskId&&item.operationId===operationId&&item.archiveSha256===sha256)}/>}
     {active && onContinueBuildCopy && <div className="pw-form-actions">

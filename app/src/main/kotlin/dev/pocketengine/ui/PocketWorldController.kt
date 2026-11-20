@@ -3243,6 +3243,36 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var conversationReadSequence=0L
     internal val conversationReaderRevision get() = conversationReadSequence
     fun canReadConversationWindow(page:ConversationReadPage)=!closed&&privateWorkspaceView()&&conversationReader?.window==page.window&&conversationReader?.conversation==page.conversation
+    internal fun openOwnerReportHistory(task:String,run:String,epoch:Int,messageId:String,current:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val readerAtRequest=conversationReadSequence
+        val sourceRevision=conversationSourceRevision
+        val store=app.tasks
+        fun original()=webPrivateOwnerVisible()&&current()&&webTaskViewId==task&&conversationReader==null&&
+            readerAtRequest==conversationReadSequence&&sourceRevision==conversationSourceRevision&&app.tasks===store
+        check(original()) { "请在已保存汇报的原工作中查看" }
+        io.execute {
+            val result=runCatching {
+                store.ownerWorkReportHistoryForOwner(task,run,epoch,messageId,0L,"",dev.pocketengine.core.RunControl())
+            }
+            main.post {
+                if(!original()){done(null,"原工作或阅读窗口已变化，没有打开其他对话");return@post}
+                result.fold({ native ->
+                    val opened=runCatching {
+                        val conversation=native.getString("conversationId")
+                        val pin=OwnerReportHistoryAnchor(task,run,epoch,messageId,native.getLong("reportRevision"),native.getString("bodyFingerprint"))
+                        require(native.opt("reportMessageId")==messageId&&pin.revision>0&&pin.fingerprint.matches(Regex("sha256:[0-9a-f]{64}")))
+                        val page=ConversationReadPage(Math.addExact(conversationReadSequence,1L),conversation,native.optString("title"),null,
+                            anchor=messageId,reportAnchor=pin).accept(native,false)
+                        require(page.initialized&&!page.limited&&page.messages.lastOrNull()?.let { it.id==messageId&&it.sourceRevision==pin.revision }==true) { "原汇报超出本次阅读范围" }
+                        conversationReadSequence=page.window;conversationReader=page
+                        JSONObject().put("window",page.window).put("conversationId",conversation).put("reportMessageId",messageId)
+                            .put("reportRevision",pin.revision).put("readOnly",true)
+                    }
+                    opened.fold({ done(it,null) },{ failure -> done(null,message(failure)) })
+                },{ failure -> done(null,message(failure)) })
+            }
+        }
+    }
     fun openConversationReader(id:String) {
         if(id.isBlank()||id.length>240||!privateWorkspaceView())return
         // Reading the active conversation is independent of its live composer anchor.
@@ -3255,12 +3285,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val page=conversationReader?:return;if(!canReadConversationWindow(page)||older&&(!page.hasMore||page.limited))return
         val requested=if(older)page.cursor else "";conversationReader=page.copy(loading=true,error=null)
         io.execute {
+            val report=page.reportAnchor
             val result=runCatching {
-                val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error("私人历史宿主尚未准备")
-                assistant.readOriginalConversation(page.conversation,requested,40)
+                if(report!=null&&!older)app.tasks.ownerWorkReportHistoryForOwner(report.task,report.run,report.epoch,report.message,
+                    report.revision,report.fingerprint,dev.pocketengine.core.RunControl())
+                else {
+                    val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error("私人历史宿主尚未准备")
+                    assistant.readOriginalConversation(page.conversation,requested,40)
+                }
             }
             main.post {val current=conversationReader?:return@post;if(!canReadConversationWindow(page))return@post
-                result.fold({native->runCatching{current.accept(native,older)}.fold({conversationReader=it},{failure->conversationReader=current.copy(loading=false,error=message(failure))})},{failure->conversationReader=current.copy(loading=false,error=message(failure))})
+                fun failed(failure:Throwable) {
+                    val preserved=if(report!=null&&!older)current.copy(messages=emptyList(),rowBytes=emptyMap(),bytes=0,hasMore=false,cursor="") else current
+                    conversationReader=preserved.copy(loading=false,error=message(failure))
+                }
+                result.fold({native->
+                    runCatching{
+                        val next=(if(report!=null&&!older)current.copy(anchor=report.message,index=0,offset=0) else current).accept(native,older)
+                        if(report!=null&&!older)require(!next.limited&&next.messages.lastOrNull()?.let { it.id==report.message&&it.sourceRevision==report.revision }==true) { "原汇报已不可在本页读取" }
+                        next
+                    }
+                        .fold({conversationReader=it},::failed)
+                },::failed)
             }
         }
     }

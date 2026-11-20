@@ -4,7 +4,7 @@ import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, pickupUnavailable, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
-import { deviceManualPhonePreparation } from './devices-workspace';
+import { deviceManualPhonePreparation, deviceSavedOwnerChoice } from './devices-workspace';
 import { DesktopViewer } from './DesktopViewer';
 import { ReceivedGoalInputReview, originalDeviceInputReady } from './ReceivedGoalInputReview';
 import { PendingReceivedGoalInput } from './PendingReceivedGoalInput';
@@ -801,11 +801,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const returnedTask = modelReturnFocus && tasks.find(item => !unreadSource(item) && matchesReceivedPhoneGoal(item, snapshot, modelReturnFocus));
   const waiting: Data[] = [], interruptible: Data[] = [], remaining: Data[] = [];
-  const preparedHere = tasks.filter(task => !unreadSource(task) && (manualPreparationForPeer(task)?.deadlineAt || 0) > now);
+  const newestSavedChoice = tasks.find(task => !!task.savedDeviceChoice && !['completed', 'failed', 'cancelled', 'canceled'].includes(task.status));
+  const preparedHere = tasks.filter(task => task === newestSavedChoice || !unreadSource(task) && (manualPreparationForPeer(task)?.deadlineAt || 0) > now);
   const preparedIds = new Set(preparedHere.map(task => task.id));
   const canStop = (task: Data) => { const facts = actionsFor(task); return available(facts.stop) || available(facts.pendingCancel); };
   // The native 40-action window bounds controls, not the number of saved originals one may open.
-  for (const task of tasks) if (task !== returnedTask && !preparedIds.has(task.id)) (needsOwner(task) ? waiting : canStop(task) ? interruptible : remaining).push(task);
+  for (const task of tasks) if (task !== returnedTask && !preparedIds.has(task.id))
+    (task.savedDeviceChoice ? remaining : needsOwner(task) ? waiting : canStop(task) ? interruptible : remaining).push(task);
   const initialCount = Math.max(0, 2 - Number(!!returnedTask) - waiting.length - interruptible.length - preparedHere.length);
   const shownTasks = [...(returnedTask ? [returnedTask] : []), ...waiting, ...preparedHere, ...interruptible, ...remaining.slice(0, initialCount + extraWork)];
   const nextCount = Math.min(12, tasks.length - shownTasks.length);
@@ -823,6 +825,18 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           <header className="pw-device-section-heading"><div><h3>{peer ? '这台设备的原工作' : '设备相关工作'}</h3><p>{peer ? '打开本机保留的原任务，不会重连或恢复执行。' : '本机保存的任务与结果，打开不会重新执行。'}</p></div><span>已读到 {tasks.length} 项</span></header>
           <div className="pw-device-task-list">
             {shownTasks.map(task => {
+              const selected = task.savedDeviceChoice;
+              if (selected) return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
+                <header><h4 dir="auto">{task.goal || '原工作'}</h4><span>本机已保存设备选择</span></header>
+                <p>这里是原工作保存的选择，不是对端接单或执行回执。</p>
+                <Button variant="secondary" disabled={busy || !supported('devices.openTask')} onClick={() => {
+                  if (selectedPeer.current !== peerId) return;
+                  const row = rows(state.tasks).find(item => item.id === task.id);
+                  const fresh = row && deviceSavedOwnerChoice(row, snapshot, peer);
+                  if (!fresh || JSON.stringify(fresh) !== JSON.stringify(selected)) { setError('原任务或设备选择已变化，请重新读取。'); return; }
+                  void invoke('devices.openTask', { taskId: task.id, savedDeviceChoice: fresh });
+                }}>回到这份原工作</Button>
+              </article>;
               const controls = actionsFor(task), request = resumeRequest(task);
               const readable = !unreadSource(task), details = readable ? taskDetails[task.id] : undefined, links = deviceTaskHistoryLinks(details, task.id, peerId);
               const preparedPhone = readable ? manualPreparationForPeer(task) : undefined;

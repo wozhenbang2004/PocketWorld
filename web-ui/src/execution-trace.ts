@@ -106,6 +106,37 @@ export function executionTraceDetail(value: unknown, taskId: string, runId: stri
   return { ...detail, node: parsed.nodes[0] } as ExecutionTraceDetail;
 }
 
+const documentReadTool = 'attachments_read_document';
+export function traceReturnedDocumentRead(node?: TraceNode): boolean {
+  return !!node && node.kind === 'tool' && node.source === 'native_tool_trace' && !node.legacy && node.name === documentReadTool &&
+    node.dispatchEntered === true && node.status === 'completed' && node.finishedAt !== null;
+}
+
+/** Only text already preserved in this exact native call; no new file read or model output inference. */
+export function traceDocumentRead(detail: ExecutionTraceDetail | null) {
+  if (!detail || detail.sourceState !== 'current') return null;
+  const {node} = detail;
+  if (!traceReturnedDocumentRead(node) || node.runId !== detail.runId || node.epoch !== detail.epoch) return null;
+  const input = object(node.input), output = object(node.output), data = object(output?.data);
+  if (!input || !output || !data || output.tool !== documentReadTool || output.ok !== true || output.untrustedToolContent !== true ||
+      data.untrustedAttachmentContent !== true || data.status !== output.status || !['ok', 'partial', 'truncated'].includes(text(data.status)) ||
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(text(data.attachmentId)) || data.attachmentId !== input.attachmentId ||
+      !/^[a-f0-9]{64}$/.test(text(data.sha256)) || data.sha256 !== input.expectedSha256 || !Array.isArray(data.chunks) || !data.chunks.length || data.chunks.length > 48) return null;
+  const chunks: {unit: number; chunk: number; text: string}[] = [];
+  let characters = 0;
+  for (const value of data.chunks) {
+    const row = object(value), previous = chunks.at(-1);
+    if (!row || !integer(row.unit) || row.unit < 1 || !integer(row.chunk) || typeof row.text !== 'string' ||
+        previous && (row.unit < previous.unit || row.unit === previous.unit && row.chunk <= previous.chunk)) return null;
+    characters += row.text.length;
+    if (characters > 65_536) return null;
+    chunks.push({unit: row.unit, chunk: row.chunk, text: row.text});
+  }
+  if (characters === 0) return null;
+  return {chunks, pdf: data.format === 'pdf', ocr: data.extraction === 'ocr',
+    partial: data.status !== 'ok' || data.truncated === true || output.outputTruncated === true};
+}
+
 /** Pages may overlap while the active run grows. IDs, never arrival order, own
  * metadata; also check parent cycles that only become visible across pages. */
 export function mergeTraceNodes(previous: readonly TraceNode[], incoming: readonly TraceNode[]): TraceNode[] {
