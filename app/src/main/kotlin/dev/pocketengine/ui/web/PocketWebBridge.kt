@@ -1425,6 +1425,7 @@ internal class PocketWebBridge(
                     val value=result?.optJSONObject("value")
                     val privateText=when(action){
                         "devices.queryPhoneGoalResult" -> !value?.optJSONObject("result")?.optString("summary").isNullOrEmpty()
+                        "devices.readReviewedPhoneReceipt" -> true // Original closed-window read only; never replay the selection.
                         "devices.readLocalReviewedPhoneGoal" -> value?.has("text")==true
                         "devices.reviewResult" -> value?.optJSONObject("view")?.let { it.has("summary") || it.has("evidence") }==true
                         "devices.readPendingGoalInput" -> value?.optJSONObject("input")!=null

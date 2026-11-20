@@ -1050,6 +1050,9 @@ public final class TaskStoreDeviceTasks {
     public JSONObject closedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp,String query)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.closed(db,here,instance,afterCaller,afterOp,query);}
     }
+    public JSONObject closedReceivedPhoneReceipt(String here,String instance,String caller,String task,String op,String stamp)throws Exception{
+        synchronized(owner){return ReceivedPhoneGoalIndex.closedReceipt(db,here,instance,caller,task,op,stamp);}
+    }
     public JSONObject readLocallyReviewedPhoneGoal(JSONObject selected,int page,String stamp)throws Exception{
         synchronized(owner){return ReceivedPhoneReviewArchive.read(db,selected,page,stamp);}
     }

@@ -87,7 +87,7 @@ internal data class AttachmentOutcomeState(
     val error:String?=null,val progress:JSONObject?=null,val observing:Boolean=false,val notice:String?=null,val thumbnail:android.graphics.Bitmap?=null,
     val team:TeamWorkspaceOutcomeHost.Selection?=null,val teamDifference:JSONObject?=null,val teamPrevious:TeamWorkspaceOutcomeHost.Selection?=null,
     val originalFile:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null,
-    val documentDraft:JSONObject?=null,val pendingDocumentTask:String?=null,
+    val documentDraft:JSONObject?=null,val documentDraftEdited:Boolean=false,val pendingDocumentTask:String?=null,
     val processingSource:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null,val processingInfo:JSONObject?=null,
     val processingReview:dev.pocketengine.features.attachments.processing.NativeFileProcess.Review?=null,val pendingProcessingTask:String?=null,
     val comparison:Pair<dev.pocketengine.features.attachments.OwnerFilePreviewSource,dev.pocketengine.features.attachments.OwnerFilePreviewSource>?=null,
@@ -193,11 +193,12 @@ internal class AttachmentOutcomeCoordinator(
         if(state.team!=null){readTeamFile();return}
         val task=state.taskId;val group=state.group;val pin=restoreFile?:state.file;val savedDraft=restoredDocumentDraft
         val showOriginal=restoreFile?.optBoolean("showOriginal")==true
+        var unpublishedEdits=savedDraft!=null
         val resultRun=state.resultRun?.takeIf{it.taskId==task}
         var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
         work(onSuccess={actual->
             if(group==null&&actual.optString("originalDocumentActionId").isNotEmpty()&&actual.optString("taskStatus")!in setOf("completed","failed")){pendingDocumentAction=actual.getString("originalDocumentActionId");state=state.copy(pendingDocumentTask=pendingDocumentAction)}
-            if(savedDraft!=null&&restoredDocumentDraft===savedDraft){state=state.copy(documentDraft=JSONObject(savedDraft.toString()));restoredDocumentDraft=null}
+            if(savedDraft!=null&&restoredDocumentDraft===savedDraft){state=state.copy(documentDraft=JSONObject(savedDraft.toString()),documentDraftEdited=unpublishedEdits);restoredDocumentDraft=null}
             if(original!=null)state=state.copy(originalFile=original)
         }){control,window -> if(group==null){
             if(resultRun!=null)requireConversationResult(resultRun,control)
@@ -216,6 +217,7 @@ internal class AttachmentOutcomeCoordinator(
                     check(pin!=null&&pin.optString("id")==savedDraft.getString("parentArtifactId")&&pin.optString("sha256")==savedDraft.getString("parentSha256")){"草稿不属于当前固定原文件，未换用其他来源"}
                     val current=app.ownerEditableDocument(task,savedDraft.getString("parentArtifactId"),savedDraft.getString("parentSha256"),control)
                     requireSameDocumentSelection(current,savedDraft)
+                    unpublishedEdits=current.toString()!=savedDraft.toString()
                 }
                 control.check()
             }
@@ -247,9 +249,27 @@ internal class AttachmentOutcomeCoordinator(
     fun queryProcessing(){val action=state.pendingProcessingTask?:return;if(state.busy||state.group!=null||state.team!=null)return;work(onSuccess={result->if(result.optBoolean("found")){pendingProcessingAction=null;state=state.copy(pendingProcessingTask=null,processingSource=null,processingInfo=null,processingReview=null,taskId=action,file=result,snapshot=null,notice="已找到原加工动作的固定产物，未再次加工")}else state=state.copy(notice="原加工动作尚无完整发布回执，保留原编号，不自动重复。")}){c,_->app.features.fileProcessResultForOwner(action,c) to null}}
     fun compareImageParent(){val file=state.file?:return;if(state.busy||state.group!=null||state.team!=null)return;val parent=file.optJSONObject("parentArtifact")?:file.optJSONObject("source")?.optJSONObject("parentArtifact")?:return;val task=state.taskId;var pair:Pair<dev.pocketengine.features.attachments.OwnerFilePreviewSource,dev.pocketengine.features.attachments.OwnerFilePreviewSource>?=null;work(onSuccess={state=state.copy(comparison=pair)}){c,_->val selected=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),c);val before=app.attachmentOutcomes.originalFile(null,parent.getString("id"),parent.getString("sha256"),c);check(selected.mimeType.startsWith("image/")&&before.mimeType.startsWith("image/")){"原父版本不是图片，未换用其他来源"};pair=before to selected;JSONObject().put("outcomeNotice","对照的是两份固定原图，不是最新版本或缩略图替代。") to null}}
     fun closeComparison(){state=state.copy(comparison=null)}
-    fun newDocument(){if(state.busy||state.team!=null||state.group!=null||pendingDocumentAction!=null)return;restoreFile=null;restoredDocumentDraft=null;state=state.copy(documentDraft=JSONObject().put("format","docx").put("name","文档").put("title","").put("body","").put("fontPoints",12),error=null)}
-    fun continueDocument(){val file=state.file?:return;if(state.busy||state.team!=null||state.group!=null||pendingDocumentAction!=null)return;restoredDocumentDraft=null;val task=state.taskId;work(onSuccess={value->state=state.copy(documentDraft=value)}){c,_->app.ownerEditableDocument(task,file.getString("id"),file.getString("sha256"),c) to null}}
-    fun closeDocumentDraft(){if(!state.busy){restoredDocumentDraft=null;state=state.copy(documentDraft=null)}}
+    fun newDocument(){if(state.busy||state.team!=null||state.group!=null||pendingDocumentAction!=null)return;restoreFile=null;restoredDocumentDraft=null;state=state.copy(documentDraft=JSONObject().put("format","docx").put("name","文档").put("title","").put("body","").put("fontPoints",12),documentDraftEdited=false,error=null)}
+    fun continueDocument(){
+        val file=state.file?:return
+        if(state.busy||exportPending||state.team!=null||state.group!=null||state.deviceOriginalOnly||pendingDocumentAction!=null)return
+        val editable=file.optJSONObject("editableSource")?:file.optJSONObject("source")?.optJSONObject("editableSource")
+            ?:error("这份原件没有登记可编辑源")
+        val task=state.taskId;val run=state.resultRun?.takeIf{it.taskId==task}
+        val id=file.getString("id");val sha=file.getString("sha256")
+        restoredDocumentDraft=null
+        work(onSuccess={value->state=state.copy(documentDraft=value,documentDraftEdited=false)}){control,_->
+            if(run!=null)requireConversationResult(run,control)
+            val draft=app.ownerEditableDocument(task,id,sha,control)
+            check(draft.getString("parentArtifactId")==id&&draft.getString("parentSha256")==sha&&
+                draft.getString("editableSourceId")==editable.getString("id")&&draft.getString("editableSourceSha256")==editable.getString("sha256")){
+                "可编辑源与所选文档版本不一致，没有改用其他稿件"
+            }
+            if(run!=null)requireConversationResult(run,control)
+            draft to null
+        }
+    }
+    fun closeDocumentDraft(){if(!state.busy){restoredDocumentDraft=null;state=state.copy(documentDraft=null,documentDraftEdited=false)}}
     private fun requireSameDocumentSelection(current:JSONObject,draft:JSONObject){
         for(key in listOf("parentArtifactId","parentSha256","editableSourceId","editableSourceSha256"))check(current.has(key)==draft.has(key)&&current.optString(key)==draft.optString(key)){"草稿的原成果或可编辑源已变化，请从原版本重新打开"}
         val format=current.optString("format");check(if(format in setOf("docx","pdf"))draft.optString("format") in setOf("docx","pdf")else draft.optString("format")==format){"原文档格式不可在此编辑中替换"}
@@ -260,10 +280,38 @@ internal class AttachmentOutcomeCoordinator(
     }
     fun updateDocumentDraft(draft:JSONObject){
         if(state.busy||state.team!=null||state.group!=null||state.documentDraft==null||pendingDocumentAction!=null)return
-        try{state=state.copy(documentDraft=checkedDocumentDraft(draft),error=null)}catch(failure:Exception){state=state.copy(error=safe(failure))}
+        try{val pin=checkedDocumentDraft(draft);state=state.copy(documentDraft=pin,documentDraftEdited=state.documentDraftEdited||pin.toString()!=state.documentDraft.toString(),error=null)}catch(failure:Exception){state=state.copy(error=safe(failure))}
     }
-    fun createDocument(draft:JSONObject){if(state.busy||state.team!=null||state.group!=null||state.documentDraft==null||pendingDocumentAction!=null)return;val pin=try{checkedDocumentDraft(draft)}catch(failure:Exception){state=state.copy(error=safe(failure));return};val action=java.util.UUID.randomUUID().toString();pendingDocumentAction=action;state=state.copy(documentDraft=pin,pendingDocumentTask=action);work(onSuccess={actual->if(actual.optBoolean("outputNotPublished")){pendingDocumentAction=null;state=state.copy(pendingDocumentTask=null,error=actual.optString("message"),notice="原可编辑源已保存，可修正当前稿后明确生成新版本。")}else if(actual.optBoolean("found",true)){pendingDocumentAction=null;state=state.copy(documentDraft=null,pendingDocumentTask=null,taskId=actual.optString("hostTaskId",action),file=actual,snapshot=null,notice="已保存实际文档和原可编辑源。可打开原件核对排版，或明确导出/分享。")}}){c,_->val actual=app.features.createDocumentForOwner(pin,c,action);actual to null}}
-    fun queryDocument(){val action=state.pendingDocumentTask?:return;if(state.busy||state.group!=null||state.team!=null)return;work(onSuccess={actual->if(actual.optBoolean("found")){pendingDocumentAction=null;state=state.copy(documentDraft=null,pendingDocumentTask=null,taskId=action,file=actual,snapshot=null,notice="已找到原操作的实际固定文档，没有重新生成")}else state=state.copy(notice="原文档尚无完整发布回执。可查看原任务和已保留源，不自动重复生成。")}){c,_->app.features.documentResultForOwner(action,c) to null}}
+    private fun showPublishedDocument(action:String,file:JSONObject,notice:String){
+        pendingDocumentAction=null;restoredDocumentDraft=null;restoreFile=null
+        // This is a new Book file. Never keep showing the previous reader under its child's name.
+        state=AttachmentOutcomeState(open=true,taskId=action,file=file,pendingProcessingTask=pendingProcessingAction,notice=notice)
+    }
+    private fun isPublishedDocument(action:String,file:JSONObject):Boolean{
+        val source=file.optJSONObject("source")?:return false
+        return file.opt("status")=="completed"&&file.opt("accepted")==true&&file.opt("receiptReceived")==true&&
+            file.opt("taskId")==action&&source.opt("kind")=="created_document"&&source.opt("taskId")==action&&
+            source.opt("operationId")==action&&file.optString("id").isNotBlank()&&file.optString("sha256").matches(Regex("[a-f0-9]{64}"))
+    }
+    fun createDocument(draft:JSONObject){
+        if(state.busy||state.team!=null||state.group!=null||state.documentDraft==null||pendingDocumentAction!=null)return
+        val pin=try{checkedDocumentDraft(draft)}catch(failure:Exception){state=state.copy(error=safe(failure));return}
+        val action=java.util.UUID.randomUUID().toString();pendingDocumentAction=action
+        state=state.copy(documentDraft=pin,pendingDocumentTask=action)
+        work(onSuccess={actual->when{
+            actual.optBoolean("outputNotPublished")->{pendingDocumentAction=null;state=state.copy(pendingDocumentTask=null,error=actual.optString("message"),notice="原可编辑源已保存，可修正当前稿后明确生成新版本。")}
+            isPublishedDocument(action,actual)->showPublishedDocument(action,actual,"新文档已保存到私人文件库，可以打开核对。没有改动原件，也没有导出。")
+            else->state=state.copy(notice="尚未核对到这次生成的文件。请核对原文档结果，不会自动重新生成。")
+        }}){c,_->app.features.createDocumentForOwner(pin,c,action) to null}
+    }
+    fun queryDocument(){
+        val action=state.pendingDocumentTask?:return
+        if(state.busy||state.group!=null||state.team!=null)return
+        work(onSuccess={actual->
+            if(actual.opt("found")==true&&isPublishedDocument(action,actual))showPublishedDocument(action,actual,"已找到原操作的实际固定文档，没有重新生成")
+            else state=state.copy(notice="原文档尚无完整发布回执。可查看原任务和已保留源，不自动重复生成。")
+        }){c,_->app.features.documentResultForOwner(action,c) to null}
+    }
 
     fun openDocumentAction(id:String){
         if(state.busy||state.group!=null||state.team!=null||state.taskId!=null||state.documentDraft!=null)return
@@ -345,15 +393,19 @@ internal class AttachmentOutcomeCoordinator(
             entered()
         }, current = current)
     }
-    /** An explicit navigation among the same run's listed originals, not a new inventory read. */
+    /** Read a saved item from its displayed library list or from the exact run's listed originals. */
     fun openListedOriginal(id: String, sha256: String, onOpened: (() -> Unit)? = null, current: () -> Boolean) {
-        val run = state.resultRun ?: error("请在本轮成果中打开原件")
+        val run = state.resultRun
+        val listed = state.snapshot ?: error("文件清单尚未读取")
+        val library = run == null && state.taskId == null && state.file == null && onOpened == null && listed.opt("taskId") == ""
+        check(library || run != null && run.taskId == state.taskId) { "请在原文件清单中打开这份原件" }
         check(current() && state.open && !state.busy && !exportPending &&
             state.group == null && state.team == null && !state.deviceOriginalOnly && !state.choosingSource &&
             state.documentDraft == null && state.processingSource == null && state.comparison == null && !state.documentOpen &&
             (state.file == null || state.originalFile != null)) { "请先返回本轮成果或完成当前文件操作" }
-        val listed = state.snapshot ?: error("本轮文件清单尚未读取")
-        val selected = run.files(listed).entries.singleOrNull { it.optString("id") == id && it.optString("sha256") == sha256 }
+        val entries = run?.files(listed)?.entries ?: listed.getJSONArray("artifacts").objects()
+        val selected = entries.singleOrNull { it.optString("id") == id && it.optString("sha256") == sha256 &&
+            it.optString("role") == "result" && it.optString("availability") == "available" }
             ?.let { JSONObject(it.toString()) } ?: error("所选原件不在这次已核对的成果中")
         var original: dev.pocketengine.features.attachments.OwnerFilePreviewSource? = null
         work(onSuccess = {
@@ -363,11 +415,11 @@ internal class AttachmentOutcomeCoordinator(
                 onOpened?.invoke()
             }
         }) { control, _ ->
-            requireConversationResult(run, control)
-            val source = app.attachmentOutcomes.originalFile(run.taskId, id, sha256, control)
+            if (run != null) requireConversationResult(run, control)
+            val source = app.attachmentOutcomes.originalFile(run?.taskId, id, sha256, control)
             check(source.name == selected.getString("name") && source.mimeType == selected.getString("mimeType") &&
-                source.sizeBytes == selected.getLong("size")) { "原文件信息已变化，请重新读取本轮成果" }
-            requireConversationResult(run, control)
+                source.sizeBytes == selected.getLong("size")) { "原文件信息已变化，请重新读取文件清单" }
+            if (run != null) requireConversationResult(run, control)
             original = source
             JSONObject() to null
         }
@@ -551,8 +603,10 @@ internal class AttachmentOutcomeCoordinator(
         if(result!=null)value.put("resultRunId",result.runId).put("resultEpoch",result.epoch)
         state.team?.let{value.put("team",it.toJson())};state.teamPrevious?.let{value.put("teamPrevious",it.toJson())}
         (restoreFile?:state.file)?.let{file->
-            val returningCopy=export?.takeUnless{exportAbandoned}?.let{privateCopyFile(it,state.file)}!=null
-            val showOriginal=restoreFile?.optBoolean("showOriginal")==true || state.originalFile!=null&&(state.fromWorkResult||result!=null||returningCopy)
+            val shown=state.originalFile
+            val privateOriginal=state.group==null&&state.team==null&&!state.deviceOriginalOnly&&shown!=null&&
+                shown.sha256==file.optString("sha256")&&shown.metadata().optString("id")==file.optString("id")
+            val showOriginal=restoreFile?.optBoolean("showOriginal")==true || shown!=null&&(state.fromWorkResult||result!=null||privateOriginal)
             value.put("file",JSONObject().put("id",file.optString("id")).put("sha256",file.optString("sha256")).put("showOriginal",showOriginal))
         }
         state.group?.let{s->value.put("group",JSONObject().put("requestId",s.requestId).put("taskId",s.taskId).put("spaceId",s.spaceId).put("outputId",s.outputId).put("artifactId",s.artifactId).put("audience",s.audience).put("visibility",s.visibility).put("operation",s.sourceOperationHint).put("sourceRun",s.sourceRunHint))}

@@ -78,6 +78,9 @@ final class ReceivedPhoneReviewArchive {
         if(!stamp.isEmpty()&&!stamp.equals(reference))throw new SecurityException("本机原结果已变化，不可接读另一份文字");
         if(metadataOnly){
             JSONObject meta=new JSONObject().put("hasText",!saved.getString("summary").isEmpty()).put("runId",run).put("epoch",epoch).put("reviewedAt",saved.getLong("reviewedAt")).put("keptOnPhone",kept).put("stamp",reference);
+            if(Boolean.FALSE.equals(task.opt("cancelRequested"))&&task.optLong("deviceStateRevision")>0
+                    &&saved.getLong("reviewedAt")>=saved.getLong("recordedAt"))
+                meta.put("sourceRevision",task.getLong("deviceStateRevision"));
             if(search!=null&&search.active()){
                 int goal=search.firstMatchingPage(receivedGoal,PAGE),answer=search.firstMatchingPage(saved.getString("summary"),PAGE);
                 if(goal<0&&answer<0)return null;

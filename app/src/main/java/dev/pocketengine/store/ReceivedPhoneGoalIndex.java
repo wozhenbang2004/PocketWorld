@@ -88,7 +88,28 @@ final class ReceivedPhoneGoalIndex {
     static JSONObject closed(SQLiteDatabase db,String here,String instance,String afterCaller,String afterOp,String query)throws Exception{
         return scan(db,here,instance,null,afterCaller,afterOp,Shelf.CLOSED,new LocalPhoneGoalSearch(query));
     }
+    private record ExactClosed(String caller,String task,String operation){}
+    /** Read only this receiving phone's already-verified original decision. No generic task
+     * view, screenshot maintenance, result text, peer lookup or action authority on this route. */
+    static JSONObject closedReceipt(SQLiteDatabase db,String here,String instance,String caller,String task,String operation,String stamp)throws Exception{
+        ExactClosed key=new ExactClosed(DeviceProtocol.deviceId(caller,"callerDeviceId"),DeviceProtocol.identifier(task,"localTaskId"),DeviceProtocol.identifier(operation,"operationId"));
+        JSONObject page=scan(db,here,instance,null,"","",Shelf.CLOSED,new LocalPhoneGoalSearch(""),key);
+        JSONArray rows=page.getJSONArray("rows");
+        if(rows.length()!=1||!stamp.matches("[a-f0-9]{64}"))throw new SecurityException("原工作回执无法核对，请重新读取目录");
+        JSONObject row=rows.getJSONObject(0),review=row.getJSONObject("closedReview");
+        if(!task.equals(row.opt("taskId"))||!operation.equals(row.opt("operationId"))||!caller.equals(row.opt("sourceDeviceId"))||
+                !stamp.equals(review.opt("originalReceiptStamp")))throw new SecurityException("这份原工作回执已变化，请重新读取目录");
+        return new JSONObject().put("kind","reviewedPhoneReceipt").put("readOnly",true)
+                .put("localDeviceId",here).put("localInstanceId",instance).put("sourceDeviceId",caller)
+                .put("taskId",task).put("operationId",operation).put("runId",review.getString("runId")).put("epoch",review.getInt("epoch"))
+                .put("confirmed",!review.optBoolean("screenDecision")||review.getBoolean("confirmed"))
+                .put("sourceRevision",review.getLong("sourceRevision")).put("receivedAt",row.getLong("createdAt")).put("reviewedAt",review.getLong("reviewedAt"))
+                .put("resultScope",review.optBoolean("screenDecision")?"screen":review.getBoolean("keptOnPhone")?"status_only":"summary_allowed");
+    }
     private static JSONObject scan(SQLiteDatabase db,String here,String localInstance,String issuer,String anchorId,String afterOp,Shelf shelf,LocalPhoneGoalSearch search)throws Exception{
+        return scan(db,here,localInstance,issuer,anchorId,afterOp,shelf,search,null);
+    }
+    private static JSONObject scan(SQLiteDatabase db,String here,String localInstance,String issuer,String anchorId,String afterOp,Shelf shelf,LocalPhoneGoalSearch search,ExactClosed exact)throws Exception{
         boolean results=shelf==Shelf.RESULT,closed=shelf==Shelf.CLOSED,started=shelf==Shelf.STARTED,declined=shelf==Shelf.DECLINED,withdrawn=shelf==Shelf.WITHDRAWN,failed=shelf==Shelf.FAILED;
         int limit=(closed||declined||withdrawn)?6:24;
         DeviceProtocol.deviceId(here,"targetDeviceId"); DeviceProtocol.identifier(localInstance,"instanceId");
@@ -103,6 +124,10 @@ final class ReceivedPhoneGoalIndex {
         else {
             where+=" AND i.caller_device_id=? AND i.authorization_epoch BETWEEN ? AND ?";
             args.add(issuer);args.add(Long.toString(sourceAt.first));args.add(Long.toString(sourceAt.last));
+        }
+        if(exact!=null){
+            where+=" AND i.caller_device_id=? AND i.local_task_id=? AND i.remote_operation_id=?";
+            args.add(exact.caller());args.add(exact.task());args.add(exact.operation());
         }
         if(!anchorId.isEmpty()||!afterOp.isEmpty()){
             DeviceProtocol.identifier(afterOp,"operationId"); String caller=waiting?DeviceProtocol.deviceId(anchorId,"callerDeviceId"):issuer;
@@ -197,6 +222,18 @@ final class ReceivedPhoneGoalIndex {
                             if(!zero&&search.active()&&!search.matches(wire.getJSONObject("arguments").getString("goal")))continue;
                             closedReview=zero?ReceivedPhoneReviewArchive.checkedMetadata(db,selected,search):ReceivedScreenGoalDecision.metadata(db,header,wire);
                             if(closedReview==null)continue;
+                            boolean completed="completed".equals(header.opt("status"));
+                            boolean decisionMatches=zero?completed&&closedReview.has("stamp"):Boolean.valueOf(completed).equals(closedReview.opt("confirmed"));
+                            if(decisionMatches&&header.opt("runId") instanceof String headerRun&&!headerRun.isEmpty()&&headerRun.equals(closedReview.opt("runId"))
+                                    &&header.getInt("coordinatorEpoch")==closedReview.optInt("epoch",-1)&&closedReview.optLong("sourceRevision")>0
+                                    &&closedReview.optLong("reviewedAt")>=c.getLong(2)){
+                                // The list and the exact read use the same signed wire, original run, and owner decision.
+                                // Search matches and page numbers are presentation only and do not enter this stamp.
+                                JSONObject receipt=new JSONObject(selected.toString()).put("confirmed",completed).put("run",closedReview.getString("runId"))
+                                        .put("epoch",closedReview.getInt("epoch")).put("receivedAt",c.getLong(2)).put("reviewedAt",closedReview.getLong("reviewedAt"))
+                                        .put("revision",closedReview.getLong("sourceRevision")).put("decision",closedReview.getString(zero?"stamp":"decisionDigest"));
+                                closedReview.put("originalReceiptStamp",TaskStore.capabilityFingerprint(receipt));
+                            }
                         }
                         catch(IllegalStateException|SecurityException|JSONException unavailable){limited++;continue;}
                     }

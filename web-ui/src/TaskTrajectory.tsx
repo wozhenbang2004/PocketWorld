@@ -13,21 +13,24 @@ import { useSurfaceEnter } from './library/surface-motion';
 import { MarkdownBody } from './library/MarkdownBody';
 import { traceSteps } from './trace-stepper';
 import { durationLabel, executionTraceDetail, executionTracePage, mergeTraceNodes, nodeDurationLabel, tokenLabel, traceBody, traceBounds, traceCount,
-  traceDisplayName, traceDocumentRead, traceEventMatches, traceEvents, traceFailed, traceInProgress, traceRecordStatus, traceRequestTiming, traceReturnedDocumentRead, traceRole, traceRoleLabel, traceRows, traceSkillReference, traceStatus, traceSummary,
+  isDocumentReadNode, traceDisplayName, traceDocumentRead, traceDocumentReadIssue, traceDocumentParameters, traceEventMatches, traceEvents, traceFailed, traceInProgress, traceRecordStatus, traceRequestTiming, traceReturnedDocumentRead, traceRole, traceRoleLabel, traceRows, traceSkillReference, traceStatus, traceSummary,
   traceTime, traceTurnCount, traceUsageBreakdown, type ExecutionTraceDetail, type ExecutionTracePage, type TraceAggregate, type TraceFilter, type TraceNode } from './execution-trace';
 import { taskHistoryIdentity, type TaskHeader } from './task-history';
 import { SavedDefaultChange } from './SavedDefaultChange';
 import './execution-trace.css';
 
 type TraceWindow = { scope: string; page: ExecutionTracePage; complete: boolean; backfilling: boolean; pages: number };
-type Selection = { node: TraceNode; taskId: string; runId: string; epoch: number; documentEpoch: number;
+type Selection = { node: TraceNode; taskId: string; runId: string; epoch: number; documentEpoch: number; documentReadRevision?: string;
   fromSkill?: { node: TraceNode; sourceRevision: string } };
 const filters: TraceFilter[] = ['all', 'model', 'tool', 'failed'];
 const POLL_MS = 3_000;
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const aggregateLabel = (value: TraceAggregate) => `${tokenLabel(value.value)}${value.value !== null && (value.missing > 0 || !value.final) ? ' +' : ''}`;
 const bodyKeys = ['message', 'preview', 'raw', 'input', 'output', 'options', 'schema', 'error', 'sourceRefs', 'preferenceChange', 'skillReferenceEvidence'] as const;
-const getSourceRevision = () => String(bridge.getState().state.traceSourceRevision ?? 0);
+const getSourceRevision = () => {
+  const revision = bridge.getState().state.traceSourceRevision;
+  return Number.isSafeInteger(revision) && revision >= 0 ? String(revision) : '';
+};
 function metadataOnly(node: TraceNode): TraceNode {
   const metadata = { ...node }; for (const key of bodyKeys) delete metadata[key]; return metadata;
 }
@@ -137,9 +140,9 @@ function useTraceDetail(selection: Selection | null, active: boolean, metadataRe
   const generation = useRef(0);
   useEffect(() => {
     const ticket = ++generation.current;
-    if (!selection || !active) { setLoadingKey(''); return; }
+    if (!selection || !active || document.hidden || bridge.getDocumentEpoch() !== selection.documentEpoch || getSourceRevision() !== sourceRevision) { setLoaded(null); setFailure(null); setLoadingKey(''); return; }
     let disposed = false;
-    const valid = () => !disposed && generation.current === ticket && bridge.getDocumentEpoch() === selection.documentEpoch && getSourceRevision() === sourceRevision;
+    const valid = () => !disposed && !document.hidden && generation.current === ticket && bridge.getDocumentEpoch() === selection.documentEpoch && getSourceRevision() === sourceRevision;
     setFailure(null); setLoaded(previous => previous?.key === key ? previous : null); setLoadingKey(key);
     if (!bridge.getState().capabilities.commands.includes('trace.detail')) {
       setLoadingKey(''); setFailure({ key, message: '当前应用未提供正文详情读取，已保留调用元数据。' }); return;
@@ -153,8 +156,8 @@ function useTraceDetail(selection: Selection | null, active: boolean, metadataRe
     // restart an independent detail read or disturb the selected tab.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, active, retry, metadataRevision]);
-  return { detail: loaded?.key === key ? loaded.value : null, error: failure?.key === key ? failure.message : '',
-    busy: !!key && loadingKey === key, retry: () => setRetry(value => value + 1) };
+  return { detail: active && loaded?.key === key ? loaded.value : null, error: active && failure?.key === key ? failure.message : '',
+    busy: active && !!key && loadingKey === key, retry: () => setRetry(value => value + 1) };
 }
 
 function TraceBody({ value, missing, preview = false }: { value: unknown; missing: string; preview?: boolean }) {
@@ -163,14 +166,14 @@ function TraceBody({ value, missing, preview = false }: { value: unknown; missin
     {body.truncated && <p className="pw-trace-note">正文较长，当前展示前 65,536 个字符。</p>}</> : <p className="pw-trace-note">{missing}</p>;
 }
 
-function DocumentReadResult({ result, original }: { result: NonNullable<ReturnType<typeof traceDocumentRead>>; original: unknown }) {
+function DocumentReadResult({ result }: { result: NonNullable<ReturnType<typeof traceDocumentRead>> }) {
   return <section className="pw-trace-document-read" aria-label="本次实际返回的文档片段">
     <p className="pw-trace-note">{result.partial ? '这次只返回了部分内容。' : '这里只展示这次返回的片段，不代表已读全文。'}{result.ocr && ' 识别文字须核对原件。'}</p>
     {result.chunks.map(part => <section key={`${part.unit}:${part.chunk}`}>
       <h5>{result.pdf ? `第 ${part.unit} 页` : `文档单元 ${part.unit}`} · 片段 {part.chunk + 1}</h5>
       <p dir="auto">{part.text || '（原片段无文字）'}</p>
     </section>)}
-    <Accordion variant="divided" className="pw-trace-disclosures"><AccordionItem id="document-read-receipt" headingLevel={5} title="核对原始回执"><TraceBody value={original} missing="原回执当前不可读。"/></AccordionItem></Accordion>
+    <Accordion variant="divided" className="pw-trace-disclosures"><AccordionItem id="document-read-receipt" headingLevel={5} title="核对来源文件"><dl className="pw-trace-facts"><div><dt>原附件编号</dt><dd>{result.attachmentId}</dd></div><div><dt>文件摘要（SHA-256）</dt><dd>{result.sha256}</dd></div></dl></AccordionItem></Accordion>
   </section>;
 }
 
@@ -262,15 +265,17 @@ function SkillReference({ node, page, selection, open }: {
 
 /** Category tabs and the two drawer detents are adapted from Whaleness
  * EventDetailSheet (MIT, Chaofan Li), using the project's adopted Vaul/BoardUI. */
-function TraceDetails({ selection, page, complete, close, active, openRelated, back }: {
+function TraceDetails({ selection, page, complete, close, active, openRelated, back, restoreDocumentTrigger }: {
   selection: Selection | null; page?: ExecutionTracePage; complete: boolean; close: () => void; active: boolean;
-  openRelated: (node: TraceNode, sourceRevision: string) => void; back: () => void;
+  openRelated: (node: TraceNode, sourceRevision: string) => void; back: () => void; restoreDocumentTrigger: (event: Event) => void;
 }) {
   const descriptionId = useId();
   const sourceRevision = useSyncExternalStore(bridge.subscribe, getSourceRevision, getSourceRevision);
   const fromSkill = selection?.fromSkill, relatedExpired = !!fromSkill && fromSkill.sourceRevision !== sourceRevision;
   const compact = selection && page?.runId === selection.runId && page.epoch === selection.epoch ? page.nodes.find(node => node.id === selection.node.id) : undefined;
-  const read = useTraceDetail(selection, active && !relatedExpired, compact ? `${compact.status}:${compact.finishedAt}:${compact.hasError}` : '', sourceRevision);
+  const documentCall = isDocumentReadNode(selection?.node);
+  const expiredDocument = documentCall && (!selection?.documentReadRevision || selection.documentReadRevision !== sourceRevision);
+  const read = useTraceDetail(selection, active && !relatedExpired && !expiredDocument, compact && !documentCall ? `${compact.status}:${compact.finishedAt}:${compact.hasError}` : '', sourceRevision);
   const [tab, setTab] = useState('summary'), [snap, setSnap] = useState<number | string | null>(.64);
   const title = useRef<HTMLHeadingElement>(null), priorWasRelated = useRef(false);
   const key = selection ? `${selection.runId}:${selection.epoch}:${selection.node.id}` : '';
@@ -290,17 +295,23 @@ function TraceDetails({ selection, page, complete, close, active, openRelated, b
   const isSkillDecision = node?.kind === 'tool' && node.name === 'skills_reference_decision';
   const linkedReceipt = !fromSkill || (!relatedExpired && read.detail?.sourceState === 'current' && read.detail.node.operationBodySource === 'original_operation_row' &&
     read.detail.node.operationState === 'receipt' && read.detail.node.operationId === selection?.node.operationId);
-  const documentRead = linkedReceipt && !read.busy && !read.error ? traceDocumentRead(read.detail) : null;
-  const output = linkedReceipt && (!opensDocumentResult || !read.busy && !read.error) ? node?.output : undefined;
+  const documentReceipt = documentCall && linkedReceipt && !read.busy && !read.error ? read.detail : null;
+  const documentRead = traceDocumentRead(documentReceipt), documentIssue = traceDocumentReadIssue(documentReceipt);
+  // Never substitute a generic output, preview or diagnostic for an unverified document result.
+  const output = !documentCall && linkedReceipt ? node?.output : undefined;
   const tabs = node?.kind === 'model' ? [['summary', '摘要'], ['options', '选项'], ['usage', '用量'], ['timing', '耗时']]
     : node?.kind === 'tool' ? [['summary', '摘要'], ['input', '参数'], ['output', '结果'], ...(role === 'subtool' ? [] : [['schema', 'Schema']]), ['timing', '耗时']]
       : [['summary', '摘要'], ['preview', '预览'], ['raw', '原始']];
   const sourceUnavailable = read.detail && read.detail.sourceState !== 'current';
-  const missing = read.busy ? '正在读取原记录正文…' : read.detail?.sourceReason === 'private_revision_result_only' ? '续稿过程只保留步骤和耗时。原稿与新稿请回这次交办查看差异。' : sourceUnavailable ? read.detail!.sourceReason || '原记录正文已不可用，调用元数据仍保留。' : '原记录未保留这项内容。';
+  const documentNote = expiredDocument ? '来源状态已变化。已收起此前的片段；请关闭后在原记录重新选择。'
+    : documentReceipt?.sourceState === 'unavailable' ? '目前无法核对原来源，没有显示此前的片段。'
+    : documentReceipt?.sourceState === 'metadata_only' ? '只保留了这次调用的记录，没有可核对的原文片段。'
+    : documentIssue || '这份回执未留下可与原附件核对的片段。没有重新读取文件。';
+  const missing = read.busy ? '正在读取原记录正文…' : documentCall && (expiredDocument || sourceUnavailable) ? documentNote : read.detail?.sourceReason === 'private_revision_result_only' ? '续稿过程只保留步骤和耗时。原稿与新稿请回这次交办查看差异。' : sourceUnavailable ? read.detail!.sourceReason || '原记录正文已不可用，调用元数据仍保留。' : '原记录未保留这项内容。';
   return <Drawer.NestedRoot open={active && !!selection} onOpenChange={open => { if (!open) close(); }} shouldScaleBackground={false}
     snapPoints={[.64, .94]} activeSnapPoint={snap} setActiveSnapPoint={setSnap} fadeFromIndex={0}>
     <Drawer.Portal><Drawer.Overlay className="pw-overlay pw-trace-overlay"/>
-      <Drawer.Content className="pw-drawer pw-trace-detail" aria-describedby={descriptionId}>
+      <Drawer.Content className="pw-drawer pw-trace-detail" aria-describedby={descriptionId} onCloseAutoFocus={restoreDocumentTrigger}>
         <Drawer.Handle aria-label="拖动调整详情高度"/>
         <header className="pw-drawer-header"><div><Drawer.Title ref={title} tabIndex={-1}>{node?.kind === 'model' ? '模型请求' : node ? traceRoleLabel(node) : '记录详情'}{node?.sequence != null && <small>#{node.sequence}</small>}</Drawer.Title>
           <Drawer.Description id={descriptionId}>{node ? `${traceDisplayName(node)} · ${status}` : '原任务的一次调用'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭调用详情" onClick={close}/></header>
@@ -310,8 +321,9 @@ function TraceDetails({ selection, page, complete, close, active, openRelated, b
             {fromSkill && !relatedExpired && <Button variant="ghost" leadingIcon={IconArrowLeft} onClick={back}>返回原技能关联</Button>}
             {relatedExpired && <p className="pw-trace-note" role="status">原关联来源已变化，关闭后请在原任务重新核对。</p>}
             {read.busy && <p className="pw-trace-note pw-trace-detail-loading" role="status"><Spinner size="xs" aria-hidden/>正在读取原记录正文…</p>}
-            {read.error && <div className="pw-trace-detail-source" role="alert"><p>{read.error}</p><Button variant="ghost" onClick={read.retry}>重读详情</Button></div>}
-            {sourceUnavailable && <p className="pw-trace-detail-source" role="status" data-source-state={read.detail!.sourceState}>{missing}</p>}
+            {read.error && <div className="pw-trace-detail-source" role="alert"><p>{documentCall ? '这份原读取回执暂时不能核对。没有重新读取附件。' : read.error}</p><Button variant="ghost" onClick={read.retry}>{documentCall ? '重查这份回执' : '重读详情'}</Button></div>}
+            {documentCall && tab !== 'output' && (expiredDocument || sourceUnavailable) && <p className="pw-trace-note" role="status">{documentNote}</p>}
+            {sourceUnavailable && !documentCall && <p className="pw-trace-detail-source" role="status" data-source-state={read.detail!.sourceState}>{missing}</p>}
             {node.contentLimited && <p className="pw-trace-note">正文仅保留已记录的部分。</p>}
             <TabPanel id="summary">
               {node.kind === 'tool' && node.name === 'agent_settings_set' && read.detail?.sourceState === 'current' && !read.busy && !read.error && <SavedDefaultChange value={node.preferenceChange} />}
@@ -325,13 +337,13 @@ function TraceDetails({ selection, page, complete, close, active, openRelated, b
               </dl>
               {node.legacy && <p className="pw-trace-note">早先记录只展示已保存字段，缺失的轮次、内容和耗时不会补造。</p>}
               {node.effectPending && <p className="pw-trace-note">工具处理已返回；动作效果仍等待原执行确认。</p>}
-              {(traceFailed(node) || traceBody(node.error).text) && <section className="pw-trace-error-detail" aria-label="调用错误"><h4>错误</h4><TraceBody value={node.error} missing={read.busy ? missing : '这条记录标记了错误，错误正文未保留。'}/></section>}
+              {!documentCall && (traceFailed(node) || traceBody(node.error).text) && <section className="pw-trace-error-detail" aria-label="调用错误"><h4>错误</h4><TraceBody value={node.error} missing={read.busy ? missing : '这条记录标记了错误，错误正文未保留。'}/></section>}
               {node.kind === 'model' ? <>
                 <p className="pw-trace-note">这是一次物理模型请求。消息记录与请求共用关联标识，用量只计入请求一次。</p>
                 <dl className="pw-trace-facts pw-trace-request-tokens"><div><dt>输入 token</dt><dd>{tokenLabel(traceCount(node.usage, 'INPUT')?.value ?? null)}</dd></div><div><dt>输出 token</dt><dd>{tokenLabel(traceCount(node.usage, 'OUTPUT')?.value ?? null)}</dd></div></dl>
                 <Accordion variant="divided"><AccordionItem id="trace-request-context" title="保留的原上下文" headingLevel={4}><p className="pw-trace-note">请求来源中的原上下文可能与裁剪、投影后的实际发送内容不同。</p><TraceBody value={node.input} missing={missing}/></AccordionItem>
                   <AccordionItem id="trace-request-output" title="返回内容" headingLevel={4}><TraceBody value={node.output} missing={missing}/></AccordionItem></Accordion>
-              </> : node.kind === 'tool' ? !isSkillDecision && !documentRead && <section className="pw-trace-event-detail"><h4>结果摘要</h4><TraceBody value={fromSkill ? output : node.preview ?? node.message ?? output} missing={missing}/></section>
+              </> : node.kind === 'tool' ? !isSkillDecision && !documentCall && <section className="pw-trace-event-detail"><h4>结果摘要</h4><TraceBody value={fromSkill ? output : node.preview ?? node.message ?? output} missing={missing}/></section>
                 : <section className="pw-trace-event-detail"><TraceBody value={node.message ?? node.preview} missing={missing} preview/></section>}
               <SourceDetails node={node} selection={selection}/>
             </TabPanel>
@@ -340,9 +352,9 @@ function TraceDetails({ selection, page, complete, close, active, openRelated, b
               <TabPanel id="usage"><TokenDetails node={node} nodes={page?.nodes || []} complete={complete}/></TabPanel>
               <TabPanel id="timing"><TimingDetails node={node}/></TabPanel>
             </> : node.kind === 'tool' ? <>
-              <TabPanel id="input"><h4>调用参数</h4><TraceBody value={node.input} missing={missing}/></TabPanel>
+              <TabPanel id="input"><h4>调用参数</h4><TraceBody value={documentCall ? traceDocumentParameters(documentReceipt) : node.input} missing={missing}/></TabPanel>
               <TabPanel id="output"><h4>工具结果</h4>{fromSkill && linkedReceipt && <p className="pw-trace-note">这是同一笔操作当前保留的原回执，不是关联当时的另存快照。</p>}
-                {documentRead ? <DocumentReadResult result={documentRead} original={output}/> : <TraceBody value={output} missing={!linkedReceipt && !read.busy ? '这笔操作的原回执当前不可核对。' : traceInProgress(node.status) ? '等待原执行返回。' : missing}/>}</TabPanel>
+                {documentCall ? documentRead ? <DocumentReadResult result={documentRead}/> : !read.busy && !read.error && <p className="pw-trace-note" role="status">{documentNote}</p> : <TraceBody value={output} missing={!linkedReceipt && !read.busy ? '这笔操作的原回执当前不可核对。' : traceInProgress(node.status) ? '等待原执行返回。' : missing}/>}</TabPanel>
               {role !== 'subtool' && <TabPanel id="schema"><h4>调用时的工具定义</h4><TraceBody value={node.schema} missing={missing}/></TabPanel>}
               <TabPanel id="timing"><TimingDetails node={node}/></TabPanel>
             </> : <>
@@ -365,12 +377,19 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
   const [intervalMode, setIntervalMode] = useState<'timeline' | 'tree'>('timeline'), [folded, setFolded] = useState<Set<string>>(new Set());
   const [stepDisclosure, setStepDisclosure] = useState<{scope: string; values: Map<string, boolean>}>({scope: '', values: new Map()});
   const currentView = useRef<HTMLDivElement>(null);
+  const documentTrigger = useRef<{element: HTMLElement; scope: string; nodeId: string} | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null), [highlighted, setHighlighted] = useState<string | null>(null), [locateTicket, setLocateTicket] = useState(0);
   const readWindow = useTraceWindow(task, selectedRun, active, canRead, documentEpoch), page = readWindow.view?.page;
   const identity = taskHistoryIdentity(task), complete = readWindow.view?.complete === true;
   useEffect(() => { setSelectedRun(''); setSelection(null); setFolded(new Set()); setStepDisclosure({scope: '', values: new Map()}); setQuery(''); setFilter('all'); setHighlighted(null); }, [identity, documentEpoch]);
   useEffect(() => { if (!active) setSelection(null); }, [active]);
   useEffect(() => { if (page) setSelection(previous => previous && (previous.runId !== page.runId || previous.epoch !== page.epoch) ? null : previous); }, [page?.runId, page?.epoch]);
+  useEffect(() => {
+    const retire = () => setSelection(current => isDocumentReadNode(current?.node) ? null : current);
+    const changed = () => { if (document.hidden) retire(); };
+    document.addEventListener('visibilitychange', changed); window.addEventListener('pagehide', retire);
+    return () => { document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', retire); };
+  }, []);
   const close = useCallback(() => setSelection(null), []), endHighlight = useCallback(() => setHighlighted(null), []);
   const selected = selection && selection.documentEpoch === documentEpoch && selection.taskId === task.id && page?.runId === selection.runId && page.epoch === selection.epoch ? selection : null;
   const back = useCallback(() => setSelection(current => {
@@ -388,6 +407,7 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
   const chooseRun = (key: string) => { if (key === selectedRun) return; setSelectedRun(key); setSelection(null); setHighlighted(null); setFolded(new Set()); setStepDisclosure({scope: '', values: new Map()}); };
   const toggle = (id: string) => setFolded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const nodes = page?.nodes || [];
+  const documentReads = nodes.filter(traceReturnedDocumentRead);
   const preferenceRequests = nodes.filter(node => node.kind === 'tool' && node.name === 'agent_settings_set' && typeof node.operationId === 'string' && node.operationId.length > 0);
   const events = useMemo(() => traceEvents(nodes), [page?.nodes]);
   const filteredEvents = useMemo(() => events.filter(row => traceEventMatches(row, filter, query)), [events, filter, query]);
@@ -412,7 +432,18 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
   const stats = traceSummary(nodes), filtering = filter !== 'all' || query.trim() !== '';
   const empty = filter === 'tool' ? '已读轨迹没有匹配工具，不能据此判断有没有用过，也不能说明原因。'
     : filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。';
-  const select = (node: TraceNode) => { if (page) setSelection({ node, taskId: task.id, runId: page.runId, epoch: page.epoch, documentEpoch }); };
+  const select = (node: TraceNode, trigger?: HTMLElement) => {
+    if (page && active && readWindow.enabled && !document.hidden) {
+      documentTrigger.current = isDocumentReadNode(node) && trigger ? {element: trigger, scope: stepScope, nodeId: node.id} : null;
+      setSelection({ node, taskId: task.id, runId: page.runId, epoch: page.epoch, documentEpoch, documentReadRevision: isDocumentReadNode(node) ? getSourceRevision() : undefined });
+    }
+  };
+  const restoreDocumentTrigger = (event: Event) => {
+    const source = documentTrigger.current; documentTrigger.current = null;
+    if (!source || !active || document.hidden || source.scope !== stepScope || !source.element.isConnected || !page?.nodes.some(row => row.id === source.nodeId)) return;
+    const id = source.element.dataset.documentRead || source.element.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId;
+    if (id === source.nodeId && !source.element.matches(':disabled')) { event.preventDefault(); source.element.focus({preventScroll: true}); }
+  };
   const locate = (node: TraceNode) => { setQuery(''); setFilter('all'); setViewMode('events'); setHighlighted(node.id); setLocateTicket(value => value + 1); };
   const runs = page?.runs || [], currentRunId = typeof task.raw?.runId === 'string' ? task.raw.runId : '';
   return <>{!selectedRun && currentCheckpoint}
@@ -430,6 +461,10 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
     {!canRead && <p className="pw-trace-note">当前应用尚未开放这份轨迹读取，可在进展记录和工具调用中查看原记录。</p>}
     {readWindow.error && <div className="pw-trace-read-error" role="alert"><p>{readWindow.error}</p>{page && <small>下方保留已读取的轨迹。自动刷新已暂停，刷新后继续补齐。</small>}</div>}
     {page && <>
+      {documentReads.length > 0 && <div className="pw-action-row"><Button variant="ghost" size="small" data-document-read={documentReads.length === 1 ? documentReads[0].id : undefined} disabled={!active || !readWindow.enabled} onClick={event => {
+        if (documentReads.length === 1) select(documentReads[0], event.currentTarget);
+        else { setViewMode('events'); setFilter('tool'); setQuery(traceDisplayName(documentReads[0])); }
+      }}>{documentReads.length === 1 ? '查看这次文档读取的回执' : `筛选文档读取（${documentReads.length} 条调用记录）`}</Button></div>}
       {preferenceRequests.length > 0 && <Accordion variant="divided" className="pw-trace-disclosures"><AccordionItem id="original-default-requests" title="默认偏好保存请求" description={`已读到 ${preferenceRequests.length} 次，打开核对原结果`}>
         <div className="pw-form-actions">{[...preferenceRequests].sort((a, b) => b.sequence - a.sequence).slice(0, 4).map(node =>
           <Button key={node.id} variant="secondary" size="small" disabled={!active || !readWindow.enabled} onClick={() => select(node)}>查看记录 #{node.sequence}</Button>)}
@@ -456,10 +491,10 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
       <p className="pw-trace-note pw-trace-timing-note">轮次来自原执行记录；总览的累计耗时包含并行重叠。缺失的计时、用量与正文保持可见。</p>
     </>}
     {!page && canRead && !readWindow.busy && !readWindow.error && <p className="pw-trace-note">打开此页后读取原任务轨迹。</p>}
-    <TraceDetails selection={selected} page={page} complete={complete} close={close} back={back} active={active && readWindow.enabled}
+    <TraceDetails selection={selected} page={page} complete={complete} close={close} back={back} restoreDocumentTrigger={restoreDocumentTrigger} active={active && readWindow.enabled}
       openRelated={(node, sourceRevision) => {
         if (selected && !selected.fromSkill && readWindow.enabled && sourceRevision === getSourceRevision())
-          setSelection({ ...selected, node, fromSkill: { node: selected.node, sourceRevision } });
+          setSelection({ ...selected, node, documentReadRevision: isDocumentReadNode(node) ? sourceRevision : undefined, fromSkill: { node: selected.node, sourceRevision } });
       }}/>
   </section></>;
 }

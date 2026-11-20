@@ -30,7 +30,7 @@ export async function verifyHomeReport(target:ReportTarget,expected?:ReportPin):
     row.status!=='current'||!Number.isSafeInteger(row.reportRevision)||row.reportRevision<1||typeof row.bodyFingerprint!=='string'||!/^sha256:[a-f0-9]{64}$/.test(row.bodyFingerprint)||
     expected&&(row.reportRevision!==expected.expectedReportRevision||row.bodyFingerprint!==expected.expectedReportFingerprint)||
     typeof row.body!=='string'||row.body.length>64||row.readRange?.unit!=='UTF-16'||row.readRange.offset!==0||row.readRange?.chars!==row.body.length||!Number.isSafeInteger(row.readRange?.totalChars)||row.readRange.totalChars<row.body.length||row.readRange.totalChars>0&&!row.body.length||row.nextOffset!==(row.body.length<row.readRange.totalChars?row.body.length:-1))
-    throw new Error(expected?'原汇报暂不可核对，没有打开本轮文件。':'未核对到这份原汇报，留在管家首页。');
+    throw new Error(expected?'未能核对原汇报的版本和正文，请重新打开原工作。':'未核对到这份原汇报，留在管家首页。');
   if(!row.body.length)throw new Error('这份原汇报没有可读正文。');
   return {target,pin:{expectedReportRevision:row.reportRevision,expectedReportFingerprint:row.bodyFingerprint},documentEpoch,resume:revision};
 }
@@ -40,27 +40,40 @@ export function currentHomeReport(report:VerifiedHomeReport){
   return !document.hidden&&bridge.getDocumentEpoch()===report.documentEpoch&&resume()===report.resume&&Array.isArray(rows)&&
     rows.some((row:ButlerHomeTask)=>row?.id===report.target.taskId&&sameHomeReport(reportedHomeWork(row),report.target));
 }
-export function ButlerReturnedReport({report,task,active,onCopy,onOriginal,onFollowUp,onConversation,onFiles}:{report:VerifiedHomeReport|null;task:ButlerHomeTask;active:boolean;onCopy:(text:string)=>Promise<unknown>;onOriginal:()=>void;onFollowUp?:()=>void;onConversation?:()=>void;onFiles?:(report:VerifiedHomeReport,target:HTMLButtonElement)=>Promise<void>}){
+type ReturnedReportProps={
+  report:VerifiedHomeReport|null; task:ButlerHomeTask; active:boolean;
+  onCopy:(text:string)=>Promise<unknown>; onOriginal:()=>void; onFollowUp?:()=>void; onConversation?:()=>void;
+  onLocateReport?:(report:VerifiedHomeReport)=>Promise<void>;
+  onFiles?:(report:VerifiedHomeReport,target:HTMLButtonElement)=>Promise<void>;
+};
+export function ButlerReturnedReport({report,task,active,onCopy,onOriginal,onFollowUp,onConversation,onLocateReport,onFiles}:ReturnedReportProps){
   const [notice,setNotice]=useState('');
-  const [filesPending,setFilesPending]=useState(false),fileFlight=useRef(false);
+  const [opening,setOpening]=useState<'files'|'history'|null>(null),flight=useRef(false);
   if(!report||bridge.getDocumentEpoch()!==report.documentEpoch||resume()!==report.resume||!sameHomeReport(reportedHomeWork(task),report.target))
     return <p className="pw-reading-note" role="status">原工作或汇报已变化，没有改读其他轮次。请返回管家首页核对。</p>;
   const identity=JSON.stringify([report.documentEpoch,report.resume,report.target,report.pin]);
-  const openFiles=async(target:HTMLButtonElement)=>{
-    if(!onFiles||!active||fileFlight.current)return;
-    fileFlight.current=true;setFilesPending(true);setNotice('');
-    try{await onFiles(report,target)}
-    catch(error){if(currentHomeReport(report)&&target.isConnected)setNotice(error instanceof Error?error.message:'未能打开本轮文件。')}
-    finally{fileFlight.current=false;setFilesPending(false)}
+  const blocked=!active||opening!==null;
+  const open=async(kind:'files'|'history',target:HTMLButtonElement)=>{
+    if(!active||flight.current)return;
+    if(!currentHomeReport(report)){setNotice('原汇报已变化，请重新打开原工作。');return}
+    const read=kind==='history'?onLocateReport:onFiles;
+    if(!read)return;
+    flight.current=true;setOpening(kind);setNotice('');
+    try{await read(report,target)}
+    catch(error){if(currentHomeReport(report)&&target.isConnected)setNotice(error instanceof Error?error.message:kind==='history'?'未能定位这条原消息。':'未能打开本轮文件。')}
+    finally{flight.current=false;setOpening(null)}
   };
   return <><OwnerWorkReport key={identity} identity={identity} target={report.target} originalVersion={report.pin} active={active} supported={bridge.getState().capabilities.commands.includes('ownerWork.report.read')} onCopy={onCopy}/>
     <div className="pw-action-row">
-      {onFiles&&<Button variant="secondary" leadingIcon={IconFolder} disabled={!active||filesPending} aria-busy={filesPending||undefined} onClick={event=>void openFiles(event.currentTarget)}>
-        {filesPending?'正在打开文件…':'查看本次文件'}
+      {onLocateReport&&<Button variant="secondary" disabled={blocked} aria-busy={opening==='history'||undefined} onClick={event=>void open('history',event.currentTarget)}>
+        {opening==='history'?'正在定位原消息…':'在原对话定位汇报'}
       </Button>}
-      {onFollowUp?<Button variant="secondary" disabled={!active||filesPending} onClick={()=>{if(currentHomeReport(report))onFollowUp();else setNotice('原汇报已变化，未关联到其他对话。')}}>在原对话追问</Button>
-        :onConversation&&<Button variant="secondary" disabled={!active||filesPending} onClick={()=>{if(currentHomeReport(report))onConversation();else setNotice('原汇报已变化，没有打开其他对话。')}}>打开原对话</Button>}
-      <Button variant="ghost" disabled={!active||filesPending} onClick={()=>{if(currentHomeReport(report))onOriginal();else setNotice('原工作已变化，没有打开其他执行。')}}>查看原工作详情</Button>
+      {onFiles&&<Button variant="secondary" leadingIcon={IconFolder} disabled={blocked} aria-busy={opening==='files'||undefined} onClick={event=>void open('files',event.currentTarget)}>
+        {opening==='files'?'正在打开文件…':'查看本次文件'}
+      </Button>}
+      {onFollowUp?<Button variant={onLocateReport?'ghost':'secondary'} disabled={blocked} onClick={()=>{if(currentHomeReport(report))onFollowUp();else setNotice('原汇报已变化，未关联到其他对话。')}}>在原对话追问</Button>
+        :!onLocateReport&&onConversation&&<Button variant="secondary" disabled={blocked} onClick={()=>{if(currentHomeReport(report))onConversation();else setNotice('原汇报已变化，没有打开其他对话。')}}>打开原对话</Button>}
+      <Button variant="ghost" disabled={blocked} onClick={()=>{if(currentHomeReport(report))onOriginal();else setNotice('原工作已变化，没有打开其他执行。')}}>查看原工作详情</Button>
     </div>
     {notice&&<p className="pw-reading-note" role="status">{notice}</p>}</>;
 }

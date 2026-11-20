@@ -89,13 +89,17 @@ export function teamFollowUps(run: Data | null, attention: unknown): TeamFollowU
 /** Exact progress from the open team's existing roster, plan and decisions. */
 export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollowUp[], readRetained = false) {
   const active = activeProgress(run.status);
-  if ((!active && run.status !== 'completed' && run.status !== 'partial' && !(readRetained && retainedProgress(run.status))) ||
-      member.exited || !text(member.id) || rows(run.members).filter(row => row?.id === member.id).length !== 1) return [];
+  const readStopped = readRetained && !run.workPlan && !run.productionScope && ['collaborate','debate'].includes(run.mode);
+  const showStages = active || run.status === 'completed' || run.status === 'partial' ||
+    readStopped && (retainedProgress(run.status) || run.status === 'cancelled');
+  if (!showStages || member.exited && !readStopped || !text(member.id) ||
+      rows(run.members).filter(row => row?.id === member.id).length !== 1) return [];
   const pending = followUps.filter(({ locator }) => locator.runId === run.id && locator.generation === run.generation &&
     locator.memberId === member.id && locator.memberGeneration === member.generation);
   const state = (row: Data, matches: (locator: TeamAttentionLocator) => boolean) => {
     const saved = text(row.status) || 'unknown';
     if (['completed','cancelled','paused','interrupted','failed','exited'].includes(saved)) return saved;
+    if (member.exited || run.status === 'cancelled') return ['unsupported','blocked_dependency'].includes(saved) ? saved : 'unknown'; // Never present a stale live state as still executing.
     // A native question or approval can arrive while the coordinator still says "running".
     const same = pending.filter(item => matches(item.locator));
     if (same.some(item => item.locator.questionId)) return 'awaiting_input';
@@ -193,7 +197,7 @@ export function teamPartialReading(run: Data | null, followUps: TeamFollowUp[]) 
   if (!roster.length || roster.some(member => member?.runner !== 'model')) return null;
   return {
     synthesizing: run.status === 'running' && run.phase === 'synthesis',
-    remaining: roster.flatMap(member => {
+    remaining: roster.filter(member => !member.exited).flatMap(member => {
       const stages = teamMemberProgress(run, member, followUps, true);
       const unfinished = stages.filter(stage => stage.state !== 'completed');
       if (!unfinished.length) return [];

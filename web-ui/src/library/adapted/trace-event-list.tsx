@@ -6,7 +6,7 @@ import { nodeDurationLabel, traceDisplayName, traceFailed, traceInProgress, trac
 
 export function TraceEventList({ rows, selectedId, highlightedId, locateTicket, onSelect, onHighlightEnd, complete }: {
   rows: TraceEventRow[]; selectedId: string | null; highlightedId: string | null; locateTicket: number;
-  onSelect: (node: TraceNode) => void; onHighlightEnd: () => void; complete: boolean;
+  onSelect: (node: TraceNode, trigger?: HTMLButtonElement) => void; onHighlightEnd: () => void; complete: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -33,7 +33,7 @@ export function TraceEventList({ rows, selectedId, highlightedId, locateTicket, 
               title={request ? '查看这次模型请求' : complete ? '关联请求未保留' : '正在补齐关联请求'} onClick={() => request && onSelect(request)}><i aria-hidden="true"/></button>
               : <span className="pw-trace-event-dot" aria-hidden="true"><i/></span>}
           </div>
-          <button type="button" className="pw-trace-event-open" aria-label={`打开 ${traceRoleLabel(node)} ${title}，${state}`} onClick={() => onSelect(node)}>
+          <button type="button" className="pw-trace-event-open" aria-label={`打开 ${traceRoleLabel(node)} ${title}，${state}`} onClick={event => onSelect(node,event.currentTarget)}>
             <span className="pw-trace-role-tag">{traceRoleLabel(node)}</span>
             <span className="pw-trace-event-name">{title}</span>
             <span className="pw-trace-event-sequence">#{node.sequence}</span>

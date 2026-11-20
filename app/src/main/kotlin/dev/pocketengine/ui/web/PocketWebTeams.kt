@@ -152,7 +152,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     }
     fun taskForResearchNavigation(args: JSONObject): ResearchNavigation {
         check(controller.webPrivateOwnerVisible()) { "请回到前台私人团队页面" }
-        fields(args, "viewHandle", "memberId", "round", "taskId", "outputFingerprint")
+        fields(args, "viewHandle", "memberId", "round", "taskId", "outputFingerprint", "archivedVersion")
         val original = reading(text(args, "viewHandle"), "run")
         check(original.optString("researchExecutionFormat").isNotBlank()) { "这份记录不是原研究协作" }
         val memberId = text(args, "memberId")
@@ -164,10 +164,19 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             ?: error("原研究阶段不在这份读取窗口")
         val id = text(args, "taskId", 36)
         require(runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)) { "原研究任务身份无效" }
-        val result = if (phase.optString("researchTaskId") == id) phase.optJSONObject("researchTask") else {
-            val prior = phase.optJSONArray("researchHistory").objects().singleOrNull { it.optString("taskId") == id }
-                ?: error("这份原研究任务不属于所选成员与阶段，请重新读取")
-            prior.optJSONObject("result")
+        val current = phase.optString("researchTaskId") == id
+        val archived = args.has("archivedVersion")
+        val result = when {
+            archived -> {
+                require(args.has("outputFingerprint")) { "请从修订前已交回的原答复进入" }
+                archivedTeamResearchResult(original, phase, id, args.opt("archivedVersion"))
+            }
+            current -> phase.optJSONObject("researchTask")
+            else -> {
+                val prior = phase.optJSONArray("researchHistory").objects().singleOrNull { it.optString("taskId") == id }
+                    ?: error("这份原研究任务不属于所选成员与阶段，请重新读取")
+                prior.optJSONObject("result")
+            }
         }
         if (result != null) {
             check((!result.has("taskId") || result.optString("taskId") == id)
@@ -179,7 +188,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         if (!args.has("outputFingerprint")) return ResearchNavigation(id)
         val hash = text(args, "outputFingerprint", 64)
         val saved = requireNotNull(result) { "这份原阶段没有已保存的研究产出" }
-        require(phase.optString("status") == "completed" && phase.optString("researchTaskId") == id &&
+        require((archived || current && phase.optString("status") == "completed") &&
             saved.optString("status") == "completed" && saved.opt("executionAuthorized") == false &&
             saved.opt("teamRunId") == original.getString("id") && saved.opt("memberId") == memberId && saved.opt("taskId") == id &&
             (!saved.has("round") || saved.optInt("round", -1) == round.toInt()) && hash.matches(Regex("[0-9a-f]{64}"))) { "原研究成员或阶段已变化" }

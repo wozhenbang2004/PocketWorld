@@ -170,7 +170,7 @@ type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{a
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
 type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
-type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string};
+type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
 type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
@@ -723,6 +723,10 @@ export default function App(){
   if(document.hidden||bridge.getDocumentEpoch()!==origin.document||live.state.conversationId!==origin.conversation||
      node?.dataset.conversationId!==origin.conversation||origin.hostTaskId&&rows.length!==1||
      !rows.some(m=>Number(m.sourceRevision||0)===origin.revision&&(!origin.hostTaskId||m.hostGoalTaskId===origin.hostTaskId)))return false;
+  if(origin.replyRun){
+   const reply=rows.length===1?messageReplyContext(rows[0]):null;
+   if(!reply||workIdentityKey(reply)!==workIdentityKey(origin.replyRun))return false;
+  }
   const article=Array.from(chatMessageList.current?.children||[]).find(row=>(row as HTMLElement).dataset.messageId===origin.message) as HTMLElement|undefined;
   if(!article)return false;
   stopFollowing();
@@ -914,7 +918,7 @@ export default function App(){
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
   void act('tasks.review',{id,...(approvalId?{approvalId}:{})},id).then(value=>{if(!currentReviewWindow(window))return;setReview(value);const raw=obj(value.task?.raw);setScopeTools(String(raw.toolLimit||raw.executionScope?.toolLimit||raw.scope?.toolLimit||''));setScopeModels(String(raw.modelCallLimit||raw.executionScope?.modelCallLimit||raw.scope?.modelCallLimit||''));}).catch(()=>{if(reviewRequest.current===request)setReview(null)}).finally(()=>{if(reviewRequest.current===request)setReviewPending(false)});
  },[can,act,currentReviewWindow,invalidateContinuation]);
- const openTask=useCallback((id:string,entry:TaskLayer|'review'='overview',nativeWindowAlreadyOpen=false,historyOrigin?:ConversationHistoryTaskOrigin,searchQuery?:string,expected?:{runId:string;epoch:number;draftId?:string},stillCurrent?:()=>boolean,originalApprovalId?:string,failed?:()=>void,onOpened?:()=>void):void=>{
+ const openTask=useCallback((id:string,entry:TaskLayer|'review'='overview',nativeWindowAlreadyOpen=false,historyOrigin?:ConversationHistoryTaskOrigin,searchQuery?:string,expected?:{runId:string;epoch:number;draftId?:string},stillCurrent?:()=>boolean,originalApprovalId?:string,failed?:(reason?:unknown)=>void,onOpened?:()=>void):void=>{
   const noticeOrigin=phoneNoticeRef.current;
   const dropNotice=noticeOrigin&&(noticeOrigin.taskId!==id||originalPhoneNotice(bridge.getState().state?.originalPhoneNotification)?.token!==noticeOrigin.token||
     !!expected&&(expected.runId!==noticeOrigin.runId||expected.epoch!==noticeOrigin.epoch));
@@ -945,9 +949,9 @@ export default function App(){
    if(stillCurrent&&!stillCurrent()||reviewRequest.current!==request||bridge.getDocumentEpoch()!==window.documentEpoch||Number(obj(bridge.getState().view).resumeRevision||0)!==window.resumeRevision||document.hidden)return false;
    await act('tasks.open',{id,requestNavigation:false,...origin,...(searchQuery===undefined?{}:{searchQuery}),...(projectSource?{expectedProjectId:projectSource.projectId,...(projectSource.checkoutId?{expectedCheckoutId:projectSource.checkoutId}:{})}:{}),...(expected?{expectedRunId:expected.runId,expectedEpoch:expected.epoch}:{})},id);return true;
   };
-  const failedOpen=()=>{if(reviewRequest.current!==request)return;setTaskOpening(false);
+  const failedOpen=(reason?:unknown)=>{if(reviewRequest.current!==request)return;setTaskOpening(false);
    if(failed){if(obj(bridge.getState().view).taskId===id&&can('tasks.close'))void bridge.command('tasks.close').catch(()=>{});
-     setTaskOpen(false);setFocusedOriginalDraft(null);failed();}
+     setTaskOpen(false);setFocusedOriginalDraft(null);failed(reason);}
   };
   void openOriginal().then(opened=>{if(reviewRequest.current!==request)return;if(!opened||stillCurrent&&!stillCurrent()){failedOpen();return}
    openedTaskId.current=id;openedTaskResumeRevision.current=window.resumeRevision;setTaskOpening(false);if(onOpened)onOpened();else if(readReview)loadTaskReview(id,originalApprovalId)}).catch(failedOpen);
@@ -1070,26 +1074,40 @@ export default function App(){
   await returnToOriginalTaskConversation(task.id,conversation,work);
  };
  const reportHistoryOpening=useRef(false);
- const readReportInConversation=async(task:Task)=>{
-  const target=reportedHomeWork(task);
+ const readReportInConversation=async(task:Task,original?:VerifiedHomeReport)=>{
+  const target=original?.target??reportedHomeWork(task);
   if(!target||reportHistoryOpening.current||!can('ownerWork.report.history')||!can('tasks.close'))return;
   const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
   const unchanged=()=>!document.hidden&&documentEpoch===bridge.getDocumentEpoch()&&navigationWindow.current===navigation;
   const atTask=()=>unchanged()&&openedTaskId.current===target.taskId&&obj(bridge.getState().view).taskId===target.taskId;
-  if(!atTask()||bridge.getState().state.conversationReader)return;
+  const atOriginal=()=>!original||homeReport.current===original&&currentHomeReport(original);
+  if(!atTask()||!atOriginal()||bridge.getState().state.conversationReader){
+   if(original)throw Error('原工作或阅读窗口已变化，没有打开其他对话。');
+   return;
+  }
   reportHistoryOpening.current=true;setReturningConversation(task.id);
   let opened:{window:number;conversationId:string}|null=null,retained=false;
   try{
+   if(original){
+    await verifyHomeReport(original.target,original.pin);
+    if(!atTask()||!atOriginal())return;
+   }
    const page=await bridge.command('ownerWork.report.history',{taskId:target.taskId,runId:target.runId,epoch:target.epoch,reportMessageId:target.reportMessageId});
    if(!page||!Number.isSafeInteger(page.window)||page.window<1||page.conversationId!==target.conversationId||
       page.reportMessageId!==target.reportMessageId||!Number.isSafeInteger(page.reportRevision)||page.reportRevision<1||page.readOnly!==true)
     throw Error('没有在原对话核对到这份汇报。');
    opened={window:page.window,conversationId:page.conversationId};
-   if(!atTask()||!await closeTask()||!unchanged())return;
+   if(original&&page.reportRevision!==original.pin.expectedReportRevision)throw Error('汇报版本已变化，没有打开不同版本的消息。');
+   if(!atTask()||!atOriginal()||!await closeTask()||!unchanged())return;
    retained=await navigate('chat',undefined,{taskClosed:true,stillCurrent:unchanged});
-  }catch(failure){if(unchanged())setLocalError(failure instanceof Error?failure.message:'没有定位到原汇报。')}
+  }catch(failure){
+   if(unchanged()){
+    if(original)throw failure;
+    setLocalError(failure instanceof Error?failure.message:'没有定位到原汇报。');
+   }
+  }
   finally{
-   if(opened&&!retained&&documentEpoch===bridge.getDocumentEpoch()&&can('conversation.reader.close'))void bridge.command('conversation.reader.close',opened).catch(()=>{});
+   if(opened&&!retained&&documentEpoch===bridge.getDocumentEpoch()&&can('conversation.reader.close'))await bridge.command('conversation.reader.close',opened).catch(()=>{});
    reportHistoryOpening.current=false;setReturningConversation('');
   }
  };
@@ -1997,7 +2015,14 @@ export default function App(){
    if(item.kind==='work'){
     if(!can('tasks.open'))throw new Error('当前版本暂不能打开工作。');
     retainedForContinuation=true;
-    setSearchReturn(true);setWorkOpen(false);setCommandOpen(false);openTask(item.taskId||item.id,'overview',false,undefined,query,undefined,stillCurrent);return;
+    toast.dismiss('work-search-open');
+    setSearchReturn(true);setWorkOpen(false);setCommandOpen(false);
+    openTask(item.taskId||item.id,'overview',false,undefined,query,undefined,stillCurrent,undefined,reason=>{
+     if(!stillCurrent())return;
+     setSearchReturn(false);showWorkSearch();
+     toast.error(reason instanceof Error?reason.message:'这项工作没能打开。可以在原搜索结果中重试。',{id:'work-search-open'});
+    });
+    return;
    }
    if(item.kind==='artifact'){
     if(!can('attachmentWorkspace.open')||!item.sha256)throw new Error('这份成果的准确版本暂不可打开，请重新搜索。');
@@ -2132,7 +2157,10 @@ export default function App(){
     can('conversation.select')&&can('composer.object.add')&&!state.chatSubmitting&&!returningConversation;
   const followOriginal=canFollowOriginal?()=>{if(openedTaskId.current===task.id&&!taskOpening)void returnToTaskConversation(task,true)}:undefined;
   const canReadOriginal=originatingRequestConversation(task)&&can('conversation.select')&&!returningConversation;
+  const reportHistory=task.raw?.executionRole==='owner_work'&&!task.raw?.developmentContext&&!task.raw?.ownerPhoneControl&&!task.raw?.ownerDeviceWork&&
+   isPrimaryRoute&&!!reportedHomeWork(task)&&can('ownerWork.report.history')&&can('tasks.close');
   if(taskLayer==='homeReport')return <ButlerReturnedReport key={homeReport.current?.target.reportMessageId} report={homeReport.current} task={task} active={taskOpen&&!taskOpening&&openedTaskId.current===task.id&&obj(snapshot?.view).taskId===task.id} onCopy={copyWithLocalFeedback} onOriginal={()=>showTaskLayer('overview')} onFollowUp={followOriginal}
+   onLocateReport={reportHistory&&can('conversation.reader.close')?report=>readReportInConversation(task,report):undefined}
    onFiles={task.status==='completed'&&can('attachmentWorkspace.open')?openHomeReportFiles:undefined}
    onConversation={canReadOriginal?()=>{if(openedTaskId.current===task.id&&!taskOpening)void returnToTaskConversation(task)}:undefined}/>;
   const progress=getRecentTaskProgress(task);
@@ -2210,8 +2238,6 @@ export default function App(){
     {pickerVisible=><ProjectExecutionWorkspace task={task} focusFailure run={act} active={!pickerVisible&&!phoneViewerObscured&&!phoneViewerExpanded}
       projectName={projects.find(project=>project.id===failureOverview.projectId)?.name} editFailedCopy={buildCopy?()=>void openOriginalBuildCopy(buildCopy):undefined}
       prepareFailure={can('tasks.review')?prepareFailedBuild:undefined}/>}</ConversationModelPickerVisibility>}{originalEvidence}</TaskPackageProjectContext.Provider>;
-  const reportHistory=task.raw?.executionRole==='owner_work'&&!task.raw?.developmentContext&&!task.raw?.ownerPhoneControl&&!task.raw?.ownerDeviceWork&&
-   isPrimaryRoute&&!!reportedHomeWork(task)&&can('ownerWork.report.history')&&can('tasks.close');
   const workFacts=<OwnerWorkFacts key="task-handling" task={task} onTeam={can('teams.readRun')?openWorkTeam:undefined}
    reportLabel={reportHistory?'在原对话定位汇报':undefined}
    onReport={reportHistory?overviewActive&&!returningConversation&&!state.conversationReader?()=>void readReportInConversation(task):undefined:
@@ -2305,7 +2331,9 @@ export default function App(){
    </TabPanel>
    {/* Keep settled audit pages and expanded records while returning to the result.
        The original task/run/epoch key still retires a different history window. */}
-   <TabPanel id="process" shouldForceMount className="pw-task-process-layer" hidden={taskLayer!=='process'}><TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} canReadTrace={can('trace.read')} active={taskLayer==='process' && taskOpen && !taskOpening && openedTaskId.current===task.id} registerTransientBack={registerTaskBack} renderOperation={renderOperation}/></TabPanel>
+   <TabPanel id="process" shouldForceMount className="pw-task-process-layer" hidden={taskLayer!=='process'}>{chatWorkReturn.current?.replyRun?.taskId===task.id&&
+    (task.raw?.runId!==chatWorkReturn.current.replyRun.runId||task.raw?.coordinatorEpoch!==chatWorkReturn.current.replyRun.epoch)?
+    <p className="pw-reading-note" role="status">这项工作已换轮或原执行暂不可核对。没有用另一轮的记录代替这条回复。</p>:<TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} canReadTrace={can('trace.read')} active={taskLayer==='process' && taskOpen && !taskOpening && openedTaskId.current===task.id} registerTransientBack={registerTaskBack} renderOperation={renderOperation}/>}</TabPanel>
    <TabPanel id="goal" shouldForceMount hidden={taskLayer!=='goal'&&taskLayer!=='scope'}>
     <div hidden={taskLayer==='scope'} className="pw-work-goal-panel"><WorkGoal task={task}/>
      {phoneConversationId(task)&&can('phone.request.original')?<PhoneTaskOriginalRequest key={taskHistoryIdentity(task)} task={task} active={taskOpen&&!taskOpening&&taskLayer==='goal'&&openedTaskId.current===task.id&&obj(snapshot?.view).taskId===task.id}/>
@@ -2360,8 +2388,26 @@ export default function App(){
  };
  const composerHasChatStop=isChatSurface&&intent==='chat'&&!!state.chatBusy&&!!currentCancelIdentity&&can('chat.cancel');
  const conversationActivity=conversationActivityLabel(state);
- const openTurnNotes=(original:WorkIdentity,layer:'overview'|'review'|'process')=>
-  openTask(original.taskId,layer==='review'&&!can('tasks.review')?'overview':layer,false,undefined,undefined,{runId:original.runId,epoch:original.epoch});
+ const openTurnNotes=(original:WorkIdentity,layer:'overview'|'review'|'process',saved?:Message,trigger?:HTMLButtonElement|null)=>{
+  const expected={runId:original.runId,epoch:original.epoch};
+  if(layer!=='process'||!saved){openTask(original.taskId,layer==='review'&&!can('tasks.review')?'overview':layer,false,undefined,undefined,expected);return}
+  const source=saved.id,revision=saved.sourceRevision,scroller=scroll.current,article=trigger?.closest<HTMLElement>('article[data-message-id]');
+  if(!source||typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<1||!trigger||article?.dataset.messageId!==source||
+     !scroller||!conversation||route!=='chat'||taskOpen||taskOpening)return;
+  const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const current=()=>{
+   const state=bridge.getState().state,rows=asArray<Message>(state.messages).filter(row=>row.id===source);
+   const context=rows.length===1&&rows[0].sourceRevision===revision?messageReplyContext(rows[0]):null;
+   return !document.hidden&&documentEpoch===bridge.getDocumentEpoch()&&navigation===navigationWindow.current&&
+    state.conversationId===conversation&&!state.conversationReader&&!!context&&workIdentityKey(context)===workIdentityKey(original);
+  };
+  if(!current())return;
+  stopFollowing();rememberChatPosition();
+  chatWorkReturn.current={document:documentEpoch,conversation,message:source,revision,replyRun:original,top:scroller.scrollTop,
+   offset:article.getBoundingClientRect().top-scroller.getBoundingClientRect().top,trigger};
+  openTask(original.taskId,'process',false,undefined,undefined,expected,current,undefined,
+   ()=>{if(current())setLocalError('现在无法核对这条回复的原执行。没有打开其他轮次。')},()=>{});
+ };
  const editingChat=!!text||asArray(state.selectedChatAttachments).length>0||
   [composer.objectRefs,composer.sourceRefs,composer.previewRefs].some(value=>asArray(value).length>0);
  const stageExample=intent==='chat'&&!!draftKey&&!isListening&&!voiceReview&&!state.voiceInput?.reviewAvailable&&!composer.voiceText&&
@@ -2890,6 +2936,7 @@ export default function App(){
     const earlierRun=returnedWork&&linked?.raw?.runId&&(linked.raw.runId!==returnedWork.runId||linked.raw.coordinatorEpoch!==returnedWork.epoch);
     const readPhone=!!m.id&&m.sourceRevision===1&&can('phone.result.original');
     const inlineResult=!earlierRun&&!phoneResult&&taskResult?.kind==='owner_work'&&taskResult.status==='completed'&&!taskResult.noticeKind&&!!m.id;
+    const savedTrace=!phoneResult&&!taskResult&&m.id&&Number(m.sourceRevision)>0?replyContext:null;
     const noteIdentity=!phoneResult&&!taskResult&&replyContext&&!representedProjectRuns.has(workIdentityKey(replyContext))&&messageTaskAnchors.get(replyContext.taskId)===index?replyContext:null;
     const preparations=anchoredPreparations.get(index);
     const originalProject=preparations?.length===1?preparations[0]:null;
@@ -2900,7 +2947,7 @@ export default function App(){
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
       actionElsewhere={!!linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')||!!chatAttention&&chatAttention.id===noteIdentity?.taskId}
-      onRead={noteIdentity&&can('tasks.open')?layer=>openTurnNotes(noteIdentity,layer):undefined}/>}
+      onRead={noteIdentity&&can('tasks.open')?(layer,trigger)=>openTurnNotes(noteIdentity,layer,savedTrace?m:undefined,trigger):undefined}/>}
      {m.originalHostFinal?<div className="pw-user-text">{m.content}</div>:m.role==='assistant'&&phoneResult&&m.id&&m.sourceRevision===1?<PhoneMessageReturn result={phoneResult} conversation={String(state.conversationId||'')} messageId={m.id} revision={Number(m.sourceRevision)} body={m.content}
        onOriginal={readPhone?setMessageOriginTarget:undefined} onRun={can('tasks.open')?(entry,t)=>openTask(t.phoneResult.taskId,entry,false,undefined,undefined,{runId:t.phoneResult.runId,epoch:t.phoneResult.epoch}):undefined}>
        <CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>
@@ -2947,7 +2994,11 @@ export default function App(){
           setMessageMenu(null);if(trigger)void openOriginalChatWork(m,olderProjectDraft.row,{action:'draft',label:'查看原改稿',
            target:olderProjectDraft.target,draftId:olderProjectDraft.draftId},trigger);}}>查看原改稿</Button>}
         {m.role==='user'&&m.automaticLearningExcluded===true&&<p className="pw-muted">这条原话已排除自动记忆整理，后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{m.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p>}
-        {m.role==='assistant'&&traceTaskId&&can('tasks.open')&&<Button variant="ghost" leadingIcon={IconTool} aria-label={phoneResult?'查看这份手机任务的当前进展':'查看这条回复的执行轨迹'} onClick={()=>{setMessageMenu(null);openTask(traceTaskId,'process')}}>{phoneResult?'所属工作当前进展':'执行轨迹'}</Button>}
+        {m.role==='assistant'&&traceTaskId&&can('tasks.open')&&<Button variant="ghost" leadingIcon={IconTool} aria-label={savedTrace||taskResult&&!phoneResult?'查看这条回复的执行轨迹':phoneResult?'查看这份手机任务的当前进展':'查看所属工作的当前进展'} onClick={()=>{
+         const article=Array.from(chatMessageList.current?.children||[]).find(node=>(node as HTMLElement).dataset.messageId===id);
+         const trigger=article?.querySelector<HTMLButtonElement>('button[aria-label="消息操作与来源"]');
+         setMessageMenu(null);if(savedTrace)openTurnNotes(savedTrace,'process',m,trigger);else openTask(traceTaskId,'process');
+        }}>{savedTrace?'这条回复的执行轨迹':taskResult&&!phoneResult?'执行轨迹':'所属工作当前进展'}</Button>}
         {m.role==='assistant'&&completedFeedback&&linkedFeedback&&can('tasks.open')&&<Button variant="ghost" aria-label={`查看任务详情：${linkedFeedback.goal}`} onClick={()=>{setMessageMenu(null);openTask(linkedFeedback.id)}}>查看任务详情</Button>}
         {!!m.content&&<Button variant="ghost" leadingIcon={IconBook} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);openReading({kind:'message',title:m.role==='assistant'?'阅读回复':'阅读消息',text:m.content,quoteSource:canQuote&&!state.chatSubmitting&&draftKey&&m.id&&Number.isSafeInteger(m.sourceRevision)&&Number(m.sourceRevision)>0?{target:{messageId:m.id,sourceRevision:Number(m.sourceRevision),key:draftKey,epoch:draftEpoch},documentEpoch:bridge.getDocumentEpoch()}:undefined,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>阅读与选字</Button>}
         {m.role!=='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)}/>}

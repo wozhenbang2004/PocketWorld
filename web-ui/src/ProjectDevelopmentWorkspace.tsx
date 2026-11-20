@@ -1,11 +1,12 @@
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import type {LocalTerminalCheckout} from './LocalWorkspace';
 import { checkedHostFiles, checkedHostText, ProjectHostComparedFiles, ProjectHostDiff, type HostComparedFile, type HostComparison, type HostDiff, type HostEditorFile } from './ProjectHostFileComparison';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import {ProjectTaskPackageOrigin} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
 import { ProjectCheckoutFiles } from './ProjectCheckoutFiles';
+import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import { CheckoutGuide, checkoutKindSummary } from './ProjectWorkBinding';
 import './local-workspace.css';
 import './project-development.css';
@@ -72,6 +73,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
 export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+  const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),noticeArea=useRef<HTMLDivElement>(null);
   const [deliveryOpen,setDeliveryOpen]=useState(false);
@@ -235,6 +237,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     setView(value=>value ? {...value,draft:{...value.draft,ownerPickedConvention:null}} : value); };
   const readable = can('projects.development.read');
   const available = rows(view?.checkouts);
+  const selectedCopy = available.find(row => row.projectId === projectId && row.checkoutId === checkout);
   const differentBuildCopy=buildCheckout&&checkout!==buildCheckout&&available.find(row=>row.projectId===projectId&&row.checkoutId===buildCheckout);
   useEffect(() => { if (active && readable && !handle.current) void readRef.current(); }, [active, readable]);
   useEffect(() => {
@@ -406,20 +409,22 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const reviewNodeBuild = () => void invoke('projects.development.reviewDraftBuild',{
     viewHandle:handle.current,checkoutId:checkout,retainedDraft:displayedSavedDraft({...draft.current}),
   },v=>acceptReview(v,true));
-  const openVersionBuild = () => void invoke('projects.development.inspect', {viewHandle:handle.current, checkoutId:checkout}, fresh => {
+  const openVersionBuild = (destination:'work'|'savedWeb') => void invoke('projects.development.inspect', {viewHandle:handle.current, checkoutId:checkout}, fresh => {
     const current = versionBuildFor(fresh, projectId, checkout);
     if (fresh.projectId === projectId && fresh.checkoutId === checkout) setSource(fresh);
     if (!versionBuild || !current || fresh.sourceDigest !== source?.sourceDigest || fresh.existingNodeBuild !== source?.existingNodeBuild ||
         current.id !== versionBuild.id || current.runId !== versionBuild.runId || current.epoch !== versionBuild.epoch)
       throw new Error('副本版本或原任务已变化。没有打开另一版，请按更新后的记录选择。');
-    onOpenTask(current.id, checkout);
+    if(destination==='work')onOpenTask(current.id, checkout);
+    else if(!savedWebLink?.current?.({projectId,checkoutId:checkout,taskId:current.id,sourceDigest:fresh.sourceDigest,runId:current.runId,epoch:current.epoch}))
+      throw new Error('网页版本区暂不可用，请回到原项目工作页再核对。没有打开其他网页。');
   });
   if(returnTarget&&returned.current!==returnTarget.handle)return <section hidden={!active} className="pw-project-development pw-settings-section" aria-label="核对原项目草稿">
     <p role="status">{error||'正在核对刚才写入的原项目草稿…'}</p>
     {error&&<Button variant="ghost" onClick={onDismissReturn}>收起定位，返回项目概览</Button>}
   </section>;
-  return <section hidden={!active} className="pw-project-development pw-local-workspace pw-settings-section" aria-label="使用默认模型开发项目">
-    <header className="pw-development-intro"><h3>让模型接手开发</h3><p>在私人副本中工作，结果由你审阅后导回项目。</p></header>
+  return <section hidden={!active} className="pw-project-development pw-local-workspace pw-settings-section" aria-label="本机副本与默认模型">
+    <header className="pw-development-intro"><h3>这台手机上的工作副本</h3><p>直接改文件不需要模型。构建或交办目标时，另行核对。</p></header>
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
     {buildCopyMissing&&<p className="pw-local-inline-notice" role="status">原构建所用的私人副本暂不可用，没有打开替代副本。</p>}
     {!view ? <Button variant="secondary" disabled={busy || !readable} onClick={() => void read()}> {busy ? '正在读取原项目…' : '读取项目开发条件'} </Button> : <>
@@ -433,6 +438,41 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {sourceConflict&&view.draft?.ownerPickedConvention&&<div className="pw-local-inline-notice"><p>原草稿现在有另一次选择，本页还留着你的输入。两份都没有被自动覆盖。</p>
         {draft.current.checkoutId===view.draft.checkoutId&&<details><summary>对照本副本的两份限制</summary><p>本页普通文字</p><p dir="auto" className="pw-reading-copy">{draft.current.constraints||'（本页为空）'}</p><p>项目当前所选约定 · 修订 {view.draft.ownerPickedConvention.revision}</p><p dir="auto" className="pw-reading-copy">{view.draft.constraints}</p></details>}
         {draft.current.checkoutId===view.draft.checkoutId?<><Button variant="secondary" size="small" disabled={busy||pending} onClick={()=>reconcileSource(true)}>在本页使用项目当前约定</Button><Button variant="ghost" size="small" disabled={busy||pending} onClick={()=>reconcileSource(false)}>用本页普通文字替换草稿约定</Button></>:<p>工作副本不同，不展示另一份正文，也不能互相覆盖。请保留本页文字后，退出并打开原项目副本。</p>}</div>}
+      <SelectField label="选择私人副本" value={checkout} isDisabled={disabled} options={[{ id: '', label: available.length ? '选择已有私人副本' : '尚未准备私人副本' },
+        ...available.map(row => ({ id: row.checkoutId, label: `${row.name || name} · ${row.checkoutId.slice(0,8)} · ${new Date(row.createdAt || 0).toLocaleString()}` })),
+        ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
+        onChange={value => { const clear = !!currentPicked && checkout!==value; if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
+          setCheckout(value); setBuildOrigin(null); setBuildCopyMissing(false); setSource(null); setHostOrigin(null); setHostFiles(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value, ...(clear?{constraints:''}:{}) }); }} />
+      {available.length === 0 && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
+      {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
+        {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={()=>onOpenTerminal()}>打开副本准备入口</Button></div>}
+        {copyResult && !copyResult.found && !copyResult.partial && <p role="status">未发现这次准备的副本；显式准备仍使用同一请求，不会换一个身份重建。</p>}</div>}
+      {!filesOpen&&differentBuildCopy&&<div className="pw-local-inline-notice" role="status">
+        <p>这次构建使用的是 {differentBuildCopy.name||'私人副本'} · {buildCheckout.slice(0,8)}。{unfinishedInput||pending?'另一份交办仍保留，没有切换。':'可以选这份副本，再审阅下一次构建。'}</p>
+        <div className="pw-form-actions">
+          {!unfinishedInput&&!pending&&can('projects.development.draft')&&<Button variant="secondary" size="small" disabled={disabled} onClick={selectBuildCopy}>用这份副本继续</Button>}
+          <Button variant="ghost" size="small" disabled={busy||!!review} onClick={()=>setBuildOrigin(null)}>返回当前交办</Button>
+        </div>
+      </div>}
+      {!filesOpen && comparedBuild && <p className="pw-field-hint" role="status">
+        {versionChanged ? <>当前已保存源码 <code>{source?.sourceDigest.slice(0,8)}</code> 不同于原构建 <code>{comparedBuild.sourceDigest.slice(0,8)}</code>。旧批准不会用于新版本。</>
+          : '当前已保存源码仍是原构建使用的版本。'}
+      </p>}
+      <div className="pw-form-actions">
+        {selectedCopy && can('projects.development.files.open') && <Button variant="secondary" disabled={busy || !!review || filesOpen}
+          onClick={() => { setHostEditor(null); setFileCheckout(selectedCopy.checkoutId); }}>编辑这份副本的文件</Button>}
+        {!differentBuildCopy && selectedCopy && (selectedCopy.draftWorkingCopy === true || source?.existingNodeBuild === true) && can('projects.development.reviewDraftBuild') &&
+          (versionBuild ? <>
+            {can('tasks.open') && <Button variant="secondary" disabled={disabled || !can('projects.development.inspect')}
+              onClick={()=>openVersionBuild('work')}>查看原构建任务</Button>}
+            {savedWebLink && <Button variant="ghost" disabled={disabled || !can('projects.development.inspect')}
+              onClick={()=>openVersionBuild('savedWeb')}>查找同一源码的已存网页</Button>}
+          </> : !buildLookupUnavailable && <Button variant="secondary"
+            disabled={disabled || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
+            onClick={reviewNodeBuild}>{source?.existingNodeBuild===true?(versionChanged?'核对修改后的 Node 构建':'审阅这个副本的 Node 构建'):source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
+      </div>
+      {buildLookupUnavailable && <p role="status" className="pw-field-hint">这一版的构建记录暂未核对，请重新读取项目条件，不重复交办。</p>}
+      {nodeBlocked && can('projects.development.reviewDraftBuild') && <p className="pw-field-hint" role="status">{nodeBlocked} 你仍可浏览和编辑这个副本。</p>}
       <TextAreaField label="这次的目标" value={goal} isDisabled={disabled} onChange={value => { if (value.length <= 12000) { setGoal(value); retain({ ...draft.current, goal: value }); } }} hint="例如：做一个能在手机预览的番茄钟，先用本地数据。不要填写密码或令牌。" />
       {currentPicked && <div ref={noticeArea} tabIndex={-1} className="pw-local-inline-notice"><p>已从本项目手写约定修订 {currentPicked.revision} 放入本次草稿，尚不是模型采用的证据。</p>
         <Button variant="ghost" size="small" disabled={disabled} onClick={removePicked}>移除本次约定</Button></div>}
@@ -446,11 +486,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         <TextAreaField label="怎样算完成" value={requirements.completionCriteria} isDisabled={disabled} hint="写清你要看到的实际结果；发送或发布仍需原来的确认。"
           onChange={value => { if (value.length <= 4000) { setRequirements(previous => ({ ...previous, completionCriteria: value })); retain({ ...draft.current, completionCriteria: value }); } }} />
       </AccordionItem></Accordion>
-      <SelectField label="要工作的私人副本" value={checkout} isDisabled={disabled} options={[{ id: '', label: available.length ? '选择已有私人副本' : '尚未准备私人副本' },
-        ...available.map(row => ({ id: row.checkoutId, label: `${row.name || name} · ${new Date(row.createdAt || 0).toLocaleString()}` })),
-        ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
-        onChange={value => { const clear = !!currentPicked && checkout!==value; if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
-          setCheckout(value); setBuildOrigin(null); setBuildCopyMissing(false); setSource(null); setHostOrigin(null); setHostFiles(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value, ...(clear?{constraints:''}:{}) }); }} />
+      <div className="pw-form-actions"><Button disabled={disabled || !goal.trim() || !checkout || !source || view.model?.configured !== true} onClick={() => void invoke('projects.development.review', { viewHandle: handle.current, checkoutId: checkout, goal, ...requirements }, acceptReview)}>核对并开始</Button>
+        <Button variant="ghost" disabled={busy || pending || !!review || filesOpen} onClick={() => void read()}>重新读取项目条件</Button>
+        {checkout && !source && <Button variant="ghost" disabled={disabled} onClick={() => { sourceAttempt.current = ''; setView(previous => previous ? { ...previous } : previous); }}>重新读取副本版本</Button>}
+      </div>
       {!filesOpen&&archiveRoot&&<div className="pw-local-inline-notice" role="status">
         <p>工程配置在 <bdi>{archiveRoot.descriptor}</bdi>，不在副本顶层。你仍可编辑这份副本。</p>
         <p>若要按工程根重新导入，请选择 <bdi>{archiveRoot.directory}/</bdi> 文件夹。原普通 ZIP 若只有一层外目录，也可选「去掉普通 ZIP 唯一外层目录」。重新导入另建项目，不带入本副本的修改。</p>
@@ -470,36 +509,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {view?.viewHandle && available.some(row=>row.checkoutId===checkout && row.taskPackageSource===true) &&
         <ProjectTaskPackageOrigin key={view.viewHandle+':'+checkout} project={projectId} checkout={checkout} view={view.viewHandle}
           disabled={busy||!!review||filesOpen} invoke={invoke} can={can} open={onOpenHostOriginal}/>}
-      {available.length === 0 && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
-      {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
-        {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={()=>onOpenTerminal()}>打开副本准备入口</Button></div>}
-        {copyResult && !copyResult.found && !copyResult.partial && <p role="status">未发现这次准备的副本；显式准备仍使用同一请求，不会换一个身份重建。</p>}</div>}
-      {!filesOpen&&differentBuildCopy&&<div className="pw-local-inline-notice" role="status">
-        <p>这次构建使用的是 {differentBuildCopy.name||'私人副本'} · {buildCheckout.slice(0,8)}。{unfinishedInput||pending?'另一份交办仍保留，没有切换。':'可以选这份副本，再审阅下一次构建。'}</p>
-        <div className="pw-form-actions">
-          {!unfinishedInput&&!pending&&can('projects.development.draft')&&<Button variant="secondary" size="small" disabled={disabled} onClick={selectBuildCopy}>用这份副本继续</Button>}
-          <Button variant="ghost" size="small" disabled={busy||!!review} onClick={()=>setBuildOrigin(null)}>返回当前交办</Button>
-        </div>
-      </div>}
-      {!filesOpen && comparedBuild && <p className="pw-field-hint" role="status">
-        {versionChanged ? <>当前已保存源码 <code>{source?.sourceDigest.slice(0,8)}</code> 不同于原构建 <code>{comparedBuild.sourceDigest.slice(0,8)}</code>。旧批准不会用于新版本。</>
-          : '当前已保存源码仍是原构建使用的版本。'}
-      </p>}
-      {nodeBlocked && can('projects.development.reviewDraftBuild') && <p className="pw-field-hint" role="status">{nodeBlocked} 你仍可浏览和编辑这个副本。</p>}
-      {!differentBuildCopy&&available.some(row => row.checkoutId === checkout && (row.draftWorkingCopy === true || source?.existingNodeBuild === true)) && can('projects.development.reviewDraftBuild') &&
-        (versionBuild ? <Button variant="secondary" disabled={disabled || !can('tasks.open') || !can('projects.development.inspect')}
-          onClick={openVersionBuild}>查看这一版构建与结果</Button> : buildLookupUnavailable ?
-          <p role="status" className="pw-field-hint">这一版的构建记录暂未核对，请重新读取项目条件，不重复交办。</p> :
-          <Button variant="secondary" disabled={disabled || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
-            onClick={reviewNodeBuild}>{source?.existingNodeBuild===true?(versionChanged?'核对修改后的 Node 构建':'审阅这个副本的 Node 构建'):source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
-      <div className="pw-form-actions"><Button disabled={disabled || !goal.trim() || !checkout || !source || view.model?.configured !== true} onClick={() => void invoke('projects.development.review', { viewHandle: handle.current, checkoutId: checkout, goal, ...requirements }, acceptReview)}>核对并开始</Button>
-        <Button variant="ghost" disabled={busy || pending || !!review || filesOpen} onClick={() => void read()}>重新读取项目条件</Button>
-        {checkout && !source && <Button variant="ghost" disabled={disabled} onClick={() => { sourceAttempt.current = ''; setView(previous => previous ? { ...previous } : previous); }}>重新读取副本版本</Button>}
-      </div>
-      <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !!review || filesOpen || !checkout || !can('projects.development.files.open')} onClick={() => { setHostEditor(null); setFileCheckout(checkout); }}>编辑这份私人副本的文件</Button>
-        {canPrepareTerminal && <Button variant="ghost" disabled={disabled} data-workspace-entry="project-copy-terminal"
-          onClick={()=>void prepareTerminal()}>准备这份副本的终端</Button>}</div>
-      {view.model?.configured !== true && <p className="pw-local-inline-notice">让模型接手时，才需要连接默认模型。项目与已保存草稿保留。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
+      {canPrepareTerminal && <div className="pw-form-actions"><Button variant="ghost" disabled={disabled} data-workspace-entry="project-copy-terminal"
+        onClick={()=>void prepareTerminal()}>准备这份副本的终端</Button></div>}
+      {view.model?.configured !== true && <p className="pw-local-inline-notice">交办目标或构建需要默认模型；直接编辑文件、找回已保存的网页不需要。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
       <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : checkoutKindSummary(source, projectId, checkout) || '可先编辑文件；运行命令前核对工具'}>
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
         {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>安装依赖、构建或启动仍须核对具体方案；不会因为发现项目类型就运行脚本。</p>}

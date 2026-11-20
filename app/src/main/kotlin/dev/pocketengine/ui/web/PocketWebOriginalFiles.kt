@@ -122,6 +122,7 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         pin.busy = true; pin.error = null; changed()
         try { worker.execute {
             var value: JSONObject? = null; var error: String? = null; var sourceUnavailable = false
+            var officePosition: Pair<Int,Int>? = null
             try {
                 requireCurrent(pin); val type = pin.kind; val identity = pin.source.identity
                 // No temp copy or decoder for a format with no reader. A known binary header in a file named .txt also vetoes text decoding.
@@ -149,10 +150,15 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                         "image" -> { val image = original.image(); try { JSONObject().put("width", image.originalWidth).put("height", image.originalHeight).put("sampled", image.sampled) } finally { image.bitmap.recycle() } }
                         "audio", "video" -> { original.openMediaDescriptor().use { }; JSONObject().put("localMedia", true) }
                         "office" -> {
-                            val unit = request.optInt("unit", preferences.getInt("$identity.unit", 1)).coerceAtLeast(1)
-                            val chunk = request.optInt("chunk", 0)
-                            val result = document(original.document(unit, chunk, pin.lifetime))
-                            preferences.edit().putInt("$identity.unit", unit).apply(); result.put("unit", unit).put("chunk", chunk)
+                            val resume = command == "load"
+                            val unit = (if (resume) preferences.getInt("$identity.unit", 1) else request.optInt("unit", 1)).coerceAtLeast(1)
+                            val chunk = if (resume) preferences.getInt("$identity.chunk", 0) else request.optInt("chunk", 0)
+                            val page = original.document(unit, chunk, pin.lifetime)
+                            // A long worksheet/section can span several reads within the same unit.
+                            // A failed or out-of-range jump is not a new reading position.
+                            if (page.status in setOf("ok", "partial") && unit <= page.totalUnits && (chunk == 0 || page.chunks.isNotEmpty()))
+                                officePosition = unit to chunk
+                            document(page).put("unit", unit).put("chunk", chunk)
                         }
                         "text" -> {
                             val encoding = request.optString("encoding", preferences.getString("$identity.encoding", "UTF-8") ?: "UTF-8")
@@ -173,7 +179,13 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             main.post {
                 if (pins[pin.id] !== pin || pin.lifetime.isCancelled || !visible() || !pin.accepts(pin.ticket)) { done(null, "原文件窗口已变化，没有换用其他文件"); return@post }
                 if (sourceUnavailable) retire(pin)
-                else if (error == null && command != "find" && command != "check") pin.information = value
+                else if (error == null && command != "find" && command != "check") {
+                    pin.information = value
+                    officePosition?.let { (unit, chunk) ->
+                        val key = pin.source.identity
+                        preferences.edit().putInt("$key.unit", unit).putInt("$key.chunk", chunk).apply()
+                    }
+                }
                 pin.busy = false; pin.error = error; pin.sourceUnavailable = sourceUnavailable
                 done(if (sourceUnavailable) null else value, error); changed()
             }

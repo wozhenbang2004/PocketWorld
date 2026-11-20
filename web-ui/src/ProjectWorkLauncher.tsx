@@ -19,9 +19,9 @@ export function ProjectWorkLauncher({ active, defaultStart, profileStart, resume
   const both = Boolean(defaultStart && profileStart);
   return <Accordion className="pw-project-launcher" variant="divided" expandedKeys={open ? ['start'] : []}
     onExpandedChange={keys => { if (!busy) onPresentationChange({ ...presentation, open: keys.has('start') }); }}>
-    <AccordionItem id="start" title="新项目工作" description={resumeProfile ? '继续核对这次项目工作，或填写下一个目标' : '交代目标，选择工作方式，再核对开始'} isDisabled={busy}>
+    <AccordionItem id="start" title={defaultStart ? '编辑副本或交办工作' : '新项目工作'} description={resumeProfile ? '继续核对这次项目工作，或填写下一个目标' : defaultStart ? '改本机文件、核对构建，或交给模型处理' : '交代目标，选择工作方式，再核对开始'} isDisabled={busy}>
       {both ? <Tabs selectedKey={mode} keyboardActivation="manual" onSelectionChange={key => { if (!busy) onPresentationChange({ ...presentation, mode: key === 'profile' ? 'profile' : 'default' }); }}>
-        <TabList aria-label="新工作使用的方式"><Tab id="default" isDisabled={busy}>默认模型</Tab><Tab id="profile" isDisabled={busy}>工作配置</Tab></TabList>
+        <TabList aria-label="项目工作方式"><Tab id="default" isDisabled={busy}>本机副本与默认模型</Tab><Tab id="profile" isDisabled={busy}>工作配置</Tab></TabList>
         <TabPanel id="default" shouldForceMount hidden={mode !== 'default'}>{defaultStart?.(active && open && mode === 'default', setDefaultBusy)}</TabPanel>
         <TabPanel id="profile" shouldForceMount hidden={mode !== 'profile'}>{profileStart?.(active && open && mode === 'profile', setProfileBusy)}</TabPanel>
       </Tabs> : defaultStart ? defaultStart(active && open, setDefaultBusy) : profileStart?.(active && open, setProfileBusy)}

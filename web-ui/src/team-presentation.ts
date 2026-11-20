@@ -78,5 +78,6 @@ export function teamAttentionItems(run: TeamRecord | null, nativeAttention: unkn
 export function teamProgressLabel(run: TeamRecord): string {
   const total = run.totalWorkItems, completed = run.completedWorkItems;
   if (typeof total !== 'number' || typeof completed !== 'number' || total <= 0 || completed < 0 || completed > total) return '';
-  return `已完成 ${completed} / ${total} ${run.workPlan ? '项分工' : '个成员阶段'}`;
+  const includesFormer = !run.workPlan && records(run.members).some(member => member.exited === true);
+  return `已完成 ${completed} / ${total} ${run.workPlan ? '项分工' : '个成员阶段'}${includesFormer ? '（含已退出成员）' : ''}`;
 }

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
-import { DeviceRequestScope, pickupUnavailable, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
+import { DeviceRequestScope, pickupUnavailable, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, localReviewedReceipt, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
 import { deviceManualPhonePreparation, deviceSavedOwnerChoice } from './devices-workspace';
 import { DesktopViewer } from './DesktopViewer';
@@ -146,6 +146,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [inputPick,setInputPick]=useState('');
   const [phoneArchive, setPhoneArchive] = useState<Data | null>(null), [expandedArchive, setExpandedArchive] = useState('');
   const [closedInbox,setClosedInbox]=useState<Data|null>(null),[closedDraft,setClosedDraft]=useState('');
+  const [closedReceipt,setClosedReceipt]=useState<{value:ReturnType<typeof localReviewedReceipt>;revision:unknown}|null>(null);
   const [ownText,setOwnText]=useState<Data|null>(null),ownTextSequence=useRef(0);
   const closeOwnText=()=>{ownTextSequence.current++;setOwnText(null);};
   const autoReadSource=useRef('');
@@ -215,7 +216,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const selectPeer = (next: string, from = snapshot) => {
     if (selectedPeer.current === next) return;
     if(closedInbox?.closedHandle)void run('devices.discard',{closedHandle:closedInbox.closedHandle}).catch(()=>{});
-    setClosedInbox(null);setClosedDraft('');
+    setClosedInbox(null);setClosedDraft('');setClosedReceipt(null);
     if (waitingPhones?.waitingHandle) void run('devices.discard', { waitingHandle: waitingPhones.waitingHandle }).catch(() => {});
     if (phoneArchive?.archiveHandle) void run('devices.discard', { archiveHandle: phoneArchive.archiveHandle }).catch(() => {});
     closeOwnText();setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
@@ -235,7 +236,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if(pinnedConnection)setPinnedLocalRead(0);
     autoReadSource.current = ''; // Restored native windows never retain the previous local archive handle.
     placeRead.current = !peerPlace.current;
-    setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
+    setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');setClosedReceipt(null);closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation(null);
     setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
@@ -254,10 +255,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   }, []);
   useEffect(() => {
     if (busy || nativeRevision.current === state.deviceWorkspaceRevision || document.visibilityState !== 'visible') return;
-    nativeRevision.current = state.deviceWorkspaceRevision; refresh();
+    nativeRevision.current = state.deviceWorkspaceRevision; setClosedReceipt(null); refresh();
   }, [state.deviceWorkspaceRevision, busy]);
   useEffect(() => { registerTransientBack(() => {
     if (preparingDeviceWork) return true;
+    if (closedReceipt) {setClosedReceipt(null);return true;}
     if (ownText) {closeOwnText();return true;}
     if (review) { closeReview(); return true; }
     if (invitation) { setInvitation(null); return true; }
@@ -266,7 +268,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (sourceFocus) return false; // Return to the same owner task instead of stepping to another peer.
     if (peerId) { selectPeer(''); return true; }
     return false;
-  }); return () => registerTransientBack(null); }, [review, invitation, form, desktopOpen, peerId, sourceFocus, ownText, preparingDeviceWork, registerTransientBack]);
+  }); return () => registerTransientBack(null); }, [review, invitation, form, desktopOpen, peerId, sourceFocus, ownText, closedReceipt, preparingDeviceWork, registerTransientBack]);
   useEffect(() => {
     if (!snapshot?.lanDiscovery?.active && !snapshot?.lanDiscovery?.stopPending) return;
     const timer = window.setInterval(() => {
@@ -536,7 +538,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const localInbox=closedInbox&&closedInbox.localDeviceId===local.deviceId&&closedInbox.localInstanceId===local.instanceId?closedInbox:null;
   const readClosedInbox=(direction?:'older'|'newer',query='')=>{
     if(busy||selectedPeer.current||direction&&!localInbox)return;
-    closeOwnText();
+    closeOwnText();setClosedReceipt(null);
     if(waitingPhones?.waitingHandle)void run('devices.discard',{waitingHandle:waitingPhones.waitingHandle}).catch(()=>{});
     setWaitingPhones(null);setWaitingBlock(null);
     const search=direction?localInbox!.searchText||'':query.trim();
@@ -544,12 +546,22 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       if(!selectedPeer.current){setClosedInbox(localReviewedInbox(value,local,search));setClosedDraft(search);}
     });
   };
-  const returnScreenDecision=(row:Data)=>{
-    if(busy||selectedPeer.current||!localInbox||!rows(localInbox.rows).some(r=>r.screenDecision===true&&r.taskId===row.taskId&&r.operationId===row.operationId&&r.runId===row.runId&&r.epoch===row.epoch))return;
-    void invoke('devices.returnToReceivedPhoneGoal',{closedHandle:localInbox.closedHandle,taskId:row.taskId,operationId:row.operationId},value=>{
-      if(selectedPeer.current)return;
-      const source=receivedPhoneArchiveReturn(value,row,{deviceId:row.sourceDeviceId},local);
-      setModelReturnFocus({...source,peerDetail:false});setNotice('已定位本机核对过的原执行，没有联系伙伴或重新运行。');
+  const receipt=closedReceipt && !peerId && localInbox && closedReceipt.revision===state.deviceWorkspaceRevision &&
+    closedReceipt.value.closedHandle===localInbox.closedHandle ? closedReceipt.value : null;
+  const receiptRow=receipt && rows(localInbox?.rows).find(r=>r.canReadOriginalReceipt===true && r.taskId===receipt.taskId &&
+    r.operationId===receipt.operationId && r.sourceDeviceId===receipt.sourceDeviceId && r.reviewedAt===receipt.reviewedAt);
+  // Preserve the old screen-record locator only for a matching, already-visible native task.
+  // Locating it never fetches an absent row or opens the normal task/screenshot reader.
+  const screenTask=receipt?.resultScope==='screen' && tasks.find(t=>t.id===receipt.taskId && !unreadSource(t) &&
+    t.raw?.deviceNativeInstanceId===local.instanceId && t.raw?.deviceStateRevision===receipt.sourceRevision &&
+    t.raw?.runId===receipt.runId && t.raw?.coordinatorEpoch===receipt.epoch && t.raw?.status===(receipt.confirmed?'completed':'cancelled') &&
+    t.raw?.deviceGoalResult?.reviewedAt===receipt.reviewedAt && t.raw?.deviceGoalResult?.ownerVerified===receipt.confirmed);
+  const screenPlace=screenTask && receivedPhoneGoalReturn(screenTask,snapshot);
+  const readClosedReceipt=(row:Data)=>{
+    if(busy||selectedPeer.current||!localInbox||row.canReadOriginalReceipt!==true||!rows(localInbox.rows).includes(row))return;
+    setClosedReceipt(null);
+    void invoke('devices.readReviewedPhoneReceipt',{closedHandle:localInbox.closedHandle,taskId:row.taskId,operationId:row.operationId},value=>{
+      if(!selectedPeer.current)setClosedReceipt({value:localReviewedReceipt(value,localInbox,row),revision:state.deviceWorkspaceRevision});
     });
   };
   const sourceLabel = (id:string, original?:Data) => {
@@ -562,7 +574,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const waitingFindLabel=waitingFindLane==='withdrawn'?'发起设备在启动前撤回':waitingFindLane==='declined'?'本机不接手':'待接手';
   const readWaiting = (direction?: 'older' | 'newer', wanted:'pending'|'started'|'results'|'declined'|'failed'|'withdrawn'='pending',query='') => {
     if (busy || selectedPeer.current || direction && !waitingPage) return;
-    if(localInbox){closeOwnText();setClosedInbox(null);setClosedDraft('');void run('devices.discard',{closedHandle:localInbox.closedHandle}).catch(()=>{});}
+    if(localInbox){closeOwnText();setClosedReceipt(null);setClosedInbox(null);setClosedDraft('');void run('devices.discard',{closedHandle:localInbox.closedHandle}).catch(()=>{});}
     const lane=direction?(waitingPage!.withdrawnOnly?'withdrawn':waitingPage!.failedOnly?'failed':waitingPage!.declinedOnly?'declined':waitingPage!.startedOnly?'started':waitingPage!.resultOnly?'results':'pending'):wanted;setWaitingBlock(null);
     const search=direction?(waitingPage!.searchText||''):query.trim();
     if(search&&(!['pending','declined','withdrawn'].includes(lane)||!supported('devices.findWaitingPhoneGoals')))return;
@@ -1106,14 +1118,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 onChange={value=>setClosedDraft(Array.from(value).slice(0,64).join(''))}/>
               <Button type="submit" variant="secondary" disabled={busy||!closedDraft.trim()}>查找</Button>
               {localInbox.searchText&&<Button type="button" variant="ghost" disabled={busy} onClick={()=>readClosedInbox()}>显示全部</Button>}</form>
-              <p role="status">{localInbox.searchText?'查找「'+localInbox.searchText+'」：屏幕工作只匹配原目标，文字工作还可匹配已确认的原文。':'这是这部手机自己核对过的工作。屏幕工作可定位原执行；文字工作只按当时的决定查看。发起设备无需在线。'}</p>
+              <p role="status">{localInbox.searchText?'查找「'+localInbox.searchText+'」：屏幕工作只匹配原目标，文字工作还可匹配已确认的原文。':'这是这部手机核对过的工作。发起设备无需在线。'}</p>
               {localInbox.limitedCandidates>0&&<p>另有 {localInbox.limitedCandidates} 项已结束记录无法核对，没有列入。</p>}
               {!localInbox.rows.length&&<p>{localInbox.searchText?'这段已核对的记录没有匹配。':'这一页没有可核对的本机原件。'}{localInbox.hasMore&&'可以继续查看较早记录。'}</p>}
               {rows(localInbox.rows).map(row=><article className="pw-device-history-entry" key={JSON.stringify([row.taskId,row.operationId])}><h4 dir="auto">{row.goal}</h4>
                 <p>{time(row.reviewedAt)} 核对 · 原发起设备 …{String(row.sourceDeviceId).slice(-8)} · {row.screenDecision?(row.confirmed?'屏幕工作 · 本机确认已完成':'屏幕工作 · 本机没有确认完成'):row.notConfirmed?'本机已结束，但没有确认完成':row.keptOnPhone?'只回状态':'允许读取摘要'}{!row.screenDecision&&!row.notConfirmed&&!row.hasText&&' · 原结果无文字'}</p>
                 {localInbox.searchText&&<p>{row.screenDecision||row.notConfirmed?'匹配原目标，未检索结果正文':row.bothParts?'原目标与原结果均匹配':row.matchPart==='result'?'匹配原结果':'匹配原目标'}</p>}
-                {row.screenDecision&&<Button variant="secondary" disabled={busy||!supported('devices.returnToReceivedPhoneGoal')} onClick={()=>returnScreenDecision(row)}>查看这次屏幕工作的原记录</Button>}
-                {!row.screenDecision&&!row.notConfirmed&&<Button variant="secondary" disabled={busy||!supported('devices.readLocalReviewedPhoneGoal')} onClick={()=>readOwnText(row,0,undefined,true,'result',!!localInbox.searchText)}>
+                {row.canReadOriginalReceipt===true&&supported('devices.readReviewedPhoneReceipt')&&<Button variant="secondary" disabled={busy} onClick={()=>readClosedReceipt(row)}>{row.screenDecision&&row.confirmed===false?'查看当时决定':'查看原工作回执'}</Button>}
+                {!row.screenDecision&&!row.notConfirmed&&<Button variant={row.canReadOriginalReceipt===true?'ghost':'secondary'} disabled={busy||!supported('devices.readLocalReviewedPhoneGoal')} onClick={()=>readOwnText(row,0,undefined,true,'result',!!localInbox.searchText)}>
                   {localInbox.searchText?'打开匹配段附近':row.hasText?'重看本机原文':'查看当时的核对'}</Button>}</article>)}
               <div className="pw-form-actions">{localInbox.canReadNewer&&<Button variant="ghost" disabled={busy} onClick={()=>readClosedInbox('newer')}>较新记录</Button>}
                 {localInbox.hasMore&&<Button variant="secondary" disabled={busy} onClick={()=>readClosedInbox('older')}>{localInbox.searchText?'查找较早记录':'较早记录'}</Button>}</div></>}
@@ -1335,6 +1347,20 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         </AccordionItem></Accordion>}
       </>}
     </section>
+    <SettingsDialog isOpen={!!receiptRow} title="原工作的本机回执" closeLabel="返回核对过的工作" onClose={()=>setClosedReceipt(null)}>
+      {receipt&&receiptRow&&<div className="pw-device-form"><h3 dir="auto">{receiptRow.goal}</h3>
+        <p>这台手机于 {time(receipt.receivedAt)} 接单。{time(receipt.reviewedAt)}，{receipt.confirmed?'机主确认完成。':'机主核对后没有确认完成。'}</p>
+        <p>{receipt.resultScope==='screen'?'此处只查看机主当时的决定，不读取截图。':receipt.resultScope==='status_only'?'按当时的决定，只允许向原发起设备返回完成状态。':'当时允许原发起设备凭有效权限读取摘要。'}这不代表对方已经收到结果。</p>
+        <Accordion><AccordionItem id="closed-receipt-ids" title="核对原工作编号">
+          <p className="pw-source-copy">来源设备：<bdi>{receipt.sourceDeviceId}</bdi></p>
+          <p className="pw-source-copy">本机工作：<bdi>{receipt.taskId}</bdi></p>
+          <p className="pw-source-copy">原派单：<bdi>{receipt.operationId}</bdi></p>
+          <p className="pw-source-copy">本机执行：<bdi>{receipt.runId}</bdi>（第 {receipt.epoch} 轮）</p>
+        </AccordionItem></Accordion>
+        {screenPlace && screenPlace.sourceId===receipt.sourceDeviceId && screenPlace.operationId===receipt.operationId &&
+          <Button variant="secondary" onClick={()=>{setClosedReceipt(null);setModelReturnFocus({...screenPlace,runId:receipt.runId,executorEpoch:receipt.epoch});}}>定位已读取的原工作</Button>}
+        <Button variant="ghost" onClick={()=>setClosedReceipt(null)}>返回核对过的工作</Button></div>}
+    </SettingsDialog>
     <SettingsDialog isOpen={!!ownTextShown} onClose={closeOwnText} title={ownTextShown?.page?.part==='goal'?'当时收到的完整目标':'本机已核对的原文'}>
       {ownTextShown&&<div className="pw-device-form">{ownTextShown.page?.part!=='goal'&&<h3 dir="auto">{ownTextShown.row.goal}</h3>}
         {error&&<><p role="alert">{error}</p><Button variant="secondary" disabled={busy} onClick={()=>readOwnText(ownTextShown.row,0,undefined,ownTextShown.home,'result',ownTextShown.home&&!!localInbox?.searchText)}>重新核对原文</Button></>}<WorkingStatus active={busy}>正在核对本机原执行记录…</WorkingStatus>

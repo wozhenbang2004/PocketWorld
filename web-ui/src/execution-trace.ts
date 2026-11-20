@@ -107,21 +107,63 @@ export function executionTraceDetail(value: unknown, taskId: string, runId: stri
 }
 
 const documentReadTool = 'attachments_read_document';
+export function isDocumentReadNode(node?: TraceNode): boolean {
+  return node?.kind === 'tool' && node.name === documentReadTool;
+}
 export function traceReturnedDocumentRead(node?: TraceNode): boolean {
-  return !!node && node.kind === 'tool' && node.source === 'native_tool_trace' && !node.legacy && node.name === documentReadTool &&
-    node.dispatchEntered === true && node.status === 'completed' && node.finishedAt !== null;
+  return !!node && isDocumentReadNode(node) && node.source === 'native_tool_trace' && !node.legacy &&
+    node.dispatchEntered === true && node.finishedAt !== null && ['completed', 'failed'].includes(node.status);
 }
 
-/** Only text already preserved in this exact native call; no new file read or model output inference. */
-export function traceDocumentRead(detail: ExecutionTraceDetail | null) {
+/** Only the preserved result of this exact request may identify a file or show text. */
+function documentReadPair(detail: ExecutionTraceDetail | null) {
   if (!detail || detail.sourceState !== 'current') return null;
   const {node} = detail;
   if (!traceReturnedDocumentRead(node) || node.runId !== detail.runId || node.epoch !== detail.epoch) return null;
   const input = object(node.input), output = object(node.output), data = object(output?.data);
-  if (!input || !output || !data || output.tool !== documentReadTool || output.ok !== true || output.untrustedToolContent !== true ||
-      data.untrustedAttachmentContent !== true || data.status !== output.status || !['ok', 'partial', 'truncated'].includes(text(data.status)) ||
+  if (!input || !output || !data || output.tool !== documentReadTool || output.untrustedToolContent !== true ||
+      data.untrustedAttachmentContent !== true || data.status !== output.status ||
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(text(data.attachmentId)) || data.attachmentId !== input.attachmentId ||
-      !/^[a-f0-9]{64}$/.test(text(data.sha256)) || data.sha256 !== input.expectedSha256 || !Array.isArray(data.chunks) || !data.chunks.length || data.chunks.length > 48) return null;
+      !/^[a-f0-9]{64}$/.test(text(data.sha256)) || data.sha256 !== input.expectedSha256) return null;
+  return {output, data, input};
+}
+
+/** Do not echo unrecognized request fields in the attachment reader. */
+export function traceDocumentParameters(detail: ExecutionTraceDetail | null) {
+  const pair = documentReadPair(detail);
+  if (!pair) return null;
+  const {input} = pair, values: TraceData = {attachmentId: input.attachmentId, expectedSha256: input.expectedSha256};
+  for (const field of ['startUnit','startChunk','maxUnits','maxChars','maxChunks']) if (integer(input[field])) values[field] = input[field];
+  if (['text','ocr','auto'].includes(text(input.extraction))) values.extraction = input.extraction;
+  return values;
+}
+
+const documentReadIssues: Record<string,string> = {
+  empty_range: '这次选定的范围没有返回文字，不代表整份文件为空。',
+  input_changed: '当时读取时文件已变化，这份回执没有原文片段。',
+  unsupported: '当时的读取工具不支持这个格式。',
+  encrypted: '当时未能读取加密文档的内容。',
+  invalid: '当时未能解析这份文档。',
+  limit_exceeded: '这次读取超过了当时的处理范围。',
+  unavailable: '当时未能取得这段内容，回执没有说明现在的权限。',
+};
+export function traceDocumentReadIssue(detail: ExecutionTraceDetail | null): string | null {
+  const pair = documentReadPair(detail);
+  if (!pair) return null;
+  const {output,data} = pair, status = text(data.status);
+  if (!Array.isArray(data.chunks) || data.chunks.length) return null;
+  if (output.ok === true && ['ok','partial','truncated'].includes(status)) return '这次回执没有保留下可展示的文字片段，不代表原文件为空。';
+  if (!Object.hasOwn(documentReadIssues,status) || output.ok !== (status === 'empty_range')) return null;
+  return documentReadIssues[status];
+}
+
+/** Render the already returned chunks only, not a parser diagnostic, fresh read or model summary. */
+export function traceDocumentRead(detail: ExecutionTraceDetail | null) {
+  const pair = documentReadPair(detail);
+  if (!pair || detail?.node.status !== 'completed') return null;
+  const {data,output} = pair;
+  if (output.ok !== true || !['ok', 'partial', 'truncated'].includes(text(data.status)) ||
+      !Array.isArray(data.chunks) || !data.chunks.length || data.chunks.length > 48) return null;
   const chunks: {unit: number; chunk: number; text: string}[] = [];
   let characters = 0;
   for (const value of data.chunks) {
@@ -132,8 +174,7 @@ export function traceDocumentRead(detail: ExecutionTraceDetail | null) {
     if (characters > 65_536) return null;
     chunks.push({unit: row.unit, chunk: row.chunk, text: row.text});
   }
-  if (characters === 0) return null;
-  return {chunks, pdf: data.format === 'pdf', ocr: data.extraction === 'ocr',
+  return {chunks, attachmentId: text(data.attachmentId), sha256: text(data.sha256), pdf: data.format === 'pdf', ocr: data.extraction === 'ocr',
     partial: data.status !== 'ok' || data.truncated === true || output.outputTruncated === true};
 }
 

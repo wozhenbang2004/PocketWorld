@@ -223,6 +223,7 @@ export function localReviewedInbox(value:unknown,local:DeviceData,search=''){
   if(!object(value)||value.kind!=='reviewedPhoneInbox'||(value.searchText??'')!==search||Array.from(search).length>64||value.readOnly!==true||value.localDeviceId!==local.deviceId||value.localInstanceId!==local.instanceId||!identity(value.closedHandle)
     ||!Array.isArray(value.rows)||value.rows.length>6||typeof value.hasMore!=='boolean'||typeof value.canReadNewer!=='boolean'||!Number.isSafeInteger(value.limitedCandidates)||value.limitedCandidates<0
     ||!value.rows.every((r:unknown)=>object(r)&&identity(r.taskId)&&identity(r.operationId)&&identity(r.sourceDeviceId)&&typeof r.goal==='string'&&positiveInteger(r.reviewedAt)
+      &&(r.canReadOriginalReceipt===undefined||r.canReadOriginalReceipt===true&&r.notConfirmed!==true)
       &&(r.screenDecision===true?typeof r.confirmed==='boolean'&&identity(r.runId)&&positiveInteger(r.epoch)&&r.notConfirmed===undefined&&r.hasText===undefined&&r.keptOnPhone===undefined&&r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined
         :r.screenDecision!==undefined||r.confirmed!==undefined||r.runId!==undefined||r.epoch!==undefined?false:r.notConfirmed===true?r.hasText===undefined&&r.keptOnPhone===undefined&&r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined
         :r.notConfirmed===undefined&&typeof r.keptOnPhone==='boolean'&&typeof r.hasText==='boolean'
@@ -230,6 +231,21 @@ export function localReviewedInbox(value:unknown,local:DeviceData,search=''){
         : r.matchPart===undefined&&r.matchPage===undefined&&r.bothParts===undefined)))
     ||new Set(value.rows.map((r:DeviceData)=>JSON.stringify([r.taskId,r.operationId]))).size!==value.rows.length)throw new Error('本机已核对目录身份已变化，请重新读取。');
   return value;
+}
+/** Correlate only the receiving phone's original decision. No result or task-detail payload enters this view. */
+export function localReviewedReceipt(value:unknown,archive:DeviceData,row:DeviceData){
+  const scope=row.screenDecision===true?'screen':row.keptOnPhone===true?'status_only':'summary_allowed';
+  if(!object(value)||archive.kind!=='reviewedPhoneInbox'||row.canReadOriginalReceipt!==true||row.notConfirmed===true||
+    value.kind!=='reviewedPhoneReceipt'||value.readOnly!==true||value.closedHandle!==archive.closedHandle||
+    value.localDeviceId!==archive.localDeviceId||value.localInstanceId!==archive.localInstanceId||
+    value.sourceDeviceId!==row.sourceDeviceId||value.taskId!==row.taskId||value.operationId!==row.operationId||
+    !identity(value.runId)||!positiveInteger(value.epoch)||!positiveInteger(value.receivedAt)||
+    !positiveInteger(value.reviewedAt)||value.reviewedAt<value.receivedAt||value.reviewedAt!==row.reviewedAt||value.resultScope!==scope||
+    !positiveInteger(value.sourceRevision)||typeof value.confirmed!=='boolean'||value.confirmed!==(scope==='screen'?row.confirmed:true)||
+    (scope==='screen'&&(value.runId!==row.runId||value.epoch!==row.epoch)))
+    throw new Error('不能将这份回执与刚选的原工作核对，未打开其他记录。');
+  return {closedHandle:value.closedHandle,taskId:value.taskId,operationId:value.operationId,sourceDeviceId:value.sourceDeviceId,
+    runId:value.runId,epoch:value.epoch,receivedAt:value.receivedAt,reviewedAt:value.reviewedAt,confirmed:value.confirmed,sourceRevision:value.sourceRevision,resultScope:scope};
 }
 /** Already reviewed on this receiving phone. This is not A's task.get or a new execution. */
 export function localReceivedPhonePage(value: unknown, archive: DeviceData, row: DeviceData, page: number, before?: DeviceData, part='result') {

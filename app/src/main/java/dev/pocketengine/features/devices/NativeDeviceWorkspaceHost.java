@@ -188,6 +188,7 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default JSONObject closedReceivedPhoneGoals(String caller,String operation,String query)throws Exception{
             if(!query.isEmpty())throw new IllegalStateException("原宿主未提供本机文字查找");return closedReceivedPhoneGoals(caller,operation);
         }
+        default JSONObject closedReceivedPhoneReceipt(String caller,String task,String op,String stamp)throws Exception{throw new IllegalStateException("此宿主没有本机原工作回执读取入口");}
         default JSONObject declinedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有本机不接手记录");}
         default JSONObject withdrawnReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有原设备启动前撤回记录");}
         default JSONObject failedReceivedPhoneGoals(String caller,String operation)throws Exception{throw new IllegalStateException("此宿主没有本机失败原执行目录");}
@@ -543,6 +544,9 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public JSONObject closedReceivedPhoneGoals(String caller,String operation)throws Exception{return closedReceivedPhoneGoals(caller,operation,"");}
         public JSONObject closedReceivedPhoneGoals(String caller,String operation,String query)throws Exception {
             current();JSONObject page=copy(control.closedReceivedPhoneGoals(caller,operation,query));current();return page;
+        }
+        public JSONObject closedReceivedPhoneReceipt(String caller,String task,String op,String stamp)throws Exception{
+            current();JSONObject receipt=copy(control.closedReceivedPhoneReceipt(caller,task,op,stamp));current();return receipt;
         }
         public JSONObject declinedReceivedPhoneGoals(String caller,String operation)throws Exception{
             current();JSONObject page=copy(control.declinedReceivedPhoneGoals(caller,operation));current();return page;

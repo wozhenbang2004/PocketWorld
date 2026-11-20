@@ -43,7 +43,7 @@ export function ConversationLinkedReason({conversation,task}:{conversation:strin
  return <p className="pw-linked-reason"><strong>{label}</strong>{reason.length>0&&original!==label&&<span>{reason.slice(0,180).join('')}{reason.length>180?'…':''}</span>}</p>;
 }
 type Props={conversation:string;identity?:WorkIdentity|null;task?:{id:string;status:string;raw?:Record<string,any>};phase:ReplyPhase|null;
- actionElsewhere?:boolean;onRead?:(layer:'process'|'overview'|'review')=>void};
+ actionElsewhere?:boolean;onRead?:(layer:'process'|'overview'|'review',trigger:HTMLButtonElement)=>void};
 /** Lives in the existing keyed reply article, next to (never inside) its answer.
  * The disclosure owns only its local open/close state. All reads and decisions
  * still go through the original task window with its expected run and epoch. */
@@ -63,7 +63,7 @@ function BoundTurnActivity({conversation,identity,task,phase,onRead,actionElsewh
   {visible&&<>
    {need&&phase?.state==='error'&&phase.label!==need.label&&<p className="pw-turn-dual-status">{phase.label}</p>}
    {!!important.length&&<ul className="pw-turn-receipts" aria-label="已读取的操作回执">{important.map(g=><li key={g.kind} data-kind={g.kind}><strong>{g.title}</strong><span>{g.names}</span></li>)}</ul>}
-   {need&&onRead&&!actionElsewhere&&<Button variant="secondary" size="small" className="pw-turn-next" onClick={()=>onRead(need.layer)}>{need.action}<IconChevronRight size={14} aria-hidden="true"/></Button>}
+   {need&&onRead&&!actionElsewhere&&<Button variant="secondary" size="small" className="pw-turn-next" onClick={event=>onRead(need.layer,event.currentTarget)}>{need.action}<IconChevronRight size={14} aria-hidden="true"/></Button>}
    {(!!recent||!!onRead||!!routine)&&<div className="pw-turn-progress">
     <Button size="small" variant="ghost" className="pw-turn-fold" aria-expanded={expanded} aria-controls={detailId} onClick={()=>setExpanded(v=>!v)}>
      {expanded?'收起进展':'查看进展'}{routine&&<span className="pw-turn-count">{routine.count} 条工具回执</span>}<IconChevronDown size={14} aria-hidden="true"/>
@@ -72,7 +72,7 @@ function BoundTurnActivity({conversation,identity,task,phase,onRead,actionElsewh
      {routine&&<p><strong>{routine.title}</strong>{routine.names}</p>}
      {recent&&<p><strong>最近记录</strong>{recent}</p>}
      {notes?.limited&&<p>当前只能读取部分记录。</p>}
-     {onRead&&<Button size="small" variant="ghost" trailingIcon={IconChevronRight} onClick={()=>onRead('process')}>查看这次工作的过程</Button>}
+     {onRead&&<Button size="small" variant="ghost" trailingIcon={IconChevronRight} onClick={event=>onRead('process',event.currentTarget)}>查看这次工作的过程</Button>}
     </div></MotionDisclosure>
    </div>}
   </>}

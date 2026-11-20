@@ -18,8 +18,8 @@ export function TeamFollowUps({ items, disabled, read, expanded = true, toggle }
   </section>;
 }
 
-export function TeamResultHandoff({ result, partial, memberName, actions, sources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview, nextRequest }: {
-  result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; frozenFiles?:ReactNode; finalPackageReader?:ReactNode; revisionOffers?:ReactNode; stopped: boolean;
+export function TeamResultHandoff({ result, partial, memberName, actions, sources, archivedSources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview, nextRequest }: {
+  result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; archivedSources?:ReactNode; frozenFiles?:ReactNode; finalPackageReader?:ReactNode; revisionOffers?:ReactNode; stopped: boolean;
   partial: ReturnType<typeof teamPartialReading>; memberName: (id: string) => string;
   openMembers: () => void; openMessage: (id: string) => void; openOriginalReview?: () => void;
   nextRequest?: { open: () => void; disabled: boolean };
@@ -56,12 +56,13 @@ export function TeamResultHandoff({ result, partial, memberName, actions, source
       {partial.synthesizing ? <p className="pw-team-result-caption">正在整理共同汇总。</p>
         : (!summary || result.previous) && <p className="pw-team-result-caption">还没有本次的共同汇总。</p>}
     </div>}
+    {archivedSources}
     {result.statusNote && <div className="pw-team-result-caption"><strong>原协作记录</strong><p dir="auto" style={{ whiteSpace: 'pre-wrap' }}>{result.statusNote}</p></div>}
     {!summaryFirst && summary && <>{partial && <header className="pw-team-result-heading"><h4>{summaryTitle}</h4>{summaryByline}</header>}
       {result.previous && <p className="pw-team-result-caption">这是当时保存的汇总，不代表当前进展或授权。</p>}
       {summary}</>}
     {result.original && memberLink}
-    {!summary && !partial && <div className="pw-team-result-empty"><p>{stopped ? '协作已停止后续派发，成员已有的产出和记录仍可查看。' : '还没有能核对来源的共同汇总。各成员已保存的产出可以单独查看。'}</p>
+    {!summary && !partial && <div className="pw-team-result-empty"><p>{stopped ? '协作已停止后续派发，成员已有的产出和记录仍可查看。' : archivedSources && !sources ? '尚未读到本版可核对的成员答复或共同汇总。' : '还没有能核对来源的共同汇总。各成员已保存的产出可以单独查看。'}</p>
       {memberLink}</div>}
   </section>;
 }

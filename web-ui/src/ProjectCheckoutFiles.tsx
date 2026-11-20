@@ -177,6 +177,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     });
   };
   const recentSave = savedEdit?.filesHandle===handle.current ? savedEdit : null;
+  const showingSavedFile = !!recentSave && !!file && !file.dirty && !file.conflict && !file.saveUnknown &&
+    orphan===null && !blockedEdit.current && file.path===recentSave.path && file.latest?.expectedHash===recentSave.savedHash && text===recentSave.after;
   const locked = busy || editing || !!adoption, nativeText = file?.text || '';
   const canFindText=['findText','findTextNext','readTextHit'].every(a=>bridge.getState().capabilities.commands.includes(command+a));
   const sourceHit=file?.sourceHit,anchorable=!!(sourceHit&&file&&file.path===sourceHit.path&&file.latest?.expectedHash===sourceHit.sha256&&
@@ -185,7 +187,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const savedExcerpt=!anchorable&&sourceHit&&savedSource!==null&&savedSource.slice(sourceHit.start,sourceHit.end)===sourceHit.query?
     savedSource.slice(Math.max(savedSource.lastIndexOf('\n',sourceHit.start-1)+1,sourceHit.start-70),sourceHit.start)+sourceHit.query+
       savedSource.slice(sourceHit.end,sourceHit.end+100).split('\n',1)[0]:null;
-  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : '返回项目目标';
+  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : '返回项目工作区';
   const formalLink = (pin: Data | undefined, evidence: 'import_receipt' | 'equal_content') => {
     if (!file || !pin || pin.evidence !== evidence || pin.projectId !== projectId || pin.checkoutId !== checkoutId || pin.path !== file.path ||
         typeof pin.handle !== 'string' || !pin.handle || !Number.isInteger(pin.version) || pin.version < 1 || !/^[a-f0-9-]{36}$/.test(pin.revisionId) ||
@@ -266,7 +268,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {choice ? <div role="region" aria-label="处理文件冲突"><p>{choice === 'keep_mine' ? '把当前副本作为新基线，保留我的草稿文字？下一次保存才会改写文件。' : '放弃这份草稿，采用刚读取的副本内容？不会写入文件。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => setChoice(null)}>返回</Button><Button disabled={locked} onClick={() => void invoke('resolve', { fileHandle: file.fileHandle, revision: file.revision, choice }, value => { interfaceDrafts.delete(keyFor(file.path)); setChoice(null); apply(value); })}>确认这个选择</Button></div></div> : <div className="pw-form-actions">
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
-          <Button disabled={locked || orphan !== null || blockedEdit.current || !file.dirty || file.conflict || file.saveUnknown} onClick={saveFile}>保存到这个副本</Button>
+          {showingSavedFile ? <Button disabled={locked} onClick={close}>已保存，回到项目工作区</Button> :
+            <Button disabled={locked || orphan !== null || blockedEdit.current || !file.dirty || file.conflict || file.saveUnknown} onClick={saveFile}>保存到这个副本</Button>}
         </div>}
         <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null || blockedEdit.current || file.dirty || file.saveUnknown} onClick={() => void invoke('reviewImport', { fileHandle: file.fileHandle }, value => {
           if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.fileHandle !== file.fileHandle || value.path !== file.path || value.filesHandle !== handle.current || !value.importHandle) throw new Error('采纳审阅不属于原文件。');

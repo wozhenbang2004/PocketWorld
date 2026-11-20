@@ -4,6 +4,7 @@ import { IconAttention, IconChevronRight, IconFile, IconTerminal } from './icons
 import { readFollowUp, WorkQueueRow, type WorkEntry, type WorkReading } from './WorkFollowUp';
 import type { WorkCollectionFilter } from './work-collection';
 import { WorkDirectoryControls, type useWorkDirectory } from './WorkDirectory';
+import { ProjectSavedWebLink, type FindSavedBuildWeb } from './ProjectSavedBuildWeb';
 import './project-workspace-overview.css';
 import './project-workspace-manga.css';
 
@@ -38,6 +39,7 @@ export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionF
 /** Project work directory; saved Web versions separately use exact original B4 receipts. */
 export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
+  const savedWebLink = useRef<FindSavedBuildWeb|null>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
   const visit = (task: ProjectWorkspaceTask, entry: ProjectWorkEntry) => {
     if (!canOpenTask) return;
@@ -90,8 +92,10 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
           <ol className="pw-project-work-list pw-depth-tasks">{attention.map(renderTask)}</ol>
         </section>}
         {active.length > 0 && <section className="pw-project-work-group" aria-label="进行中的项目工作"><h3>进行中</h3><ol className="pw-project-work-list pw-depth-tasks">{active.map(renderTask)}</ol></section>}
-        {startContent && <section className="pw-project-new-work" aria-label="开始或继续项目工作">{startContent}</section>}
-        {savedWebContent && <section className="pw-project-saved-web" aria-label="找回这个项目的已保存网页">{savedWebContent}</section>}
+        <ProjectSavedWebLink.Provider value={savedWebContent ? savedWebLink : null}>
+          {startContent && <section className="pw-project-new-work" aria-label="开始或继续项目工作">{startContent}</section>}
+          {savedWebContent && <section className="pw-project-saved-web" aria-label="找回这个项目的已保存网页">{savedWebContent}</section>}
+        </ProjectSavedWebLink.Provider>
         {recent.length > 0 && <section className="pw-project-work-group" aria-label="已结束的项目工作"><h3>{hasFilters ? '已结束' : '最近结束'}</h3><ol className="pw-project-work-list pw-depth-tasks">{(hasFilters ? recent : recent.slice(0, 3)).map(renderTask)}</ol>
           {!hasFilters && recent.length > 3 && <Accordion key={project.id} className="pw-project-work-history" expandedKeys={view.expanded ? ['earlier-project-results'] : []}
             onExpandedChange={keys => onViewChange({ expanded: keys.has('earlier-project-results') })}><AccordionItem id="earlier-project-results" title="更早记录" description={`本次已读取的其余 ${recent.length - 3} 项`}><ol className="pw-project-work-list pw-depth-tasks">{recent.slice(3).map(renderTask)}</ol></AccordionItem></Accordion>}

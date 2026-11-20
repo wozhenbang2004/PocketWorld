@@ -50,6 +50,7 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   const [query, setQuery] = useState(memory.query || ''), [kind, setKind] = useState<WorkSearchKind>(memory.kind || 'all');
   const [reply, setReply] = useState<SearchReply | null>(null), [replyScope, setReplyScope] = useState('');
   const [loading, setLoading] = useState(false), [opening, setOpening] = useState(false), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
+  const [openFailure, setOpenFailure] = useState<{ scope: string; itemKey: string; message: string } | null>(null);
   const root = useRef<HTMLDivElement>(null), request = useRef(0), alive = useRef(false), restored = useRef(false), pending = useRef(false);
   const pages = useRef(0), cursors = useRef<string[]>([]), returnPosition = useRef(memory.scrollTop || 0);
   const current = useRef({ query, kind, identity }); current.current = { query, kind, identity };
@@ -85,14 +86,14 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   useEffect(() => { alive.current = true; return () => { alive.current = false; request.current++; openingRequest.current++; pending.current = false; }; }, []);
   useEffect(() => {
     request.current++; pending.current = false; pages.current = 0; cursors.current = []; restored.current = false;
-    openingRequest.current++; openingRef.current = false; setOpening(false);
+    openingRequest.current++; openingRef.current = false; setOpening(false); setOpenFailure(null);
     returnPosition.current = memory.scrollTop || 0; setReply(null); setError(''); setLoading(supported);
     const timer = window.setTimeout(() => { void read(); }, query.trim() ? 220 : 0);
     return () => window.clearTimeout(timer);
   }, [query, kind, identity, attempt, supported, read]);
   useEffect(() => {
     const visibility = () => {
-      if (document.hidden) { request.current++; openingRequest.current++; openingRef.current = false; pending.current = false; setOpening(false); setLoading(false); setReply(null); }
+      if (document.hidden) { request.current++; openingRequest.current++; openingRef.current = false; pending.current = false; setOpening(false); setOpenFailure(null); setLoading(false); setReply(null); }
       else setAttempt(value => value + 1);
     };
     document.addEventListener('visibilitychange', visibility);
@@ -129,6 +130,18 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   const resetPosition = () => { request.current++; pending.current = false; memory.selectedId = undefined; memory.scrollTop = 0; memory.pages = 1; restored.current = false; };
   const changeQuery = (value: string) => { if (openingRef.current) return; resetPosition(); memory.query = value; setQuery(value); };
   const changeKind = (value: WorkSearchKind) => { if (value === kind || openingRef.current) return; resetPosition(); memory.kind = value; setKind(value); };
+  const openItem = useCallback((item: WorkSearchItem) => {
+    if (openingRef.current) return;
+    const owner = ++openingRequest.current, expected = { ...current.current }, epoch = bridge.getDocumentEpoch();
+    const stillCurrent = () => active.current && alive.current && owner === openingRequest.current && openingRef.current
+      && expected.query === current.current.query && expected.kind === current.current.kind && expected.identity === current.current.identity
+      && epoch === bridge.getDocumentEpoch() && !document.hidden;
+    openingRef.current = true; setOpening(true); setOpenFailure(null); memory.selectedId = itemKey(item);
+    void Promise.resolve().then(() => { if (stillCurrent()) return onOpen(item, stillCurrent); }).catch(failure => {
+      if (stillCurrent()) setOpenFailure({ scope: JSON.stringify([expected.query, expected.kind, expected.identity]), itemKey: itemKey(item),
+        message: failure instanceof Error ? failure.message : '尚未打开这条结果，请重试。' });
+    }).finally(() => { if (owner === openingRequest.current) { openingRef.current = false; if (alive.current) setOpening(false); } });
+  }, [onOpen, memory]);
   const commands = useMemo<WorkCommand[]>(() => (visibleReply?.items || []).map(item => {
     const passage = item.kind === 'conversation' && !!item.recordId;
     const preview = passagePreview(item.excerpt || '', query);
@@ -138,18 +151,11 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
       id: itemKey(item), group: '', title: (passage && preview) || item.title || '未命名', icon: icons[item.kind],
       meta: [passage ? '对话原文' : kinds[item.kind], item.status ? labelStatus(item.status) : '', date].filter(Boolean).join(' · '),
       description: passage ? undefined : preview,
-      onSelect: () => {
-        if (openingRef.current) return;
-        const owner = ++openingRequest.current, expected = { ...current.current }, epoch = bridge.getDocumentEpoch();
-        const stillCurrent = () => active.current && alive.current && owner === openingRequest.current && openingRef.current
-          && expected.query === current.current.query && expected.kind === current.current.kind && expected.identity === current.current.identity
-          && epoch === bridge.getDocumentEpoch() && !document.hidden;
-        openingRef.current = true; setOpening(true); memory.selectedId = itemKey(item);
-        void Promise.resolve().then(() => { if (stillCurrent()) return onOpen(item, stillCurrent); }).catch(failure => { if (stillCurrent()) setError(failure instanceof Error ? failure.message : '尚未打开这条结果，请重试。'); })
-          .finally(() => { if (owner === openingRequest.current) { openingRef.current = false; if (alive.current) setOpening(false); } });
-      },
+      onSelect: () => openItem(item),
     };
-  }), [visibleReply, query, onOpen, labelStatus, memory]);
+  }), [visibleReply, query, labelStatus, openItem]);
+  const failedSelection = openFailure?.scope === scope ? openFailure : null;
+  const retryItem = failedSelection && visibleReply?.items.find(item => itemKey(item) === failedSelection.itemKey);
   const shown = visibleReply?.items.length || 0;
   const footerSummary = shown
     ? `已显示 ${shown} 条${query.trim() ? '匹配结果' : '记录'}`
@@ -165,7 +171,7 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
       closeOnSelect={false} onClose={() => { openingRequest.current++; openingRef.current = false; onClose(); }} selectedId={memory.selectedId}
       controls={<div className="pw-search-kind-filters" role="group" aria-label="查找对象">{filters.map(option => <Button key={option.id} variant="ghost" aria-pressed={kind === option.id} disabled={opening} onClick={() => changeKind(option.id)}>{option.label}</Button>)}</div>}
       emptyMessage={visibleReply?.nextCursor ? '当前已读取范围内没有命中，可以继续查找更早的记录。' : visibleReply?.notices.length ? '已读取范围内没有命中；还有部分记录尚未读全，请查看下方说明。' : query.trim() ? `没有找到匹配的${scopeLabel(kind)}。试试目标中的关键词或文件名。` : `还没有可显示的${scopeLabel(kind)}记录。`}
-      status={!supported ? <p className="pw-search-status" role="status">当前版本尚未提供工作搜索。</p> : opening ? <p className="pw-search-status" role="status">正在打开原记录…</p> : error ? <div className="pw-search-status" role="alert"><p>{error}</p><Button variant="secondary" onClick={() => { if (visibleReply?.nextCursor) void read(visibleReply.nextCursor); else setAttempt(value => value + 1); }}>重新读取</Button></div> : loading ? <p className="pw-search-status" role="status">{visibleReply ? '正在读取更多结果…' : `正在搜索${scopeLabel(kind)}…`}</p> : undefined}
+      status={!supported ? <p className="pw-search-status" role="status">当前版本尚未提供工作搜索。</p> : opening ? <p className="pw-search-status" role="status">正在打开原记录…</p> : failedSelection ? <div className="pw-search-status" role="alert"><p>{failedSelection.message}</p>{retryItem && <Button variant="secondary" disabled={loading} onClick={() => openItem(retryItem)}>重试打开原记录</Button>}</div> : error ? <div className="pw-search-status" role="alert"><p>{error}</p><Button variant="secondary" onClick={() => { if (visibleReply?.nextCursor) void read(visibleReply.nextCursor); else setAttempt(value => value + 1); }}>重新读取</Button></div> : loading ? <p className="pw-search-status" role="status">{visibleReply ? '正在读取更多结果…' : `正在搜索${scopeLabel(kind)}…`}</p> : undefined}
       footer={<><p>{footerSummary}</p>
         {visibleReply?.nextCursor && <Button variant="ghost" disabled={loading || opening} onClick={() => void read(visibleReply.nextCursor)}>{visibleReply.items.length ? '查看更多结果' : '继续查找'}</Button>}
         {visibleReply?.notices.map((notice, index) => <p className="pw-search-notice" key={index}>{notice}</p>)}</>} />
