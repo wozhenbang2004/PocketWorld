@@ -184,6 +184,14 @@ type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTa
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
+function openedRetainedDraftCopyKey({state,view}:ReturnType<typeof bridge.getState>){
+ const pin=obj(state.openedRetainedDraftCopy),native=obj(view);
+ const id=(value:unknown)=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
+ return !document.hidden&&native.section===null&&native.taskId===null&&!state.filePath&&
+  id(pin.sourceTaskId)&&id(pin.checkoutId)&&id(pin.projectId)&&pin.projectId===state.projectId&&pin.projectId===state.requestedProjectId&&
+  Number.isSafeInteger(pin.requestRevision)&&pin.requestRevision>0&&pin.requestRevision===state.requestedProjectRevision
+  ?JSON.stringify([pin.sourceTaskId,pin.projectId,pin.checkoutId,pin.requestRevision]):'';
+}
 const sameProjectModelChat=(input:ModelSetupInput,source:ChatWorkReturn|undefined,live:ReturnType<typeof bridge.getState>)=>{
  if(document.hidden||!source||source.conversation!==input.conversation||source.document!==input.document||
     !sameModelSetupInput(input,live,bridge.getDocumentEpoch()))return false;
@@ -1531,6 +1539,7 @@ export default function App(){
  };
  const showPhoneNotice=!!phoneNotification&&(phoneNoticePanel===phoneNotification.token||noticeBinding?.token===phoneNotification.token&&taskOpen&&!taskOpening&&noticeNotReady);
  const previousRequestedTask=useRef(0),previousRequestedProject=useRef(0),previousRequestedConnection=useRef(0);
+ const retainedCopyVisit=useRef<{key:string;documentEpoch:number;navigation:number}|null>(null);
  useEffect(()=>{
   const revision=Number(state.requestedTaskRevision||0),id=String(state.requestedTaskId||'');
   // A notification can arrive before getTask or the document handshake finishes.
@@ -1539,7 +1548,18 @@ export default function App(){
   previousRequestedTask.current=revision;
   openTask(id,'overview',snapshot?.view?.taskId===id);
  },[state.requestedTaskRevision,state.requestedTaskId,snapshot?.view?.taskId,tasks,can,openTask]);
- useEffect(()=>{const revision=Number(state.requestedProjectRevision||0);if(revision>previousRequestedProject.current)void navigate('projects');previousRequestedProject.current=revision;},[state.requestedProjectRevision,navigate]);
+ useEffect(()=>{
+  const revision=Number(state.requestedProjectRevision||0),newRequest=revision>previousRequestedProject.current;
+  previousRequestedProject.current=revision;
+  if(!newRequest)return;
+  const live=bridge.getState(),documentEpoch=bridge.getDocumentEpoch(),startingNavigation=navigationWindow.current;
+  const key=live.state.requestedProjectRevision===revision?openedRetainedDraftCopyKey(live):'';
+  // Mark only the visit that has arrived at this accepted native selection. This changes presentation, not the route or project.
+  void navigate('projects',key?()=>{
+   if(navigationWindow.current===startingNavigation+1&&bridge.getDocumentEpoch()===documentEpoch&&openedRetainedDraftCopyKey(bridge.getState())===key)
+    retainedCopyVisit.current={key,documentEpoch,navigation:navigationWindow.current};
+  }:undefined);
+ },[state.requestedProjectRevision,navigate]);
  useEffect(()=>{const revision=Number(state.requestedConnectionRevision||0);if(revision>previousRequestedConnection.current&&state.requestedConnectionSection)void navigate(state.requestedConnectionSection);previousRequestedConnection.current=revision;},[state.requestedConnectionRevision,state.requestedConnectionSection,navigate]);
  useEffect(()=>{bridge.setBackHandler(()=>{if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(queuedInputsBack.current?.())return true;
   if(taskLayer==='homeReport'||route==='chat'&&!taskOpen){
@@ -3750,6 +3770,12 @@ export default function App(){
  const importedCheckouts=importedCopy?asArray<Json>(state.features?.local?.checkouts).filter(row=>row?.projectId===importedCopy.projectId):[];
  const importedSourceFirst=!!importedCopy&&projectSection==='work'&&importedPresentation?.open===true&&importedPresentation.mode==='default'&&
   importedCheckouts.length===1&&importedCheckouts[0].id===importedCopy.checkoutId;
+ const retainedVisit=retainedCopyVisit.current;
+ const retainedCopyFirst=!!(currentProject&&retainedVisit&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked&&
+  !taskOpen&&!projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&!projectWorkReviewOpen&&can('projects.development.read')&&
+  !projectWorkDrafts[currentProject.id]?.operation&&!projectWorkDrafts[currentProject.id]?.expanded&&projectWorkPresentations[currentProject.id]?.mode!=='profile'&&
+  navigationRevision===retainedVisit.navigation&&personalDocumentEpoch===retainedVisit.documentEpoch&&
+  retainedVisit.key===openedRetainedDraftCopyKey(snapshot));
  const importedWorkTarget=importedCopy&&projectSection==='work'&&!importedPresentation?.open&&
   !projectWorkDrafts[importedCopy.projectId]?.expanded?importedCopy:null;
  const importedFileTarget=importedCopy&&projectSection==='files'&&projectListInput.projectId===importedCopy.projectId&&
@@ -3806,7 +3832,7 @@ export default function App(){
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
         editImported={importedWorkTarget?{onOpen:()=>openOriginalImportedFiles(importedWorkTarget,'work'),label:fixedTaskCopy?'编辑新副本源码':'编辑导入源码'}:undefined}
-        importedSourceFirst={importedSourceFirst}
+        localCopyFirst={importedSourceFirst||retainedCopyFirst}
         savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
           canPreview={can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&!packageOpening}
@@ -3825,6 +3851,7 @@ export default function App(){
         startContent={can('projects.development.read')||can('projectWork.open')&&can('projectWork.confirm')?<ProjectWorkLauncher key={currentProject.id}
           active={route==='projects'&&!taskOpen&&!state.filePath&&projectSection==='work'&&!projectPreview.expanded&&!projectPickerOpen&&!newProjectOpen&&!newFileOpen&&!workOpen&&!commandOpen}
           resumeProfile={!!projectWorkDrafts[currentProject.id]?.operation}
+          retainedDraftCopy={retainedCopyFirst}
           presentation={projectWorkPresentations[currentProject.id]??{open:!!(projectWorkDrafts[currentProject.id]?.operation||projectWorkDrafts[currentProject.id]?.expanded),mode:projectWorkDrafts[currentProject.id]?.operation||projectWorkDrafts[currentProject.id]?.expanded||!can('projects.development.read')?'profile':'default'}}
           onPresentationChange={presentation=>setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}))}
           defaultStart={can('projects.development.read')?(active,onBusy)=><ProjectDevelopmentWorkspace key={currentProject.id} returnTarget={projectDraftReturn?.projectId===currentProject.id?projectDraftReturn:undefined}

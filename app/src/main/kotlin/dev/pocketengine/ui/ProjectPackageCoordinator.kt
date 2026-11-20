@@ -87,14 +87,15 @@ internal class ProjectPackageCoordinator(
     private fun local() = app.features.module("local") as? LocalModule ?: error("原项目模块不可用")
     fun pendingWebSourceForProject(project: String): JSONObject? = local().pendingPhoneSourceForProject(project)
     private fun requireOwner() { check(!closed && mounted && privateOwner()) { "请返回原私人项目入口操作" } }
-    fun activate(project: String?, checkout: JSONObject?, sourcesOnly: Boolean = false, prepared: Pair<String, String>? = null) {
+    fun activate(project: String?, checkout: JSONObject?, sourcesOnly: Boolean = false, prepared: Pair<String, String>? = null,
+        readSettledSource: Boolean = false) {
         check(!closed && privateOwner()) { "请返回原私人项目入口操作" }; mounted = true
         val checkoutId = checkout?.getString("id")
-        if (activated && state.checkoutId == checkoutId && state.projectId == project) { if (sourcesOnly) refreshSourceStages(prepared); processPickerResults(); return }
+        if (activated && state.checkoutId == checkoutId && state.projectId == project) { if (sourcesOnly) refreshSourceStages(prepared, readSettled = readSettledSource); processPickerResults(); return }
         activated = true
         retainPosition(); cancel(); val pin = positions.remove(positionKey(project, checkoutId))
         state = ProjectPackageState(checkoutId = checkoutId, projectId = project, exportStatus = state.exportStatus, pendingFreeze = pin?.optJSONObject("pendingFreeze"), pendingImport = pin?.optJSONObject("pendingImport"), notice = if (pin != null) "只恢复原动作定位；未恢复确认或执行。请先核对原结果。" else null)
-        if (sourcesOnly) refreshSourceStages(prepared) else refresh(); processPickerResults()
+        if (sourcesOnly) refreshSourceStages(prepared, readSettled = readSettledSource) else refresh(); processPickerResults()
     }
     fun deactivate() { mounted = false; cancel(); closePreview() }
     private fun processPickerResults() {
@@ -488,19 +489,37 @@ internal class ProjectPackageCoordinator(
     }
     // The web owner directory only reads prior selections. Opening it never opens a provider,
     // mounts a checkout, or fetches unrelated task artifacts and received attachments.
-    private fun refreshSourceStages(prepared: Pair<String, String>?, recovery: ProjectSourceRecoveryPin? = webSourceRecovery) = work { _, _ ->
+    private fun refreshSourceStages(prepared: Pair<String, String>?, recovery: ProjectSourceRecoveryPin? = webSourceRecovery,
+        readSettled: Boolean = false) = work { control, _ ->
         val position = if (recovery != null) local().ownerSourcePosition(recovery.projectId, recovery.actionId, recovery.planDigest)
             else local().ownerSourcePosition()
         val durable = position.optJSONObject("plan")
         if (durable != null) {
-            // The source cache or provider may have vanished. Its failure must not hide a published checkout.
+            // A fresh intake can verify the actual old result, not just its locator.
+            // Do not look at staged ZIPs or retire an action until the owner chooses another source.
+            val observed = if (readSettled && recovery == null) try {
+                local().queryReviewedPhoneSource(durable, false)
+            } catch (failure: Exception) {
+                if (failure is InterruptedException) throw failure
+                control.check()
+                null // Leave the original pending on an unreadable or unsettled result.
+            } else null
             return@work {
                 preferredWebSource = prepared
                 webSourcePin = JSONObject(durable.toString())
-                state = state.copy(importPlan = null, pendingImport = webSourcePin, retryImport = false,
-                    missingSourceAction = null, imported = null, error = null,
-                    notice = if (prepared != null) "刚准备的选集仍在。先核对上一次创建的实际副本，再选导入另一份。"
-                    else "已找回上次在这台手机明确创建的操作，请先核对真正的副本；没有恢复执行。")
+                val settled = observed?.takeIf {
+                    it.opt("found") == true && it.opt("projectRegistered") == true && it.opt("imported") == true &&
+                        it.opt("taskOrGrantRestored") == false && matchesWebSourceReceipt(it) &&
+                        state.pendingImport?.let(::matchesWebSourcePlan) != false
+                }
+                state = state.copy(importPlan = null, pendingImport = if (settled == null) webSourcePin else null,
+                    retryImport = false, missingSourceAction = null, imported = settled, error = null,
+                    notice = when {
+                        settled != null && prepared != null -> "已核对上次创建的项目。选择「导入另一份源码」后会核对刚才选的来源。"
+                        settled != null -> "已核对上次创建的项目，没有重新导入。"
+                        prepared != null -> "刚准备的选集仍在。先核对上一次创建的实际副本，再选导入另一份。"
+                        else -> "已找回上次在这台手机明确创建的操作，请先核对真正的副本；没有恢复执行。"
+                    })
             }
         }
         val rows = local().listStagedProjectPackagesForOwner().objects()
@@ -523,7 +542,8 @@ internal class ProjectPackageCoordinator(
             } else state = state.copy(stagedPackages = rows)
         }
     }
-    fun openWebSourceIntake(prepared: Pair<String, String>? = null, recovery: ProjectSourceRecoveryPin? = null) {
+    fun openWebSourceIntake(prepared: Pair<String, String>? = null, recovery: ProjectSourceRecoveryPin? = null,
+        readSettled: Boolean = false) {
         check(foreground && !closed && privateOwner() && !state.busy && pickerExport == null &&
             state.pendingFreeze == null && taskExport?.phase !in setOf("checking", "document_requested", "selection_returned", "writing") &&
             (pickerImport == null || pickerImport?.optString("sourceKind") in setOf("saf_tree", "external_zip")) &&
@@ -533,7 +553,7 @@ internal class ProjectPackageCoordinator(
         check(prepared == null || recovery == null)
         preferredWebSource = prepared
         webSourceRecovery = recovery
-        activate(null, null, sourcesOnly = true, prepared = prepared)
+        activate(null, null, sourcesOnly = true, prepared = prepared, readSettledSource = readSettled && recovery == null)
         val original = webSourcePin
         val found = matchesWebSourceReceipt(state.imported)
         state = state.copy(ownerPanelRequested = true, sourceImportRequested = true, importPlan = null,

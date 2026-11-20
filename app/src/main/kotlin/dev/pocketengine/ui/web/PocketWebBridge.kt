@@ -167,6 +167,42 @@ internal class PocketWebBridge(
     // A task-list stub or proposed ID is not permission to expose that owner's detailed project requirements.
     private data class GoalWindow(val task:String,val run:String,val epoch:Int,val project:String,val checkout:String,val ticket:PocketWebWindowTicket)
     private var projectGoal:GoalWindow?=null
+    private data class OpenedRetainedDraftCopy(val project: String, val checkout: String, val sourceTask: String,
+        val request: Int, val selection: Long, val document: String)
+    private var openedRetainedDraftCopy: OpenedRetainedDraftCopy? = null
+    private fun openDraftCopy(copy: JSONObject) {
+        val sourceTask = taskViewId
+        val document = documentId
+        openedRetainedDraftCopy = null
+        leaveTask()
+        controller.openedDraftWorkCopy(copy)
+        val state = controller.state
+        val project = copy.getString("projectId")
+        val checkout = copy.getString("checkoutId")
+        if (sourceTask != null && copy.opt("taskId") == sourceTask && document != null && taskReturnSection == null &&
+            copy.opt("status") == "ready" && copy.optInt("ordinal") in 1..8 &&
+            state.requestedProjectId == project && controller.originalProjectEditorCurrent(project, checkout)) {
+            openedRetainedDraftCopy = OpenedRetainedDraftCopy(project, checkout, sourceTask, state.requestedProjectRevision,
+                controller.projectWorkbench.navigationRevision(), document)
+        }
+        publishState()
+    }
+
+    private fun retainedDraftCopyOpenForWeb(): JSONObject? {
+        val open = openedRetainedDraftCopy ?: return null
+        val state = controller.state
+        // The Web drawer may close after native selection. Match the actual project request, not its old task window.
+        if (documentId != open.document || section != null || taskViewId != null || !controller.webPrivateOwnerVisible() ||
+            state.filePath != null || state.requestedProjectId != open.project || state.requestedProjectRevision != open.request ||
+            controller.projectWorkbench.navigationRevision() != open.selection ||
+            !controller.originalProjectEditorCurrent(open.project, open.checkout)) {
+            openedRetainedDraftCopy = null
+            return null
+        }
+        return JSONObject().put("projectId", open.project).put("checkoutId", open.checkout)
+            .put("sourceTaskId", open.sourceTask).put("requestRevision", open.request)
+    }
+
     private fun canReadProjectGoal(row:UiTask):Boolean {
         val pin=projectGoal ?: return false
         if (row.id!=pin.task || taskViewId!=pin.task || section!=null || !controller.webPrivateOwnerVisible() || !acceptsWindow(pin.ticket)) return false
@@ -231,7 +267,7 @@ internal class PocketWebBridge(
     private val profilePages = PocketWebProfiles(controller, { !closed && documentId != null && section == "workProfiles" && controller.webPrivateOwnerVisible() })
     private val projectDraftDifference=PocketWebProjectDraftDifference(controller.nativeButlerHost(),{controller.nativeButlerHost().tasks},controller::runPluginCatalogWork,::captureWindow,::acceptsWindow,
         { controller.nativeButlerHost().features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("原本机项目宿主不可用") },
-        { value -> leaveTask();controller.openedDraftWorkCopy(value);publishState() }) {
+        ::openDraftCopy) {
         taskViewId.takeIf{!closed&&documentId!=null&&section==null&&controller.state.filePath==null&&controller.webPrivateOwnerVisible()}
     }
     private val firstNodeWebOutput=PocketWebFirstNodeWebOutput({controller.nativeButlerHost().tasks},
@@ -410,6 +446,7 @@ internal class PocketWebBridge(
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
         savedLocalReturn = null
+        openedRetainedDraftCopy = null
         controller.closeOwnerWorkRequestHistory()
         controller.forgetHeldPhoneImage()
         cancelStatePublication()
@@ -462,6 +499,7 @@ internal class PocketWebBridge(
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
             projection = PocketWebState.snapshot(controller, ::canReadProjectGoal)
+            retainedDraftCopyOpenForWeb()?.let { projection?.getJSONObject("state")?.put("openedRetainedDraftCopy", it) }
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("localSourceIntake", localSourceIntake.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("projectGitImport", projectGitImport.snapshot() ?: JSONObject.NULL)
@@ -2720,7 +2758,10 @@ internal class PocketWebBridge(
 
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
-    private fun leaveConnection() { if(section=="remote")connectionPages.hostGoalOrigins.closeSaved(); localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
+    private fun leaveConnection() {
+        openedRetainedDraftCopy = null
+        if(section=="remote")connectionPages.hostGoalOrigins.closeSaved(); localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null
+    }
     /**
      * Navigation already disposes these workspace handles in leaveConnection().
      * React unmount cleanup may arrive after that transition. Acknowledge only

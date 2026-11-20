@@ -9,8 +9,9 @@ export type ProjectWorkPresentation = { open: boolean; mode: 'default' | 'profil
 /** One place to start a project job. The retained BoardUI disclosure and tabs
  * keep both original forms mounted; only the selected one owns a native window.
  * App retains the selected method and disclosure when preparation opens another page. */
-export function ProjectWorkLauncher({ active, defaultStart, profileStart, resumeProfile = false, presentation, onPresentationChange }: {
+export function ProjectWorkLauncher({ active, defaultStart, profileStart, resumeProfile = false, retainedDraftCopy = false, presentation, onPresentationChange }: {
   active: boolean; defaultStart?: StartView; profileStart?: StartView; resumeProfile?: boolean;
+  retainedDraftCopy?: boolean;
   presentation: ProjectWorkPresentation; onPresentationChange: (value: ProjectWorkPresentation) => void;
 }) {
   const { open, mode } = presentation;
@@ -19,7 +20,7 @@ export function ProjectWorkLauncher({ active, defaultStart, profileStart, resume
   const both = Boolean(defaultStart && profileStart);
   return <Accordion className="pw-project-launcher" variant="divided" expandedKeys={open ? ['start'] : []}
     onExpandedChange={keys => { if (!busy) onPresentationChange({ ...presentation, open: keys.has('start') }); }}>
-    <AccordionItem id="start" title={defaultStart ? '编辑副本或交办工作' : '新项目工作'} description={resumeProfile ? '继续核对这次项目工作，或填写下一个目标' : defaultStart ? '改本机文件、核对构建，或交给模型处理' : '交代目标，选择工作方式，再核对开始'} isDisabled={busy}>
+    <AccordionItem id="start" title={retainedDraftCopy ? '这份稿的工作副本' : defaultStart ? '编辑副本或交办工作' : '新项目工作'} description={resumeProfile ? '继续核对这次项目工作，或填写下一个目标' : retainedDraftCopy ? '查看副本文件和构建条件' : defaultStart ? '改本机文件、核对构建，或交给模型处理' : '交代目标，选择工作方式，再核对开始'} isDisabled={busy}>
       {both ? <Tabs selectedKey={mode} keyboardActivation="manual" onSelectionChange={key => { if (!busy) onPresentationChange({ ...presentation, mode: key === 'profile' ? 'profile' : 'default' }); }}>
         <TabList aria-label="项目工作方式"><Tab id="default" isDisabled={busy}>本机副本与默认模型</Tab><Tab id="profile" isDisabled={busy}>工作配置</Tab></TabList>
         <TabPanel id="default" shouldForceMount hidden={mode !== 'default'}>{defaultStart?.(active && open && mode === 'default', setDefaultBusy)}</TabPanel>

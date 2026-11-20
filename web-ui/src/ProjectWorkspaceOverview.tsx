@@ -30,7 +30,7 @@ export type ProjectWorkspaceOverviewProps = {
   onOpenTerminal: () => void;
   onAskButler?: () => void;
   editImported?: { label: string; onOpen: () => void };
-  importedSourceFirst?: boolean;
+  localCopyFirst?: boolean;
   startContent?: ReactNode;
   savedWebContent?: ReactNode;
 };
@@ -39,7 +39,7 @@ export type ProjectWorkEntry = WorkEntry | 'outcomes';
 export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionFilter; expanded: boolean; selected: string; selectedEntry?: ProjectWorkEntry };
 
 /** Project work directory; saved Web versions separately use exact original B4 receipts. */
-export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, editImported, importedSourceFirst = false, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
+export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, editImported, localCopyFirst = false, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
   const savedWebLink = useRef<FindSavedBuildWeb|null>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
@@ -91,7 +91,7 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
   const start = startContent && <section key="work-start" className="pw-project-new-work" aria-label="开始或继续项目工作">{startContent}</section>;
   // Same keyed launcher under the same provider in either order. Reordering the
   // directory never starts a second native file, setup or review window.
-  const sections = importedSourceFirst ? [needsOwner, start, tools, running] : [tools, needsOwner, running, start];
+  const sections = localCopyFirst ? [needsOwner, start, tools, running] : [tools, needsOwner, running, start];
   return <section ref={root} className="pw-project-overview" aria-label={`${project.name}的项目工作`}>
     <header className="pw-project-overview-heading">
       <div><p className="pw-project-overview-eyebrow">项目工作台</p><h2>{project.name}</h2></div>
@@ -101,7 +101,7 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
       </div> : askButler}
     </header>
     <div className="pw-project-overview-layout">
-      <div className="pw-project-overview-work" data-imported-source-first={importedSourceFirst || undefined}>
+      <div className="pw-project-overview-work" data-local-copy-first={localCopyFirst || undefined}>
         <ProjectSavedWebLink.Provider value={savedWebContent ? savedWebLink : null}>
           {sections}
           {savedWebContent && <section className="pw-project-saved-web" aria-label="找回这个项目的已保存网页">{savedWebContent}</section>}

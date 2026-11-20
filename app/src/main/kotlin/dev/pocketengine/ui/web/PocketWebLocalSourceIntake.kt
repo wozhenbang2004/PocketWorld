@@ -139,9 +139,10 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
                 ProjectSourceRecoveryPin(projectId, action, digest)
             } else null
             if (prepared != null || recovery != null) check(!original.state.busy && !original.webSourcePickerPending) { "请先结束已有的本机源码操作" }
-            if (!here() || prepared != null) {
-                if (!here()) close()
-                original.openWebSourceIntake(prepared, recovery)
+            val alreadyHere = here()
+            if (!alreadyHere || prepared != null) {
+                if (!alreadyHere) close()
+                original.openWebSourceIntake(prepared, recovery, readSettled = !alreadyHere && recovery == null)
                 origin = project(); window = UUID.randomUUID().toString()
             }
             return JSONObject().put("opened", true).also { if (recovery != null) it.put("recoveryWindow", window) }

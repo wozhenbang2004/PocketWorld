@@ -56,8 +56,8 @@
 .pw-project-saved-web { min-width: 0; }
 .pw-project-overview-work > :is(.pw-project-new-work, .pw-project-saved-web) + :is(.pw-project-saved-web, .pw-project-work-group) { margin-top: var(--pw-gap-section, 28px); }
 .pw-project-new-work:first-child { margin-top: 0; }
-.pw-project-overview-work[data-imported-source-first] > .pw-project-new-work .pw-project-launcher { margin-top: 0; }
-.pw-project-overview-work[data-imported-source-first] > .pw-project-new-work + .pw-project-work-tools { margin-top: var(--pw-gap-section, 28px); }
+.pw-project-overview-work[data-local-copy-first] > .pw-project-new-work .pw-project-launcher { margin-top: 0; }
+.pw-project-overview-work[data-local-copy-first] > .pw-project-new-work + .pw-project-work-tools { margin-top: var(--pw-gap-section, 28px); }
 .pw-project-overview-tools { min-width: 0; padding-top: 4px; }
 .pw-project-overview-tools h3 { margin-left: 10px; }
 .pw-project-overview .pw-project-tool-row { display: flex; width: 100%; height: auto; min-height: 64px; justify-content: flex-start; gap: 10px; padding: 10px; border: 0; border-radius: 12px; background: transparent; box-shadow: none; text-align: start; white-space: normal; }
