@@ -25,6 +25,7 @@ import { desktopScopes } from './desktop-viewer';
 import { windowsObservationCompatibility } from './windows-observation-compatibility';
 import { phoneSurfaceStatus } from './phone-surface-status';
 import { recordedPhoneWork } from './phone-work-choice';
+import { deviceReadingPlace, sameDeviceReadingPlace, type DeviceReadingSlot } from './devices-workspace';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, WorkingStatus, useCollectionMotion } from './library/journey-motion';
 import './devices-reading.css';
@@ -127,10 +128,13 @@ function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean
   </>;
 }
 
-export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus, onReturnToPartnerTask }: { sourceFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
+export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus, onReturnToPartnerTask, reading }: { reading?: DeviceReadingSlot; sourceFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
   const pinnedConnection=sourceFocus?.purpose==='partner_connection';
   const [pinnedLocalRead,setPinnedLocalRead]=useState(0);
-  const [snapshot, setSnapshot] = useState<Data | null>(null), [peerId, setPeerId] = useState(''), [form, setForm] = useState(''), [raw, setRaw] = useState('');
+  const peerPlace = useRef(!sourceFocus && !modelReturn ? reading?.selected : undefined);
+  const placeRead = useRef(!peerPlace.current);
+  const focusReturnedPeer = useRef(!!peerPlace.current);
+  const [snapshot, setSnapshot] = useState<Data | null>(null), [peerId, setPeerId] = useState(() => peerPlace.current?.partner.deviceId || ''), [form, setForm] = useState(''), [raw, setRaw] = useState('');
   const [address, setAddress] = useState(''), [inviteId, setInviteId] = useState(''), [host, setHost] = useState(''), [port, setPort] = useState(''), [recoveryAddresses, setRecoveryAddresses] = useState<string[]>([]);
   const [invitation, setInvitation] = useState<ShownPairingInvitation|null>(null), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
   const [workBusy, setWorkBusy] = useState(false), [controlBusy, setControlBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -165,7 +169,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [modelReturnFocus, setModelReturnFocus] = useState<ReceivedPhoneGoalReturn>();
   const focusedModelReturn = useRef<ReceivedPhoneGoalReturn | undefined>(undefined);
   const [localExpanded, setLocalExpanded] = useState(false), [moreWork, setMoreWork] = useState({ key: '', count: 0 });
-  const lastPeer = useRef('');
+  const lastPeer = useRef(peerPlace.current?.partner.deviceId || '');
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef({ list: 0, detail: 0 }), previousReadingView = useRef('list');
   const rememberReadingPosition = (view: 'list' | 'detail') => { readingPositions.current[view] = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
   const busy = workBusy || controlBusy;
@@ -199,6 +203,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   // Supplying a deviceId asks that peer for fresh capabilities. Local reads must also work offline.
   const refresh = () => { void invoke('devices.snapshot',{},(_value,actual)=>{
+    if (actual) placeRead.current = true;
     if(pinnedConnection && Number.isSafeInteger(actual?.capturedAt))setPinnedLocalRead(actual!.capturedAt);
   }); };
   const closeReview = () => {
@@ -206,7 +211,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
     if (old) void run('devices.discard', { viewHandle: old }).catch(() => {});
   };
-  const selectPeer = (next: string) => {
+  const selectPeer = (next: string, from = snapshot) => {
     if (selectedPeer.current === next) return;
     if(closedInbox?.closedHandle)void run('devices.discard',{closedHandle:closedInbox.closedHandle}).catch(()=>{});
     setClosedInbox(null);setClosedDraft('');
@@ -216,6 +221,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     closeReview(); // Retire pending review handles before changing the list/detail scope.
     setNotice(''); setError(''); setTaskDetails({});
     setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
+    focusReturnedPeer.current = false;
+    placeRead.current = true;
+    peerPlace.current = next ? deviceReadingPlace(from?.local, rows(from?.peers).find(row => row.deviceId === next)) : undefined;
+    if (!sourceFocus && reading) reading.selected = peerPlace.current;
     if (next) lastPeer.current = next;
     selectedPeer.current = next;
     setPeerId(next);
@@ -223,6 +232,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
     if(pinnedConnection)setPinnedLocalRead(0);
+    autoReadSource.current = ''; // Restored native windows never retain the previous local archive handle.
+    placeRead.current = !peerPlace.current;
     setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation(null);
     setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
@@ -278,7 +289,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     }
   }, [peerId, desktopOpen]);
   const peers = rows(snapshot?.peers).filter(row => typeof row.deviceId === 'string' && row.deviceId.trim());
-  const peer = peerId ? peers.find(row => row.deviceId === peerId) : undefined, local = snapshot?.local || {}, actions = snapshot?.actions || {};
+  const local = snapshot?.local || {}, actions = snapshot?.actions || {};
+  const candidatePeer = peerId ? peers.find(row => row.deviceId === peerId) : undefined;
+  const peer = candidatePeer && (!peerPlace.current || placeRead.current && sameDeviceReadingPlace(peerPlace.current, local, candidatePeer)) ? candidatePeer : undefined;
+  useLayoutEffect(() => {
+    if (!peer || !focusReturnedPeer.current || document.hidden) return;
+    focusReturnedPeer.current = false;
+    readingRoot.current?.querySelector<HTMLElement>('.pw-device-heading h2')?.focus({ preventScroll: true });
+  }, [peer]);
   const PeerIcon = peer ? platformIcon(peer) : IconDevices;
   const pairingEntry = form === 'add' || form === 'invite';
   // Only this short-lived choice ID crosses the system picker. The URI, photo
@@ -345,10 +363,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       row.inviterDeviceId === candidate.inviterDeviceId && row.joinerDeviceId === candidate.joinerDeviceId &&
       row.inviterFingerprint === candidate.inviterFingerprint && row.joinerFingerprint === candidate.joinerFingerprint);
     if (original && original.joiningOriginal === true && (pairConclusion(original.state) || !match)) {
-      if (match && String(original.state).startsWith('local_pair_')) { rememberReadingPosition('list'); selectPeer(match.deviceId); }
+      if (match && String(original.state).startsWith('local_pair_')) { rememberReadingPosition('list'); selectPeer(match.deviceId, receipt); }
       setNotice(originalPairProgress(original)); return;
     }
-    if (match) { rememberReadingPosition('list'); selectPeer(match.deviceId); setNotice('本机已读到同一身份的配对伙伴。查看双方授权范围，再决定是否开始工作。'); }
+    if (match) { rememberReadingPosition('list'); selectPeer(match.deviceId, receipt); setNotice('本机已读到同一身份的配对伙伴。查看双方授权范围，再决定是否开始工作。'); }
     else setNotice(other === 'joiner' ? '本机已确认。请回到加入邀请的设备，选「继续原配对」完成双端握手。'
       : other === 'inviter' ? '原配对尚未读到已保存的伙伴。请对方核对指纹与范围，再从这台手机继续原配对。' : '配对请求已有回执，尚未核对到同一身份的伙伴。请查看原配对记录。');
   };
@@ -508,7 +526,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const pinnedReadReady=!pinnedConnection || pinnedLocalRead>0 && Number.isSafeInteger(snapshot?.capturedAt) && snapshot!.capturedAt>=pinnedLocalRead;
   const focusedPeer=sourceFocus && pinnedReadReady?peers.find(it=>it.deviceId===sourceFocus.deviceId && it.instanceId===sourceFocus.instanceId
-    && it.certificateFingerprint===sourceFocus.certificateFingerprint && !retired(it)):undefined;
+    && it.certificateFingerprint===sourceFocus.certificateFingerprint && !retired(it)
+    && (!peerPlace.current || placeRead.current && sameDeviceReadingPlace(peerPlace.current, local, it))):undefined;
   const activeArchive = samePhoneGoalArchive(phoneArchive, peer, local) && (phoneArchive?.sourceTaskId||'')===(sourceFocus?.taskId||'')
     && (!sourceFocus || peer===focusedPeer) ? phoneArchive : null;
   const waitingPage = waitingPhones && waitingPhones.localDeviceId === local.deviceId && waitingPhones.localInstanceId === local.instanceId ? waitingPhones : null;
@@ -603,12 +622,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     });
   };
   useEffect(()=>{
-    if(!sourceFocus || pinnedConnection || !focusedPeer || busy || !snapshot || document.visibilityState!=='visible')return;
+    if(!sourceFocus || pinnedConnection || !focusedPeer || busy || !snapshot || document.visibilityState!=='visible' ||
+      state.webWorkspaceTaskOpen || state.webWorkspaceSection!=='devices' || scope.current.hasPending('work') || scope.current.hasPending('control'))return;
     if(peerId!==sourceFocus.deviceId){selectPeer(sourceFocus.deviceId);return;}
     const k=JSON.stringify([sourceFocus.taskId,sourceFocus.deviceId,sourceFocus.instanceId,sourceFocus.certificateFingerprint,local.deviceId,local.instanceId]);
     if(autoReadSource.current===k || !supported('devices.readPhoneGoalArchive'))return;
     autoReadSource.current=k;readPhoneArchive('sent'); // This method reads only this phone's retained records.
-  },[sourceFocus,focusedPeer,busy,peerId,local.deviceId,local.instanceId]);
+  },[sourceFocus,focusedPeer,busy,peerId,local.deviceId,local.instanceId,state.webWorkspaceTaskOpen,state.webWorkspaceSection,state.webWorkspaceResumeRevision]);
   const ownTextShown=ownText && (ownText.home?!!localInbox&&ownText.archiveHandle===localInbox.closedHandle:activeArchive?.side==='received'&&ownText.archiveHandle===activeArchive.archiveHandle)?ownText:null;
   const readOwnText=(row:Data,page=0,before?:Data,home=ownText?.home===true,part:string=before?.part||'result',match=false)=>{
     if(row.notConfirmed===true)return;
@@ -943,7 +963,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       {!sourceFocus && (desktopOpen || peerId) && <header className="pw-device-heading">
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { selectPeer(''); setForm(''); setRaw(''); }}>所有设备</Button>}
-          <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : '设备详情'}</h2>
+          <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : peerPlace.current ? '原设备 · '+peerPlace.current.partner.deviceId.slice(-8) : '设备详情'}</h2>
           {!desktopOpen && peer && <p>{[peerPlatform(peer), deviceConnectionLabel(peer)].filter(Boolean).join(' · ')}</p>}
         </div>
         {!desktopOpen && <div className="pw-device-heading-actions">
@@ -1173,7 +1193,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             </>} />
           </section>}
         </>}
-        {!sourceFocus && peerId && !peer && snapshot && <p className="pw-device-feedback" role="alert">这台设备不在当前读取页。保留原身份，请返回后刷新核对。</p>}
+        {!sourceFocus && peerId && !peer && snapshot && placeRead.current && <p className="pw-device-feedback" role="alert">{candidatePeer && peerPlace.current
+          ? '本机或原配对身份已变化，没有打开其他设备。可返回所有设备重新选择。'
+          : '这台原设备不在本次本机读取范围。没有改选其他伙伴。'}</p>}
         {!sourceFocus && peer && <>
           {preparedHere.length > 0 && originalWork}
           {quickPhoneArchive && <section className="pw-device-section pw-device-peer-archive" aria-label="这台设备的最近往来工作">

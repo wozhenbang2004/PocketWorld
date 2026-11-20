@@ -186,7 +186,12 @@ internal class PocketWebWorkSearch(
         fun fileHeader(file: JSONObject) = JSONObject().put("id", file.getString("id")).put("sha256", file.getString("sha256"))
             .put("name", file.getString("name")).put("mimeType", file.getString("mimeType")).put("size", file.getLong("size"))
         val files = JSONArray()
-        available.take(limit).forEach { file -> files.put(fileHeader(file).put("runProvenance", file.optString("runProvenance", "unrecorded"))) }
+        available.take(limit).forEach { file ->
+            val row = fileHeader(file).put("runProvenance", file.optString("runProvenance", "unrecorded"))
+            if (file.opt("sourceKind") == "device_received_file" && file.opt("sourceRunEvidence") == "original_device_file_receive")
+                row.put("sourceRunEvidence", "original_device_file_receive")
+            files.put(row)
+        }
         val readLimited = runFiles?.readLimited ?: snapshot.getJSONObject("indexDiagnostics").getBoolean("incomplete")
         val page = JSONObject().put("taskId", taskId).put("files", files)
             .put("readLimited", readLimited || artifacts.size != available.size || available.size > limit)

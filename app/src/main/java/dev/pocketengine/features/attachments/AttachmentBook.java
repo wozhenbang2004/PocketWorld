@@ -127,6 +127,10 @@ public final class AttachmentBook {
         // Do not include digest in the route: changed semantics under one operation/role must be rejected.
         return UUID.nameUUIDFromBytes(("pocketworld-native-result-v1\0"+operation+"\0"+role+"\0"+(task==null?"":task)+"\0"+(run==null?"":run)).getBytes(StandardCharsets.UTF_8)).toString();
     }
+    /** Exact identity comparison for an already-materialized read-only inventory row. */
+    public static boolean isOriginalPublicationId(String id,String operation,String role,String task,String run,String planDigest)throws Exception{
+        return nativeResultId(operation,role,task,run,planDigest).equals(id);
+    }
     private JSONObject importBytesInternal(InputStream input,String name,String mime,JSONObject source,RunControl control)throws Exception{return importBytesInternal(input,name,mime,source,control,null);}
     private JSONObject importBytesInternal(InputStream input,String name,String mime,JSONObject source,RunControl control,String nativeId)throws Exception{
         try(ImportLock ignored=lockImports()) {return importBytesLocked(input,name,mime,source,control,nativeId);}

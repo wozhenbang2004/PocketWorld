@@ -232,12 +232,34 @@ internal class PocketWebProjectDevelopment(
                 done(JSONObject().put("dismissed", true).put("taskStopped", false), null)
             }
             "projects.development.draft" -> {
-                fields(args, "viewHandle", "goal", "checkoutId", "dropSelectedSource", *deliveryFields)
+                fields(args, "viewHandle", "goal", "checkoutId", "dropSelectedSource", "verifySavedForTools", *deliveryFields)
                 require(!args.has("dropSelectedSource") || args.opt("dropSelectedSource")==true)
+                require(!args.has("verifySavedForTools") || args.opt("verifySavedForTools")==true && !args.has("dropSelectedSource"))
                 val drop=args.opt("dropSelectedSource")==true
                 val goal = text(args, "goal", 12000, true); val checkout = text(args, "checkoutId", 80, true)
                 val retainedFields = copyDeliveryFields(args, JSONObject())
                 check(!busy && !pending(original.project)) { "原项目输入仍待核对，草稿没有替换" }
+                if (args.opt("verifySavedForTools") == true) {
+                    check(review == null) { "请先返回原项目草稿" }
+                    val shown = retainedFields.put("goal", goal).put("checkoutId", checkout)
+                    working(original, done) {
+                        synchronized(drafts) {
+                            val saved = draft(original.project)
+                            check(!pending(original.project) && saved.optString("projectId") == original.project &&
+                                sameDraft(saved, shown) && ProjectConventionDraft.bind(saved).seal == original.shownSeal) {
+                                "本页目标、要求或副本与已保存的原稿还没核对一致。文字仍在这里，没有离开、覆盖或提交。"
+                            }
+                            // Finish persisting the exact existing native draft. The verification path
+                            // must never write caller text back or replay a previously submitted action.
+                            check(presentation.edit().putString("drafts", savePresentation().toString()).commit()) {
+                                "尚未确认草稿已写入手机存储。请保留本页文字后再核对；没有打开工具准备。"
+                            }
+                            JSONObject().put("projectId", original.project).put("checkoutId", checkout)
+                                .put("draftVerifiedForTools", true).put("taskStarted", false)
+                        }
+                    }
+                    return
+                }
                 editShownDraft(original,drop) { stored ->
                     val selected = ProjectConventionDraft.present(stored)
                     check(selected == null || selected.getString("checkoutId") == checkout ||

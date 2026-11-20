@@ -21,7 +21,7 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
     companion object {
         val COMMANDS = setOf("memoryHistory.open", "memoryHistory.close", "memoryHistory.search", "memoryHistory.record",
             "memoryHistory.cognition", "memoryHistory.source", "memoryHistory.review", "memoryHistory.conflict.review", "memoryHistory.confirm",
-            "taskMemory.search", "taskMemory.task", "taskMemory.answer", "taskMemory.receipt", "taskMemory.source", "taskMemory.source.focus", "taskMemory.replacements",
+            "taskMemory.search", "taskMemory.task", "taskMemory.answer", "taskMemory.receipt", "taskMemory.currentRevision", "taskMemory.source", "taskMemory.source.focus", "taskMemory.replacements",
             "taskMemory.review", "taskMemory.confirm", "taskMemory.focus")
         private fun fields(value: JSONObject, vararg names: String) {
             require(value.keys().asSequence().all { it in names }) { "原来源参数包含未接入字段" }
@@ -152,6 +152,18 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
     }
     private fun binding(receipt: JSONObject) = JSONObject().also { value ->
         for (key in listOf("taskId", "runId", "requestId", "answerId")) value.put(key, text(receipt, key))
+    }
+    private fun sameProvidedAnswer(receipt: JSONObject, answer: JSONObject): Boolean =
+        answer.opt("ownerReadableMemoryProvided") == true && receipt.opt("phase") == "provided_to_request" &&
+        receipt.opt("ownerId") == "owner" && receipt.opt("spaceId") == "private" && !receipt.has("memoryNamespace") &&
+        receipt.opt("receiptId") == answer.opt("receiptId") && receipt.optLong("coordinatorEpoch", -1) >= 0 &&
+        receipt.optLong("coordinatorEpoch", -1) == answer.optLong("coordinatorEpoch", -2) && binding(receipt).toString() == binding(answer).toString()
+    private fun laterPersonalRevision(row: JSONObject): Long? {
+        val revision = row.opt("currentRevision")
+        return (revision as? Number)?.toLong()?.takeIf {
+            (revision is Int || revision is Long) && it > TaskMemoryEvidenceGuard.revision(row) &&
+                row.opt("status") == "record_changed" && row.opt("canCheckCurrentPersonal") == true
+        }
     }
     private fun checkedReceipt(value: JSONObject) = TaskMemoryEvidenceGuard.receipt(value.getString("taskId"), value.getString("runId"), value, value.getString("requestId"), value.getString("answerId"))
     private fun sourcePage(value: JSONObject, offset: Int): JSONObject {
@@ -304,23 +316,51 @@ internal class PocketWebMemoryHistory(private val controller: PocketWorldControl
             }
             "taskMemory.receipt" -> {
                 fields(args, "taskHandle"); val (session, original) = selected(args, "taskHandle", "task"); val binding = original.optJSONObject("binding") ?: error("此原任务没有提供给模型的记忆凭据；不会用新检索代替")
-                if (original.has("messageId")) check(binding(answerReference(session, original.getString("messageId"))).toString() == binding.toString()) { "原回答的记忆引用已变化" }
+                val message = original.optString("messageId").takeIf(String::isNotBlank)
+                if (message != null) check(binding(answerReference(session, message)).toString() == binding.toString()) { "原回答的记忆引用已变化" }
                 call(session, "readTaskMemoryReceipt", binding, done) { value ->
                     val receipt = checkedReceipt(value); val frozen = copy(receipt)
-                    if (session.historyAnswer != null && receipt.opt("phase") == "provided_to_request") {
-                        val expected = session.historyAnswer.invoke()
-                        check(receipt.opt("receiptId") == expected.opt("receiptId") && receipt.optInt("coordinatorEpoch") == expected.optInt("coordinatorEpoch") &&
-                            receipt.opt("ownerId") == "owner" && receipt.opt("spaceId") == "private") {
-                            "原私人历史回答的记忆提供回执已变化"
-                        }
-                    }
+                    val sameAnswer = message != null && sameProvidedAnswer(receipt, answerReference(session, message))
+                    if (session.historyAnswer != null && receipt.opt("phase") == "provided_to_request") check(sameAnswer) { "原私人历史回答的记忆提供回执已变化" }
                     rows(receipt.getJSONArray("records")).forEach { row ->
                         val selected = JSONObject().put("receipt", frozen).put("record", copy(row))
-                        if (original.has("messageId")) selected.put("answerMessageId", original.getString("messageId"))
-                        row.put("readHandle", pinTaskRecord(session, selected))
+                        if (message != null) selected.put("answerMessageId", message)
+                        val field = if (sameAnswer && receipt.opt("status") == "invalidated" && laterPersonalRevision(row) != null) "currentReadHandle" else "readHandle"
+                        row.remove("canCheckCurrentPersonal")
+                        row.put(field, pinTaskRecord(session, selected))
                     }
-                    if (original.has("messageId")) receipt.put("answerReadExpiresAt", session.expires)
+                    if (message != null) receipt.put("answerReadExpiresAt", session.expires)
                     receipt
+                }
+            }
+            "taskMemory.currentRevision" -> {
+                fields(args, "currentReadHandle")
+                val (session, original) = selected(args, "currentReadHandle", "task-record")
+                val message = original.getString("answerMessageId"); val receipt = original.getJSONObject("receipt"); val row = original.getJSONObject("record")
+                check(session.answerId == message && receipt.opt("status") == "invalidated" && sameProvidedAnswer(receipt, answerReference(session, message))) { "请在原私人回答核对此条现行记忆" }
+                val later = laterPersonalRevision(row) ?: error("请选择原回答已变化的同一条本人记忆")
+                val target = JSONObject().put("id", row.getString("id")).put("originalRevision", row.getLong("revision"))
+                    .put("currentRevision", later).put("receiptId", receipt.getString("receiptId")).put("coordinatorEpoch", receipt.getLong("coordinatorEpoch"))
+                val memoryRevision = controller.state.memoryRefreshRevision; val sources = controller.conversationSourceRevision
+                call(session, "readTaskMemoryReceipt", binding(receipt).put("revisedPersonalRecord", target), done) { value ->
+                    val proof = value.getJSONObject("original")
+                    check(memoryRevision == controller.state.memoryRefreshRevision && sources == controller.conversationSourceRevision &&
+                        sameProvidedAnswer(receipt, answerReference(session, message)) && binding(proof).toString() == binding(receipt).toString() &&
+                        proof.opt("ownerId") == "owner" && proof.opt("spaceId") == "private" && proof.opt("receiptId") == target.opt("receiptId") &&
+                        proof.optLong("coordinatorEpoch", -1) == target.getLong("coordinatorEpoch") && value.opt("id") == target.opt("id") &&
+                        value.optLong("originalRevision", -1) == target.getLong("originalRevision") && value.optLong("currentRevision", -1) == later &&
+                        value.opt("providedToOriginalRequest") == false && value.opt("executionAuthorized") == false && value.opt("modelUseVerified") == false &&
+                        value.opt("format") == "pocketworld.current-provided-memory-version.v1") { "原回答或现行记忆已变化，请重新核对" }
+                    val expires = when (value.opt("status")) {
+                        "read" -> {
+                            val body = value.opt("text"); check(body is String && body.isNotBlank() && body.length <= 4000)
+                            if (value.isNull("expiresAt")) session.expires else minOf(session.expires, value.getLong("expiresAt"))
+                        }
+                        "not_available" -> { check(!value.has("text")); session.expires }
+                        else -> error("现行记忆状态未能核对")
+                    }
+                    check(expires > System.currentTimeMillis()) { "原阅读范围已到期，请重新核对" }
+                    value.remove("expiresAt"); value.put("readExpiresAt", expires)
                 }
             }
             "taskMemory.focus" -> {

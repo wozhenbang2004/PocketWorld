@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.pocketengine.features.local.project.ProjectArchiveRoot
 import dev.pocketengine.ui.ProjectPackageCoordinator
 import org.json.JSONArray
 import org.json.JSONObject
@@ -31,6 +32,11 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
     private fun stageRow(row: JSONObject?, preview: Boolean = false): JSONObject? {
         val evidence = evidence(row) ?: return null
         val actual = row ?: return null
+        val zipRoot = if (preview && evidence.opt("sourceKind") == "external_zip" &&
+            evidence.opt("ordinaryZipIsPocketWorldPackage") == false &&
+            evidence.optJSONObject("original")?.opt("singleRootStripped") == "") {
+            actual.optJSONObject("manifest")?.let { runCatching { ProjectArchiveRoot.staged(it) }.getOrNull() }
+        } else null
         val fixed = evidence.optJSONObject("original")?.takeIf { evidence.optString("sourceKind") == "external_zip" &&
             evidence.optBoolean("ordinaryZipIsPocketWorldPackage") && it.optString("fixedPackageManifestIdentity").matches(Regex("[a-f0-9]{64}")) &&
             it.optString("originalArchiveSha256").matches(Regex("[a-f0-9]{64}")) && it.optInt("fixedPackageOmitted", -1) in 0..2000 }
@@ -46,6 +52,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
                 .put("archive", it.getString("originalArchiveSha256")).put("omitted", it.getInt("fixedPackageOmitted")) }
                 ?: taskPackage?.let{JSONObject().put("manifest",it.getString("manifestIdentity")).put("archive",it.getString("archiveSha256")).put("omitted",evidence.getInt("omittedCount"))})
             .put("hostVersion", evidence.optJSONObject("original")?.optString("snapshotVersion")?.takeIf { evidence.optString("sourceKind") == "host_saved_snapshot" })
+            .put("retainedArchiveRoot", zipRoot)
             .put("bytes", evidence.optLong("expandedBytes")).put("omitted", evidence.optInt("omittedCount"))
             .put("paths", JSONArray().apply { if (preview) actual.optJSONObject("manifest")?.optJSONArray("files")?.let { rows ->
                 for (i in 0 until minOf(rows.length(), 6)) rows.optJSONObject(i)?.optString("path")?.take(260)?.let { put(it) }

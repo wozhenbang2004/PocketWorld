@@ -6,6 +6,27 @@ const digest = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/
 export const deviceRows = (value: unknown): DeviceData[] => Array.isArray(value) ? value.filter(object) : [];
 export const deviceStrings = (value: unknown): string[] => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
 
+type ReadingIdentity = { deviceId: string; instanceId: string; certificateFingerprint: string };
+export type DeviceReadingPlace = { here: ReadingIdentity; partner: ReadingIdentity };
+/** One Settings navigation, held in memory only. No text, grant or native handle survives. */
+export type DeviceReadingSlot = { entry: string; selected?: DeviceReadingPlace };
+function readingIdentity(value: unknown): ReadingIdentity | undefined {
+  if (!object(value) || !identity(value.deviceId) || !/^pw1_[a-f0-9]{64}$/.test(value.deviceId)
+    || !identity(value.instanceId) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value.instanceId)
+    || !digest(value.certificateFingerprint)) return;
+  const { deviceId, instanceId, certificateFingerprint } = value;
+  return { deviceId, instanceId, certificateFingerprint };
+}
+export function deviceReadingPlace(local: unknown, peer: unknown): DeviceReadingPlace | undefined {
+  const here = readingIdentity(local), partner = readingIdentity(peer);
+  return here && partner ? { here, partner } : undefined;
+}
+export function sameDeviceReadingPlace(place: DeviceReadingPlace, local: unknown, peer: unknown): boolean {
+  const actual = deviceReadingPlace(local, peer);
+  return !!actual && (['here', 'partner'] as const).every(role =>
+    (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(field => actual[role][field] === place[role][field]));
+}
+
 export function deviceSnapshot(value: unknown): DeviceData {
   if (!object(value) || value.format !== 'pocketworld.device-workspace.v1' || !positiveInteger(value.capturedAt) || !object(value.local) || !Array.isArray(value.peers) || !value.peers.every(object) || !Array.isArray(value.pendingPairings) || !value.pendingPairings.every(object)) throw new Error('原设备状态尚未完整读取，不能推断已经连接或授权。');
   return value;

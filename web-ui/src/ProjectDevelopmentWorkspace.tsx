@@ -250,6 +250,19 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const timer = window.setTimeout(() => setExpired(true), remaining); return () => window.clearTimeout(timer);
   }, [review]);
   const pending = unresolved(submission), disabled = !active || busy || pending || sourceConflict || !!review || filesOpen || !view || view.draftRecoveryRequired === true;
+  const prepareTools = () => {
+    if (disabled || !can('setup.runtime.read')) return;
+    const displayed = { ...draft.current };
+    // A sole default copy is not a saved selection until the owner changes
+    // the selection or types a draft. Do not manufacture a draft for it.
+    const expected = !touched.current && !view?.draft?.checkoutId ? { ...displayed, checkoutId: '' } : displayed;
+    void invoke('projects.development.draft', { viewHandle: handle.current, ...expected, verifySavedForTools: true }, result => {
+      if (result.projectId !== projectId || result.checkoutId !== expected.checkoutId ||
+          result.draftVerifiedForTools !== true || result.taskStarted !== false || !sameDraft(draft.current, displayed))
+        throw new Error('没有核对到本页同一份草稿，文字仍留在这里。没有进入工具准备。');
+      onPrepareTools();
+    });
+  };
   const reconcileSource=(useProject:boolean)=>{
     if(!sourceConflict||!active||busy||pending||filesOpen||!view||!view.draft?.ownerPickedConvention||document.hidden)return;
     const remote=view.draft,here=draft.current,scope=String(remote.checkoutId||'');
@@ -354,6 +367,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, receipt => applySubmission(receipt, marker));
   };
   const androidWrapper = source?.projectId === projectId && source.checkoutId === checkout && source.androidGradleWrapper?.sourceDigest === source.sourceDigest ? source.androidGradleWrapper : null;
+  const archiveRoot = source?.projectId === projectId && source.checkoutId === checkout &&
+    /^[a-f0-9]{64}$/.test(source.sourceDigest) ? source.retainedArchiveRoot : null;
   const versionBuild = versionBuildFor(source, projectId, checkout);
   const nodeBlocked = source?.projectId===projectId && source?.checkoutId===checkout ? existingBuildBlocked(source.existingNodeBuildBlocked) : '';
   const buildLookupUnavailable = source?.existingNodeBuild === true ?
@@ -404,6 +419,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
         onChange={value => { const clear = !!currentPicked && checkout!==value; if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
           setCheckout(value); setBuildCheckout(''); setBuildCopyMissing(false); setSource(null); setHostOrigin(null); setHostFiles(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value, ...(clear?{constraints:''}:{}) }); }} />
+      {!filesOpen&&archiveRoot&&<div className="pw-local-inline-notice" role="status">
+        <p>工程配置在 <bdi>{archiveRoot.descriptor}</bdi>，不在副本顶层。你仍可编辑这份副本。</p>
+        <p>若要按工程根重新导入，请选择 <bdi>{archiveRoot.directory}/</bdi> 文件夹。原普通 ZIP 若只有一层外目录，也可选「去掉普通 ZIP 唯一外层目录」。重新导入另建项目，不带入本副本的修改。</p>
+        {can('projects.localSource.open')&&<Button variant="secondary" size="small" disabled={disabled}
+          onClick={()=>void invoke('projects.localSource.open')}>打开手机导入</Button>}
+      </div>}
       {available.some(row => row.checkoutId === checkout && row.hostSource === true) && can('projects.development.hostSource') &&
         <div className="pw-form-actions"><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => readOrigin(false)}>核对导入来源</Button>
           {origin && <div role="status">{origin.localSourceRecorded ? <p>来自主机冻结版本 {origin.snapshotVersion} · {origin.files} 份文件 · {origin.bytes} 字节。这里只记录导入时的版本，不代表本机文件未改或主机现在在线。</p> :
@@ -445,7 +466,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
         {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>安装依赖、构建或启动仍须核对具体方案；不会因为发现项目类型就运行脚本。</p>}
         <p>模型调用需要相应网络；已有文件和副本不会因离线而删除。退出页面不等于停止任务，重开请查看原任务。</p>
-        <Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onPrepareTools}>{androidWrapper ? '查看手机基础工具（不安装 SDK）' : '查看工具准备'}</Button>
+        {can('setup.runtime.read')&&can('projects.development.draft')&&<Button variant="secondary" disabled={disabled}
+          data-workspace-entry="project-default-tools" onClick={prepareTools}>{androidWrapper ? '查看手机基础工具（不安装 SDK）' : '查看工具准备'}</Button>}
         {source && <dl className="pw-facts"><div><dt>原项目</dt><dd>{projectId}</dd></div><div><dt>私人副本</dt><dd>{checkout}</dd></div><div><dt>已读取版本</dt><dd>{source.sourceDigest}</dd></div><CheckoutGuide source={source} projectId={projectId} checkoutId={checkout}/></dl>}
       </AccordionItem></Accordion>
     </>}

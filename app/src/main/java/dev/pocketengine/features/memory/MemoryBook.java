@@ -1670,7 +1670,10 @@ public final class MemoryBook {
                 }
             }
             status=replacements.length()>0?"superseded":"record_removed";
-        }else if(row.getLong("revision")!=revision){status="record_changed";result.put("currentRevision",row.getLong("revision"));}
+        }else if(row.getLong("revision")!=revision){
+            long later=row.getLong("revision");status="record_changed";result.put("currentRevision",later);
+            if(ownerManagementView&&later>revision&&ownerPersonalRecord(scope,row))result.put("canCheckCurrentPersonal",true);
+        }
         JSONArray sourceStates=new JSONArray(),expected=reference.getJSONArray("sourceRefs");
         for(int i=0;i<expected.length();i++){
             SourceRef ref=SourceRef.fromJson(expected.getJSONObject(i));String state=taskSourceState(scope,ref,row);
@@ -1687,12 +1690,26 @@ public final class MemoryBook {
         }
         if("current".equals(status)){
             // UI eligibility from this already checked row. No subject body, new search, or model metadata.
-            if(ownerManagementView&&"owner".equals(scope.ownerId)&&"private".equals(scope.spaceId)&&!row.has("appKnowledge")
-                    &&PersonalMemorySemantics.ownerAssertion(row.optJSONObject("assertion")))result.put("personalOwnerReview",true);
+            if(ownerManagementView&&ownerPersonalRecord(scope,row))result.put("personalOwnerReview",true);
             JSONObject current=viewRecord(row);for(String field:Set.of("text","layer","tier","core","source","confidence","expiresAt","supersedes","supersededAt","validationStatus","applicability"))
                 if(current.has(field))result.put(field,current.get(field));
         }
         return result.put("status",status).put("sourceRefs",sourceStates).put("replacementRefs",replacements);
+    }
+    private static boolean ownerPersonalRecord(Scope scope,JSONObject row){
+        return "owner".equals(scope.ownerId)&&"private".equals(scope.spaceId)&&!row.has("appKnowledge")
+                &&PersonalMemorySemantics.ownerAssertion(row.optJSONObject("assertion"));
+    }
+    /** Owner review of one exact saved version; caller has proved membership of the older version. */
+    JSONObject taskCurrentPersonalRecord(Scope scope,String id,long revision)throws Exception {
+        JSONObject row=require(scope,id);
+        if(row.getLong("revision")!=revision||!ownerPersonalRecord(scope,row))throw new SecurityException("这条记忆或版本已变化，请重新核对原回答");
+        long now=System.currentTimeMillis();
+        if(!activeIds(now).contains(id)||!retrievalSourcesLive(row,new LinkedHashMap<>()))return new JSONObject().put("status","not_available");
+        long until=recordExpiry(row,new HashSet<>());
+        if(until<=System.currentTimeMillis())return new JSONObject().put("status","not_available");
+        return new JSONObject().put("status","read").put("text",row.getString("text"))
+                .put("expiresAt",until==Long.MAX_VALUE?JSONObject.NULL:until);
     }
     private String taskSourceState(Scope scope,SourceRef ref,JSONObject row)throws Exception {
         JSONObject state=sources.get(ref.key());

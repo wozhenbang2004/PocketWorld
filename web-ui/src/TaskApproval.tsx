@@ -11,23 +11,31 @@ const labels:Record<string,string>={text:'内容',goal:'目标',url:'网址',pat
 
 const nonEmptyText=(value:unknown):value is string=>typeof value==='string'&&value.trim().length>0;
 
-/** Use the native capability snapshot being approved, not the saved team's
- * current directory entry or a draft. Other team start routes keep their own review. */
-function originalSavedTeamStart(tool:unknown,capability:Json,args:Json){
+/** Render the frozen native roster of this approval, not draft arguments or a
+ * current directory entry. File/device teams keep their own review. */
+function originalModelTeamStart(capability:Json,args:Json,oneTime:boolean){
  const definition=object(capability.teamDefinition);
- if(tool!=='teams_start'||capability.feature!=='teams'||capability.command!=='start'||!nonEmptyText(args.teamId)||
-    args.teamId!==definition.id||Object.hasOwn(args,'members')||Object.hasOwn(args,'planRef')||Object.hasOwn(args,'planHash')||
+ if(Object.hasOwn(args,'planRef')||Object.hasOwn(args,'planHash')||
     !['collaborate','debate'].includes(definition.mode)||!nonEmptyText(definition.name))return null;
+ const rounds=Object.hasOwn(args,'rounds')?args.rounds:definition.mode==='debate'?2:1;
+ if(oneTime){
+  if(definition.definitionKind!=='one_time'||!nonEmptyText(definition.id)||Object.hasOwn(args,'teamId')||
+     !nonEmptyText(args.goal)||!Array.isArray(args.members)||definition.mode!==(Object.hasOwn(args,'mode')?args.mode:'collaborate')||
+     (rounds!==1&&rounds!==2)||definition.mode==='debate'&&(rounds!==2||definition.discussionFormat!=='pocketworld.evidence-dialogue.v1'))return null;
+ }else if(!nonEmptyText(args.teamId)||args.teamId!==definition.id)return null;
  const members=list(definition.members).map(object);
  if(!members.length||members.length>4||members.some(member=>!nonEmptyText(member.id)||!nonEmptyText(member.name)||
     !nonEmptyText(member.role)||(member.assignment!=null&&typeof member.assignment!=='string')||
     (member.runner!=null&&member.runner!=='model')||(member.device!=null&&member.device!=='phone')))return null;
+ if(oneTime&&(args.members.length!==members.length||members.some((member,i)=>member.id!==object(args.members[i]).id||
+    member.runner!=='model'||member.device!=='phone')))return null;
  const ids=new Set(members.map(member=>member.id));
  if(ids.size!==members.length||!ids.has(definition.leaderId)||members.some(member=>member.dependsOn!=null&&
     (!Array.isArray(member.dependsOn)||member.dependsOn.some((id:unknown)=>typeof id!=='string'||!ids.has(id)||id===member.id))))return null;
  const name=(member:Json,index:number)=>members.filter(row=>row.name===member.name).length===1
-   ? member.name as string : String(member.name)+'（编组第 '+(index+1)+' 位）';
- return {name:definition.name,members:members.map((member,index)=>({
+   ? member.name as string : String(member.name)+(oneTime?'（第 ':'（编组第 ')+(index+1)+' 位）';
+ return {oneTime,name:definition.name,steps:oneTime?(definition.mode==='debate'?'独立提出观点、相互核对、原作者回应，最后整理结论。':
+   rounds===2?'成员按分工协作两轮，然后汇总。':''): '',members:members.map((member,index)=>({
   id:member.id as string,name:name(member,index),role:member.role as string,assignment:nonEmptyText(member.assignment)?member.assignment as string:'',
   leads:member.id===definition.leaderId,
   dependencies:(member.dependsOn||[]).map((id:string)=>{const i=members.findIndex(row=>row.id===id);return name(members[i],i);}) as string[],
@@ -40,7 +48,9 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
  const [scopeReviewed,setScopeReviewed]=useState(false);
  const id=String(approval.approvalId||approval.id||''),capability=object(approval.capability),args=object(approval.arguments),view=object(approval.webReview);
  const team=view.kind==='team_plan',live=view.kind==='live_scope',execution=view.kind==='execution_plan',scope=object(capability.ownedService);
- const savedTeam=view.kind==='operation'?originalSavedTeamStart(approval.tool,capability,args):null;
+ const rosterStart=view.kind==='operation'&&approval.tool==='teams_start'&&capability.feature==='teams'&&capability.command==='start';
+ const oneTimeStart=rosterStart&&(Object.hasOwn(args,'members')||object(capability.teamDefinition).definitionKind==='one_time');
+ const plannedTeam=rosterStart?originalModelTeamStart(capability,args,oneTimeStart):null;
  const executionOriginal=object(view.executionPlan),executionPlan=object(executionOriginal.plan);
  const original=object(view.teamPlan),plan=object(original.plan),source=object(plan.sourceParent),previous=object(source.parentBudget),budget=object(plan.budgetPlan);
  const items=list(plan.items),members=list(object(plan.definition).members);
@@ -59,14 +69,14 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
      validDependencies||reviewedBuild.action==='build'&&['npm','pnpm'].includes(reviewedBuild.manager)||reviewedBuild.action==='collect'&&positiveId(reviewedBuild.buildRunId)&&
      positiveId(reviewedBuild.buildOperationId)&&reviewedBuild.buildOperationId!==reviewedBuild.actionOperationId&&goodEpoch(reviewedBuild.buildEpoch)&&
      typeof reviewedBuild.path==='string'&&Number.isSafeInteger(reviewedBuild.bytes)&&reviewedBuild.bytes>=0&&/^[a-f0-9]{64}$/.test(reviewedBuild.sha256));
- const canApprove=buildValid&&view.canApprove===true&&planMatches&&(!execution||executionMatches)&&(!(team||live||execution)||scopeReviewed);
+ const canApprove=buildValid&&view.canApprove===true&&planMatches&&(!oneTimeStart||!!plannedTeam)&&(!execution||executionMatches)&&(!(team||live||execution)||scopeReviewed);
  const decide=(approved:boolean)=>onDecision({approvalId:id,approved,...(approved&&(team||live||execution)?{scopeReviewed}:{}),...(approved&&team?{planRef:original.planRef,planHash:original.planHash}:{}),...(approved&&execution?{planRevision:executionOriginal.planRevision,planArtifactRef:executionOriginal.planArtifactRef,planHash:executionOriginal.planHash}:{})});
  const originalFile=originalTeamApprovalFile(approval);
  const argumentFacts=Object.entries(args).filter(([key,value])=>key in labels&&(!originalFile||key!=='path')&&['string','number','boolean'].includes(typeof value));
  return <section className="pw-approval-item pw-task-decision" aria-label="本次操作授权">
   <header className="pw-decision-heading">
-   <span className="pw-decision-eyebrow">{execution?'审阅原任务计划':team?'确认工作计划':live?'确认服务范围':savedTeam?'确认团队分工':'需要你的确认'}</span>
-   <h4>{savedTeam?<>{'使用编组：'}<bdi>{savedTeam.name}</bdi></>:String(approval.message||approval.title||(execution?'计划审阅':approval.toolName||approval.tool||'这次操作授权'))}</h4>
+   <span className="pw-decision-eyebrow">{execution?'审阅原任务计划':team?'确认工作计划':live?'确认服务范围':plannedTeam||oneTimeStart?'确认团队分工':'需要你的确认'}</span>
+   <h4>{oneTimeStart?'管家为这件事安排的分工':plannedTeam?<>{'使用编组：'}<bdi>{plannedTeam.name}</bdi></>:String(approval.message||approval.title||(execution?'计划审阅':approval.toolName||approval.tool||'这次操作授权'))}</h4>
    {approval.reason&&<p className="pw-decision-context">{String(approval.reason)}</p>}
    {approval.description&&<p className="pw-decision-context">{String(approval.description)}</p>}
   </header>
@@ -84,15 +94,17 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
   {argumentFacts.length>0&&<dl className="pw-decision-facts" aria-label="本次操作内容">
    {argumentFacts.map(([key,value])=><div key={key}><dt>{labels[key]}</dt><dd className="pw-approval-copy">{String(value)}</dd></div>)}
   </dl>}
-  {savedTeam&&<section className="pw-decision-section" aria-label="这次申请的成员与分工">
+  {oneTimeStart&&!plannedTeam&&<p role="alert">尚未核对到这次拟定的完整分工，不能批准。请重新打开原待审事项，或拒绝这次申请。</p>}
+  {plannedTeam&&<section className="pw-decision-section" aria-label="这次申请的成员与分工">
    <h5>这次由谁负责</h5>
-   <ol className="pw-decision-worklist">{savedTeam.members.map(member=><li key={member.id}>
+   <ol className="pw-decision-worklist" role="list">{plannedTeam.members.map(member=><li key={member.id}>
     <div className="pw-decision-work-heading"><h6><bdi>{member.name}</bdi></h6>{member.leads&&<span>计划负责汇总</span>}</div>
     <p className="pw-approval-copy" dir="auto">{member.assignment||member.role}</p>
     {member.assignment&&member.assignment.trim()!==member.role.trim()&&<p className="pw-approval-copy" dir="auto">职责：{member.role}</p>}
     {member.dependencies.length>0&&<p className="pw-decision-meta">先等 <bdi>{member.dependencies.join('、')}</bdi> 的产出</p>}
    </li>)}</ol>
-   <p className="pw-decision-boundary">只批准这次分工，不修改已保存的编组。</p>
+   {plannedTeam.steps&&<p>{plannedTeam.steps}</p>}
+   <p className="pw-decision-boundary">{plannedTeam.oneTime?'只批准这次模型分工。不保存为编组，不授予文件写入或设备操作。':'只批准这次分工，不修改已保存的编组。'}</p>
   </section>}
   {capability.pluginId&&<p className="pw-decision-meta">插件 {String(capability.pluginId)} · v{String(capability.version||'')} · 安装 {String(capability.installationId||'').slice(-8)}</p>}
   {live&&<section className="pw-decision-section" aria-label="本次启动范围">
@@ -171,7 +183,7 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
    {(team||live||execution)&&view.canApprove===true&&(!execution||executionMatches)&&<CheckboxField className="pw-decision-reviewed" isSelected={scopeReviewed} onChange={setScopeReviewed} isDisabled={disabled}>
     {execution?`我已核对计划版本 ${String(executionOriginal.planRevision)} 的完整步骤和原任务范围`:team?'我已核对原成员、依赖、文件基线、范围与累计预算':'我已核对原文件范围，并允许这些源码后续修改在本轮服务中执行'}
    </CheckboxField>}
-   <div className="pw-decision-actions"><PressButton label={execution?'确认这版计划，在原范围内继续':team?'批准此计划与可见预算':live?'允许启动与限定热改':view.programRisk?'允许运行本机程序':dependencies?'批准此锁的依赖下载':savedTeam?'批准这次分工':'允许这次操作'} disabled={disabled||!id||!canApprove} onClick={()=>decide(true)}/><Button variant="secondary" disabled={disabled||!id} onClick={()=>decide(false)}>拒绝</Button></div>
+   <div className="pw-decision-actions"><PressButton label={execution?'确认这版计划，在原范围内继续':team?'批准此计划与可见预算':live?'允许启动与限定热改':view.programRisk?'允许运行本机程序':dependencies?'批准此锁的依赖下载':plannedTeam||oneTimeStart?'批准这次分工':'允许这次操作'} disabled={disabled||!id||!canApprove} onClick={()=>decide(true)}/><Button variant="secondary" disabled={disabled||!id} onClick={()=>decide(false)}>拒绝</Button></div>
   </footer>
  </section>;
 }

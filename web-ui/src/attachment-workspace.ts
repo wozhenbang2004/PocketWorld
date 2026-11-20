@@ -21,7 +21,8 @@ export function fileBytes(value: unknown): string {
   const count = typeof value === 'number' && Number.isFinite(value) ? value : 0;
   return count >= 1048576 ? `${(count / 1048576).toFixed(1)} MiB` : count >= 1024 ? `${(count / 1024).toFixed(1)} KiB` : `${count} bytes`;
 }
-export function fileRunProvenance(value: unknown): string {
+export function fileRunProvenance(value: unknown, evidence?: unknown): string {
+  if (evidence === 'original_device_file_receive') return value === 'current' ? '本轮接收自原设备' : value === 'earlier' ? '较早轮次接收自原设备' : '';
   switch (value) {
     case 'current': return '本轮生成';
     case 'earlier': return '较早执行生成';

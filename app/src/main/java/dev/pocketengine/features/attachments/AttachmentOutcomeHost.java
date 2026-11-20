@@ -27,6 +27,7 @@ public final class AttachmentOutcomeHost {
         control.check();JSONObject task=ownerTask(taskId);JSONArray selected=task==null?new JSONArray():tasks.ownerAttachmentReferences(taskId);
         JSONObject inventory=documents.ownerAttachmentInventoryForHost();JSONArray files=inventory.getJSONArray("attachments"),sources=new JSONArray(),results=new JSONArray(),jobs=new JSONArray();Set<String> included=new HashSet<>();
         var captured=new dev.pocketengine.features.remote.RemoteFileCaptureAttempt(task,tasks::remoteOwnerOperation);
+        int receivedChecks=0;boolean receivedLimited=false;
         for(int i=0;i<selected.length();i++){
             JSONObject pinned=selected.getJSONObject(i),meta=find(files,pinned.getString("id"));
             if(meta==null||!sameReference(pinned,meta))sources.put(new JSONObject(pinned.toString()).put("availability","input_changed").put("name","原来源文件不可读"));
@@ -41,6 +42,15 @@ public final class AttachmentOutcomeHost {
                 if(original!=null&&original.optJSONObject("origin")!=null&&original.getJSONObject("origin").optString("kind").equals("group"))continue; // Group results use their original scoped viewer, not this technical media cache.
             }
             String kind=origin==null?"":origin.optString("kind");
+            if(task!=null&&"device_received_file".equals(kind)&&"file".equals(origin.opt("artifactKind"))){
+                // A local Book row alone is not a device result. Preserve the ordinary source
+                // entry unless the original SQLite receipt and exact local publication agree.
+                if(receivedChecks++>=24)receivedLimited=true;
+                else {
+                    JSONObject received=originalReceivedFile(task,meta,origin,control);
+                    if(received!=null){results.put(received);continue;}
+                }
+            }
             boolean output=kind.equals("generated_media")||kind.equals("created_text")||kind.equals("document_extract")||kind.equals("remote_result_snapshot")||kind.equals("created_document")||kind.equals("derived_media")||kind.equals("managed_build_output");
             if(task!=null&&output&&kind.equals("generated_media")) {
                 JSONObject actual=tasks.ownerMediaOperationSource(taskId,origin.getString("operationId"));
@@ -72,11 +82,26 @@ public final class AttachmentOutcomeHost {
                 jobs.put(value);
             }
         }
+        if(receivedLimited)inventory.getJSONObject("indexDiagnostics").put("incomplete",true);
         ownerTask(taskId);control.check();JSONObject result=new JSONObject().put("taskId",taskId==null?"":taskId).put("sources",sources).put("artifacts",results)
                 .put("media",jobs).put("documentCapabilities",documents.documentCapabilities()).put("indexDiagnostics",inventory.getJSONObject("indexDiagnostics")).put("verifiedBusinessSuccess",false);
         if(task!=null){result.put("taskRunId",task.optString("runId")).put("coordinatorEpoch",task.optInt("coordinatorEpoch")).put("taskStatus",task.optString("status"));if("attachments".equals(task.optString("feature"))&&"createDocument".equals(task.optString("command")))result.put("originalDocumentActionId",task.getString("operationId"));}
         else result.put("documentActions",documentActions("",control));
         return result;
+    }
+    private JSONObject originalReceivedFile(JSONObject task,JSONObject meta,JSONObject origin,RunControl control)throws InterruptedException{
+        if(task.has("origin")||task.optBoolean("contextWithdrawn")||!task.optBoolean("contextAvailable",true)
+                ||task.optBoolean("sourceCurrentReadRequired")||"source_unavailable".equals(task.opt("taskProjection")))return null;
+        try{
+            String id=task.getString("id"),current=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
+            var original=tasks.deviceTasks().ownerHistoryEvidence(id,origin.getString("sourceOperationId"));
+            JSONObject proof=dev.pocketengine.features.devices.transport.OwnerReceivedFileBook.savedFileProvenance(original,meta,control);
+            String run=proof.getString("sourceTaskRunId");int receivedEpoch=proof.getInt("sourceCoordinatorEpoch");
+            if(current.isBlank()||receivedEpoch>epoch||run.equals(current)!=(receivedEpoch==epoch))return null;
+            JSONObject result=row(meta,"result");
+            for(String field:new String[]{"sourceTaskId","sourceTaskRunId","sourceCoordinatorEpoch","sourceOperationId","sourceRunEvidence"})result.put(field,proof.get(field));
+            return result.put("runProvenance",receivedEpoch==epoch?"current":"earlier");
+        }catch(InterruptedException cancelled){throw cancelled;}catch(Exception unverified){return null;}
     }
 
     /** One explicit metadata page, including completed originals whose UI callback was lost. */

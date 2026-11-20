@@ -206,6 +206,28 @@ public final class TaskMemoryUse {
     JSONObject readOwnerManagementReceipt(JSONObject authenticatedScope,ReceiptRef expected,MemoryHostFence fence)throws Exception{
         return readReceipt(authenticatedScope,expected,fence,null,true);
     }
+    /** Separate read for one newer saved version. It is never added to the original provided rows. */
+    JSONObject readOwnerRevisedRecord(JSONObject authenticatedScope,ReceiptRef expected,JSONObject choice,MemoryHostFence fence)throws Exception{
+        MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,expected.task);requireFence(fence);
+        if(projectAccess!=null||!"owner".equals(scope.ownerId)||!"private".equals(scope.spaceId)||choice.length()!=5
+                ||SourceRef.integer(choice,"coordinatorEpoch",0)!=expected.task.coordinatorEpoch)throw new SecurityException("现行本人记忆不属于原私人回答");
+        String id=identifier(choice.getString("id")),receiptId=identifier(choice.getString("receiptId"));
+        long original=SourceRef.integer(choice,"originalRevision",1),revision=SourceRef.integer(choice,"currentRevision",1);
+        if(revision<=original)throw new SecurityException("现行记忆必须是同一条的较新版本");
+        return fence.admit(()->{synchronized(book){
+            Provided proof=provided(scope,expected);
+            if(proof==null||proof.revoked||!receiptId.equals(proof.selectionId)||!"current".equals(taskStatus(task(scope,expected.task),expected.task)))
+                throw new SecurityException("原回答的提供回执已不可核对");
+            JSONArray refs=proof.references();boolean member=false;
+            for(int i=0;i<refs.length();i++){JSONObject row=refs.getJSONObject(i);if(id.equals(row.getString("id"))&&original==row.getLong("revision")){member=true;break;}}
+            if(!member)throw new SecurityException("这条记忆不在原回答的提供回执中");
+            JSONObject saved=book.taskCurrentPersonalRecord(scope,id,revision);
+            fence.check();
+            return saved.put("format","pocketworld.current-provided-memory-version.v1").put("original",expected.toJson().put("receiptId",receiptId))
+                    .put("id",id).put("originalRevision",original).put("currentRevision",revision)
+                    .put("providedToOriginalRequest",false).put("modelUseVerified",false).put("executionAuthorized",false);
+        }});
+    }
     private JSONObject readReceipt(JSONObject authenticatedScope,ReceiptRef expected,MemoryHostFence fence,ReadAudience readAudience,boolean ownerManagementView)throws Exception{
         MemoryBook.Scope scope=scope(authenticatedScope);requireScope(scope,expected.task);requireFence(fence);MemoryAudienceSelection audience=captureAudience(readAudience,bookScope(scope));
         return fence.admit(()->{checkAudience(audience);synchronized(book){Provided proof=provided(scope,expected);if(proof==null)return unavailable(expected,"native_proof_unavailable");

@@ -4,7 +4,7 @@ import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 
-export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded' };
+export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive' };
 
 type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string };
 
@@ -77,7 +77,7 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   const hasSources = !!(sources.length || current?.sourceUnavailable || current?.hasRequestAttachments);
   if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error) return null;
   const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
-      const metadata = input ? fileBytes(file.size) : `${fileRunProvenance(file.runProvenance) || '生成轮次未记录'} · ${fileBytes(file.size)}`;
+      const metadata = input ? fileBytes(file.size) : `${fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录'} · ${fileBytes(file.size)}`;
       return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
         aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
         <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}</small></span>

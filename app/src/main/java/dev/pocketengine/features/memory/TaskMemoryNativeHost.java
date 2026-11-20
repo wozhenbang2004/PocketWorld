@@ -48,7 +48,7 @@ public final class TaskMemoryNativeHost {
             case "readTaskMemoryTraceOperation":allowed=Set.of("taskId","runId","sourceId","revision","offset","maxChars");break;
             case "readTaskNativeOutputAudit":allowed=Set.of("taskId","runId","sourceId","revision","offset","maxChars");break;
             case "readConversationHistoryCitation":allowed=Set.of("callerTaskId","callerRunId","conversationId","sourceJump","taskSource");break;
-            case "readTaskMemoryReceipt":break;
+            case "readTaskMemoryReceipt":allowed.add("revisedPersonalRecord");break;
             case "readTaskMemorySource":allowed.addAll(Set.of("id","expectedRevision","sourceRef","receiptId","offset","maxChars"));break;
             case "listTaskMemoryReplacements":allowed.addAll(Set.of("id","expectedRevision","receiptId"));break;
             case "correctTaskMemoryReviewed":allowed.addAll(Set.of("id","expectedRevision","receiptId","text"));break;
@@ -92,11 +92,13 @@ public final class TaskMemoryNativeHost {
         }
         if("readTaskMemoryTraceOperation".equals(command))return reader.readTraceOperation(authenticated,payload);
         if("readTaskNativeOutputAudit".equals(command))return tasks.readNativeOutputAudit(MemoryBook.Scope.from(authenticated),payload,ownerReadControl);
+        JSONObject revised=payload.has("revisedPersonalRecord")?payload.getJSONObject("revisedPersonalRecord"):null;
         synchronized(sources){
-            sources.synchronize(authenticated);synchronized(tasks){String taskId=payload.getString("taskId"),run=payload.getString("runId"),request=payload.getString("requestId"),answer=payload.getString("answerId");
+            if(revised==null)sources.synchronize(authenticated);
+            synchronized(tasks){String taskId=payload.getString("taskId"),run=payload.getString("runId"),request=payload.getString("requestId"),answer=payload.getString("answerId");
             TaskMemoryUse.ReceiptRef receipt=reader.readReceiptRef(authenticated,taskId,run,request,answer);
             if(receipt==null){
-                if(!"readTaskMemoryReceipt".equals(command))throw new IllegalStateException("没有这次请求的原生提供回执，请重新核对");
+                if(revised!=null||!"readTaskMemoryReceipt".equals(command))throw new IllegalStateException("没有这次请求的原生提供回执，请重新核对");
                 return authenticated.put("taskId",taskId).put("runId",run).put("requestId",request).put("answerId",answer).put("phase","unavailable").put("status","unavailable")
                         .put("reason","native_proof_unavailable").put("records",new JSONArray()).put("modelUseVerified",false).put("executionAuthorized",false);
             }
@@ -105,7 +107,13 @@ public final class TaskMemoryNativeHost {
                 public JSONObject admit(Admission action)throws Exception{synchronized(tasks){check();return action.run();}}
             };
             TaskMemoryUse use=use();
-            if("readTaskMemoryReceipt".equals(command))return use.readOwnerManagementReceipt(authenticated,receipt,fence);
+            if("readTaskMemoryReceipt".equals(command)){
+                if(revised==null)return use.readOwnerManagementReceipt(authenticated,receipt,fence);
+                if(ownerReadControl==null)throw new SecurityException("缺少原私人阅读窗口");
+                ownerReadControl.check();
+                JSONObject read=use.readOwnerRevisedRecord(authenticated,receipt,revised,fence);
+                ownerReadControl.check();return read;
+            }
             String id=payload.getString("id");long revision=SourceRef.integer(payload,"expectedRevision",1);
             if("readTaskMemorySource".equals(command))return use.readTaskMemorySource(authenticated,receipt,id,revision,SourceRef.fromJson(payload.getJSONObject("sourceRef")),
                     payload.has("offset")?Math.toIntExact(SourceRef.integer(payload,"offset",0)):0,

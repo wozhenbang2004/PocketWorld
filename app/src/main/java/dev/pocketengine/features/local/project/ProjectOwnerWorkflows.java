@@ -45,6 +45,7 @@ public final class ProjectOwnerWorkflows {
         JSONObject wrapper=ProjectAndroidPreflight.ownerWrapper(snapshot,source);
         if(!project.equals(source.getString("projectId"))||!checkout.equals(source.getString("checkoutId")))throw new SecurityException("原项目副本已变化");
         if(observeTooling){
+            source.putOpt("retainedArchiveRoot",ProjectArchiveRoot.checkout(snapshot.getJSONObject("checkout"),source.getJSONArray("files")));
             try{source.put("checkoutTooling",ProjectCheckoutTooling.describe(snapshot,source,local.projectRuntimeForHost("managed_process_v1")).put("androidClues",wrapper!=null));}
             catch(Exception unavailable){/* Optional observation must not block reading/editing a verified checkout. */}
             JSONObject copy=snapshot.getJSONObject("checkout").optJSONObject(OwnerDraftWorkCopy.FIELD);

@@ -3,7 +3,7 @@ import {bridge} from './bridge';
 import {Button, SettingsDialog, StretchSwitch, TextField} from './forms-library';
 import './project-git-intake.css';
 
-type Source = {id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
+type Source = {retainedArchiveRoot?:{directory:string;descriptor:string};id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
 type Intake = {window:string;busy:boolean;picking:boolean;notice?:string;error?:string;suggestedSkip?:string;staged?:Source;saved:Source[];
   reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string};
 const prefix='projects.localSource.', number=(n:number)=>new Intl.NumberFormat('zh-CN').format(n);
@@ -18,7 +18,7 @@ export function ProjectLocalSourceIntake({state}:{state?:Intake}) {
   return state?.window?<SourcePanel key={state.window} state={state}/>:null;
 }
 function SourcePanel({state}:{state:Intake}){
-  const source=state.staged, inflight=useRef(false);
+  const source=state.staged, root=source?.retainedArchiveRoot, inflight=useRef(false);
   const [name,setName]=useState(''),[strip,setStrip]=useState(false),[discard,setDiscard]=useState(false);
   const [pending,setPending]=useState(false),[error,setError]=useState(''),[excluded,setExcluded]=useState('');
   useEffect(()=>{setName((source?.label||'').slice(0,80));setDiscard(false);setError('');if(source?.id)setExcluded('');},[source?.id]);
@@ -49,6 +49,9 @@ function SourcePanel({state}:{state:Intake}){
         {source.kind==='host_saved_snapshot'&&<p>只包含在原任务中选定的 UTF-8 文件，不是整份主机仓库，也没有授予运行权限。</p>}
         {source.excludedDirectory&&<p>按你的选择跳过目录 <bdi>{source.excludedDirectory}/</bdi>。其中的文件没有读取，也不会进入新项目。</p>}
         {source.fixedPackage&&<p>已核对包内文件，按原相对路径放进新项目，不带外层 project/。{source.fixedPackage.omitted>0&&`原包另有 ${number(source.fixedPackage.omitted)} 项未收录。`}不会恢复旧任务、工具环境或执行权限。</p>}
+        {root&&<><p>工程配置位于 <bdi>{root.descriptor}</bdi>。当前会保留外层 <bdi>{root.directory}/</bdi>。</p>
+          {!state.reviewId&&!discard&&<div className="pw-action-row"><Button variant="secondary" disabled={busy}
+            onClick={()=>void act('zip',{stripRoot:true})}>重新选择 ZIP 并去掉外层目录</Button></div>}</>}
         <dl><div><dt>来源</dt><dd dir="auto">{source.label} · {sourceKind(source)}</dd></div>
           {state.reviewId&&<div><dt>去向</dt><dd dir="auto">此手机 · 新私人项目「{state.reviewName}」</dd></div>}
           <div><dt>已选范围</dt><dd>{number(source.files)} 个文件 · {number(source.bytes)} 字节{source.omitted>0&&` · 跳过 ${number(source.omitted)} 项`}</dd></div></dl>
