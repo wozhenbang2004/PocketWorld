@@ -1192,16 +1192,35 @@ public final class TaskStore {
      * A result may be visible to its owner without being eligible as new model context. */
     public synchronized JSONObject conversationPhoneOriginalPage(String conversation,String message,long revision,String task,String run,int epoch,String delivery,int offset,String expectedDigest)throws Exception {
         ConversationPhoneHandoff.nativeId(conversation);ConversationPhoneHandoff.nativeId(message);
-        String key=ConversationPhoneHandoff.resultKey(task,run,epoch);
         // Native phone result publication inserts exactly revision 1. Edits or restored text do not reissue it.
         if(revision!=1L||offset<0||!ConversationPhoneHandoff.deliveryId(task,run,epoch).equals(delivery))throw new SecurityException("请选择这条原手机回执");
+        return readConversationPhoneOriginalPage(conversation,message,task,run,epoch,delivery,offset,expectedDigest,false);
+    }
+    /** Read the current run's original private publication from its already open work.
+     * The destination and message are selected by the original transaction, never by the caller. */
+    public synchronized JSONObject conversationPhoneTaskOriginalPage(String task,String run,int epoch,int offset,String expectedDigest)throws Exception {
+        return readConversationPhoneOriginalPage(null,null,task,run,epoch,ConversationPhoneHandoff.deliveryId(task,run,epoch),offset,expectedDigest,true);
+    }
+    private JSONObject readConversationPhoneOriginalPage(String conversation,String message,String task,String run,int epoch,String delivery,int offset,String expectedDigest,boolean fromTask)throws Exception {
+        String key=ConversationPhoneHandoff.resultKey(task,run,epoch);
+        long revision=1L;
         db.beginTransactionNonExclusive();try{
+            JSONObject work=required(task),link=ConversationPhoneHandoff.association(work);
+            if(fromTask){
+                if(work.has("ownerPhoneControl")||work.has("ownerDeviceWork")||!run.equals(work.optString("runId"))||epoch!=work.optInt("coordinatorEpoch")||
+                        !ConversationPhoneHandoff.ended(work.optString("status")))
+                    throw new SecurityException("原手机工作或轮次已变化，未读取其他结果");
+                conversation=link.getString("conversationId");
+            }
             if(!conversationRepository.active()||!conversationRepository.exists(conversation))throw new SecurityException("原私人对话已关闭或不可用");
             JSONObject published=conversationRepository.sourceByReply(delivery);
+            if(fromTask){
+                if(published==null)throw new SecurityException("尚未在原私人对话核对到这轮已保存的回执");
+                message=published.getString("sourceId");ConversationPhoneHandoff.nativeId(message);
+            }
             if(published==null||!message.equals(published.optString("sourceId"))||revision!=published.optLong("revision")||!conversation.equals(published.optString("conversationId"))
                     ||published.optBoolean("deleted")||published.optBoolean("memoryContextRetired")||published.optLong("memorySourceRetiredThrough")>=revision)
                 throw new SecurityException("原回执已撤回、换版或不可用，没有打开其他结果");
-            JSONObject link=ConversationPhoneHandoff.association(required(task));
             if(!conversation.equals(link.getString("conversationId")))throw new SecurityException("原手机工作不属于这段私人对话");
             JSONObject record=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.PHONE_RETURN_RECORD,key,8*1024*1024));
             if(!"delivered".equals(record.optString("phase"))||!message.equals(record.optString("messageId")))throw new SecurityException("没有这条回执的正式原文");
@@ -1211,6 +1230,7 @@ public final class TaskStore {
             if(!snapshot.getString("status").equals(published.optString("nativeStatus")))throw new SecurityException("原回执终态无法核对");
             requireConversationPhoneEndedRun(task,run,epoch);requireConversationPhonePublication(snapshot,published);
             JSONObject page=ConversationPhoneHandoff.summaryPage(snapshot,record.getString("originalSummary"),offset,expectedDigest).put("messageId",message).put("sourceRevision",revision);
+            if(fromTask)page.remove("finalScreenReceipt"); // The work already has a separate, sourced screen observation.
             db.setTransactionSuccessful();return page;
         }finally{db.endTransaction();}
     }

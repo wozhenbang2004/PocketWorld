@@ -123,6 +123,67 @@ export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollo
     }));
 }
 
+const stoppedMemberStage = (value: unknown) => value === 'failed' || value === 'interrupted';
+
+/** A scoped choice on the existing owner reading, not a new resume grant.
+ * Evidence debate is excluded: redoing an earlier debate turn can reopen later turns of other members. */
+export function teamRemainingMember(reading: Data | null, delivered: readonly { memberId: string; round: number }[], ownerTasks: unknown) {
+  const run = reading?.run, link = reading?.ownerWorkLink;
+  if (reading?.kind !== 'run' || !run?.id || run.mode !== 'collaborate' || run.workPlan || run.productionScope ||
+      run.researchExecutionFormat !== 'pocketworld.team-research-agent.v1' || run.researchBudgetAutoRefill !== false ||
+      (run.discussionFormat != null && run.discussionFormat !== 'classic') ||
+      !((run.status === run.phase && (run.status === 'partial' || stoppedMemberStage(run.status))) ||
+        run.status === 'paused' && run.phase === 'waiting_member') ||
+      link?.teamRunId !== run.id || link.readOnly !== true || link.currentRun !== true || link.stopping !== false ||
+      !Number.isSafeInteger(run.revision) || run.revision < 1 || !roundId(run.rounds) ||
+      !Array.isArray(reading.attention) || reading.attention.length !== 1) return null;
+  const roster = rows(run.members), [item] = teamFollowUps(run, reading.attention);
+  if (roster.length < 2 || !item || !stoppedMemberStage(item.status) ||
+      item.locator.questionId || item.locator.workItemId || item.locator.childKind || item.locator.assignmentId ||
+      new Set(roster.map(member => member?.id)).size !== roster.length) return null;
+  let remaining: Data[] = [], assignment = '';
+  for (const member of roster) {
+    if (!text(member?.id) || member.runner !== 'model' || member.exited || member.paused ||
+        (member.device != null && member.device !== 'phone')) return null;
+    const stages = rows(member.roundStates).slice().sort((a, b) => (a?.round || 0) - (b?.round || 0));
+    if (stages.length !== run.rounds || !stages.every((stage, i) => stage?.round === i + 1)) return null;
+    if (member.id !== item.locator.memberId) {
+      if (member.status !== 'completed' || !stages.every(stage => stage.status === 'completed' &&
+          delivered.some(receipt => receipt.memberId === member.id && receipt.round === stage.round))) return null;
+      continue;
+    }
+    remaining = stages.filter(stage => stage.status !== 'completed');
+    if (member.status !== item.status || !stoppedMemberStage(remaining[0]?.status) ||
+        member.memberModelSelection?.format !== 'pocketworld.team-member-model.v1' ||
+        member.memberModelSelection.identityRevision !== item.locator.identityRevision ||
+        remaining.some(stage => {
+          const child = stage.researchTask;
+          return stage.status === 'queued' ? !!stage.researchTaskId || !!child :
+            !stoppedMemberStage(stage.status) || (stage.researchTaskId ? child?.taskId !== stage.researchTaskId ||
+              child?.executionAuthorized !== false || child?.teamRunId !== run.id || child?.memberId !== member.id ||
+              child?.round !== stage.round || child?.identityRevision !== item.locator.identityRevision ||
+              !stoppedMemberStage(child?.status) : !!child);
+        })) return null;
+    assignment = text(member.assignment || member.role).trim();
+  }
+  if (!remaining.length || !assignment) return null;
+  const pool = run.parentBudget, left = pool?.remainingModelRequests;
+  const parent = rows(ownerTasks).find(task => task?.id === link.taskId && task.raw?.executionRole === 'owner_work' &&
+    task.raw?.runId === link.runId && task.raw?.coordinatorEpoch === link.epoch &&
+    task.raw?.conversationId === link.conversationId && task.raw?.actorId === 'owner' && task.raw?.spaceId === 'private');
+  // A retained link can still be the latest link after its parent execution ends.
+  const parentStatus = text(parent?.raw?.status);
+  const parentPresent = !!parentStatus && parent?.raw?.cancelRequested !== true &&
+    !['completed', 'stopping', 'cancelled', 'interrupted', 'paused', 'pausing'].includes(parentStatus);
+  return {
+    key: JSON.stringify([item.key, run.revision]), item, assignment,
+    rounds: remaining.map(row => row.round as number), revision: run.revision as number,
+    canReview: parentPresent && pool?.parentTaskId === link.taskId && pool?.parentRunId === link.runId &&
+      Number.isSafeInteger(left) && left > 0 && Number.isSafeInteger(run.callsUsed) &&
+      Number.isSafeInteger(run.callLimit) && run.callsUsed < run.callLimit,
+  };
+}
+
 /** Use previously saved originals as the reading priority, not as a team outcome.
  * Pending stages are from the same roster snapshot, never inferred from missing answers. */
 export function teamPartialReading(run: Data | null, followUps: TeamFollowUp[]) {

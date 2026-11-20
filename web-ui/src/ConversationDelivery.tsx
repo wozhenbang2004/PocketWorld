@@ -27,21 +27,23 @@ export function conversationPending(composer:Data,receipts:Data,messages:readonl
  });
 }
 
-type Action='query'|'retry'|'return';
-type Props={rows:PendingInput[];can:(action:string)=>boolean;submitting:boolean;onAction:(action:Action,row:PendingInput)=>void};
-export function ConversationDelivery({rows,can,submitting,onAction}:Props){
+type Action='query'|'retry'|'return'|'release-prepared';
+type Props={rows:PendingInput[];can:(action:string)=>boolean;submitting:boolean;ordinaryComposer:boolean;onAction:(action:Action,row:PendingInput)=>void};
+export function ConversationDelivery({rows,can,submitting,ordinaryComposer,onAction}:Props){
  const current=rows.filter(row=>row.current),others=rows.filter(row=>!row.current);
  if(!rows.length)return null;
  const entry=(row:PendingInput,index:number)=>{
   const knownUnsent=row.canRetryLocallyUnsent===true;
+  const canKeepDraft=ordinaryComposer&&row.current&&row.sameDraft&&row.canReleasePreparedFirstChat===true&&can('composer.releasePreparedFirst');
   const state=String(row.receipt.status||row.status||'');
   const heading=knownUnsent||state==='not_sent'?'这条输入未发出':state==='rejected'?'这条输入未被接收':state==='withdrawn'?'这条输入已撤回':
-   ['accepted','queued','consumed'].includes(state)?'原消息已有回执':'等待原发送回执';
+   ['accepted','queued','consumed'].includes(state)?'原消息已有回执':canKeepDraft?'原草稿待核对':'等待原发送回执';
   const original=row.preview?('「'+row.preview+'」'):row.origin+(row.current&&current.length>1?' · 第 '+(index+1)+' 条':'');
   const detail=label(row.receipt.message||row.receipt.reason);
   return <div key={row.clientMessageId} className="pw-pending-input">
    <strong role={row.current?'status':undefined}>{heading}</strong><small>{original}{detail?' · '+detail:''}</small>
    <div className="pw-action-row">
+    {canKeepDraft&&<Button variant="secondary" size="small" disabled={submitting} onClick={()=>onAction('release-prepared',row)}>保留草稿，解除等待</Button>}
     {can('composer.query')&&<Button variant="ghost" size="small" onClick={()=>onAction('query',row)}>查询原回执</Button>}
     {row.otherEditor&&can('composer.returnPending')&&<Button variant="ghost" size="small" disabled={submitting} onClick={()=>onAction('return',row)}>{row.work?'返回原工作补充':'返回原输入'}</Button>}
     {knownUnsent&&can('composer.retry')&&<Button variant="secondary" size="small" disabled={submitting} onClick={()=>onAction('retry',row)}>重新保存并发送</Button>}

@@ -27,21 +27,28 @@ public final class OwnerComposerStore {
         persistedRevision=existing==null?0:state.revision();confirmedFingerprint=fingerprint(existing);attemptedFingerprint="";healthy=true;loaded=true;return state;
     });}
     /** Capture metadata/text now; actual bounded write is serialized off the UI thread. */
-    public CompletableFuture<Void> save(OwnerComposerState state){return save(state,false);}
+    public CompletableFuture<Void> save(OwnerComposerState state){return save(state,false,null,null);}
     /** Only an explicit UI action with an in-process proof that send was never called may use
      * this. It relaxes no disk CAS: only this store's exact last-good/attempted bytes can reopen. */
-    public CompletableFuture<Void> saveAfterLocalUnsentFailure(OwnerComposerState state){return save(state,true);}
-    private CompletableFuture<Void> save(OwnerComposerState state,boolean localUnsentRetry){
+    public CompletableFuture<Void> saveAfterLocalUnsentFailure(OwnerComposerState state){return save(state,true,null,null);}
+    /** Only a verified transition of the same on-disk PREPARED input may fence or release it. */
+    public CompletableFuture<Void> saveFirstChatTransition(OwnerComposerState state,OwnerComposerState.Pending before,OwnerComposerState.Pending after){
+        return save(state,false,java.util.Objects.requireNonNull(before),java.util.Objects.requireNonNull(after));
+    }
+    private CompletableFuture<Void> save(OwnerComposerState state,boolean localUnsentRetry,OwnerComposerState.Pending before,OwnerComposerState.Pending after){
         final JSONObject snapshot;try{snapshot=state.toJson();}catch(Exception invalid){CompletableFuture<Void> failure=new CompletableFuture<>();failure.completeExceptionally(invalid);return failure;}
         return submit(()->{
             if(localUnsentRetry&&loaded&&!healthy){JSONObject disk=read();String actual=fingerprint(disk);if(!actual.equals(confirmedFingerprint)&&!actual.equals(attemptedFingerprint))throw new IllegalStateException("原草稿文件已被其他窗口改变，未以重试覆盖；请保留本页输入");persistedRevision=disk==null?0:OwnerComposerState.fromJson(disk).revision();confirmedFingerprint=actual;healthy=true;}
             if(!loaded||!healthy)throw new IllegalStateException("原草稿尚未读取或上次保存未确认，未覆盖本机文件");
-            long next=OwnerComposerState.fromJson(snapshot).revision();if(next<persistedRevision)throw new IllegalStateException("原草稿保存顺序已变化，未发送新输入");
+            OwnerComposerState proposed=OwnerComposerState.fromJson(snapshot);
+            long next=proposed.revision();if(next<persistedRevision)throw new IllegalStateException("原草稿保存顺序已变化，未发送新输入");
             jsonBudget(snapshot,OwnerComposerState.MAX_STATE_BYTES);
             String encoded=snapshot.toString();if(!StandardCharsets.UTF_8.newEncoder().canEncode(encoded))throw new IllegalArgumentException("草稿含不完整Unicode字符，未隐式替换或发送");byte[] bytes=encoded.getBytes(StandardCharsets.UTF_8);if(bytes.length>OwnerComposerState.MAX_STATE_BYTES)throw new IllegalStateException("私聊草稿超过1MiB本机上限；原文件保留，新输入尚未保存或发送，请缩小草稿后重试");
-            JSONObject current=read();long actual=current==null?0:OwnerComposerState.fromJson(current).revision();
+            JSONObject current=read();OwnerComposerState disk=current==null?null:OwnerComposerState.fromJson(current);long actual=disk==null?0:disk.revision();
             if(actual!=persistedRevision)throw new IllegalStateException("另一原输入窗口已更新草稿；本页文字保留，未覆盖新版本或自动发送");
-            if(next==persistedRevision){if(current==null||!OwnerComposerState.fromJson(current).toJson().toString().equals(snapshot.toString()))throw new IllegalStateException("相同草稿版本的内容不同，未覆盖或发送");java.util.Arrays.fill(bytes,(byte)0);return null;}
+            if(before!=null&&!fingerprint(current).equals(confirmedFingerprint))throw new IllegalStateException("原首次输入的已确认快照已变化");
+            proposed.requireFirstChatTransitions(disk,before,after);
+            if(next==persistedRevision){if(disk==null||!disk.toJson().toString().equals(snapshot.toString()))throw new IllegalStateException("相同草稿版本的内容不同，未覆盖或发送");java.util.Arrays.fill(bytes,(byte)0);return null;}
             attemptedFingerprint=fingerprint(snapshot);FileOutputStream out=null;try{out=file.startWrite();out.write(bytes);file.finishWrite(out);out=null;byte[] actualBytes=readBytes();try{if(actualBytes==null||!java.util.Arrays.equals(bytes,actualBytes))throw new IllegalStateException("原草稿原子保存未能逐字节确认；未发送新输入");}finally{if(actualBytes!=null)java.util.Arrays.fill(actualBytes,(byte)0);}persistedRevision=next;confirmedFingerprint=attemptedFingerprint;attemptedFingerprint="";return null;}
             catch(Exception failed){healthy=false;throw failed;}
             finally{if(out!=null)file.failWrite(out);java.util.Arrays.fill(bytes,(byte)0);}

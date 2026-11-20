@@ -40,13 +40,15 @@ type Props = {
   open: boolean; inventory: unknown; selected: unknown; inputModel: unknown;
   importing: boolean; onClose: () => void; onImport?: () => void;
   pagingDenied: boolean; onReviewPagingRule?: () => void; openingPagingRule?: boolean;
-  onToggle?: (id: string, sha256: string) => void;
+  onToggle?: (id: string, sha256: string, selected: boolean) => void;
+  original?: {fileId:string;sha256:string;name:string;draftLabel:string};
 };
 
 /** Keep fit guidance with the original picker. Native send still verifies source, model and scope. */
-export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, onClose, onImport, onToggle }: Props) {
+export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, onClose, onImport, onToggle, original }: Props) {
   const catalog = fileObject(inventory);
-  const files = fileRows(catalog.attachments), choices = fileRows(selected), model = fileObject(inputModel);
+  const files = fileRows(catalog.attachments).filter(row=>!original||row.id===original.fileId&&row.sha256===original.sha256);
+  const choices = fileRows(selected), model = fileObject(inputModel);
   const rows = files.map(file => ({ file, use: fileUse(file, model) }));
   const incomplete = fileObject(catalog.indexDiagnostics).incomplete === true;
   return <Drawer.Root open={open} onOpenChange={next => { if (!next) onClose(); }} shouldScaleBackground={false}>
@@ -56,14 +58,14 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
         <div className="pw-drawer-handle"/>
         <header className="pw-drawer-header">
           <div>
-            <Drawer.Title>选择附件</Drawer.Title>
-            <Drawer.Description id="pw-attachment-description">已选 {choices.length}/{maxSelections} · 只加入草稿，不发送。</Drawer.Description>
+            <Drawer.Title>{original?'选作草稿附件':'选择附件'}</Drawer.Title>
+            <Drawer.Description id="pw-attachment-description">{original&&`「${original.draftLabel}」 · `}已选 {choices.length}/{maxSelections} · 只加入草稿，不发送。</Drawer.Description>
           </div>
           <IconButton icon={IconClose} aria-label="关闭附件选择" onClick={onClose}/>
         </header>
         <div className="pw-drawer-body">
           {incomplete && <p className="pw-error" role="alert">部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。</p>}
-          {pagingDenied && !!onReviewPagingRule && rows.some(row => row.use.paged) &&
+          {!original && pagingDenied && !!onReviewPagingRule && rows.some(row => row.use.paged) &&
             <div className="pw-form-actions"><Button variant="ghost" leadingIcon={IconShieldCheck}
               disabled={importing || openingPagingRule} onClick={onReviewPagingRule}>核对分段读取规则</Button></div>}
           <div className="pw-attachment-objects">
@@ -78,8 +80,8 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
                   : '只提供文件引用。能否分段读取，发送后由原任务核对。') : hint);
               const disabled = !onToggle || !target || (!selectedHere && (!!chosen || !!reason || choices.length >= maxSelections));
               return <div className="pw-attachment-object" key={target ? `${target.fileId}:${target.sha256}` : index}>
-                <CheckboxField isSelected={selectedHere} isDisabled={disabled} onChange={() => {
-                  if (!disabled && target) onToggle?.(target.fileId, target.sha256);
+                <CheckboxField isSelected={selectedHere} isDisabled={disabled} onChange={selected => {
+                  if (!disabled && target) onToggle?.(target.fileId, target.sha256, selected);
                 }}>
                   <span className="pw-attachment-copy">
                     <b>{typeof file.name === 'string' && file.name ? file.name : '未命名附件'}</b>
@@ -89,7 +91,7 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
               </div>;
             })}
           </div>
-          {!files.length && !importing && <div className="pw-empty-small">{incomplete ? '暂未读到可选择的附件。' : '还没有附件，可以先导入。'}</div>}
+          {!files.length && !importing && <div className="pw-empty-small">{original ? `「${original.name}」的原版本不再可选，没有改用其他文件。` : incomplete ? '暂未读到可选择的附件。' : '还没有附件，可以先导入。'}</div>}
           {files.length > 0 && <p className="pw-muted">发送时才核对原文件与模型。图片提供原图，文档提供提取文字或引用。</p>}
         </div>
         <footer className="pw-drawer-actions">

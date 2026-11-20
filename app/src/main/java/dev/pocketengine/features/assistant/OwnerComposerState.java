@@ -17,6 +17,8 @@ public final class OwnerComposerState {
     private static final String TASK_ONLY_FORMAT="pocketworld.owner-composer.v1.first-task-defaults-locked";
     private static final String ONE_MESSAGE_FORMAT="pocketworld.owner-composer.v1.one-message-learning-exclusion";
     public static final int MAX_DRAFTS=64,MAX_PENDING=64,MAX_TEXT=48_000,MAX_STATE_BYTES=1_048_576;
+    /** Absence is the older query-only format. FENCED is not evidence of a send. */
+    public enum FirstChatPhase { PREPARED, FENCED, RELEASED }
     public static final class Draft {
         public final String key,conversationId,text,mode,anchorMessage,observedMessage,voiceText,voiceInputId;
         public final long revision;
@@ -43,6 +45,10 @@ public final class OwnerComposerState {
         public JSONArray previewRefs()throws Exception{return new JSONArray(previewRefs);}
         public JSONArray objectRefs()throws Exception{return new JSONArray(objectRefs);}
         private boolean hasInput(){return !text.isEmpty()||!attachments.equals("[]")||!voiceText.isEmpty()||!sourceRefs.equals("[]")||!previewRefs.equals("[]")||!objectRefs.equals("[]");}
+        private boolean sameInput(Draft other){return other!=null&&key.equals(other.key)&&conversationId.equals(other.conversationId)&&
+                revision==other.revision&&text.equals(other.text)&&mode.equals(other.mode)&&attachments.equals(other.attachments)&&
+                sourceRefs.equals(other.sourceRefs)&&previewRefs.equals(other.previewRefs)&&objectRefs.equals(other.objectRefs)&&
+                voiceText.equals(other.voiceText)&&voiceInputId.equals(other.voiceInputId);}
         private JSONObject json()throws Exception{return new JSONObject().put("key",key).put("conversationId",conversationId)
                 .put("revision",revision).put("text",text).put("mode",mode).put("attachments",attachments()).put("ownerSourceRefs",sourceRefs()).put("ownerPreviewRefs",previewRefs()).put("ownerObjectRefs",objectRefs())
                 .put("scrollIndex",scrollIndex).put("scrollOffset",scrollOffset).put("anchorMessage",anchorMessage)
@@ -55,6 +61,7 @@ public final class OwnerComposerState {
         public final String clientId,draftKey,fingerprint,conversationId,mode;
         public final long draftRevision;
         private final String originalTarget;
+        public final FirstChatPhase firstChatPhase;
         /** Provenance of a private read-only composer intent, never permission to run or read again. */
         public final boolean primaryDisplayOnly;
         // Two Android activity instances may restore the same pending client before the first one retires.
@@ -71,8 +78,11 @@ public final class OwnerComposerState {
             if(display.origin!=null&&display.origin.getAsBoolean())return false;display.closedConversation=storedConversation;display.origin=null;return true;
         }}
         private boolean provedMissingIn(String conversation){return display!=null&&conversation!=null&&conversation.equals(display.closedConversation);}
-        private Pending(String client,String key,long revision,String fingerprint,String conversation,String mode,JSONObject target,boolean primaryDisplayOnly)throws Exception{
+        private Pending(String client,String key,long revision,String fingerprint,String conversation,String mode,JSONObject target,boolean primaryDisplayOnly,FirstChatPhase firstChatPhase)throws Exception{
             if(primaryDisplayOnly&&(isWorkKey(key)||target!=null&&target.length()!=0))throw new IllegalArgumentException("本机读数定位不能指向原工作");
+            if(firstChatPhase!=null&&(primaryDisplayOnly||key==null||!key.startsWith("new:")||!conversation.isEmpty()||target!=null&&target.length()!=0))
+                throw new SecurityException("首次派发边界只属于原未绑定的普通私聊");
+            this.firstChatPhase=firstChatPhase;
             this.primaryDisplayOnly=primaryDisplayOnly;display=primaryDisplayOnly?fence(client):null;
             if(!uuid(client)||!validKey(key)||revision<1||!fingerprint.matches("[a-f0-9]{64}")||!conversation.isEmpty()&&!conversationId(conversation)||!mode(mode))throw new IllegalArgumentException("原输入待核对身份无效");
             clientId=client;draftKey=key;draftRevision=revision;this.fingerprint=fingerprint;conversationId=conversation;this.mode=mode;
@@ -85,8 +95,13 @@ public final class OwnerComposerState {
         }
         /** Display/reconciliation locator only. Never pass it to a launch or resume operation. */
         public JSONObject originalTarget()throws Exception{return new JSONObject(originalTarget);}
+        private boolean sameRequest(Pending other){return other!=null&&clientId.equals(other.clientId)&&draftKey.equals(other.draftKey)
+                &&draftRevision==other.draftRevision&&fingerprint.equals(other.fingerprint)&&conversationId.equals(other.conversationId)
+                &&mode.equals(other.mode)&&originalTarget.equals(other.originalTarget)&&primaryDisplayOnly==other.primaryDisplayOnly;}
         private JSONObject json()throws Exception{JSONObject row=new JSONObject().put("clientId",clientId).put("draftKey",draftKey).put("draftRevision",draftRevision)
-                .put("fingerprint",fingerprint).put("conversationId",conversationId).put("mode",mode).put("originalTarget",originalTarget());return primaryDisplayOnly?row.put("primaryDisplayOnly",true):row;}
+                .put("fingerprint",fingerprint).put("conversationId",conversationId).put("mode",mode).put("originalTarget",originalTarget());
+            if(primaryDisplayOnly)row.put("primaryDisplayOnly",true);
+            if(firstChatPhase!=null)row.put("firstChatPhase",firstChatPhase.name());return row;}
     }
     public static final class Acknowledgement {
         public final boolean matched,cleared,migrated;
@@ -268,21 +283,74 @@ public final class OwnerComposerState {
         return prepare(client,key,expected,fingerprint,target,excluded,false);
     }
     public synchronized Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target,boolean excluded,boolean lockDefaults)throws Exception {
-        return prepare(client,key,expected,fingerprint,target,excluded,lockDefaults,false);
+        return prepare(client,key,expected,fingerprint,target,excluded,lockDefaults,false,null);
+    }
+    public synchronized Pending prepareFirstChat(String client,String key,long expected,String fingerprint,boolean excluded,boolean lockDefaults)throws Exception{
+        Draft draft=require(key,expected);
+        if(!activeKey.equals(key)||blank(draft.text)||!draft.attachments.equals("[]")||!draft.sourceRefs.equals("[]")||
+                !draft.previewRefs.equals("[]")||!draft.objectRefs.equals("[]")||!draft.voiceText.isEmpty())
+            throw new SecurityException("首次派发边界只属于当前普通文字草稿");
+        return prepare(client,key,expected,fingerprint,null,excluded,lockDefaults,false,FirstChatPhase.PREPARED);
     }
     public synchronized Pending preparePrimaryDisplay(String client,String key,long expected,String fingerprint,boolean excluded,boolean lockDefaults)throws Exception{
         Draft draft=require(key,expected);
         if(dev.pocketengine.phone.reading.PrimaryDisplayQuestion.parse(draft.text)==null||draft.attachments().length()!=0||draft.sourceRefs().length()!=0||draft.previewRefs().length()!=0||draft.objectRefs().length()!=0)throw new SecurityException("仅能登记原私人草稿的单一主屏读数");
-        return prepare(client,key,expected,fingerprint,null,excluded,lockDefaults,true);
+        return prepare(client,key,expected,fingerprint,null,excluded,lockDefaults,true,null);
     }
-    private Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target,boolean excluded,boolean lockDefaults,boolean localRead)throws Exception {
+    private Pending prepare(String client,String key,long expected,String fingerprint,JSONObject target,boolean excluded,boolean lockDefaults,boolean localRead,FirstChatPhase firstChatPhase)throws Exception {
         if(lockDefaults!=firstTaskDefaultsLocked.contains(key)||lockDefaults&&(!excluded||target!=null))throw new IllegalStateException("此草稿须按原新委托范围发送，未交给另一项工作");
         if(excluded!=oneMessageExcluded.contains(key))throw new IllegalStateException("原草稿的单条记忆限制不适用于另一提交入口，没有发送");
         Draft draft=require(key,expected);if((blank(draft.text)&&draft.attachments().length()==0)||draft.text.trim().length()>12000)throw new IllegalArgumentException("请保留草稿并将本条输入缩至12000字内；纯附件消息必须已有真实附件选择");
         Pending duplicate=matchingPending(key,fingerprint);if(duplicate!=null)return duplicate;
         if(excluded&&hasPending(key))throw new IllegalStateException("本条排除自动整理的原输入尚待核对，未发送第二条");
         if(pending.containsKey(client)||pending.size()>=MAX_PENDING)throw new IllegalStateException("待核对输入已达本机上限，请先查询原回执；未发送新输入");
-        Pending next=new Pending(client,key,draft.revision,fingerprint,draft.conversationId,draft.mode,target,localRead);pending.put(client,next);revision=increment(revision);return next;
+        Pending next=new Pending(client,key,draft.revision,fingerprint,draft.conversationId,draft.mode,target,localRead,firstChatPhase);pending.put(client,next);revision=increment(revision);return next;
+    }
+    public synchronized Pending transitionPreparedFirstChat(Pending expected,FirstChatPhase phase)throws Exception {
+        if(expected==null||pending.get(expected.clientId)!=expected||expected.firstChatPhase!=FirstChatPhase.PREPARED
+                ||(phase!=FirstChatPhase.FENCED&&phase!=FirstChatPhase.RELEASED)||!activeKey.equals(expected.draftKey))
+            throw new IllegalStateException("原待核对的首次输入已变化");
+        require(expected.draftKey,expected.draftRevision);
+        long nextRevision=increment(revision);
+        Pending next=new Pending(expected.clientId,expected.draftKey,expected.draftRevision,expected.fingerprint,expected.conversationId,
+                expected.mode,expected.originalTarget(),false,phase);
+        pending.put(next.clientId,next);revision=nextRevision;return next;
+    }
+    /** After the native store confirms RELEASED (or reads it back on cold open), keep the draft verbatim. */
+    public synchronized boolean forgetReleasedFirstChat(Pending released){
+        if(released==null||released.firstChatPhase!=FirstChatPhase.RELEASED||pending.get(released.clientId)!=released)return false;
+        long nextRevision=increment(revision);pending.remove(released.clientId);revision=nextRevision;return true;
+    }
+    /** Serialized with the original owner-composer file CAS. An ordinary autosave
+     * cannot advance PREPARED, drop it, or reopen either terminal phase. */
+    void requireFirstChatTransitions(OwnerComposerState disk,Pending before,Pending after){
+        if((before==null)!=(after==null))throw new IllegalArgumentException("原首次输入切换缺少身份");
+        if(before!=null){
+            Pending prior=disk==null?null:disk.pending.get(before.clientId),next=pending.get(before.clientId);
+            String key=before.draftKey;
+            if(prior==null||!prior.sameRequest(before)||prior.firstChatPhase!=FirstChatPhase.PREPARED||before.firstChatPhase!=FirstChatPhase.PREPARED||
+                    !prior.sameRequest(after)||next==null||!next.sameRequest(after)||next.firstChatPhase!=after.firstChatPhase||
+                    (after.firstChatPhase!=FirstChatPhase.FENCED&&after.firstChatPhase!=FirstChatPhase.RELEASED)||
+                    !disk.activeKey.equals(key)||!activeKey.equals(key)||disk.drafts.get(key).revision!=prior.draftRevision||
+                    !disk.drafts.get(key).sameInput(drafts.get(key))||
+                    firstMessagePaused.contains(key)!=disk.firstMessagePaused.contains(key)||
+                    firstTaskDefaultsLocked.contains(key)!=disk.firstTaskDefaultsLocked.contains(key)||
+                    oneMessageExcluded.contains(key)!=disk.oneMessageExcluded.contains(key))
+                throw new IllegalStateException("磁盘上的原首次输入已变化，未切换派发状态");
+        }
+        if(disk!=null)for(Pending prior:disk.pending.values()){
+            if(prior.firstChatPhase==null)continue;
+            Pending next=pending.get(prior.clientId);
+            if(next==null&&prior.firstChatPhase!=FirstChatPhase.PREPARED)continue; // Native receipt / already released.
+            if(prior.sameRequest(next)&&(next.firstChatPhase==prior.firstChatPhase||
+                    before!=null&&before.clientId.equals(prior.clientId)))continue;
+            throw new IllegalStateException("普通草稿保存不能改写原首次输入的派发边界");
+        }
+        for(Pending next:pending.values())if(next.firstChatPhase!=null){
+            Pending prior=disk==null?null:disk.pending.get(next.clientId);
+            if(prior==null?next.firstChatPhase!=FirstChatPhase.PREPARED:prior.firstChatPhase==null)
+                throw new IllegalStateException("这笔输入没有本版本的原准备记录");
+        }
     }
     /** Caller has validated an exact native not-admitted receipt. Keep every draft byte;
      * only a later explicit owner Send may prepare a new identity. */
@@ -365,7 +433,7 @@ public final class OwnerComposerState {
                 if(!(raw instanceof String key)||!state.oneMessageExcluded.contains(key)||!key.startsWith("new:")||!state.drafts.get(key).conversationId.isEmpty()||!state.firstTaskDefaultsLocked.add(key))throw new IllegalArgumentException("默认偏好限制不属于原新草稿");}
         }
         if(!state.drafts.containsKey(state.activeKey)||isWorkKey(state.activeKey))throw new IllegalArgumentException("原活动对话草稿不存在");
-        for(int i=0;i<pending.length();i++){JSONObject row=pending.getJSONObject(i);Pending p=new Pending(row.getString("clientId"),row.getString("draftKey"),integer(row,"draftRevision",1,Long.MAX_VALUE),row.getString("fingerprint"),row.getString("conversationId"),row.getString("mode"),row.getJSONObject("originalTarget"),Boolean.TRUE.equals(row.opt("primaryDisplayOnly")));Draft d=state.drafts.get(p.draftKey);if(d==null||!d.conversationId.equals(p.conversationId)||p.draftRevision>d.revision||state.pending.put(p.clientId,p)!=null)throw new IllegalArgumentException("待核对输入不属于原草稿版本");}
+        for(int i=0;i<pending.length();i++){JSONObject row=pending.getJSONObject(i);Pending p=new Pending(row.getString("clientId"),row.getString("draftKey"),integer(row,"draftRevision",1,Long.MAX_VALUE),row.getString("fingerprint"),row.getString("conversationId"),row.getString("mode"),row.getJSONObject("originalTarget"),Boolean.TRUE.equals(row.opt("primaryDisplayOnly")),row.has("firstChatPhase")?FirstChatPhase.valueOf(row.getString("firstChatPhase")):null);Draft d=state.drafts.get(p.draftKey);if(d==null||!d.conversationId.equals(p.conversationId)||p.draftRevision>d.revision||state.pending.put(p.clientId,p)!=null)throw new IllegalArgumentException("待核对输入不属于原草稿版本");}
         for(String key:state.oneMessageExcluded)if(state.pending.values().stream().filter(item->item.draftKey.equals(key)).count()>1)throw new IllegalArgumentException("单条记忆限制不能绑定多条待核对输入");
         return state;
     }

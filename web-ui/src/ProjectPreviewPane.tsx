@@ -5,14 +5,17 @@ import { Accordion, AccordionItem, Button, IconButton, SelectField } from './for
 import { ProgressCircle } from './library';
 import { ProjectPackageCheckout } from './ProjectPackageCheckout';
 import { MotionFeedback } from './library/journey-motion';
-import { packagePreviewMatches, previewReturned, previewViewport, projectPreviewState, samePreviewWindow, type PackagePreviewChoices, type ProjectPreviewState, type PreviewWindow } from './project-preview';
+import { packagePreviewChoices, packagePreviewMatches, previewReturned, previewViewport, projectPreviewState, samePreviewWindow, type PackagePreviewChoices, type ProjectPreviewState, type PreviewWindow } from './project-preview';
 import './project-preview.css';
 
 type Data = Record<string, any>;
 type Action = 'projects.preview.mode' | 'projects.preview.reload' | 'projects.preview.close' | 'projects.preview.return';
 type PackageExportTarget = Pick<PackagePreviewChoices, 'taskId' | 'operationId' | 'artifactId' | 'artifactSha256'>;
 type PackageExportState = PackageExportTarget & { kind: 'project_package_export'; requestId: string; projectId: string; status: string; message: string; exported: boolean; bytes?: number; targetReadback?: {protocol:string;status:string;provider:string;displayName?:string;bytes?:number;sha256?:string} };
-type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string, originalChat?:boolean) => void };
+type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string, originalChat?:boolean) => void;
+  openOriginalBuildCopy?: (choices: PackagePreviewChoices) => boolean };
+const fixedPackage = (view: ProjectPreviewState | null) => !!view &&
+  (!!view.packageOperationId || view.metadata.origin === 'fixed_workspace_project_artifact');
 const exportPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing', 'exported', 'written_unverified', 'cancelled', 'rejected', 'unknown']);
 const exportPendingPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing']);
 const sameExportTarget = (value: PackageExportTarget | null, target: PackageExportTarget | null) => !!value && !!target &&
@@ -45,11 +48,9 @@ export function useProjectPreview(options: Options) {
   const candidate = projectPreviewState(options.value);
   const native = candidate?.metadata.projectId === options.projectId ? candidate : null;
   const view = native && (!opened || native.sessionId === opened.sessionId) &&
-    (!choices || packageShowing && packagePreviewMatches(native, choices, selectedEntry)) ? native : null;
+    (choices ? packageShowing && packagePreviewMatches(native, choices, selectedEntry) : !fixedPackage(native)) ? native : null;
   const viewRef = useRef(view); viewRef.current = view;
-  const exportTarget: PackageExportTarget | null = choices ? { taskId: choices.taskId, operationId: choices.operationId, artifactId: choices.artifactId, artifactSha256: choices.artifactSha256 } :
-    view?.metadata.origin === 'fixed_workspace_project_artifact' && view.packageOperationId && typeof view.metadata.artifactId === 'string' && typeof view.metadata.artifactSha256 === 'string' && /^[a-f0-9]{64}$/.test(view.metadata.artifactSha256) ?
-      { taskId: view.taskId, operationId: view.packageOperationId, artifactId: view.metadata.artifactId, artifactSha256: view.metadata.artifactSha256 } : null;
+  const exportTarget: PackageExportTarget | null = choices ? { taskId: choices.taskId, operationId: choices.operationId, artifactId: choices.artifactId, artifactSha256: choices.artifactSha256 } : null;
   const nativeExport = packageExportState(options.exportValue);
   const currentNativeExport = nativeExport?.projectId === options.projectId && sameExportTarget(nativeExport, exportTarget) ? nativeExport : null;
   const currentExportReceipt = exportReceipt?.projectId === options.projectId && sameExportTarget(exportReceipt, exportTarget) ? exportReceipt : null;
@@ -102,13 +103,12 @@ export function useProjectPreview(options: Options) {
 
   const open = () => {
     const context = optionsRef.current;
-    if (pending.current || !context.active || document.hidden) return;
-    if (choices && !choices.sourceMember && exportState) { setExpanded(true); return; }
-    if (exportBusy) return;
+    if (pending.current || exportBusy || !context.active || document.hidden) return;
     setChoices(null); setSelectedEntry(''); setPackageShowing(false); setFromOriginalChat(false);
-    // Returning to the existing view retains its native Document and staged refs.
+    // Historical fixed packs must be explicitly selected. A project-level
+    // tab must not reopen another copy's last selected artifact.
     const retained = projectPreviewState(context.value);
-    if (retained && retained.metadata.projectId === context.projectId) {
+    if (retained && !fixedPackage(retained) && retained.metadata.projectId === context.projectId) {
       setOpened(retained); setExpanded(true); setError(''); setUnknown(false); return;
     }
     if (!context.can('projects.preview')) return;
@@ -117,7 +117,7 @@ export function useProjectPreview(options: Options) {
     void bridge.command('projects.preview', { projectId: original.projectId }).then(value => {
       if (!current(original, request)) return;
       const accepted = projectPreviewState(value);
-      if (!accepted) throw new Error('未取得原项目预览的完整回执，请核对原状态。');
+      if (!accepted || fixedPackage(accepted)) throw new Error('未取得原项目采集画面。固定网页请从已保存版本中选取。');
       setOpened(accepted);
     }).catch(failure => {
       if (!current(original, request)) return;
@@ -158,6 +158,28 @@ export function useProjectPreview(options: Options) {
     return true;
   };
   const openPackage = () => { if(choices&&!fromOriginalChat)openPackageEntry(choices, selectedEntry); };
+  const canOpenSavedBuildCopy = !!(choices?.originalBuild && view?.ready && options.openOriginalBuildCopy &&
+    options.can('projects.package.preview.inspect'));
+  const openSavedBuildCopy = () => {
+    const selected = choices, showing = viewRef.current, context = optionsRef.current;
+    const build = selected?.originalBuild;
+    if (!selected || !build || !showing?.ready || showing.selecting || pending.current || exportBusy || unknown ||
+        !context.active || context.blocked || document.hidden || !context.openOriginalBuildCopy || !context.can('projects.package.preview.inspect')) return;
+    const original = ticket(), request = ++generation.current;
+    pending.current = true; setBusy('package.copy'); setError('');
+    void bridge.command('projects.package.preview.inspect', {taskId:selected.taskId,operationId:selected.operationId}).then(result=>{
+      if (!current(original,request)) return;
+      const live = viewRef.current, exact = packagePreviewChoices(result,selected), origin = exact?.originalBuild;
+      if (!exact || !origin || !live?.ready || live.sessionId!==showing.sessionId ||
+          live.documentGeneration!==showing.documentGeneration || !packagePreviewMatches(live,exact,exact.entryPath) ||
+          origin.runId!==build.runId || origin.epoch!==build.epoch || origin.buildOperationId!==build.buildOperationId)
+        throw new Error('原构建、网页或副本已经变化，未打开替代文件。');
+      if (!optionsRef.current.openOriginalBuildCopy?.(exact)) throw new Error('原项目窗口已变化，未打开其他副本或覆盖草稿。');
+      pending.current = false; hide();
+    }).catch(failure=>{
+      if (current(original,request)) setError(failure instanceof Error ? failure.message : '没有核对到产出这版网页的原副本。');
+    }).finally(()=>{if(generation.current===request){pending.current=false;setBusy('');}});
+  };
 
   const exportPackage = () => {
     const context = optionsRef.current, target = exportTarget;
@@ -239,7 +261,7 @@ export function useProjectPreview(options: Options) {
     return true;
   };
   return { expanded, view, busy, error, unknown, open, hide, action, handleBack, showPackage, choices, selectedEntry, setSelectedEntry, openPackage,
-    exportPackage, exportState, exportBusy, exportTarget, resumeRevision: options.resumeRevision,
+    exportPackage, exportState, exportBusy, exportTarget, canOpenSavedBuildCopy, openSavedBuildCopy, resumeRevision: options.resumeRevision,
     returnToPackageTask, fromOriginalChat, blocked: options.blocked, can: options.can };
 }
 
@@ -291,13 +313,14 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
   const count = view ? refs.filter((ref: Data) => ref.previewId === view.metadata.previewId).length : 0;
   const problem = error || view?.error;
   const choices = control.choices, choosing = !!choices && !view;
-  const fixed = view?.metadata.origin === 'fixed_workspace_project_artifact';
+  const fixed = fixedPackage(view), copy = view?.metadata.checkoutId ?? choices?.checkoutId, source = view?.metadata.sourceDigest ?? choices?.sourceDigest;
   if (choosing && choices?.sourceMember) return !blocked
     ? <ProjectPackageCheckout key={JSON.stringify([choices.taskId, choices.operationId, choices.artifactId, choices.sourceMember.path])}
       target={{ ...choices, sourceMember: choices.sourceMember }} onReturn={control.returnToPackageTask} onDismiss={control.hide}/>
     : null;
   return <section className="pw-preview-pane" data-motion-native-surface="project-preview" aria-label="项目预览" aria-busy={working}>
-    <header className="pw-preview-heading"><div><h3>{control.fromOriginalChat?'固定网页':choosing ? '固定项目包' : fixed ? '任务固定版本' : '已采集预览'}</h3><p>{choosing ? choices?.entryPath || '项目源码与资源' : view?.metadata.entryPath ? String(view.metadata.entryPath) : '原项目画面'}</p></div>{view?.selecting && <span className="pw-preview-selection-state">正在选择</span>}</header>
+    <header className="pw-preview-heading"><div><h3>{choices?.mode==='web_output'?'固定网页':choosing ? '固定项目包' : fixed ? '任务固定版本' : '已采集预览'}</h3><p>{choosing ? choices?.entryPath || '项目源码与资源' : view?.metadata.entryPath ? String(view.metadata.entryPath) : '原项目画面'}</p>
+      {typeof copy==='string'&&typeof source==='string'&&<small className="pw-field-hint">来源副本 <code>{copy.slice(0,8)}</code> · 源码 <code>{source.slice(0,10)}</code></small>}</div>{view?.selecting && <span className="pw-preview-selection-state">正在选择</span>}</header>
     {!choosing && <div className="pw-preview-actions">
       {!control.fromOriginalChat&&<Button variant={view?.selecting ? 'primary' : 'secondary'} leadingIcon={IconCursor} size="small"
         disabled={!view?.ready || !view.selectionAvailable && !view.selecting || working || unknown || blocked || !can('projects.preview.mode')} aria-pressed={view?.selecting === true}
@@ -332,10 +355,12 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       {!view?.ready && <div className="pw-preview-placeholder">{busy || view && !problem ? <><ProgressCircle isIndeterminate size="sm" aria-label="正在打开已采集预览"/><p>正在打开已采集预览…</p></> : <p>{problem ? '原文件和草稿仍保留。' : '当前项目没有可用的已采集预览。'}</p>}</div>}
     </div>}
     {view && !control.fromOriginalChat && <MotionFeedback identity={`${sessionId}:${count}`} initial={false} className="pw-preview-draft-status" role="status">{count > 0 ? `草稿中有 ${count} 处元素引用，尚未发送` : '选择的元素会留在原对话草稿中'}</MotionFeedback>}
-    {view && !control.fromOriginalChat && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
-        <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
+    {view && (!control.fromOriginalChat || fixed) && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
+        <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd><dt>来源副本</dt><dd>{String(view.metadata.checkoutId || '')}</dd><dt>来源源码</dt><dd>{String(view.metadata.sourceDigest || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
       </AccordionItem></Accordion>}
     <footer className="pw-preview-footer">
+      {control.canOpenSavedBuildCopy && <Button variant="secondary" size="small" disabled={working || blocked || unknown || !!view?.selecting}
+        onClick={control.openSavedBuildCopy}>{busy==='package.copy'?'正在核对原副本…':'打开原副本的当前源码'}</Button>}
       {(choosing || fixed) && (control.fromOriginalChat||can('tasks.open')) && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={working || blocked} onClick={control.returnToPackageTask}>{control.fromOriginalChat?'返回原话':'返回原工作'}</Button>}
       {!control.fromOriginalChat&&<Button variant="ghost" size="small" disabled={control.exportBusy} onClick={control.hide}>{choosing || fixed ? '留在项目' : '返回项目'}</Button>}
       {view && !control.fromOriginalChat && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}

@@ -290,11 +290,11 @@ internal class PocketWebBridge(
             "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal", "conversation.saveFirstHostRequest", "conversation.selectSavedHost",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
-            "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
+            "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
-            "phone.request.original",
+            "phone.request.original", "phone.result.taskOriginal",
             "phone.resultImage.held", "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
             "skillDraft.open", "skillDraft.read", "skillDraft.source", "skillDraft.confirm", "skillDraft.cancel", "skillDraft.query", "skillDraft.close", "voice.start", "voice.stop", "voice.review", "voice.accept", "voice.discard", "speech.speak", "speech.stop", "speech.taskAnnouncements", "speech.stopTaskAnnouncement",
@@ -1057,6 +1057,16 @@ internal class PocketWebBridge(
                     value,error -> complete(id,value,error,retainValue=false)
                 };return
             }
+            if (action == "phone.result.taskOriginal") {
+                checkedPayload(args, setOf("taskId", "runId", "epoch", "offset", "expectedDigest"))
+                val task = requiredString(args, "taskId"); val window = captureWindow(); val document = documentId
+                val current = { !closed && section == null && taskViewId == task && document != null && document == documentId && acceptsWindow(window) }
+                require(current() && controller.webPrivateOwnerVisible()) { "请在原手机工作中查看这轮回执" }
+                controller.readPhoneTaskOriginalResult(task, requiredString(args, "runId"), requiredInt(args, "epoch"),
+                    requiredInt(args, "offset"), requiredString(args, "expectedDigest", true), current) {
+                    value, error -> complete(id, value, error, retainValue = false)
+                }; return
+            }
             if (action == "phone.result.original") {
                 checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "taskId", "runId", "epoch", "deliveryId", "offset", "expectedDigest", "readerWindow"))
                 val ticket = captureWindow()
@@ -1142,6 +1152,19 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebExperience.COMMANDS) {
                 requireSection("learning"); experience.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+            }
+            if (action == "composer.releasePreparedFirst") {
+                checkedPayload(args,setOf("clientMessageId","key","epoch","revision"))
+                val ticket=captureWindow();val document=documentId
+                fun current()=!closed && document!=null && documentId==document && acceptsWindow(ticket) &&
+                    section==null && taskViewId==null && !phoneComposer.intent && controller.conversationReader==null && controller.webPrivateOwnerVisible()
+                controller.releasePreparedFirstChat(requiredString(args,"clientMessageId"),requiredString(args,"key"),
+                    requiredInt(args,"epoch"),requiredLong(args,"revision"),::current){value,error->
+                    if(current())complete(id,value,error,retainValue=false,replayHint="请核对当前原稿，没有自动发送")
+                    else complete(id,null,"原输入窗口已关闭，请在原草稿核对。",retainValue=false)
+                    publishState()
+                }
+                return
             }
             if (action == "composer.oneLearning.save") {
                 require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话" }
@@ -1906,7 +1929,9 @@ internal class PocketWebBridge(
                         val text = requiredString(args, "text", true)
                         require(controller.composerDraft?.text == text && ChatInputRules.canSend(controller.state, false, text)) { "原输入尚不可发送，请核对保留草稿与原任务" }
                         val localRevision=if(args.has("primaryDisplayRevision"))requiredLong(args,"primaryDisplayRevision").also { require(it>0) } else null
-                        controller.sendChat(text,key,epoch,localRevision,localRevision?.let { primaryDisplayComposerWindow() })
+                        val ordinary=section==null && taskViewId==null && documentId!=null && !phoneComposer.intent &&
+                            controller.conversationReader==null && controller.webPrivateOwnerVisible()
+                        controller.sendChat(text,key,epoch,localRevision,localRevision?.let { primaryDisplayComposerWindow() },originalOrdinaryComposer=ordinary)
                     }
                 }
             }
@@ -1976,14 +2001,44 @@ internal class PocketWebBridge(
                 controller.switchFromConversationReader(page.window)
             }
             "attachments.pick" -> { requireComposer(args, optional = true); controller.pickAttachments() }
-            "attachments.openPicker" -> { requireComposer(args, optional = true); controller.openChatAttachmentPicker() }
-            "attachments.closePicker" -> controller.closeChatAttachmentPicker()
+            "attachments.openPicker" -> {
+                val exact = args.has("revision")
+                requireComposer(args, optional = !exact)
+                if (exact) {
+                    checkedPayload(args, setOf("key", "epoch", "revision"))
+                    requireAttachmentDraft(args)
+                    require(!controller.state.chatAttachmentPickerOpen) { "请先关闭原附件选择" }
+                }
+                val list = controller.openChatAttachmentPicker()
+                if (exact) return JSONObject().put("requestId", list ?: error(controller.state.error ?: "原附件选择未打开，请核对输入和模型设置"))
+            }
+            "attachments.closePicker" -> {
+                val request = if (args.has("pickerRequestId")) {
+                    checkedPayload(args, setOf("pickerRequestId")); requiredString(args, "pickerRequestId")
+                } else null
+                controller.closeChatAttachmentPicker(request)
+            }
             "attachments.remove" -> { requireComposer(args); controller.removeChatAttachment(requiredString(args, "id"), requiredString(args, "key"), requiredInt(args, "epoch")) }
             "attachments.toggle" -> {
-                requireComposer(args, optional = true)
+                val focused = args.has("pickerRequestId")
+                requireComposer(args, optional = !focused)
                 val id = requiredString(args, "id"); val sha = requiredString(args, "sha256")
-                val selected = controller.state.feature("attachments").optJSONArray("attachments").objects().firstOrNull { it.optString("id") == id && it.optString("sha256") == sha }
+                val inventory = if (focused) {
+                    checkedPayload(args, setOf("key", "epoch", "revision", "id", "sha256", "pickerRequestId", "selected"))
+                    requireAttachmentDraft(args)
+                    val request = requiredString(args, "pickerRequestId")
+                    check(request == controller.chatAttachmentPickerRequest() && "attachments.list" !in controller.state.moduleBusy &&
+                        controller.state.moduleResultInputs["attachments.list"]?.optString("_requestId") == request) { "原附件选择清单已变化" }
+                    controller.state.moduleResults["attachments.list"] ?: error("未读取这份原附件")
+                } else controller.state.feature("attachments")
+                val selected = inventory.optJSONArray("attachments").objects().firstOrNull { it.optString("id") == id && it.optString("sha256") == sha }
                     ?: error("附件原件已变化，请重新选择")
+                if (focused) {
+                    check(!selected.optBoolean("outputSourceRetired")) { "原文件已撤回，没有加入草稿" }
+                    val held = controller.state.selectedChatAttachments.firstOrNull { it.id == id }
+                    check(held == null || held.sha256 == sha) { "草稿选的是另一版本，没有替换" }
+                    if (requiredBoolean(args, "selected") == (held != null)) return accepted()
+                }
                 controller.toggleChatAttachment(selected)
             }
             "quickVoice.start" -> { checkedPayload(args, setOf("handoffId")); controller.startQuickPanelVoice(requiredString(args, "handoffId")) }
@@ -2580,6 +2635,14 @@ internal class PocketWebBridge(
     }
 
     private fun requireSection(expected: String) { require(section == expected) { "原能力窗口已关闭，请重新进入" } }
+    private fun requireAttachmentDraft(args: JSONObject) {
+        check(section == null && taskViewId == null && controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
+            !controller.state.chatBusy && !controller.state.chatSubmitting && !controller.state.phoneSubmitting &&
+            controller.composerDraft?.let { draft -> draft.revision == requiredLong(args, "revision") &&
+                draft.conversationId == controller.state.conversationId.orEmpty() && controller.composerPending.none { it.draftKey == draft.key } } == true) {
+            "原私人草稿已变化，没有把文件加入其他输入"
+        }
+    }
     private fun requireComposer(args: JSONObject, optional: Boolean = false) {
         val draft = controller.composerDraft ?: error("原输入尚未恢复")
         if (!optional || args.has("key") || args.has("epoch")) require(requiredString(args, "key") == draft.key && requiredInt(args, "epoch") == controller.composerViewEpoch) { "原输入窗口已变化" }

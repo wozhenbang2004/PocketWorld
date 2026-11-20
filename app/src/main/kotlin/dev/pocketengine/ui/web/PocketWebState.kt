@@ -160,6 +160,7 @@ internal object PocketWebState {
             .put("chatReceipts", JSONObject().also { out -> state.chatReceipts.forEach { (key, value) -> out.put(key, publicValue(value, omitProjectContract = true)) } })
             .put("selectedChatAttachments", JSONArray().also { out -> state.selectedChatAttachments.forEach { out.put(attachment(it)) } })
             .put("chatAttachmentPickerOpen", state.chatAttachmentPickerOpen)
+            .put("chatAttachmentPickerRequest", controller.chatAttachmentPickerRequest())
             .put("chatAttachmentModel", publicValue(state.chatAttachmentModel))
             .put("chatAttachmentPagingDenied", controller.webAttachmentPagingDenied())
             .put("attachmentImporting", state.attachmentImporting).put("phoneSubmitting", state.phoneSubmitting)
@@ -280,7 +281,8 @@ internal object PocketWebState {
                     .put("originalTarget", pending.originalTarget())
                     .put("status", state.chatReceipts[pending.clientId]?.opt("status") ?: JSONObject.NULL)
                     .put("receipt", publicValue(state.chatReceipts[pending.clientId]))
-                    .put("canRetryLocallyUnsent", controller.canRetryLocallyUnsent(pending.clientId)))
+                    .put("canRetryLocallyUnsent", controller.canRetryLocallyUnsent(pending.clientId))
+                    .put("canReleasePreparedFirstChat", controller.canReleasePreparedFirstChat(pending.clientId)))
             } })
         return JSONObject().put("state", data).put("composer", composer)
     }

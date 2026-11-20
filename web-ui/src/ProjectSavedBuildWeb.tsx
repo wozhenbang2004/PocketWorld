@@ -69,7 +69,8 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
     const response=await bridge.command('projects.package.preview.inspect',target);if(!here())return;
     const exact=packagePreviewChoices(response,target);
     if(!exact||exact.mode!=='web_output'||exact.projectId!==project||exact.checkoutId!==picked.checkoutId||
-      exact.sourceDigest!==picked.sourceDigest||exact.artifactId!==picked.artifactId||exact.artifactSha256!==picked.archiveSha256||exact.entryPath!==picked.entryPath)
+      exact.sourceDigest!==picked.sourceDigest||exact.artifactId!==picked.artifactId||exact.artifactSha256!==picked.archiveSha256||exact.entryPath!==picked.entryPath||
+      exact.originalBuild&&(exact.originalBuild.runId!==picked.runId||exact.originalBuild.epoch!==picked.epoch))
       throw Error('选中的已保存网页与当前回执不同，没有改用其它版本。');
     if(!show(exact,()=>original()&&current.current.copy===picked.checkoutId))throw Error('项目窗口已变化，原网页没有打开。');
   });

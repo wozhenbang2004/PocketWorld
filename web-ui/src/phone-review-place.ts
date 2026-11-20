@@ -20,11 +20,22 @@ export function currentPhonePlaceInput():PhonePlaceReturn|null {
     phoneEpoch:draft.epoch,mode,...(mode==='chat'?{chatRevision:c.revision}:{})};
 }
 
+function sameNativeDraft(now:PhonePlaceReturn,pin:PhonePlaceReturn){
+  return now.composer===pin.composer&&now.conversation===pin.conversation&&now.ownerEpoch===pin.ownerEpoch&&
+    now.revision===pin.revision&&now.phoneEpoch===pin.phoneEpoch&&now.mode===pin.mode&&
+    now.chatRevision===pin.chatRevision;
+}
+
 export function samePhonePlaceDraft(pin:PhonePlaceReturn){
   const now=currentPhonePlaceInput();
-  return !!now&&now.composer===pin.composer&&now.conversation===pin.conversation&&now.ownerEpoch===pin.ownerEpoch&&
-    now.revision===pin.revision&&now.phoneEpoch===pin.phoneEpoch&&now.mode===pin.mode&&
-    now.documentEpoch===pin.documentEpoch&&now.chatRevision===pin.chatRevision;
+  return !!now&&now.documentEpoch===pin.documentEpoch&&sameNativeDraft(now,pin);
+}
+
+/** Android Settings rotates the foreground token even in the same Web document. Only
+ * restore the input location, not the old review, mode selection or start authority. */
+export function returnToPreparedPhoneDraft(pin:PhonePlaceReturn):PhonePlaceReturn|null{
+  const now=currentPhonePlaceInput();
+  return now&&pin.mode==='background'&&sameNativeDraft(now,pin)?now:null;
 }
 
 export function phonePlaceReturn(review:{originalDraft?:Pin;documentEpoch?:number;goal:string;mode:string}):PhonePlaceReturn|null{

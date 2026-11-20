@@ -25,10 +25,11 @@ export type ProjectPackageOutcome = PackagePreviewTarget & {
   name: string; mode: 'web_output' | 'source_project'; entryPath: string;
   currentRun: boolean; fileCount?: number; omittedCount?: number; createdAt?: number;
 };
+export type SavedWebBuildOrigin = { runId: string; epoch: number; buildOperationId: string };
 export type PackagePreviewChoices = PackagePreviewTarget & {
   kind: 'package_preview_choices'; conversationId: string; projectId: string; checkoutId: string; sourceDigest: string;
   artifactId: string; artifactSha256: string; mode: 'web_output' | 'source_project';
-  entryPath: string; entryChoices: string[];
+  entryPath: string; entryChoices: string[]; originalBuild?: SavedWebBuildOrigin;
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -119,9 +120,17 @@ export function packagePreviewChoices(value: unknown, expected: PackagePreviewTa
       source.artifactId !== member.artifactId || source.artifactSha256 !== member.artifactSha256)) return null;
   if (source.mode === 'web_output' && (!entry(source.entryPath) || source.entryChoices.length !== 1 || source.entryChoices[0] !== source.entryPath)) return null;
   if (source.mode === 'source_project' && source.entryPath !== '') return null;
+  let originalBuild: SavedWebBuildOrigin | undefined;
+  if (source.originalBuild !== undefined) {
+    const build = record(source.originalBuild);
+    if (source.mode !== 'web_output' || source.entryPath !== 'dist/index.html' || !identifier(build.runId) ||
+        !Number.isSafeInteger(build.epoch) || Number(build.epoch) < 1 || !identifier(build.buildOperationId) ||
+        build.buildOperationId === expected.operationId) return null;
+    originalBuild = { runId: build.runId, epoch: Number(build.epoch), buildOperationId: build.buildOperationId };
+  }
   return { kind: 'package_preview_choices', ...expected, conversationId: source.conversationId, projectId: source.projectId, checkoutId: source.checkoutId, sourceDigest: source.sourceDigest,
     artifactId: source.artifactId, artifactSha256: source.artifactSha256, mode: source.mode as PackagePreviewChoices['mode'],
-    entryPath: source.entryPath, entryChoices: [...source.entryChoices] };
+    entryPath: source.entryPath, entryChoices: [...source.entryChoices], ...(originalBuild ? {originalBuild} : {}) };
 }
 
 export function packagePreviewMatches(view: ProjectPreviewState | null, choices: PackagePreviewChoices, entryPath: string): boolean {

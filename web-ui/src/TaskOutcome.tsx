@@ -16,7 +16,7 @@ import type { OriginalProjectDraft } from './ButlerPreparations';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import { PrepareTaskPackageProject } from './PrepareTaskPackageProject';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
-import {PhoneTaskConversationReturn,type PhoneConversationOrigin} from './PhoneTaskConversationReturn';
+import {PhoneTaskOriginalReport} from './PhoneTaskConversationReturn';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
 import { HeldPhoneResultImage } from './HeldPhoneResultImage';
 import { MessageAttachment } from './MessageAttachment';
@@ -120,7 +120,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, onReadPhoneConversation, focusedOriginalDraft, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, focusedOriginalDraft, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -138,7 +138,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
   onContinueBuildCopy?: () => void;
   onFollowUp?: () => void;
-  onReadPhoneConversation?: (origin:PhoneConversationOrigin) => void;
+  canReadPhoneTaskOriginal?: boolean;
   resultFiles?: {
     taskId: string;
     supported: boolean;
@@ -218,12 +218,12 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {!projectDraftSourceRetired&&record.raw?.actorId==='owner'&&record.raw?.spaceId==='private'&&record.raw?.contextAvailable!==false&&record.raw?.contextWithdrawn!==true&&
       record.raw?.sourceCurrentReadRequired!==true&&record.raw?.taskProjection!=='source_unavailable'&&record.raw?.developmentContext?.draftOnly===true&&typeof record.raw.projectEditDraftId==='string'&&/^[a-f0-9]{64}$/.test(record.raw.projectEditDraftId)&&<ProjectDraftDifference active={active} id={record.id} project={record.raw.developmentContext.projectId}
       checkout={record.raw.developmentContext.checkoutId} pin={record.raw.projectEditDraftId} requested={focusedOriginalDraft} registerBeforeLeave={registerProjectDraftBeforeLeave}/>}
-    {active&&<TaskPhoneFinalScreen task={record}/>}
     {settlementTitle && <div className="pw-outcome-settlement" role="status">
       <h3>{settlementTitle}</h3>
       {settlementDetail && settlementDetail !== settlementTitle && <p>{settlementDetail}</p>}
     </div>}
-    {active && onReadPhoneConversation && <PhoneTaskConversationReturn task={record} onRead={onReadPhoneConversation}/>}
+    {active && canReadPhoneTaskOriginal && <PhoneTaskOriginalReport task={record}/>}
+    {active&&<TaskPhoneFinalScreen task={record}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}`} ownerWindow={packageRead.firstWebWindow}
       target={firstWeb} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}

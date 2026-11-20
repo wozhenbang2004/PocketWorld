@@ -13,6 +13,7 @@ import './attachment-page.css';
 
 export type FileDraftTarget={key:string;epoch:number;revision:number;conversationId:string;label:string};
 export type FileResultTopic={taskId:string;conversationId:string;label:string};
+export type OriginalAttachmentChoice={fileId:string;sha256:string;name:string};
 type Props={
  state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event)=>void;openTaskId?:string;
  draftTarget?:FileDraftTarget;resultTopic?:FileResultTopic;
@@ -20,6 +21,7 @@ type Props={
  onOpenDraft?:(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
  onUseResult?:(reference:Json,topic:FileResultTopic,openOnly:boolean,stillCurrent:()=>boolean,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
  onVerifyReportFileWork?:(taskId:string,windowId:string)=>Promise<void>;
+ onChooseAttachment?:(file:OriginalAttachmentChoice,target:FileDraftTarget,stillCurrent:()=>boolean,closeOriginal:()=>Promise<void>)=>Promise<void>;
 };
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 const mayReferenceOriginal=(view:Json)=>view.canSaveOriginal===true||view.historyResultOnly===true&&view.canReferenceHistoryOriginal===true;
@@ -35,7 +37,7 @@ const fileOrigins:Record<string,string>={
  device_received_file:'来自这次原设备工作',derived_media:'原件加工成果',managed_build_output:'构建产物',remote_result_snapshot:'已保存的远端成果',
 };
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onVerifyReportFileWork}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onVerifyReportFileWork,onChooseAttachment}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -44,6 +46,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const [draftHandoff,setDraftHandoff]=useState<DraftHandoff|null>(null);
  const draftFlight=useRef<DraftHandoff|null>(null);
  const reportFlight=useRef(false);
+ const attachmentFlight=useRef(false);
  const [previewContinuation,setPreviewContinuation]=useState('');
  useEffect(()=>{if(!view.open)setPreviewContinuation('')},[view.open]);
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
@@ -188,12 +191,35 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  },[mode,continuationVisible,continuationKey]);
  const reuseAction=canStage&&draftTarget&&<>
   <Button variant="secondary" className="pw-file-draft-action" disabled={busy||draftBusy} aria-busy={draftBusy||undefined} onClick={()=>void handOffFile(draftHasFile)}>
-   {handoff?.phase==='opening'?'正在打开草稿…':handoff?.phase==='adding'?'正在加入草稿…':draftHasFile?(draftTarget.conversationId?'查看话题草稿':'查看管家草稿'):`加入「${draftTarget.label}」草稿`}
+   {handoff?.phase==='opening'?'正在打开草稿…':handoff?.phase==='adding'?'正在关联文件位置…':draftHasFile?(draftTarget.conversationId?'查看话题草稿':'查看管家草稿'):`向「${draftTarget.label}」关联文件位置`}
   </Button>
   {handoff?.error?<p className="pw-file-draft-status pw-error" role="alert">{handoff.error}</p>:
-   draftHasFile&&<p className="pw-file-draft-status" role="status">这份文件已关联到「{draftTarget.label}」草稿，未发送。</p>}
+   draftHasFile&&<p className="pw-file-draft-status" role="status">文件位置已关联到「{draftTarget.label}」；未作为附件。</p>}
  </>;
  const original=obj(view.originalFile),canSaveOriginal=privateFiles&&hasFile&&view.canSaveOriginal===true;
+ const canChooseAttachment=!scopedResultOnly&&!view.taskId&&canSaveOriginal&&!!draftTarget&&!!selection&&!!onChooseAttachment;
+ const attachmentChoiceError=mode==='original'&&canChooseAttachment&&error;
+ const chooseAttachment=async()=>{
+  if(!canChooseAttachment||busy||draftBusy||view.exportPending||attachmentFlight.current||!onChooseAttachment||!draftTarget||!selection)return;
+  const epoch=bridge.getDocumentEpoch(),{windowId}=view;
+  const read=()=>obj(bridge.getState().state.attachmentWorkspace);
+  const stillCurrent=()=>{
+   const native=read(),selected=obj(native.file);
+   return alive.current&&!document.hidden&&bridge.getDocumentEpoch()===epoch&&native.open===true&&native.ready===true&&native.windowId===windowId&&
+    !native.taskId&&!native.busy&&native.canSaveOriginal===true&&selected.id===selection.fileId&&selected.sha256===selection.sha256;
+  };
+  if(!stillCurrent())return;
+  attachmentFlight.current=true;setPending(count=>count+1);setError('');
+  try{await onChooseAttachment({...selection,name:String(file.name||'原件')},draftTarget,stillCurrent,async()=>{
+   if(!stillCurrent())throw new Error('原文件窗口已变化，没有打开附件选择。');
+   const frame=attachmentFrame(read());
+   if(!frame)throw new Error('请在固定原件重开附件选择。');
+   returningToSearch.current=true;
+   try{if((await act('close',{},frame,false)).workspace?.open!==false)throw new Error('原文件窗口尚未确认关闭。');}
+   catch(failure){returningToSearch.current=false;throw failure;}
+  });}catch(failure){if(stillCurrent())setError(failure instanceof Error?failure.message:'原附件尚未打开，没有改变草稿。');}
+  finally{attachmentFlight.current=false;if(alive.current)setPending(count=>Math.max(0,count-1));}
+ };
  const offerReader=canSaveOriginal&&view.canOpenInReader===true&&!view.externalViewerResult;
  const resultFilesOnly=view.resultFilesOnly===true;
  const reportInWork=!scopedResultOnly&&resultFilesOnly&&view.fromWorkResult===true;
@@ -270,7 +296,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {receivedOriginal&&<p className="pw-field-hint">这是原设备交给本机的固定文件，不是对端已经完成目标的证明。{topic&&'带回原话题只添加文件引用，不会发送。'}</p>}
  {file.sourceRunEvidence==='original_snapshot_capture'&&file.sourceKind==='remote_result_snapshot'&&<p className="pw-field-hint">这份文件在原主机作业结束后被选中并固定。采集轮次已核对，不代表文件一定由该作业生成。</p>}
  {view.busy&&<div className="pw-action-row"><p role="status">正在核对原记录…</p><Button variant="ghost" onClick={()=>run('cancel')}>停止本次读取</Button></div>}
- {!reportError&&(error||view.error)&&<p className="pw-error" role="alert">{error||view.error}</p>}{view.notice&&<p role="status">{view.notice}</p>}
+ {!reportError&&!attachmentChoiceError&&(error||view.error)&&<p className="pw-error" role="alert">{error||view.error}</p>}{view.notice&&<p role="status">{view.notice}</p>}
  {!view.ready&&<p>回到当前工作区后继续查看，原文件、记录和当前输入保留。</p>}
  {view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
   recovery={{canSave:canSaveOriginal,busy:busy||draftBusy,onOpenInReader:offerReader?()=>run('openInReader'):undefined}}/>:view.documentOpen?<section><h3>{file.name||'原文件'}</h3><div className="pw-action-row">{Number(view.document?.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>run('read',{unit:view.document.nextUnit,chunk:view.document.nextChunk||0})}>读取后续范围</Button>}{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>识别原图或 PDF 文字</Button>}{view.canSaveRead&&<Button variant="primary" disabled={busy} onClick={()=>run('saveRead')}>保存当前已读范围为文件</Button>}</div><DocumentProjection value={obj(view.document)}/><p className="pw-muted">文字摘录只包含当前已查看的部分，并保留来源位置。</p></section>:view.team?<section><h3>{snapshot.artifact?.path||'成员的固定文件成果'}</h3><div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>查看原件</Button><Button variant="secondary" disabled={busy||view.exportPending} onClick={()=>run('export')}>导出到手机</Button><Button variant="ghost" disabled={busy} onClick={()=>run('newerTeam')}>核对较新成果</Button>{view.hasPreviousTeamArtifact&&<Button variant="ghost" disabled={busy} onClick={()=>run('previousTeam')}>返回上一份成果</Button>}{view.canReadTeamDifference&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference')}>比较原项目当前文件</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>回原分工</Button></div>{typeof snapshot.content==='string'&&<pre className="pw-file-text">{snapshot.content}</pre>}{typeof snapshot.preview?.content==='string'&&<pre className="pw-file-text">{snapshot.preview.content}</pre>}<FileDetails value={snapshot} title="原成果与读取范围"/>{snapshot.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('readTeam',{offset:snapshot.nextOffset})}>读取后续内容</Button>}{view.teamDifference&&<><FileDetails value={view.teamDifference} title="原文件差异"/>{view.teamDifference.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference',{offset:view.teamDifference.nextOffset})}>读取后续差异</Button>}</>}</section>:<>
@@ -313,8 +339,11 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   </>}
   {preferSave&&exportAction}
   {useInTopic}
+  {canChooseAttachment&&<Button variant={preferSave?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending}
+   aria-busy={attachmentFlight.current||undefined} onClick={()=>void chooseAttachment()}>{attachmentFlight.current?'正在核对原文件…':`选作「${draftTarget?.label}」的附件…`}</Button>}
+  {attachmentChoiceError&&<p className="pw-file-draft-status pw-error" role="alert">{attachmentChoiceError}</p>}
   {canKeepSupplement&&<Button variant={preferSave||useInTopic?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>{view.continuationDraft?.text?.trim()?'查看补充草稿':'留一条补充'}</Button>}
-  {reuseAction}
+  {!canChooseAttachment&&reuseAction}
   {canSaveOriginal&&!preferSave&&exportAction}
  </div>}
  </Drawer.Content></Drawer.Portal></Drawer.Root>;

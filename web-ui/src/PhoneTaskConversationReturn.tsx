@@ -1,63 +1,108 @@
+import {useEffect,useId,useRef,useState,useSyncExternalStore} from 'react';
 import {bridge} from './bridge';
 import {Button} from './forms-library';
 import {isPrivateLocalPhone} from './PhonePauseInstruction';
-import {messagePhoneResult,phoneConversationId,phoneRunIdentity} from './phone-start';
+import {cancelledPhoneSummaryNote,phoneConversationId,phoneRunIdentity} from './phone-start';
+import {registerOverlayBack} from './overlay-back';
+import {usePhoneOriginalReadingPlace} from './phone-original-reading-place';
+import './phone-returned-report.css';
 
 type Row=Record<string,any>;
-type PhoneView={taskId?:string|null;section?:string|null};
-export type PhoneConversationOrigin={taskId:string;runId:string;epoch:number;conversationId:string};
-const returnedStatuses=new Set(['completed','needs_confirmation','awaiting_user','failed','cancelled','interrupted','reconciling','paused']);
-function source(task:Row|undefined):PhoneConversationOrigin|null{
-  if(!task||!isPrivateLocalPhone(task)||!returnedStatuses.has(task.status))return null;
-  const conversationId=phoneConversationId(task),id=phoneRunIdentity(task);
-  return conversationId&&id?{...id,conversationId}:null;
+type PhoneConversationOrigin={taskId:string;runId:string;epoch:number;conversationId:string};
+type Ticket={doc:number;resume:unknown;changes:unknown;digest:string;messageId:string;summaryDigest:string};
+type Page={offset:number;text:string;total:number;next:number;more:boolean;status:string;note?:string};
+const command='phone.result.taskOriginal';
+const labels:Record<string,string>={completed:'执行结束',needs_confirmation:'等待确认',awaiting_user:'需要你处理',
+  failed:'执行失败',cancelled:'已停止',interrupted:'已中断',reconciling:'结果待核对',paused:'已暂停'};
+const digest=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+function original(task:Row|undefined):PhoneConversationOrigin|null{
+  if(!task||!isPrivateLocalPhone(task)||!Object.hasOwn(labels,task.status)||task.raw?.contextAvailable===false||
+     task.raw?.contextWithdrawn===true||task.raw?.sourceCurrentReadRequired===true||task.raw?.taskProjection==='source_unavailable')return null;
+  const conversationId=phoneConversationId(task),run=phoneRunIdentity(task);
+  return conversationId&&run?{...run,conversationId}:null;
 }
-export function phoneSourceStillOpen(t:PhoneConversationOrigin){
-  const {state,view}=bridge.getState();
-  if(document.hidden||(view as PhoneView|undefined)?.taskId!==t.taskId||state.chatSubmitting||state.conversationReader||!Array.isArray(state.tasks))return false;
-  const s=source(state.tasks.find(row=>row?.id===t.taskId));
-  return !!s&&s.runId===t.runId&&s.epoch===t.epoch&&s.conversationId===t.conversationId;
+function sameOriginal(a:PhoneConversationOrigin|null,b:PhoneConversationOrigin){
+  return a?.taskId===b.taskId&&a.runId===b.runId&&a.epoch===b.epoch&&a.conversationId===b.conversationId;
 }
-export function PhoneTaskConversationReturn({task,onRead}:{task:Row;onRead:(origin:PhoneConversationOrigin)=>void}){
-  const target=source(task);if(!target)return null;
-  return <div className="pw-action-row"><Button variant="ghost" size="medium" className="h-auto min-h-11 max-w-full whitespace-normal"
-    onClick={()=>onRead(target)}>去原私聊核对第 {target.epoch} 轮回执</Button></div>;
+function shownOriginal(rows:unknown,taskId:string){
+  const same=Array.isArray(rows)?rows.filter(row=>row?.id===taskId):[];
+  return same.length===1?original(same[0]):null;
+}
+function OriginalPhoneReport({target}:{target:PhoneConversationOrigin}){
+  useSyncExternalStore(bridge.subscribe,bridge.getState);
+  const region=useId(),trigger=useRef<HTMLButtonElement>(null),ticket=useRef<Ticket|null>(null);
+  const serial=useRef(0),inFlight=useRef(false),previous=useRef<number[]>([]),wanted=useRef(0);
+  const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[page,setPage]=useState<Page|null>(null);
+  function current(t:Ticket|null){
+    const s=bridge.getState(),v=s.view as {taskId?:string;section?:string;resumeRevision?:number}|undefined;
+    if(!t||ticket.current!==t||document.hidden||v?.section||v?.taskId!==target.taskId||
+       bridge.getDocumentEpoch()!==t.doc||v.resumeRevision!==t.resume||s.state.traceSourceRevision!==t.changes||
+       !s.capabilities.commands.includes(command))return false;
+    return sameOriginal(shownOriginal(s.state.tasks,target.taskId),target);
+  }
+  const valid=current(ticket.current),reading=usePhoneOriginalReadingPlace(ticket.current,open&&valid,page?.offset,()=>current(ticket.current));
+  function close(focus=false){
+    ++serial.current;ticket.current=null;inFlight.current=false;previous.current=[];setOpen(false);setBusy(false);setPage(null);setError('');
+    if(focus&&!document.hidden)trigger.current?.focus({preventScroll:true});
+  }
+  async function read(t:Ticket,offset:number,manual=true){
+    if(inFlight.current||!current(t))return;
+    if(manual)reading.leaving(offset);
+    const attempt=++serial.current;inFlight.current=true;wanted.current=offset;setBusy(true);setPage(null);setError('');
+    try{
+      const p=await bridge.command(command,{taskId:target.taskId,runId:target.runId,epoch:target.epoch,offset,expectedDigest:t.digest});
+      if(attempt!==serial.current||!current(t))return;
+      if(!p||p.taskId!==target.taskId||p.runId!==target.runId||p.epoch!==target.epoch||p.conversationId!==target.conversationId||
+         p.deliveryId!==`phone_handoff:${target.taskId}:${target.runId}:${target.epoch}`||typeof p.messageId!=='string'||!p.messageId||p.messageId.length>240||p.sourceRevision!==1||
+         typeof p.status!=='string'||!Object.hasOwn(labels,p.status)||!Number.isSafeInteger(p.endedAt)||p.endedAt<1||
+         !Number.isSafeInteger(p.summaryChars)||p.summaryChars<0||typeof p.summaryTruncated!=='boolean'||
+         p.executionAuthorized!==false||p.resultVerified!==false||!digest(p.resultDigest)||!digest(p.summaryDigest)||
+         t.digest&&(t.digest!==p.resultDigest||t.messageId!==p.messageId||t.summaryDigest!==p.summaryDigest)||
+         p.offset!==offset||typeof p.text!=='string'||p.text.length>8000||p.nextOffset!==offset+p.text.length||
+         p.nextOffset>p.summaryChars||p.hasMore!==(p.nextOffset<p.summaryChars)||p.hasMore&&!p.text.length)
+        throw Error('这段文字与原轮次不一致，没有换读其他结果。');
+      t.digest=p.resultDigest;t.messageId=p.messageId;t.summaryDigest=p.summaryDigest;
+      const i=previous.current.indexOf(offset);previous.current=i<0?[...previous.current,offset]:previous.current.slice(0,i+1);
+      setPage({offset,text:p.text,total:p.summaryChars,next:p.nextOffset,more:p.hasMore,status:p.status,
+        note:offset===0&&!p.hasMore?cancelledPhoneSummaryNote(p,p.text):undefined});
+    }catch(e){if(attempt===serial.current&&current(t))setError(e instanceof Error?e.message:'这轮原回执暂不可读。');}
+    finally{if(attempt===serial.current){inFlight.current=false;setBusy(false);}}
+  }
+  function enter(){
+    const s=bridge.getState(),v=s.view as {resumeRevision?:number}|undefined;
+    const t={doc:bridge.getDocumentEpoch(),resume:v?.resumeRevision,changes:s.state.traceSourceRevision,digest:'',messageId:'',summaryDigest:''};
+    ticket.current=t;if(!current(t)){ticket.current=null;return;}
+    setOpen(true);void read(t,0,false);
+  }
+  useEffect(()=>{if(open&&!valid)close();},[open,valid]);
+  useEffect(()=>{
+    if(!open)return;
+    const hidden=()=>{if(document.hidden)close();};
+    document.addEventListener('visibilitychange',hidden);
+    const back=registerOverlayBack(()=>close(true));
+    return ()=>{document.removeEventListener('visibilitychange',hidden);back();};
+  },[open]);
+  useEffect(()=>()=>{++serial.current;ticket.current=null;inFlight.current=false;},[]);
+  return <div>
+    <Button ref={trigger} variant="ghost" className="h-auto min-h-11 max-w-full whitespace-normal"
+      aria-expanded={open&&valid} aria-controls={region} onClick={()=>open?close(true):enter()}>{open&&valid?'收起原回执':`查看第 ${target.epoch} 轮原回执`}</Button>
+    {open&&valid&&<section id={region} aria-label="这轮手机工作的原回执">
+      {busy&&<p role="status">正在核对已保存的原回执…</p>}{error&&<p role="alert">{error}</p>}
+      {page&&<><p className="pw-field-hint">当时的记录：{labels[page.status]}。这是原轮次的文字回执，不是当前画面或目标达成的凭据。</p>
+        {page.note&&<p className="pw-field-hint">{page.note}</p>}
+        {page.total===0?<p>这轮没有留下文字总结。</p>:<p ref={reading.body} tabIndex={-1} className="pw-phone-report-text" dir="auto">{page.text}</p>}
+        {page.total>page.text.length&&<p className="pw-muted">原文位置 {page.offset+1}–{page.next} / {page.total}</p>}</>}
+      {(error||page&&(page.more||previous.current.length>1))&&<div className="pw-action-row">
+        {page&&previous.current.length>1&&<Button variant="ghost" onClick={()=>ticket.current&&void read(ticket.current,previous.current[previous.current.length-2])}>上一段</Button>}
+        {page?.more&&<Button variant="secondary" onClick={()=>ticket.current&&void read(ticket.current,page.next)}>下一段原文</Button>}
+        {error&&<Button variant="secondary" onClick={()=>ticket.current&&void read(ticket.current,wanted.current)}>重读这一段</Button>}
+      </div>}
+    </section>}
+  </div>;
 }
 
-type Location='found'|'absent'|'not_mounted'|'left';
-/** Locate only a pre-existing authentic message in the original visible conversation.
- * Wait briefly for React's row, not for a future delivery. Never select a different message or a device. */
-export function locatePhoneReturn(t:PhoneConversationOrigin,list:()=>HTMLElement|null,current:()=>boolean,
-  stopFollowing:()=>void,save:()=>void):Promise<Location>{
-  const active=()=>{const s=bridge.getState(),view=s.view as PhoneView|undefined;return current()&&!document.hidden&&!view?.section&&!view?.taskId&&
-    s.state.conversationId===t.conversationId&&!s.state.conversationReader};
-  const marker=()=>{
-    const rows=bridge.getState().state.messages;if(!Array.isArray(rows))return null;
-    const matches=rows.filter(m=>{if(!m?.id||m.sourceRevision!==1||m.taskId!==t.taskId)return false;
-      const r=messagePhoneResult(m);return r?.runId===t.runId&&r.epoch===t.epoch});
-    return matches.length===1&&typeof matches[0].id==='string'?matches[0].id:null;
-  };
-  if(!active())return Promise.resolve('left');
-  const id=marker();if(!id)return Promise.resolve('absent');
-  return new Promise(resolve=>{
-    let frame=0,done=false;let observer:MutationObserver|undefined,observed:HTMLElement|null=null;
-    const finish=(outcome:Location)=>{if(done)return;done=true;clearTimeout(timeout);cancelAnimationFrame(frame);observer?.disconnect();
-      document.removeEventListener('visibilitychange',leave);for(const type of inputs)document.removeEventListener(type,leave,true);resolve(outcome)};
-    const leave=()=>finish('left'),inputs=['pointerdown','touchstart','wheel','keydown'];
-    const timeout=setTimeout(()=>finish(active()?'not_mounted':'left'),1100);
-    const check=()=>{
-      if(done)return;if(!active()){finish('left');return}if(marker()!==id){finish('absent');return}
-      const container=list(),scroll=container?.closest<HTMLElement>('[data-conversation-id]');
-      if(!container?.isConnected||!scroll||scroll.dataset.conversationId!==t.conversationId||container.closest('[inert],[aria-hidden="true"]')||!scroll.clientHeight){frame=requestAnimationFrame(check);return}
-      const matches=Array.from(container.querySelectorAll<HTMLElement>('[data-message-id]')).filter(n=>n.dataset.messageId===id);
-      if(matches.length===1){
-        const row=matches[0],inset=parseFloat(getComputedStyle(scroll).scrollPaddingTop)||0;
-        stopFollowing();row.focus({preventScroll:true});scroll.scrollTo({top:scroll.scrollTop+row.getBoundingClientRect().top-scroll.getBoundingClientRect().top-scroll.clientTop-inset,behavior:'instant'});
-        save();finish('found');return
-      }
-      if(observed!==container){observer?.disconnect();observed=container;observer=new MutationObserver(check);observer.observe(container,{childList:true,subtree:true})}
-    };
-    document.addEventListener('visibilitychange',leave);for(const type of inputs)document.addEventListener(type,leave,true);
-    frame=requestAnimationFrame(check);
-  });
+/** Read the immutable local report without looking for a bubble in a bounded conversation page. */
+export function PhoneTaskOriginalReport({task}:{task:Row}){
+  const target=original(task);
+  return target?<OriginalPhoneReport key={JSON.stringify(target)} target={target}/>:null;
 }

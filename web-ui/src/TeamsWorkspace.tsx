@@ -27,7 +27,7 @@ import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelive
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { finalPackage, TeamFinalPackageReading } from './TeamFinalPackageReading';
 import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
-import { settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamMemberProgress, teamPartialReading, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
+import { settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamMemberProgress, teamPartialReading, teamRemainingMember, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { ownerWorkPresentation } from './owner-work-presentation';
 import { ReadingContext } from './reading-context';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
@@ -541,7 +541,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (value.operation === 'phone_scope') { setPhoneSelection(value); setPhoneChoices(Object.fromEntries(rows(value.view?.members).map(member => [member.memberId, teamPhoneChoice()]))); }
     else { setReview(value); setAcknowledged(false); }
   };
-  const control = (command: string, memberId?: string) => {
+  const control = (command: string, memberId?: string, resumed?: NonNullable<ReturnType<typeof teamRemainingMember>>) => {
     if (!reading || !canControl || entered.current || backgrounded.current || !ownsNativeWindow() || uncertain && !['pause', 'cancel'].includes(command)) return;
     const viewHandle = reading.viewHandle;
     // Native control consumes this reading before it checks the current run.
@@ -549,8 +549,17 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     setReading(value => value ? { ...value, viewHandle: '' } : null);
     void invoke('teams.control', { viewHandle, command, ...(memberId ? { memberId } : {}) }, result => {
       if (result.confirmed !== true) throw new Error('原操作尚未确认');
+      if (resumed) {
+        const next = result.reading?.run, locator = resumed.item.locator;
+        const slot = rows(next?.members).find(member => member.id === locator.memberId);
+        if (result.command !== 'resume' || result.reading?.kind !== 'run' || !result.reading.viewHandle ||
+            next?.id !== locator.runId || !(next.revision > resumed.revision) ||
+            slot?.generation !== locator.memberGeneration + 1 || slot.status !== 'queued') {
+          release(result.reading); throw new Error('原分工是否已排队待核对，请刷新这次协作，不要重复提交。');
+        }
+      }
       if (result.reading) acceptReading(result.reading);
-      setNotice('已收到原运行的操作回执。');
+      setNotice(resumed ? '这名成员的未完成分工已排队。其他成员已交的原件保留，尚无新成果。' : '已收到原运行的操作回执。');
     });
   };
   const mayAnswer = !!reading && !!current && canMutate && reply?.kind === 'assignment_question' && replyCanReceive
@@ -677,6 +686,11 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   ]), { active: workspaceActive && catalogReady && (!reading || !!reading.viewHandle) && !editor && !memberDraft && !review && !phoneSelection });
   const teamResult = teamResultReading(current, messages, deliveryWorkers?.originalFileObservation);
   const followUps = teamFollowUps(current, reading?.attention);
+  const deliveries = teamResearchDeliveries(current, messages);
+  const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
+  const remainingMember = teamRemainingMember(reading, deliveries.filter(source => canOpenMemberResult || source.answer && openReading), state.tasks);
+  const scopedFollowUps = remainingMember?.canReview && !uncertain ? followUps.map(item => item.key === remainingMember.item.key
+    ? { ...item, title: '核对' + name(item.locator.memberId) + '的未完成分工' } : item) : followUps;
   const canSupplementParent = ownerWorkLink?.currentRun && ownerWorkLink.stopping !== true &&
     (!teamHasEnded(current?.status) || current?.status === 'completed' && rows(state.tasks).some(task =>
       task.id === ownerWorkLink.taskId && task.raw?.runId === ownerWorkLink.runId && task.raw?.coordinatorEpoch === ownerWorkLink.epoch &&
@@ -727,6 +741,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const original = currentReading.current;
     if (!canRead || materialBusy || !ownsNativeWindow() || original?.run?.id !== item.locator.runId || !original.viewHandle) return;
     const origin = runSection === 'result' ? resultOrigin(item.key) : null;
+    const resume = canMutate && remainingMember?.canReview && remainingMember.item.key === item.key ? remainingMember : null;
     void invoke('teams.readAttention', item.locator, reply => {
       const next = reply.reading;
       if (currentReading.current?.viewHandle !== original.viewHandle || !ownsNativeWindow()) { release(next); return; }
@@ -734,12 +749,29 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       const focus = teamFollowUpFocus(next, object(reply.focus), item.locator);
       acceptReading(next);
       if (focus.kind === 'changed') { setNotice(focus.message || '这项原事项已变化。'); return; }
+      if (resume) {
+        const originalDeliveries = teamResearchDeliveries(next.run, next.messages).filter(source => canOpenMemberResult || source.answer && openReading);
+        const now = teamRemainingMember(next, originalDeliveries, state.tasks);
+        if (focus.kind !== 'member' || focus.memberId !== item.locator.memberId || !now?.canReview || now.key !== resume.key) {
+          setNotice('这项分工或原额度已变化。没有继续，请核对现在的进展。'); return;
+        }
+        reviewResult({ operation: 'resumeRemainingMember', viewHandle: next.viewHandle, target: now });
+        return;
+      }
       setResultSource(origin);
       showDecisionTarget(item.locator.runId,next.viewHandle,focus);
     });
   };
-  const deliveries = runSection === 'details' ? [] : teamResearchDeliveries(current, messages);
-  const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
+  const resumeReview: NonNullable<ReturnType<typeof teamRemainingMember>> | null =
+    review?.operation === 'resumeRemainingMember' ? review.target : null;
+  const resumeReviewCurrent = !!resumeReview && !!remainingMember?.canReview && canMutate &&
+    review?.viewHandle === reading?.viewHandle && resumeReview.key === remainingMember.key;
+  const confirmRemainingMember = () => {
+    if (!resumeReviewCurrent || !resumeReview || entered.current || backgrounded.current || document.hidden ||
+        currentReview.current !== review || currentReading.current?.viewHandle !== review?.viewHandle || !ownsNativeWindow()) return;
+    closeReview();
+    control('resume', resumeReview.item.locator.memberId, resumeReview);
+  };
   const partialResult = runSection === 'result' && reading?.viewHandle && ownerWorkLink?.currentRun !== false &&
     deliveries.some(source => canOpenMemberResult || source.answer && openReading) ? teamPartialReading(current, followUps) : null;
   const rememberSourcesOpened = (id: string) => setShownMemberSources(shown => shown[id] ? shown : { ...shown, [id]: true });
@@ -983,7 +1015,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         <div className="pw-team-work-actions">{ownerWorkLink && onOpenWork ? <><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openOwnerWork('overview')}>查看原工作</Button>{canSupplementParent &&
           <Button variant="secondary" disabled={!canRead || materialBusy} onClick={() => openOwnerWork('supplement')}>补充要求</Button>}</> : <span className="pw-team-history-label">保留原目标与执行记录</span>}</div>
         <div className="pw-team-current-actions">
-          {!hasWorkPlan && (teamCanResume(current.status) || current.phase === 'intervention' || current.phase === 'awaiting_member' && currentMembers.length > 0) && <Button leadingIcon={IconPlay} disabled={!canMutate} onClick={() => control('resume')}>继续协作</Button>}
+          {!hasWorkPlan && !remainingMember && (teamCanResume(current.status) || current.phase === 'intervention' || current.phase === 'awaiting_member' && currentMembers.length > 0) && <Button leadingIcon={IconPlay} disabled={!canMutate} onClick={() => control('resume')}>继续协作</Button>}
           {current.status !== 'cancelled' && <ContextMenuTrigger key={current.id}>{({ open }) => <><IconButton icon={IconMore} aria-label="暂停或停止协作" disabled={!canControl} onClick={event => open(event.currentTarget)} /><ContextMenu aria-label="本次协作操作" onAction={key => { if (key === 'pause' && canControl) control('pause'); if (key === 'stop' && canControl) reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id }); }}>{teamCanPause(current.status) && <ContextMenuItem id="pause" icon={IconPause}>暂停协作</ContextMenuItem>}<ContextMenuItem id="stop" icon={IconStop}>停止这次协作</ContextMenuItem></ContextMenu></>}</ContextMenuTrigger>}
         </div>
       </div>
@@ -998,7 +1030,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         {resultSource && resultSource.runId === current.id && !resultSource.member && runSection !== 'result' && <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy || materialBusy}
           onClick={() => resultBack.current()}>返回协作成果</Button>}
         <TabPanel id="progress">
-          <TeamFollowUps items={followUps} read={openFollowUp} disabled={!canRead || materialBusy}/>
+          <TeamFollowUps items={scopedFollowUps} read={openFollowUp} disabled={!canRead || materialBusy}/>
           {current.phase === 'intervention' && !hasWorkPlan && <div className="pw-collaboration-attention" role="status"><div><strong>新要求已保存</strong><span>受影响成员已暂停。继续协作后处理，沿用剩余额度。</span></div></div>}
           {!!teamResult.body && <section className="pw-team-result-overview" aria-label={teamResult.previous ? '上次汇总摘要' : teamResult.partial ? '部分汇总摘要' : '本轮汇总摘要'}>
             <h3>{teamResult.previous ? '上次保存的共同汇总' : teamResult.partial ? '本次的部分汇总' : '已有共同汇总'}</h3>
@@ -1070,7 +1102,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                 {member.text && <section className="pw-team-member-output" aria-label="已保存的成员产出"><h4>已保存的成员产出</h4>{outputIdentity && <TeamMemberIdentity member={outputIdentity} name={teamMessageAuthor(outputMessage!, members)} detail={outputIdentity.name !== member.name ? `原名称 · ${member.id}` : undefined} size={24} />}<AIAnswer text={String(member.text)} /></section>}
                 {member.acceptance && <p>验收：{member.acceptance}</p>}
                 {!member.exited && <div className="pw-form-actions"><Button variant="ghost" disabled={!canMutate} onClick={() => beginMemberChange('rename', member)}>名称与头像</Button>{simpleRoster && <Button variant="ghost" disabled={!canMutate || !rosterPaused} onClick={() => beginMemberChange('exit', member)}>退出本次协作</Button>}</div>}
-                <div className="pw-form-actions">{!member.exited && teamCanPause(member.status) && <Button variant="ghost" disabled={!canControl} onClick={() => control('pause', member.id)}>暂停成员</Button>}{!member.exited && !hasWorkPlan && teamCanResume(member.status) && <Button variant="ghost" disabled={!canMutate} onClick={() => control('resume', member.id)}>继续成员</Button>}{!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <Button variant="ghost" disabled={!canMutate || pendingMessageBusy(member)} onClick={() => control('continueMessages', member.id)}>使用 {pendingCount(member)} 条待处理消息继续</Button>}</div>
+                <div className="pw-form-actions">{!member.exited && teamCanPause(member.status) && <Button variant="ghost" disabled={!canControl} onClick={() => control('pause', member.id)}>暂停成员</Button>}{!member.exited && !hasWorkPlan && teamCanResume(member.status) && (remainingMember && remainingMember.item.locator.memberId === member.id
+                  ? remainingMember.canReview && <Button variant="ghost" disabled={!canMutate} onClick={() => openFollowUp(remainingMember.item)}>核对未完成分工</Button>
+                  : <Button variant="ghost" disabled={!canMutate} onClick={() => control('resume', member.id)}>继续成员</Button>)}{!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <Button variant="ghost" disabled={!canMutate || pendingMessageBusy(member)} onClick={() => control('continueMessages', member.id)}>使用 {pendingCount(member)} 条待处理消息继续</Button>}</div>
               </div>}
               </div>
             </article>;
@@ -1090,7 +1124,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} hasRevision={hasFrozenRevision} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy} rawAvailable={canOpenMemberResult}
             open={openMemberDelivery} openAnswer={openReading?openMemberAnswer:undefined}
             expanded={shownMemberSources[current.id] ?? !!partialResult} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
-            actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
+            actions={{ items: scopedFollowUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}
             finalPackageReader={teamPackage&&reading&&workspaceActive&&runSection==='result'&&bridge.getState().capabilities.commands.includes('teams.readFinalPackageFiles')
               ? <TeamFinalPackageReading key={reading.viewHandle+':'+teamPackage.operationId} item={teamPackage} handle={reading.viewHandle} fromWork={focusedPackage?()=>leaveWithDrafts(focusedPackage.returnToWork):undefined} disabled={!canRead||materialBusy} exportState={state.teamFinalPackageExport===undefined?reading.finalPackageExport:state.teamFinalPackageExport}
@@ -1284,7 +1318,18 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         </div>
       </footer>
     </>}</div></SettingsDialog>
-    <SettingsDialog className="pw-team-modal" isOpen={!!review} title={review?.operation === 'handoffFailedItem' ? '核对这一次分工交接' : review?.operation === 'reviseFromParent' ? '核对原团队修订' : review?.operation === 'continueWorkItem' ? '核对原文件分工' : review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
+    <SettingsDialog className="pw-team-modal" isOpen={!!resumeReview} title="核对未完成的分工" closeLabel="返回原协作" onClose={closeReview}>
+      {resumeReview && <div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
+        <h3><bdi>{name(resumeReview.item.locator.memberId)}</bdi></h3>
+        <p dir="auto">{resumeReview.assignment}</p>
+        <p>这名成员还有{resumeReview.rounds.map(round => '第 ' + round + ' 阶段').join('、')}未完成。只继续这些阶段，沿用原范围和剩余额度。</p>
+        <p>其他成员已交回的内容保留，不重新分派。共同汇总仍按原流程处理。</p>
+        {!resumeReviewCurrent && <p role="status">这项分工或原记录已变化。返回后请核对目前的进展。</p>}
+        <div className="pw-form-actions"><Button variant="secondary" onClick={closeReview}>返回</Button>
+          <Button disabled={!resumeReviewCurrent} onClick={confirmRemainingMember}>只继续这名成员</Button></div>
+      </div>}
+    </SettingsDialog>
+    <SettingsDialog className="pw-team-modal" isOpen={!!review && !resumeReview} title={review?.operation === 'handoffFailedItem' ? '核对这一次分工交接' : review?.operation === 'reviseFromParent' ? '核对原团队修订' : review?.operation === 'continueWorkItem' ? '核对原文件分工' : review?.operation === 'configureMember' ? '核对本次成员改动' : review?.operation === 'start' ? '开始这次协作' : review?.operation === 'cancel' ? '停止这次协作' : review?.operation === 'feedback' ? '修改要求并暂停' : review?.operation === 'remove' ? '移除编组' : '保存编组'} onClose={() => { if (!busy) closeReview(); }}><div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
       {review?.operation === 'handoffFailedItem' ? <FailedHandoffReview facts={review.input}/> : review?.operation === 'reviseFromParent' ? <TeamParentRevisionReview facts={review.input}/> : review?.operation === 'continueWorkItem' ? <TeamFileContinuationReview facts={review.input} /> : review?.operation === 'configureMember' ? <>
         <TeamMemberIdentity member={review.member || {}} name={teamMemberLabel(review.member || {}, rows(review.roster))} size={40} />
         {review.input?.action === 'rename' ? <><p>改为：</p><TeamMemberIdentity member={{ ...review.member, name: review.input.name, avatarShape: review.input.avatarShape }} size={40} /><p>历史消息和已开始的轮次保留原身份；不改职责、权限、额度或执行状态。</p></>
