@@ -112,8 +112,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [requirements, setRequirements] = useState<DeliveryRequirements>(() => deliveryRequirements());
   const [source, setSource] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [submission, setSubmission] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
-  const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry}|null>(null);
+  const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;unselectedImport?:ProjectImportedEditor}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
+  const [importEditChoice,setImportEditChoice]=useState<{original:ProjectImportedEditor;viewHandle:string}|null>(null);
   const [importEditorNotice,setImportEditorNotice]=useState('');
   const buildReturnAnchor=useRef<HTMLElement>(null), focusingBeforeDeparture=useRef(false);
   const fileCheckout=fileWindow?.checkoutId||'';
@@ -357,8 +358,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed && can('projects.development.queryCopy'));
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
   const closeFiles = (saved?:CheckoutSavedPosition) => {
-    if(saved?.projectId===projectId && saved.checkoutId===fileCheckout && active && !document.hidden && bridge.getState().state.projectId===projectId)
-      setLastSavedFile(saved);
+    const original=fileWindow?.unselectedImport;
+    const sameSave=saved?.projectId===projectId&&saved.checkoutId===fileCheckout&&active&&!document.hidden&&bridge.getState().state.projectId===projectId;
+    if(sameSave)setLastSavedFile(saved);
+    // The saved file can identify a suggested selection, never make one on return.
+    setImportEditChoice(sameSave&&original?.checkoutId===saved.checkoutId&&view?.viewHandle===handle.current&&original.window===ownerWindow()?
+      {original,viewHandle:handle.current}:null);
     setFileWindow(null); setHostEditor(null); setHostFiles(null); sourceAttempt.current = ''; setSource(null);
   };
   useEffect(()=>{
@@ -376,7 +381,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     setImportEditorNotice('');setHostEditor(null);
     // Only list this checked-out copy. Opening this door does not choose a
     // source file, change a saved work draft or grant a build.
-    setFileWindow({checkoutId});
+    setFileWindow({checkoutId,unselectedImport:!draft.current.checkoutId&&!view.draft?.checkoutId?importedEditor:undefined});
   },[importedEditor,onImportedEditorHandled,active,view,busy,review,fileCheckout,buildReturn,projectId,submission,sourceConflict]);
   useEffect(()=>{
     if(!buildReturn||!active||!view||busy||review||fileCheckout||document.hidden||
@@ -443,12 +448,19 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     });
   };
   const chooseCheckout = (value:string) => {
-    setImportEditorNotice('');
+    setImportEditChoice(null);setImportEditorNotice('');
     const clear = !!currentPicked && checkout!==value;
     if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
     setCheckout(value); setBuildOrigin(null); setBuildCopyMissing(false); setSource(null); setHostOrigin(null); setHostFiles(null);
     sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value, ...(clear?{constraints:''}:{}) });
   };
+  const editedImportCopy = () => {
+    if(!importEditChoice||!latest.current.active||checkout||draft.current.checkoutId||view?.draft?.checkoutId||available.length<2||
+      handle.current!==importEditChoice.viewHandle||view?.viewHandle!==importEditChoice.viewHandle||
+      !sameImportedEditor(importEditChoice.original,originalImportedEditor(projectId)))return;
+    return available.find(row=>row.projectId===projectId&&row.checkoutId===importEditChoice.original.checkoutId);
+  };
+  const editedCopy=editedImportCopy();
   const copy = (query: boolean) => {
     const action=query?'projects.development.queryCopy':'projects.development.prepare', expected=view?.draft?.copyRequestId;
     const state=bridge.getState().state;
@@ -565,6 +577,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         ...available.map(row => ({ id: row.checkoutId, label: `${row.name || name} · ${row.checkoutId.slice(0,8)} · ${new Date(row.createdAt || 0).toLocaleString()}` })),
         ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
         onChange={chooseCheckout} />
+      {editedCopy&&can('projects.development.draft')&&<div className="pw-form-actions"><Button variant="ghost" size="small" disabled={disabled} onClick={()=>{
+        if(!disabled&&!entered.current&&latest.current.can('projects.development.draft')&&editedImportCopy()?.checkoutId===editedCopy.checkoutId)chooseCheckout(editedCopy.checkoutId);
+      }}>选我刚编辑的副本 · <bdi>{editedCopy.name||name}</bdi> · <code>{editedCopy.checkoutId.slice(0,8)}</code></Button></div>}
       {available.length === 0 && can('projects.development.prepare') && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyUnconfirmed || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
       {(view.draft?.copyRequestId || copyResult) && <div>
         {copyUnconfirmed&&<p className="pw-field-hint" role="status">{can('projects.development.queryCopy')?

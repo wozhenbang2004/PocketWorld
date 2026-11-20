@@ -7,7 +7,7 @@ import {AttachmentOriginalReader,DocumentProjection,FileDetails} from './Attachm
 import {AttachmentDocumentEditor,AttachmentProcessingEditor,AttachmentVersionContinuation} from './AttachmentDocumentEditor';
 import {OriginalImageComparison} from './workspace-library/OriginalImageComparison';
 import {AttachmentFileCollection} from './workspace-library/AttachmentFileCollection';
-import {attachmentActionPayload,attachmentDocumentKey,attachmentFileFormat,attachmentFrame,documentVersionKey,exactFileTarget,fileBytes,fileObject as obj,fileRows as rows,fileRunProvenance,savedDocumentVersions,type AttachmentFrame,type FileJson as Json} from './attachment-workspace';
+import {attachmentActionPayload,attachmentDocumentKey,attachmentFileFormat,attachmentFrame,documentVersionKey,exactFileKey,exactFileTarget,fileBytes,fileObject as obj,fileRows as rows,fileRunProvenance,libraryFileOrigins,normalizedFileName,savedDocumentVersions,type AttachmentFrame,type FileJson as Json} from './attachment-workspace';
 import './attachment-workspace.css';
 import './attachment-page.css';
 
@@ -25,10 +25,8 @@ type Props={
 };
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
-const exactFileKey=(file:Json)=>{const pin=exactFileTarget(file);return pin?JSON.stringify([pin.fileId,pin.sha256]):''};
 const catalogFormats=[{id:'all',label:'全部类型'},{id:'document',label:'文档'},{id:'table',label:'表格'},
  {id:'text',label:'文本'},{id:'media',label:'图片和音视频'},{id:'other',label:'其他文件'}];
-const normalName=(name:unknown)=>typeof name==='string'?name.normalize('NFKC').trim().toLowerCase():'';
 const importMessages:Record<string,string>={
  selecting:'等待系统文件选择。确认前还没有导入。',
  selection_unconfirmed:'无法确认系统选择器是否打开。请在原选择器完成或取消，不会自动重开。',
@@ -344,7 +342,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const detailsLabel=scopedResultOnly?'文件来源':'来源与操作';
  const backLabel=view.deviceOriginalOnly?'返回原工作':entryBack||mode==='list'?sourceReturnLabel:
   mode==='detail'||originalHasDirectBack?'返回文件列表':mode==='edit'&&hasOriginal?'返回这份原件':'返回文件详情';
- const fileList=(label:string,files:Json[],opensOriginal:boolean|((file:Json)=>boolean)=false)=><AttachmentFileCollection label={label} files={files} busy={busy||selectionPending} choosing={!!view.choosingSource} opensOriginal={opensOriginal} versions={documentVersions}
+ const fileList=(label:string,files:Json[],opensOriginal:boolean|((file:Json)=>boolean)=false)=><AttachmentFileCollection label={label} files={files} busy={busy||selectionPending} choosing={!!view.choosingSource} opensOriginal={opensOriginal} versions={documentVersions} origins={catalogOrigins}
   onSelect={(target,row,direct)=>{
    const body=scroller.current;
    if(listScope&&body)listOrigin.current={scope:listScope,collection:label,inset:row.getBoundingClientRect().top-body.getBoundingClientRect().top};
@@ -377,12 +375,15 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const media=catalogUnread||view.choosingSource?[]:rows(snapshot.media).length?rows(snapshot.media):snapshot.kind==='group_media_result'?[{...snapshot,operationId:snapshot.sourceOperationId,status:snapshot.mediaState}]:[];
  const allSources=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts);
  const privateLibrary=privateFiles&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
+ const catalogOrigins=useMemo(()=>privateLibrary&&view.open&&view.ready&&mode==='list'&&!catalogUnread?
+  libraryFileOrigins([...rows(snapshot.artifacts),...rows(snapshot.sources)],rows(state.tasks)):undefined,
+  [privateLibrary,view.open,view.ready,mode,catalogUnread,snapshot.artifacts,snapshot.sources,state.tasks]);
  // One view of the native catalog: no content search, new index, or changes to which originals can open.
  const filterable=privateLibrary||privateFiles&&!!view.taskId&&!scopedResultOnly&&!view.choosingSource&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
  const fileFilter=filterable&&catalogFilter?.scope===listScope?catalogFilter:null;
- const nameFilter=fileFilter?.name||'',formatFilter=fileFilter?.format||'all',needle=normalName(nameFilter);
+ const nameFilter=fileFilter?.name||'',formatFilter=fileFilter?.format||'all',needle=normalizedFileName(nameFilter);
  const filterActive=!!needle||formatFilter!=='all';
- const matchesFile=(row:Json)=>(!needle||normalName(row.name).includes(needle))&&
+ const matchesFile=(row:Json)=>(!needle||normalizedFileName(row.name).includes(needle))&&
   (formatFilter==='all'||attachmentFileFormat(row.mimeType,row.name).category===formatFilter);
  const updateFilter=(name:string,format:string)=>setCatalogFilter({scope:listScope,name,format});
  const libraryImport=privateLibrary?obj(view.libraryImport):{},registration=obj(libraryImport.registration);

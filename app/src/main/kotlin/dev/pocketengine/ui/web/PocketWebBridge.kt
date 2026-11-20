@@ -253,6 +253,8 @@ internal class PocketWebBridge(
     private val commandReceipts = linkedMapOf<String, Pair<String, JSONObject>>()
     private val pendingCommands = mutableMapOf<String, String>()
     @Volatile private var documentId: String? = null
+    private data class SavedLocalReturn(val handle:String,val window:PocketWebWindowTicket,val key:String,val conversation:String,val message:String,val revision:Long)
+    @Volatile private var savedLocalReturn: SavedLocalReturn? = null
     private val phoneComposer = PocketWebPhoneComposer(controller, { closed }, ::captureWindow, ::acceptsWindow,
         { PocketWebWindowTicket(commandFence.ticket(), controller.webPhoneViewerWindowTicket()) },
         { ticket -> ticket.accepts(commandFence.ticket(), controller.webPhoneViewerWindowTicket()) },
@@ -393,6 +395,7 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        savedLocalReturn = null
         controller.closeOwnerWorkRequestHistory()
         controller.forgetHeldPhoneImage()
         cancelStatePublication()
@@ -1570,10 +1573,47 @@ internal class PocketWebBridge(
                 fun shown()=!closed&&originalDocument!=null&&documentId==originalDocument&&acceptsWindow(ticket)&&section==null&&taskViewId==null&&
                     controller.state.filePath==null&&controller.webPrivateOwnerVisible()&&!phoneComposer.intent
                 require(shown()){"请在原私人文字输入框保存"}
-                controller.saveFirstHostRequest(requiredString(args,"key"),requiredLong(args,"revision"),requiredInt(args,"epoch"),::shown){
-                    result,error->complete(id,result,error,retainValue=false);publishState()
+                val key=requiredString(args,"key")
+                savedLocalReturn=null
+                controller.saveFirstHostRequest(key,requiredLong(args,"revision"),requiredInt(args,"epoch"),::shown){ result,error->
+                    // The controller returns saved_local only after checking the durable original.
+                    if(error==null&&result!=null&&result.opt("status")=="saved_local"&&result.opt("selectedOriginal")==false&&shown()){
+                        val original=SavedLocalReturn(UUID.randomUUID().toString(),ticket,key,result.getString("conversationId"),result.getString("messageId"),result.getLong("revision"))
+                        savedLocalReturn=original;result.put("viewSavedHandle",original.handle)
+                    }
+                    complete(id,result,error,retainValue=false);publishState()
                 }
                 return
+            }
+            if(action=="conversation.select"&&args.has("viewSavedHandle")){
+                require(args.keys().asSequence().toSet()==setOf("viewSavedHandle","key","epoch","revision"))
+                val original=savedLocalReturn ?: error("这次原话回执已离开，当前草稿保留")
+                require(original.handle==requiredString(args,"viewSavedHandle")&&original.key==requiredString(args,"key"))
+                val sourceRevision=controller.conversationSourceRevision
+                val unavailable="未能核对刚才保存的原话，当前草稿保留。"
+                fun current()=savedLocalReturn===original&&acceptsWindow(original.window)&&!phoneComposer.intent&&
+                    controller.state.filePath==null&&!controller.state.listening&&!controller.state.chatAttachmentPickerOpen&&
+                    controller.conversationSourceRevision==sourceRevision&&runCatching{
+                        requireComposer(args);requireAttachmentDraft(args)
+                    }.isSuccess
+                require(current()){unavailable}
+                controller.runPluginCatalogWork(Runnable{
+                    val verified=runCatching{
+                        check(current())
+                        val assistant=controller.nativeButlerHost().features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error(unavailable)
+                        assistant.reviewSavedFirstHostSource(original.conversation,original.message,original.revision)
+                    }.isSuccess
+                    main.post{
+                        if(!verified||!current()){complete(id,null,unavailable,retainValue=false);return@post}
+                        savedLocalReturn=null
+                        leaveTask(); leaveConnection(); reviews.clear(); phoneComposer.clearReviews()
+                        controller.openConversation(original.conversation)
+                        val opened=controller.state.conversationId==original.conversation
+                        complete(id,if(opened)JSONObject().put("opened",true).put("conversationId",original.conversation)
+                            .put("messageId",original.message).put("revision",original.revision) else null,if(opened)null else unavailable,retainValue=false)
+                        publishState()
+                    }
+                });return
             }
             if(action=="conversation.selectSavedHost"){
                 require(args.keys().asSequence().toSet()==setOf("conversationId","messageId","revision","profileId","profileBinding"))

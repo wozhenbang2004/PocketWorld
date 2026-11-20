@@ -92,6 +92,58 @@ export function exactFileTarget(file: FileJson): {fileId: string; sha256: string
   return typeof file.id === 'string' && file.id !== '' && typeof file.sha256 === 'string' && /^[a-f0-9]{64}$/.test(file.sha256) && (file.availability === undefined || file.availability === 'available') ? {fileId: file.id, sha256: file.sha256} : null;
 }
 
+export function exactFileKey(file: FileJson): string {
+  const pin=exactFileTarget(file);
+  return pin?JSON.stringify([pin.fileId,pin.sha256]):'';
+}
+export const normalizedFileName=(value:unknown)=>typeof value==='string'?value.normalize('NFKC').trim().toLowerCase():'';
+
+/** Display-only disambiguation of different fixed originals in the already-read private catalog. */
+export function libraryFileOrigins(files:FileJson[],projectedTasks:FileJson[]):Map<string,string> {
+  const groups=new Map<string,Map<string,FileJson>>();
+  for(const file of files){
+    const pin=exactFileKey(file),name=normalizedFileName(file.name);
+    if(!pin||!name)continue;
+    const type=file.sourceKind==='document_source'?'document_source':attachmentFileFormat(file.mimeType,file.name).label;
+    const key=JSON.stringify([name,type]),group=groups.get(key)??new Map<string,FileJson>();
+    group.set(pin,file);groups.set(key,group);
+  }
+  const sharedNames=[...groups.values()].filter(group=>group.size>1),origins=new Map<string,string>();
+  if(!sharedNames.length)return origins;
+
+  const sourceId=(file:FileJson)=>typeof file.sourceTaskId==='string'&&/^[A-Za-z0-9._:-]{1,240}$/.test(file.sourceTaskId)?file.sourceTaskId:'';
+  const wanted=new Set(sharedNames.flatMap(group=>[...group.values()].map(sourceId).filter(Boolean)));
+  const taskNames=new Map<string,string>();
+  for(const task of projectedTasks){
+    if(!wanted.has(task.id))continue;
+    const raw=fileObject(task.raw);
+    const privateSource=task.id===raw.id&&raw.actorId==='owner'&&raw.spaceId==='private'&&fileObject(raw.origin).kind!=='group'&&
+      raw.contextAvailable!==false&&raw.contextWithdrawn!==true&&raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable';
+    const name=!taskNames.has(task.id)&&privateSource&&typeof task.goal==='string'&&raw.goal===task.goal?
+      [...task.goal.trim().replace(/\s+/gu,' ')]:[];
+    taskNames.set(task.id,name.length>32?name.slice(0,32).join('')+'…':name.join(''));
+  }
+
+  const dateFormat=new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  for(const group of sharedNames){
+    const names=new Map<string,string>();
+    for(const file of group.values()){
+      const task=sourceId(file),name=normalizedFileName(taskNames.get(task));
+      if(name)names.set(name,!names.has(name)||names.get(name)===task?task:'');
+    }
+    for(const [pin,file] of group){
+      const task=sourceId(file),name=taskNames.get(task);
+      const number=task?'…'+task.slice(-12):'';
+      const source=name?`工作「${name}」${names.get(normalizedFileName(name))===task?'':` · 编号 ${number}`}`:number?`工作编号 ${number}`:'';
+      const at=Number.isSafeInteger(file.createdAt)&&file.createdAt>0?new Date(file.createdAt):null;
+      const time=at&&Number.isFinite(at.getTime())?`登记 ${dateFormat.format(at)}`:'';
+      const origin=[source,time].filter(Boolean).join(' · ');
+      if(origin)origins.set(pin,origin);
+    }
+  }
+  return origins;
+}
+
 export type SavedDocumentVersion={label:string;parent:string;savedAt:string};
 function documentVersionLabel(id:unknown,sha:unknown):string {
   return typeof id==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)&&

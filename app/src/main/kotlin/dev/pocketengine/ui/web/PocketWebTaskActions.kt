@@ -1,6 +1,7 @@
 package dev.pocketengine.ui.web
 
 import dev.pocketengine.core.RuntimeDiagnostics
+import dev.pocketengine.features.local.project.ProjectEditDraft
 import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.UiTask
@@ -200,9 +201,35 @@ internal class PocketWebTaskActions(
                 .put("task", PocketWebState.task(task, images = true))
                 .put("ownerQuestion", question ?: JSONObject.NULL)
                 .put("projectContinuation", projectContinuation ?: JSONObject.NULL)
+                .putOpt("projectDraftAcceptance", if ("tasks.confirm" in allowed) missingSavedDraft(task) else null)
                 .put("actions", JSONArray().also { out -> allowed.forEach { (action, label) -> out.put(JSONObject().put("action", action).put("label", label)) } })
                 .put("approvals", PocketWebState.publicValue(approvalViews))
                 .put("unresolvedOperations", PocketWebState.publicValue(JSONArray(unknown)))
+        }
+
+        /** Absence in the full original task is evidence: the draft row and pointer commit together.
+         * A present pointer or incomplete projection is unknown here; no manuscript is read. */
+        private fun missingSavedDraft(task: UiTask): JSONObject? {
+            val raw = task.raw
+            val context = raw.optJSONObject("developmentContext") ?: return null
+            val preparation = raw.optJSONObject("ownerWorkPreparation") ?: return null
+            val handling = raw.optJSONObject("resultHandling") ?: return null
+            val run = raw.opt("runId") as? String ?: return null
+            val epoch = raw.optInt("coordinatorEpoch", -1)
+            val digest = raw.opt("resultReviewDigest") as? String ?: return null
+            if (!ProjectEditDraft.selected(context) || raw.has("projectEditDraftId") || raw.opt("status") != "needs_confirmation" ||
+                raw.opt("taskProjection") != "detail_window" || raw.opt("taskCoreReadLimited") != false ||
+                raw.opt("id") != task.id || raw.opt("kind") != "assistant" || raw.opt("executionMode") != "capabilities" ||
+                raw.opt("actorId") != "owner" || raw.opt("spaceId") != "private" || !raw.isNull("origin") || !raw.isNull("parentTaskId") ||
+                !raw.isNull("teamRunId") || !raw.isNull("memberId") || raw.opt("contextAvailable") == false ||
+                raw.optBoolean("contextWithdrawn") || raw.optBoolean("sourceCurrentReadRequired") || raw.opt("hasUnresolvedOperations") != false ||
+                context.opt("format") != "pocketworld.development-context.v1" || context.opt("runtime") != "managed_process_v1" ||
+                preparation.opt("format") != "pocketworld.owner-work-preparation.v1" || preparation.opt("targetTaskId") != task.id ||
+                raw.opt("nativeResultHandling") != true || handling.opt("format") != "pocketworld.owner-result-handling.v1" ||
+                handling.opt("taskId") != task.id || handling.opt("runId") != run || handling.optInt("epoch", -1) != epoch ||
+                handling.opt("executionAuthorized") != false || run.isBlank() || epoch < 1 || !digest.matches(Regex("[a-f0-9]{64}"))) return null
+            return JSONObject().put("state", "missing_saved_draft").put("taskId", task.id)
+                .put("runId", run).put("epoch", epoch).put("resultReviewDigest", digest)
         }
 
         fun unresolvedForReview(task: UiTask): List<JSONObject> {
