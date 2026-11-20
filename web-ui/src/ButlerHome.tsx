@@ -6,7 +6,7 @@ import { IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconErro
 import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { getRecentTaskProgress } from './task-presentation';
-import { isButlerHomeWork, workCollectionPresentation } from './work-collection';
+import { isButlerHomeWork, workCollectionPresentation, type WorkCollectionFilter } from './work-collection';
 import { domainLabel, homeDomainResult, homeWorkIdentity } from './butler-work-entry';
 import './butler-home.css';
 
@@ -36,7 +36,7 @@ export type ButlerHomeProps = {
   canOpen: boolean;
   onOpen: (task: ButlerHomeTask, nativeAlreadyOpen?: boolean, report?:VerifiedHomeReport, stillOriginal?:()=>boolean) => void;
   canReadReports?:boolean;
-  onAllWork: (filter?:'all'|'attention'|'running') => void;
+  onAllWork: (filter?: WorkCollectionFilter) => void;
   onScrollTop?: (top: number) => void;
   initialScrollTop?: number;
 };
@@ -239,7 +239,8 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
               {shownRunning.length>0&&<ol className="pw-butler-work-list">{shownRunning.map(renderTask)}</ol>}
             </section>}
             {shownResults.length>0&&<section className="pw-butler-work-group" aria-label="成果">
-              <header className="pw-butler-group-heading"><h3>成果</h3></header>
+              <header className="pw-butler-group-heading"><h3>成果</h3>{moreWork&&
+                <Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('ended')}>找更早的成果</Button>}</header>
               <ol id={returnedList} className="pw-butler-work-list">{shownResults.map(renderTask)}</ol>
               {results.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-expanded={allResults} aria-controls={returnedList} onClick={()=>setAllResults(value=>!value)}>{allResults?'收起成果':`再看 ${results.length-2} 项成果`}</Button>}
             </section>}
@@ -252,7 +253,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
                 </div>
               </>}
               {shownEnded.length>0&&<ol className="pw-butler-work-list" aria-label="最近结束的其他工作">{shownEnded.map(renderTask)}</ol>}
-              {moreWork&&<Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('attention')}>到目录查找其他待处理工作</Button>}
+              {moreWork&&<Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('all')}>到目录查找更早的工作</Button>}
             </div>}
             {!!work.length && !canOpen && <p className="pw-butler-work-note" role="status">当前暂时无法打开原任务记录。</p>}
           </>}

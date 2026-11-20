@@ -75,6 +75,11 @@ internal data class AttachmentResultRun(val taskId: String, val runId: String, v
     }
 }
 
+internal data class OwnerAttachmentCopyReceipt(val requestId:String,val taskId:String,val fileId:String,val sha256:String,val result:OwnerCopyResult) {
+    fun toJson()=JSONObject().put("requestId",requestId).put("taskId",taskId).put("fileId",fileId).put("sha256",sha256)
+        .put("status",result.status.value).put("displayName",result.displayName).put("verifiedBytes",result.verifiedBytes)
+}
+
 internal data class AttachmentOutcomeState(
     val open:Boolean=false,val taskId:String?=null,val deviceOriginalOnly:Boolean=false,val group:GroupResultAccess.Selection?=null,
     val snapshot:JSONObject?=null,val file:JSONObject?=null,val document:JSONObject?=null,
@@ -86,7 +91,8 @@ internal data class AttachmentOutcomeState(
     val processingSource:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null,val processingInfo:JSONObject?=null,
     val processingReview:dev.pocketengine.features.attachments.processing.NativeFileProcess.Review?=null,val pendingProcessingTask:String?=null,
     val comparison:Pair<dev.pocketengine.features.attachments.OwnerFilePreviewSource,dev.pocketengine.features.attachments.OwnerFilePreviewSource>?=null,
-    val fromWorkResult:Boolean=false,val resultRun:AttachmentResultRun?=null,val externalViewerResult:String?=null
+    val fromWorkResult:Boolean=false,val resultRun:AttachmentResultRun?=null,val externalViewerResult:String?=null,
+    val copyReceipt:OwnerAttachmentCopyReceipt?=null
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -102,6 +108,21 @@ internal class AttachmentOutcomeCoordinator(
     private var export:JSONObject?=null;private var restoreFile:JSONObject?=null;private var exportResult:Uri?=null;private var exportAbandoned=false;private var resumed=false;private var closed=false
     var exportPending by mutableStateOf(false);private set
     val exportRequestId:String? get()=export?.takeIf{it.optString("exportPhase","waiting")=="waiting"}?.optString("exportRequestId")
+    private fun privateCopyFile(pin:JSONObject):JSONObject? {
+        if(!state.open||state.deviceOriginalOnly||state.group!=null||state.team!=null||pin.has("group")||pin.has("team")||
+            pin.optString("taskId")!=state.taskId.orEmpty())return null
+        val shown=state.file?:return null
+        return pin.optJSONObject("file")?.takeIf {file->file.optString("id")==shown.optString("id")&&file.optString("sha256")==shown.optString("sha256")}
+    }
+    private fun recordPrivateCopy(pin:JSONObject,result:OwnerCopyResult){
+        if(export!==pin||closed||exportAbandoned)return
+        val file=privateCopyFile(pin)?:return
+        state=state.copy(copyReceipt=OwnerAttachmentCopyReceipt(pin.getString("exportRequestId"),pin.getString("taskId"),file.getString("id"),file.getString("sha256"),result))
+    }
+    fun privateCopyStage():String?=export?.takeIf {privateCopyFile(it)!=null}?.let {pin->
+        val phase=pin.getString("exportPhase")
+        if(phase=="waiting"&&pin.optBoolean("exportLaunchUnknown"))"picker_unconfirmed" else phase
+    }
     private var teamHost:TeamWorkspaceOutcomeHost?=null;private var originalAssignment:((JSONObject)->Unit)?=null
     fun bindTeamOutcomes(host:TeamWorkspaceOutcomeHost,onAssignment:(JSONObject)->Unit){check(!state.open&&wait==null&&export==null){"请先关闭当前成果或完成原导出"};teamHost=host;originalAssignment=onAssignment}
     fun openTeamArtifact(selected:TeamWorkspaceOutcomeHost.Selection)=openTeamArtifactInternal(selected,null)
@@ -412,6 +433,7 @@ internal class AttachmentOutcomeCoordinator(
         }
         pin.put("exportRequestId",java.util.UUID.randomUUID().toString()).put("exportPhase","waiting")
         export=pin;exportResult=null;exportAbandoned=false;exportPending=true
+        if(privateCopyFile(pin)!=null)state=state.copy(copyReceipt=null)
         val requestId=pin.getString("exportRequestId")
         try{activity.createOutcomeDocument(mime,name)}
         catch(_:android.content.ActivityNotFoundException){exportLaunchResult(requestId,OutcomeExportLaunch.NOT_STARTED)}
@@ -430,7 +452,10 @@ internal class AttachmentOutcomeCoordinator(
         val pin=export?:return
         if(pin.optString("exportRequestId")!=requestId||pin.optString("exportPhase","waiting")!="waiting")return
         pin.put("exportPhase","consumed")
-        if(uri==null||exportAbandoned||closed){clearExport(pin);return}
+        if(uri==null||exportAbandoned||closed){
+            if(uri==null)recordPrivateCopy(pin,OwnerCopyResult(OwnerCopyStatus.NO_TARGET))
+            clearExport(pin);return
+        }
         exportResult=uri;if(resumed)finishExport()
     }
     private fun clearExport(pin:JSONObject){if(export!==pin)return;export=null;exportResult=null;exportAbandoned=false;exportPending=false}
@@ -446,11 +471,19 @@ internal class AttachmentOutcomeCoordinator(
         }
         val target=groupFrom(pin.optJSONObject("group"));val task=pin.optString("taskId").takeIf{it.isNotBlank()};val file=pin.getJSONObject("file")
         pin.put("exportPhase","writing")
-        if(target==null&&task!=null&&OriginalTaskOutputDelivery.selected(task,file)){
-            work(groupAuthority=false,onFinished={clearExport(pin)}){c,_->OriginalTaskOutputDelivery.write(app,app.attachmentOutcomes,task,file,uri,c) to null}
+        if(target==null){
+            val entered=java.util.concurrent.atomic.AtomicBoolean(false)
+            var settled:OwnerCopyResult?=null
+            work(groupAuthority=false,onFinished={
+                if(entered.get()&&state.copyReceipt?.requestId!=pin.optString("exportRequestId"))recordPrivateCopy(pin,OwnerCopyResult(OwnerCopyStatus.UNCONFIRMED))
+                clearExport(pin)
+            },onSuccess={settled?.let{recordPrivateCopy(pin,it)}}){c,_->
+                entered.set(true);settled=OriginalTaskOutputDelivery.write(app,app.attachmentOutcomes,task,file,uri,c)
+                JSONObject() to null
+            }
             return
         }
-        work(groupAuthority=target!=null,onFinished={clearExport(pin)}){c,w->val result=if(target==null)app.attachmentOutcomes.export(task,file.getString("id"),file.getString("sha256"),uri,c)else groupCall(w){app.exportGroupOutcome(target,uri,c)};result.put("outcomeNotice","已导出真实文件；原任务与群投递状态分别保留") to null}
+        work(groupAuthority=true,onFinished={clearExport(pin)}){c,w->val result=groupCall(w){app.exportGroupOutcome(target,uri,c)};result.put("outcomeNotice","已导出真实文件；原任务与群投递状态分别保留") to null}
         }catch(failed:Exception){if(pin.optString("exportPhase")!="writing")clearExport(pin);state=state.copy(error=if(pin.optString("exportPhase")=="writing")"导出是否开始尚未确认；请核对所选目标文件，没有自动重写。"else safe(failed))}
     }
     fun refreshMedia(operation:String,fetch:Boolean=false){val group=state.group;val task=state.taskId?:return

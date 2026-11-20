@@ -3,36 +3,54 @@ package dev.pocketengine.ui
 import android.content.Context
 import android.net.Uri
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.attachments.AttachmentBook
 import dev.pocketengine.features.attachments.AttachmentOutcomeHost
 import dev.pocketengine.features.attachments.OriginalTaskOutputPin
 import org.json.JSONObject
 
+internal enum class OwnerCopyStatus(val value:String) {
+    VERIFIED("verified"), COULD_NOT_READ("could_not_read"), CONTENT_MISMATCH("content_mismatch"),
+    DESTINATION_CHANGED("destination_changed"), NO_TARGET("no_target"), UNCONFIRMED("unconfirmed")
+}
+internal data class OwnerCopyResult(val status:OwnerCopyStatus,val displayName:String?=null,val verifiedBytes:Long?=null)
+
 /** Original private result -> the SAME result of its existing CreateDocument request. No other target, persisted grant or retry. */
 internal object OriginalTaskOutputDelivery {
-    fun selected(task:String?,file:JSONObject)=!task.isNullOrBlank()&&OriginalTaskOutputPin.kind(file.opt("sourceKind"))&&task==file.opt("sourceTaskId")
-    fun write(context:Context,host:AttachmentOutcomeHost,task:String,file:JSONObject,uri:Uri,c:RunControl):JSONObject{
-        val source=host.originalTaskOutputForExport(task,file,c);val id=source.getString("id")
-        val sha=source.getString("sha256");val bytes=source.getLong("bytes")
-        check(ProjectPackageDocument.allowed(context,uri)){"请选择 Android 保存面板中的原文档位置；没有改写其他位置"}
-        val before=ProjectPackageDocument.name(context,uri,c,c::check)
-        fun stillOriginal(){c.check();check(host.originalTaskOutputForExport(task,file,c).getString("identity")==source.getString("identity")){"原成果来源已变化"}}
+    fun write(context:Context,host:AttachmentOutcomeHost,task:String?,file:JSONObject,uri:Uri,c:RunControl):OwnerCopyResult{
+        val source=if(task!=null&&OriginalTaskOutputPin.kind(file.opt("sourceKind"))&&task==file.opt("sourceTaskId"))
+            host.originalTaskOutputForExport(task,file,c) else null
+        val id=file.getString("id");val sha=file.getString("sha256")
+        val readableTarget=ProjectPackageDocument.allowed(context,uri)
+        // Keep the stronger existing author/provenance contract for these pinned task outputs.
+        check(source==null||readableTarget&&source.getString("id")==id&&source.getString("sha256")==sha){
+            "请选择 Android 保存面板中的原文件位置；没有改写其他位置"
+        }
+        val before=if(readableTarget)ProjectPackageDocument.name(context,uri,c,c::check) else null
+        fun stillOriginal(){
+            c.check()
+            if(source==null)host.requireReference(task,id,sha)
+            else check(host.originalTaskOutputForExport(checkNotNull(task),file,c).getString("identity")==source.getString("identity")){"原成果来源已变化"}
+            c.check()
+        }
         stillOriginal()
         val written=host.export(task,id,sha,uri,c)
-        check(written.opt("taskId")==task&&written.opt("id")==id&&written.opt("sha256")==sha&&written.opt("verified")==true&&
-              (written.opt("bytes") is Long||written.opt("bytes") is Int)&&written.optLong("bytes",-1)==bytes){"没有取得原文件写入回执；不自动重写"}
+        val bytes=written.optLong("bytes",-1)
+        check(written.opt("taskId")==task.orEmpty()&&written.opt("id")==id&&written.opt("sha256")==sha&&written.opt("verified")==true&&
+              (written.opt("bytes") is Long||written.opt("bytes") is Int)&&bytes in 0..AttachmentBook.MAX_FILE_BYTES&&
+              (source==null||source.getLong("bytes")==bytes)){"没有取得原文件写入回执；不自动重写"}
         stillOriginal()
+        // A provider without readable document authority remains a write-only observation.
+        if(!readableTarget)return OwnerCopyResult(OwnerCopyStatus.COULD_NOT_READ)
         val target=ProjectPackageDocument.taskOutput(context,uri,before,bytes,sha,c,c::check)
         stillOriginal()
-        val status=target.getString("status");val same=target.opt("protocol")==ProjectPackageTargetBytes.TASK_OUTPUT_PROTOCOL&&status=="verified"&&
-                target.opt("sha256")==sha&&target.optLong("bytes",-1)==bytes
-        val where=target.optString("displayName").let{if(it.isNotBlank())"「$it」" else "所选文档"}+"（"+target.getString("provider")+"）"
-        val notice=when{
-            same->"$where 已回读 $bytes 字节，SHA-256 与原件一致（${sha.take(12)}…）。这是本次保存时的核对。"
-            status=="content_mismatch"->"$where 写入后实际字节或 SHA-256 与原件不符，不能当作交付成功。原文件保留，没有重写。"
-            status=="destination_changed"->"写入后所选文档的标识发生变化，不能确认交付。原文件保留，请在原位置核对。"
-            else->"$where 已收到写入，但不能回读核对，不能确认交付。原文件保留，没有重试。"
+        val name=target.optString("displayName").takeIf {it.isNotBlank()}
+        if(target.opt("protocol")!=ProjectPackageTargetBytes.TASK_OUTPUT_PROTOCOL)return OwnerCopyResult(OwnerCopyStatus.COULD_NOT_READ)
+        return when(target.opt("status")){
+            "verified"->if(target.opt("sha256")==sha&&target.optLong("bytes",-1)==bytes)OwnerCopyResult(OwnerCopyStatus.VERIFIED,name,bytes)
+                else OwnerCopyResult(OwnerCopyStatus.COULD_NOT_READ)
+            "content_mismatch"->OwnerCopyResult(OwnerCopyStatus.CONTENT_MISMATCH,name)
+            "destination_changed"->OwnerCopyResult(OwnerCopyStatus.DESTINATION_CHANGED)
+            else->OwnerCopyResult(OwnerCopyStatus.COULD_NOT_READ,name)
         }
-        return JSONObject().put("taskId",task).put("id",id).put("status",if(same)"exported" else "written_unverified")
-            .put("verified",same).put("targetReadback",target).put("outcomeNotice",notice)
     }
 }

@@ -54,16 +54,16 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
   clearQuery, drillEnded, start, history, open, registerReturn, extra }: Props) {
   const origin = useRef<Origin | null>(null), focusReturn = useRef<HTMLDivElement>(null);
   const [returning, setReturning] = useState<Origin | null>(null);
-  const items = directory.tasks, groups: Record<Exclude<WorkCollectionFilter, 'all'>, WorkReading[]> = { attention: [], running: [], ended: [] };
-  for (const task of items) {
-    const item = readFollowUp(task, canReview, canContinue(task));
-    groups[item.group].push(item);
-  }
-  const moreEnded = scope === 'all' && (groups.ended.length > 3 || directory.hasMore);
-  const visibleEnded = scope === 'all' ? groups.ended.slice(0, 3) : groups.ended;
-  const visible = [...groups.attention, ...groups.running, ...visibleEnded];
-  const searched = !!query.trim(), filtered = searched || scope !== 'all';
-  // Searching is for locating an exact original; do not displace a match with a feature.
+  const items = directory.tasks, searched = !!query.trim(), filtered = searched || scope !== 'all';
+  const readings = items.map(task => readFollowUp(task, canReview, canContinue(task)));
+  const groups: Record<Exclude<WorkCollectionFilter, 'all'>, WorkReading[]> = { attention: [], running: [], ended: [] };
+  for (const item of readings) groups[item.group].push(item);
+  // Only the unfiltered overview is an editorial selection. Searching must
+  // expose every already-read match, in the same order as the directory.
+  const overview = scope === 'all' && !searched;
+  const moreEnded = overview && (groups.ended.length > 3 || directory.hasMore);
+  const visibleEnded = overview ? groups.ended.slice(0, 3) : groups.ended;
+  const visible = searched ? readings : [...groups.attention, ...groups.running, ...visibleEnded];
   const brief = searched ? undefined : firstFollowUp(visible);
   const compact = (rows: WorkReading[]) => rows.filter(v => v !== brief);
   const attentionRows = compact(groups.attention), runningRows = compact(groups.running), endedRows = compact(visibleEnded);
@@ -148,9 +148,13 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
           const id = returning.id; origin.current = returning; setReturning(null); open(id, 'overview', '', returning.run);
         }}>查看原工作</Button>}<IconButton icon={IconClose} aria-label="留在当前列表" onClick={() => { setReturning(null); scroll.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus({ preventScroll: true }); }}/>
       </div>}
-    <section className="pw-task-results pw-follow-directory" aria-label="工作列表" data-work-split={!!brief && hasQueue || undefined}>
+    <section className="pw-task-results pw-follow-directory" aria-label={searched ? '工作搜索结果' : '工作列表'} data-work-split={!!brief && hasQueue || undefined}>
+      {searched && !!visible.length && <section className="pw-task-collection" aria-label="匹配的工作">
+        <h3>匹配的工作</h3>
+        <div className="pw-task-list">{visible.map(renderRow)}</div>
+      </section>}
       {brief && <WorkBrief key={brief.task.id} item={brief} canOpen={canOpen} visit={visit}/>}
-      {hasQueue && <div className="pw-follow-queue">
+      {!searched && hasQueue && <div className="pw-follow-queue">
         {!!attentionRows.length && <section className="pw-task-collection pw-work-attention" aria-label="需要关注"><h3>需要关注</h3><div className="pw-task-list">{attentionRows.map(renderRow)}</div></section>}
         {!!runningRows.length && <section className="pw-task-collection" aria-label="进行中"><h3>进行中</h3><div className="pw-task-list">{runningRows.map(renderRow)}</div></section>}
         {(!!endedRows.length || moreEnded && !!visibleEnded.length) && <section className="pw-task-collection pw-ended-tasks" aria-label="已结束的工作">

@@ -9,16 +9,19 @@ import './local-workspace.css';
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
-export type LocalWorkspaceDraft = { projectId: string; checkoutId: string; cwd: string; env: string; seconds: string };
+export type LocalTerminalCheckout = { projectId: string; checkoutId: string };
+export type LocalWorkspaceDraft = LocalTerminalCheckout & { cwd: string; env: string; seconds: string };
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const identity = (task: Data) => ({ taskId: task.taskId || task.id, runId: task.runId || task.raw?.runId, epoch: task.epoch || task.raw?.coordinatorEpoch, executionId: task.executionId || task.id });
 const statusLabel = (value: any) => ({ running: '运行中', completed: '已完成', failed: '已结束，需核对', stopped: '已停止', unknown: '结果待核对', reconciling: '结果待核对', paused: '已暂停', pending: '等待回执', observed: '已取得回执', not_dispatched: '未发送' } as Record<string, string>)[String(value)] || value || '状态待核对';
 
 /** BoardUI's retained fields, disclosure and navigation-row composition around
  * the original local checkout/PTY workflow. No replacement terminal or authority. */
-export function LocalWorkspace({ state, data, run, supported, registerTransientBack, onPrepareTools, onOpenProjects, initialProjectId, draft, onDraftChange }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void; onOpenProjects?: () => void; initialProjectId?: string; draft?: LocalWorkspaceDraft; onDraftChange?: (draft: LocalWorkspaceDraft) => void }) {
-  const [project, setProject] = useState(draft?.projectId ?? ''), [checkout, setCheckout] = useState(draft?.checkoutId ?? ''), [source, setSource] = useState<Data | null>(null);
-  const [cwd, setCwd] = useState(draft?.cwd ?? '.'), [env, setEnv] = useState(draft?.env ?? '{}'), [seconds, setSeconds] = useState(draft?.seconds ?? '300');
+export function LocalWorkspace({ state, data, run, supported, registerTransientBack, onPrepareTools, onOpenProjects, initialProjectId, terminalCheckout, draft, onDraftChange }: { state: Data; data: Data; run: Run; supported: (name: string) => boolean; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void; onOpenProjects?: () => void; initialProjectId?: string; terminalCheckout?: LocalTerminalCheckout; draft?: LocalWorkspaceDraft; onDraftChange?: (draft: LocalWorkspaceDraft) => void }) {
+  const retained = !terminalCheckout || draft?.projectId === terminalCheckout.projectId && draft.checkoutId === terminalCheckout.checkoutId ? draft : undefined;
+  const [chosenProject, setProject] = useState(retained?.projectId ?? ''), [chosenCheckout, setCheckout] = useState(retained?.checkoutId ?? ''), [source, setSource] = useState<Data | null>(null);
+  const project = terminalCheckout?.projectId ?? chosenProject, checkout = terminalCheckout?.checkoutId ?? chosenCheckout;
+  const [cwd, setCwd] = useState(retained?.cwd ?? '.'), [env, setEnv] = useState(retained?.env ?? '{}'), [seconds, setSeconds] = useState(retained?.seconds ?? '300');
   const [review, setReview] = useState<Data | null>(null), [acknowledged, setAcknowledged] = useState(false), [original, setOriginal] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
   const [view, setView] = useState<Data | null>(null), [output, setOutput] = useState<Data | null>(null), [input, setInput] = useState(''), [uncertain, setUncertain] = useState(false);
   const [inputReceipt, setInputReceipt] = useState<Data | null>(null), [panel, setPanel] = useState<'setup' | 'session'>('setup');
@@ -33,7 +36,10 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   const sourceReadAttempt = useRef('');
   const sourceSelection = useRef({ project, checkout }); sourceSelection.current = { project, checkout };
   const acceptSource = (expectedProject: string, expectedCheckout: string) => (value: Data) => {
-    if (sourceSelection.current.project === expectedProject && sourceSelection.current.checkout === expectedCheckout && value.projectId === expectedProject && value.checkoutId === expectedCheckout) setSource(value);
+    if (sourceSelection.current.project !== expectedProject || sourceSelection.current.checkout !== expectedCheckout) return;
+    if (value.projectId !== expectedProject || value.checkoutId !== expectedCheckout || typeof value.sourceDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.sourceDigest))
+      throw new Error('没有核对到所选副本的实际版本，未打开别的副本。');
+    setSource({ ...value, sourceWindow: ownerWindow() });
   };
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef<Record<string, number>>({}), previousPresentation = useRef('setup');
   const activePanel = useRef(panel); activePanel.current = panel;
@@ -114,11 +120,15 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     const timer = window.setTimeout(() => { if (document.visibilityState === 'visible' && activePanel.current === 'session' && viewHandle.current === handle) void invoke('local.terminal.read', { handle }, value => { if (viewHandle.current === handle) { setOutput(value); if (typeof value.inputUncertain === 'boolean') setUncertain(value.inputUncertain); } }).catch(() => {}); }, 1200);
     return () => window.clearTimeout(timer);
   }, [panel, view?.handle, output, busy, error, visible]);
-  const selected = rows(data.checkouts).find(row => row.id === checkout && row.projectId === project);
-  const checkouts = rows(data.checkouts).filter(row => row.projectId === project && !row.teamProjectCopy);
-  const terminals = rows(state.tasks).filter(row => row.raw?.nativeExecutionMode === 'OWNER_LOCAL_TERMINAL' || row.raw?.ownerLocalTerminal);
+  const projectRows = rows(state.projects), selectedProject = projectRows.find(row => row.id === project);
+  const checkouts = rows(data.checkouts).filter(row => row.projectId === project && !row.teamProjectCopy &&
+    (!terminalCheckout || !['teamProjectCopy', 'skillExecutionCopy', 'isolatedGit', 'nativeGitImportPending'].some(key => key in row)));
+  const selected = (!terminalCheckout || selectedProject) && checkouts.find(row => row.id === checkout);
+  const terminals = rows(state.tasks).filter(row => row.raw?.nativeExecutionMode === 'OWNER_LOCAL_TERMINAL' || row.raw?.ownerLocalTerminal)
+    .filter(row => !terminalCheckout || row.raw?.ownerLocalTerminal?.projectId === project && row.raw.ownerLocalTerminal.checkoutId === checkout);
   const currentTask = terminals.find(task => identity(task).taskId === original?.taskId && identity(task).executionId === original?.executionId);
-  const ready = !!selected && source?.checkoutId === checkout && source?.projectId === project;
+  const sourceWindow = ownerWindow(), nativeSection = (bridge.getState().view as Data).section;
+  const ready = !!selected && source?.checkoutId === checkout && source?.projectId === project && source?.sourceWindow === sourceWindow;
   const canInput = panel === 'session' && !!view?.handle && !busy && !uncertain && !stopRequested && !view.metadata?.observingOnly && output?.nativeStatus === 'running' && !output?.terminal;
   const send = (payload: Data) => {
     if (activePanel.current !== 'session' || viewHandle.current !== view?.handle || !canInput) return;
@@ -139,20 +149,24 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
   };
   const knownResults = state.moduleResults || {};
   const runtimes = rows(data.projectRuntimes?.runtimes || data.projectRuntimes);
+  const managed = runtimes.find(row => row.runtimeId === 'managed_process_v1');
+  const terminalToolMissing = !!terminalCheckout && (managed?.canExecute === false || managed?.ptyAvailable === false);
   const inventory = knownResults['local.listJobs'] || data;
   const legacyReceiptRecovery = inventory.legacyReceiptRecovery || knownResults['local.probe']?.legacyReceiptRecovery || data.legacyReceiptRecovery;
   const legacyNeedsAttention = legacyReceiptRecovery && (legacyReceiptRecovery.originalInventoryUnconfirmed || legacyReceiptRecovery.coldUnconfirmedRecords > 0 || legacyReceiptRecovery.unreadableOriginalRecordsRetained > 0);
   const legacySummary = legacyReceiptRecovery && <div className="pw-local-feedback" role="status"><p>{legacyReceiptRecovery.message || '原只读命令的恢复清单只用于核对既有记录。'}</p><p className="pw-field-hint">可读原记录 {legacyReceiptRecovery.readableOriginalRecords ?? '尚未返回'} 条 · 冷恢复待核 {legacyReceiptRecovery.coldUnconfirmedRecords ?? '尚未返回'} 条 · 保留的不可读原记录 {legacyReceiptRecovery.unreadableOriginalRecordsRetained ?? '尚未返回'} 条。</p>{(legacyReceiptRecovery.originalInventoryUnconfirmed || legacyReceiptRecovery.coldUnconfirmedRecords > 0) && <p className="pw-field-hint">{legacyReceiptRecovery.blockingScope === 'all_checkouts' ? '全部工作副本的原写入范围仍受阻止。' : '相关原工作副本仍保持占用。'}重新打开页面不证明进程已经退出，也不会恢复执行权限。</p>}</div>;
-  const projectRows = rows(state.projects), hasSetupSource = projectRows.length > 0 || !!project;
+  const hasSetupSource = projectRows.length > 0 || !!project;
   const jobs: Data[] = [...rows(inventory.jobs).map(row => ({ ...row, backendLabel: '本机' })), ...rows(inventory.termuxJobs).map(row => ({ ...row, backendLabel: 'Termux' }))];
   const unresolvedJobs = jobs.filter(row => /unknown|uncertain/.test(String(row.status || row.state || '')));
   const inputBytes = new TextEncoder().encode(input + '\n').length;
   const currentStatus = output?.nativeStatus || receipt?.status || currentTask?.status;
   const resultUnknown = !!original && (!receipt || !/^(running|completed|failed|paused|stopped)$/.test(String(receipt.status)) || /^(unknown|prepared)$/.test(String(receipt.operationState)));
   const executionMessage = receipt?.message || receipt?.receipt?.message;
-  const selectedProject = projectRows.find(row => row.id === project);
   const canDescribeCheckout = supported('local.describeCheckout');
-  const sourceWindow = ownerWindow();
+  const readCheckout = () => {
+    setSource(null);
+    return invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, acceptSource(project, checkout));
+  };
   useEffect(() => {
     if (!project || !checkout) { sourceReadAttempt.current = ''; return; }
     if (!visible || panel !== 'setup' || busy || entered.current || resultUnknown || view || review || stopReview || uncertain || unresolvedJobs.length || legacyNeedsAttention || !selected || !canDescribeCheckout) return;
@@ -162,21 +176,40 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
     if (document.hidden || nativeView.section !== 'local' || nativeView.taskId) return;
     const attempt = [sourceWindow, project, checkout].join('|');
     if (sourceReadAttempt.current === attempt) return;
-    sourceReadAttempt.current = attempt; setSource(null);
+    sourceReadAttempt.current = attempt;
     // Only once for this choice/window. An observation failure leaves a visible
     // manual retry, never a read loop, duplicate checkout or terminal dispatch.
-    void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, acceptSource(project, checkout)).catch(() => {});
+    void readCheckout().catch(() => {});
   }, [project, checkout, visible, panel, busy, resultUnknown, view, review, stopReview, uncertain, unresolvedJobs.length, legacyNeedsAttention, !!selected, canDescribeCheckout, sourceWindow]);
   const preparationBlocked = busy || !!review || stopReview || resultUnknown || uncertain || unresolvedJobs.length > 0 || !!legacyNeedsAttention || prepareAttempted && !selected;
   useEffect(() => {
     // Navigation supplies a suggestion, never a checkout or execution binding.
     // Wait for the exact real option, and leave any user choice or original
     // session/review/unknown receipt in charge of this workspace.
-    if (initialProjectApplied.current || projectSelectionTouched.current || !initialProjectId || project || checkout || source || original || view || review || uncertain || entered.current || busy || prepareAttempted || panel !== 'setup' || unresolvedJobs.length || legacyNeedsAttention) return;
+    if (terminalCheckout || initialProjectApplied.current || projectSelectionTouched.current || !initialProjectId || project || checkout || source || original || view || review || uncertain || entered.current || busy || prepareAttempted || panel !== 'setup' || unresolvedJobs.length || legacyNeedsAttention) return;
     if (!projectRows.some(row => row.id === initialProjectId)) return;
     initialProjectApplied.current = true;
     setProject(initialProjectId);
-  }, [initialProjectId, state.projects, project, checkout, source, original, view, review, uncertain, busy, prepareAttempted, panel, unresolvedJobs.length, legacyNeedsAttention]);
+  }, [initialProjectId, terminalCheckout, state.projects, project, checkout, source, original, view, review, uncertain, busy, prepareAttempted, panel, unresolvedJobs.length, legacyNeedsAttention]);
+  const requestReview = () => {
+    if (!ready || !source || terminalToolMissing || activePanel.current !== 'setup' || entered.current || resultUnknown || uncertain) return;
+    try {
+      const environment = JSON.parse(env);
+      if (!environment || Array.isArray(environment) || typeof environment !== 'object') throw new Error('环境变量需要 JSON 对象。');
+      const sourceDigest = source.sourceDigest, timeoutMillis = Number(seconds) * 1000;
+      if (view) closeViewer();
+      void invoke('local.terminal.review', { projectId: project, checkoutId: checkout, expectedSourceDigest: sourceDigest,
+        runtimeId: 'managed_process_v1', cwd, env: environment, timeoutMillis, columns: 80, rows: 24, inputByteLimit: 65536 }, result => {
+        if (!result.handle || result.projectId !== project || result.checkoutId !== checkout || result.sourceDigest !== sourceDigest ||
+            result.runtimeId !== 'managed_process_v1' || result.command?.workingDirectory !== cwd || result.command?.timeoutMillis !== timeoutMillis ||
+            result.executionAuthorized !== false || result.modelDispatchAllowed !== false) {
+          if (result.handle) void run('local.terminal.close', { handle: result.handle }).catch(() => {});
+          throw new Error('没有取得同一副本、目录与版本的终端审阅。没有启动命令。');
+        }
+        reviewHandle.current = result.handle; setReview(result); setAcknowledged(false);
+      }).catch(() => {});
+    } catch (failure) { setError(failure instanceof Error ? failure.message : '请核对表单'); }
+  };
   return <section ref={readingRoot} className="pw-local-workspace pw-settings-section" data-local-view={panel}>
     <header className="pw-local-heading"><div><h2>本机终端</h2>{panel === 'setup' && selectedProject && <p className="pw-local-project-context"><IconFolder size={16} aria-hidden /><span>{selectedProject.name}</span><span>私人工作副本</span></p>}</div>{panel === 'setup' && onPrepareTools && <Button variant="secondary" trailingIcon={IconChevronRight} disabled={preparationBlocked} onClick={() => { if (activePanel.current !== 'setup' || entered.current || preparationBlocked) return; onDraftChange?.({ projectId: project, checkoutId: checkout, cwd, env, seconds }); onPrepareTools(); }}>准备开发工具</Button>}</header>
     {error && <p role="alert" className="pw-local-feedback pw-secondary-error">{error}</p>}
@@ -200,24 +233,28 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
       <div className="pw-local-main">
         <section className="pw-local-panel" data-local-panel="setup" hidden={panel !== 'setup'}>
           {!hasSetupSource ? <div className="pw-local-project-empty"><IconFolder size={30} aria-hidden /><h2 tabIndex={-1}>{Array.isArray(state.projects) ? '从一个项目开始' : '先读取你的项目'}</h2><p>本机终端在项目的私人工作副本中运行。先前往项目创建或选择内容，再回来准备副本。</p>{onOpenProjects && <Button leadingIcon={IconFolder} disabled={busy} onClick={onOpenProjects}>前往项目</Button>}</div> : <>
-          <header className="pw-local-panel-heading pw-local-setup-heading"><h2 tabIndex={-1}>新建手动终端</h2><Button disabled={busy || resultUnknown || uncertain || !ready || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} trailingIcon={IconChevronRight} onClick={() => {
-              if (activePanel.current !== 'setup' || entered.current || resultUnknown || uncertain) return;
-              try { const environment = JSON.parse(env); if (!environment || Array.isArray(environment) || typeof environment !== 'object') throw new Error('环境变量需要 JSON 对象。');
-                if (view) closeViewer();
-                void invoke('local.terminal.review', { projectId: project, checkoutId: checkout, expectedSourceDigest: source!.sourceDigest, runtimeId: 'managed_process_v1', cwd, env: environment, timeoutMillis: Number(seconds) * 1000, columns: 80, rows: 24, inputByteLimit: 65536 }, result => { reviewHandle.current = result.handle; setReview(result); setAcknowledged(false); }).catch(() => {});
-              } catch (failure) { setError(failure instanceof Error ? failure.message : '请核对表单'); }
-            }}>核对并准备终端</Button></header>
+          <header className="pw-local-panel-heading pw-local-setup-heading"><h2 tabIndex={-1}>{terminalCheckout ? '准备这个副本的终端' : '新建手动终端'}</h2><Button disabled={busy || resultUnknown || uncertain || !ready || terminalToolMissing || Number(seconds) < 1 || Number(seconds) > 300 || !supported('local.terminal.review')} trailingIcon={IconChevronRight} onClick={requestReview}>{terminalCheckout?'核对终端范围':'核对并准备终端'}</Button></header>
           <div className="pw-local-setup-step">
-            <h3><IconFolder size={17} aria-hidden />选择工作副本</h3>
-            <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...projectRows.map(row => ({ id: row.id, label: row.name })), ...(project && !projectRows.some(row => row.id === project) ? [{ id: project, label: '原项目暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { projectSelectionTouched.current = true; setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
-              <SelectField label="私人工作副本" value={checkout} isDisabled={busy || !project} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() })), ...(checkout && !checkouts.some(row => row.id === checkout) ? [{ id: checkout, label: '原工作副本暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { setCheckout(value); setSource(null); } }} /></div>
-            <div className="pw-form-actions"><Button variant="secondary" disabled={!selected || busy} onClick={() => { void invoke('local.describeCheckout', { projectId: project, checkoutId: checkout }, acceptSource(project, checkout)).catch(() => {}); }}>{ready ? '重新核对副本版本' : '读取这个副本的实际版本'}</Button><Button variant="ghost" disabled={!project || busy || prepareAttempted} onClick={() => { if (activePanel.current !== 'setup' || entered.current || prepareAttempted) return; setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>准备新的私人副本</Button></div>
+            <h3><IconFolder size={17} aria-hidden />{terminalCheckout ? '原私人副本' : '选择工作副本'}</h3>
+            {terminalCheckout ? <>
+              <dl className="pw-facts"><div><dt>项目</dt><dd>{selectedProject?.name || project.slice(0,8)}</dd></div>
+                <div><dt>工作副本</dt><dd>{selected?.name || '原私人副本'} · <code>{checkout.slice(0,8)}</code></dd></div></dl>
+              {!selected && <div role="status"><p>{Array.isArray(state.projects) && Array.isArray(data.checkouts) && nativeSection === 'local'
+                ? '当前无法核对这份私人副本，没有切换或新建副本。' : '正在核对原项目与副本…'}</p>{onOpenProjects &&
+                <Button variant="ghost" disabled={busy} onClick={onOpenProjects}>返回原项目</Button>}</div>}
+            </> : <div className="pw-form-grid"><SelectField label="原项目" value={project} isDisabled={busy} options={[{ id: '', label: '选择已有项目' }, ...projectRows.map(row => ({ id: row.id, label: row.name })), ...(project && !projectRows.some(row => row.id === project) ? [{ id: project, label: '原项目暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { projectSelectionTouched.current = true; setProject(value); setCheckout(''); setSource(null); setPrepareAttempted(false); } }} />
+              <SelectField label="私人工作副本" value={checkout} isDisabled={busy || !project} options={[{ id: '', label: '选择或准备副本' }, ...checkouts.map(row => ({ id: row.id, label: (row.name || '工作副本') + ' · ' + new Date(row.createdAt || 0).toLocaleString() })), ...(checkout && !checkouts.some(row => row.id === checkout) ? [{ id: checkout, label: '原工作副本暂未在当前清单中' }] : [])]} onChange={value => { if (!busy) { setCheckout(value); setSource(null); } }} /></div>}
+            {(!terminalCheckout || selected) && <div className="pw-form-actions"><Button variant="secondary" disabled={!selected || busy || !canDescribeCheckout} onClick={() => { if (selected && !entered.current) void readCheckout().catch(() => {}); }}>{ready ? '重新核对副本版本' : '读取这个副本的实际版本'}</Button>
+              {!terminalCheckout && <Button variant="ghost" disabled={!project || busy || prepareAttempted} onClick={() => { if (activePanel.current !== 'setup' || entered.current || prepareAttempted) return; setPrepareAttempted(true); void invoke('local.prepareCheckout', { projectId: project }, result => { setCheckout(result.id); setSource(null); }).catch(() => {}); }}>准备新的私人副本</Button>}</div>}
             {prepareAttempted && <p className="pw-local-inline-notice" role="status">本次已请求准备副本。请核对真实副本列表；回执不明时不重复准备。</p>}
-            {ready ? <div className="pw-local-source" role="status"><span>{source.fileCount} 个源码文件 · {source.bytes} 字节</span><small>版本已读取，启动前仍会核对是否变化。</small></div> : <p className="pw-field-hint">{selected ? busy ? '正在读取所选副本的实际版本…' : '副本版本尚未确认，可点读取重试；没有启动终端。' : project ? '选择或准备一个私人副本后，会自动读取它的实际版本。' : '使用已有项目的私人副本，不直接改动原项目。'}</p>}
+            {ready ? <div className="pw-local-source" role="status"><span>已保存源码 <code>{source.sourceDigest.slice(0,8)}</code> · {source.fileCount} 个文件</span>
+              <small>这里还没有启动终端。副本版本会在确认时再次核对，未保存的文件草稿不会带入。</small></div> :
+              (!terminalCheckout || selected) && <p className="pw-field-hint">{selected ? busy ? '正在读取所选副本的实际版本…' : '副本版本尚未确认，可点读取重试；没有启动终端。' : project ? '选择或准备一个私人副本后，会自动读取它的实际版本。' : '使用已有项目的私人副本，不直接改动原项目。'}</p>}
           </div>
+          {terminalToolMissing && <p className="pw-field-hint" role="status">手机上的交互终端还没就绪。可先查看开发工具准备，再回到这份副本；不会改用其他环境。</p>}
           <div className="pw-local-setup-step" hidden={!ready}>
             <h3><IconTerminal size={17} aria-hidden />设置这次终端</h3>
-            <div className="pw-form-grid"><TextField label="副本中的工作目录" value={cwd} onChange={setCwd} isDisabled={busy} /><TextField label="最长运行秒数（1–300）" inputMode="numeric" value={seconds} isDisabled={busy} onChange={value => setSeconds(value.replace(/\D/g, '').slice(0, 3))} /></div>
+            <div className="pw-form-grid"><TextField label="副本中的工作目录" value={cwd} onChange={setCwd} isDisabled={busy} hint="默认 . 为这份副本的根目录；也可以填它已有的相对目录。" /><TextField label="最长运行秒数（1–300）" inputMode="numeric" value={seconds} isDisabled={busy} onChange={value => setSeconds(value.replace(/\D/g, '').slice(0, 3))} /></div>
             <Accordion className="pw-local-disclosures"><AccordionItem id="environment" title="环境变量" description={env.trim() === '{}' ? '可选，仅限普通配置值' : '已编辑普通环境变量，启动前会核对'}><TextAreaField label="普通环境变量（JSON 对象）" value={env} onChange={setEnv} isDisabled={busy} hint="例如 APP_LABEL；不能设置密钥或覆盖宿主运行环境。" /></AccordionItem></Accordion>
             <p className="pw-local-safety">终端操作可能修改私人副本，输入和输出会保留在原任务记录中。不支持密码等秘密输入。</p>
           </div>
@@ -260,7 +297,7 @@ export function LocalWorkspace({ state, data, run, supported, registerTransientB
       {Array.isArray(knownResults['local.probe']?.tools) && <p className="pw-field-hint">已发现工具：{knownResults['local.probe'].tools.map((tool: any) => typeof tool === 'string' ? tool : tool.name || tool.id).join('、') || '尚无'}</p>}
       <div className="pw-local-job-list"><h3>原本机与 Termux 运行回执</h3>{jobs.length ? jobs.map((row: Data, index) => <div className="pw-local-runtime-row" key={row.id || row.operationId || index}><h4>{row.backendLabel} · {statusLabel(row.status || row.state)}</h4><p>{row.message || row.summary}</p>{row.coldProcessUnconfirmed && <p className="pw-field-hint">原进程冷恢复后仍待核对；保留原记录，不重启、不重新派发。</p>}{!localReceiptPollable(String(row.status || row.state || ''), row.backendLabel === 'Termux') && <p className="pw-field-hint">当前状态不自动轮询。需要时可明确读取原运行回执。</p>}<dl className="pw-facts"><div><dt>原操作</dt><dd>{row.operationId || row.id}</dd></div>{row.originalPersistedStatus && <div><dt>原持久化阶段</dt><dd>{row.originalPersistedStatus}</dd></div>}{row.phase && <div><dt>原回执阶段</dt><dd>{row.phase}</dd></div>}<div><dt>退出状态</dt><dd>{row.exitCode == null ? '尚未返回' : row.exitCode}</dd></div></dl></div>) : <p className="pw-field-hint">本次读取没有返回运行回执。</p>}</div>
     </AccordionItem></Accordion>
-    <SettingsDialog isOpen={!!review} title="打开这个手动终端？" onClose={() => { if (!busy) closeReview(); }}>{review && <div className="pw-local-review"><dl className="pw-facts"><div><dt>原目录</dt><dd>{review.command?.workingDirectory}</dd></div><div><dt>最长运行时间</dt><dd>{review.command?.timeoutMillis / 1000} 秒</dd></div><div><dt>输入额度</dt><dd>{review.command?.inputByteLimit} 字节，最多 {review.inputRequestLimit} 次</dd></div><div><dt>原项目</dt><dd>{review.projectId}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>源码版本</dt><dd>{review.sourceDigest}</dd></div></dl><p>只打开已登记的 sh -i。终端操作可能修改这个私人副本，是否导回项目另行核对。</p>{rows(review.warnings).map((warning, i) => <p key={i}>{String(warning)}</p>)}{reviewExpired && <p className="pw-local-inline-notice" role="status">这次终端审阅已过期。请返回重新核对目录和运行范围；这次终端尚未启动。</p>}<CheckboxField isSelected={acknowledged} isDisabled={busy || reviewExpired} onChange={setAcknowledged}>我已核对目录、时限与普通输入范围</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || reviewExpired || !acknowledged} onClick={() => { if (activePanel.current !== 'setup' || entered.current || !acknowledged || reviewHandle.current !== review.handle) return; if (reviewExpired || typeof review.expiresAt !== 'number' || !Number.isFinite(review.expiresAt) || review.expiresAt <= Date.now()) { setReviewExpired(true); setAcknowledged(false); return; } const selected = review; const handle = reviewHandle.current; reviewHandle.current = ''; rememberPosition(); setReview(null); setOriginal({ taskId: selected.requestId, runId: selected.requestId, epoch: 1, executionId: selected.requestId }); setInput(''); setReceipt(null); setInputReceipt(null); setUncertain(false); setStopRequested(false); setPanel('session'); void invoke('local.terminal.confirm', { handle }, setReceipt).catch(() => {}); }}>确认打开原终端</Button></div></div>}</SettingsDialog>
+    <SettingsDialog isOpen={!!review} title="打开这个手动终端？" onClose={() => { if (!busy) closeReview(); }}>{review && <div className="pw-local-review"><dl className="pw-facts"><div><dt>工作目录</dt><dd><bdi>{review.command?.workingDirectory === '.' ? '副本根目录（.）' : review.command?.workingDirectory}</bdi></dd></div><div><dt>最长运行时间</dt><dd>{review.command?.timeoutMillis / 1000} 秒</dd></div><div><dt>输入额度</dt><dd>{review.command?.inputByteLimit} 字节，最多 {review.inputRequestLimit} 次</dd></div><div><dt>原项目</dt><dd>{review.projectId}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>源码版本</dt><dd>{review.sourceDigest}</dd></div></dl><p>只打开已登记的 sh -i。终端操作可能修改这个私人副本，是否导回项目另行核对。</p>{rows(review.warnings).map((warning, i) => <p key={i}>{String(warning)}</p>)}{reviewExpired && <p className="pw-local-inline-notice" role="status">这次终端审阅已过期。请返回重新核对目录和运行范围；这次终端尚未启动。</p>}<CheckboxField isSelected={acknowledged} isDisabled={busy || reviewExpired} onChange={setAcknowledged}>我已核对目录、时限与普通输入范围</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || reviewExpired || !acknowledged} onClick={() => { if (activePanel.current !== 'setup' || entered.current || !acknowledged || reviewHandle.current !== review.handle || !ready || review.sourceDigest !== source?.sourceDigest) return; if (reviewExpired || typeof review.expiresAt !== 'number' || !Number.isFinite(review.expiresAt) || review.expiresAt <= Date.now()) { setReviewExpired(true); setAcknowledged(false); return; } const selected = review; const handle = reviewHandle.current; reviewHandle.current = ''; rememberPosition(); setReview(null); setOriginal({ taskId: selected.requestId, runId: selected.requestId, epoch: 1, executionId: selected.requestId }); setInput(''); setReceipt(null); setInputReceipt(null); setUncertain(false); setStopRequested(false); setPanel('session'); void invoke('local.terminal.confirm', { handle }, setReceipt).catch(() => {}); }}>确认打开原终端</Button></div></div>}</SettingsDialog>
     <SettingsDialog isOpen={stopReview} title="停止这个原终端进程？" onClose={() => { if (!busy) setStopReview(false); }}><div className="pw-local-review"><p>只请求停止所选原进程。已写入的副本内容和原日志保留；退出与资源回收以真实回执为准。</p><dl className="pw-facts"><div><dt>原任务</dt><dd>{original?.taskId}</dd></div><div><dt>原执行</dt><dd>{original?.executionId}</dd></div></dl><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setStopReview(false)}>返回</Button><Button variant="danger" disabled={busy || !original} onClick={() => { if (activePanel.current !== 'session' || entered.current) return; setStopReview(false); setStopRequested(true); if (original) void invoke('local.terminal.stop', original, setReceipt).catch(() => {}); }}>停止这个原进程</Button></div></div></SettingsDialog>
   </section>;
 }

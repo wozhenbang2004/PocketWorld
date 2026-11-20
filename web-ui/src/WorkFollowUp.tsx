@@ -4,6 +4,7 @@ import { MotionFeedback } from './library/journey-motion';
 import { IconAttention, IconCheckCircle, IconChevronRight, IconClock, IconError, IconFileText, IconHistory, IconInfo, IconPauseCircle, IconReview, IconStop } from './icons';
 import { getRecentTaskProgress } from './task-presentation';
 import { workCollectionPresentation, type WorkCollectionTask } from './work-collection';
+import { domainLabel, homeDomainResult, homeWorkIdentity } from './butler-work-entry';
 
 export type WorkEntry = 'overview' | 'review' | 'process';
 type Reading = { label: string; entry: WorkEntry };
@@ -22,11 +23,14 @@ export function readFollowUp(task: WorkCollectionTask, canReview: boolean, canCo
   const view = workCollectionPresentation(task), raw = task.raw, owner = view.handling;
   const readable = raw?.id === task.id && raw.actorId === 'owner' && raw.spaceId === 'private' && raw.kind !== 'inference' && raw.contextAvailable !== false
     && raw.taskProjection !== 'source_unavailable' && raw.sourceCurrentReadRequired !== true;
+  const original = readable ? homeWorkIdentity(task) : null;
+  const domain = original ? domainLabel[original.domain] : '';
+  const nativeResult = original ? homeDomainResult(task, original.domain) : '';
   const approval = view.pendingApproval || ['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_permission'].includes(task.status);
   const ownerInput = ['awaiting_user', 'waiting_user', 'needs_confirmation'].includes(task.status);
   const review = (label: string): Reading => canReview ? { label, entry: 'review' } : overview('查看原工作');
   const result = (kind: Kind, label: string, next: Reading, reason = '') => ({
-    task, group: view.group, kind, label, next, readable, ownerRequest: kind === 'decision' && (approval || ownerInput), reason: readable ? limit(asText(reason)) : '',
+    task, group: view.group, kind, label, next, readable, domain, ownerRequest: kind === 'decision' && (approval || ownerInput), reason: readable ? limit(asText(reason)) : '',
     goal: readable ? asText(task.goal) || '未命名工作' : '原工作来源不可用',
     busy: readable && view.busy && (kind === 'active' || kind === 'handling'),
     // A failed or stopped run may still have a saved result or a readable report.
@@ -55,6 +59,7 @@ export function readFollowUp(task: WorkCollectionTask, canReview: boolean, canCo
     return result('stopped', '已停止', process('查看停止记录'));
   if (owner?.delivered) return result('reported', '管家已汇报', overview('查看工作汇报'));
   if (owner?.resultAvailable) return result('saved', '执行结果已保存', overview('查看已保存结果'));
+  if (nativeResult) return result('saved', nativeResult, overview('查看原成果'));
   return result('ended', '本次执行已结束', overview('查看结束记录'));
 }
 export type WorkReading = ReturnType<typeof readFollowUp>;
@@ -114,7 +119,7 @@ export function WorkBrief({ item, canOpen, visit }: ActionProps) {
   const intro = kind === 'decision' ? '等你处理' : kind === 'paused' || kind === 'failed' ? '停下的工作'
     : item.group === 'running' ? '正在跟进' : '最近结束';
   return <article className="pw-follow-brief" aria-label={intro} data-motion-key={task.id} data-follow-kind={kind}>
-    <header className="pw-follow-heading"><span className="pw-follow-kicker"><StateMark item={item}/>{intro}</span>
+    <header className="pw-follow-heading"><span className="pw-follow-kicker"><StateMark item={item}/>{intro}{item.domain && <span> · {item.domain}</span>}</span>
       {stamp && <time dateTime={new Date(task.updatedAt!).toISOString()} title="工作记录更新时间">{stamp}</time>}</header>
     <h2 dir="auto">{item.goal}</h2>
     <MotionFeedback className="pw-follow-state" as="div" identity={kind + ':' + item.label} initial={false} role="status" aria-atomic="true"><span className="pw-sr-only">{item.goal}：</span>{item.label}</MotionFeedback>
@@ -135,12 +140,12 @@ export function WorkQueueRow({ item, canOpen, visit }: ActionProps) {
   const detail = note(item), stamp = when(task.updatedAt);
   return <Button variant="ghost" className="pw-task-row pw-follow-row" disabled={!canOpen}
     data-motion-key={task.id} data-task-id={task.id} data-work-entry={next.entry} data-task-status={task.status} data-follow-kind={item.kind}
-    aria-label={item.goal + '，' + item.label + '，' + next.label} onClick={() => visit(task, next.entry)}>
+    aria-label={[item.goal, item.domain, item.label, next.label].filter(Boolean).join('，')} onClick={() => visit(task, next.entry)}>
     <StateMark item={item}/>
     <span className="pw-task-row-copy"><b dir="auto">{item.goal}</b>
       {detail && <span className="pw-task-row-summary" dir="auto">{detail.text}</span>}
       <span className="pw-task-row-meta"><MotionFeedback as="span" identity={item.label} initial={false}>{item.label}</MotionFeedback>
-        <span className="pw-work-next-step">{next.label}</span>{stamp && <time dateTime={new Date(task.updatedAt!).toISOString()}>{stamp}</time>}</span>
+        {item.domain && <span>{item.domain}</span>}<span className="pw-work-next-step">{next.label}</span>{stamp && <time dateTime={new Date(task.updatedAt!).toISOString()}>{stamp}</time>}</span>
     </span><IconChevronRight size={16} aria-hidden/>
   </Button>;
 }

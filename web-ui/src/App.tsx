@@ -29,7 +29,7 @@ import {ComposerAttachmentPicker,attachmentPagingTool} from './ComposerAttachmen
 import type {CapabilityWorkspaceMemory} from './CapabilitiesWorkspace';
 import {usePocketAppearance} from './usePocketAppearance';
 import {useClosingSnapshot,useMessageArrivals,useReviewFocus,useSurfaceEnter} from './library/surface-motion';
-import {chatCancelFeedback,chatCancelIdentity,chatCancelKey} from './chat-cancel';
+import {chatCancelIdentity,chatCancelKey,chatStopObservation,sameChatCancelIdentity,type ChatStopRecord} from './chat-cancel';
 import {presentOperation,getRecentTaskProgress,taskNeedsReconciliation} from './task-presentation';
 import {TaskHistory} from './TaskHistory';
 import {composerHasPayload} from './composer-send-policy';
@@ -97,7 +97,7 @@ import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import {ContinuedProjectBinding} from './ProjectWorkBinding';
 import {ProjectWorkStart,emptyProjectWorkDraft,type ProjectWorkDraft} from './ProjectWorkStart';
 import {ProjectWorkLauncher,type ProjectWorkPresentation} from './ProjectWorkLauncher';
-import type {LocalWorkspaceDraft} from './LocalWorkspace';
+import type {LocalTerminalCheckout,LocalWorkspaceDraft} from './LocalWorkspace';
 import {fileWorkspaceKey,type FileLayer} from './project-file';
 import {useProjectRevision} from './useProjectRevision';
 import {packageOperationTarget,type PackagePreviewChoices,type PackagePreviewTarget} from './project-preview';
@@ -172,7 +172,7 @@ type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;doc
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
 type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
-type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean};
@@ -631,23 +631,31 @@ export default function App(){
   void exactPhoneControl(action,shown,isLocal,shownPause).catch(error=>setLocalError(error instanceof Error?error.message:String(error)));
  };
  const cancelPending=useRef(new Set<string>());
- const [cancelFeedback,setCancelFeedback]=useState<Record<string,{error:boolean;message:string}>>({});
+ const [cancelFeedback,setCancelFeedback]=useState<Record<string,ChatStopRecord>>({});
  const currentCancelIdentity=chatCancelIdentity(state);
- const currentCancelFeedback=chatCancelFeedback(state,cancelFeedback);
+ const currentCancelKey=currentCancelIdentity?chatCancelKey(currentCancelIdentity):'';
+ const currentCancelFeedback=chatStopObservation(state,cancelFeedback);
+ // A newer foreground run in the same conversation retires the old inline notice,
+ // not its actual durable task or saved results in the work directory.
+ useEffect(()=>{
+  if(!currentCancelKey)return;
+  setCancelFeedback(before=>{
+   const kept=Object.entries(before).filter(([key,row])=>key===currentCancelKey||row.original.conversationId!==state.conversationId);
+   return kept.length===Object.keys(before).length?before:Object.fromEntries(kept);
+  });
+ },[currentCancelKey,state.conversationId]);
  const stopOriginalChat=()=>{
-  const expected=chatCancelIdentity(state);
-  if(!expected||!can('chat.cancel'))return;
+  const expected=currentCancelIdentity;
+  if(document.hidden||!expected||!can('chat.cancel')||!sameChatCancelIdentity(bridge.getState().state,expected))return;
   const key=chatCancelKey(expected);
   if(cancelPending.current.has(key))return;
   cancelPending.current.add(key);
-  setCancelFeedback(previous=>{const next={...previous};delete next[key];return next});
-  const remember=(error:boolean,message:string)=>setCancelFeedback(previous=>
-   Object.fromEntries([...Object.entries(previous).filter(([prior])=>prior!==key),[key,{error,message}]].slice(-16)));
-  void bridge.command('chat.cancel',expected).then(()=>{
-   remember(false,'已请求停止所选原回复，结果请以原任务状态为准。');
-  }).catch(error=>{
-   remember(true,error instanceof Error?error.message:'未确认原回复收到停止请求，请核对原任务。');
-  }).finally(()=>{cancelPending.current.delete(key)});
+  setCancelFeedback(before=>Object.fromEntries([...Object.entries(before).filter(([prior])=>prior!==key),
+   [key,{original:expected,request:'sending'} as ChatStopRecord]].slice(-16)));
+  const remember=(request:ChatStopRecord['request'])=>setCancelFeedback(before=>before[key]?.original===expected?
+   {...before,[key]:{original:expected,request}}:before);
+  void bridge.command('chat.cancel',expected).then(receipt=>remember(receipt?.cancellationRequested===true?'requested':'unknown'),
+   ()=>remember('unknown')).finally(()=>{cancelPending.current.delete(key)});
  };
  const editText=useCallback((next:string)=>{
   if(intent==='chat'){chatDraft.set(next);if(can('composer.edit'))run('composer.edit',{key:draftKey,epoch:draftEpoch,text:next});}
@@ -749,6 +757,22 @@ export default function App(){
   relatedOrigin.current=origin;
   return navigate(destination,afterNavigate,{keepOrigin:true,taskClosed:closingTask});
  };
+ const openProjectTerminal=(checkout?:LocalTerminalCheckout)=>{
+  if(!checkout){void openRelatedWorkspace('local');return;}
+  const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const current=()=>{
+   const live=bridge.getState(),view=obj(live.view);
+   return !document.hidden&&route==='projects'&&!taskOpen&&navigationWindow.current===navigation&&
+    bridge.getDocumentEpoch()===documentEpoch&&live.state.projectId===checkout.projectId&&!live.state.filePath&&
+    !view.taskId&&!view.section;
+  };
+  if(!current())return;
+  const origin={...captureWorkspaceOrigin(),label:'返回原私人副本',focus:null,focusKey:'project-copy-terminal',terminalCheckout:checkout};
+  void navigate('local',()=>{relatedOrigin.current=origin;setLocalWorkspaceDraft(undefined);},{keepOrigin:true,stillCurrent:current});
+ };
+ const terminalOrigin=setupReturnPending.current
+  ? (setupOrigin.current.route==='local'?setupOrigin.current.parent:null) : relatedOrigin.current;
+ const originalTerminalCheckout=route==='local'?terminalOrigin?.terminalCheckout:undefined;
  const openReviewedSkill=async(reviewedSkill:ReviewedSkillTarget,conversationId:string)=>{
   const proposal=skillDraftTarget,source=proposal?.chatWork,navigation=navigationWindow.current;
   if(!proposal||!source||source.conversation!==conversationId||route!=='chat'||taskOpen)return false;
@@ -2969,7 +2993,7 @@ export default function App(){
           presentation={projectWorkPresentations[currentProject.id]??{open:!!(projectWorkDrafts[currentProject.id]?.operation||projectWorkDrafts[currentProject.id]?.expanded),mode:projectWorkDrafts[currentProject.id]?.operation||projectWorkDrafts[currentProject.id]?.expanded||!can('projects.development.read')?'profile':'default'}}
           onPresentationChange={presentation=>setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}))}
           defaultStart={can('projects.development.read')?(active,onBusy)=><ProjectDevelopmentWorkspace key={currentProject.id} returnTarget={projectDraftReturn?.projectId===currentProject.id?projectDraftReturn:undefined}
-            buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)} onTaskRegistered={projectDirectory.reset} onPrepareTools={()=>void openSetup('tools')} onConnectModel={()=>void openRelatedWorkspace('model-settings')} onOpenTerminal={()=>void openRelatedWorkspace('local')}/>:undefined}
+            buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)} onTaskRegistered={projectDirectory.reset} onPrepareTools={()=>void openSetup('tools')} onConnectModel={()=>void openRelatedWorkspace('model-settings')} onOpenTerminal={openProjectTerminal}/>:undefined}
           profileStart={can('projectWork.open')&&can('projectWork.confirm')?(active,onBusy)=><ProjectWorkStart
             key={currentProject.id} project={currentProject} embedded
             draft={projectWorkDrafts[currentProject.id]||emptyProjectWorkDraft()}
@@ -2992,7 +3016,29 @@ export default function App(){
   <ProjectLocalSourceIntake state={state.localSourceIntake}/>
   <ProjectGitIntake state={state.projectGitImport} toolReturn={projectGitToolReturn} onPrepareTools={can('setup.runtime.read')?()=>{void openSetup('tools')}:undefined}/>
  </motion.main>;
- const workspaceNotices=<>{route!=='chat'&&replyActivity}{currentCancelFeedback&&<div className={currentCancelFeedback.error?'pw-banner pw-banner-error':'pw-banner'} role={currentCancelFeedback.error?'alert':'status'}><p>{currentCancelFeedback.message}</p></div>}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><IconInfo size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={IconClose} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{(localStatus||can('notice.dismiss'))&&<IconButton icon={IconClose} aria-label="关闭这条提示" onClick={()=>{setLocalStatus('');if(state.notice&&can('notice.dismiss'))run('notice.dismiss')}}/>}</div>}
+ const readStoppedChatWork=()=>{
+  if(!currentCancelFeedback?.canOpen||!can('tasks.open'))return;
+  const original=currentCancelFeedback.original,key=chatCancelKey(original),navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+  const stillOriginal=()=>{
+   const observed=chatStopObservation(bridge.getState().state,cancelFeedback);
+   return !document.hidden&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&
+    !!observed?.canOpen&&chatCancelKey(observed.original)===key;
+  };
+  if(!stillOriginal())return;
+  openTask(original.taskId,'overview',false,undefined,undefined,{runId:original.runId,epoch:original.epoch},stillOriginal,undefined,()=>{
+   if(!document.hidden&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&
+      bridge.getState().state.conversationId===original.conversationId)
+    setLocalError('这一轮原工作暂不可读取，没有打开其他运行。');
+  });
+ };
+ const stopFeedback=currentCancelFeedback&&(isChatSurface||currentCancelIdentity)?<div className={currentCancelFeedback.error?'pw-banner pw-banner-error':'pw-banner'}>
+  <p role={currentCancelFeedback.error?'alert':'status'}>{currentCancelFeedback.message}</p>
+  {currentCancelFeedback.canOpen&&can('tasks.open')&&<Button variant="ghost" size="small" disabled={taskOpening} onClick={readStoppedChatWork}>查看这轮原工作</Button>}
+  <IconButton icon={IconClose} aria-label="关闭原停止提示" onClick={()=>setCancelFeedback(previous=>{
+   const next={...previous};delete next[chatCancelKey(currentCancelFeedback.original)];return next;
+  })}/>
+ </div>:null;
+ const workspaceNotices=<>{route!=='chat'&&replyActivity}{stopFeedback}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><IconInfo size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={IconClose} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{(localStatus||can('notice.dismiss'))&&<IconButton icon={IconClose} aria-label="关闭这条提示" onClick={()=>{setLocalStatus('');if(state.notice&&can('notice.dismiss'))run('notice.dismiss')}}/>}</div>}
   {searchReturn&&!state.attachmentWorkspace?.open&&<div className="pw-search-return"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={showWorkSearch}>返回搜索结果</Button></div>}</>;
  return <ReadingContext.Provider value={openReading}><ConversationModelPickerProvider ref={modelPicker} state={state} can={can} act={act} disabled={!ready} active={isChatSurface} channelPhoneModel={channelPhoneModel} onChannelModel={()=>{void navigate('models')}} onManage={()=>{const origin={...captureWorkspaceOrigin(),modelPicker:true};void openRelatedWorkspace('models',origin)}} onOpenMedia={can('media.snapshot')?()=>{const origin={...captureWorkspaceOrigin(),modelPicker:true};void openRelatedWorkspace('media',origin)}:undefined}><Drawer.Root swipeToOpen={!desktopNavigation} open={workOpen&&!desktopNavigation} onOpenChange={changeNavigation} direction="left" autoFocus shouldScaleBackground={false}>
  <div className="pw-app pw-redesign" data-navigation={desktopNavigation?'sidebar':'drawer'} data-route={route} data-file-open={!!state.filePath||undefined} data-vaul-drawer-wrapper=""><Toaster theme={state.appearance?.dark===true?'dark':'light'}/>
@@ -3017,7 +3063,7 @@ export default function App(){
   {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} stagingLocal={displayStagePending} modelSetup={modelSetupAction} composer={composerRegion} phoneActivity={phoneActivity} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal)=>{
     if(report){homeReport.current=report;taskReading.current.delete(`${task.id}:homeReport`);openTask(task.id,'homeReport',alreadyOpen,undefined,undefined,undefined,()=>homeReport.current===report&&currentHomeReport(report));return}
     openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview',alreadyOpen,undefined,undefined,undefined,stillOriginal)
-   }} onAllWork={(scope='all')=>{void openRelatedWorkspace('tasks',undefined,()=>{setEndedScopeOrigin(null);setFilter(scope);setTaskQuery('')})}} initialScrollTop={butlerScrollTop.current} onScrollTop={top=>{butlerScrollTop.current=top}}/>:route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace memory={notificationMemory.current} onOpenTeamAttention={locator=>{setTeamAttentionFocus({...locator,requestId:crypto.randomUUID()});void openRelatedWorkspace('teams')}} onOpenTask={(id,review)=>openTask(id,review?'review':'overview')} state={state.remoteInbox} navigationTrigger={navigationTrigger} onBack={returnFromSecondary} registerBack={registerSecondaryBack}/></div>:route==='developer-logs'?<div className="pw-workspace pw-route-workspace"><DeveloperDiagnosticsWorkspace onBack={returnFromSecondary} navigationTrigger={navigationTrigger}/></div>:route==='setup'?<div className="pw-workspace pw-route-workspace"><SetupWorkspace key={`setup:${setupMode}:${setupCapability||''}:${setupRuntimeTask||''}`} snapshot={snapshot} mode={setupMode} initialCapability={setupCapability} initialView={setupView} onViewChange={setSetupView} returnLabel={setupOrigin.current.label} originGoal={setupOrigin.current.goal} runtimeTaskId={setupRuntimeTask} onNavigate={navigateFromSetup} onClose={closeSetup} registerBackHandler={registerSecondaryBack}/></div>:route==='profile'?<div className="pw-workspace pw-route-workspace"><ProfileWorkspace initialTarget={personalTarget} targetRequestKey={String(personalTargetKey)} onOpenAdvancedMemory={()=>{void navigate('advanced-memory')}} onOpenCommitments={()=>{void navigate('commitments')}} onOpenReminders={()=>{void navigate('automation')}} state={state} presentationKey={`${personalDocumentEpoch}:${Number(snapshot?.view?.resumeRevision||0)}:${String(snapshot?.view?.taskId||'')}:${String(snapshot?.view?.section||'')}`} supported={can} run={bridge.command} onBack={returnFromProfile} onSettings={()=>{void navigate('group:data')}} registerBack={registerSecondaryBack} registerBeforeLeave={registerProfileBeforeLeave}/></div>:<SecondaryRouteBoundary navigation={route+':'+navigationRevision} onBack={returnFromSecondary}><Suspense fallback={<SecondaryRoutePending onBack={returnFromSecondary}/>}><Secondary reviewedSkill={route==='skills'?relatedOrigin.current?.reviewedSkill:undefined} onChoosePhonePlace={choosePhonePlaceFromSettings} cloudGoal={route==='remote'&&cloudGoal?.navigation===navigationRevision?cloudGoal:undefined} onCloudGoalUsed={consumeCloudGoal} sentPhoneFocus={sentPhoneFocus?.navigation===navigationRevision?sentPhoneFocus:undefined} teamRunFocus={teamRunFocus} onTeamRunFocusConsumed={requestId=>setTeamRunFocus(current=>current?.requestId===requestId?undefined:current)} onAskButlerForTeam={askButlerForTeam} onOpenTeamOwnerWork={openTeamOwnerWork} capabilityMemory={capabilityMemory.current} onStartCapability={startCapability} onTeamAttentionConsumed={requestId=>setTeamAttentionFocus(current=>current?.requestId===requestId?undefined:current)} teamAttentionFocus={teamAttentionFocus} registerBeforeLeave={registerSecondaryBeforeLeave} route={route} localDraft={localWorkspaceDraft} onLocalDraftChange={setLocalWorkspaceDraft} initialProjectId={setupReturnPending.current?setupOrigin.current.contextProjectId:relatedOrigin.current?.contextProjectId} originGoal={setupReturnPending.current?setupOrigin.current.goal:relatedOrigin.current?.goal} returnLabel={setupReturnPending.current?'返回能力准备':relatedOrigin.current?.label} onOpenProjectDraft={openStagedProjectDraft} onOpenProjects={()=>{if(relatedOrigin.current?.route==='projects')returnFromSecondary();else void openRelatedWorkspace('projects')}} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?(capability,origin)=>{void openSetup(capability,undefined,undefined,origin)}:undefined} settingsRestore={settingsRestore?.revision===navigationRevision?settingsRestore:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined} onReturnOriginalModelInput={returnOriginalModelInput}/></Suspense></SecondaryRouteBoundary> }
+   }} onAllWork={(scope='all')=>{void openRelatedWorkspace('tasks',undefined,()=>{setEndedScopeOrigin(null);setFilter(scope);setTaskQuery('')})}} initialScrollTop={butlerScrollTop.current} onScrollTop={top=>{butlerScrollTop.current=top}}/>:route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace memory={notificationMemory.current} onOpenTeamAttention={locator=>{setTeamAttentionFocus({...locator,requestId:crypto.randomUUID()});void openRelatedWorkspace('teams')}} onOpenTask={(id,review)=>openTask(id,review?'review':'overview')} state={state.remoteInbox} navigationTrigger={navigationTrigger} onBack={returnFromSecondary} registerBack={registerSecondaryBack}/></div>:route==='developer-logs'?<div className="pw-workspace pw-route-workspace"><DeveloperDiagnosticsWorkspace onBack={returnFromSecondary} navigationTrigger={navigationTrigger}/></div>:route==='setup'?<div className="pw-workspace pw-route-workspace"><SetupWorkspace key={`setup:${setupMode}:${setupCapability||''}:${setupRuntimeTask||''}`} snapshot={snapshot} mode={setupMode} initialCapability={setupCapability} initialView={setupView} onViewChange={setSetupView} returnLabel={setupOrigin.current.label} originGoal={setupOrigin.current.goal} runtimeTaskId={setupRuntimeTask} onNavigate={navigateFromSetup} onClose={closeSetup} registerBackHandler={registerSecondaryBack}/></div>:route==='profile'?<div className="pw-workspace pw-route-workspace"><ProfileWorkspace initialTarget={personalTarget} targetRequestKey={String(personalTargetKey)} onOpenAdvancedMemory={()=>{void navigate('advanced-memory')}} onOpenCommitments={()=>{void navigate('commitments')}} onOpenReminders={()=>{void navigate('automation')}} state={state} presentationKey={`${personalDocumentEpoch}:${Number(snapshot?.view?.resumeRevision||0)}:${String(snapshot?.view?.taskId||'')}:${String(snapshot?.view?.section||'')}`} supported={can} run={bridge.command} onBack={returnFromProfile} onSettings={()=>{void navigate('group:data')}} registerBack={registerSecondaryBack} registerBeforeLeave={registerProfileBeforeLeave}/></div>:<SecondaryRouteBoundary navigation={route+':'+navigationRevision} onBack={returnFromSecondary}><Suspense fallback={<SecondaryRoutePending onBack={returnFromSecondary}/>}><Secondary reviewedSkill={route==='skills'?relatedOrigin.current?.reviewedSkill:undefined} onChoosePhonePlace={choosePhonePlaceFromSettings} cloudGoal={route==='remote'&&cloudGoal?.navigation===navigationRevision?cloudGoal:undefined} onCloudGoalUsed={consumeCloudGoal} sentPhoneFocus={sentPhoneFocus?.navigation===navigationRevision?sentPhoneFocus:undefined} teamRunFocus={teamRunFocus} onTeamRunFocusConsumed={requestId=>setTeamRunFocus(current=>current?.requestId===requestId?undefined:current)} onAskButlerForTeam={askButlerForTeam} onOpenTeamOwnerWork={openTeamOwnerWork} capabilityMemory={capabilityMemory.current} onStartCapability={startCapability} onTeamAttentionConsumed={requestId=>setTeamAttentionFocus(current=>current?.requestId===requestId?undefined:current)} teamAttentionFocus={teamAttentionFocus} registerBeforeLeave={registerSecondaryBeforeLeave} route={route} terminalCheckout={originalTerminalCheckout} localDraft={localWorkspaceDraft} onLocalDraftChange={setLocalWorkspaceDraft} initialProjectId={setupReturnPending.current?setupOrigin.current.contextProjectId:relatedOrigin.current?.contextProjectId} originGoal={setupReturnPending.current?setupOrigin.current.goal:relatedOrigin.current?.goal} returnLabel={setupReturnPending.current?'返回能力准备':relatedOrigin.current?.label} onOpenProjectDraft={openStagedProjectDraft} onOpenProjects={()=>{if(relatedOrigin.current?.route==='projects')returnFromSecondary();else void openRelatedWorkspace('projects')}} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?(capability,origin)=>{void openSetup(capability,undefined,undefined,origin)}:undefined} settingsRestore={settingsRestore?.revision===navigationRevision?settingsRestore:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined} onReturnOriginalModelInput={returnOriginalModelInput}/></Suspense></SecondaryRouteBoundary> }
   </div>{allWork}
   <ConversationHistoryWindow page={route==='chat'&&!taskOpen?state.conversationReader||null:null} activeDraft={intent==='chat'&&composer.ready===true&&draftKey&&state.conversationId&&composer.conversationId===state.conversationId?{conversation:state.conversationId,key:draftKey,epoch:draftEpoch}:undefined} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin,alreadyOpen=false)=>openTask(id,entry,alreadyOpen,origin)}
    onOpenResultFiles={can('tasks.resultFiles')&&can('attachmentWorkspace.open')?openChatResult:undefined}/>

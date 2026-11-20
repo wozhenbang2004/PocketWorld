@@ -1,4 +1,5 @@
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
+import type {LocalTerminalCheckout} from './LocalWorkspace';
 import { checkedHostFiles, checkedHostText, ProjectHostComparedFiles, ProjectHostDiff, type HostComparedFile, type HostComparison, type HostDiff, type HostEditorFile } from './ProjectHostFileComparison';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
@@ -24,7 +25,7 @@ const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === or
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string };
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void; projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
-  onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: () => void;
+  onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout) => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
@@ -256,15 +257,34 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const pending = unresolved(submission), disabled = !active || busy || pending || sourceConflict || !!review || filesOpen || !view || view.draftRecoveryRequired === true;
   const displayedSavedDraft = (displayed:DevelopmentDraft) => !touched.current && !view?.draft?.checkoutId
     ? { ...displayed, checkoutId: '' } : displayed; // A sole default copy is not a saved selection.
-  const prepareTools = () => {
-    if (disabled || !can('setup.runtime.read')) return;
-    const displayed = { ...draft.current }, expected = displayedSavedDraft(displayed);
-    void invoke('projects.development.draft', { viewHandle: handle.current, ...expected, verifySavedForTools: true }, result => {
+  const verifyDeparture = (displayed:DevelopmentDraft, expected:DevelopmentDraft, open:()=>void) =>
+    invoke('projects.development.draft', { viewHandle: handle.current, ...expected, verifySavedForTools: true }, result => {
       if (result.projectId !== projectId || result.checkoutId !== expected.checkoutId ||
           result.draftVerifiedForTools !== true || result.taskStarted !== false || !sameDraft(draft.current, displayed))
-        throw new Error('没有核对到本页同一份草稿，文字仍留在这里。没有进入工具准备。');
-      onPrepareTools();
+        throw new Error('没有核对到本页同一份草稿，文字仍留在这里。');
+      open();
     });
+  const prepareTools = () => {
+    if (disabled || !can('setup.runtime.read')) return;
+    const displayed={...draft.current};
+    void verifyDeparture(displayed,displayedSavedDraft(displayed),onPrepareTools);
+  };
+  const canPrepareTerminal = can('projects.development.draft') && can('connections.enter') &&
+    can('local.describeCheckout') && can('local.terminal.review') && available.some(copy=>copy.projectId===projectId&&copy.checkoutId===checkout);
+  const prepareTerminal = async () => {
+    if(disabled||entered.current||!canPrepareTerminal||draft.current.checkoutId!==checkout)return;
+    const displayed={...draft.current};
+    // An explicit request for the currently displayed sole copy saves that
+    // same choice, so Back doesn't guess again if the list has since changed.
+    if(!displayedSavedDraft(displayed).checkoutId){
+      const saved=await invoke('projects.development.draft',{viewHandle:handle.current,...displayed},value=>{
+        if(value.saved!==true||value.projectId!==projectId||!sameDraft(draft.current,displayed))
+          throw new Error('没有保存原副本的选择，未打开终端准备。');
+        touched.current=true;
+      });
+      if(!saved)return;
+    }
+    await verifyDeparture(displayed,displayed,()=>onOpenTerminal({projectId,checkoutId:displayed.checkoutId}));
   };
   const reconcileSource=(useProject:boolean)=>{
     if(!sourceConflict||!active||busy||pending||filesOpen||!view||!view.draft?.ownerPickedConvention||document.hidden)return;
@@ -452,7 +472,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           disabled={busy||!!review||filesOpen} invoke={invoke} can={can} open={onOpenHostOriginal}/>}
       {available.length === 0 && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
       {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
-        {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={onOpenTerminal}>打开副本准备入口</Button></div>}
+        {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={()=>onOpenTerminal()}>打开副本准备入口</Button></div>}
         {copyResult && !copyResult.found && !copyResult.partial && <p role="status">未发现这次准备的副本；显式准备仍使用同一请求，不会换一个身份重建。</p>}</div>}
       {!filesOpen&&differentBuildCopy&&<div className="pw-local-inline-notice" role="status">
         <p>这次构建使用的是 {differentBuildCopy.name||'私人副本'} · {buildCheckout.slice(0,8)}。{unfinishedInput||pending?'另一份交办仍保留，没有切换。':'可以选这份副本，再审阅下一次构建。'}</p>
@@ -476,8 +496,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         <Button variant="ghost" disabled={busy || pending || !!review || filesOpen} onClick={() => void read()}>重新读取项目条件</Button>
         {checkout && !source && <Button variant="ghost" disabled={disabled} onClick={() => { sourceAttempt.current = ''; setView(previous => previous ? { ...previous } : previous); }}>重新读取副本版本</Button>}
       </div>
-      <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !!review || filesOpen || !checkout || !can('projects.development.files.open')} onClick={() => { setHostEditor(null); setFileCheckout(checkout); }}>编辑这份私人副本的文件</Button></div>
-      {view.model?.configured !== true && <p className="pw-local-inline-notice">需要先连接默认模型。项目与已保存草稿保留。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
+      <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !!review || filesOpen || !checkout || !can('projects.development.files.open')} onClick={() => { setHostEditor(null); setFileCheckout(checkout); }}>编辑这份私人副本的文件</Button>
+        {canPrepareTerminal && <Button variant="ghost" disabled={disabled} data-workspace-entry="project-copy-terminal"
+          onClick={()=>void prepareTerminal()}>准备这份副本的终端</Button>}</div>
+      {view.model?.configured !== true && <p className="pw-local-inline-notice">让模型接手时，才需要连接默认模型。项目与已保存草稿保留。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
       <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : checkoutKindSummary(source, projectId, checkout) || '可先编辑文件；运行命令前核对工具'}>
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
         {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>安装依赖、构建或启动仍须核对具体方案；不会因为发现项目类型就运行脚本。</p>}

@@ -91,6 +91,9 @@ internal class PocketWebAttachments(
             controller.readArtifactContinuationDraft(state.taskId,state.file.getString("id"),state.file.getString("sha256")).put("available",true)
         }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
         val privateOriginal = !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
+        val ownedCopy= scoped == null && !state.deviceOriginalOnly && state.group == null && state.team == null && controller.webPrivateOwnerVisible()
+        val copyReceipt=state.copyReceipt?.takeIf { receipt -> ownedCopy && receipt.taskId==state.taskId.orEmpty() &&
+            state.file?.let { file->receipt.fileId==file.optString("id")&&receipt.sha256==file.optString("sha256") }==true }
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
             .put("canOpenReportOriginalWork", canNavigateFromReport(state))
@@ -107,6 +110,7 @@ internal class PocketWebAttachments(
             .put("processingInfo", processingInfo).put("processingReview", reviewedProcessing).put("processingReviewId", processingReview?.id)
             .put("processingOpen", state.processingSource != null).put("pendingProcessingTask", state.pendingProcessingTask.takeUnless { report })
             .put("progress", state.progress).put("observing", state.observing).put("exportPending", flow.exportPending)
+            .put("privateCopyStage", if(ownedCopy)flow.privateCopyStage() else null).put("privateCopyReceipt",copyReceipt?.toJson())
             .put("canRequestOcr", flow.canRequestOcr()).put("canSaveRead", flow.canSaveRead())
             .put("canReadTeamDifference", state.team != null && flow.canReadTeamDifference())
             .put("teamDifference", state.teamDifference).put("hasPreviousTeamArtifact", state.teamPrevious != null)
