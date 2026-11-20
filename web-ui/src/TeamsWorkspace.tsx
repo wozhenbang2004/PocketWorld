@@ -8,7 +8,7 @@ import { AIAnswer, PressButton, ProgressBar } from './library';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { teamAnswerOutcome, teamDirectedSupplement, teamMessageConfirmed, teamMessageDelivery, teamMessageRecorded, type AnswerDelivery, type TeamDirectedSupplement } from './team-message';
-import { teamResearchRecords, type TeamResearchRecord } from './team-research';
+import { teamResearchRecords, teamResearchReplyExecution, type TeamResearchRecord } from './team-research';
 import { teamPhoneChoice, teamPhoneDevice, teamPhoneScopeLabel, teamPhoneSelections, teamPhoneTargetKey, teamPhoneTargetLabel, type TeamPhoneChoice } from './team-phone';
 import { TeamHarnessFields } from './TeamHarnessFields';
 import { TeamProductionFields, TeamProductionReview } from './TeamProductionFields';
@@ -1011,6 +1011,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         <div className="pw-team-member-board">
           {members.map(member => {
             const model = memberModelLabel(member), progress = teamMemberProgress(current, member, followUps);
+            const researchMember = !hasWorkPlan && current.researchExecutionFormat === 'pocketworld.team-research-agent.v1' && (member.runner || 'model') === 'model';
+            const observed = researchMember && reading?.viewHandle ? teamResearchReplyExecution(current.id, member, reading.researchAnswerRoutes) : null;
             const supplement = !hasWorkPlan && ownerWorkLink?.readOnly === true && ownerWorkLink.currentRun === true &&
               ownerWorkLink.teamRunId === current.id ? teamDirectedSupplement(current, messages, member.id, ownerWorkLink.taskId) : null;
             const memberRound = hasWorkPlan ? undefined : rows(member.roundStates).find(round => round.round === member.round && round.generation === member.generation);
@@ -1030,11 +1032,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                 {progress.map(fact => {
                   const source = !hasWorkPlan && fact.state === 'completed' ? deliveries.find(item => item.memberId === member.id && String(item.round) === fact.key) : undefined;
                   const inPlace = source?.answer && !!openReading;
+                  const execution = observed && fact.state === 'completed' && String(observed.round) === fact.key ? observed : null;
                   return <li key={fact.key}><span dir="auto">{fact.title}</span><span className="pw-team-state" data-state={fact.state}>
                     {fact.state === 'completed' ? '已完成' : fact.state === 'preparing' ? '正在准备' : status(fact.state)}</span>
                     {source && (inPlace || canOpenMemberResult) && <Button className="pw-team-progress-read" size="small" variant="ghost"
                       trailingIcon={IconChevronRight} aria-label={'查看' + source.name + '的' + fact.title + '答复'} data-team-progress-delivery={source.key}
                       disabled={!canRead || materialBusy} onClick={event => inPlace ? openMemberAnswer(source, event.currentTarget) : openMemberDelivery(source, 'progress')}>查看答复</Button>}
+                    {execution && <small className="pw-team-progress-source">{execution.reportedModel ? <>答复模型：<bdi>{execution.reportedModel}</bdi></> :
+                      execution.requestedModel ? <>请求模型：<bdi>{execution.requestedModel}</bdi>（答复型号未确认）</> : '答复型号未确认'}。{execution.location}</small>}
                   </li>;
                 })}
               </ul>}
@@ -1053,10 +1058,11 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
               {expanded && <div className="pw-team-expanded-copy">
                 {member.id === current.leaderId && <p className="pw-field-hint">{teamRoleLabel(current)}</p>}<p>{member.assignment || member.role}</p>
                 {!!rows(member.dependsOn).length && <p className="pw-field-hint">等待前置分工：{member.dependsOn.map(name).join('、')}</p>}
-                <Accordion variant="divided" className="pw-team-execution-details"><AccordionItem id={`execution:${member.id}`} title="模型与执行信息"><p className="pw-muted">成员标识：{member.id}</p>
-                {member.runner === 'phone_agent' && <p className="pw-muted">{teamPhoneTargetLabel(member.device, phoneTargets)}</p>}
-                {isTeamHarness(member.runner || '') && <><p className="pw-muted">执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p>{member.externalSession?.sessionId && <p className="pw-muted">原会话：{member.externalSession.sessionId}</p>}</>}
-                {model && <p className="pw-muted">模型：{model}</p>}</AccordionItem></Accordion>
+                <Accordion variant="divided" className="pw-team-execution-details"><AccordionItem id={`execution:${member.id}`} title="模型与执行信息">
+                {member.runner === 'phone_agent' && <p className="pw-muted">计划使用：{teamPhoneTargetLabel(member.device, phoneTargets)}</p>}
+                {isTeamHarness(member.runner || '') && <><p className="pw-muted">计划执行器：{harnessWorkerLabel(undefined, member.runner)} · 电脑：{computerLabel(member)}</p>{member.externalSession?.sessionId && <p className="pw-muted">原会话：{member.externalSession.sessionId}</p>}</>}
+                {(model || researchMember) && <p className="pw-muted">计划模型：{model || '沿用原团队主模型'}</p>}
+                {researchMember && !observed && <p className="pw-muted">没有可核对的答复回执，实际模型与执行位置未确认。</p>}</AccordionItem></Accordion>
                 {researchRecords.length > 0 && <section aria-label="原研究记录"><h4>原研究记录</h4><p className="pw-field-hint">查看完整产出、待处理事项和执行过程；打开不会继续工作，最新状态以原任务为准。</p>
                   <div className="pw-form-actions">{researchRecords.filter(record => !record.historical).map(record => <Button key={`${record.round}:${record.taskId}`} data-team-source-task={record.taskId} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段记录{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div>
                   {researchRecords.some(record => record.historical) && <Accordion variant="divided"><AccordionItem id="research-history" title="历史研究版本"><p className="pw-field-hint">这些版本已被后续输入替代，不代表当前成果，也不会转移给新成员。</p><div className="pw-form-actions">{researchRecords.filter(record => record.historical).map(record => <Button key={`${record.round}:${record.taskId}:${record.version}`} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段 · 旧版本 {record.version}{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div></AccordionItem></Accordion>}

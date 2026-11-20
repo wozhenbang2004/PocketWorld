@@ -236,6 +236,7 @@
 .pw-team-progress-facts > li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 12px; }
 .pw-team-progress-facts > li > span:first-child { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; color: var(--pw-ink); font-size: 14px; line-height: 1.65; }
 .pw-team-progress-facts .pw-team-progress-read { min-height: 44px; margin-inline-start: auto; }
+.pw-team-progress-source { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; color: var(--pw-copy); font-size: 12px; line-height: 1.55; }
 .pw-team-supplement-receipt { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 12px; padding-inline-start: 12px; border-inline-start: 2px solid var(--pw-divider); }
 .pw-team-supplement-receipt > div { flex: 1 1 140px; min-width: 0; display: grid; color: var(--pw-copy); font-size: 12px; line-height: 1.6; }
 .pw-team-supplement-receipt strong { color: var(--pw-ink); font-size: 13px; font-weight: 500; }

@@ -59,7 +59,8 @@ public final class CloudWorkspaceJobs {
     public static boolean accepted(JSONObject t,JSONObject e,JSONObject s) {
         return receipt(t,e,s) && t.optString("runId").equals(t.opt("externalOperationId")) && e.opt("id").equals(t.opt("externalId"));
     }
-    // Both normal and recovered acceptance need the matching durable pin to release the original editor.
+    // Both live and archived acceptance need the matching durable pin to lift the next-intent block.
+    // The original operation remains reserved; detailRetired is not a completion or replay marker.
     static boolean confirmsTransportAcceptance(JSONObject operation,JSONObject task) {
         Object status=operation.opt("status");boolean recordedAccepted="accepted".equals(status);
         if(!firstReadOnlyHostTask(task)||!"job_submit".equals(operation.opt("kind"))||operation.opt("originalHostStatusOnRequest")!=Boolean.TRUE
@@ -68,7 +69,8 @@ public final class CloudWorkspaceJobs {
             return false;
         JSONObject host=operation.optJSONObject("hostWorkspace"),original=task.optJSONObject("externalRefs").optJSONObject("hostWorkspace");
         JSONObject admission=task.optJSONObject("cloudHostAdmission");
-        if(admission==null||admission.length()!=9||!same(host,original)||!accepted(task,admission,original))return false;
+        if(admission==null||admission.length()!=(Boolean.TRUE.equals(admission.opt("detailRetired"))?10:9)
+                ||!same(host,original)||!accepted(task,admission,original))return false;
         if(!task.opt("id").equals(operation.opt("operationId"))||!original.opt("profileId").equals(operation.opt("profileId"))
                 ||!original.opt("profileBinding").equals(operation.opt("profileBinding"))
                 ||!original.opt("serviceBase").equals(operation.opt("serviceBase"))||!original.opt("serviceBase").equals(host.opt("serviceBase"))

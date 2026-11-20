@@ -523,6 +523,7 @@ public final class RemoteModule implements EngineModule {
             JSONObject minimal=new JSONObject();
             for(String field:new String[]{"id","operationId","profileId","serviceBase","profileBinding","environmentId","worker","hostWorkspaceAnchor","workspaceIdentity"})
                 minimal.put(field,actual.get(field));
+            if(dev.pocketengine.store.CloudWorkspaceJobs.archived(actual))minimal.put("detailRetired",true);
             identity=minimal.toString();
         }
         public JSONObject require(dev.pocketengine.features.RemoteOwnerWorkflows.OriginalLinuxStatusRead original)throws Exception{
@@ -561,7 +562,11 @@ public final class RemoteModule implements EngineModule {
         if(!matchesHostJob(host,actual)||!job.matches("[A-Za-z0-9_-]{1,80}")||
                 !expectedJob.isEmpty()&&(!expectedJob.equals(job)||!original.getString("knownWorkspaceIdentity").equals(actual.opt("workspaceIdentity")))||
                 actual.has("readOnly")&&actual.opt("readOnly")!=Boolean.TRUE)throw new SecurityException("未核对到同一原目录、作业与范围");
-        if(dev.pocketengine.store.CloudWorkspaceJobs.archived(actual))return out.put("stage","archived").put("jobId",job);
+        if(dev.pocketengine.store.CloudWorkspaceJobs.archived(actual)){
+            // The original Companion ledger retained the accepted job, not its execution details.
+            if(expectedJob.isEmpty())receipt.retainOriginalAdmission(this,new OriginalLinuxAdmissionProof(receipt,actual));
+            return out.put("stage","archived").put("jobId",job);
+        }
         if(actual.optBoolean("archived")||!java.util.Set.of("queued","running","stopping","awaiting_approval","awaiting_input","completed","failed","cancelled","interrupted","blocked","timed_out","unknown").contains(status))
             throw new SecurityException("未核对一个可识别的原状态");
         if(expectedJob.isEmpty()&&actual.opt("readOnly")==Boolean.TRUE&&!"unknown".equals(status))

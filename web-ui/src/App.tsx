@@ -508,6 +508,8 @@ export default function App(){
  const closePermissionOptions=useCallback(()=>{if(permissionWriting.current)return;const close=()=>setPermissionOptionsOpen(false);if(!permissionBeforeLeave.current?.(close))close()},[]);
  useEffect(()=>{if(permissionConversation.current!==state.conversationId){setPermissionOptionsOpen(false);permissionWriting.current=false;setPermissionPending(false)}permissionConversation.current=state.conversationId},[state.conversationId]);
  const voiceReviewLive=useRef(voiceReview),voiceWriting=useRef(false);voiceReviewLive.current=voiceReview;
+ const voiceReading=useRef(false),voiceReviewOwner=useRef('');
+ const retainedVoiceEdit=useRef<{owner:string;inputId:string;original:string;edited:string}|null>(null);
  const voiceExit=useReviewFocus(!!voiceReview);
  const workspace=useRef<HTMLDivElement>(null);
  const scroll=useRef<HTMLDivElement>(null);
@@ -527,6 +529,12 @@ export default function App(){
  useEffect(()=>setTaskMenuOpen(false),[taskId,taskOpen,taskLayer,selectedTask?.status,selectedTask?.raw?.runId,selectedTask?.raw?.coordinatorEpoch,personalDocumentEpoch,snapshot?.view?.resumeRevision]);
  useEffect(()=>{const hide=()=>{if(document.hidden)setTaskMenuOpen(false)};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
  const chatOwner=`${composer.key||''}:${composer.epoch??''}`;const chatDraft=useNativeDraft(chatOwner,String(composer.text||''),composer.revision);const phoneOwner=`phone:${phoneDraft.epoch??''}:${state.conversationId||''}:${phoneDraft.channelOrigin===true?'channel':'private'}:${phoneDraft.sourceState==='elsewhere'?'away':'here'}`;const phoneText=useNativeDraft(phoneOwner,String(phoneDraft.text||''),phoneDraft.revision);
+ const voiceOwner=JSON.stringify([bridge.getDocumentEpoch(),route,intent,intent==='chat'?chatOwner:phoneOwner]);
+ voiceReviewOwner.current=voiceOwner;
+ useEffect(()=>{
+  if(retainedVoiceEdit.current?.owner!==voiceOwner)retainedVoiceEdit.current=null;
+  setVoiceReview(null);setVoiceText('');
+ },[voiceOwner]);
  const text=intent==='chat'?chatDraft.value:phoneText.value;
  // This is presentation of the native draft classifier, never a Web permission to read the display.
  const displayStageFlight=useRef('');
@@ -1147,13 +1155,34 @@ export default function App(){
   receipts:Object.entries(obj(state.chatReceipts)).map(([clientMessageId,value])=>({clientMessageId,conversationId:String(obj(value).conversationId||''),status:String(obj(value).status||'')})),
   submissions:messages.flatMap((message,index)=>message.role==='user'&&message.submission?.clientMessageId?[{id:message.id||`${message.role}:${message.at}:${index}`,clientMessageId:message.submission.clientMessageId}]:[]),
  });
- const openVoiceReview=()=>{if(!can('voice.review'))return;voiceExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setVoicePending(true);void act('voice.review',{phone:intent!=='chat'}).then(value=>{setVoiceReview(value);setVoiceText(value.text||'')}).catch(error=>setLocalError(error.message)).finally(()=>setVoicePending(false));};
+ const openVoiceReview=()=>{
+  if(!can('voice.review')||voiceReading.current||voiceWriting.current)return;
+  const owner=voiceOwner,documentEpoch=bridge.getDocumentEpoch(),phone=intent!=='chat';
+  const current=()=>!document.hidden&&voiceReviewOwner.current===owner&&bridge.getDocumentEpoch()===documentEpoch;
+  voiceExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);
+  voiceReading.current=true;setVoicePending(true);
+  void act('voice.review',{phone}).then(value=>{
+   if(!current())return;
+   if(typeof value?.reviewHandle!=='string'||!value.reviewHandle||typeof value.inputId!=='string'||!value.inputId||
+    typeof value.text!=='string'||value.phone!==phone)throw new Error('尚未核对到原听写，请重新打开。');
+   const kept=retainedVoiceEdit.current;
+   const same=kept?.owner===owner&&kept.inputId===value.inputId&&kept.original===value.text;
+   if(!same)retainedVoiceEdit.current=null;
+   setVoiceReview(value);setVoiceText(same?kept.edited:value.text);
+  }).catch(error=>{if(current())setLocalError(error.message)}).finally(()=>{voiceReading.current=false;setVoicePending(false)});
+ };
+ const editVoiceReview=(edited:string)=>{
+  const review=voiceReviewLive.current;
+  if(!review||voiceWriting.current)return;
+  retainedVoiceEdit.current={owner:voiceOwner,inputId:review.inputId,original:review.text,edited};
+  setVoiceText(edited);
+ };
  const submitVoiceReview=(command:'voice.accept'|'voice.discard')=>{
   const reviewed=voiceReviewLive.current;if(!reviewed||voiceWriting.current||voicePending)return;
   voiceWriting.current=true;setVoicePending(true);
-  void act(command,{reviewHandle:reviewed.reviewHandle,...(command==='voice.accept'?{text:voiceText}:{})}).then(()=>{if(voiceReviewLive.current===reviewed)setVoiceReview(null)}).catch(error=>setLocalError(error.message)).finally(()=>{voiceWriting.current=false;setVoicePending(false)});
+  void act(command,{reviewHandle:reviewed.reviewHandle,...(command==='voice.accept'?{text:voiceText}:{})}).then(()=>{if(retainedVoiceEdit.current?.inputId===reviewed.inputId)retainedVoiceEdit.current=null;if(voiceReviewLive.current===reviewed)setVoiceReview(null)}).catch(error=>setLocalError(error.message)).finally(()=>{voiceWriting.current=false;setVoicePending(false)});
  };
- const discardVoice=()=>{if(isListening&&can('voice.stop')){run('voice.stop');return}if(!can('voice.review')||!can('voice.discard'))return;setVoicePending(true);void act('voice.review',{phone:intent!=='chat'}).then(value=>act('voice.discard',{reviewHandle:value.reviewHandle})).catch(error=>setLocalError(error.message)).finally(()=>setVoicePending(false));};
+ const discardVoice=()=>{if(isListening&&can('voice.stop')){run('voice.stop');return}if(!can('voice.review')||!can('voice.discard'))return;setVoicePending(true);void act('voice.review',{phone:intent!=='chat'}).then(async value=>{await act('voice.discard',{reviewHandle:value.reviewHandle});if(retainedVoiceEdit.current?.inputId===value.inputId)retainedVoiceEdit.current=null;}).catch(error=>setLocalError(error.message)).finally(()=>setVoicePending(false));};
  const sameLinkedStart=!!phoneStart?.requestId&&phoneStart.conversationId===state.conversationId&&
   phoneDraft.channelOrigin!==true&&phoneDraft.sourceState!=='elsewhere'&&phoneDraft.startReceipt?.requestId===phoneStart.requestId;
  const sameBlankStart=!!phoneStart?.draftRequestId&&!state.conversationId&&phoneDraft.channelOrigin!==true&&phoneDraft.sourceState!=='elsewhere'&&
@@ -1339,6 +1368,29 @@ export default function App(){
    if(current())throw error;
   }
  };
+ const verifyReportFileWork=async(taskId:string,windowId:string)=>{
+  const origin=resultFileReturnFocus.current;
+  if(!origin||!('taskId' in origin)||origin.taskId!==taskId||!origin.report)throw new Error('请在原汇报重新打开这份原件。');
+  const {report}=origin;
+  const current=()=>{
+   const native=bridge.getState(),view=obj(native.state.attachmentWorkspace),scope=obj(view.snapshot);
+   return resultFileReturnFocus.current===origin&&homeReport.current===report&&openedTaskId.current===taskId&&
+    obj(native.view).taskId===taskId&&origin.target.isConnected&&currentHomeReport(report)&&view.open===true&&view.ready===true&&
+    view.reportResultOnly===true&&view.canOpenReportOriginalWork===true&&view.windowId===windowId&&view.taskId===taskId&&
+    scope.taskRunId===report.target.runId&&scope.coordinatorEpoch===report.target.epoch;
+  };
+  if(!current())throw new Error('原汇报窗口已变化，没有打开其他文件。');
+  await verifyHomeReport(report.target,report.pin);
+  if(!current())throw new Error('原汇报窗口已变化，没有打开其他文件。');
+ };
+ useLayoutEffect(()=>{
+  // Only a newly re-admitted same-run work original has both native flags. The command's receipt alone is not the transition.
+  const native=bridge.getState(),view=obj(native.state.attachmentWorkspace),scope=obj(view.snapshot),origin=resultFileReturnFocus.current;
+  if(taskLayer==='homeReport'&&taskOpen&&origin&&'taskId' in origin&&origin.taskId===taskId&&origin.report&&homeReport.current===origin.report&&
+   openedTaskId.current===taskId&&obj(native.view).taskId===taskId&&currentHomeReport(origin.report)&&view.open===true&&view.ready===true&&
+   view.taskId===taskId&&view.resultFilesOnly===true&&view.fromWorkResult===true&&view.reportResultOnly===false&&view.historyResultOnly===false&&
+   scope.taskRunId===origin.report.target.runId&&scope.coordinatorEpoch===origin.report.target.epoch)showTaskLayer('overview');
+ },[taskId,taskLayer,taskOpen,state.attachmentWorkspace,showTaskLayer]);
  const openChatResult=async(resultMessageId:string,result:TaskResult,target:HTMLButtonElement,reader?:HistoryResultOrigin)=>{
   const conversationId=reader?.conversationId||String(state.conversationId||'');
   const fallback=()=>openTask(result.taskId,'overview',false,undefined,undefined,{runId:result.runId,epoch:result.epoch});
@@ -2841,7 +2893,8 @@ export default function App(){
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
   {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined}
-   draftTarget={fileDraftTarget} resultTopic={fileResultTopic} onStageFile={can('composer.object.add')?stageFileInDraft:undefined} onOpenDraft={showFileDraft} onUseResult={useFileInOriginalTopic}/>
+   draftTarget={fileDraftTarget} resultTopic={fileResultTopic} onStageFile={can('composer.object.add')?stageFileInDraft:undefined} onOpenDraft={showFileDraft} onUseResult={useFileInOriginalTopic}
+   onVerifyReportFileWork={taskLayer==='homeReport'&&can('ownerWork.report.read')?verifyReportFileWork:undefined}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.())closeTask()}else setTaskOpen(true)}} direction="right" handleOnly shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
@@ -2884,7 +2937,7 @@ export default function App(){
     <footer><Button type="button" variant="ghost" onClick={closeCreate}>取消</Button><Button type="submit" disabled={createBusy||!(createKind==='project'?projectName:newPath).trim()}>{createBusy?'正在创建…':'创建'}</Button></footer>
    </form>
   </SettingsDialog>
- <Drawer.Root open={!!voiceReview} onOpenChange={open=>{if(!open)setVoiceReview(null)}} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-voice-description" inert={!voiceReview} onCloseAutoFocus={voiceExit.onCloseAutoFocus}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对听写文字</Drawer.Title><Drawer.Description id="pw-voice-description">采用后放入原输入，暂不发送</Drawer.Description></div><Drawer.Close asChild><IconButton icon={IconClose} aria-label="关闭听写核对"/></Drawer.Close></header><div className="pw-drawer-body"><TextAreaField label="原听写文字" value={voiceText} isReadOnly={!voiceReview} onChange={value=>{if(voiceReviewLive.current)setVoiceText(value)}}/></div><footer className="pw-drawer-actions"><Button variant="secondary" disabled={voicePending||!voiceReview} onClick={()=>submitVoiceReview('voice.discard')}>丢弃</Button><PressButton label="采用到原输入" disabled={voicePending||!voiceReview||!voiceText.trim()} onClick={()=>submitVoiceReview('voice.accept')}/></footer></Drawer.Content></Drawer.Portal></Drawer.Root>
+ <Drawer.Root open={!!voiceReview} onOpenChange={open=>{if(!open)setVoiceReview(null)}} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-voice-description" inert={!voiceReview} onCloseAutoFocus={voiceExit.onCloseAutoFocus}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对听写文字</Drawer.Title><Drawer.Description id="pw-voice-description">采用后放入原输入，暂不发送</Drawer.Description></div><Drawer.Close asChild><IconButton icon={IconClose} aria-label="关闭听写核对"/></Drawer.Close></header><div className="pw-drawer-body"><TextAreaField label="原听写文字" value={voiceText} isReadOnly={!voiceReview} onChange={editVoiceReview}/></div><footer className="pw-drawer-actions"><Button variant="secondary" disabled={voicePending||!voiceReview} onClick={()=>submitVoiceReview('voice.discard')}>丢弃</Button><PressButton label="采用到原输入" disabled={voicePending||!voiceReview||!voiceText.trim()} onClick={()=>submitVoiceReview('voice.accept')}/></footer></Drawer.Content></Drawer.Portal></Drawer.Root>
  <SavedHostPicker open={route==='chat'&&!!savedHostChoice&&savedHostChoice.conversation===state.conversationId}
    profiles={savedHostProfiles(state.features?.remote?.profiles)} select={p=>void selectSavedHost(p)}
    configure={can('connections.enter')&&can('remote.saveProfile')?()=>void configureSavedHost():undefined}

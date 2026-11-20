@@ -300,8 +300,19 @@ internal class AttachmentOutcomeCoordinator(
         }
     }
     fun backFromOriginalFile(){state=state.copy(originalFile=null)}
+    /** Re-admit the displayed private report original in its already-open work, not as an export. */
+    fun openReportOriginalInWork(current: () -> Boolean, entered: () -> Unit) {
+        val reportRun = state.resultRun?.takeIf { it.report != null } ?: error("请先打开原汇报的本轮成果")
+        val file = state.file?.takeIf { state.originalFile != null && it.optString("role") == "result" }
+            ?: error("请先打开这份固定原件")
+        openListedOriginal(file.getString("id"), file.getString("sha256"), onOpened = {
+            // The exact run still constrains the normal work view. The old reader is retired by its owner.
+            state = state.copy(resultRun = reportRun.copy(report = null), fromWorkResult = true)
+            entered()
+        }, current = current)
+    }
     /** An explicit navigation among the same run's listed originals, not a new inventory read. */
-    fun openListedOriginal(id: String, sha256: String, current: () -> Boolean) {
+    fun openListedOriginal(id: String, sha256: String, onOpened: (() -> Unit)? = null, current: () -> Boolean) {
         val run = state.resultRun ?: error("请在本轮成果中打开原件")
         check(current() && state.open && !state.busy && !exportPending &&
             state.group == null && state.team == null && !state.deviceOriginalOnly && !state.choosingSource &&
@@ -315,6 +326,7 @@ internal class AttachmentOutcomeCoordinator(
             if (current() && state.resultRun == run) original?.let { source ->
                 restoreFile = null
                 state = state.copy(file = selected, originalFile = source, thumbnail = null, document = null)
+                onOpened?.invoke()
             }
         }) { control, _ ->
             requireConversationResult(run, control)

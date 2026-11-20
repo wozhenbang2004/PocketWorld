@@ -6786,6 +6786,7 @@ public final class TaskStore {
                 throw new SecurityException("原操作或机主窗口已变化；没有接入其他主机作业");
             t.put("externalId",checked.getString("id")).put("externalOperationId",run);
             CloudWorkspaceJobs.noteAdmission(t,checked,host);
+            if(Boolean.TRUE.equals(checked.opt("detailRetired")))t.getJSONObject("cloudHostAdmission").put("detailRetired",true);
             write(t); // No status, run, operation, events, watcher or result body updates.
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
@@ -9385,6 +9386,55 @@ public final class TaskStore {
     public synchronized void interruptTeamResearch(TeamResearchBinding binding,String status)throws Exception {if(binding==null||binding.issuer!=this||binding.inspect)return;JSONObject task=teamResearchIdentity(binding);if(!binding.runId().equals(task.optString("runId"))||binding.epoch()!=task.optInt("coordinatorEpoch")||task.optString("status").equals("completed"))return;endAttempt(binding.taskId(),binding.runId(),hasUnresolved(binding.taskId())?"blocked_unknown":status,"原研究child未取得确定终态；原用量、检查点与未知操作保留，不重放",new JSONObject().put("researchInterrupted",true));}
     public synchronized JSONObject teamResearchResult(TeamResearchBinding binding)throws Exception {
         JSONObject task=teamResearchIdentity(binding);String status=hasUnresolved(binding.taskId())?"blocked_unknown":task.optString("status");JSONObject result=binding.view().put("status",status).put("message",task.optString("summary")).put("content",status.equals("completed")?researchFinalContent(task):"").put("factVerified",false).put("businessVerified",false).put("inspectOnly",binding.inspect);if(status.equals("completed"))result.put("outputReference",new JSONObject(task.getJSONObject("teamResearchOutputReference").toString()));return result;
+    }
+    /** The existing owner-only Teams reading can show one verified recent answer per member.
+     * This bounded read never writes a coordinator snapshot or exposes a receipt to another member. */
+    public synchronized JSONArray ownerTeamResearchAnswerRoutes(JSONObject source,RunControl reader)throws Exception {
+        if(reader==null||reader.hasHostRun())throw new SecurityException("执行记录只供原团队阅读窗口核对");
+        reader.check();JSONArray shown=new JSONArray(),members=source.optJSONArray("members");String run=source.optString("id");
+        if(!TeamResearchReplyExecution.uuid(run)||!dev.pocketengine.features.teams.TeamCoordinator.RESEARCH_FORMAT.equals(source.opt("researchExecutionFormat"))||
+                !source.optString("mode").matches("collaborate|debate")||source.has("workPlan")||source.has("productionScope")||
+                members==null||members.length()<1||members.length()>4)return shown;
+        JSONObject team=teamWriteTask(run),parent=read(team.optString("parentTaskId"));
+        if(OwnerWorkTask.isOwnerWork(parent)&&(!originalOwnerWorkTeam(parent,team,team.optString("parentRunId"))||!ownerWorkTeamSourcesCurrent(parent)))return shown;
+        JSONArray links=team.optJSONArray("relatedTasks");if(links==null||links.length()>32)return shown;
+        Set<String> unique=new java.util.HashSet<>();
+        for(int i=0;i<members.length();i++)if(!unique.add(members.getJSONObject(i).getString("id")))return shown;
+        for(int i=0;i<members.length();i++){
+            reader.check();JSONObject member=members.getJSONObject(i);JSONArray phases=member.optJSONArray("roundStates");
+            if(!"model".equals(member.optString("runner","model"))||phases==null||phases.length()>6)continue;
+            JSONObject selected=null;int latest=0;boolean ambiguous=false;
+            for(int p=0;p<phases.length();p++){
+                JSONObject phase=phases.getJSONObject(p);int round=phase.optInt("round");
+                if(!"completed".equals(phase.opt("status"))||round<1||round>6||round<latest)continue;
+                if(round==latest){ambiguous=true;continue;}
+                latest=round;selected=phase;ambiguous=false;
+            }
+            if(selected==null||ambiguous)continue;
+            try{JSONObject route=ownerTeamResearchReplyRoute(run,team.getString("id"),member.getString("id"),latest,selected,links);
+                if(route!=null)shown.put(route);}catch(Exception unreadable){reader.check();/* Missing optional evidence does not hide the answer. */}
+        }
+        reader.check();return shown;
+    }
+    private JSONObject ownerTeamResearchReplyRoute(String team,String parent,String member,int phase,JSONObject selected,JSONArray links)throws Exception {
+        String id=selected.optString("researchTaskId");JSONObject result=selected.optJSONObject("researchTask");
+        if(!TeamResearchReplyExecution.uuid(id)||result==null||!"completed".equals(result.opt("status"))||!Boolean.FALSE.equals(result.opt("executionAuthorized"))||
+                !id.equals(result.opt("taskId"))||!team.equals(result.opt("teamRunId"))||!member.equals(result.opt("memberId")))return null;
+        int found=0;for(int i=0;i<links.length();i++){
+            JSONObject link=links.getJSONObject(i);if(!id.equals(link.opt("taskId")))continue;
+            if(!"team_research".equals(link.opt("feature"))||!member.equals(link.opt("memberId"))||phase!=link.optInt("round"))return null;found++;
+        }
+        if(found!=1)return null;
+        JSONObject child=boundedHostWorkCore(id);if(child==null)return null;requirePrivateOwner(child);
+        JSONObject identity=child.optJSONObject("teamResearch"),origin=child.optJSONObject("origin"),ref=child.optJSONObject("teamResearchOutputReference");
+        if(identity==null||origin==null||ref==null||!id.equals(child.opt("id"))||!parent.equals(child.opt("parentTaskId"))||
+                !"completed".equals(child.opt("status"))||!"assistant".equals(child.opt("kind"))||!"capabilities".equals(child.opt("executionMode"))||
+                !"team_research".equals(origin.opt("kind"))||!team.equals(origin.opt("teamRunId"))||!member.equals(origin.opt("memberId"))||!id.equals(origin.opt("researchTaskId"))||
+                !team.equals(identity.opt("teamRunId"))||!member.equals(identity.opt("memberId"))||!id.equals(identity.opt("researchTaskId"))||phase!=identity.optInt("round")||
+                !id.equals(ref.opt("taskId"))||!child.optString("runId").equals(ref.opt("runId"))||!child.optString("runId").equals(result.opt("runId"))||
+                child.optInt("coordinatorEpoch")!=ref.optInt("coordinatorEpoch",-1)||child.optInt("coordinatorEpoch")!=result.optInt("coordinatorEpoch",-1)||
+                !canonical(ref).equals(canonical(result.optJSONObject("outputReference"))))return null;
+        return TeamResearchReplyExecution.read(db,ref,team,member,phase);
     }
     public static final class TeamMemberRead implements dev.pocketengine.features.memory.ReadAudience {
         private final TaskStore issuer;private final dev.pocketengine.features.teams.TeamCoordinator.MemberEvidenceCall call;private final String data,operation,tool,argsHash;private final RunControl original;private volatile boolean returned;private boolean observationStarted;private long observationPause;private TeamResearchBinding research;

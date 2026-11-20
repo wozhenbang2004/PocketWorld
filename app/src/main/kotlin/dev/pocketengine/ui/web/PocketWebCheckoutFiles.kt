@@ -23,9 +23,15 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         @Volatile var matchesUntil: Long = 0
         @Volatile var textPage: CheckoutTextMatches? = null
         @Volatile var textUntil: Long = 0
+        @Volatile var savedEdit: SavedEdit? = null
         val git = PocketWebCheckoutGit(project, checkout)
         var opened: Opened? = null
         var adoption: Adoption? = null
+    }
+    // Only a foreground, path-and-hash receipt. The private editor already has
+    // the two bounded texts; no second history store or writer is created here.
+    private data class SavedEdit(val id: String, val path: String, val beforeHash: String, val savedHash: String) {
+        fun view() = JSONObject().put("id",id).put("path",path).put("beforeHash",beforeHash).put("savedHash",savedHash)
     }
     private class Adoption(val handle: String, val file: Opened, val revision: Long, val review: JSONObject, val expires: Long)
     private class Opened(val handle: String, var draft: ProjectFileDraft) {
@@ -288,12 +294,18 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     check(original.sourcePath==null){"原任务只读所选文件"};fields(args,"viewHandle","filesHandle","searchHandle","hit")
                     val index=number(args,"hit");require(index in 0L..1999L);check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已过期，请重新查找"}
                     (original.matches?:error("原查询已结束，请重新查找")).selected(text(args,"searchHandle"),index.toInt())
-                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path", "gitStatusOperation");null}
+                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path", "gitStatusOperation", "savedEditId");null}
                 val gitStatus=if(args.has("gitStatusOperation")){
                     check(action.endsWith(".read")&&original.sourcePath==null){"只能在原副本目录选择 Git 文件"}
                     text(args,"gitStatusOperation")
                 }else null
                 val path=located?.second?.getString("path")?:hit?.path()?:text(args,"path",240)
+                val saved=if(args.has("savedEditId")){
+                    check(action.endsWith(".read")&&original.sourcePath==null&&gitStatus==null) { "只在原私人副本文件窗口核对本次保存" }
+                    val receipt=original.savedEdit
+                    check(receipt!=null&&receipt.id==text(args,"savedEditId")&&receipt.path==path) { "本次保存回执已变化，请在原列表重新选择" }
+                    receipt
+                }else null
                 if (original.sourcePath != null) {
                     check(path == original.sourcePath && !busy) { "只能重新核对已选择的原文件" }
                     original.opened?.let { store.release(it.draft) }; original.opened = null
@@ -301,6 +313,10 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 work(original, done) {
                     val gitSha=gitStatus?.let { original.git.shaForEditor(it,path) }
                     val actual = controller.projectDevelopmentForWeb().fileForOwner(original.project, original.checkout, path)
+                    if(saved!=null)check(original.savedEdit===saved&&actual.opt("deleted")==false&&actual.opt("expectedHash")==saved.savedHash&&
+                        actual.opt("projectId")==original.project&&actual.opt("checkoutId")==original.checkout&&actual.opt("path")==saved.path) {
+                        "这个文件已不再是本次保存的字节。未打开其他版本，可从副本清单核对当前文件。"
+                    }
                     if(gitSha!=null)check(!actual.getBoolean("deleted")&&actual.getString("expectedHash")==gitSha){
                         "上次 Git 读取后文件内容已变化，请重读同一副本的 Git 状态。"
                     }
@@ -327,6 +343,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     val shown = info(original, file, true)
                     if(anchor!=null)shown.put("sourceHit",anchor)
                     if(hit!=null)shown.put("matchedFileSha256",hit.sha())
+                    if(saved!=null)shown.put("savedEditId",saved.id)
                     original.initialPhoneSha = null // First real read succeeded. From here existing save CAS and adoption review govern this same path.
                     shown
                 }
@@ -372,10 +389,17 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         val result = controller.projectDevelopmentForWeb().saveFileForOwner(submitted) { current(original) && original.opened === file }
                         synchronized(store) {
                             val latest = store.open(original.project, original.checkout, submitted.path, false)
-                            val observed = JSONObject(result.toString()).put("projectId", original.project).put("expectedHash", result.getString("sha256"))
+                            val observed = JSONObject(result.toString()).put("projectId", original.project).put("expectedHash", result.getString("sha256")).put("deleted",false)
                             val saved = latest.saved(submitted, result).observe(observed); store.retain(saved); file.draft = saved
                         }
                         info(original, file, true).put("saveStatus", "observed").put("message", "已按原SHA保存到这个私人副本并回读；没有导回正式项目，也没有运行代码")
+                            .also { reply ->
+                                if(original.sourcePath==null){
+                                    val receipt=SavedEdit(UUID.randomUUID().toString(),submitted.path,submitted.expectedHash,result.getString("sha256"))
+                                    original.savedEdit=receipt
+                                    reply.put("savedEdit",receipt.view())
+                                }
+                            }
                     } catch (failure: Exception) {
                         file.saveUnknown = true
                         info(original, file, true).put("saveStatus", "unknown").put("message", "原保存未取得完整回执，草稿仍保留。请读取同一文件核对，不自动再次保存。").put("saveError", failure.message)

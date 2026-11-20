@@ -1412,8 +1412,10 @@ public final class AssistantModule implements EngineModule {
         JSONObject accepted=task.optJSONObject("cloudHostAdmission");
         if(!CloudWorkspaceJobs.accepted(task,accepted,location))accepted=task.optJSONObject("evidence");
         if(!CloudWorkspaceJobs.accepted(task,accepted,location))return null; // Explicitly reconcile the original ACK first, never guess a job.
-        return new JSONObject().put("taskId",id).put("host",copy(location)).put("jobId",accepted.getString("id"))
+        JSONObject target=new JSONObject().put("taskId",id).put("host",copy(location)).put("jobId",accepted.getString("id"))
                 .put("workspaceIdentity",accepted.getString("workspaceIdentity"));
+        if(Boolean.TRUE.equals(accepted.opt("detailRetired")))target.put("detailRetired",true);
+        return target;
     }
     /** An Activity's exact original message and admitted job. It authorizes one existing GET, never a model or worker. */
     public static final class PrivateHostFinalRead {
@@ -1466,6 +1468,7 @@ public final class AssistantModule implements EngineModule {
             return hostFinalStage(checkedSavedPrivateHostFinal(row.optJSONObject("privateHostFinalText"))==null?"no_verified_text":"saved");
         JSONObject target=sourceRead(()->originalPrivateHostTarget(requirePrivateHostMessage(conversation,message,task)));
         if(target==null)return hostFinalStage("admission_unverified");
+        if(Boolean.TRUE.equals(target.opt("detailRetired")))return hostFinalStage("no_verified_text"); // Known admission, no retained original body to fetch.
         PrivateHostFinalRead original=new PrivateHostFinalRead(this,conversation,message,task,remote,visible,target);
         PrivateHostFinalText.Result result=remote.readPrivateHostFinal(original);
         if(!"verified".equals(result.stage()))return hostFinalStage(result.stage());

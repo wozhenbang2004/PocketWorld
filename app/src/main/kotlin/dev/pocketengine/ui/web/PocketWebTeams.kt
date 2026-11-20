@@ -207,7 +207,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         return assignment.optString("assignmentId") == question.optString("assignmentId") &&
             assignment.optJSONArray("questions").objects().none { it.optString("state") == "pending" }
     }
-    private fun view(kind: String, value: JSONObject): JSONObject {
+    private fun view(kind: String, value: JSONObject, answerRoutes: JSONArray? = null): JSONObject {
         while (readings.size >= 24) readings.remove(readings.keys.first())?.retire()
         val handle = UUID.randomUUID().toString()
         // Reading/editing is bound to the visible native window, not a timer.
@@ -216,6 +216,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         readings[handle] = Reading(kind, value.toString(), kind == "run" && value.optJSONObject("productionScope")?.optJSONObject("projectSelection") != null)
         val result = JSONObject().put("kind", kind).put("viewHandle", handle).put(kind, PocketWebState.publicValue(value))
         if (kind == "run") {
+            answerRoutes?.let { result.put("researchAnswerRoutes",PocketWebState.publicValue(it)) }
             val messages = teamConversationRows(value).onEach { row ->
                 if (canAskToContinueSaved(value, row)) row.put("canRequestSavedContinuation", true) else row.remove("canRequestSavedContinuation")
             }
@@ -346,12 +347,12 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
         }
-        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, accept: (JSONObject?, String?) -> Unit) {
+        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, accept: (JSONObject?, JSONArray?, String?) -> Unit) {
             controller.runTeamPhoneWork {
                 val result = runCatching {
                     check(currentWindow()) { "原团队阅读窗口已关闭" }
                     val teams = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主尚未接入")
-                    teams.retainedOwnerReading(id).also {
+                    val retained = teams.retainedOwnerReading(id).also {
                         check(it.optString("id") == id) { "原团队运行身份不匹配" }
                         if (proposalOrigin != null) {
                             controller.requireWorkOrigin(proposalOrigin,id)
@@ -359,16 +360,22 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                             controller.requireWorkOrigin(proposalOrigin,id)
                         }
                     }
+                    val observations = runCatching {
+                        val reader = RunControl()
+                        reader.setAuthorityCheck { check(currentWindow()) { "原团队阅读窗口已关闭" } }
+                        controller.nativeTokenBudgetHost().tasks.ownerTeamResearchAnswerRoutes(retained,reader).takeIf { it.length() > 0 }
+                    }.getOrNull()
+                    retained to observations
                 }
                 main.post {
                     if (!currentWindow()) done(null, "原团队阅读窗口已关闭，请回原记录核对")
-                    else result.fold({ accept(it, null) }, { accept(null, it.message ?: "原团队暂不可读") })
+                    else result.fold({ accept(it.first,it.second,null) }, { accept(null,null,it.message ?: "原团队暂不可读") })
                 }
             }
         }
         fun feature(command: String, input: JSONObject, messageId: String? = null, attention: JSONObject? = null, proposalOrigin: JSONObject? = null) {
-            val received: (JSONObject?, String?) -> Unit = receive@{ result, error ->
-                if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return@receive }
+            fun received(result: JSONObject?, error: String?, observations: JSONArray? = null) {
+                if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return }
                 if (error != null || result == null) deliver(null, error ?: "原团队操作没有返回回执")
                 else if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) try {
                     if (command == "sendMessage") check(result.optJSONObject("messageReceipt")?.optString("messageId") == messageId
@@ -381,7 +388,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     if (command == "answerAssignment") receipt.put("runId", input.getString("runId")).put("memberId", input.getString("memberId"))
                     if (command in setOf("get", "pause", "resume", "feedback", "continueMessages", "cancel", "sendMessage", "configureMember")) {
                         check(result.optString("id") == input.getString("runId")) { "原团队运行身份不匹配" }
-                        receipt.put("reading", view("run", result))
+                        receipt.put("reading", view("run", result, observations))
                         if (attention != null) receipt.put("focus", attentionFocus(result, attention))
                     }
                     if (command == "start") {
@@ -399,20 +406,20 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         if (command == "save") receipt.put("reading", view("definition", result))
                     }
                     if (command == "answerAssignment") {
-                        readOwnerRun(input.getString("runId")) { current, readError ->
+                        readOwnerRun(input.getString("runId")) { current, observed, readError ->
                             if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) {
-                                if (readError == null && current != null && current.optString("id") == input.getString("runId")) receipt.put("reading", view("run", current))
+                                if (readError == null && current != null && current.optString("id") == input.getString("runId")) receipt.put("reading", view("run", current, observed))
                                 else receipt.put("readRequired", true)
                                 deliverReceipt(receipt)
                             } else done(null, "原回答窗口已关闭；回答结果保留，请回原问题核对，没有自动重发")
                         }
-                        return@receive
+                        return
                     }
                     deliverReceipt(receipt)
                 } catch (failure: Exception) { deliver(null, failure.message ?: "原团队回执待核对") }
             }
-            if (command == "get") readOwnerRun(input.getString("runId"), proposalOrigin, received)
-            else controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow, received)
+            if (command == "get") readOwnerRun(input.getString("runId"), proposalOrigin) { result, observations, error -> received(result,error,observations) }
+            else controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow) { result, error -> received(result,error) }
         }
         when (action) {
             "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget" -> {

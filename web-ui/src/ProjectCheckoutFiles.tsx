@@ -11,11 +11,26 @@ import './project-development.css';
 import './project-workspace-manga.css';
 
 type Data = Record<string, any>;
+type SavedEdit = { id: string; filesHandle: string; path: string; beforeHash: string; savedHash: string; before: string; after: string };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string }; onClose: () => void; registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
 const windowKey = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
+const fileHash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+function observedSave(submitted: Data, response: Data): SavedEdit | null {
+  const proof = response.savedEdit, actual = response.latest;
+  if (response.saveStatus !== 'observed' || response.executionAuthorized !== false || response.projectVersionWritten !== false ||
+      !proof || typeof proof.id !== 'string' || !/^[a-f0-9-]{36}$/.test(proof.id) ||
+      proof.path !== submitted.path || proof.beforeHash !== submitted.baseHash ||
+      !(fileHash(proof.beforeHash) || proof.beforeHash === 'absent' && submitted.baseContent === '') ||
+      !fileHash(proof.savedHash) || proof.savedHash === proof.beforeHash || actual?.deleted !== false ||
+      actual.projectId !== submitted.projectId || actual.checkoutId !== submitted.checkoutId || actual.path !== submitted.path ||
+      actual.expectedHash !== proof.savedHash || actual.content !== submitted.text || typeof actual.content !== 'string' ||
+      typeof submitted.baseContent !== 'string') return null;
+  return { id: proof.id, filesHandle: response.filesHandle, path: proof.path, beforeHash: proof.beforeHash,
+    savedHash: proof.savedHash, before: submitted.baseContent, after: actual.content };
+}
 // Last unacknowledged interface text only. Native ProjectFileDraftStore remains
 // the durable cache. A different restored draft always requires a visible choice.
 const interfaceDrafts = new Map<string, string>();
@@ -25,6 +40,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const [listing, setListing] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [text, setText] = useState('');
   const [finding,setFinding]=useState(false),[finder,setFinder]=useState<'path'|'text'|'git'>('path');
   const [gitView,setGitView]=useState<CheckoutGitView|null>(null);
+  const [savedEdit,setSavedEdit]=useState<SavedEdit|null>(null), [listingStale,setListingStale]=useState(false);
+  const [searchVersion,setSearchVersion]=useState(0);
   const editorContainer=useRef<HTMLElement>(null);
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
   const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
@@ -69,15 +86,19 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const readList = (more = false) => invoke('list', { afterPath: more ? listing?.nextPath || '' : '', sourceDigest: more ? listing?.sourceDigest || '' : '' }, value => {
     if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('文件列表不属于原副本。');
     setListing(previous => ({ ...value, files: more ? [...rows(previous?.files), ...rows(value.files)] : rows(value.files) }));
+    setListingStale(false);
   });
-  const readFile = (path: string, gitStatusOperation?: string) => {
+  const readFile = (path: string, gitStatusOperation?: string, saved?: SavedEdit) => {
     if (sourceMember || hostFile) {
       if (path !== (sourceMember || hostFile)!.path || entered.current || edits.current) return;
       setReviewed(false); currentFile.current = null; setFile(null);
     }
-    return invoke('read', { path, ...(gitStatusOperation?{gitStatusOperation}:{}) }, value => {
-      if ((sourceMember || hostFile || gitStatusOperation) && (value.path !== path || value.latest?.deleted !== false || !/^[a-f0-9]{64}$/.test(value.latest?.expectedHash) ||
-          typeof value.latest.content !== 'string')) throw new Error('没有取得原副本这个文件的当前内容，未打开替代文件。');
+    return invoke('read', { path, ...(gitStatusOperation?{gitStatusOperation}:{}), ...(saved?{savedEditId:saved.id}:{}) }, value => {
+      if ((sourceMember || hostFile || gitStatusOperation || saved) && (value.path !== path || value.latest?.deleted !== false ||
+          !fileHash(value.latest?.expectedHash) || typeof value.latest.content !== 'string'))
+        throw new Error('没有取得原副本这个文件的当前内容，未打开替代文件。');
+      if (saved && (value.savedEditId !== saved.id || value.latest.expectedHash !== saved.savedHash || value.latest.content !== saved.after))
+        throw new Error('未核对到这次保存的原文件内容，未打开其他版本。');
       setChoice(null); setAdoption(null); apply(value); setTreeOpen(false); requestAnimationFrame(() => { editorHeading.current?.scrollIntoView({ block: 'nearest' }); editorHeading.current?.focus({ preventScroll: true }); }); });
   };
   const openFiles = async () => {
@@ -138,6 +159,24 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (!Number.isFinite(remaining) || remaining <= 0) { setAdoptionExpired(true); return; }
     const timer = window.setTimeout(() => setAdoptionExpired(true), remaining); return () => window.clearTimeout(timer);
   }, [adoption]);
+  const saveFile = () => {
+    const submitted = currentFile.current;
+    if (!submitted) return;
+    void invoke('save', {fileHandle:submitted.fileHandle,revision:submitted.revision,editSequence:submitted.editSequence},value=>{
+      if (value.fileHandle!==submitted.fileHandle || value.path!==submitted.path) throw new Error('不属于这次保存的文件回执，草稿仍保留。');
+      const known = observedSave(submitted,value);
+      apply(value);
+      if (value.saveStatus==='observed' && interfaceDrafts.get(keyFor(submitted.path))===value.text) interfaceDrafts.delete(keyFor(submitted.path));
+      if (!sourceMember && !hostFile && (value.saveStatus==='observed' || value.saveStatus==='unknown')) {
+        if (known) setSavedEdit(known);
+        // Inventory, path and text hits may refer to the pre-save tree. A
+        // new list/search is explicit and never executes Git in the background.
+        setListingStale(true); setFinding(false); setSearchVersion(epoch=>epoch+1);
+        setGitView(last=>last?.pendingOperation ? {pendingOperation:last.pendingOperation} : null);
+      }
+    });
+  };
+  const recentSave = savedEdit?.filesHandle===handle.current ? savedEdit : null;
   const locked = busy || editing || !!adoption, nativeText = file?.text || '';
   const canFindText=['findText','findTextNext','readTextHit'].every(a=>bridge.getState().capabilities.commands.includes(command+a));
   const sourceHit=file?.sourceHit,anchorable=!!(sourceHit&&file&&file.path===sourceHit.path&&file.latest?.expectedHash===sourceHit.sha256&&
@@ -161,7 +200,12 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small>
     {error && <p role="alert">{error}</p>}
     {!listing ? <Button variant="secondary" disabled={busy} onClick={() => void openFiles()}>{busy ? '正在核对原副本…' : '重新读取副本文件'}</Button> : <>
-      {sourceMember || hostFile ? !file && <div><p dir="auto">{(sourceMember || hostFile)!.path}</p><Button variant="secondary" disabled={locked} onClick={() => void readFile((sourceMember || hostFile)!.path)}>{busy ? '正在读取同一文件…' : '重读原副本中的这个文件'}</Button></div> : <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
+      {sourceMember || hostFile ? !file && <div><p dir="auto">{(sourceMember || hostFile)!.path}</p><Button variant="secondary" disabled={locked} onClick={() => void readFile((sourceMember || hostFile)!.path)}>{busy ? '正在读取同一文件…' : '重读原副本中的这个文件'}</Button></div> : <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={listingStale?'完整清单待重新核对':`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
+        {recentSave && <div className="pw-checkout-file-list" aria-label="最近一次已核对的保存">
+          <Button variant="secondary" disabled={locked} onClick={()=>void readFile(recentSave.path,undefined,recentSave)}>
+            <span dir="auto">{recentSave.path}</span><small>最近保存 · {recentSave.savedHash.slice(0,8)}</small>
+          </Button>
+        </div>}
         {listing.draftError && <p role="alert">{listing.draftError}</p>}
         {(canFindText||listing.gitAvailable===true)&&<div role="group" aria-label="查看副本文件" className="pw-form-actions">{(['path','text','git'] as const)
           .filter(v=>v==='path'||v==='text'&&canFindText||v==='git'&&listing.gitAvailable===true).map(v=><Button key={v}
@@ -170,7 +214,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {finder==='git'&&listing.gitAvailable===true&&<ProjectCheckoutGitChanges value={gitView} busy={locked}
           inspect={request=>void invoke('list',{gitRead:request},v=>setGitView(checkoutGitView(v,projectId,checkoutId,handle.current)))}
           open={(path,op)=>void readFile(path,op)}/>}
-        {finder==='text'&&canFindText&&<ProjectCheckoutTextSearch project={projectId} checkout={checkoutId} filesHandle={handle.current} busy={locked} visible={setFinding} invoke={invoke}
+        {finder==='text'&&canFindText&&<ProjectCheckoutTextSearch key={searchVersion} project={projectId} checkout={checkoutId} filesHandle={handle.current} busy={locked} visible={setFinding} invoke={invoke}
           open={(textHandle,hit,row,query)=>void invoke('readTextHit',{textHandle,hit},v=>{
             const a=v.sourceHit;
             if(!a||v.path!==row.path||a.path!==row.path||a.sha256!==row.sha256||a.line!==row.line||a.column!==row.column||a.query!==query||
@@ -178,15 +222,16 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
               a.start<0||a.end>v.latest.content.length||a.end-a.start!==query.length||v.latest.content.slice(a.start,a.end)!==query)throw Error('不能核对这行代码的原版，未定位到替代文件。');
             setChoice(null);setAdoption(null);apply(v);setTreeOpen(false);requestAnimationFrame(()=>{editorHeading.current?.scrollIntoView({block:'nearest'});editorHeading.current?.focus({preventScroll:true})});
           })}/>}
-        {finder==='path'&&['find','findNext','readFound'].every(a=>bridge.getState().capabilities.commands.includes(command+a))&&<ProjectCheckoutPathSearch project={projectId} checkout={checkoutId}
+        {finder==='path'&&['find','findNext','readFound'].every(a=>bridge.getState().capabilities.commands.includes(command+a))&&<ProjectCheckoutPathSearch key={searchVersion} project={projectId} checkout={checkoutId}
           filesHandle={handle.current} busy={locked} visible={setFinding} invoke={invoke} open={(searchHandle,hit)=>void invoke('readFound',{searchHandle,hit:hit.hit},v=>{
             if(v.path!==hit.path||v.matchedFileSha256!==hit.sha256||v.filesHandle!==handle.current||v.projectId!==projectId||v.checkoutId!==checkoutId)throw Error('不能核对命中的原文件，未打开其他路径。');
             setChoice(null);setAdoption(null);apply(v);setTreeOpen(false);requestAnimationFrame(()=>{editorHeading.current?.scrollIntoView({block:'nearest'});editorHeading.current?.focus({preventScroll:true})});
           })}/>}
         {finder!=='git'&&!finding&&<>        <div className="pw-form-actions"><Button variant="ghost" disabled={locked} onClick={() => void readList()}>重新读取文件列表</Button></div>
+        {listingStale ? <p className="pw-field-hint" role="status">旧列表不再显示，可重读完整清单。{recentSave && ' 也可直接核对上方已保存的文件。'}</p> : <>
         <div className="pw-checkout-file-list">{rows(listing.files).map(row => <Button key={row.path} aria-current={file?.path === row.path ? 'true' : undefined} variant="ghost" disabled={locked || row.binary === true} onClick={() => void readFile(row.path)}><span>{row.path}</span><small>{row.binary ? '二进制' : row.hasDraft ? '有保留草稿' : row.change === 'deleted' ? '副本已删除' : row.change === 'added' ? '副本新增' : row.change === 'modified' ? '副本已修改' : '与原基线一致'}</small></Button>)}</div>
         {!rows(listing.files).length && <p>副本中还没有文件。可以在下方填写相对路径创建，或返回目标让 AI 开始。</p>}
-        {listing.nextPath && <Button variant="secondary" disabled={locked} onClick={() => void readList(true)}>读取下一页文件</Button>}</>}
+        {listing.nextPath && <Button variant="secondary" disabled={locked} onClick={() => void readList(true)}>读取下一页文件</Button>}</>}</>}
         {finder!=='git'&&<><TextField label="相对文件路径" value={newPath} onChange={setNewPath} isDisabled={locked} hint="例如 index.html 或 src/main.ts；不操作运行缓存和 Git 内部目录。" />
         <Button variant="secondary" disabled={locked || !newPath.trim()} onClick={() => void readFile(newPath.trim())}>打开或准备新文件草稿</Button></>}
       </AccordionItem></Accordion>}
@@ -210,11 +255,18 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           }}>在编辑框选中这一处</Button>}</div>}
         <TextAreaField label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || orphan !== null} className="pw-code-editor" />
         {(file.conflict || file.saveUnknown) && <p role="status">{file.saveUnknown ? '保存结果待核对，请读取同一文件。' : '副本文件与保留草稿的基线不同。请比较后决定，未自动覆盖。'}</p>}
-        <Accordion><AccordionItem id="checkout-file-diff" title="比较保留的修改"><InlineDiff before={file.baseContent || ''} after={text} versionLabel="草稿原基线" />{file.latest && file.conflict && <><h4>当前副本与保留草稿</h4><InlineDiff before={file.latest.content || ''} after={text} versionLabel="刚读取的副本" /></>}</AccordionItem></Accordion>
+        <Accordion>{(recentSave?.path!==file.path || file.dirty || file.conflict || orphan!==null) &&
+          <AccordionItem id="checkout-file-diff" title="比较保留的修改"><InlineDiff before={file.baseContent || ''} after={text} versionLabel="草稿原基线" />{file.latest && file.conflict && <><h4>当前副本与保留草稿</h4><InlineDiff before={file.latest.content || ''} after={text} versionLabel="刚读取的副本" /></>}</AccordionItem>}
+          {recentSave && recentSave.path===file.path && <AccordionItem id="checkout-last-save" title="比较最近一次已核对的保存" description={recentSave.savedHash.slice(0,8)}>
+            <p className="pw-field-hint">本次文件窗口只保留这一份对照，不含之后的未保存输入，也不是正式版本历史。</p>
+            <InlineDiff before={recentSave.before} after={recentSave.after} versionLabel="保存前 → 已写入副本"
+              beforeLabel={recentSave.beforeHash==='absent'?'保存前（路径不存在）':'保存前'} afterLabel="本次写入" readOnly />
+          </AccordionItem>}
+        </Accordion>
         {choice ? <div role="region" aria-label="处理文件冲突"><p>{choice === 'keep_mine' ? '把当前副本作为新基线，保留我的草稿文字？下一次保存才会改写文件。' : '放弃这份草稿，采用刚读取的副本内容？不会写入文件。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => setChoice(null)}>返回</Button><Button disabled={locked} onClick={() => void invoke('resolve', { fileHandle: file.fileHandle, revision: file.revision, choice }, value => { interfaceDrafts.delete(keyFor(file.path)); setChoice(null); apply(value); })}>确认这个选择</Button></div></div> : <div className="pw-form-actions">
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
-          <Button disabled={locked || orphan !== null || blockedEdit.current || !file.dirty || file.conflict || file.saveUnknown} onClick={() => void invoke('save', { fileHandle: file.fileHandle, revision: file.revision, editSequence: file.editSequence }, value => { if (value.saveStatus === 'observed' && interfaceDrafts.get(keyFor(file.path)) === value.text) interfaceDrafts.delete(keyFor(file.path)); apply(value); })}>保存到这个副本</Button>
+          <Button disabled={locked || orphan !== null || blockedEdit.current || !file.dirty || file.conflict || file.saveUnknown} onClick={saveFile}>保存到这个副本</Button>
         </div>}
         <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null || blockedEdit.current || file.dirty || file.saveUnknown} onClick={() => void invoke('reviewImport', { fileHandle: file.fileHandle }, value => {
           if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.fileHandle !== file.fileHandle || value.path !== file.path || value.filesHandle !== handle.current || !value.importHandle) throw new Error('采纳审阅不属于原文件。');

@@ -25,6 +25,7 @@ internal class PocketWebAttachments(
     companion object {
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal")
+        private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
     }
     private val flow get() = controller.attachmentOutcomes
     private data class Window(val id: String, val ticket: PocketWebWindowTicket)
@@ -52,6 +53,10 @@ internal class PocketWebAttachments(
     private var deviceTaskCurrent:(()->Boolean)?=null
     private var scopedResultCurrent: (() -> Boolean)? = null
     val hasScopedResult: Boolean get() = scopedResultCurrent != null
+    private fun canNavigateFromReport(state: AttachmentOutcomeState): Boolean =
+        state.resultRun?.report != null && scopedResultCurrent?.invoke() == true && controller.webPrivateOwnerVisible() &&
+            !state.deviceOriginalOnly && state.group == null && state.team == null && state.file?.optString("role") == "result" &&
+            viewer.matchesOriginal(state.file)
     fun openOriginalFromDevice(file:dev.pocketengine.ui.ReceivedFileSelection,current:()->Boolean){
         check(controller.webUiCanInteract() && controller.webPrivateOwnerVisible() && current())
         clear();deviceTaskCurrent=current
@@ -88,6 +93,7 @@ internal class PocketWebAttachments(
         val privateOriginal = !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
+            .put("canOpenReportOriginalWork", canNavigateFromReport(state))
             .put("canReferenceHistoryOriginal", scoped != null && !report && privateOriginal)
             .put("canSaveOriginal", scoped == null && privateOriginal).put("canOpenInReader", scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
             .put("externalViewerResult", state.externalViewerResult)
@@ -117,7 +123,9 @@ internal class PocketWebAttachments(
             }
             scopedResultCurrent?.let { current ->
                 check(current()) { "原成果阅读窗口已变化，请重新打开这次成果" }
-                check(action == "attachmentWorkspace.viewer" || action == "attachmentWorkspace.action" && args.optString("command") in SCOPED_RESULT_READS) {
+                val command = args.optString("command")
+                check(action == "attachmentWorkspace.viewer" || action == "attachmentWorkspace.action" &&
+                    (command in SCOPED_RESULT_READS || command == REPORT_WORK_NAVIGATION && canNavigateFromReport(flow.state))) {
                     "这里仅可查看本次原件，不会修改原工作"
                 }
             }
@@ -220,6 +228,18 @@ internal class PocketWebAttachments(
                             window === current && acceptsWindow(current.ticket) && controller.webPrivateOwnerVisible() && scopedResultCurrent?.invoke()!=false
                         }
                     } else flow.openOriginalFile()
+                }
+                REPORT_WORK_NAVIGATION -> {
+                    // Never authorize a write in the report window, or accept a substitute file from the Web.
+                    require(args.length() == 3 && canNavigateFromReport(flow.state)) { "请在这份可读原件中进入原工作" }
+                    val originalScope = checkNotNull(scopedResultCurrent)
+                    fun currentWork() = window === current && acceptsWindow(current.ticket) &&
+                        scopedResultCurrent === originalScope && originalScope() && controller.webPrivateOwnerVisible()
+                    flow.openReportOriginalInWork(::currentWork) {
+                        scopedResultCurrent = null
+                        clear() // A different native window/frame is required before the ordinary file actions can be used.
+                        changed()
+                    }
                 }
                 "export" -> flow.prepareExport()
                 "openInReader" -> {
