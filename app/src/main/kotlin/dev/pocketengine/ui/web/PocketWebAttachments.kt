@@ -10,7 +10,6 @@ import dev.pocketengine.features.attachments.processing.NativeMediaTrim
 import dev.pocketengine.ui.AttachmentOutcomeState
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.PocketWorldController
-import dev.pocketengine.ui.UiTaskResult
 import dev.pocketengine.ui.objects
 import org.json.JSONArray
 import org.json.JSONObject
@@ -25,7 +24,7 @@ internal class PocketWebAttachments(
 ) {
     companion object {
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
-        private val HISTORY_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal")
+        private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal")
     }
     private val flow get() = controller.attachmentOutcomes
     private data class Window(val id: String, val ticket: PocketWebWindowTicket)
@@ -51,27 +50,28 @@ internal class PocketWebAttachments(
         s.processingReview?.metadata()?.toString(), s.comparison?.first?.identity, s.comparison?.second?.identity).joinToString("\u0000")
 
     private var deviceTaskCurrent:(()->Boolean)?=null
-    private var historyResultCurrent: (() -> Boolean)? = null
-    val hasHistoryResult: Boolean get() = historyResultCurrent != null
+    private var scopedResultCurrent: (() -> Boolean)? = null
+    val hasScopedResult: Boolean get() = scopedResultCurrent != null
     fun openOriginalFromDevice(file:dev.pocketengine.ui.ReceivedFileSelection,current:()->Boolean){
         check(controller.webUiCanInteract() && controller.webPrivateOwnerVisible() && current())
         clear();deviceTaskCurrent=current
         flow.openReceivedOriginal(file,current);changed()
     }
     fun snapshot(): JSONObject {
-        if(flow.state.deviceOriginalOnly && deviceTaskCurrent?.invoke()!=true || historyResultCurrent?.invoke()==false)clear()
+        if(flow.state.deviceOriginalOnly && deviceTaskCurrent?.invoke()!=true || scopedResultCurrent?.invoke()==false)clear()
         val state = flow.state
-        if (!state.open) { if (window != null || historyResultCurrent != null) clear(); return JSONObject().put("open", false) }
+        if (!state.open) { if (window != null || scopedResultCurrent != null) clear(); return JSONObject().put("open", false) }
         if (!controller.webUiCanInteract()) return JSONObject().put("open", true).put("ready", false)
         val current = activeWindow()
-        val history = historyResultCurrent
+        val scoped = scopedResultCurrent
+        val report = state.resultRun?.report != null
         val files = (state.snapshot?.optJSONArray("sources").objects() + state.snapshot?.optJSONArray("artifacts").objects())
             .map { JSONObject(it.toString()) }
         val frameId = UUID.randomUUID().toString()
         frames[frameId] = Frame(location(state), files)
         while (frames.size > 16) frames.remove(frames.keys.first())
         viewer.bind(state.originalFile, state.comparison, current.ticket) { ticket ->
-            acceptsWindow(ticket) && (!state.deviceOriginalOnly || deviceTaskCurrent?.invoke()==true) && history?.invoke()!=false
+            acceptsWindow(ticket) && (!state.deviceOriginalOnly || deviceTaskCurrent?.invoke()==true) && scoped?.invoke()!=false
         }
         val originalReview = state.processingReview
         if (originalReview == null || state.pendingProcessingTask != null) processingReview = null
@@ -82,13 +82,14 @@ internal class PocketWebAttachments(
         val reviewedProcessing = originalReview?.let { original -> original.metadata().also { metadata ->
             if (original.command == "trimMedia") metadata.put("startAlignmentLabel", NativeMediaTrim.startAlignmentLabel(metadata))
         } }
-        val continuationDraft=if(history==null&&!state.deviceOriginalOnly&&state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null)runCatching{
+        val continuationDraft=if(scoped==null&&!state.deviceOriginalOnly&&state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null)runCatching{
             controller.readArtifactContinuationDraft(state.taskId,state.file.getString("id"),state.file.getString("sha256")).put("available",true)
         }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
         val privateOriginal = !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
-            .put("historyResultOnly", history != null).put("canReferenceHistoryOriginal", history != null && privateOriginal)
-            .put("canSaveOriginal", history == null && privateOriginal).put("canOpenInReader", history == null && privateOriginal && viewer.canOpenInReader(state.file))
+            .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
+            .put("canReferenceHistoryOriginal", scoped != null && !report && privateOriginal)
+            .put("canSaveOriginal", scoped == null && privateOriginal).put("canOpenInReader", scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
             .put("externalViewerResult", state.externalViewerResult)
             .put("taskId", state.taskId).put("group", state.group != null).put("team", state.team != null)
             .put("deviceOriginalOnly",state.deviceOriginalOnly).put("fromWorkResult", state.fromWorkResult).put("resultFilesOnly", state.resultRun?.taskId?.let { it == state.taskId } == true)
@@ -96,9 +97,9 @@ internal class PocketWebAttachments(
             .put("snapshot", state.snapshot).put("file", state.file).put("document", state.document)
             .put("continuationDraft",continuationDraft)
             .put("documentOpen", state.documentOpen).put("choosingSource", state.choosingSource)
-            .put("documentDraft", state.documentDraft).put("pendingDocumentTask", state.pendingDocumentTask)
+            .put("documentDraft", state.documentDraft).put("pendingDocumentTask", state.pendingDocumentTask.takeUnless { report })
             .put("processingInfo", processingInfo).put("processingReview", reviewedProcessing).put("processingReviewId", processingReview?.id)
-            .put("processingOpen", state.processingSource != null).put("pendingProcessingTask", state.pendingProcessingTask)
+            .put("processingOpen", state.processingSource != null).put("pendingProcessingTask", state.pendingProcessingTask.takeUnless { report })
             .put("progress", state.progress).put("observing", state.observing).put("exportPending", flow.exportPending)
             .put("canRequestOcr", flow.canRequestOcr()).put("canSaveRead", flow.canSaveRead())
             .put("canReadTeamDifference", state.team != null && flow.canReadTeamDifference())
@@ -106,7 +107,7 @@ internal class PocketWebAttachments(
             .put("originalFile", viewer.snapshot()).put("comparison", viewer.comparisonSnapshot())
     }
 
-    fun dispatch(action: String, args: JSONObject, conversationResult: UiTaskResult? = null,
+    fun dispatch(action: String, args: JSONObject, resultRun: AttachmentResultRun? = null,
                  readerCurrent: (() -> Boolean)? = null, done: (JSONObject?, String?) -> Unit) {
         try {
             check(controller.webUiCanInteract()) { "请回到当前工作区再操作文件" }
@@ -114,10 +115,10 @@ internal class PocketWebAttachments(
                 check(deviceTaskCurrent?.invoke()==true && controller.webPrivateOwnerVisible()){"原文件所属的工作窗口已变化"}
                 check(action=="attachmentWorkspace.viewer" || action=="attachmentWorkspace.action" && args.optString("command") in setOf("back","close","cancel","continueTask")){"从此入口只查看这一个原文件，请先回原工作"}
             }
-            historyResultCurrent?.let { current ->
-                check(current()) { "原历史阅读窗口已变化，请重新打开这次成果" }
-                check(action == "attachmentWorkspace.viewer" || action == "attachmentWorkspace.action" && args.optString("command") in HISTORY_RESULT_READS) {
-                    "原历史成果只提供本次原件阅读，不会修改原工作"
+            scopedResultCurrent?.let { current ->
+                check(current()) { "原成果阅读窗口已变化，请重新打开这次成果" }
+                check(action == "attachmentWorkspace.viewer" || action == "attachmentWorkspace.action" && args.optString("command") in SCOPED_RESULT_READS) {
+                    "这里仅可查看本次原件，不会修改原工作"
                 }
             }
             if (action == "attachmentWorkspace.open") {
@@ -128,22 +129,22 @@ internal class PocketWebAttachments(
                 val file = args.optString("fileId").takeIf { it.isNotBlank() }
                 val openOriginal = args.opt("openOriginal")
                 require(openOriginal == null || openOriginal == true && task != null && file != null) { "原件入口需要原工作和固定文件版本" }
-                val resultRun = conversationResult?.let { result ->
-                    require(result.taskId == task && (file != null && openOriginal == true || !args.has("fileId") && openOriginal == null)) { "请选择这条原工作回执的文件" }
-                    AttachmentResultRun(result.taskId, result.runId, result.epoch)
+                if (resultRun != null) {
+                    require(resultRun.taskId == task && (file != null && openOriginal == true || !args.has("fileId") && openOriginal == null)) { "请选择这条原工作回执的文件" }
+                    require(resultRun.report == null || readerCurrent != null && file == null) { "请在原汇报查看本轮文件" }
                 }
-                check(readerCurrent == null || resultRun != null && !flow.state.open && readerCurrent()) { "请在原历史消息中打开这次成果" }
+                check(readerCurrent == null || resultRun != null && !flow.state.open && readerCurrent()) { "请在原阅读窗口打开这次成果" }
                 if (file != null) {
                     val sha = args.getString("sha256")
                     require(file.length <= 240 && '\u0000' !in file && sha.matches(Regex("[0-9a-f]{64}"))) { "原文件版本无效，请重新查找" }
-                    clear(); historyResultCurrent = readerCurrent
+                    clear(); scopedResultCurrent = readerCurrent
                     flow.openFile(JSONObject().put("id", file).put("sha256", sha), task, openOriginal == true,
                         fromWorkResult = openOriginal == true && resultRun == null, resultRun = resultRun)
                 } else {
                     require(!args.has("sha256")) { "请选择对应的原文件" }
                     // The coordinator rereads the original owner task on its IO executor.
                     // An older task need not still be in the home page's summary cache.
-                    clear(); historyResultCurrent = readerCurrent; flow.openTask(task, resultRun)
+                    clear(); scopedResultCurrent = readerCurrent; flow.openTask(task, resultRun)
                 }
                 done(JSONObject().put("opened", true).put("reading", true), null); changed(); return
             }
@@ -216,7 +217,7 @@ internal class PocketWebAttachments(
                     if (args.has("fileId") || args.has("sha256")) {
                         val file = selected()
                         flow.openListedOriginal(file.getString("id"), file.getString("sha256")) {
-                            window === current && acceptsWindow(current.ticket) && controller.webPrivateOwnerVisible() && historyResultCurrent?.invoke()!=false
+                            window === current && acceptsWindow(current.ticket) && controller.webPrivateOwnerVisible() && scopedResultCurrent?.invoke()!=false
                         }
                     } else flow.openOriginalFile()
                 }
@@ -277,8 +278,8 @@ internal class PocketWebAttachments(
     fun response(uri: Uri, method: String, headers: Map<String, String>): WebResourceResponse? = viewer.response(uri, method, headers)
     fun foreground(visible: Boolean) { if (!visible) clear() }
     fun clear() {
-        val scoped = flow.state.deviceOriginalOnly || historyResultCurrent != null
-        deviceTaskCurrent=null; historyResultCurrent=null
+        val scoped = flow.state.deviceOriginalOnly || scopedResultCurrent != null
+        deviceTaskCurrent=null; scopedResultCurrent=null
         if(scoped && flow.state.open)flow.close()
         window = null; frames.clear(); review = null; processingReview = null; viewer.clear()
     }

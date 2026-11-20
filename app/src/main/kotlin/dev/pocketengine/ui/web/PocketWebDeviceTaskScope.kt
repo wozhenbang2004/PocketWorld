@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.pocketengine.features.devices.DirectedPhoneTarget
 import dev.pocketengine.features.devices.NativeDeviceTaskScopeHost as Host
 import dev.pocketengine.store.TaskStoreDeviceTasks
 import dev.pocketengine.ui.PocketWorldController
@@ -33,7 +34,7 @@ internal class PocketWebDeviceTaskScope(
     @Volatile private var review: Review? = null
 
     companion object {
-        val COMMANDS = setOf("deviceTaskScope.prepare", "deviceTaskScope.open", "deviceTaskScope.close", "deviceTaskScope.review",
+        val COMMANDS = setOf("deviceTaskScope.prepare", "deviceTaskScope.open", "deviceTaskScope.readPhoneDispatchFact", "deviceTaskScope.close", "deviceTaskScope.review",
             "deviceTaskScope.confirm", "deviceTaskScope.dismissReview", "deviceTaskScope.reviewImport", "deviceTaskScope.confirmImport")
         private fun fields(value: JSONObject, vararg allowed: String) = PocketWebGroupReviews.fields(value, *allowed)
         private fun text(value: JSONObject, key: String, max: Int = 240) = PocketWebGroupReviews.text(value, key, max)
@@ -94,6 +95,28 @@ internal class PocketWebDeviceTaskScope(
             .put("reviewExpiresAt", System.currentTimeMillis() + 120_000)
             .put("taskId", original.taskId).put("pageHandle", original.id).put("kind", if (scope != null) "scope" else "import")
     }
+    /** Only the active private owner's original task, with its stored pin, may read this metadata.
+     * Do not open the capability or history window (which can contact a partner). */
+    private fun phoneDispatchFact(task: String): JSONObject {
+        val original = controller.readOriginalDeviceTask(task)
+        val target = DirectedPhoneTarget.fromTask(original) ?: error("这份工作没有选定原手机")
+        val host = controller.nativeDeviceWorkspace() ?: error("原设备留档不可用")
+        val page = host.openOwnerWindow().use { it.savedDirectedPhoneDispatches(target.view(), task, "") }
+        require(page.opt("kind") == "savedDirectedPhoneDispatches" && page.opt("sourceTaskId") == task &&
+            page.opt("readOnly") == true && DirectedPhoneTarget.read(page.getJSONObject("target")) == target) { "原工作或手机留档已变化" }
+        val rows = page.getJSONArray("rows"); require(rows.length() <= 24)
+        val fact = rows.optJSONObject(0)?.let { row ->
+            JSONObject().put("createdAt", row.getLong("createdAt")).apply {
+                if (row.has("targetAcceptedAt")) {
+                    put("targetAcceptedAt", row.getLong("targetAcceptedAt"))
+                    put("targetRunRecorded", row.opt("targetRunRecorded").takeIf { it == true })
+                } else put("sourceSendPhase", row.optString("sourceSendPhase").takeIf { it in setOf("abandoned_before_write", "write_claimed") })
+            }
+        }
+        // Never copy goal text, wire, output, detail handles, grant or a read on the other phone.
+        return JSONObject().put("kind", "originalPhoneDispatchFact").put("readOnly", true).put("taskId", task)
+            .put("target", target.view()).put("capturedAt", System.currentTimeMillis()).put("fact", fact)
+    }
     fun dispatch(action: String, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
         if (action == "deviceTaskScope.close") {
             fields(input, "pageHandle")
@@ -129,6 +152,11 @@ internal class PocketWebDeviceTaskScope(
                         }
                     })
                 } catch (failure: Exception) { busy.set(false); done(null, failure.message ?: "准备队列不可用") }
+            }
+            "deviceTaskScope.readPhoneDispatchFact" -> {
+                fields(input, "taskId"); val task = text(input, "taskId")
+                check(visible(task)) { "请先打开这份原私人任务" }
+                work(null, task, done) { phoneDispatchFact(task) }
             }
             "deviceTaskScope.open" -> {
                 fields(input, "taskId"); val task = text(input, "taskId")

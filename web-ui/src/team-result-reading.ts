@@ -86,7 +86,8 @@ export function teamFollowUps(run: Data | null, attention: unknown): TeamFollowU
 
 /** Exact progress from the open team's existing roster, plan and decisions. */
 export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollowUp[]) {
-  if (!['queued','running','awaiting_user','awaiting_input','awaiting_approval','awaiting_review','needs_confirmation'].includes(run.status) ||
+  const active = ['queued','running','awaiting_user','awaiting_input','awaiting_approval','awaiting_review','needs_confirmation'].includes(run.status);
+  if ((!active && run.status !== 'completed' && run.status !== 'partial') ||
       member.exited || !text(member.id) || rows(run.members).filter(row => row?.id === member.id).length !== 1) return [];
   const pending = followUps.filter(({ locator }) => locator.runId === run.id && locator.generation === run.generation &&
     locator.memberId === member.id && locator.memberGeneration === member.generation);
@@ -98,7 +99,7 @@ export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollo
     if (same.some(item => item.locator.questionId)) return 'awaiting_input';
     const statuses = [...new Set(same.map(item => item.status).filter(Boolean))];
     if (statuses.length) return statuses.length === 1 ? statuses[0] : 'unknown';
-    return saved === 'running' && (member.paused === true || !Number.isSafeInteger(row.generation) || row.generation !== member.generation) ? 'unknown' : saved;
+    return saved === 'running' && (!active || member.paused === true || !Number.isSafeInteger(row.generation) || row.generation !== member.generation) ? 'unknown' : saved;
   };
   if (run.workPlan) {
     const items = rows(run.workPlan.items);

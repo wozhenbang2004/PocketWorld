@@ -20,8 +20,33 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executor
 
-internal data class AttachmentResultRun(val taskId: String, val runId: String, val epoch: Int) {
+internal data class AttachmentResultRun(val taskId: String, val runId: String, val epoch: Int, val report: Report? = null) {
     data class Files(val entries: List<JSONObject>, val readLimited: Boolean)
+    data class Report(val conversationId: String, val messageId: String, val deliveryId: String) {
+        companion object {
+            fun current(task: JSONObject): Report? {
+                val native = task.optJSONObject("resultHandling")?.takeIf {
+                    task.opt("nativeResultHandling") == true && it.optString("format") == "pocketworld.owner-result-handling.v1" &&
+                        it.optString("taskId") == task.optString("id") && it.optString("runId") == task.optString("runId") &&
+                        it.optInt("epoch") == task.optInt("coordinatorEpoch")
+                }
+                val result = native ?: task.optJSONObject("ownerWork")?.takeIf { task.optString("executionRole") == "owner_work" } ?: return null
+                val handling = result.optJSONObject("handling") ?: return null
+                if (handling.optString("state") != "reported") return null
+                val conversation = result.optString("conversationId").ifBlank { task.optString("conversationId") }
+                val message = handling.optString("reportMessageId")
+                val delivery = handling.optString("deliveryId")
+                return if (conversation.isNotBlank() && message.isNotBlank() && delivery.isNotBlank()) Report(conversation, message, delivery) else null
+            }
+        }
+    }
+
+    fun matchesCompletedResult(task: JSONObject): Boolean =
+        task.optString("id") == taskId && task.optString("actorId") == "owner" && task.optString("spaceId") == "private" &&
+            task.optString("kind") != "inference" && task.optJSONObject("origin")?.optString("kind") != "group" &&
+            task.optString("taskProjection") != "source_unavailable" && task.optBoolean("contextAvailable", true) &&
+            task.optString("runId") == runId && task.optInt("coordinatorEpoch") == epoch && task.optString("status") == "completed" &&
+            (report == null || report == Report.current(task))
 
     fun files(snapshot: JSONObject): Files {
         check(snapshot.optString("taskId") == taskId && snapshot.optString("taskRunId") == runId &&
@@ -167,11 +192,9 @@ internal class AttachmentOutcomeCoordinator(
     private fun requireConversationResult(run:AttachmentResultRun,control:RunControl){
         control.check()
         val current=app.tasks.getForUi(run.taskId,false)?:error("原工作已不可读取")
-        check(current.optString("id")==run.taskId&&current.optString("actorId")=="owner"&&current.optString("spaceId")=="private"&&
-            current.optString("kind")!="inference"&&current.optJSONObject("origin")?.optString("kind")!="group"&&
-            current.optString("taskProjection")!="source_unavailable"&&current.optBoolean("contextAvailable",true)){"原工作来源已不可读取"}
-        check(current.optString("runId")==run.runId&&current.optInt("coordinatorEpoch")==run.epoch&&current.optString("status")=="completed"){
-            "原任务状态已变化，请打开当前工作核对成果"
+        check(run.matchesCompletedResult(current)){
+            if(run.report==null)"原任务状态或来源已变化，请打开当前工作核对成果"
+            else "原汇报或本轮文件来源已变化，没有打开其他成果"
         }
     }
     fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null,externalViewerResult=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
@@ -272,7 +295,7 @@ internal class AttachmentOutcomeCoordinator(
                 selectedTeam!=null->requireTeamHost().originalFile(selectedTeam,c)
                 selectedGroup!=null->app.groupOriginalFilePreview(selectedGroup,w?:error("请回原群成果重新打开"),c)
                 else->{
-                    // Returning to file details retains the exact chat result, not a general library selection.
+                    // Returning to file details retains the scoped result, not a general library selection.
                     if(resultRun!=null)requireConversationResult(resultRun,c)
                     val original=app.attachmentOutcomes.originalFile(task,selectedFile!!.getString("id"),selectedFile.getString("sha256"),c)
                     if(resultRun!=null)requireConversationResult(resultRun,c)
@@ -455,7 +478,7 @@ internal class AttachmentOutcomeCoordinator(
         };val preview=!state.deviceOriginalOnly&&state.file?.optString("mimeType")?.startsWith("image/")==true&&state.thumbnail==null&&file!=null;if(wait===c)wait=null;c.cancel();if(preview&&generation==token)loadThumbnail()}}catch(e:Exception){main.post{if(!closed&&state.open&&generation==token&&wait===c){val message=if(onFinished!=null)"导出未完整确认，目标可能已有部分内容；请核对所选文件，没有自动重写。"else if(c.isCancelled)"读取已停止；原文件与任务保留"else safe(e);state=state.copy(busy=false,error=listOfNotNull(restoredExportNotice,message).joinToString(" "));restoredExportNotice=null;wait=null};c.cancel()}}finally{if(onFinished!=null)main.post{onFinished()}}}}catch(rejected:java.util.concurrent.RejectedExecutionException){if(onFinished==null)throw rejected;state=state.copy(busy=false,error="导出未开始，原文件保留；请稍后明确重试");if(wait===c)wait=null;c.cancel();onFinished()}
     }
     private fun groupCall(window:String?,call:()->JSONObject):JSONObject {val actual=window?:throw SecurityException("当前原生主人窗口不可用");return app.groupOwnerWorkflows.call(actual){call()}}
-    fun save(bundle:Bundle){pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.open&&!state.deviceOriginalOnly)bundle.putString("attachmentOutcomeLocator",locator().toString())else if(state.deviceOriginalOnly)bundle.remove("attachmentOutcomeLocator");bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
+    fun save(bundle:Bundle){pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator().toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
     fun restore(bundle:Bundle?){bundle?.getString("attachmentPendingProcessingTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingProcessingAction=it;state=state.copy(pendingProcessingTask=it)};bundle?.getString("attachmentPendingDocumentTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingDocumentAction=it;state=state.copy(pendingDocumentTask=it)};try{bundle?.getString("attachmentOutcomeExport")?.let{val pin=JSONObject(it);val requestId=pin.optString("exportRequestId")
             if(requestId.matches(Regex("[a-f0-9-]{36}"))&&pin.optString("exportPhase","waiting")=="waiting"){
                 export=pin;exportPending=true;exportAbandoned=bundle.getBoolean("attachmentOutcomeExportAbandoned");if(pin.optBoolean("exportLaunchUnknown"))restoredExportNotice="系统文件选择器是否启动尚未确认；请先返回原选择器完成或取消，没有重新请求导出。"

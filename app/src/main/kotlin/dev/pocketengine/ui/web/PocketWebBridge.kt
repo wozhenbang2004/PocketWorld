@@ -11,6 +11,7 @@ import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
 import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ReasoningOptions
 import dev.pocketengine.store.TaskExecutionScope
+import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.ChatInputRules
 import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PocketWorldController
@@ -671,7 +672,7 @@ internal class PocketWebBridge(
                 deviceTaskScope.dispatch(action, input) { result, error ->
                     if (action == "deviceTaskScope.prepare" && error == null && result?.optBoolean("prepared") == true)
                         openOriginalTask(id, result.getString("taskId"), true, "devices")
-                    else { complete(id, result, error); publishState() }
+                    else { complete(id, result, error, retainValue = action != "deviceTaskScope.readPhoneDispatchFact"); publishState() }
                 }; return
             }
             if (action in PocketWebTaskCapabilities.COMMANDS) {
@@ -717,21 +718,27 @@ internal class PocketWebBridge(
                     attachmentPages.dispatch(action, fileArgs) { result, error -> complete(id, result, error); publishState() }
                     return
                 }
-                val conversationResult = if (action == "attachmentWorkspace.open") visibleChatTaskResult(args) else null
-                val readerCurrent: (() -> Boolean)? = if (conversationResult != null && args.has("resultReaderWindow")) {
+                val reportRun = if (action == "attachmentWorkspace.open" && (args.has("expectedRunId") || args.has("expectedEpoch")))
+                    visibleReportFileRun(args) else null
+                val conversationResult = if (action == "attachmentWorkspace.open" && reportRun == null) visibleChatTaskResult(args) else null
+                val resultRun = reportRun ?: conversationResult?.let { AttachmentResultRun(it.taskId, it.runId, it.epoch) }
+                val readerCurrent: (() -> Boolean)? = if (reportRun != null || conversationResult != null && args.has("resultReaderWindow")) {
                     val ticket = captureWindow()
-                    val current: () -> Boolean = { !closed && acceptsWindow(ticket) && runCatching { visibleChatTaskResult(args) }.getOrNull() == conversationResult }
+                    val current: () -> Boolean = { !closed && acceptsWindow(ticket) &&
+                        (if (reportRun != null) currentReportFileRun(reportRun)
+                        else runCatching { visibleChatTaskResult(args) }.getOrNull() == conversationResult) }
                     current
                 } else null
-                if (action == "attachmentWorkspace.open" && args.optBoolean("openOriginal") && conversationResult == null) {
+                if (action == "attachmentWorkspace.open" && args.optBoolean("openOriginal") && resultRun == null) {
                     require(section == null && taskViewId == requiredString(args, "taskId")) { "请从原工作打开这份成果" }
                 }
-                val attachmentArgs = if (conversationResult == null) args else JSONObject(args.toString()).apply {
+                val attachmentArgs = if (reportRun != null) JSONObject().put("taskId", reportRun.taskId)
+                else if (conversationResult == null) args else JSONObject(args.toString()).apply {
                     remove("resultMessageId"); remove("conversationId"); remove("resultReaderWindow"); remove("resultSourceRevision")
                 }
-                val historyScoped = readerCurrent != null || attachmentPages.hasHistoryResult
-                attachmentPages.dispatch(action, attachmentArgs, conversationResult, readerCurrent) { result, error ->
-                    complete(id, result, error, retainValue = !historyScoped); publishState()
+                val readerScoped = readerCurrent != null || attachmentPages.hasScopedResult
+                attachmentPages.dispatch(action, attachmentArgs, resultRun, readerCurrent) { result, error ->
+                    complete(id, result, error, retainValue = !readerScoped); publishState()
                 }; return
             }
             if (action == "conversation.projectConvention.read") {
@@ -2484,6 +2491,28 @@ internal class PocketWebBridge(
             message.sourceRevision == requiredLong(args, "resultSourceRevision")) { "原历史消息或其成果版本已变化" }
         return result
     }
+    private fun visibleReportFileRun(args: JSONObject): AttachmentResultRun {
+        checkedPayload(args, setOf("taskId", "resultMessageId", "conversationId", "expectedRunId", "expectedEpoch"))
+        val id = requiredString(args, "taskId")
+        val run = requiredString(args, "expectedRunId")
+        val epoch = requiredInt(args, "expectedEpoch")
+        val message = requiredString(args, "resultMessageId")
+        val conversation = requiredString(args, "conversationId")
+        require(section == null && taskViewId == id && controller.conversationReader == null && controller.webPrivateOwnerVisible()) {
+            "请从这份原汇报打开本轮文件"
+        }
+        require(epoch > 0 && id.length <= 80 && run.length <= 80 && message.length <= 512 && conversation.length <= 240)
+        val task = requireTask(id).raw
+        val report = AttachmentResultRun.Report.current(task)
+        require(report != null && report.messageId == message && report.conversationId == conversation) { "原汇报已变化，没有打开其他文件" }
+        return AttachmentResultRun(id, run, epoch, report).also {
+            check(it.matchesCompletedResult(task)) { "原汇报或本轮文件来源已变化，没有打开其他成果" }
+        }
+    }
+    private fun currentReportFileRun(run: AttachmentResultRun): Boolean =
+        section == null && taskViewId == run.taskId && controller.conversationReader == null && controller.webPrivateOwnerVisible() &&
+            controller.state.tasks.singleOrNull { it.id == run.taskId }?.let { run.matchesCompletedResult(it.raw) } == true
+
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() { if(section=="remote")connectionPages.hostGoalOrigins.closeSaved(); localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }

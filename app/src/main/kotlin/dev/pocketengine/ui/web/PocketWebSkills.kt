@@ -91,8 +91,19 @@ internal class PocketWebSkills(private val controller: PocketWorldController, pr
             "skills.snapshot" -> { fields(input); work(done, { module.snapshot() }) }
             "skills.close" -> { fields(input, "handle"); if (input.has("handle")) { val id = text(input, "handle"); pins.remove(id); manifestRead.remove(id); pages.keys.removeAll { it.startsWith("$id:") }; done(JSONObject().put("closed", true), null) } else { clear(); done(snapshot(), null) } }
             "skills.get" -> {
-                fields(input, "id"); val id = text(input, "id")
-                work(done, { module.handle("get", JSONObject().put("id", id)) }, { value -> val skill = value.getJSONObject("skill"); value.put("skillHandle", issue("skill", JSONObject(skill.toString()))) })
+                fields(input, "id", "expectedRevision", "expectedDigest"); val id = text(input, "id")
+                val exact = input.has("expectedRevision")
+                require(exact == input.has("expectedDigest")) { "请同时核对原技能修订和内容身份" }
+                val revision = if (exact) number(input, "expectedRevision", 1) else null
+                val digest = if (exact) text(input, "expectedDigest", 64).also { require(it.matches(Regex("[a-f0-9]{64}"))) } else null
+                work(done, {
+                    val value = module.handle("get", JSONObject().put("id", id))
+                    val skill = value.getJSONObject("skill")
+                    check(!exact || skill.getString("id") == id && skill.getInt("revision") == revision && skill.getString("digest") == digest) {
+                        "原提案保存的技能修订已变化，没有打开其他版本"
+                    }
+                    value
+                }, { value -> value.put("skillHandle", issue("skill", JSONObject(value.getJSONObject("skill").toString()))) })
             }
             "skills.read" -> {
                 fields(input, "skillHandle", "path", "offset"); val handle = text(input, "skillHandle"); val expected = selected(input); val path = text(input, "path", 240); val offset = number(input, "offset")

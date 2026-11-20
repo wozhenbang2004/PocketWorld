@@ -120,7 +120,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, onReadPhoneConversation, focusedOriginalDraft, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, onReadPhoneConversation, focusedOriginalDraft, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -136,6 +136,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   canOpenAttachment: boolean;
   canLocateAttachment: boolean;
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
+  onContinueBuildCopy?: () => void;
   onFollowUp?: () => void;
   onReadPhoneConversation?: (origin:PhoneConversationOrigin) => void;
   resultFiles?: {
@@ -228,6 +229,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       target={firstWeb} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}
       listedSavedVersion={(taskId, operationId, sha256)=>packageRead.eligible && !!onOpenProjectPackage &&
         outcome.projectPackages.some(item=>item.mode==='web_output'&&item.taskId===taskId&&item.operationId===operationId&&item.archiveSha256===sha256)}/>}
+    {active && onContinueBuildCopy && <div className="pw-form-actions">
+      <Button variant="secondary" onClick={onContinueBuildCopy}>继续编辑构建所用的副本</Button>
+    </div>}
     {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>

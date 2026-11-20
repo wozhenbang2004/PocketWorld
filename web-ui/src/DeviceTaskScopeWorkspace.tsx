@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextField } from './forms-library';
 import { bridge } from './bridge';
 import { materialPath, phoneTextOnly, routeDraft, routeTitle, scopeRows as rows, scopeSelection, type RouteDraft, type ScopeData as Data } from './device-task-scope';
+import { OriginalPhoneDispatchStatus } from './OriginalPhoneDispatchStatus';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 const time = (value: any) => Number.isSafeInteger(Number(value)) ? new Date(Number(value)).toLocaleString() : '尚未确认';
@@ -67,7 +68,7 @@ function RouteMaterials({ kind, option, view, draft, disabled, update }: { kind:
 
 type OriginalDevice = { deviceId: string; instanceId: string; certificateFingerprint: string };
 
-export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange, onSaved, onOpenDevices, onOpenOriginal, autoOpen = false, directed, directedWorkspace, directedManual }: { directedManual?:OriginalDevice; directed?: OriginalDevice; directedWorkspace?: OriginalDevice; autoOpen?: boolean; taskId: string; peers?: Data[]; run: Run; onBackChange?: (handler: (() => boolean) | null) => void; onSaved?: () => void; onOpenDevices?: () => void; onOpenOriginal?: () => void }) {
+export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange, onSaved, onOpenDevices, onOpenOriginal, autoOpen = false, directed, directedWorkspace, directedManual, startedPhone, canReadDispatch }: { directedManual?:OriginalDevice; directed?: OriginalDevice; directedWorkspace?: OriginalDevice; autoOpen?: boolean; taskId: string; peers?: Data[]; run: Run; onBackChange?: (handler: (() => boolean) | null) => void; onSaved?: () => void; onOpenDevices?: () => void; onOpenOriginal?: () => void; startedPhone?: boolean; canReadDispatch?: boolean }) {
   const [open, setOpen] = useState(false), [view, setView] = useState<Data | null>(null), [drafts, setDrafts] = useState<Record<string, RouteDraft>>({});
   const [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [removeUnavailable, setRemoveUnavailable] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -164,10 +165,12 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     const labels=new Set(rows(view?.options).filter(option=>option.targetDeviceId===id).map(option=>routeName(option,ownerNames)));
     return labels.size===1 && !labels.has('') ? [...labels][0] : deviceName(id,peers);
   };
+  const showDispatch = !open && startedPhone && directed && onOpenOriginal && !directedWorkspace && !directedManual;
   return <section className="pw-task-capabilities" aria-label="本任务的远端设备范围">
-    <Button variant="secondary" onClick={read} disabled={busy}>{directedId ? '读取' + scopeLabel : '选择本任务的远端设备'}</Button>
-    {directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看原派单与结果</Button>}
-    {directedId && !open && <p>这份工作只给{deviceName(directedId, peers)}。{directedManual?'点读取只核对这部手机已有的范围，不抓取画面，也不发送输入。':'点读取才核对它已授权的范围，不会发送目标或启动执行。'}</p>}
+    {showDispatch && <OriginalPhoneDispatchStatus key={`${taskId}:${directed.deviceId}:${directed.instanceId}:${directed.certificateFingerprint}`} source={{taskId, ...directed}} canRead={canReadDispatch === true} onOpen={onOpenOriginal} />}
+    <Button variant={showDispatch ? 'ghost' : 'secondary'} onClick={read} disabled={busy}>{directedId ? '读取' + scopeLabel : '选择本任务的远端设备'}</Button>
+    {!startedPhone && directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看原派单与结果</Button>}
+    {directedId && !open && <p>这份工作只给{deviceName(directedId, peers)}。{directedManual?'点读取只核对这部手机已有的范围，不抓取画面，也不发送输入。':showDispatch?'核对范围与读取原派单是两件事。':'点读取才核对它已授权的范围，不会发送目标或启动执行。'}</p>}
     {notice && <p role="status">{notice}</p>}
     <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : '核对本任务设备范围' : directedId ? '核对' + scopeLabel : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>
       <div className="pw-collaboration-dialog">

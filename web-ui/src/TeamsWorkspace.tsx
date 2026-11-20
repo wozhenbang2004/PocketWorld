@@ -129,7 +129,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const [materialBusy, setMaterialBusy] = useState(false);
   const [resultSource, setResultSource] = useState<ResultOrigin | null>(null);
   const [shownMemberSources,setShownMemberSources]=useState<Record<string,boolean>>({});
-  const deliveryReturn=useRef<{team:string;key:string;taskId:string;scroll:number;entered:boolean;member?:ResultOrigin['member']}|null>(null);
+  const [openingMemberResult, setOpeningMemberResult] = useState(false);
+  const deliveryReturn=useRef<{team:string;key:string;section:'progress'|'result';taskId:string;scroll:number;entered:boolean;member?:ResultOrigin['member']}|null>(null);
   const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
@@ -434,7 +435,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const changed = !!current && latest.id === current.id && (latest.generation > current.generation
     || latest.generation === current.generation && latest.revision > current.revision);
   useEffect(() => {
-    if (!changed || !workspaceActive || busy || materialBusy || readingFiles || editor || memberDraft || review || phoneSelection || backgrounded.current) return;
+    if (!changed || !workspaceActive || busy || materialBusy || openingMemberResult || readingFiles || editor || memberDraft || review || phoneSelection || backgrounded.current) return;
     const runId = current!.id, originalHandle = reading?.viewHandle, generation = requestGeneration.current;
     let retired = false;
     const stillCurrent = () => !retired && alive.current && !backgrounded.current && ownsNativeWindow()
@@ -456,7 +457,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       });
     }, 250);
     return () => { retired = true; clearTimeout(timer); };
-  }, [changed, current?.id, reading?.viewHandle, workspaceActive, busy, materialBusy, readingFiles, editor, memberDraft, review, phoneSelection]);
+  }, [changed, current?.id, reading?.viewHandle, workspaceActive, busy, materialBusy, openingMemberResult, readingFiles, editor, memberDraft, review, phoneSelection]);
   const members = rows(current?.members), messages = rows(reading?.messages);
   const activeQuestionKeys = new Set(rows(reading?.attention).filter(item => item.kind === 'question').map(questionKey));
   const isCurrentQuestion = (message: Data) => message.kind === 'assignment_question' && message.state === 'pending' && activeQuestionKeys.has(questionKey(message));
@@ -467,6 +468,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const revisionRequest=object(current?.workPlan).lastRevisionRequestId;
   const hasFrozenRevision=!!revisionRequest&&rows(current?.parentRequests).some(p=>p.kind==='revision_proposal'&&p.state==='applied_to_work_revision'&&p.revisionRequestId===revisionRequest);
   const runSection = runSections[current?.id || ''] || 'progress';
+  const shownRunSection = useRef(runSection);
+  shownRunSection.current = runSection;
   const expandedDetails = detailSections[current?.id || ''] || [];
   const materialsActive = runSection === 'details' && expandedDetails.includes('materials');
   const revealDetail = (section: string) => { if (current) setDetailSections(old => ({ ...old, [current.id]: [...new Set([...(old[current.id] || []), section])] })); };
@@ -507,7 +510,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   }, [draftKey, composeOpen]);
   useEffect(() => { if (messageDraftId.current === draftKey) messageDraft.update({ text }); }, [draftKey, text, messageDraft.update]);
   useEffect(() => { if (messageDraft.requiresRecheck) setMessageChecked(false); }, [messageDraft.requiresRecheck]);
-  const canRead = workspaceActive && !!current && !!reading?.viewHandle && !busy && !changed;
+  const canRead = workspaceActive && !!current && !!reading?.viewHandle && !busy && !openingMemberResult && !changed;
   const canControl = canRead && !materialBusy && current?.status !== 'cancelled';
   const canMutate = canControl && !uncertain;
   const changeMessageMode = (nextMode: string) => messageDraft.guard(() => setMode(nextMode));
@@ -735,16 +738,18 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       showDecisionTarget(item.locator.runId,next.viewHandle,focus);
     });
   };
-  const deliveries=runSection==='result'?teamResearchDeliveries(current,messages):[];
+  const deliveries = runSection === 'details' ? [] : teamResearchDeliveries(current, messages);
+  const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
   const openMemberAnswer=(item:TeamResearchDelivery,trigger:HTMLButtonElement)=>{
     const original=currentReading.current;
     if(!openReading||!item.answer||!canRead||materialBusy||document.hidden||!ownsNativeWindow()||
       original?.kind!=='run'||original.run?.id!==item.team||original.viewHandle!==reading?.viewHandle)return;
     const same=teamResearchDeliveries(original.run,original.messages).find(row=>row.key===item.key&&row.answer?.key===item.answer?.key);
     if(!same?.answer||same.answer.text!==item.answer.text){setNotice('这份成员答复已变化，没有打开其他阶段。');return;}
-    setResultSource(Number.isSafeInteger(original.run.generation)?resultOrigin(same.answer.key, {
+    if (runSection === 'result') setResultSource(Number.isSafeInteger(original.run.generation)?resultOrigin(same.answer.key, {
       id:same.memberId,generation:original.run.generation,deliveryKey:same.key,
     }):null);
+    else setResultSource(null);
     openReading({kind:'message',title:`${same.name} · ${same.answer.label}`,text:same.answer.text,returnFocus:trigger});
   };
   const selectRunTab = (section: RunSection) => {
@@ -769,26 +774,29 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     }
     chooseRunSection(section, () => setResultSource(saved => saved === source ? null : saved));
   };
-  const openMemberDelivery=(item:TeamResearchDelivery)=>{
+  const openMemberDelivery=(item:TeamResearchDelivery, section: 'progress' | 'result' = 'result')=>{
     const original=currentReading.current;
-    if(deliveryReturn.current||!canRead||materialBusy||!ownsNativeWindow()||original?.run?.id!==item.team)return;
+    if(deliveryReturn.current||!canOpenMemberResult||!canRead||materialBusy||!ownsNativeWindow()||original?.run?.id!==item.team)return;
+    const sameSection = () => shownRunSection.current === section && !document.hidden;
     leaveWithDrafts(()=>{
-      if(!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle)return;
+      if(!sameSection()||!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle)return;
       void invoke('teams.readRun',{runId:item.team},reply=>{
         const next=reply.reading;
-        if(!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle){release(next);return}
+        if(!sameSection()||!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle){release(next);return}
         if(next?.kind!=='run'||!next.viewHandle||next.run?.id!==item.team){release(next);throw new Error('未读取到原协作，没有打开其他分工。')}
         const same=teamResearchDeliveries(next.run,next.messages).find(s=>s.key===item.key);
         acceptReading(next);
         if(!same){setNotice('这份成员原件已变化，请重新核对。没有打开另一阶段。');return}
         const member=Number.isSafeInteger(next.run.generation)?{id:same.memberId,generation:next.run.generation,deliveryKey:same.key}:undefined;
-        const origin={team:item.team,key:item.key,taskId:item.taskId,scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,member};
+        const origin={team:item.team,key:item.key,section,taskId:item.taskId,scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,member};
+        if (section === 'progress') setResultSource(null);
         deliveryReturn.current=origin;
+        setOpeningMemberResult(true);
         void run('teams.openResearchTask',{viewHandle:next.viewHandle,memberId:same.memberId,round:same.round,taskId:same.taskId,outputFingerprint:same.hash}).catch(failure=>{
           if(deliveryReturn.current===origin)deliveryReturn.current=null;
           if(alive.current&&!backgrounded.current&&ownsNativeWindow()&&currentReading.current?.run?.id===item.team)
-            setError(failure instanceof Error?failure.message:'原研究任务暂不可读取。');
-        });
+            setError(failure instanceof Error?failure.message:'原答复暂时无法打开。');
+        }).finally(() => { if (alive.current) setOpeningMemberResult(false); });
       });
     });
   };
@@ -796,16 +804,21 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const origin=deliveryReturn.current;if(!origin)return;
     const view=object(bridge.getState().view);
     if(view.taskId===origin.taskId){origin.entered=true;return}
-    if(!origin.entered||!workspaceActive||!ownsNativeWindow()||busy||!reading?.viewHandle)return;
+    if(!origin.entered||!workspaceActive||!ownsNativeWindow()||busy||openingMemberResult||!reading?.viewHandle)return;
     deliveryReturn.current=null;
-    if(current?.id!==origin.team||runSection!=='result')return;
-    const area=root.current?.querySelector<HTMLElement>('.pw-team-result');
-    const target=Array.from(area?.querySelectorAll<HTMLButtonElement>('[data-team-delivery]')||[]).find(row=>row.dataset.teamDelivery===origin.key);
-    setResultSource(target&&origin.member&&current.generation===origin.member.generation
+    if(current?.id!==origin.team||runSection!==origin.section)return;
+    const fromProgress = origin.section === 'progress';
+    const area=root.current?.querySelector<HTMLElement>(fromProgress ? '[data-team-section="members"]' : '.pw-team-result');
+    const selector = fromProgress ? '[data-team-progress-delivery]' : '[data-team-delivery]';
+    const sameGeneration = !!origin.member && current.generation === origin.member.generation;
+    const target=fromProgress&&!sameGeneration ? undefined : Array.from(area?.querySelectorAll<HTMLButtonElement>(selector)||[])
+      .find(row=>(fromProgress?row.dataset.teamProgressDelivery:row.dataset.teamDelivery)===origin.key);
+    if (!fromProgress) setResultSource(target&&sameGeneration
       ? {runId:origin.team,key:origin.key,scroll:origin.scroll,member:origin.member} : null);
     const scroll=root.current?.closest<HTMLElement>('.pw-secondary-scroll');if(scroll)scroll.scrollTop=origin.scroll;
-    (target||area?.querySelector<HTMLElement>('[data-team-result-heading]'))?.focus({preventScroll:true});
-  },[workspaceActive,busy,reading?.viewHandle,current?.id,runSection,state.webWorkspaceResumeRevision]);
+    if (fromProgress) target?.scrollIntoView({block:'nearest'});
+    (target||(fromProgress?area:area?.querySelector<HTMLElement>('[data-team-result-heading]')))?.focus({preventScroll:true});
+  },[workspaceActive,busy,openingMemberResult,reading?.viewHandle,current?.id,runSection,state.webWorkspaceResumeRevision]);
   const openAwaitingReview = () => {
     const original = currentReading.current, owner = original?.taskId, id = current?.id;
     if (!canRead || materialBusy || !id || !owner || original?.run?.id !== id || current.status !== 'awaiting_review') return;
@@ -961,7 +974,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       }}/>
       {reading?.taskLookupNotice && <p className="pw-field-hint" role="status">{reading.taskLookupNotice}</p>}
       <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'result' || value === 'details') selectRunTab(value); }} className="pw-team-workbench">
-        <div className="pw-team-workbench-bar pw-material-navigation"><TabList aria-label="这次协作"><Tab id="progress" isDisabled={materialBusy}>进展</Tab><Tab id="result" isDisabled={materialBusy}>成果</Tab><Tab id="details">详情</Tab></TabList></div>
+        <div className="pw-team-workbench-bar pw-material-navigation"><TabList aria-label="这次协作"><Tab id="progress" isDisabled={materialBusy || openingMemberResult}>进展</Tab><Tab id="result" isDisabled={materialBusy || openingMemberResult}>成果</Tab><Tab id="details" isDisabled={openingMemberResult}>详情</Tab></TabList></div>
         {resultSource && resultSource.runId === current.id && !resultSource.member && runSection !== 'result' && <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy || materialBusy}
           onClick={() => resultBack.current()}>返回协作成果</Button>}
         <TabPanel id="progress">
@@ -988,8 +1001,16 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
               <header className="pw-team-progress-member-heading"><TeamMemberIdentity member={member} name={name(member.id)} detail={member.id === current.leaderId ? teamRoleLabel(current) : undefined} size={40} />{showMemberState && <span className="pw-team-state" data-state={memberState}>{status(memberState)}</span>}</header>
               {assignment && <p className="pw-team-current-work">{assignment}</p>}
               {progress.length > 0 && <ul className="pw-team-progress-facts" role="list" aria-label={hasWorkPlan ? '本次分工' : '本次阶段'}>
-                {progress.map(fact => <li key={fact.key}><span dir="auto">{fact.title}</span><span className="pw-team-state" data-state={fact.state}>
-                  {fact.state === 'completed' ? '已完成' : fact.state === 'preparing' ? '正在准备' : status(fact.state)}</span></li>)}
+                {progress.map(fact => {
+                  const source = !hasWorkPlan && fact.state === 'completed' ? deliveries.find(item => item.memberId === member.id && String(item.round) === fact.key) : undefined;
+                  const inPlace = source?.answer && !!openReading;
+                  return <li key={fact.key}><span dir="auto">{fact.title}</span><span className="pw-team-state" data-state={fact.state}>
+                    {fact.state === 'completed' ? '已完成' : fact.state === 'preparing' ? '正在准备' : status(fact.state)}</span>
+                    {source && (inPlace || canOpenMemberResult) && <Button className="pw-team-progress-read" size="small" variant="ghost"
+                      trailingIcon={IconChevronRight} aria-label={'查看' + source.name + '的' + fact.title + '答复'} data-team-progress-delivery={source.key}
+                      disabled={!canRead || materialBusy} onClick={event => inPlace ? openMemberAnswer(source, event.currentTarget) : openMemberDelivery(source, 'progress')}>查看答复</Button>}
+                  </li>;
+                })}
               </ul>}
               {memberRound?.message && <p className="pw-team-member-receipt">{memberRound.message}</p>}
               {memberRound?.nativeErrorMessage && <p className="pw-team-member-error">{memberRound.nativeErrorMessage}</p>}
@@ -1028,7 +1049,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                 release(value,'reviewHandle');throw new Error('原提案或工作项已变化，没有开始修订。');
               }reviewResult(value);
             });}}/>:undefined} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || hasFrozenRevision || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
-            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} hasRevision={hasFrozenRevision} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy} rawAvailable={bridge.getState().capabilities.commands.includes('teams.openResearchTask')}
+            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} hasRevision={hasFrozenRevision} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy} rawAvailable={canOpenMemberResult}
             open={openMemberDelivery} openAnswer={openReading?openMemberAnswer:undefined}
             expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],

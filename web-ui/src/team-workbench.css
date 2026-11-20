@@ -229,6 +229,7 @@
 .pw-team-progress-facts { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .pw-team-progress-facts > li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 12px; }
 .pw-team-progress-facts > li > span:first-child { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; color: var(--pw-ink); font-size: 14px; line-height: 1.65; }
+.pw-team-progress-facts .pw-team-progress-read { min-height: 44px; margin-inline-start: auto; }
 .pw-team-output-preview { padding-inline-start: 12px; border-inline-start: 2px solid var(--pw-divider); color: var(--pw-copy); font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
 .pw-team-member-receipt, .pw-team-member-pending { color: var(--pw-copy); font-size: 12px; line-height: 1.7; }
 .pw-team-member-error { color: var(--pw-warning); font-size: 13px; line-height: 1.7; white-space: pre-wrap; }

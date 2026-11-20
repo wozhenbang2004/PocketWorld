@@ -3,6 +3,7 @@ import { IconAdd, IconBook, IconMore, IconRefresh } from './icons';
 import { SkillLibrary } from './shell-library/affect-workflows';
 import { Popover, PopoverTrigger } from './shell-library';
 import { MarkdownBody } from './library/MarkdownBody';
+import type { ReviewedSkillTarget } from './SkillDraftReview';
 import './skills-reading.css';
 import './ecosystem-depth.css';
 import './capability-management-manga.css';
@@ -17,7 +18,7 @@ const sameContent = (a?: Data | null, b?: Data) => !!a && !!b && typeof a.id ===
 const classifications: Record<string, string> = { current: '来源内容未变', upstream_changed: '上游更新，本地未改动', local_changed: '本地有改动', both_changed: '本地和上游都有改动', untracked: '尚无来源基线' };
 
 /** Approved BoardUI list/detail/SettingsDialog composition, over the original SkillBook. */
-export default function SkillsWorkspace({ state, run, registerTransientBack, onPrepareTools }: { state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void }) {
+export default function SkillsWorkspace({ state, run, registerTransientBack, onPrepareTools, reviewedSkill }: { state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; onPrepareTools?: () => void; reviewedSkill?: ReviewedSkillTarget }) {
   const [catalogue, setCatalogue] = useState<Data | null>(null), [selection, setSelection] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
   const [body, setBody] = useState<Data | null>(null), [sourceBody, setSourceBody] = useState<Data | null>(null), [history, setHistory] = useState<Data | null>(null), [projects, setProjects] = useState<Data[]>([]), [resources, setResources] = useState<Data[]>([]);
   const [query, setQuery] = useState(''), [path, setPath] = useState('SKILL.md'), [sourcePath, setSourcePath] = useState('SKILL.md'), [source, setSource] = useState('机主选择的技能文件');
@@ -44,13 +45,13 @@ export default function SkillsWorkspace({ state, run, registerTransientBack, onP
   const closeReview = () => { release(review?.reviewHandle); setReview(null); setSourceBody(null); setAcknowledged(false); setAttempted(false); setDiscard(false); };
   const closeSelection = () => { closeReview(); release(selection?.skillHandle); setSelection(null); setManifestReadFor(''); setBody(null); setHistory(null); setProjects([]); setResources([]); };
   const refresh = () => { closeSelection(); batch.forEach(item => release(item.skillHandle)); setBatch([]); setReceipt(null); void invoke('skills.open', {}, value => { setCatalogue(value); setNotice(''); }); };
-  useEffect(() => { alive.current = true; refresh(); return () => { alive.current = false; for (const handle of handles.current) void run('skills.close', { handle }).catch(() => {}); handles.current.clear(); void run('skills.close').catch(() => {}); }; }, []);
+  useEffect(() => { alive.current = true; if (reviewedSkill) openReviewedSkill(); else refresh(); return () => { alive.current = false; for (const handle of handles.current) void run('skills.close', { handle }).catch(() => {}); handles.current.clear(); void run('skills.close').catch(() => {}); }; }, []);
   const backToList = () => {
     if (entered.current || waiting) return;
     if (selection?.unconfirmed) { setCatalogue(null); void invoke('skills.snapshot', {}, setCatalogue); }
     closeSelection(); setNotice(''); setError('');
   };
-  useEffect(() => { registerTransientBack(review || selection || importOpen || libraryMenuOpen ? () => { if (libraryMenuOpen) { setLibraryMenuOpen(false); return true; } if (!entered.current && !waiting) { if (review) closeReview(); else if (importOpen) setImportOpen(false); else backToList(); } return true; } : null); return () => registerTransientBack(null); }, [review, selection, importOpen, libraryMenuOpen, waiting, registerTransientBack]);
+  useEffect(() => { registerTransientBack(review || !reviewedSkill && selection || importOpen || libraryMenuOpen ? () => { if (libraryMenuOpen) { setLibraryMenuOpen(false); return true; } if (!entered.current && !waiting) { if (review) closeReview(); else if (importOpen) setImportOpen(false); else backToList(); } return true; } : null); return () => registerTransientBack(null); }, [reviewedSkill, review, selection, importOpen, libraryMenuOpen, waiting, registerTransientBack]);
   const showSkill = (value: Data, keepDocument = false) => {
     const original = value.skill;
     setSelection(value); setManifestReadFor(''); setHistory(null); setProjects([]); setResources([]);
@@ -63,7 +64,21 @@ export default function SkillsWorkspace({ state, run, registerTransientBack, onP
     listPosition.current = collectionPanel.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; openedSkill.current = id;
     closeSelection(); setNotice(''); setReceipt(null); void invoke('skills.get', { id }, value => showSkill(value));
   };
+  const skillLookup = (id: string) => reviewedSkill
+    ? { id: reviewedSkill.id, expectedRevision: reviewedSkill.revision, expectedDigest: reviewedSkill.digest }
+    : { id };
+  const openReviewedSkill = () => {
+    if (!reviewedSkill || entered.current) return;
+    closeSelection();
+    void invoke('skills.get', skillLookup(reviewedSkill.id), value => {
+      if (!value.skillHandle || !sameContent(reviewedSkill, value.skill)) {
+        release(value.skillHandle); throw new Error('未能核对原提案保存的技能修订，没有打开其他版本。');
+      }
+      showSkill(value);
+    });
+  };
   const recoverDetail = () => {
+    if (reviewedSkill) { openReviewedSkill(); return; }
     if (!selection) return;
     void invoke('skills.get', { id: selection.skill.id }, value => {
       if (value.skill?.id !== selection.skill.id || !value.skillHandle) { release(value.skillHandle); throw new Error('未能重新打开这份技能，请返回技能列表。'); }
@@ -100,19 +115,20 @@ export default function SkillsWorkspace({ state, run, registerTransientBack, onP
         if (!sameContent(before, saved) || saved.id !== id || saved.enabled !== review.enabled) throw new Error('未收到匹配此版本的启停回执。');
         confirmed = true;
         closeReview(); release(selection.skillHandle); setManifestReadFor(''); setReceipt(null);
-        setSelection({ skill: saved }); updateRow(saved);
+        if (reviewedSkill) { setSelection(null); setBody(null); }
+        else { setSelection({ skill: saved }); updateRow(saved); }
         setNotice(saved.enabled ? '这份技能已启用。没有运行技能，也没有授予工具权限。' : '这份技能已停用。');
         // The write changes executionGeneration. Only a fresh, read-only get can
         // supply an actionable handle; neither a cached read nor the write receipt can.
-        const fresh = await run('skills.get', { id });
-        if (!alive.current || fresh?.skill?.id !== id || !fresh?.skillHandle) {
+        const fresh = await run('skills.get', skillLookup(id));
+        if (!alive.current || fresh?.skill?.id !== id || !fresh?.skillHandle || reviewedSkill && !sameContent(reviewedSkill, fresh.skill)) {
           release(fresh?.skillHandle);
           if (alive.current) throw new Error('未能重新打开这份技能，请核对当前状态。');
           return;
         }
         remember(fresh); showSkill(fresh, true); updateRow(fresh.skill);
         if (!sameContent(saved, fresh.skill) || fresh.skill.executionGeneration !== saved.executionGeneration)
-          setNotice('已收到本次启停回执。这份技能随后有变化，当前显示最新状态。');
+          setNotice(reviewedSkill ? '已收到本次启停回执。这一修订的启停或范围随后有变化，当前按重新读到的状态显示。' : '已收到本次启停回执。这份技能随后有变化，当前显示最新状态。');
       }, () => {
         if (confirmed) return; // The write was confirmed; only the follow-up read failed.
         closeReview(); release(selection.skillHandle); setManifestReadFor(''); setReceipt(null);
@@ -129,6 +145,11 @@ export default function SkillsWorkspace({ state, run, registerTransientBack, onP
   };
   const skill = selection?.skill, targetHandle = selection?.skillHandle || '';
   const manifestReady = !!targetHandle && manifestReadFor === targetHandle;
+  const policy = skill?.sourcePolicy;
+  const projectName = policy?.layer === 'PROJECT' && typeof policy.projectId === 'string'
+    ? rows(state.projects).find(project => project.id === policy.projectId)?.name : undefined;
+  const reviewedScope = policy?.layer === 'PROJECT' ? policy.projectBindingRequired === true ? '尚未绑定项目' : projectName ? '仅项目「' + projectName + '」' : '仅所属项目'
+    : policy?.layer === 'USER' ? '个人范围' : policy?.layer === 'BUNDLED' ? '随应用参考层' : '适用范围未核对';
   useLayoutEffect(() => {
     const scroller = collectionPanel.current?.closest('.pw-secondary-scroll');
     if (skill) {
@@ -172,15 +193,16 @@ export default function SkillsWorkspace({ state, run, registerTransientBack, onP
 
   return <div className="pw-skill-workspace pw-ecosystem-depth">
       {(error || native.error) && <p className="pw-error" role="alert">{error || native.error}</p>}{notice && <p role="status">{notice}</p>}{waiting && <p role="status">正在处理本次原技能请求…</p>}{native.busy && native.operationId && <Button variant="ghost" disabled={stopping} onClick={() => { const operationId = native.operationId; setStopping(true); void run('skills.cancel', { operationId }).then(() => { if (alive.current) setNotice('已请求停止这次原处理，仍需等待实际回执；可能已发生的写入不会自动重试。'); }).catch(failure => { if (alive.current) setError(failure.message); }).finally(() => { if (alive.current) setStopping(false); }); }}>停止这次原处理</Button>}
-    {incoming.pending && <section className="pw-source-record pw-eco-pending-file"><h3>收到一份待核对的 SKILL.md</h3><p>正文尚未读取。先检查内容、来源与资源缺口，再决定是否导入。</p><div className="pw-form-actions"><Button disabled={waiting || selecting} onClick={() => { void invoke('skills.incoming.inspect', { requestId: incoming.requestId, targetHandle }, openReview); }}>检查这份原文件</Button><Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.incoming.discard', { requestId: incoming.requestId }); }}>放弃这份文件</Button></div></section>}
-    {selecting && <section className="pw-source-record pw-eco-pending-file"><h3>{native.selection?.export ? '保存本次审阅内容' : '本次所选文件'}</h3><p>{native.pickerPending ? '请完成系统文件选择。' : native.selection?.export ? '保存位置已选定。确认写入时会再次核对原版本，系统可能已建立空文件。' : '文件已选定，尚未读取正文。'}</p><div className="pw-form-actions">{!native.pickerPending && <Button disabled={waiting} onClick={() => { void invoke(native.selection?.export ? 'skills.writeSelected' : 'skills.inspectSelected', { requestId: native.selectedRequestId }, value => { if (value.saved) { setReceipt(value); setNotice('原技能文件已完成写入、刷新和关闭。'); } else openReview(value); }); }}>{native.selection?.export ? '保存所审阅文件' : '检查所选文件'}</Button>}<Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.discardSelection', { requestId: native.selectedRequestId }); }}>放弃这次选择</Button></div></section>}
-    <section ref={collectionPanel} tabIndex={-1} className="pw-memory-collection pw-skill-collection" aria-label="技能管理" hidden={!!skill}>
+    {!reviewedSkill && incoming.pending && <section className="pw-source-record pw-eco-pending-file"><h3>收到一份待核对的 SKILL.md</h3><p>正文尚未读取。先检查内容、来源与资源缺口，再决定是否导入。</p><div className="pw-form-actions"><Button disabled={waiting || selecting} onClick={() => { void invoke('skills.incoming.inspect', { requestId: incoming.requestId, targetHandle }, openReview); }}>检查这份原文件</Button><Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.incoming.discard', { requestId: incoming.requestId }); }}>放弃这份文件</Button></div></section>}
+    {!reviewedSkill && selecting && <section className="pw-source-record pw-eco-pending-file"><h3>{native.selection?.export ? '保存本次审阅内容' : '本次所选文件'}</h3><p>{native.pickerPending ? '请完成系统文件选择。' : native.selection?.export ? '保存位置已选定。确认写入时会再次核对原版本，系统可能已建立空文件。' : '文件已选定，尚未读取正文。'}</p><div className="pw-form-actions">{!native.pickerPending && <Button disabled={waiting} onClick={() => { void invoke(native.selection?.export ? 'skills.writeSelected' : 'skills.inspectSelected', { requestId: native.selectedRequestId }, value => { if (value.saved) { setReceipt(value); setNotice('原技能文件已完成写入、刷新和关闭。'); } else openReview(value); }); }}>{native.selection?.export ? '保存所审阅文件' : '检查所选文件'}</Button>}<Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.discardSelection', { requestId: native.selectedRequestId }); }}>放弃这次选择</Button></div></section>}
+    {reviewedSkill && !skill && !waiting && <Button variant="secondary" leadingIcon={IconRefresh} onClick={openReviewedSkill}>重新核对原修订 {reviewedSkill.revision}</Button>}
+    {!reviewedSkill && <section ref={collectionPanel} tabIndex={-1} className="pw-memory-collection pw-skill-collection" aria-label="技能管理" hidden={!!skill}>
       {showDirectoryTools && <header className="pw-eco-workspace-heading pw-skill-directory-heading"><p className="pw-skill-directory-count">{skillRows.length} 份技能</p><div className="pw-skill-heading-actions"><Button variant="secondary" leadingIcon={IconAdd} disabled={waiting || selecting} onClick={() => setImportOpen(true)}>导入技能</Button><PopoverTrigger isOpen={libraryMenuOpen} onOpenChange={setLibraryMenuOpen}><IconButton icon={IconMore} aria-label="技能库操作" title="技能库操作"/><Popover aria-label="技能库操作" placement="bottom end"><div className="pw-skill-library-menu"><Button variant="ghost" leadingIcon={IconRefresh} disabled={waiting} onClick={() => { setLibraryMenuOpen(false); refresh(); }}>重新读取技能</Button>{(canCheckSources || checkingSources) && <Button variant="ghost" disabled={waiting} onClick={() => { setLibraryMenuOpen(false); if (checkingSources) exitBatch(); else setCheckingSources(true); }}>{checkingSources ? '退出多选' : '批量检查来源'}</Button>}</div></Popover></PopoverTrigger></div></header>}
       {catalogue ? <SkillLibrary skills={visibleSkills} loaded query={query} onQuery={setQuery} disabled={waiting || selecting} onOpen={open} checkingSources={checkingSources} selectedIds={batch.map(item => item.skill.id)} onToggle={toggleBatch} filters={filters} hideHeading directOpen showTools={showDirectoryTools} emptyContent={skillRows.length ? emptyResults : emptyLibrary}/> : !waiting && <Button variant="secondary" leadingIcon={IconRefresh} onClick={refresh}>重新读取技能</Button>}
       {batch.length > 0 && <div className="pw-form-actions"><span>已选择 {batch.length} 项</span><Button variant="secondary" disabled={waiting} onClick={() => { void invoke('skills.batch.inspect', { skillHandles: batch.map(item => item.skillHandle) }, openReview); }}>检查这些原来源</Button></div>}
-    </section>
+    </section>}
     {skill && <section ref={detailPanel} tabIndex={-1} className="pw-source-record pw-skill-detail" aria-label="原技能详情">
-      <div className="pw-form-actions pw-skill-detail-actions"><Button variant="ghost" disabled={waiting} onClick={backToList}>返回技能列表</Button><Button variant="ghost" disabled={waiting || selecting || !targetHandle || !!skill.origin} onClick={() => setImportOpen(true)}>更新来源</Button></div>
+      {!reviewedSkill && <div className="pw-form-actions pw-skill-detail-actions"><Button variant="ghost" disabled={waiting} onClick={backToList}>返回技能列表</Button><Button variant="ghost" disabled={waiting || selecting || !targetHandle || !!skill.origin} onClick={() => setImportOpen(true)}>更新来源</Button></div>}
       {selection?.unconfirmed ? <header className="pw-eco-object-heading"><div><h3>{skill.name}</h3><p>当前启停状态尚未确认。</p></div></header> : summary(skill, false, false)}
       {!targetHandle && (!waiting || selection?.unconfirmed) ? <div className="pw-form-actions"><Button variant="secondary" disabled={waiting} onClick={recoverDetail}>核对这份技能的当前状态</Button></div> : <><div className="pw-eco-reading-layout"><section className="pw-eco-reading-main">
       {strings(skill.resources).length > 1 && <SelectField label="阅读文件" value={path} options={strings(skill.resources).map(value => ({ id: value, label: value }))} isDisabled={waiting} onChange={value => { setPath(value); setBody(null); }} />}
@@ -195,13 +217,17 @@ export default function SkillsWorkspace({ state, run, registerTransientBack, onP
         : !skill.origin && <p className="pw-muted">完整阅读当前 SKILL.md 后，可核对并启用这份技能。</p>}
       {(error || native.error) && <Button variant="ghost" disabled={waiting || selecting} onClick={recoverDetail}>重新打开这份技能</Button>}
       </section><aside className="pw-eco-reading-aside">{skill.origin && <p className="pw-muted">来源型技能在经验学习页核对原来源后批准。</p>}
-{metadata(skill)}{onPrepareTools && strings(skill.requiredCapabilities).some(capability => /local|shell|python|node|runtime|exec/i.test(capability)) && <Button variant="secondary" disabled={waiting} onClick={onPrepareTools}>检查开发工具准备</Button>}{identity(skill)}<div className="pw-eco-section-heading"><h4>管理</h4></div><Accordion variant="divided" className="pw-skill-disclosures"><AccordionItem id="skill-policy-history" title="来源、调用方式与修订历史">
+      {reviewedSkill && <><p>原提案保存的修订 · {reviewedScope}{policy?.modelInvocable === false && ' · 不提供给模型选择'}</p>
+        {skill.eligibleForModel === true && <p className="pw-muted">下次可在交办时说明要用「{skill.name}」。回那次回答的执行轨迹核对技能是否读取、工具是否返回。启用不等于已采用。</p>}
+        {policy?.layer === 'PROJECT' && policy.projectBindingRequired === false && skill.active === true && policy.modelInvocable === true &&
+          <p className="pw-muted">下一次在所属项目的工作配置中明确选择并核对。是否实际读取技能或调用工具，以那次工作的执行轨迹为准。</p>}</>}
+{metadata(skill)}{!reviewedSkill && onPrepareTools && strings(skill.requiredCapabilities).some(capability => /local|shell|python|node|runtime|exec/i.test(capability)) && <Button variant="secondary" disabled={waiting} onClick={onPrepareTools}>检查开发工具准备</Button>}{identity(skill)}{!reviewedSkill && <><div className="pw-eco-section-heading"><h4>管理</h4></div><Accordion variant="divided" className="pw-skill-disclosures"><AccordionItem id="skill-policy-history" title="来源、调用方式与修订历史">
         <SelectField label="来源层级" value={layer} onChange={setLayer} isDisabled={waiting} options={[{ id: 'USER', label: '主人全局' }, { id: 'PROJECT', label: '所选真实项目' }, { id: 'BUNDLED', label: '随应用提供的参考层' }]} />
         <SelectField label="谁可以选择这个技能" value={invocation} onChange={setInvocation} isDisabled={waiting} options={[{ id: 'MODEL_AND_OWNER', label: '模型和主人' }, { id: 'OWNER_ONLY', label: '仅主人明确调用' }]} />
         {layer === 'PROJECT' && <><Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.policy.choices', {}, value => setProjects(rows(value.projects))); }}>读取真实项目选择</Button><SelectField label="项目及原副本" value={project} onChange={setProject} isDisabled={waiting} options={projects.map(row => ({ id: row.projectHandle, label: row.name || row.projectName || row.projectId, description: row.checkoutName || row.checkoutId }))} /></>}
         <div className="pw-form-actions"><Button variant="secondary" disabled={waiting || (layer === 'PROJECT' && !project)} onClick={() => { void invoke('skills.policy.review', { skillHandle: targetHandle, layer, invocation, projectHandle: layer === 'PROJECT' ? project : '' }, openReview); }}>核对来源与调用变更</Button><Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.history.list', { skillHandle: targetHandle, beforeRevision: 0 }, setHistory); }}>读取保留的修订</Button></div>
         {history && <>{rows(history.revisions).map(row => <div className="pw-source-record" key={row.revision}><p>修订 {row.revision} · {row.sourceVersion || '历史来源未知'}</p><Button variant="ghost" disabled={waiting || !row.available} onClick={() => { void invoke('skills.history.inspect', { skillHandle: targetHandle, revision: row.revision }, openReview); }}>{row.available ? '核对这个原修订' : '原内容或历史元数据不可用'}</Button></div>)}{history.beforeRevision && <Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.history.list', { skillHandle: targetHandle, beforeRevision: history.beforeRevision }, setHistory); }}>更早修订</Button>}</>}
-      </AccordionItem><AccordionItem id="skill-export-remove" title="导出、分享与卸载"><p>分享 SKILL.md 只包含说明正文；完整文本资源使用 ZIP 导出。来源型技能保留原来源关系，不能去掉来源身份后导出。</p><div className="pw-form-actions"><Button variant="secondary" disabled={waiting || !!skill.origin} onClick={() => { void invoke('skills.export.review', { skillHandle: targetHandle, format: 'document' }, openReview); }}>核对 SKILL.md 分享内容</Button><Button variant="secondary" disabled={waiting || !!skill.origin} onClick={() => { void invoke('skills.export.review', { skillHandle: targetHandle, format: 'package' }, openReview); }}>核对完整 ZIP 导出</Button><Button variant="ghost" disabled={waiting || skill.enabled || !!skill.origin} onClick={() => { void invoke('skills.remove.review', { skillHandle: targetHandle }, openReview); }}>核对卸载这份停用技能</Button></div></AccordionItem></Accordion></aside></div></>}
+      </AccordionItem><AccordionItem id="skill-export-remove" title="导出、分享与卸载"><p>分享 SKILL.md 只包含说明正文；完整文本资源使用 ZIP 导出。来源型技能保留原来源关系，不能去掉来源身份后导出。</p><div className="pw-form-actions"><Button variant="secondary" disabled={waiting || !!skill.origin} onClick={() => { void invoke('skills.export.review', { skillHandle: targetHandle, format: 'document' }, openReview); }}>核对 SKILL.md 分享内容</Button><Button variant="secondary" disabled={waiting || !!skill.origin} onClick={() => { void invoke('skills.export.review', { skillHandle: targetHandle, format: 'package' }, openReview); }}>核对完整 ZIP 导出</Button><Button variant="ghost" disabled={waiting || skill.enabled || !!skill.origin} onClick={() => { void invoke('skills.remove.review', { skillHandle: targetHandle }, openReview); }}>核对卸载这份停用技能</Button></div></AccordionItem></Accordion></>}</aside></div></>}
     </section>}
     <SettingsDialog isOpen={importOpen} title={skill ? `更新「${skill.name}」` : '导入技能'} onClose={() => { if (!waiting) setImportOpen(false); }}>{skillImport}</SettingsDialog>
     {receipt && <section className="pw-source-record" aria-label="原技能处理回执"><h3>本次原结果</h3>{receipt.skill && summary(receipt.skill)}{receipt.saved && <p>所审阅的文件已保存。</p>}{receipt.shareSheetOpened && <p>系统分享面板已打开，发送结果尚未确认。</p>}{(receipt.taskId || receipt.actionId) && <><p>原卸载记录：{receipt.taskId || receipt.actionId} · {receipt.status || receipt.task?.status || '待核对'}</p><p>{receipt.message || receipt.task?.summary}</p><Button variant="ghost" disabled={waiting} onClick={() => { void invoke('skills.removal.query', { actionId: receipt.taskId || receipt.actionId }, setReceipt); }}>只读核对原卸载记录</Button></>}{rows(receipt.rows).map((row, index) => <p key={row.id || index}>{row.id} · {row.status} {row.reason || ''}</p>)}</section>}

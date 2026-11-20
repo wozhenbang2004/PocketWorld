@@ -148,14 +148,15 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
     const resume=()=>Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0),startResume=resume();
     const originalDocument=()=>!document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&resume()===startResume;
     const current=()=>live.current&&activeRef.current&&originalDocument();
-    const same=()=>{
+    const originalRow=()=>{
       const native=bridge.getState().state;
       const rows=item.report||item.decision?native.ownerWork:native.tasks;
-      return Array.isArray(rows)&&rows.some((row:ButlerHomeTask)=>row?.id===id&&row.raw?.runId===runId&&row.raw?.coordinatorEpoch===epoch&&
+      return Array.isArray(rows)?rows.find((row:ButlerHomeTask)=>row?.id===id&&row.raw?.runId===runId&&row.raw?.coordinatorEpoch===epoch&&
         (item.report?sameHomeReport(reportedHomeWork(row),item.report):item.saved?!!originalSavedResult(row):
           item.decision?row.status===item.task.status&&workCollectionPresentation(row).handling?.ownerDecision:
-            !!item.exact&&row.status===item.task.status&&homeWorkIdentity(row)?.domain===item.exact.domain));
+            !!item.exact&&homeWorkIdentity(row)?.domain===item.exact.domain)):undefined;
     };
+    const same=()=>!!originalRow();
     let ownsWindow=false,handedOff=false;
     flight.current=true;setOpening(id);setNotice('');
     try{
@@ -167,8 +168,10 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
       if(!same())throw new Error('原工作已变化，请核对当前记录。');
       const verified=report?await verifyHomeReport(report):undefined;
       if(!current())return;
-      if(!same())throw new Error('原工作或汇报已变化，没有改读其他轮次。');
-      onOpen(item.task,true,verified,()=>originalDocument()&&same());handedOff=true;
+      const latest=originalRow();
+      if(!latest)throw new Error('原工作或汇报已变化，没有改读其他轮次。');
+      // Normal progress within the same run can advance while its window opens.
+      onOpen(latest,true,verified,()=>originalDocument()&&same());handedOff=true;
     }catch(error){
       if(current()){
         const reason=error instanceof Error?error.message:'原工作暂不可读取。';

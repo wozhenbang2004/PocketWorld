@@ -8,10 +8,22 @@ import { ShimmerText } from './library';
 
 type Data = Record<string, any>;
 export type ConversationDraftTarget = { taskId: string; runId: string; epoch: number; operationId: string; proposalDigest: string };
+export type ReviewedSkillTarget = { id: string; revision: number; digest: string };
 type FileSelection = { side: 'before' | 'after'; path: string };
 
+function reviewedSkill(receipt: Data, original: ConversationDraftTarget): ReviewedSkillTarget | undefined {
+  const skill = receipt.skill;
+  if (receipt.status !== 'saved' || receipt.formalSkillSaved !== true || receipt.approvalGrantedByThisSave !== false ||
+      !Object.entries(original).every(([key, value]) => receipt[key] === value) ||
+      typeof skill?.id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(skill.id) ||
+      !Number.isSafeInteger(skill.revision) || skill.revision < 1 ||
+      typeof skill.digest !== 'string' || !/^[a-f0-9]{64}$/.test(skill.digest)) return;
+  return { id: skill.id, revision: skill.revision, digest: skill.digest };
+}
+
 /** Uses the approved source drawer and native SkillBook review; no browser import authority. */
-export function SkillDraftReview({ target, onClose }: { target: ConversationDraftTarget; onClose: () => void }) {
+export function SkillDraftReview({ target, onClose, onOpenSaved }: { target: ConversationDraftTarget; onClose: () => void;
+  onOpenSaved?: (skill: ReviewedSkillTarget, conversation: string) => Promise<boolean> }) {
   const [value, setValue] = useState<Data | null>(null), [page, setPage] = useState<Data | null>(null), [selected, setSelected] = useState<FileSelection | null>(null);
   const [source, setSource] = useState<Data | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(true), [allRead, setAllRead] = useState(false), [acknowledged, setAcknowledged] = useState(false), [attempted, setAttempted] = useState(false);
@@ -55,6 +67,15 @@ export function SkillDraftReview({ target, onClose }: { target: ConversationDraf
   };
   const close = () => { if (!busy) onClose(); };
   const review = value?.review, proposal = value?.proposal || review?.proposal || {}, apply = value?.apply || (value?.status ? value : {});
+  const savedSkill = onOpenSaved && typeof proposal.conversationId === 'string' && reviewedSkill(apply, original);
+  const openSaved = async () => {
+    if (!savedSkill || !onOpenSaved || busy || entered.current) return;
+    entered.current = true; setBusy(true); setError('');
+    try {
+      if (!await onOpenSaved(savedSkill, proposal.conversationId) && alive.current) setError('原回答或窗口已变化，没有打开其他技能。');
+    } catch (failure) { if (alive.current) setError(failure instanceof Error ? failure.message : '原技能详情尚不可打开。'); }
+    finally { entered.current = false; if (alive.current) setBusy(false); }
+  };
   const pending = apply.status === 'pending_owner' && !!review && !!handle.current && !attempted;
   const canReopen = apply.status === 'pending_owner' && !review && !handle.current;
   const status: Record<string, string> = { pending_owner: '待你审阅', saved: '已保存为独立技能', cancelled: '已放弃原提案', rejected: '本次未保存', unknown: '保存结果待核对', applying_unknown: '原保存结果待核对' };
@@ -65,6 +86,7 @@ export function SkillDraftReview({ target, onClose }: { target: ConversationDraf
       <div className="pw-drawer-body pw-ecosystem-depth pw-eco-draft-body">
         {busy && <ShimmerText>正在核对原提案…</ShimmerText>}{error && <p className="pw-error" role="alert">{error}</p>}
         <div className="pw-eco-draft-state">{apply.status && <p role="status">{status[apply.status] || '原提案状态待核对'}</p>}{apply.message && <p>{apply.message}</p>}</div>
+        {savedSkill && <div className="pw-action-row"><Button disabled={busy} onClick={() => void openSaved()}>查看已保存的技能 · 修订 {savedSkill.revision}</Button></div>}
         {proposal.reason && <p className="pw-eco-draft-reason"><strong>本次整理</strong>{proposal.reason}</p>}
         {review && <>
           <p className="pw-muted">{proposal.action === 'update' ? '更新已读取的这个技能版本。原文件、启停或来源改变时，需要重新提案。' : '保存为新的独立本机技能。'} 源消息后续被编辑或删除，不会自动撤销已保存的独立技能。</p>
@@ -77,7 +99,7 @@ export function SkillDraftReview({ target, onClose }: { target: ConversationDraf
           {pending && <section className="pw-eco-draft-decision"><p className="pw-muted">{allRead ? '前后全部文件已按页提供；请核对内容后作出决定。' : '请逐份展开前后文件并读到末页，之后才能保存。'}</p><CheckboxField isSelected={acknowledged} onChange={setAcknowledged}>我已核对全部文件，理解这是独立保存并保持停用的技能</CheckboxField><div className="pw-action-row"><Button disabled={busy || !allRead || !acknowledged} onClick={() => { const id = handle.current; setAttempted(true); void request('skillDraft.confirm', { handle: id }, result => { handle.current = ''; setValue({ proposal, apply: result }); }); }}>保存这份技能，保持停用</Button><Button variant="secondary" disabled={busy} onClick={() => { const id = handle.current; setAttempted(true); void request('skillDraft.cancel', { handle: id }, result => { handle.current = ''; setValue(result); }); }}>放弃这个原提案</Button></div></section>}
         </>}
         {canReopen ? <Button variant="secondary" disabled={busy} onClick={() => { void request('skillDraft.open', original, applyResult); }}>重新打开审阅</Button>
-          : (!pending || attempted || error) && <Button variant="ghost" disabled={busy} onClick={() => { void request('skillDraft.query', original, result => {
+          : (!pending || attempted || error) && (!savedSkill || apply.journalRecorded === false) && <Button variant="ghost" disabled={busy} onClick={() => { void request('skillDraft.query', original, result => {
             const id = handle.current; handle.current = ''; setValue(result); clearReviewState();
             if (id) void bridge.command('skillDraft.close', { handle: id }).catch(() => {});
           }); }}>查询原保存结果</Button>}
