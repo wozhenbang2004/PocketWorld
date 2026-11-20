@@ -1119,24 +1119,30 @@ export default function App(){
   });
  },[can,navigate,draftSwitchPending,openDraftSwitch]);
  const returnToOriginalTaskConversation=async(taskId:string,conversationId:string,work?:Pick<WorkIdentity,'runId'|'epoch'>,fromTeam=false,
-  stageFile?:(inEditor:()=>boolean)=>Promise<boolean>,fileReader?:HistoryResultOrigin)=>{
-  const associate=!!work;
+  stageFile?:(inEditor:()=>boolean)=>Promise<boolean>,fileReader?:HistoryResultOrigin,stillSource?:()=>boolean)=>{
+  const associate=!!work,justRead=!associate&&!stageFile;
   if(!conversationId||returningConversation||!can('conversation.select')||
      (associate||stageFile)&&bridge.getState().state.chatSubmitting)return;
   const request=++conversationReturnRequest.current,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const keepChat=justRead&&!fromTeam&&route==='chat'&&bridge.getState().state.conversationId===conversationId;
+  let destination=navigation;
   setReturningConversation(taskId);
   // Closing a task over a secondary workspace legitimately advances the host's
   // resume revision. Guard navigation by this request/document and visibility;
   // a background transition cancels the request above, rather than blocking
   // the host's normal task-close restoration.
-  const current=()=>request===conversationReturnRequest.current&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden;
+  const current=()=>request===conversationReturnRequest.current&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden&&stillSource?.()!==false;
+  const atDestination=()=>current()&&navigationWindow.current===destination;
   try{
    if(!fromTeam){
     if(taskOpen&&!await closeTask()||!current()||navigationWindow.current!==navigation)return;
-    if(!await navigate('chat',undefined,{taskClosed:true}))return;
+    // The drawer already covers this exact reading surface. Closing it retains
+    // the message focus and any parent search, without a new visit.
+    if(!keepChat){
+     if(!await navigate('chat',undefined,{taskClosed:true,...(stillSource?{stillCurrent:()=>current()&&navigationWindow.current===navigation}:{})}))return;
+     destination=navigation+1;
+    }
    }
-   const destination=navigationWindow.current;
-   const atDestination=()=>current()&&navigationWindow.current===destination;
    const waitForSnapshot=(matches:()=>boolean,failure:string)=>new Promise<boolean>((resolve,reject)=>{
     let unsubscribe=()=>{};
     const timer=window.setTimeout(()=>{unsubscribe();if(atDestination())reject(new Error(failure));else resolve(false)},5000);
@@ -1163,10 +1169,6 @@ export default function App(){
    const earlierRead=stageFile&&selecting?obj(obj(before.moduleResultInputs)['assistant.get'])._requestId:undefined;
    if(before.chatSubmitting&&(associate||stageFile))throw new Error('当前消息仍在提交，请稍后回到这件事的对话。');
    if(selecting)await act('conversation.select',{id:conversationId});
-   else if(before.chatSubmitting){
-    if(!can('conversation.reader.open'))throw new Error('当前消息仍在提交，暂时不能打开原对话历史。');
-    await act('conversation.reader.open',{conversationId});
-   }
    // Native may open a read-only history for an older conversation. That is
    // already our successful destination, not a failed editor selection.
    const arrived=()=>{
@@ -1174,7 +1176,7 @@ export default function App(){
     if(reader)return reader.conversation===conversationId?'history':null;
     if((fromTeam||stageFile)&&(obj(latest.view).section||obj(latest.view).taskId||obj(latest.composer).conversationId!==conversationId))return null;
     if(stageFile&&(latest.composer?.ready!==true||state.attachmentWorkspace?.open||!fileReader&&!fileDraftConversationLoaded(state,conversationId,earlierRead)))return null;
-    return !state.chatSubmitting&&state.conversationId===conversationId?'editor':null;
+    return (justRead||!state.chatSubmitting)&&state.conversationId===conversationId?'editor':null;
    };
    if(!await waitForSnapshot(()=>arrived()!==null,'尚未确认已回到所属对话，请从对话列表重新打开。'))return;
    if(!atDestination())return;
@@ -1184,6 +1186,13 @@ export default function App(){
     return;
    }
    const inEditor=()=>atDestination()&&arrived()==='editor';
+   if(justRead){
+    if(!keepChat)requestAnimationFrame(()=>{
+     const node=scroll.current;
+     if(inEditor()&&node?.dataset.conversationId===conversationId)node.focus({preventScroll:true});
+    });
+    return;
+   }
    if(inEditor()){
     if(fromTeam&&bridge.getState().state.chatBusy){
       setLocalStatus('已回到原对话。当前消息还在处理，这次成果没有关联到输入。');return;
@@ -1204,7 +1213,7 @@ export default function App(){
     }
     requestAnimationFrame(()=>{if(current()&&navigationWindow.current===destination&&bridge.getState().state.conversationId===conversationId&&!bridge.getState().state.conversationReader)workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea')?.focus({preventScroll:true})});
    }
-  }catch(error){if(current()&&navigationWindow.current===navigation+(fromTeam?0:1))setLocalError(error instanceof Error?error.message:String(error))}
+  }catch(error){if(atDestination())setLocalError(error instanceof Error?error.message:String(error))}
   finally{if(conversationReturnRequest.current===request)setReturningConversation('')}
  };
  const returnToTaskConversation=async(task:Task,associate=false)=>{
@@ -1212,6 +1221,20 @@ export default function App(){
   if(!conversation)return;
   const work=associate?{runId:task.raw?.runId,epoch:task.raw?.coordinatorEpoch}:undefined;
   await returnToOriginalTaskConversation(task.id,conversation,work);
+ };
+ const returnToContinuationConversation=(task:Task,shown:ContinuationSubmission)=>{
+  const original=shown.original,scope=task.raw?.developmentContext;
+  const stillOriginal=()=>{
+   const live=asArray<Task>(bridge.getState().state.tasks).find(row=>row.id===original.taskId),raw=live?.raw;
+   return task.id===original.taskId&&privateProjectTask(live)&&raw?.id===task.id&&
+    raw.conversationId===original.conversationId&&raw.developmentContext?.projectId===scope?.projectId&&
+    raw.developmentContext?.checkoutId===scope?.checkoutId&&raw.contextAvailable!==false&&
+    raw.contextWithdrawn!==true&&raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable';
+  };
+  if(openedTaskId.current!==task.id||obj(bridge.getState().view).taskId!==task.id||!stillOriginal()){
+   setLocalError('原工作的对话暂不可核对，没有打开其他对话。');return;
+  }
+  void returnToOriginalTaskConversation(task.id,original.conversationId,undefined,false,undefined,undefined,stillOriginal);
  };
  const readOriginalWorkRequest=async(task:Task,trigger:HTMLButtonElement)=>{
   const work=ownerWorkIdentity(task);
@@ -2515,7 +2538,7 @@ export default function App(){
   const reviewStatus=<>
     {readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}
     {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
-    {continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting} onClick={()=>selectConversation(continuation.original.conversationId)}>返回原对话，草稿保留</Button>}</section>}
+    {continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>returnToContinuationConversation(task,continuation)}>返回原对话，草稿保留</Button>}</section>}
     {draftAcceptanceSaved?<p className="pw-muted" role="status">验收已记录，原稿保留。</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
   </>;
   const decision=(declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||attention(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">

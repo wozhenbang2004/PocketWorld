@@ -19,6 +19,7 @@ _STATE = {"succeeded":"执行成功", "failed":"失败", "cancelled":"已取消"
           "waiting_resource":"等待可用资源", "pause_requested":"已请求暂停，未确认暂停", "paused":"已暂停", "cancel_requested":"已请求取消，未确认停止",
           "needs_reconcile":"结果待核对", "accepted":"手机已接收", "completed":"曾记录执行结束", "dispatch_prepared":"准备派发", "unknown":"状态未确认"}
 _BACK_TO_PEER = ("back_to_peer", "返回这台设备的本机派单")
+_BACK_TO_ORIGINAL = ("back_to_original", "返回这笔原派单")
 _BATCH = """SELECT rid,operation_id,fingerprint,updated_at,CASE WHEN
        json_extract(doc,'$.protocol')=? AND json_extract(doc,'$.kind')='task.submitGoal'
        AND json_extract(doc,'$.peerDeviceId')=? AND json_extract(doc,'$.instanceId')=?
@@ -131,15 +132,17 @@ class ResultView:
 
     def choose_outgoing(self, peer, row, *, back_to_peer=False):
         current=lambda: self._source_current(peer,row)
-        if not current(): return
-        choice=self._dialog("要核对这笔工作的哪一步？", f"原手机 …{peer[0][-12:]} · 派单 …{row[1][-16:]}。选择之前不联系手机。",
-                           [("dispatch","只查派单\n核对对方是否保存这笔原工作，不读取目标成果。"),
-                            ("result","查看原执行进展和成果\n另需有效的任务读取授权和同一次原执行。")]
-                           + ([_BACK_TO_PEER] if back_to_peer else []),current)
-        if choice in {"dispatch","result"} and current(): self._read(peer,row,dispatch_only=choice=="dispatch",back_to_peer=back_to_peer)
+        while current():
+            choice=self._dialog("核对这笔原派单", f"发起：这台 Windows · 原派单 …{row[1][-16:]}\n指定执行：手机 …{peer[0][-12:]}\n是否已接收或开始，以原回执为准。选择之前不联系手机。",
+                               [("dispatch","只查派单\n核对对方是否保存这笔原工作，不读取目标成果。"),
+                                ("result","查看原执行进展和成果\n另需有效的任务读取授权和同一次原执行。")]
+                               + ([_BACK_TO_PEER] if back_to_peer else []),current)
+            if choice not in {"dispatch","result"} or not current(): return
+            if self._read(peer,row,dispatch_only=choice=="dispatch",back_to_peer=back_to_peer) != _BACK_TO_ORIGINAL[0]: return
+            # Reopen only this local choice. A new remote read needs another explicit click.
 
     def _read(self, peer, row, *, dispatch_only=False, back_to_peer=False):
-        back = [_BACK_TO_PEER] if back_to_peer else []
+        back = [_BACK_TO_ORIGINAL] + ([_BACK_TO_PEER] if back_to_peer else [])
         if not self.reading.acquire(blocking=False):
             self._dialog("上一笔读取仍在返回", "没有再发一笔读取。稍后再进入原工作查看。", []); return
         done, closed, box = threading.Event(), threading.Event(), {}
@@ -173,16 +176,15 @@ class ResultView:
             valid=lambda: visible() and callable(guard) and guard()
             heading, message = dispatch_status(result, box.get("error")) if callable(guard) else dispatch_status({},box.get("error"))
             # A failed read has no guarded result data. It never falls back to an old acceptance.
-            self._dialog(heading,message,back,valid if callable(guard) else visible)
+            selected = self._dialog(heading, f"指定执行设备：手机 …{peer[0][-12:]}\n" + message, back, valid if callable(guard) else visible)
             closed.set()
-            return
+            return selected
         outcome, task = result.get("phoneGoalOutcome"), result.get("task")
         body = f"原操作：{row[1]}\n目标设备：{peer[0]}\n"
         if (result.get("phoneStateUnconfirmed") or not callable(guard) or not isinstance(outcome, dict) or not isinstance(task, dict)
                 or outcome.get("operationId") != row[1] or outcome.get("peerDeviceId") != peer[0] or outcome.get("instanceId") != peer[2]
                 or outcome.get("taskId") != task.get("taskId") or outcome.get("runId") != task.get("runId") or outcome.get("executorEpoch") != task.get("executorEpoch")):
-            self._dialog("尚未取得可核对的原手机结果", body + "电脑的派单记录仍在。手机离线、原授权不允许读取或运行身份未对上时，不能判为失败或没有成果。", back, lambda: self._source_current(peer, row))
-            return
+            return self._dialog("尚未取得可核对的原手机结果", body + "电脑的派单记录仍在。手机离线、原授权不允许读取或运行身份未对上时，不能判为失败或没有成果。", back, lambda: self._source_current(peer, row))
         status = _STATE.get(task.get("state"), "状态已返回")
         identity = body + f"手机任务：{task['taskId']}\n本轮：{task['runId']} · {task['executorEpoch']}"
         body = f"手机 …{peer[0][-12:]} · 原派单 …{row[1][-16:]}\n本次读到的手机状态：{status} · 手机记录 {_stamp(task.get('updatedAt'))}\n\n"
@@ -207,7 +209,7 @@ class ResultView:
             elif selected == "next": index += 1
             elif selected == "identity":
                 if self._dialog("同一笔原派单", identity, [("back","返回这份原回执")], valid) != "back": return
-            else: return
+            else: return selected
 
     def show(self):
         if not self.presenting.acquire(blocking=False): return

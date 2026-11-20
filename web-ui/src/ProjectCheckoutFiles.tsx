@@ -20,7 +20,8 @@ type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: Che
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry;
-  onClose: (saved?: CheckoutSavedPosition) => void; registerBack: (handler: (() => boolean) | null) => void };
+  onClose: (saved?: CheckoutSavedPosition) => void; onPrepareBuild?: (saved: CheckoutSavedPosition) => void;
+  registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
 const windowKey = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
@@ -53,7 +54,7 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack, sourceMember, hostFile, resumeSaved, firstEntry }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onPrepareBuild, registerBack, sourceMember, hostFile, resumeSaved, firstEntry }: Props) {
   const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
@@ -71,7 +72,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const activeAdoption = useRef<Data | null>(null), adoptionHeading = useRef<HTMLHeadingElement>(null); activeAdoption.current = adoption;
   const alive = useRef(false), generation = useRef(0), handle = useRef(''), currentFile = useRef<Data | null>(null), currentText = useRef('');
   const entered = useRef<object | null>(null), edits = useRef(0), editSequence = useRef(0), blockedEdit = useRef(false);
-  const latest = useRef({ run, onClose }); latest.current = { run, onClose };
+  const latest = useRef({ run, onClose, onPrepareBuild }); latest.current = { run, onClose, onPrepareBuild };
   const originalWindow = useRef(windowKey());
   const recentSave = savedEdit?.filesHandle===handle.current ? savedEdit : null;
   const showingSavedFile = !!recentSave && !!file && !file.dirty && !file.conflict && !file.saveUnknown &&
@@ -185,18 +186,20 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       .finally(() => { edits.current--; if (alive.current) setEditing(edits.current > 0); });
   };
   const dismissAdoption = () => { if (entered.current || edits.current) return; const selected = activeAdoption.current; activeAdoption.current = null; setAdoption(null); if (selected) void latest.current.run(command + 'dismissImport', { viewHandle, filesHandle: handle.current, importHandle: selected.importHandle }).catch(() => {}); };
-  const close = () => {
+  const close = (next?: 'prepare-build') => {
     if (entered.current || edits.current) return;
     if (activeAdoption.current) { dismissAdoption(); return; }
     if (choice) { setChoice(null); return; }
     if (!showingSavedFile || !recentSave || !live(generation.current) || currentFile.current!==file) {
-      latest.current.onClose(); return;
+      if (!next) latest.current.onClose();
+      return;
     }
     const area = editorContainer.current?.querySelector('textarea');
     const caret = area?.value===textareaText(recentSave.after) ? {
       start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop, scrollLeft: area.scrollLeft,
     } : undefined;
-    latest.current.onClose({ projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret });
+    const finish = next === 'prepare-build' ? latest.current.onPrepareBuild : latest.current.onClose;
+    finish?.({ projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret });
   };
   const closeCurrent = useRef(close); closeCurrent.current = close;
   useEffect(() => {
@@ -343,7 +346,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {choice ? <div role="region" aria-label="处理文件冲突"><p>{choice === 'keep_mine' ? '把当前副本作为新基线，保留我的草稿文字？下一次保存才会改写文件。' : '放弃这份草稿，采用刚读取的副本内容？不会写入文件。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => setChoice(null)}>返回</Button><Button disabled={locked} onClick={() => void invoke('resolve', { fileHandle: file.fileHandle, revision: file.revision, choice }, value => { interfaceDrafts.delete(keyFor(file.path)); setChoice(null); apply(value); })}>确认这个选择</Button></div></div> : <div className="pw-form-actions">
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
-          {showingSavedFile ? <Button disabled={locked} onClick={close}>已保存，回到项目工作区</Button> :
+          {showingSavedFile ? <Button disabled={locked} onClick={() => close(onPrepareBuild ? 'prepare-build' : undefined)}>
+            {onPrepareBuild ? '接下来：准备构建' : '已保存，回到项目工作区'}
+          </Button> :
             <Button disabled={locked || orphan !== null || blockedEdit.current || !file.dirty || file.conflict || file.saveUnknown} onClick={saveFile}>保存到这个副本</Button>}
         </div>}
         <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null || blockedEdit.current || file.dirty || file.saveUnknown} onClick={() => void invoke('reviewImport', { fileHandle: file.fileHandle }, value => {
@@ -368,6 +373,6 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         </>}
       </section>}
     </>}
-    <Button variant="secondary" disabled={busy || editing} onClick={close}>{adoption || choice ? '返回文件' : backLabel}</Button>
+    <Button variant="secondary" disabled={busy || editing} onClick={() => close()}>{adoption || choice ? '返回文件' : backLabel}</Button>
   </div></SettingsDialog>;
 }

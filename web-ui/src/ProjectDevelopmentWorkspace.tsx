@@ -119,7 +119,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   const [importEditChoice,setImportEditChoice]=useState<{original:ProjectImportedEditor;viewHandle:string}|null>(null);
   const [importEditorNotice,setImportEditorNotice]=useState('');
-  const buildReturnAnchor=useRef<HTMLElement>(null), focusingBeforeDeparture=useRef(false);
+  const buildReturnAnchor=useRef<HTMLElement>(null), buildNextAction=useRef<HTMLButtonElement>(null), focusingBeforeDeparture=useRef(false);
+  const buildAfterSave=useRef<{saved:CheckoutSavedPosition;viewHandle:string;window:string}|null>(null);
   const fileCheckout=fileWindow?.checkoutId||'';
   const [buildOrigin,setBuildOrigin]=useState<ProjectBuildCopy|null>(null);
   const buildCheckout=buildOrigin?.checkoutId||'';
@@ -248,7 +249,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   useEffect(() => {
     alive.current = true; let owner = ownerWindow();
     const retire = () => {
-      generation.current++; entered.current = null;
+      generation.current++; entered.current = null; buildAfterSave.current=null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null;
       if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); }
       if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
@@ -360,9 +361,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
   const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed && can('projects.development.queryCopy'));
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
-  const closeFiles = (saved?:CheckoutSavedPosition) => {
+  const closeFiles = (saved?:CheckoutSavedPosition, prepareBuild=false) => {
     const original=fileWindow?.unselectedImport;
     const sameSave=saved?.projectId===projectId&&saved.checkoutId===fileCheckout&&active&&!document.hidden&&bridge.getState().state.projectId===projectId;
+    if(prepareBuild&&(!sameSave||!canPrepareSavedBuild||draft.current.checkoutId!==saved.checkoutId||view?.viewHandle!==handle.current))return;
+    buildAfterSave.current=prepareBuild&&sameSave?{saved,viewHandle:handle.current,window:ownerWindow()}:null;
+    if(prepareBuild)setError('');
     if(sameSave)setLastSavedFile(saved);
     // The saved file can identify a suggested selection, never make one on return.
     setImportEditChoice(sameSave&&original?.checkoutId===saved.checkoutId&&view?.viewHandle===handle.current&&original.window===ownerWindow()?
@@ -389,6 +393,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       if(!originalIsCurrent()||hasDifferentCopy())return;
       setImportEditorNotice('');setHostEditor(null);
       const firstEntry=checkoutWebEntry(inspection??null,projectId,checkoutId);
+      if(inspection?.projectId===projectId&&inspection.checkoutId===draft.current.checkoutId&&inspection.checkoutId===checkoutId&&sourceHash(inspection.sourceDigest))
+        setSource(inspection); // Existing observation can name a destination, not authorize a build after an edit.
       setFileWindow({checkoutId,firstEntry:firstEntry??undefined,
         unselectedImport:!draft.current.checkoutId&&!view.draft?.checkoutId?importedEditor:undefined});
     };
@@ -533,6 +539,28 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const showToolSetupByBuild = firstBuildVisible && buildToolsBlocked && !missingPnpm && !builtInSetupUnavailable && canReviewToolSetup;
   const modelStillNeeded = firstBuild && !buildToolsBlocked && view?.model?.configured!==true;
   const firstBuildAction = !firstBuildVisible ? '' : showToolSetupByBuild ? 'tools' : buildToolsBlocked ? 'refresh' : modelStillNeeded ? 'model' : 'review';
+  const canPrepareSavedBuild=!!(nodeTools&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
+    !view?.draftRecoveryRequired&&can('projects.development.inspect')&&can('projects.development.reviewDraftBuild'));
+  useEffect(()=>{
+    const next=buildAfterSave.current;
+    if(!next)return;
+    const current=()=>alive.current&&latest.current.active&&!document.hidden&&handle.current===next.viewHandle&&
+      ownerWindow()===next.window&&draft.current.checkoutId===next.saved.checkoutId&&bridge.getState().state.projectId===next.saved.projectId;
+    if(!current()){buildAfterSave.current=null;return;}
+    if(filesOpen||busy||entered.current||!source&&!error)return;
+    // closeFiles retires the old observation. Wait for the fresh read before
+    // moving focus; the ordinary build controls still decide what is available.
+    const fresh=source?.projectId===projectId&&source?.checkoutId===checkout&&sourceHash(source?.sourceDigest);
+    const frame=requestAnimationFrame(()=>{
+      if(buildAfterSave.current!==next||!current()||savedFileHere!==next.saved)return;
+      buildAfterSave.current=null;
+      const action=fresh&&buildNextAction.current;
+      if(action&&!action.disabled){
+        action.focus({preventScroll:true});action.scrollIntoView({block:'start',behavior:'auto'});
+      }else buildReturnAnchor.current?.focus({preventScroll:true});
+    });
+    return ()=>cancelAnimationFrame(frame);
+  },[active,filesOpen,busy,error,source,projectId,checkout,savedFileHere]);
   const comparedBuild = buildOrigin && buildOrigin.projectId===projectId && buildOrigin.checkoutId===checkout &&
     source?.projectId===projectId && source.checkoutId===checkout && typeof source.sourceDigest==='string' &&
     /^[a-f0-9]{64}$/.test(source.sourceDigest) ? buildOrigin : null;
@@ -571,10 +599,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         firstBuildAction==='model'?`已核对 Node.js 和 ${nodeTools.manager}。构建任务还需要连接默认模型；连接不会开始构建。`:
         `已核对 Node.js 和 ${nodeTools.manager}，已有默认模型配置。下一步只看构建方案，依赖和运行仍要分别确认。`}</p>
       <div className="pw-form-actions">
-        {firstBuildAction==='tools'&&<Button disabled={disabled} onClick={prepareTools}>{view?.runtime?.installed===true?'检查与修复手机工具':'打开手机工具准备'}</Button>}
-        {firstBuildAction==='refresh'&&<Button variant="secondary" disabled={disabled} onClick={()=>void read()}>重新核对手机工具</Button>}
-        {firstBuildAction==='model'&&<Button disabled={disabled||!can('projects.development.draft')} onClick={connectBuildModel}>连接默认模型</Button>}
-        {firstBuildAction==='review'&&<Button disabled={disabled} onClick={reviewNodeBuild}>核对这个副本的构建方案</Button>}
+        {firstBuildAction==='tools'&&<Button ref={buildNextAction} disabled={disabled} onClick={prepareTools}>{view?.runtime?.installed===true?'检查与修复手机工具':'打开手机工具准备'}</Button>}
+        {firstBuildAction==='refresh'&&<Button ref={buildNextAction} variant="secondary" disabled={disabled} onClick={()=>void read()}>重新核对手机工具</Button>}
+        {firstBuildAction==='model'&&<Button ref={buildNextAction} disabled={disabled||!can('projects.development.draft')} onClick={connectBuildModel}>连接默认模型</Button>}
+        {firstBuildAction==='review'&&<Button ref={buildNextAction} disabled={disabled} onClick={reviewNodeBuild}>核对这个副本的构建方案</Button>}
       </div>
     </section>}
     {!view ? <Button variant="secondary" disabled={busy || !readable} onClick={() => void read()}> {busy ? '正在读取原项目…' : '读取项目开发条件'} </Button> : <>
@@ -639,11 +667,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           onClick={() => { setHostEditor(null); setFileWindow({checkoutId:savedFileHere.checkoutId,resumeSaved:savedFileHere}); }}>回到上次保存的文件</Button>}
         {!differentBuildCopy && selectedCopy && (selectedCopy.draftWorkingCopy === true || source?.existingNodeBuild === true) && can('projects.development.reviewDraftBuild') &&
           (versionBuild ? <>
-            {can('tasks.open') && <Button variant="secondary" disabled={disabled || !can('projects.development.inspect')}
+            {can('tasks.open') && <Button ref={buildNextAction} variant="secondary" disabled={disabled || !can('projects.development.inspect')}
               onClick={()=>openVersionBuild('work')}>查看原构建任务</Button>}
             {savedWebLink && <Button variant="ghost" disabled={disabled || !can('projects.development.inspect')}
               onClick={()=>openVersionBuild('savedWeb')}>查找同一源码的已存网页</Button>}
-          </> : !firstBuild && !buildLookupUnavailable && <Button variant="secondary"
+          </> : !firstBuild && !buildLookupUnavailable && <Button ref={buildNextAction} variant="secondary"
             disabled={disabled || buildToolsBlocked || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
             onClick={reviewNodeBuild}>{source?.existingNodeBuild===true?(versionChanged?'核对修改后的 Node 构建':'审阅这个副本的 Node 构建'):source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
       </div>
@@ -703,7 +731,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       closeHostDiff(); setFileWindow({checkoutId:checkout});
     } : undefined}/>}
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
-      resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} onClose={closeFiles} registerBack={registerFilesBack} />}
+      resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} onClose={closeFiles}
+      onPrepareBuild={canPrepareSavedBuild?saved=>closeFiles(saved,true):undefined} registerBack={registerFilesBack} />}
     <SettingsDialog isOpen={!!review} title={review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
       {review.draftBuild === true ? <><strong>{review.dependencyState==='needs_lock_review'?'还缺依赖，先审阅这份锁':review.manager+' run build'}</strong>
         {review.existingCopy && <p className="pw-field-hint">只核对这个私人副本已保存的源码，不含未保存的文件修改。{review.preservedProjectDraft===true && '原项目目标与交付约定留在草稿，不随这次构建提交。'}</p>}

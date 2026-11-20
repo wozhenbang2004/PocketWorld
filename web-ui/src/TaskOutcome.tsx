@@ -20,6 +20,7 @@ import {PhoneTaskOriginalReport} from './PhoneTaskConversationReturn';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
 import { HeldPhoneResultImage } from './HeldPhoneResultImage';
 import { MessageAttachment } from './MessageAttachment';
+import { originalBuildExitedWithoutWeb } from './project-execution';
 import './task-reading.css';
 
 const stoppedAttemptTitles: Record<string, string> = {
@@ -42,11 +43,25 @@ const packageReadWindow = () => {
   return JSON.stringify([bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision]);
 };
 
+type PackageTaskRead = { status?: string; executionMode?: string; raw?: Record<string, any> };
+/** The immutable draft-only contract cannot produce packages on this task. A
+ * separately approved build of a derivative still has its own package reader. */
+function savedDraftWithoutPackages(record: PackageTaskRead | null, taskId: string) {
+  const raw = record?.raw, scope = raw?.developmentContext, preparation = raw?.ownerWorkPreparation;
+  return raw?.taskProjection === 'detail_window' && raw.taskCoreReadLimited === false && raw.auditBodyIncluded === true &&
+    raw.contextWithdrawn !== true && raw.status === record?.status && record?.executionMode === 'capabilities' && raw.executionMode === 'capabilities' &&
+    typeof raw.runId === 'string' && !!raw.runId && Number.isSafeInteger(raw.coordinatorEpoch) && raw.coordinatorEpoch > 0 &&
+    raw.teamRunId == null && raw.parentTaskId == null && raw.memberId == null &&
+    scope?.format === 'pocketworld.development-context.v1' && scope.runtime === 'managed_process_v1' && scope.draftOnly === true &&
+    scope.ownerDraftFirstBuild == null && preparation?.format === 'pocketworld.owner-work-preparation.v1' &&
+    preparation.targetTaskId === taskId && typeof raw.projectEditDraftId === 'string' && /^[a-f0-9]{64}$/.test(raw.projectEditDraftId);
+}
+
 /** This page holds only original-operation display metadata. Progress pushes
  * never rescan the plans; each additional history page is an explicit read. */
 function useProjectPackages(task: unknown, active: boolean, identity: string, firstWebTaskId?: string) {
-  const target = projectPackageTaskIdentity(task), taskId = target?.taskId || '';
-  const record = task as { status?: string; raw?: { runId?: string; coordinatorEpoch?: number } } | null;
+  const original = projectPackageTaskIdentity(task), record = task as PackageTaskRead | null;
+  const target = original && !savedDraftWithoutPackages(record, original.taskId) ? original : null, taskId = target?.taskId || '';
   const settled = ['needs_confirmation', 'completed', 'paused', 'interrupted', 'failed', 'stopped', 'cancelled', 'canceled'].includes(record?.status || '');
   const scope = JSON.stringify([identity, taskId, target?.projectId, target?.checkoutId, record?.raw?.runId, record?.raw?.coordinatorEpoch, settled]);
   const [supported, setSupported] = useState(packageReadSupported);
@@ -235,7 +250,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}:${status}`} ownerWindow={packageRead.firstWebWindow}
       target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} beforeGoalAcceptance={beforeGoalAcceptance}
-      hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
+      hideIneligible={buildScope.existingCheckoutBuild===true} buildExitedWithoutWeb={ordinaryBuild&&originalBuildExitedWithoutWeb(record)}
+      open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
       {outcome.projectPackages.length > 0 && <div hidden={!!readingPackage}>

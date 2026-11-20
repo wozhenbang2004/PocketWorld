@@ -26,6 +26,40 @@ export function originalFirstBuildFailure(task: ProjectExecutionData): FirstBuil
     failureStage:dependency?'dependencies':'build',projectId:pin.projectId,checkoutId:pin.checkoutId,sourceDigest:pin.sourceDigest,planDigest:plan,exitCode:fact.value,approvedCommand};
 }
 
+/** Original detail already contains the terminal native operation. A valid exit need not have a webpage witness. */
+export function originalBuildExitedWithoutWeb(task: ProjectExecutionData): boolean {
+  const raw=object(task.raw),scope=object(raw.developmentContext),pin=object(scope.ownerDraftFirstBuild);
+  const sha=(value:unknown)=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+  if(raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited===true||raw.kind!=='assistant'||raw.actorId!=='owner'||raw.spaceId!=='private'||raw.origin||
+    raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||raw.cancelRequested===true||
+    raw.hasUnresolvedOperations!==false||raw.id!==task.id||!operationId(task.id)||!operationId(raw.runId)||
+    !Number.isSafeInteger(raw.coordinatorEpoch)||raw.coordinatorEpoch<1||pin.existingCheckoutBuild!==true||scope.runtime!=='managed_process_v1'||
+    !operationId(pin.projectId)||pin.projectId!==scope.projectId||!operationId(pin.checkoutId)||pin.checkoutId!==scope.checkoutId||
+    !sha(pin.sourceDigest)||pin.sourceDigest!==scope.initialSourceDigest||!sha(pin.planDigest)||!sha(pin.runtimeIdentity)||
+    !['npm','pnpm'].includes(pin.manager)||!Array.isArray(raw.operations))return false;
+  const current=(raw.operations as unknown[]).map(object).filter(row=>row.runId===raw.runId);
+  // An outstanding or settled original archive action is not a missing-webpage-witness case.
+  if(current.some(row=>row.tool==='owner_keep_first_node_web_output'))return false;
+  const builds=current.filter(row=>row.tool==='project_execute'&&object(row.arguments).stepId==='build');
+  if(builds.length!==1)return false;
+  const row=builds[0],args=object(row.arguments),receipt=object(row.receipt),route=object(receipt.projectExecution);
+  const actual=object(receipt.executionReceipt),observedRoute=object(actual.projectExecution);
+  if(row.state!=='receipt'||!operationId(row.operationId)||args.planDigest!==pin.planDigest||
+    receipt.code!=='project_process_receipt'||receipt.accepted!==true||receipt.status!=='completed'||receipt.executionStatus!=='completed'||
+    !sha(route.requestDigest))return false;
+  const binding={authority:'native_host_operation',command:'project.runtime.run',runtimeId:scope.runtime,runtimeIdentity:pin.runtimeIdentity,
+    taskId:task.id,runId:raw.runId,coordinatorEpoch:raw.coordinatorEpoch,operationId:row.operationId,projectId:pin.projectId,
+    checkoutId:pin.checkoutId,planDigest:pin.planDigest,sourceDigest:pin.sourceDigest,requestDigest:route.requestDigest,stepId:'build',intent:'build'};
+  return Object.entries(binding).every(([key,value])=>route[key]===value&&observedRoute[key]===value)&&
+    actual.id===row.operationId&&actual.operationId===row.operationId&&actual.checkoutId===pin.checkoutId&&actual.sourceDigest===pin.sourceDigest&&
+    actual.provider==='managed_process'&&actual.kind==='command'&&actual.requestedExecutable===pin.manager&&
+    Array.isArray(actual.requestedArgv)&&actual.requestedArgv.length===2&&actual.requestedArgv[0]==='run'&&actual.requestedArgv[1]==='build'&&
+    actual.status==='completed'&&actual.receiptReceived===true&&actual.exitCode===0&&actual.terminationSignal===0&&actual.launchErrno===0&&
+    actual.processLaunched===true&&actual.processExited===true&&actual.processGroupAbsent===true&&actual.resourcesReleased===true&&
+    actual.cancelRequested===false&&actual.timedOut===false&&actual.sourceCheckStatus==='pre_exec_manifest_verified'&&
+    !Object.hasOwn(actual,'firstNodeWebOutput');
+}
+
 /** A locator for the original native journal. This projection grants no input or stop authority. */
 export function projectExecutionRows(task: ProjectExecutionData, operation?: ProjectExecutionData): ProjectExecutionRow[] {
   const raw = object(task.raw);

@@ -1,4 +1,4 @@
-import {useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {bridge} from './bridge';
 import {Button,TextAreaField} from './forms-library';
 import {ProjectDraftFileCopy} from './ProjectDraftFileCopy';
@@ -13,6 +13,7 @@ function ticket(){const v=view();return JSON.stringify([bridge.getDocumentEpoch(
 
 /** Continuation of an actual retained after-text, not saving into the original project or replacing the AI's receipt. */
 export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect}:{task:string;root:string;path:string;originalHash:string;protect:(value:boolean)=>void}){
+  const editSource=useId();
   const [head,setHead]=useState<Revision|null>(null),[text,change]=useState(''),[note,state]=useState(''),[busy,spin]=useState(false);
   const [fileLock,lockFile]=useState(false),[workLock,lockWork]=useState(false);
   const [compare,preview]=useState(false),[discard,ask]=useState(false),live=useRef(false),active=useRef(''),generation=useRef(0),request=useRef(false);
@@ -40,15 +41,15 @@ export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect}:
   function close(){if(head&&can())void bridge.command(CLOSE,{taskId:task,editHandle:head.editHandle}).catch(()=>{});reset()}
   if(!can())return null;
   if(!head)return <div className="pw-draft-actions">
-    <Button size="small" variant="secondary" disabled={busy||fileLock||workLock} onClick={()=>void run(false)}>{busy?'读取已保留的版本…':'在 App 里编辑'}</Button>
+    <Button size="small" variant="secondary" disabled={busy||fileLock||workLock} aria-describedby={editSource} onClick={()=>void run(false)}>{busy?'正在读取独立稿…':'继续编辑独立稿'}</Button>
+    <p id={editSource} className="pw-field-hint">只编辑独立稿，不改原项目。已有保留稿时打开最后一稿，否则从当前改稿开始。</p>
     <ProjectDraftFileCopy task={task} root={root} revision={root} sha={originalHash} path={path} ordinal={0} disabled={busy||workLock} lock={lockFile}/>
     <ProjectDraftWorkCopy task={task} root={root} revision={root} sha={originalHash} path={path} ordinal={0} disabled={busy||fileLock} lock={lockWork}/>
-    <p className="pw-field-hint">若你之前保留过版本，编辑器打开你最后保留的一稿。</p>
     {note&&<p className="pw-field-hint" role="status">{note}</p>}</div>;
   const dirty=text!==head.text,count=new TextEncoder().encode(text).length;
-  return <section aria-label="继续编辑独立稿"><h4>{head.ordinal===0?'从原改稿继续':'你的第 '+head.ordinal+' 稿'}</h4>
+  return <section aria-label="继续编辑独立稿"><h4>{head.ordinal===0?'编辑这份独立改稿':'编辑我保留的第 '+head.ordinal+' 稿'}</h4>
     <p className="pw-field-hint">只保留在这个原任务里，不写入工程，也不发给模型。</p>
-    <TextAreaField label={path} value={text} onChange={v=>{change(v);ask(false);state('')}} isReadOnly={busy||fileLock||workLock||head.ordinal>=8} className="pw-code-editor"/>
+    <TextAreaField label={`独立稿 · ${path}`} value={text} onChange={v=>{change(v);ask(false);state('')}} isReadOnly={busy||fileLock||workLock||head.ordinal>=8} className="pw-code-editor"/>
     <div className="pw-form-actions">{dirty&&<Button size="small" variant="ghost" onClick={()=>preview(!compare)}>{compare?'收起比较':'对比上一稿'}</Button>}
       <Button size="small" variant="secondary" disabled={busy||fileLock||workLock||!dirty||count>24576||head.ordinal>=8} onClick={()=>void run(true)}>{busy?'正在核对…':'保留为新稿'}</Button>
       <Button size="small" variant="ghost" disabled={busy||fileLock||workLock} onClick={()=>dirty?ask(true):close()}>结束编辑</Button></div>
