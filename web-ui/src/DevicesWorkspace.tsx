@@ -3,8 +3,8 @@ import './collaboration-depth.css';
 import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, pickupUnavailable, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, localReviewedReceipt, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
-import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
-import { deviceManualPhonePreparation, deviceOriginalManualPhonePreparation, deviceSavedChildOutcomeLabel, deviceSavedOwnerChoice } from './devices-workspace';
+import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconFolder, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
+import { deviceHasRecordedWorkspaceRead, deviceManualPhonePreparation, deviceOriginalManualPhonePreparation, deviceSavedChildOutcomeLabel, deviceSavedOwnerChoice } from './devices-workspace';
 import { DesktopViewer } from './DesktopViewer';
 import { ReceivedGoalInputReview, originalDeviceInputReady } from './ReceivedGoalInputReview';
 import { PendingReceivedGoalInput } from './PendingReceivedGoalInput';
@@ -462,8 +462,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const phoneWork = recordedPhoneWork(peer,local,now);
   const phonePeer = /android|phone/i.test(peer?.platform || '') || phoneCapabilities.some(item => ['phone.tools.main','phone.tools.background'].includes(item.id));
   const phoneAccess = peer && phonePeer && !retired(peer) ? phoneSurfaceStatus(peer, now) : null;
-  const desktopPeer = !!peer && (!!peer.windowsDesktop || /windows/i.test(peer.platform || '') || desktopScopes(peer, now, local.deviceId).length > 0
+  const windowsPeer = !!peer && (!!peer.windowsDesktop || /windows/i.test(peer.platform || ''));
+  const viewingScopes = peer ? desktopScopes(peer, now, local.deviceId) : [];
+  const hasViewingScope = viewingScopes.some(scope => scope.available);
+  const desktopPeer = !!peer && (windowsPeer || viewingScopes.length > 0
     || rows(peer.capabilitySnapshot?.capabilities).some(item => item.id === 'desktop' || String(item.id).startsWith('desktop.')));
+  const windowsWorkspaceRead = !!peer && windowsPeer && deviceHasRecordedWorkspaceRead(peer, local, now);
   const disclosure = peer?.capabilitySnapshot;
   const lastIdentityOnly = !!peer && disclosure?.metadata?.disclosureScope === 'pair_identity_only' &&
     disclosure.deviceId === peer.deviceId && disclosure.instanceId === peer.instanceId &&
@@ -483,8 +487,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     setForm(destination);
   };
   const prepareDeviceGoal = () => openDirectedPhone('work');
-  const prepareWindowsWorkspace = () => {
-    if (!peer || !desktopPeer || identityOnlyHere || selectedPeer.current !== peer.deviceId || retired(peer)) return;
+  const prepareWindowsWorkspace = (requireRecordedRange = false) => {
+    if (!peer || !windowsPeer || identityOnlyHere || selectedPeer.current !== peer.deviceId || retired(peer)) return;
+    if (requireRecordedRange && !deviceHasRecordedWorkspaceRead(peer, local, Date.now())) {
+      setError('本机读到的工作区范围已变化。没有保存目标或联系这台电脑。'); return;
+    }
     if (!/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) || typeof peer.instanceId !== 'string' || !peer.instanceId || !/^[a-f0-9]{64}$/.test(peer.certificateFingerprint || '')) {
       setError('原 Windows 配对身份尚未核对，没有替换其他设备。'); return;
     }
@@ -500,8 +507,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       ? { kind: 'connect', label: '核对并连接', icon: IconDevices, open: () => reviewPeerConnection(peer) }
     : identityOnlyHere ? (deviceChannelWasConnected(peer) && supported('devices.snapshot')
       ? { kind: 'capabilities', label: '向对端核对身份与回执', icon: IconLayers, open: readPeerCapabilities } : null)
-    : desktopPeer ? { kind: 'desktop', label: '准备查看桌面', icon: IconMonitor, open: openDesktopPreparation }
-    : deviceChannelWasConnected(peer) && supported('devices.snapshot')
+    : windowsWorkspaceRead && !hasViewingScope && supported('deviceTaskScope.prepare')
+      ? { kind: 'workspace', label: '准备读取工作区', icon: IconFolder, open: () => prepareWindowsWorkspace(true) }
+    : desktopPeer && hasViewingScope ? { kind: 'desktop', label: '准备查看桌面', icon: IconMonitor, open: openDesktopPreparation }
+    : !desktopPeer && deviceChannelWasConnected(peer) && supported('devices.snapshot')
       ? { kind: 'capabilities', label: '核对可用能力', icon: IconLayers, open: () => readPeerCapabilities() }
       : null;
   const localPhone = rows(state.phoneReadiness?.groups);
@@ -1380,10 +1389,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 </> : <p>没有核对到对方给本机的新工作范围。配对或连接成功不等于可以交办。</p>}
               </div>}
               <div className="pw-form-actions">
-              {desktopPeer && !identityOnlyHere && peerEntry?.kind !== 'desktop' && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
+              {desktopPeer && !identityOnlyHere && peerEntry?.kind !== 'desktop' && <Button variant="secondary" disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对桌面观看范围</Button>}
               {phonePeer && !desktopPeer && !identityOnlyHere && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => openDirectedPhone('manual')}>手动查看这部手机的屏幕范围</Button>}
-              {desktopPeer && !identityOnlyHere && supported('deviceTaskScope.prepare') &&
-                <Button variant="secondary" disabled={busy} onClick={prepareWindowsWorkspace}>准备读取这台电脑的工作区</Button>}
+              {windowsPeer && !identityOnlyHere && peerEntry?.kind !== 'workspace' && supported('deviceTaskScope.prepare') &&
+                <Button variant="secondary" disabled={busy} onClick={() => prepareWindowsWorkspace()}>准备读取这台电脑的工作区</Button>}
               {!retired(peer) && (identityOnlyHere || !desktopPeer && !phonePeer) && <p>{identityOnlyHere
                 ? '对方上次只公开身份。这里不创建交办任务，也不会改用其他设备。'
                 : '尚未核对到能锁定这台伙伴的工作方式。如果不指定设备，可从设备总览另行准备目标。'}</p>}
@@ -1408,7 +1417,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {!retired(peer) && <Button variant="secondary" disabled={busy} onClick={() => { setForm('connection'); setRaw(''); setAddress(''); }}>核对原身份并更新连接方式</Button>}
             </AccordionItem>
             <AccordionItem id="capabilities" title="能力与两端权限" description="查看范围，调整本机授予的权限" icon={IconShieldCheck}>
-              {!retired(peer) && <>{!phoneAccess && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>向这台设备更新能力记录</Button>}{!deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}</>}
+              {!retired(peer) && <>{!phoneAccess && peerEntry?.kind !== 'capabilities' && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>向这台设备更新能力记录</Button>}{!deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}</>}
               <p>上次能力记录：{time(peer.capabilitySnapshot?.capturedAt)}</p>
               {phoneAccess && <div><h4>本机可用的手机工具</h4>
                 {phoneAccess.note && <p>{phoneAccess.note}</p>}

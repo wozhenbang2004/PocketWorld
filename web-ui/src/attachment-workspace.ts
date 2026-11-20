@@ -91,6 +91,41 @@ export function processingDefaults(info: FileJson): FileJson {
 export function exactFileTarget(file: FileJson): {fileId: string; sha256: string} | null {
   return typeof file.id === 'string' && file.id !== '' && typeof file.sha256 === 'string' && /^[a-f0-9]{64}$/.test(file.sha256) && (file.availability === undefined || file.availability === 'available') ? {fileId: file.id, sha256: file.sha256} : null;
 }
+
+export type SavedDocumentVersion={label:string;parent:string;savedAt:string};
+function documentVersionLabel(id:unknown,sha:unknown):string {
+  return typeof id==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)&&
+    typeof sha==='string'&&/^[a-f0-9]{64}$/.test(sha)?id.slice(-12):'';
+}
+export function documentVersionKey(file:FileJson):string {
+  const fixed=exactFileTarget(file);
+  return fixed&&documentVersionLabel(fixed.fileId,fixed.sha256)?`${fixed.fileId}:${fixed.sha256}`:'';
+}
+/** Display only. A shared name calls for a label, never a parent relationship or a file lookup. */
+export function savedDocumentVersions(files:FileJson[]):Map<string,SavedDocumentVersion> {
+  const documents=new Map<string,{file:FileJson;name:string;parent:FileJson;parentKey:string}>();
+  const sameNames=new Map<string,number>(),parents=new Set<string>();
+  for(const file of files){
+    const key=documentVersionKey(file),source=fileObject(file.source);
+    if(!key||documents.has(key)||(file.sourceKind??source.kind)!=='created_document')continue;
+    const name=typeof file.name==='string'?file.name.normalize('NFKC').trim().toLowerCase():'';
+    const parent=fileObject(file.parentArtifact??source.parentArtifact);
+    const parentKey=parent.id!==file.id?documentVersionKey(parent):'';
+    documents.set(key,{file,name,parent,parentKey});
+    if(name)sameNames.set(name,(sameNames.get(name)??0)+1);
+    if(parentKey)parents.add(parentKey);
+  }
+  const versions=new Map<string,SavedDocumentVersion>();
+  let dateFormatter:Intl.DateTimeFormat|undefined;
+  for(const [key,{file,name,parent,parentKey}] of documents){
+    if(!parentKey&&!parents.has(key)&&(sameNames.get(name)??0)<2)continue;
+    const date=typeof file.createdAt==='number'&&file.createdAt>0?new Date(file.createdAt):null;
+    const savedAt=date&&Number.isFinite(date.getTime())?
+      (dateFormatter??=new Intl.DateTimeFormat('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false})).format(date):'';
+    versions.set(key,{label:documentVersionLabel(file.id,file.sha256),parent:parentKey?documentVersionLabel(parent.id,parent.sha256):'',savedAt});
+  }
+  return versions;
+}
 /** A table cell is grouped by its original coordinate, with paragraph boundaries intact. */
 export function documentTable(chunks: FileJson[]) {
   const cells = chunks.map(block => {

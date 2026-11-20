@@ -12,9 +12,10 @@
   scroll-padding-block: calc(24px + var(--pw-navigation-chrome-height, 0px)) 24px;
 }
 .pw-butler-content {
+  --pw-butler-section-gap: clamp(24px, 5vh, 42px);
   display: flex;
   flex-direction: column;
-  gap: clamp(24px, 5vh, 42px);
+  gap: var(--pw-butler-section-gap);
   width: 100%;
   max-width: var(--pw-conversation-width, 760px);
   min-width: 0;
@@ -107,9 +108,15 @@
 .pw-butler-work-domain::after { content: '·'; display: inline-block; margin-inline-start: 9px; color: var(--pw-copy); }
 
 
-/* A single honest first action, not another capability dashboard. */
-.pw-butler-local-example { display: grid; justify-items: start; gap: 2px; padding: 2px 0 8px; }
-.pw-butler-local-example > p { margin: 0; color: var(--pw-copy); font: 400 13px/20px var(--pw-font); }
-.pw-butler-intake .pw-butler-try { min-height: 44px; height: auto; max-width: 100%; padding: 8px 10px; gap: 8px; border-radius: 12px; background: var(--pw-inset); color: var(--pw-ink); text-align: start; white-space: normal; }
-.pw-butler-intake .pw-butler-try > span { min-width: 0; padding: 0; }
-.pw-butler-intake .pw-butler-try svg { flex: none; }
+/* The same action strip belongs to the editor on first use and follows real work on return. */
+.pw-butler-intake + .pw-butler-next-steps { margin-block-start: calc(12px - var(--pw-butler-section-gap)); }
+.pw-butler-next-steps > p { flex: 1 1 100%; }
+.pw-butler-next-steps .pw-butler-try { min-height: 44px; height: auto; max-width: 100%; padding: 8px 10px; gap: 8px; border-radius: 12px; background: var(--pw-inset); color: var(--pw-ink); text-align: start; white-space: normal; }
+.pw-butler-next-steps .pw-butler-try > span { min-width: 0; padding: 0; }
+.pw-butler-next-steps .pw-butler-try svg { flex: none; }
+.pw-butler-next-steps[data-quiet-setup] > :is([data-workspace-entry="connect-model"], .pw-start-model) {
+  border-color: transparent; background: transparent; box-shadow: none; color: var(--pw-copy);
+}
+@media (hover: hover) and (pointer: fine) {
+  .pw-butler-next-steps[data-quiet-setup] > :is([data-workspace-entry="connect-model"], .pw-start-model):hover:not(:disabled) { background: var(--pw-hover); }
+}

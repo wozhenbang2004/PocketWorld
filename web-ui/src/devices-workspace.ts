@@ -461,6 +461,18 @@ export class DeviceRequestScope {
 export type DeviceRequestTicket = { generation: number; sequence: number; lane: string };
 // A native observation is not a live promise. DEGRADED still had an authenticated control channel.
 export const deviceChannelWasConnected = (peer: DeviceData): boolean => !peer.revoked && (peer.connection?.state === 'ONLINE' || peer.connection?.state === 'DEGRADED');
+/** The native snapshot has already matched these received grants to the paired target.
+ * Only rank the local preparation entry here; the original task still checks scope and readiness. */
+export function deviceHasRecordedWorkspaceRead(peer: DeviceData, local: DeviceData, now: number): boolean {
+  const place = deviceReadingPlace(local, peer);
+  if (!place || place.here.deviceId === place.partner.deviceId || peer.revoked !== false || peer.connection?.state === 'REVOKED') return false;
+  return deviceRows(peer.receivedGrantScopes).some(scope => scope.receivedScope === true
+    && positiveInteger(scope.issuedAt) && scope.issuedAt <= now && positiveInteger(scope.expiresAt) && scope.expiresAt > now
+    && positiveInteger(scope.toolBudget) && deviceStrings(scope.allowedOrigins).includes(place.here.deviceId)
+    && deviceStrings(scope.capabilities).includes('tool.invoke') && deviceStrings(scope.toolNames).some(tool => tool === 'workspace.list' || tool === 'workspace.read')
+    && deviceRows(scope.resources).some(binding => Object.keys(binding).length === 3 && binding.kind === 'workspace'
+      && typeof binding.environmentId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(binding.environmentId) && digest(binding.binding)));
+}
 /** A readable index of the two original grant lists, not a new capability or execution decision. */
 export function deviceRecordedScopes(peer: DeviceData, fromPeer: boolean, now: number) {
   const scopes = deviceRows(fromPeer ? peer.receivedGrantScopes : peer.grantScopes);

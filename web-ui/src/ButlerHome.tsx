@@ -70,7 +70,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const savedScroll = useRef(Number.isFinite(initialScrollTop) ? Math.max(0, initialScrollTop) : 0);
   const restored = useRef(false), homeScroll = useRef(onScrollTop);
   homeScroll.current = onScrollTop;
-  const workHeading = useId(), decisionList = useId(), returnedList = useId(), checkingList = useId();
+  const workHeading = useId(), decisionList = useId(), returnedList = useId(), checkingList = useId(), nextNote = useId();
   const [allResults,setAllResults]=useState(false),[unavailableReport,setUnavailableReport]=useState<ReturnType<typeof reportedHomeWork>>(null);
   const [showDecisions,setShowDecisions]=useState(false),[checkingExpanded,setCheckingExpanded]=useState<boolean>();
   const [opening,setOpening]=useState<{id:string;intent:'row'|'report'}|null>(null),[notice,setNotice]=useState('');
@@ -268,10 +268,19 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
         onClick={event=>void open(item,event.currentTarget,'report')}>{reportOpening?'正在核对汇报…':unavailable?'重新读取原汇报':'先看已保存的汇报'}</Button>}
     </li>;
   };
-  const modelConnection = ready && !modelReady && !localDisplayDraft && !stagingLocal && <div className="pw-butler-model-setup">
-    {modelSetup}{firstHostSave&&<Button variant="ghost" size="small" disabled={firstHostSave.disabled} aria-busy={firstHostSave.busy||undefined}
-      aria-description={firstHostSave.hint} onClick={firstHostSave.save}>{firstHostSave.busy?'正在保存原话…':'仅保存到本机'}</Button>}
-    <p>{firstHostSave?.hint||(onTryLocal?'需要写作或研究时再连接。':'可以先写好草稿，连接后再发送。')}</p>
+  // The editor never moves. An optional capability is not the next step ahead
+  // of work the owner already has, except for an action on the current draft.
+  const workFirst = !firstHostSave && !stagingLocal && (work.length > 0 || !!phoneActivity);
+  const showLocal = stagingLocal || empty && !!onTryLocal;
+  const showSetup = ready && !modelReady && !localDisplayDraft && !stagingLocal;
+  const nextHint=showLocal?(stagingLocal?'正在填入问题…':'只填入问题，按发送才读取。不用模型。'):
+    firstHostSave?.hint||(!workFirst?'可以先写好草稿，连接后再发送。':'');
+  const nextSteps=(showLocal||showSetup)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
+    {showLocal&&<Button className="pw-butler-try" variant="ghost" leadingIcon={IconPhone} trailingIcon={IconChevronRight} disabled={stagingLocal} aria-describedby={nextNote} onClick={onTryLocal}>查这台手机的屏幕信息</Button>}
+    {showSetup&&modelSetup}
+    {showSetup&&firstHostSave&&<Button variant="ghost" size="small" disabled={firstHostSave.disabled} aria-busy={firstHostSave.busy||undefined}
+      aria-describedby={nextNote} onClick={firstHostSave.save}>{firstHostSave.busy?'正在保存原话…':'仅保存到本机'}</Button>}
+    {nextHint&&<p id={nextNote} role={stagingLocal?'status':undefined}>{nextHint}</p>}
   </div>;
 
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>
@@ -280,12 +289,8 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
         <section className="pw-butler-intake" aria-label="交办">
           <header className="pw-butler-welcome"><h2>想交给我什么事？</h2></header>
           {composer}
-          {(onTryLocal||stagingLocal)&&<div className="pw-butler-local-example">
-            <Button className="pw-butler-try" variant="ghost" leadingIcon={IconPhone} trailingIcon={IconChevronRight} disabled={stagingLocal} onClick={onTryLocal}>查这台手机的屏幕信息</Button>
-            <p role={stagingLocal?'status':undefined}>{stagingLocal?'正在填入问题…':'先填入问题，按发送才读取。不用连接模型。'}</p>
-          </div>}
-          {modelConnection}
         </section>
+        {!workFirst&&nextSteps}
         {(!ready || work.length > 0 || phoneActivity || moreWork || homeNotice) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
           onBlurCapture={event => { const node = event.target as HTMLElement; if (event.relatedTarget instanceof Node ? !event.currentTarget.contains(event.relatedTarget) : node.isConnected && !node.closest('[inert],[hidden]') && !node.matches(':disabled')) focused.current = null; }}>
@@ -322,6 +327,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
             {!!work.length && !canOpen && <p className="pw-butler-work-note" role="status">当前暂时无法打开原任务记录。</p>}
           </>}
         </section>}
+        {workFirst&&nextSteps}
         {preparations?.(visible.map(item=>item.task))}
       </div>
     </div>

@@ -146,7 +146,9 @@ export function useConversationReading({ scroll, active, conversationId, compose
     const win = readingWindow(); if (!win) return;
     const { current, node, list } = win;
     if (!current.ready || !list) { setReadingNotice('loading'); return; }
-    if (readingNotice === 'unanchored') {
+    // Another reply may arrive while the first visit still has a way back.
+    // Keep that exact line instead of replacing it with a second bookmark.
+    if (returnPoint || readingNotice === 'unanchored') {
       setReadingNotice(''); goToLatest(); node.focus({ preventScroll: true }); return;
     }
     const bounds = node.getBoundingClientRect(), top = bounds.top + node.clientTop + readingTopInset(node);
@@ -157,7 +159,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
       ? captureReadingPlace(row, message.content, top, bounds.top + node.clientTop + node.clientHeight) : null;
     if (!place) { setReadingNotice('unanchored'); return; }
     setReturnPoint(place); setReadingNotice('');
-    goToLatest();
+    goToLatest(); node.focus({ preventScroll: true });
   };
   const returnToPlace = () => {
     const win = readingWindow(); if (!win || !returnPoint) return;

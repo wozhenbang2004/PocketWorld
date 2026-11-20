@@ -4,6 +4,26 @@ export type ExecutionExit={format:string;taskId:string;runId:string;epoch:number
   stepId:string;kind:'exit_code'|'signal'|'no_child';value:number;nativeStatus:string;canPrepareBuildFeedback:boolean;canPrepareDependencyFeedback?:boolean;dependencyLockSha256?:string;timedOut?:boolean;cancelRequested?:boolean;resourcesReleased?:boolean;processGroupAbsent?:boolean};
 const sha=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const word=(v:unknown)=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(v);
+type NextNodeBuild={taskId:string;runId:string;epoch:number;operationId:string;projectId:string;checkoutId:string;sourceDigest:string;
+  manager:'npm'|'pnpm';lockPath:string;lockSha256:string};
+/** Native getForUi readback of the only settled command in this original run. */
+export function originalNodeBuildAfterDependencies(task?:Data|null):NextNodeBuild|null{
+  const raw=task?.raw,c=raw?.developmentContext,pin=c?.ownerDraftFirstBuild,r=raw?.originalFirstBuildNext;
+  const lock=pin?.lockedDependencies?.review;
+  if(!projectFeedbackKey(task)||task?.status!=='awaiting_user'||raw?.status!=='awaiting_user'||raw.cancelRequested===true||
+    raw.hasUnresolvedOperations!==false||pin?.existingCheckoutBuild!==true||!r||r.format!=='pocketworld.owner-node-build-next.v1'||
+    r.dependencyExitCode!==0||r.buildStarted!==false||r.taskId!==task.id||r.runId!==raw.runId||r.epoch!==raw.coordinatorEpoch||
+    !word(r.operationId)||r.projectId!==c.projectId||r.projectId!==pin.projectId||r.checkoutId!==c.checkoutId||r.checkoutId!==pin.checkoutId||
+    !sha(r.sourceDigest)||r.sourceDigest!==pin.sourceDigest||r.sourceDigest!==c.initialSourceDigest||
+    (r.manager!=='npm'&&r.manager!=='pnpm')||r.manager!==pin.manager||r.manager!==lock?.manager||
+    r.lockPath!==(r.manager==='npm'?'package-lock.json':'pnpm-lock.yaml')||r.lockPath!==lock?.lockPath||
+    !sha(r.lockSha256)||r.lockSha256!==lock?.lockSha256)return null;
+  return {taskId:r.taskId,runId:r.runId,epoch:r.epoch,operationId:r.operationId,projectId:r.projectId,checkoutId:r.checkoutId,
+    sourceDigest:r.sourceDigest,manager:r.manager,lockPath:r.lockPath,lockSha256:r.lockSha256};
+}
+export function nodeBuildContinuationText(next:NextNodeBuild):string{
+  return `请按原来的 ${next.lockPath} 核对同一副本中的实际依赖。若已就绪，请只提出这版源码的 ${next.manager} run build 供我另行批准。不改源码或锁，不自动下载、构建或启动服务。`;
+}
 export function originalExecutionExit(raw:unknown,metadata:Data,status:unknown):ExecutionExit|null{
   const r=raw as ExecutionExit|undefined;if(!r||r.format!=='pocketworld.owner-managed-exit.v1'||r.nativeStatus!==status||
     !['exit_code','signal','no_child'].includes(r.kind)||!Number.isSafeInteger(r.value)||r.value<(r.kind==='exit_code'?0:1)||r.value>(r.kind==='signal'?127:r.kind==='exit_code'?255:2147483647)||

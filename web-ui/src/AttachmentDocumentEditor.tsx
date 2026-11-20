@@ -88,7 +88,7 @@ export function AttachmentVersionContinuation({original,foregroundReady,busy,act
  </section>;
 }
 
-export function AttachmentDocumentEditor({original,unpublished,windowId,foregroundReady,pendingTask,busy,act,beforeBack}:{original:Json;unpublished:boolean;windowId:string;foregroundReady:boolean;pendingTask?:string;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void}) {
+export function AttachmentDocumentEditor({original,baseVersion,unpublished,windowId,foregroundReady,pendingTask,busy,act,beforeBack}:{original:Json;baseVersion?:string;unpublished:boolean;windowId:string;foregroundReady:boolean;pendingTask?:string;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void}) {
  const [draft,setDraft]=useState<Json>(()=>structuredClone(original)),[slide,setSlide]=useState('0'),[error,setError]=useState(''),[saving,setSaving]=useState(false),[saved,setSaved]=useState(false),[review,setReview]=useState<Json|null>(null),[ack,setAck]=useState(false),[discardOpen,setDiscardOpen]=useState(false);
  const current=useRef(draft),committed=useRef(JSON.stringify(original)),savingPromise=useRef<Promise<AttachmentFrame|undefined>|null>(null),alive=useRef(true),revision=useRef(0),action=useRef(act);current.current=draft;action.current=act;
  const context=useRef({windowId,foregroundReady,generation:0});
@@ -160,7 +160,7 @@ export function AttachmentDocumentEditor({original,unpublished,windowId,foregrou
   if(review)return registerOverlayBack(closeReview);
  },[leaveOpen,discardOpen,review]);
  const draftStatus=pendingTask?'生成结果待核对':saving?'正在保留本页修改':!saved?'本页修改待确认':unpublished?'更改在本页，尚未生成':'未生成新文件';
- return <section className="pw-document-editor"><header className="pw-document-heading"><h3>{presentation?'演示文稿内容':'文档内容'}</h3><p className="pw-muted">{draft.parentArtifactId?'以选定原版本为起点，保存为新的独立文件。':'生成 Word 或 PDF，并保留可以继续修改的内容。'}</p></header>
+ return <section className="pw-document-editor"><header className="pw-document-heading"><h3>{presentation?'演示文稿内容':'文档内容'}</h3><p className="pw-muted">{baseVersion?<>从版本 <code>{baseVersion}</code> 继续。生成新文件时保留原版。</>:draft.parentArtifactId?'以选定原版本为起点，保存为新的独立文件。':'生成 Word 或 PDF，并保留可以继续修改的内容。'}</p></header>
  {error&&<p className="pw-error" role="alert">{error}</p>}{!validDraft(draft)&&supported&&<div className="pw-document-incomplete"><p className="pw-muted">补全文件名和正文后，编辑页才能保留本次输入。要在文件库里找到这份稿子，请生成新文件。</p>{JSON.stringify(draft)!==committed.current&&<Button variant="ghost" disabled={busy||saving} onClick={()=>setDiscardOpen(true)}>放弃未保存修改</Button>}</div>}
  {pendingTask&&<div className="pw-banner"><p>原保存动作待核，编辑与再次生成已暂停。</p><Button variant="secondary" disabled={busy} onClick={()=>void act('queryDocument').catch(()=>{})}>核对原文档结果</Button></div>}
  {supported?<><TextField label="文件名" value={draft.name||''} onChange={value=>text('name',value,80)} isDisabled={!editable}/>
