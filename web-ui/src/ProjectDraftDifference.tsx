@@ -27,11 +27,13 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
   const [data,show]=useState<ShownDiff|null>(null),[note,tell]=useState(''),[busy,spin]=useState(false),turn=useRef(0),held=useRef(''),flight=useRef(false);
   const [editorProtected,setProtected]=useState(false),shownFromChat=useRef('');
   const locked=useRef(false),[leaveNotice,warn]=useState(false);
+  const keepInFlight=useRef<{scope:string;window:string;documentEpoch:number}|null>(null),[keepReminder,remindKeep]=useState('');
   const protect=useCallback((value:boolean)=>{locked.current=value;setProtected(value);if(!value)warn(false)},[]);
   const dismissLeave=useCallback(()=>warn(false),[]);
   const result=useRef<HTMLElement>(null),arrival=useRef<{scroller:HTMLElement;top:number;ticket:string}|null>(null);
   const exact=requested?.taskId===id&&requested.draftId===pin?requested:undefined;
   const exactKey=exact?JSON.stringify([exact.taskId,exact.runId,exact.epoch,exact.draftId]):'';
+  const keepScope=pin?JSON.stringify([id,project,checkout,pin,exactKey]):'';
   const originalDecision=data&&goalDecision?.taskId===data.taskId&&goalDecision.draftId===data.draftId&&
     goalDecision.runId===data.runId&&goalDecision.epoch===data.epoch?goalDecision:undefined;
   const current=()=>{const s=bridge.getState();return active&&!document.hidden&&!visible()?.section&&visible()?.taskId===id&&s.capabilities.commands.includes(action)};
@@ -43,9 +45,18 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
     });
   },[id,project,checkout,pin,active,registerBeforeLeave]);
   const reset=()=>{++turn.current;held.current='';flight.current=false;show(null);tell('');spin(false);protect(false)};
-  useEffect(()=>{reset();const leave=()=>{if(held.current&&(!current()||held.current!==ticket()))reset()};
+  useEffect(()=>{reset();keepInFlight.current=null;remindKeep('');
+    const leave=()=>{
+      const heldWindow=held.current;
+      if(!heldWindow||current()&&heldWindow===ticket())return;
+      const keeping=keepInFlight.current,v=visible();
+      // A retired foreground can lose the reply after the native commit.
+      if(keeping?.scope===keepScope&&keeping.window===heldWindow&&v?.taskId===id&&!v.section&&
+        (document.hidden||keeping.documentEpoch!==bridge.getDocumentEpoch()))remindKeep(keepScope);
+      keepInFlight.current=null;reset();
+    };
     const off=bridge.subscribe(leave);document.addEventListener('visibilitychange',leave);return()=>{++turn.current;off();document.removeEventListener('visibilitychange',leave)};
-  },[id,active,pin,project,checkout]);
+  },[id,active,pin,project,checkout,keepScope]);
   async function read(){
     if(flight.current||!current()||requested&&!exact)return;
     const origin=ticket(),n=++turn.current;flight.current=true;held.current=origin;spin(true);tell('');
@@ -61,6 +72,7 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
         (r.ownerRevision&&(!sha.test(r.ownerRevision.draftId)||!sha.test(r.ownerRevision.revisionId)||r.ownerRevision.sha256!==r.beforeSha256||typeof r.ownerRevision.taskId!=="string"||!r.ownerRevision.taskId||r.ownerRevision.taskId===id))||typeof r.before!=='string'||typeof r.after!=='string'||r.before===r.after||!sha.test(r.beforeSha256)||!sha.test(r.afterSha256))throw Error('原工程、文件或两版文字不能同时核对。');
       const {retainedHead,...difference}=r;
       show({...difference,retainedHead:retainedPin(retainedHead,difference,origin)});
+      remindKeep(value=>value===keepScope?'':value);
     }catch(e){if(valid())tell(e instanceof Error?e.message:'这份真实草稿暂不可读。');}finally{if(turn.current===n){flight.current=false;spin(false)}}
   }
   const nativeReady=current();
@@ -77,12 +89,19 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
   if(!active||!bridge.getState().capabilities.commands.includes(action))return null;
   if(requested&&!exact)return <p role="status" className="pw-field-hint">没有打开原对话的这份改稿；不会用其他版本代替。</p>;
   const original=data&&held.current===ticket()&&current()?data:null;
+  const keepBeginning=()=>{
+    if(!keepScope||!original||original.draftId!==pin||held.current!==ticket()||!current())return;
+    const attempt={scope:keepScope,window:held.current,documentEpoch:bridge.getDocumentEpoch()};
+    keepInFlight.current=attempt;
+    return ()=>{if(keepInFlight.current===attempt)keepInFlight.current=null};
+  };
   const heading=<><div className="pw-section-heading"><h4>本轮原改稿</h4><Button size="small" variant="ghost" disabled={busy||editorProtected}
     onClick={()=>data?reset():void read()}>{busy?'读取中…':data?'收起原差异':pin?'查看原改稿':'查看草稿结果'}</Button></div>
+    {keepReminder&&keepReminder===keepScope&&nativeReady&&<p className="pw-field-hint" role="status">上次保留尚未确认。请先查看原改稿，核对已保留的稿。</p>}
     {note&&<p className="pw-field-hint" role="status">{note}</p>}</>;
   return <section className="pw-project-draft" ref={result} aria-label="这次交办的独立改稿">
     {original?<ProjectDraftOwnerRevision key={original.draftId} task={id} root={original.draftId} path={original.path} originalHash={original.afterSha256} protect={protect}
-      retainedHead={original.retainedHead} leaveRequested={leaveNotice&&editorProtected} onDismissLeave={dismissLeave}
+      retainedHead={original.retainedHead} leaveRequested={leaveNotice&&editorProtected} onDismissLeave={dismissLeave} onKeepBeginning={keepBeginning}
       originalHeader={<>{heading}<strong className="pw-project-draft-path">{original.path}</strong><p className="pw-field-hint">原工程未写回，没有构建或执行。{original.ownerRevision?'原差异以你点选的已存稿为起点。':''}</p>
         {originalDecision&&<p className="pw-field-hint" role="status">{originalDecision.completed?'这版原改稿已确认达到目标。':'这版原改稿的验收已记录：目标尚未达到。'}</p>}</>}
       originalContent={<><ProjectDraftChanges key={original.draftId} before={original.before} after={original.after} version={original.afterSha256.slice(0,8)} beforeLabel={original.ownerRevision?'选中的已存稿':undefined}/>

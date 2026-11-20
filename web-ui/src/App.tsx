@@ -202,6 +202,7 @@ const resultMessageIn=(rows:unknown,id:string,expected:TaskResult,revision?:numb
   result.deliveryId===expected.deliveryId&&result.status===expected.status&&!result.noticeKind?message:null;
 };
 const continueSavedHostLabel='继续准备（未发送）';
+const originalArchiveChatUnavailable='暂不能核对原话与草稿，没有打开其他对话。';
 function phonePreparationOwner(){
  const now=bridge.getState(),c=now.composer,draft=obj(now.phoneDraft),conversation=String(now.state.conversationId||'');
  if(c?.ready!==true||typeof c.key!=='string'||!c.key||!Number.isSafeInteger(c.epoch)||c.conversationId!==conversation||
@@ -910,17 +911,19 @@ export default function App(){
  const openNotifications=(afterNavigate?:()=>void)=>route==='remoteInbox'
   ?navigate('remoteInbox',afterNavigate,{keepOrigin:true})
   :openRelatedWorkspace('remoteInbox',captureNavigationOrigin(),afterNavigate);
- const restoreWorkspace=async(origin:WorkspaceOrigin,keepOrigin=false,rereadOriginal=false,afterReturn?:()=>void)=>{
+ const restoreWorkspace=async(origin:WorkspaceOrigin,keepOrigin=false,rereadOriginal=false,afterReturn?:()=>void,
+  archiveChatCurrent?:(live:ReturnType<typeof bridge.getState>,arrived:boolean)=>boolean)=>{
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
   const phonePlace=origin.phonePlace?returnToPreparedPhoneDraft(origin.phonePlace):undefined;
   if(origin.phonePlace&&!phonePlace){setLocalError('原手机目标已变化或尚未恢复，没有切换到其他草稿。');return;}
   const source=origin.drawerChat,savedHost=origin.savedHostPreparation&&origin.chatWork,modelInput=origin.modelInput,proposal=origin.phonePreparation;
   const sourceDocument=savedHost?documentEpoch:phonePlace?.documentEpoch??source?.documentEpoch;
-  const guarded=!!(source||modelInput||phonePlace||proposal||origin.savedHostPreparation);
+  const guarded=!!(source||modelInput||phonePlace||proposal||origin.savedHostPreparation||archiveChatCurrent);
   const sameProposalOwner=()=>!proposal||!document.hidden&&phonePreparationOwner()===proposal.owner;
   // Opening the work directory never changes the native composer. Do not select,
   // overwrite or resurrect a conversation if another surface has replaced that owner.
-  const sameChat=()=>{const live=bridge.getState();
+  const sameChat=(arrived=false)=>{const live=bridge.getState();
+   if(archiveChatCurrent?.(live,arrived)===false)return false;
    // A retired host review never returns. Only the same saved message and its
    // still-selected editor may be shown through a newly issued document token.
    if(origin.savedHostPreparation&&(!savedHost||!source?.draftKey||live.composer?.ready!==true||
@@ -932,9 +935,9 @@ export default function App(){
    if(!keepOrigin)relatedOrigin.current=origin.parent||null;
    if(origin.settingsDirectory)setSettingsRestore({...origin.settingsDirectory,revision:navigationWindow.current});
   },{keepOrigin:true,...(guarded?{stillCurrent:sameChat}:{})});
-  if(!closed&&guarded&&!sameChat()&&navigationWindow.current===navigation&&!document.hidden){setLocalError(origin.savedHostPreparation?
+  if(!closed&&guarded&&!sameChat()&&navigationWindow.current===navigation&&!document.hidden){setLocalError(archiveChatCurrent?originalArchiveChatUnavailable:origin.savedHostPreparation?
    '无法核对保存的原话与输入窗口，没有打开其他准备。可从导航手动查看原对话。':'原对话或草稿已切换。未打开其他输入，请从导航重新选择原对话。');return;}
-  const current=()=>navigationWindow.current===navigation+1&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden&&sameChat();
+  const current=()=>navigationWindow.current===navigation+1&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden&&sameChat(true);
   if(!closed||!current())return;
   if(origin.projectId&&can('projects.select')&&bridge.getState().state.projectId!==origin.projectId){
    if(proposal){setLocalError('原工作页面已切换，没有打开其他项目或提案。');return;}
@@ -985,7 +988,7 @@ export default function App(){
  };
  const navigateFromSetup=(destination:SetupDestination)=>{const target={connections:'model-settings',background:'background',appearance:'phone:appearance',local:'local'}[destination];void navigate(target,undefined,{keepOrigin:true});setupReturnPending.current=true;};
  const closeSetup=()=>{setupReturnPending.current=false;void restoreWorkspace(setupOrigin.current,true);};
- const returnFromSecondary=()=>{if(route==='profile'){returnFromProfile();return;}if(setupReturnPending.current){void navigate('setup',undefined,{keepOrigin:true});return;}const origin=relatedOrigin.current;if(origin){if(!origin.reviewedSkill&&!origin.modelInput&&!origin.savedHostPreparation)relatedOrigin.current=null;void restoreWorkspace(origin);return;}void navigate('butler');};
+ const returnFromSecondary=()=>{if(route==='profile'){returnFromProfile();return;}if(setupReturnPending.current){void navigate('setup',undefined,{keepOrigin:true});return;}const origin=relatedOrigin.current;if(origin){if(returnOriginalArchiveChat(origin))return;if(!origin.reviewedSkill&&!origin.modelInput&&!origin.savedHostPreparation)relatedOrigin.current=null;void restoreWorkspace(origin);return;}void navigate('butler');};
  // Opening the chooser from background preparation is navigation, not a mode change.
  const phoneSettingsOrigin=setupReturnPending.current?setupOrigin.current:relatedOrigin.current;
  const phoneSettingsPin=state.backgroundSetupOpen===true&&!taskOpen&&!phoneSettingsOrigin?.task&&!phoneSettingsOrigin?.phonePreparation&&can('phone.prepare')&&can('composer.intent')
@@ -1382,7 +1385,27 @@ export default function App(){
   finally{openingBuildCopy.current=false;if(!opened)handledBuildReturn(target);}
  };
  const previewBlocked=!!(searchOriginal||projectWorkReviewOpen||projectConventionMessage||providedMemoryMessage||conversationMemoryOpen||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
- const packageReturn=useRef<{target:PackagePreviewTarget;origin:WorkspaceOrigin;epoch:number;navigation:number;projectFocus:ProjectTaskReturn|null}|null>(null);
+ const packageReturn=useRef<{target:PackagePreviewTarget;origin:WorkspaceOrigin;epoch:number;navigation:number;projectFocus:ProjectTaskReturn|null;
+  originalChatCurrent?:(live:ReturnType<typeof bridge.getState>)=>boolean}|null>(null);
+ const returnOriginalArchiveChat=(origin:WorkspaceOrigin)=>{
+  const visit=packageReturn.current,epoch=bridge.getDocumentEpoch();
+  if(route!=='projects'||projectPreview.expanded||visit?.origin!==origin||visit.epoch===epoch||!visit.originalChatCurrent)return false;
+  const {drawerChat,chatWork}=origin,navigation=visit.navigation,originalChat=visit.originalChatCurrent;
+  const current=(live:ReturnType<typeof bridge.getState>,arrived=false)=>!document.hidden&&bridge.getDocumentEpoch()===epoch&&originalChat(live)&&
+   (arrived?navigationWindow.current===navigation+1:
+    navigationWindow.current===navigation&&packageReturn.current===visit&&relatedOrigin.current===origin);
+  if(previewBlocked||projectPreview.exportBusy||!drawerChat||!chatWork||!current(bridge.getState())){
+   if(!document.hidden)setLocalError(originalArchiveChatUnavailable);
+   return true;
+  }
+  // A foreground token change retires commands. Only rebind this read-only
+  // return to a still-present native chat row. Do not reopen the archive.
+  void restoreWorkspace({...origin,drawerChat:{...drawerChat,documentEpoch:epoch},chatWork:{...chatWork,document:epoch}},false,false,()=>{
+   if(packageReturn.current===visit)packageReturn.current=null;
+   setLocalError('');
+  },current);
+  return true;
+ };
  const returnFromPackage=(id:string,operationId?:string,originalChat=false)=>{
   const saved=packageReturn.current;
   if(saved&&saved.target.taskId===id&&saved.target.operationId===operationId&&saved.epoch===bridge.getDocumentEpoch()&&saved.navigation===navigationWindow.current){
@@ -3380,14 +3403,21 @@ export default function App(){
   if(!stillCurrent())return;
   if(next.action==='package'&&next.packageOperationId){
    const target={taskId:next.target.taskId,operationId:next.packageOperationId};
-   const native=bridge.getState();
+   const native=bridge.getState(),draftKey=String(native.composer?.key||''),draftEpoch=native.composer?.epoch;
+   const resume=obj(native.view).resumeRevision;
    const origin={...captureNavigationOrigin(),label:'返回原话',focus:null,focusKey:undefined,chatWork:original,
-    drawerChat:{id:conversation,draftKey:String(native.composer?.key||''),documentEpoch}};
-   const leaves=()=>{const now=bridge.getState();return now.state.conversationId===conversation&&now.composer?.key===native.composer?.key&&
-    asArray<Message>(now.state.messages).filter(m=>m.id===original.message).length===1&&
-    asArray<Message>(now.state.messages).some(m=>m.id===original.message&&m.quoteAvailable===true&&m.sourceRevision===original.revision);};
-   packageHandoff.open(target,()=>{packageReturn.current={target,origin,epoch:documentEpoch,navigation:navigationWindow.current,projectFocus:null};},
-    {originalChat:leaves,departed:()=>{relatedOrigin.current=origin;}});
+    drawerChat:{id:conversation,draftKey,documentEpoch}};
+   const sameLine=(now:ReturnType<typeof bridge.getState>)=>{
+    const rows=asArray<Message>(now.state.messages).filter(m=>m.id===original.message);
+    return now.state.conversationId===conversation&&now.composer?.key===draftKey&&rows.length===1&&
+     rows[0].role==='user'&&rows[0].quoteAvailable===true&&rows[0].sourceRevision===original.revision;
+   };
+   packageHandoff.open(target,({projectId})=>{packageReturn.current={target,origin,epoch:documentEpoch,navigation:navigationWindow.current,projectFocus:null,
+    originalChatCurrent:now=>{const view=obj(now.view);return now.state.projectId===projectId&&!now.state.filePath&&!now.state.conversationReader&&
+     !view.taskId&&view.section==null&&Number.isSafeInteger(resume)&&view.resumeRevision===resume&&
+     !!draftKey&&now.composer?.ready===true&&now.composer.conversationId===conversation&&Number.isSafeInteger(draftEpoch)&&now.composer.epoch===draftEpoch&&
+     Number.isSafeInteger(original.revision)&&original.revision>0&&sameLine(now);}
+   };},{originalChat:()=>sameLine(bridge.getState()),departed:()=>{relatedOrigin.current=origin;}});
    return;
   }
   openTask(next.target.taskId,next.review?'review':'overview',false,undefined,undefined,{runId:next.target.runId,epoch:next.target.epoch,draftId:next.draftId},stillCurrent,next.approvalId,()=>{

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { Accordion, AccordionItem, Button, SelectField } from './forms-library';
 import { bridge } from './bridge';
-import { packagePreviewChoices, type PackagePreviewChoices } from './project-preview';
+import { packagePreviewChoices, projectPackageTaskIdentity, type PackagePreviewChoices } from './project-preview';
 
 const READ='projects.savedBuildWeb.read';
 type Copy={id:string;name:string;createdAt:number};
@@ -44,10 +44,10 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
   const [expanded,expand]=useState(false),[shelf,setShelf]=useState<Shelf|null>(null),[copy,setCopy]=useState('');
   const [selection,select]=useState<BuildSelection|null>(null);
   const link=useContext(ProjectSavedWebLink),heading=useRef<HTMLParagraphElement>(null),focusOnOpen=useRef(false);
-  const [busy,setBusy]=useState(''),[error,setError]=useState('');
-  const current=useRef({project,active,copy,selection,shelf});current.current={project,active,copy,selection,shelf};
+  const [busy,setBusy]=useState(''),[error,setError]=useState(''),[needsCheck,setNeedsCheck]=useState(false);
+  const current=useRef({project,active,copy,selection,shelf,needsCheck});current.current={project,active,copy,selection,shelf,needsCheck};
   const restoreVersion=useRef<(()=>void)|null>(null);
-  const alive=useRef(false),request=useRef<object|null>(null),expandedRef=useRef(false);
+  const alive=useRef(false),request=useRef<{label:string}|null>(null),expandedRef=useRef(false);
   const readWindow=()=>{const state=bridge.getState(),view=state.view as {resumeRevision?:number;taskId?:string|null;section?:string|null}|undefined;
     return {doc:bridge.getDocumentEpoch(),resume:view?.resumeRevision,project:state.state.projectId,file:state.state.filePath,task:view?.taskId,section:view?.section};};
   const owner=()=>{const at=readWindow();return ()=>{const now=readWindow();return alive.current&&!document.hidden&&current.current.project===project&&
@@ -55,26 +55,45 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
     at.doc===now.doc&&at.resume===now.resume;};};
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;request.current=null;};},[project]);
   useEffect(()=>{if(!active&&request.current){request.current=null;setBusy('');}},[active]);
-  const observe=async(label:string,block:(here:()=>boolean,original:()=>boolean)=>Promise<void>)=>{
-    const original=owner();if(!active||!expandedRef.current||request.current||!original())return;
-    const token={};request.current=token;setBusy(label);setError('');
+  useEffect(()=>{
+    const observeOriginalWork=()=>{
+      const here=current.current, at=readWindow();
+      if(!expandedRef.current||here.needsCheck||!here.shelf?.checkoutId||at.project!==project||at.section!=null||at.file||!at.task)return;
+      const tasks=bridge.getState().state.tasks;
+      const original=Array.isArray(tasks)?tasks.find(task=>task?.id===at.task):null;
+      const binding=projectPackageTaskIdentity(original);
+      // Seeing the original work is a reason to check, never evidence that the owner saved anything.
+      if(binding?.projectId===project&&binding.checkoutId===here.shelf.checkoutId&&original?.raw?.developmentContext?.ownerDraftFirstBuild)
+        setNeedsCheck(true);
+    };
+    observeOriginalWork();return bridge.subscribe(observeOriginalWork);
+  },[project]);
+  const observe=async(label:string,block:(here:()=>boolean,original:()=>boolean)=>Promise<void>,openReadVersion=false)=>{
+    const original=owner();
+    if(!active||!expandedRef.current||!original()||(request.current&&!(openReadVersion&&request.current.label==='check')))return;
+    // A deliberate open of an already read version may supersede a presentation-only metadata check.
+    const token={label};request.current=token;setBusy(label);setError('');
     const here=()=>original()&&current.current.active&&expandedRef.current&&request.current===token;
     try {await block(here,original);}catch(failure){if(here())setError(failure instanceof Error?failure.message:'原网页记录未核对，未打开其他版本。');}
     finally{if(request.current===token){request.current=null;if(alive.current)setBusy('');}}
   };
-  const read=(selected:string,cursor='')=>void observe('list',async here=>{
-    const prior=cursor?shelf:null;
-    if(cursor&&(!prior||prior.checkoutId!==selected||prior.nextCursor!==cursor))return;
-    if(!cursor){setCopy(selected);setShelf(null);}
-    const response=await bridge.command(READ,{projectId:project,checkoutId:selected,cursor});if(!here())return;
-    const verified=page(response,project,selected,cursor);
-    if(prior){
-      const known=new Set(prior.items.map(v=>v.operationId));
-      if(verified.items.some(v=>known.has(v.operationId)))throw Error('原版本分页重复，未混入其它记录。');
-      verified.items=[...prior.items,...verified.items];verified.readLimited||=prior.readLimited;
-    }
-    setCopy(verified.checkoutId);setShelf(verified);
-  });
+  const read=(selected:string,cursor='',checkDisplayed=false)=>{
+    const checking=checkDisplayed&&!cursor&&!!selected&&shelf?.checkoutId===selected;
+    void observe(checking?'check':'list',async here=>{
+      const prior=cursor?shelf:null;
+      if(cursor&&(!prior||prior.checkoutId!==selected||prior.nextCursor!==cursor))return;
+      if(!cursor&&!checking){setCopy(selected);setShelf(null);setNeedsCheck(false);}
+      const response=await bridge.command(READ,{projectId:project,checkoutId:selected,cursor});if(!here())return;
+      const verified=page(response,project,selected,cursor);
+      if(prior){
+        const known=new Set(prior.items.map(v=>v.operationId));
+        if(verified.items.some(v=>known.has(v.operationId)))throw Error('原版本分页重复，未混入其它记录。');
+        verified.items=[...prior.items,...verified.items];verified.readLimited||=prior.readLimited;
+      }
+      setCopy(verified.checkoutId);setShelf(verified);
+      if(!cursor)setNeedsCheck(false);
+    });
+  };
   useLayoutEffect(()=>{
     if(!link||!active)return;
     const reveal:FindSavedBuildWeb=picked=>{
@@ -125,12 +144,12 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
     if(sameShelf())openWork?.(work,shelfFocus(trigger,sameShelf));
   };
   const open=(picked:Version,trigger:HTMLButtonElement)=>{
+    if(!canPreview||!matches(picked)||picked.checkoutId!==shelf?.checkoutId||!shelf.items.includes(picked))return;
     const originalShelf=owner();
     const sameShelf=()=>originalShelf()&&expandedRef.current&&current.current.copy===picked.checkoutId&&current.current.selection===selection&&
       current.current.shelf?.items.includes(picked)===true;
     const focusVersion=shelfFocus(trigger,sameShelf);
     void observe(picked.operationId,async(here,original)=>{
-      if(!canPreview||!matches(picked)||picked.checkoutId!==shelf?.checkoutId||!shelf.items.includes(picked))return;
       const target={taskId:picked.taskId,operationId:picked.operationId};
       const response=await bridge.command('projects.package.preview.inspect',target);if(!here())return;
       const exact=packagePreviewChoices(response,target);
@@ -145,8 +164,9 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
         };},
         openOriginalWork:exact.originalBuild&&openWork?()=>{if(sameShelf())openWork(picked,focusVersion);}:undefined,
       }))throw Error('项目窗口已变化，原网页没有打开。');
-    });
+    },true);
   };
+  const versionBusy=!!busy&&busy!=='check';
   return <Accordion variant="divided" expandedKeys={expanded?['saved-build-web']:[]} onExpandedChange={keys=>{
     const next=keys.has('saved-build-web');expandedRef.current=next;expand(next);
     if(!next&&request.current){request.current=null;setBusy('');}
@@ -160,26 +180,32 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
         options={[{id:'',label:'选择要看的副本'},...shelf.checkouts.map(c=>({id:c.id,label:`${c.name||'私人副本'} · ${c.id.slice(0,8)}`}))]}
         onChange={v=>{setCopy(v);setShelf(old=>old?{...old,checkoutId:'',items:[],hasMore:false,nextCursor:'',readLimited:false}:null);if(v)read(v)}} />}
       {!selection&&shelf?.checkouts.length===1&&<p className="pw-field-hint">{shelf.checkouts[0].name||'私人副本'} · {shelf.checkoutId.slice(0,8)}</p>}
+      <div className="pw-form-actions">
+        <Button variant={needsCheck?'secondary':'ghost'} size="small" aria-disabled={!!busy||!active}
+          onClick={()=>{if(!busy&&active)read(selection?.checkoutId||copy,'',true);}}>
+          {busy==='check'?'正在核对已保存网页…':copy?'核对已保存网页':'刷新副本清单'}
+        </Button>
+      </div>
       {busy==='list'&&<p role="status">正在核对原网页版本…</p>}
+      {needsCheck&&shelf?.checkoutId&&<p className="pw-field-hint" role="status">这是进入原构建前的记录。核对此副本不会重新保存或构建。</p>}
       {shelf&&!busy&&!error&&shelf.checkouts.length===0&&<p>这个项目没有可核对的私人副本。</p>}
-      {shelf?.checkoutId&&!versions.length&&!busy&&!error&&(!shelf.readLimited||shelf.hasMore)&&<p role="status">{selection?
-        shelf.hasMore?'已读取的记录里还没有这项工作用该源码保存的网页，可继续查更早的记录。':'没有查到这项工作用该源码保存的网页。可以回原工作查看日志、构建产物和保存步骤。':
-        shelf.hasMore?'这一页没有已保存的网页，可继续查更早的记录。':'这个副本还没有已保存的构建网页。'}</p>}
+      {shelf?.checkoutId&&!versions.length&&!busy&&!error&&!needsCheck&&(!shelf.readLimited||shelf.hasMore)&&<p role="status">{shelf.hasMore?
+        '已读取的记录里未查到匹配的确认保存回执，可继续查更早的记录。':
+        <>{selection?'这次未查到该源码的确认保存回执。':'这次未查到这份副本的确认保存回执。'} 保存结果不明时，回原构建核对原保存。</>}</p>}
       {shelf?.readLimited&&<p className="pw-reading-note" role="status">有些旧保存记录暂不可核对，未将它们当作可打开的网页。</p>}
       {!!versions.length&&<ul className="pw-form-flow">{versions.map(v=><li key={v.operationId}>
         <strong>{selection&&`第 ${v.epoch} 轮 · `}保存版本 {v.versionSequence}</strong> <time dateTime={new Date(v.createdAt).toISOString()}>{new Date(v.createdAt).toLocaleString()}</time>
         {selection&&(v.epoch!==selection.epoch||v.runId!==selection.runId)&&<p className="pw-field-hint">{v.epoch<selection.epoch?'较早轮次保存的网页':'另一轮保存的网页'}，不是进入时所选轮次的结果。</p>}
         <p className="pw-field-hint">源码 {v.sourceDigest.slice(0,10)} · 固定包 {v.archiveSha256.slice(0,10)}</p>
-        <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={!canPreview||!!busy||!active} onClick={event=>open(v,event.currentTarget)}>
+        <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={!canPreview||versionBusy||!active} onClick={event=>open(v,event.currentTarget)}>
           {busy===v.operationId?'正在核对原网页…':'打开这版网页'}</Button>
-          {!selection&&openWork&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
+          {!selection&&openWork&&<Button variant="ghost" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
             ()=>!current.current.selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>}</div>
       </li>)}</ul>}
       {error&&<p role="alert">{error}</p>}
       <div className="pw-form-actions">
         {shelf?.hasMore&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read(shelf.checkoutId,shelf.nextCursor)}>更多原版本</Button>}
-        <Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read(selection?.checkoutId||copy)}>{copy?'刷新这份副本':'刷新副本清单'}</Button>
-        {selection&&openWork&&<Button variant="secondary" size="small" disabled={!!busy||!active} onClick={event=>openShelfWork(selection,event.currentTarget,
+        {selection&&openWork&&<Button variant="secondary" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(selection,event.currentTarget,
           ()=>current.current.selection===selection)}>查看原构建任务</Button>}
         {selection&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>{select(null);read(selection.checkoutId);}}>查看这份副本的所有版本</Button>}
         {error&&copy&&!selection&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read('')}>重新选择副本</Button>}

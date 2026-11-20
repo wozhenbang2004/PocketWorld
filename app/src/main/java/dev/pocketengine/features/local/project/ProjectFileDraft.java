@@ -37,9 +37,19 @@ public final class ProjectFileDraft {
 
     /** A read can reveal a conflict, but may never silently replace unsaved owner text/base. */
     public ProjectFileDraft observe(JSONObject review) throws org.json.JSONException {
+        return observe(review, false);
+    }
+
+    /** A saved file can outlive cleanup of its previous dirty cache. This is byte equality, not a save receipt. */
+    public ProjectFileDraft observeRecoveredOrdinaryFile(JSONObject review) throws org.json.JSONException {
+        return observe(review, true);
+    }
+    private ProjectFileDraft observe(JSONObject review, boolean recoverSameBytes) throws org.json.JSONException {
         requireReview(review);
-        if (!hasBaseline() || !dirty())
-            return next(review.getString("content"), review.getString("content"), review.getString("expectedHash"), false, review);
+        String current = review.getString("content"), sha = review.getString("expectedHash");
+        if (!hasBaseline() || !dirty()) return next(current, current, sha, false, review);
+        if (recoverSameBytes && latest == null && Boolean.FALSE.equals(review.opt("deleted")) &&
+                sha.matches("[a-f0-9]{64}") && text.equals(current)) return next(text, text, sha, false, review);
         return next(text, baseContent, baseHash, creating, review);
     }
 

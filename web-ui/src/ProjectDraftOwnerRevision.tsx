@@ -15,8 +15,8 @@ function ticket(){const v=view();return JSON.stringify([bridge.getDocumentEpoch(
 export {ticket as projectDraftWindowTicket};
 
 /** Continuation of an actual retained after-text, not saving into the original project or replacing the AI's receipt. */
-export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect,retainedHead,leaveRequested,onDismissLeave,originalHeader,originalContent}:{task:string;root:string;path:string;originalHash:string;protect:(value:boolean)=>void;
-  retainedHead?:SavedPin;leaveRequested:boolean;onDismissLeave:()=>void;originalHeader:ReactNode;originalContent:ReactNode}){
+export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect,retainedHead,leaveRequested,onDismissLeave,onKeepBeginning,originalHeader,originalContent}:{task:string;root:string;path:string;originalHash:string;protect:(value:boolean)=>void;
+  retainedHead?:SavedPin;leaveRequested:boolean;onDismissLeave:()=>void;onKeepBeginning:()=>undefined|(()=>void);originalHeader:ReactNode;originalContent:ReactNode}){
   const editSource=useId(),editorTitle=useId();
   const [head,setHead]=useState<Revision|null>(null),[text,change]=useState(''),[note,state]=useState(''),[busy,spin]=useState(false);
   const [fileLock,lockFile]=useState(false),[workLock,lockWork]=useState(false);
@@ -50,6 +50,7 @@ export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect,r
     const token=ticket(),turn=++generation.current,prior=head,input=text,expected=keep?null:savedHere();active.current=token;request.current=true;spin(true);state('');ask(false);
     if(!keep){const scroller=editTrigger.current?.closest<HTMLElement>('.pw-task-body')??null;editorReturn.current={window:token,scroller,top:scroller?.scrollTop??0,restore:false};}
     const valid=()=>live.current&&turn===generation.current&&can()&&active.current===ticket();
+    const settleKeep=keep?onKeepBeginning():undefined;
     try{
       const r=await bridge.command<Revision>(keep?KEEP:EDIT,{taskId:task,draftId:root,...(keep?{parentId:prior!.revisionId,editHandle:prior!.editHandle,text:input}:{})});if(!valid())return;
       if(r.taskId!==task||r.draftId!==root||r.path!==path||typeof r.editHandle!=='string'||!r.editHandle||!sha.test(r.revisionId)||!sha.test(r.sha256)||
@@ -66,7 +67,7 @@ export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect,r
       if(r.ordinal>0)saved.current={taskId:r.taskId,draftId:r.draftId,path:r.path,revisionId:r.revisionId,ordinal:r.ordinal,sha256:r.sha256,bytes:r.bytes,window:token};
       setHead(r);change(r.text);preview(false);state(keep?'已经从手机回读这一稿。原工程和最初的差异都没变。':'');
     }catch(e){if(valid())state(e instanceof Error?e.message:'暂时不能核对，输入仍在此处，没有自动重交。');}
-    finally{if(live.current&&turn===generation.current){request.current=false;spin(false)}}
+    finally{if(valid())settleKeep?.();if(live.current&&turn===generation.current){request.current=false;spin(false)}}
   }
   function close(){
     if(head&&can()){

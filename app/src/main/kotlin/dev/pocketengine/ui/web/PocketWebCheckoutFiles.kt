@@ -347,7 +347,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     }
                     val value = synchronized(store) {
                         val prior = store.open(original.project, original.checkout, path, actual.optBoolean("deleted"))
-                        prior.observe(actual).also { store.retain(it) }
+                        val observed = if (original.sourcePath == null && current(original))
+                            prior.observeRecoveredOrdinaryFile(actual) else prior.observe(actual)
+                        observed.also { store.retain(it) }
                     }
                     if (!current(original)) { store.release(value); error("原文件读取窗口已变化，草稿已保留") }
                     original.opened?.let { store.release(it.draft) }
