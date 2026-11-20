@@ -20,7 +20,8 @@ export type TraceNode = {
   providerToolCallId?: string; purpose?: string; message?: unknown; sourceStatus?: string;
   contentLimited?: boolean; dispatchEntered?: boolean; effectPending?: boolean; completionMeaning?: string; timingMeaning?: string; wallClockAdjusted?: boolean;
   preview?: unknown; raw?: unknown; options?: unknown; schema?: unknown; sourceRefs?: unknown;
-  contentUnavailable?: unknown; preferenceChange?: unknown;
+  contentUnavailable?: unknown; preferenceChange?: unknown; skillReferenceEvidence?: unknown;
+  operationState?: string; operationBodySource?: string;
 };
 export type TraceRun = { runId: string; epoch: number; status: string; startedAt: number | null; updatedAt: number | null };
 export type ExecutionTracePage = {
@@ -143,10 +144,27 @@ export function traceStatus(status: string): string {
 }
 export const traceKind = (kind: TraceKind) => ({ model: '模型', tool: '工具', event: '事件' })[kind];
 
-export function traceDisplayName(node: TraceNode): string {
+export function traceDisplayName(node: Pick<TraceNode, 'kind' | 'name'>): string {
   if (node.kind !== 'tool') return node.name;
   const title = toolTitle({name: node.name, category: '', description: '', source: '', configurable: false});
   return typeof title === 'string' ? title : node.name;
+}
+
+/** History for the selected association record only. A bare model tool result is not the source. */
+export function traceSkillReference(node: TraceNode) {
+  const row = object(node.skillReferenceEvidence);
+  if (node.kind !== 'tool' || node.name !== 'skills_reference_decision' || node.source !== 'native_tool_trace' ||
+      !row || row.format !== 'pocketworld.trace-skill-reference.v1' || !safeId(row.operationId) || row.operationId !== node.operationId ||
+      !/^[a-f0-9-]{36}$/.test(text(row.packageId)) || !integer(row.revision) || row.revision < 1 ||
+      !Array.isArray(row.steps) || row.steps.length < 1 || row.steps.length > 8) return null;
+  const seen = new Set<string>(), steps: { operationId: string; tool: string }[] = [];
+  for (const value of row.steps) {
+    const step = object(value);
+    if (!step || !safeId(step.operationId) || !/^[a-f0-9-]{36}$/.test(step.operationId) || row.operationId === step.operationId ||
+        seen.has(step.operationId) || !safeId(step.tool)) return null;
+    seen.add(step.operationId); steps.push({operationId: step.operationId, tool: step.tool});
+  }
+  return {packageId: text(row.packageId), revision: row.revision, steps};
 }
 
 /** Native trace records the tool handler's boundary, not the success of an effect. */

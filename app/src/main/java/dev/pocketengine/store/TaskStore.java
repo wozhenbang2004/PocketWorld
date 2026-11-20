@@ -13836,10 +13836,12 @@ public final class TaskStore {
             if(exact.has("runtimeId"))route.put("runtimeId",exact.getString("runtimeId")).put("runtimeIdentity",exact.getString("runtimeIdentity"));
             if(firstBuild&&"build".equals(exact.opt("stepId"))){
                 var pin=dc.getJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
-                String version=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.editedWebVersion(pin);
-                if(!version.isEmpty()){
+                String edited=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.editedWebVersion(pin),
+                    existing=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.existingWebVersion(pin);
+                if(!edited.isEmpty()||!existing.isEmpty()){
                     dev.pocketengine.features.local.project.OwnerDraftFirstBuild.requireContext(pin,dc);
-                    route.put(OriginalNodeWebOutput.EDITED_ROUTE,version);
+                    if(!existing.isEmpty())route.put(OriginalNodeWebOutput.EXISTING_ROUTE,existing);
+                    else route.put(OriginalNodeWebOutput.EDITED_ROUTE,edited);
                 }
             }
             JSONObject pending=new JSONObject().put("status","unknown").put("code","project_pending").put("accepted",JSONObject.NULL).put("projectExecution",route).put("executionStatus","dispatching").put("businessVerified",false).put("replayAllowed",false);
@@ -15564,8 +15566,11 @@ public final class TaskStore {
                 if(!canonical(sources).equals(canonical(new JSONArray(selected.sources))))return traceDetailResult(node,"unavailable","original_source_selection_changed");
                 requireTraceDetailSources(task,selected.run,sources,plan);
                 JSONObject expanded=TaskTraceDetails.expand(db,node,messages);
-                requireTraceDetailSources(task,selected.run,sources,plan);selected.control.check();db.setTransactionSuccessful();
+                requireTraceDetailSources(task,selected.run,sources,plan);
                 JSONObject availability=expanded.optJSONObject("contentAvailability");
+                if(expanded.optBoolean("bodyIncluded")&&(availability==null||!Boolean.FALSE.equals(availability.opt("available"))))
+                    expanded.putOpt("skillReferenceEvidence",traceSkillReference(expanded));
+                selected.control.check();db.setTransactionSuccessful();
                 if(availability!=null&&Boolean.FALSE.equals(availability.opt("available")))return traceDetailResult(expanded,"unavailable",availability.optString("reason"));
                 return traceDetailResult(expanded,expanded.optBoolean("bodyIncluded")?"current":"metadata_only","");
             }catch(dev.pocketengine.features.memory.TaskStoreMemoryReader.RawMessageUnavailable|dev.pocketengine.features.memory.OwnerSourceRunContext.ContinuationUnavailable|dev.pocketengine.features.assistant.ConversationRepository.SourceUnavailable|TraceSourceUnavailable unavailable){
@@ -16050,6 +16055,24 @@ public final class TaskStore {
         if(!"receipt".equals(row.getString("state"))||!canonical(fact).equals(canonical(row.getJSONObject("receipt").getJSONObject("skillReference")))||!task.equals(fact.getString("taskId"))||!operation.equals(fact.getString("operationId"))||!row.getString("runId").equals(fact.getString("runId")))throw new SecurityException("参考采用缺少同一操作的最终原回执");
         if(!canonical(fact.getJSONArray("stepRefs")).equals(canonical(learnedMethodStepFacts(task,row.getString("runId"),operation,args.getJSONArray("stepOperationIds"),row.getLong("createdAt")))))throw new SecurityException("参考采用原步骤证据改变");
         JSONObject result=new JSONObject(fact.toString());if(args.has("qualityFeedback"))result.put("qualityFeedback",args.getJSONObject("qualityFeedback"));return result;
+    }
+    /** Only the original owner trace detail may show this historical association; not a live SkillBook read or a grant. */
+    private JSONObject traceSkillReference(JSONObject node)throws Exception {
+        if(!"native_tool_trace".equals(node.optString("source"))||!"skills_reference_decision".equals(node.optString("name"))||
+                !"original_operation_row".equals(node.optString("operationBodySource"))||!"receipt".equals(node.optString("operationState")))return null;
+        try{
+            String task=node.getString("taskId"),run=node.getString("runId"),operation=node.getString("operationId");
+            JSONObject fact=skillReferenceProjection(task,operation);
+            if(!"pocketworld.skill-reference-use.v1".equals(fact.optString("format"))||!run.equals(fact.getString("runId"))||
+                    node.getInt("epoch")!=fact.getInt("epoch")||!"owner".equals(fact.optString("ownerId"))||!"private".equals(fact.optString("spaceId")))return null;
+            JSONObject pack=fact.getJSONObject("package");JSONArray steps=fact.getJSONArray("stepRefs"),visible=new JSONArray();
+            if(steps.length()<1||steps.length()>8)return null;
+            for(int i=0;i<steps.length();i++){
+                JSONObject step=steps.getJSONObject(i);visible.put(new JSONObject().put("operationId",step.getString("operationId")).put("tool",step.getString("tool")));
+            }
+            return new JSONObject().put("format","pocketworld.trace-skill-reference.v1").put("operationId",operation)
+                    .put("packageId",pack.getString("id")).put("revision",pack.getInt("revision")).put("steps",visible);
+        }catch(SecurityException|org.json.JSONException unavailable){return null;}
     }
     /** Owner quality review uses the original execution journal, never a model completion flag. */
     public synchronized dev.pocketengine.features.skills.SkillQualityReceipt reviewSkillQuality(String task,String operation,String skill,int revision,String digest,String outcome,String note)throws Exception {

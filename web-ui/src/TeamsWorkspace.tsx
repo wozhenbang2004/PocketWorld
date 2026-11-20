@@ -50,6 +50,7 @@ type RunSection = 'progress' | 'result' | 'details';
 type EditorPurpose = 'start' | 'definition';
 type MessageInput = { recipient: string; replyId: string; mode: string };
 type PendingStart = { teamId: string; since: number; goal: string };
+type ResultOrigin = { runId: string; key: string; scroll: number; member?: { id: string; generation: number; deliveryKey: string } };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const object = (value: unknown): Data => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 const label = (value: unknown): string => typeof value === 'string' ? value : '';
@@ -126,9 +127,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const materialBeforeLeave = useRef<((leave: () => void) => void) | null>(null);
   useEffect(() => { registerBeforeLeave?.(leave => formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); }))))); return () => registerBeforeLeave?.(null); }, [registerBeforeLeave, formDraft.guard, startDraft.guard, messageDraft.guard, memberFormDraft.guard]);
   const [materialBusy, setMaterialBusy] = useState(false);
-  const [resultSource, setResultSource] = useState<{ runId: string; key: string; scroll: number } | null>(null);
+  const [resultSource, setResultSource] = useState<ResultOrigin | null>(null);
   const [shownMemberSources,setShownMemberSources]=useState<Record<string,boolean>>({});
-  const deliveryReturn=useRef<{team:string;key:string;taskId:string;scroll:number;entered:boolean}|null>(null);
+  const deliveryReturn=useRef<{team:string;key:string;taskId:string;scroll:number;entered:boolean;member?:ResultOrigin['member']}|null>(null);
   const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
@@ -702,19 +703,21 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       });
     });
   };
-  const resultOrigin = (key = '') => current ? { runId: String(current.id), key, scroll: root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0 } : null;
+  const resultOrigin = (key = '', member?: ResultOrigin['member']): ResultOrigin | null => current
+    ? { runId: String(current.id), key, member, scroll: root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0 } : null;
   resultBack.current = () => {
-    if (!resultSource || resultSource.runId !== current?.id || !workspaceActive || !ownsNativeWindow()) return false;
+    if (!resultSource || runSection === 'result' || resultSource.runId !== current?.id || !workspaceActive || !ownsNativeWindow()) return false;
     const original = resultSource;
     chooseRunSection('result', () => {
       if (currentReading.current?.run?.id !== original.runId || !ownsNativeWindow()) return;
-      setResultSource(null);
       const result = root.current?.querySelector<HTMLElement>('.pw-team-result');
       const row = Array.from(result?.querySelectorAll<HTMLElement>('[data-team-follow-up]') || []).find(v => v.dataset.teamFollowUp === original.key);
+      if (!original.member || !row) setResultSource(saved => saved === original ? null : saved);
       const target = row || result?.querySelector<HTMLElement>('[data-team-result-heading]');
       const scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
       if (scroll) scroll.scrollTop = original.scroll;
-      target?.focus({ preventScroll: true });
+      if (original.member) row?.scrollIntoView({ block: 'nearest' });
+      if (!original.member || !document.activeElement?.closest('[role="tablist"]')) target?.focus({ preventScroll: true });
     }); return true;
   };
   const openFollowUp = (item: TeamFollowUp) => {
@@ -739,7 +742,32 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       original?.kind!=='run'||original.run?.id!==item.team||original.viewHandle!==reading?.viewHandle)return;
     const same=teamResearchDeliveries(original.run,original.messages).find(row=>row.key===item.key&&row.answer?.key===item.answer?.key);
     if(!same?.answer||same.answer.text!==item.answer.text){setNotice('这份成员答复已变化，没有打开其他阶段。');return;}
+    setResultSource(Number.isSafeInteger(original.run.generation)?resultOrigin(same.answer.key, {
+      id:same.memberId,generation:original.run.generation,deliveryKey:same.key,
+    }):null);
     openReading({kind:'message',title:`${same.name} · ${same.answer.label}`,text:same.answer.text,returnFocus:trigger});
+  };
+  const selectRunTab = (section: RunSection) => {
+    const source = resultSource, member = source?.member;
+    if (section === 'result' && member && resultBack.current()) return;
+    // A user who just read this member's actual answer can keep that member
+    // selected when opening the existing progress tab. No task is opened.
+    if (section === 'progress' && runSection === 'result' && source && member && canRead && !materialBusy &&
+      source.runId === current?.id && member.generation === current.generation &&
+      deliveries.some(row => row.memberId === member.id && row.key === member.deliveryKey && (row.key === source.key || row.answer?.key === source.key)) &&
+      members.filter(row => row.id === member.id).length === 1) {
+      setExpandedMembers(old => ({ ...old, [source.runId]: [...new Set([...(old[source.runId] || []), member.id])] }));
+      chooseRunSection('progress', () => {
+        if (!ownsNativeWindow() || document.hidden || currentReading.current?.run?.id !== source.runId ||
+          currentReading.current.run.generation !== member.generation) return;
+        const row = root.current?.querySelector<HTMLElement>(`[data-team-member-id="${CSS.escape(member.id)}"]`);
+        if (!row || row.closest('[hidden],[inert]')) return;
+        row.scrollIntoView({ block: 'start' });
+        if (!document.activeElement?.closest('[role="tablist"]')) row.querySelector<HTMLElement>('button[aria-expanded]')?.focus({ preventScroll: true });
+      });
+      return;
+    }
+    chooseRunSection(section, () => setResultSource(saved => saved === source ? null : saved));
   };
   const openMemberDelivery=(item:TeamResearchDelivery)=>{
     const original=currentReading.current;
@@ -753,7 +781,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         const same=teamResearchDeliveries(next.run,next.messages).find(s=>s.key===item.key);
         acceptReading(next);
         if(!same){setNotice('这份成员原件已变化，请重新核对。没有打开另一阶段。');return}
-        const origin={team:item.team,key:item.key,taskId:item.taskId,scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false};
+        const member=Number.isSafeInteger(next.run.generation)?{id:same.memberId,generation:next.run.generation,deliveryKey:same.key}:undefined;
+        const origin={team:item.team,key:item.key,taskId:item.taskId,scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,member};
         deliveryReturn.current=origin;
         void run('teams.openResearchTask',{viewHandle:next.viewHandle,memberId:same.memberId,round:same.round,taskId:same.taskId,outputFingerprint:same.hash}).catch(failure=>{
           if(deliveryReturn.current===origin)deliveryReturn.current=null;
@@ -772,6 +801,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if(current?.id!==origin.team||runSection!=='result')return;
     const area=root.current?.querySelector<HTMLElement>('.pw-team-result');
     const target=Array.from(area?.querySelectorAll<HTMLButtonElement>('[data-team-delivery]')||[]).find(row=>row.dataset.teamDelivery===origin.key);
+    setResultSource(target&&origin.member&&current.generation===origin.member.generation
+      ? {runId:origin.team,key:origin.key,scroll:origin.scroll,member:origin.member} : null);
     const scroll=root.current?.closest<HTMLElement>('.pw-secondary-scroll');if(scroll)scroll.scrollTop=origin.scroll;
     (target||area?.querySelector<HTMLElement>('[data-team-result-heading]'))?.focus({preventScroll:true});
   },[workspaceActive,busy,reading?.viewHandle,current?.id,runSection,state.webWorkspaceResumeRevision]);
@@ -929,9 +960,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         leaveWithDrafts(()=>{if(currentReading.current?.viewHandle!==handle)return;void run('teams.openDeliveryWorker',{viewHandle:handle,taskId:row.taskId,runId:row.runId,epoch:row.epoch}).catch(e=>setError(e instanceof Error?e.message:String(e)));});
       }}/>
       {reading?.taskLookupNotice && <p className="pw-field-hint" role="status">{reading.taskLookupNotice}</p>}
-      <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'result' || value === 'details') chooseRunSection(value, () => setResultSource(null)); }} className="pw-team-workbench">
+      <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'result' || value === 'details') selectRunTab(value); }} className="pw-team-workbench">
         <div className="pw-team-workbench-bar pw-material-navigation"><TabList aria-label="这次协作"><Tab id="progress" isDisabled={materialBusy}>进展</Tab><Tab id="result" isDisabled={materialBusy}>成果</Tab><Tab id="details">详情</Tab></TabList></div>
-        {resultSource?.runId === current.id && runSection !== 'result' && <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy || materialBusy}
+        {resultSource && resultSource.runId === current.id && !resultSource.member && runSection !== 'result' && <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy || materialBusy}
           onClick={() => resultBack.current()}>返回协作成果</Button>}
         <TabPanel id="progress">
           <TeamFollowUps items={followUps} read={openFollowUp} disabled={!canRead || materialBusy}/>

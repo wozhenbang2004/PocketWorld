@@ -12,11 +12,13 @@ import './attachment-workspace.css';
 import './attachment-page.css';
 
 export type FileDraftTarget={key:string;epoch:number;revision:number;conversationId:string;label:string};
+export type FileResultTopic={taskId:string;conversationId:string;label:string};
 type Props={
  state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event)=>void;openTaskId?:string;
- draftTarget?:FileDraftTarget;
+ draftTarget?:FileDraftTarget;resultTopic?:FileResultTopic;
  onStageFile?:(reference:Json,target:FileDraftTarget,stillCurrent:()=>boolean)=>Promise<boolean>;
  onOpenDraft?:(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
+ onUseResult?:(reference:Json,topic:FileResultTopic,openOnly:boolean,stillCurrent:()=>boolean,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
 };
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 function draftContainsFile(target:FileDraftTarget,file:{fileId:string;sha256:string}){
@@ -31,7 +33,7 @@ const fileOrigins:Record<string,string>={
  device_received_file:'来自这次原设备工作',derived_media:'原件加工成果',managed_build_output:'构建产物',remote_result_snapshot:'已保存的远端成果',
 };
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,onStageFile,onOpenDraft}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -45,12 +47,14 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const hasOriginal=Object.keys(obj(view.originalFile)).length>0;
  const mode=view.documentDraft?'edit':view.comparison?'compare':view.processingOpen?'process':hasOriginal?'original':view.documentOpen?'read':file.id?'detail':'list';
  const location=JSON.stringify([view.windowId,view.taskId,file.id,file.sha256,mode]),locationRef=useRef(location);locationRef.current=location;
+ const workOutput=file.role==='result'&&!!view.taskId&&(view.resultFilesOnly===true||view.fromWorkResult===true||view.taskId===openTaskId);
+ const topic=workOutput&&mode==='original'&&view.canSaveOriginal===true&&file.sourceTaskId===view.taskId&&resultTopic?.taskId===view.taskId?resultTopic:undefined;
  // Success remains attached to the same draft after native receipt advances its revision.
- const draftScope=JSON.stringify([view.windowId,view.taskId,file.id,file.sha256,draftTarget?.key,draftTarget?.epoch,draftTarget?.conversationId]);
+ const draftScope=JSON.stringify([view.windowId,view.taskId,file.id,file.sha256,topic?.conversationId,draftTarget?.key,draftTarget?.epoch,draftTarget?.conversationId]);
  const currentDraftScope=useRef(draftScope);currentDraftScope.current=draftScope;
  const currentHandoff=draftHandoff?.scope===draftScope?draftHandoff:null;
  const selection=exactFileTarget(file),draftHasFile=!!(draftTarget&&selection&&draftContainsFile(draftTarget,selection));
- const handoff=(currentHandoff?.phase==='added'&&!draftHasFile)||(currentHandoff?.phase==='failed'&&draftHasFile)?null:currentHandoff;
+ const handoff=!topic&&((currentHandoff?.phase==='added'&&!draftHasFile)||(currentHandoff?.phase==='failed'&&draftHasFile))?null:currentHandoff;
  const draftBusy=draftHandoff?.phase==='adding'||draftHandoff?.phase==='opening';
  const rememberPosition=()=>{if(scroller.current)positions.current.set(locationRef.current,scroller.current.scrollTop)};
  useLayoutEffect(()=>{
@@ -91,7 +95,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  useEffect(()=>{alive.current=true;registerBack(goBack);return()=>{alive.current=false;registerBack(null)}},[registerBack,goBack]);
  useEffect(()=>{setError('');setPage('1')},[view.windowId,file.id,file.sha256]);
  const busy=pending>0||!!view.busy||!view.ready,privateFiles=!view.group&&!view.team&&!view.deviceOriginalOnly,hasFile=typeof file.id==='string';
- const canStage=privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
+ const canStage=!workOutput&&privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
  const title=hasOriginal?'查看原件':view.comparison?'原图对照':view.documentDraft?'编辑文档':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
   if(!view.ready||draftFlight.current)return;
@@ -100,19 +104,20 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   void Promise.resolve(beforeBack.current?.()).then(frame=>act(returnToWork?'continueTask':'close',{},frame)).catch(()=>{});
  };
  const returnToSearch=()=>{if(busy||draftFlight.current||!onReturnToSearch)return;returningToSearch.current=true;void Promise.resolve(beforeBack.current?.()).then(frame=>act('close',{},frame)).then(()=>onReturnToSearch()).catch(()=>{returningToSearch.current=false})};
- const handOffFile=async(openDraft:boolean)=>{
-  if(busy||draftFlight.current||!canStage||!draftTarget||!selection||!onStageFile||!onOpenDraft)return;
+ const handOffFile=async(openDraft:boolean,originalTopic?:FileResultTopic,openOnly=false)=>{
+  if(busy||draftFlight.current||!selection||!privateFiles||originalTopic&&!onUseResult||!originalTopic&&!canStage)return;
   const target=draftTarget;
   const reference={kind:'artifact',id:selection.fileId,sha256:selection.sha256},epoch=bridge.getDocumentEpoch();
   const readSource=()=>obj(bridge.getState().state.attachmentWorkspace);
   const stillCurrent=()=>{
    const current=readSource(),selected=obj(current.file);
    return alive.current&&currentDraftScope.current===draftScope&&bridge.getDocumentEpoch()===epoch&&!document.hidden&&
-    current.open===true&&current.ready===true&&current.windowId===view.windowId&&current.taskId===view.taskId&&selected.id===file.id&&selected.sha256===file.sha256;
+    current.open===true&&current.ready===true&&!current.busy&&current.windowId===view.windowId&&current.taskId===view.taskId&&selected.id===file.id&&selected.sha256===file.sha256&&
+    (!originalTopic||current.canSaveOriginal===true&&selected.sourceTaskId===originalTopic.taskId&&obj(current.originalFile).sha256===selection.sha256);
   };
   if(!stillCurrent())return;
-  const inDraft=draftContainsFile(target,selection);
-  if(openDraft!==inDraft){
+  const inDraft=!!target&&draftContainsFile(target,selection);
+  if(!originalTopic&&openDraft!==inDraft){
    // A late draft edit must not turn "open" into a write or "add" into a navigation.
    setDraftHandoff({scope:draftScope,phase:inDraft?'added':'failed',
     ...(inDraft?{}:{error:'原草稿已不含这个文件版本，没有重新加入。'})});
@@ -132,11 +137,12 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   draftFlight.current=request;
   setDraftHandoff(request);
   try{
-   const accepted=await (openDraft?onOpenDraft(reference,target,closeOriginal):onStageFile(reference,target,stillCurrent));
-   if(!accepted)throw new Error(openDraft?`「${target.label}」草稿暂未打开，请重新核对后再试。`:`文件尚未确认加入「${target.label}」草稿，请重试。`);
+   const label=originalTopic?.label||target?.label;
+   const accepted=await (originalTopic?onUseResult?.(reference,originalTopic,openOnly,stillCurrent,closeOriginal):target&&(openDraft?onOpenDraft?.(reference,target,closeOriginal):onStageFile?.(reference,target,stillCurrent)));
+   if(!accepted)throw new Error(openDraft?`「${label}」草稿暂未打开，请重新核对后再试。`:`文件尚未确认加入「${label}」草稿，请重试。`);
    if(stillCurrent())setDraftHandoff({...request,phase:'added'});
   }catch(error){
-   if(stillCurrent())setDraftHandoff({...request,phase:openDraft?'added':'failed',error:error instanceof Error?error.message:'草稿操作尚未确认，请重试。'});
+   if(stillCurrent())setDraftHandoff({...request,phase:openDraft&&!originalTopic?'added':'failed',error:error instanceof Error?error.message:'草稿操作尚未确认，请重试。'});
   }finally{
    draftFlight.current=null;
    if(alive.current&&!stillCurrent())setDraftHandoff(current=>current===request?null:current);
@@ -170,7 +176,13 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const original=obj(view.originalFile),canSaveOriginal=privateFiles&&hasFile&&view.canSaveOriginal===true;
  const offerReader=canSaveOriginal&&view.canOpenInReader===true&&!view.externalViewerResult;
  const preferSave=canSaveOriginal&&(original.kind==='unsupported'||original.information?.previewAvailable===false||original.error||view.externalViewerResult);
- const exportAction=<Button variant={preferSave?'primary':'secondary'} disabled={busy||view.exportPending} onClick={()=>run('export')}>{view.exportPending?'等待选择保存位置…':'另存原件…'}</Button>;
+ const topicHasFile=topic?.conversationId===draftTarget?.conversationId&&draftHasFile;
+ const useInTopic=privateFiles&&topic&&onUseResult&&<>
+  <Button variant={preferSave?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined}
+   onClick={()=>void handOffFile(true,topic,topicHasFile)}>{draftBusy?'正在核对原话题草稿…':topicHasFile?'打开原话题草稿':topic.label==='原话题'?'带回原话题草稿':`带回「${topic.label}」草稿`}</Button>
+  {handoff?.error&&<p className="pw-file-draft-status pw-error" role="alert">{handoff.error}</p>}
+ </>;
+ const exportAction=<Button variant={preferSave?'primary':'secondary'} disabled={busy||draftBusy||view.exportPending} onClick={()=>run('export')}>{view.exportPending?'等待选择保存位置…':'另存原件…'}</Button>;
  const fileMenu=<ContextMenuTrigger key={`${file.id}:${file.sha256}`}>{({open})=><>
   <IconButton icon={IconMore} aria-label="更多文件操作" disabled={busy} onClick={event=>open(event.currentTarget)}/>
   <ContextMenu className="pw-attachment-menu" aria-label="当前固定文件的操作" onAction={key=>{if(key==='external'||key==='share'&&privateFiles)run(String(key))}}>
@@ -250,7 +262,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  </div>
  {mode==='original'&&privateFiles&&hasFile&&view.ready&&<div className="pw-file-use-footer" role="group" aria-label={file.role==='source'?'使用来源文件':'使用此成果'}>
   {preferSave&&exportAction}
-  {canContinueFromPreview&&<Button variant={preferSave?'secondary':'primary'} disabled={busy} onClick={revealContinuation}>在原工作里继续</Button>}
+  {useInTopic}
+  {canContinueFromPreview&&<Button variant={preferSave||useInTopic?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>在原工作里继续</Button>}
   {reuseAction}
   {canSaveOriginal&&!preferSave&&exportAction}
  </div>}

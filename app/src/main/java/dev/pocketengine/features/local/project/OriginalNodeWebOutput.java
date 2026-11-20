@@ -19,8 +19,8 @@ import org.json.JSONObject;
 public final class OriginalNodeWebOutput {
     public static final String TOOL="owner_keep_first_node_web_output", ENTRY="dist/index.html";
     public static final String PENDING="owner_web_output_pending";
-    public static final String WITNESS="firstNodeWebOutput", EDITED_ROUTE="editedNodeWebVersion";
-    private static final String EDITED_TREES="editedOutputTrees";
+    public static final String WITNESS="firstNodeWebOutput", EDITED_ROUTE="editedNodeWebVersion", EXISTING_ROUTE="existingNodeWebVersion";
+    private static final String EDITED_TREES="editedOutputTrees", EXISTING_TREES="existingOutputTrees";
     private static final Set<String> BINDING=Set.of("taskId","runId","epoch","buildOperationId","buildReceiptIdentity",
         "checkoutSequence","projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity","operationId");
     private static final Set<String> WITNESS_KEYS=Set.of("taskId","runId","epoch","buildOperationId","checkoutSequence",
@@ -83,11 +83,16 @@ public final class OriginalNodeWebOutput {
             .put("operationId",ownerOp);
         for(String key:ListKeys.SOURCE)facts.put(key,plan.get(key));
         JSONObject witness=actual.optJSONObject(WITNESS);
-        String editedVersion=OwnerDraftFirstBuild.editedWebVersion(pin);
-        if(!editedVersion.isEmpty()&&!editedVersion.equals(row.getJSONObject("receipt").getJSONObject("projectExecution").opt(EDITED_ROUTE)))
-            throw new SecurityException("网页没有这次编辑版构建的原生派发依据");
-        requireWitness(facts,witness,editedVersion);
+        String editedVersion=OwnerDraftFirstBuild.editedWebVersion(pin),existingVersion=OwnerDraftFirstBuild.existingWebVersion(pin);
+        JSONObject route=row.getJSONObject("receipt").getJSONObject("projectExecution");
+        requireVersionRoute(route,EDITED_ROUTE,editedVersion);
+        requireVersionRoute(route,EXISTING_ROUTE,existingVersion);
+        requireWitness(facts,witness,editedVersion,existingVersion);
         return new Build(plan,binding,facts,witness);
+    }
+    private static void requireVersionRoute(JSONObject route,String key,String expected){
+        if(expected.isEmpty()?route.has(key):!expected.equals(route.opt(key)))
+            throw new SecurityException("网页没有这份源码版本的原生派发依据");
     }
     private static final class ListKeys {
         static final String[] SOURCE={"projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity"};
@@ -234,6 +239,23 @@ public final class OriginalNodeWebOutput {
         return version.equals(OwnerDraftFirstBuild.editedWebVersion(copy.getString("workIdentity"),copy.getString("initialCopyDigest"),exact.getString("sourceDigest")));
     }
 
+    private static boolean isExistingCheckout(String version,JSONObject exact,JSONObject checkout)throws Exception{
+        JSONObject payload=exact.getJSONObject("payload");
+        return !checkout.has(OwnerDraftWorkCopy.FIELD)&&OwnerDraftFirstBuild.ordinaryCheckout(checkout)&&
+            "build".equals(exact.opt("stepId"))&&"managed_process_v1".equals(exact.opt("runtimeId"))&&
+            ".".equals(payload.optString("workingDirectory","."))&&"foreground".equals(payload.optString("runMode","foreground"))&&
+            exact.getString("checkoutId").equals(checkout.opt("id"))&&exact.getString("projectId").equals(checkout.opt("projectId"))&&
+            version.equals(OwnerDraftFirstBuild.ordinaryWebVersion(exact));
+    }
+    private static OutputSource versionedSource(RuntimeInvocation invocation,JSONObject exact,JSONObject snapshot)throws Exception{
+        String edited=invocation.editedWebVersion(),existing=invocation.existingWebVersion();
+        JSONObject checkout=snapshot.getJSONObject("checkout");
+        if(!existing.isEmpty()){
+            if(!edited.isEmpty()||!isExistingCheckout(existing,exact,checkout))return null;
+            return requireViteSource(ProjectSources.files(snapshot));
+        }
+        return isEditedCopy(edited,exact,checkout)?requireSupportedSource(snapshot):null;
+    }
     public static final class LaunchObservation {
         private final RuntimeInvocation original;
         private final boolean cleanDist;
@@ -244,11 +266,9 @@ public final class OriginalNodeWebOutput {
     }
     /** Optional observation in the live worker, before dispatch to the OS. Nothing is cleared or written. */
     public static LaunchObservation observeBeforeLaunch(RuntimeInvocation invocation)throws Exception{
-        String version=invocation.editedWebVersion();
-        if(version.isEmpty())return new LaunchObservation(invocation,observeCleanDistAtLaunch(invocation),null);
+        if(!invocation.versionedWebOutput())return new LaunchObservation(invocation,observeCleanDistAtLaunch(invocation),null);
         JSONObject exact=invocation.exact(),snapshot=invocation.sourceSnapshot();
-        if(!isNodeBuild(exact)||!isEditedCopy(version,exact,snapshot.getJSONObject("checkout")))return null;
-        requireSupportedSource(snapshot);
+        if(!isNodeBuild(exact)||versionedSource(invocation,exact,snapshot)==null)return null;
         var root=invocation.workspace();root.verify(invocation);
         WebDistObservation before=WebDistObservation.read(root.directory().toPath());invocation.checkCurrent();
         return new LaunchObservation(invocation,false,before);
@@ -256,22 +276,23 @@ public final class OriginalNodeWebOutput {
 
     /** A read-only witness before this proven-success original process releases its lease. No late observation. */
     public static JSONObject observeAtOriginalExit(RuntimeInvocation invocation,long sequence,LaunchObservation launch)throws Exception{
-        JSONObject exact=invocation.exact();String version=invocation.editedWebVersion();boolean edited=!version.isEmpty();
+        JSONObject exact=invocation.exact();boolean versioned=invocation.versionedWebOutput();
         if(!isNodeBuild(exact)||sequence<1||launch!=null&&launch.original!=invocation)return null;
         invocation.checkCurrent();JSONObject snapshot=invocation.sourceSnapshot(),checkout=snapshot.getJSONObject("checkout");
-        if(edited?launch==null||launch.before==null||!isEditedCopy(version,exact,checkout):!isOwnerCopy(exact,checkout))return null;
-        OutputSource source=requireSupportedSource(snapshot);
-        if(!edited&&source.vite()&&(launch==null||!launch.cleanDist))return null; // V1 Vite still needs an empty output location.
+        if(versioned?launch==null||launch.before==null:!isOwnerCopy(exact,checkout))return null;
+        OutputSource source=versioned?versionedSource(invocation,exact,snapshot):requireSupportedSource(snapshot);
+        if(source==null||!versioned&&source.vite()&&(launch==null||!launch.cleanDist))return null; // V1 Vite still needs an empty output location.
         var root=invocation.workspace();requireOutputPaths(root.directory(),source);root.verify(invocation);
-        var exit=edited?WebDistObservation.read(root.directory().toPath()):null;
+        var exit=versioned?WebDistObservation.read(root.directory().toPath()):null;
         JSONObject info=new JSONObject().put("projectId",exact.getString("projectId")).put("checkoutId",exact.getString("checkoutId"))
             .put("sourceDigest",exact.getString("sourceDigest")).put("name",checkout.getString("name"));
         var frozen=ProjectPackageArchive.capture(root.directory(),info,"web_output",ENTRY,true);
         requireOutputContents(frozen,source);invocation.checkCurrent();
-        JSONObject editedEvidence=null;
-        if(edited){
+        JSONObject changedTrees=null;
+        boolean existing=!invocation.existingWebVersion().isEmpty();
+        if(versioned){
             exit.requireSameRead(WebDistObservation.read(root.directory().toPath()));
-            editedEvidence=launch.before.changedTo(exit,frozen).put("version",version);
+            changedTrees=launch.before.changedTo(exit,frozen).put("version",existing?invocation.existingWebVersion():invocation.editedWebVersion());
         }else{
             requireOutputPaths(root.directory(),source);
             var again=ProjectPackageArchive.capture(root.directory(),info,"web_output",ENTRY,true);
@@ -284,19 +305,17 @@ public final class OriginalNodeWebOutput {
             .put("epoch",binding.getInt("coordinatorEpoch")).put("buildOperationId",binding.getString("operationId"));
         for(String k:ListKeys.SOURCE)stamp.put(k,exact.get(k));
         if(source.vite())stamp.put("outputProfile",source.profile());
-        return stamp.putOpt(EDITED_TREES,editedEvidence);
+        return stamp.putOpt(existing?EXISTING_TREES:EDITED_TREES,changedTrees);
     }
-    private static void requireWitness(JSONObject facts,JSONObject witness,String editedVersion)throws Exception{
-        boolean edited=!editedVersion.isEmpty();
-        if(witness==null||!ENTRY.equals(witness.opt("entryPath"))||
-           witness.length()!=WITNESS_KEYS.size()+(witness.has("outputProfile")?1:0)+(edited?1:0)||
-           (witness.has("outputProfile")&&!VITE.equals(witness.opt("outputProfile"))))
+    private static void requireWitness(JSONObject facts,JSONObject witness,String editedVersion,String existingVersion)throws Exception{
+        boolean edited=!editedVersion.isEmpty(),existing=!existingVersion.isEmpty();
+        if(witness==null||edited&&existing||!ENTRY.equals(witness.opt("entryPath"))||
+           witness.length()!=WITNESS_KEYS.size()+(witness.has("outputProfile")?1:0)+(edited||existing?1:0)||
+           ((existing||witness.has("outputProfile"))&&!VITE.equals(witness.opt("outputProfile"))))
             throw new SecurityException("这笔原构建没有在成功退出时留下可核对的网页原证据；不补读当前 dist");
         for(String key:WITNESS_KEYS)if(!witness.has(key))throw new SecurityException("原整站退出证据缺少字段");
-        JSONObject trees=witness.optJSONObject(EDITED_TREES);
-        if(edited?(trees==null||trees.length()!=3||!editedVersion.equals(trees.opt("version"))||
-            !trees.optString("before").matches("[a-f0-9]{64}")||!trees.optString("after").matches("[a-f0-9]{64}")||trees.opt("before").equals(trees.opt("after"))):
-            witness.has(EDITED_TREES))throw new SecurityException("编辑版构建缺少已改变的原网页字节证据");
+        requireTrees(witness,EDITED_TREES,editedVersion);
+        requireTrees(witness,EXISTING_TREES,existingVersion);
         for(String key:Set.of("taskId","runId","epoch","buildOperationId","checkoutSequence",
             "projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity"))
             if(!ProjectSources.canonical(facts.get(key)).equals(ProjectSources.canonical(witness.opt(key))))
@@ -305,6 +324,12 @@ public final class OriginalNodeWebOutput {
             throw new SecurityException("原整站退出摘要不可核对");
         if(witness.optLong("archiveBytes")<=0||witness.optLong("archiveBytes")>ProjectPackageArchive.MAX_ARCHIVE_BYTES)
             throw new SecurityException("原整站退出大小不可核对");
+    }
+    private static void requireTrees(JSONObject witness,String key,String version){
+        JSONObject trees=witness.optJSONObject(key);
+        if(version.isEmpty()?witness.has(key):trees==null||trees.length()!=3||!version.equals(trees.opt("version"))||
+            !trees.optString("before").matches("[a-f0-9]{64}")||!trees.optString("after").matches("[a-f0-9]{64}")||trees.opt("before").equals(trees.opt("after")))
+            throw new SecurityException("这次构建缺少已改变的原网页字节证据");
     }
     public static void requireExitBytes(JSONObject witness,ProjectPackageArchive.Frozen frozen)throws Exception{
         JSONObject bytes=ProjectPackageDelivery.archiveIdentity(frozen);
@@ -389,9 +414,9 @@ public final class OriginalNodeWebOutput {
         if(!sourceShape.profile().equals(build.witness.optString("outputProfile",STOCK)))
             throw new SecurityException("原构建见证与本次审阅的网页类型不同");
         requireOutputContents(frozen,sourceShape);requireExitBytes(build.witness,frozen);
-        JSONObject trees=build.witness.optJSONObject(EDITED_TREES);
+        JSONObject trees=build.witness.optJSONObject(build.witness.has(EXISTING_TREES)?EXISTING_TREES:EDITED_TREES);
         if(trees!=null&&!trees.getString("after").equals(WebDistObservation.archiveTreeDigest(frozen)))
-            throw new SecurityException("当前网页包与这次编辑版构建的退出字节不一致");
+            throw new SecurityException("当前网页包与这次构建的退出字节不一致");
         JSONObject manifest=frozen.manifest(),selected=build.facts();
         JSONObject source=manifest.getJSONObject("source");
         for(String key:Set.of("projectId","checkoutId","sourceDigest"))if(!selected.getString(key).equals(source.opt(key)))

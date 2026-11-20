@@ -30,6 +30,9 @@ public final class OwnerDraftFirstBuild {
     private static final String EDITED_BASE="copiedSourceDigest", EXISTING_CHECKOUT="existingCheckoutBuild";
     public static boolean edited(JSONObject pin){return pin.has(EDITED_BASE);}
     public static boolean existingCheckout(JSONObject pin){return Boolean.TRUE.equals(pin.opt(EXISTING_CHECKOUT));}
+    static boolean ordinaryCheckout(JSONObject value){
+        return !value.has("teamProjectCopy")&&!value.has("skillExecutionCopy")&&!value.has("isolatedGit")&&!value.has("nativeGitImportPending");
+    }
     public static String existingClient(String project,String checkout,String digest){
         if(!hash(digest))throw new IllegalArgumentException("无法核对这版私人副本");
         return UUID.nameUUIDFromBytes(("private-existing-node-build-v1:"+ProjectBuildPlan.identity(project)+":"+
@@ -47,6 +50,15 @@ public final class OwnerDraftFirstBuild {
     static String editedWebVersion(String work,String copied,String source)throws Exception{
         if(!hash(copied)||copied.equals(source))throw new SecurityException("没有独立副本的当前编辑版");
         return ProjectSources.digest(new JSONObject().put("clientMessageId",editedClient(work,source)).put(EDITED_BASE,copied));
+    }
+    public static String existingWebVersion(JSONObject pin)throws Exception{
+        if(!existingCheckout(pin))return "";
+        return ordinaryWebVersion(pin);
+    }
+    static String ordinaryWebVersion(JSONObject exact)throws Exception{
+        String client=existingClient(exact.getString("projectId"),exact.getString("checkoutId"),exact.getString("sourceDigest"));
+        return ProjectSources.digest(new JSONObject().put("format","pocketworld.ordinary-node-web-version.v1")
+            .put("clientMessageId",client).put("planDigest",exact.getString("planDigest")).put("runtimeIdentity",exact.getString("runtimeIdentity")));
     }
     public static String reviewedClient(JSONObject pin)throws Exception{
         if(existingCheckout(pin))return existingClient(pin.getString("projectId"),pin.getString("checkoutId"),pin.getString("sourceDigest"));

@@ -328,12 +328,12 @@ public final class ManagedProcessJobs implements AutoCloseable {
     }
     private void execute(Job job,List<String> command,Map<String,String> environment,File directory,long timeoutMillis) {
         String finalStatus="unknown";boolean groupAbsent=false;java.util.List<JSONObject> pendingInputs=new ArrayList<>();
-        boolean edited=!job.invocation.editedWebVersion().isEmpty();
+        boolean versionedWeb=job.invocation.versionedWebOutput();
         OriginalNodeWebOutput.LaunchObservation webBefore=null;
         try {
             try{
                 long sequence;synchronized(job){sequence=job.receipt.getLong("checkoutSequence");}
-                if(!edited||webCheckoutUncontended(job,sequence,true))
+                if(!versionedWeb||webCheckoutUncontended(job,sequence,true))
                     webBefore=OriginalNodeWebOutput.observeBeforeLaunch(job.invocation);
             }catch(Exception unchecked){/* No defensible output witness; normal execution is unchanged. */}
             if(job.invocation.exact().getJSONObject("payload").has("devWatch")){
@@ -399,9 +399,9 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 JSONObject webOutputAtExit=null;
                 if(groupAbsent&&!job.cancel&&"completed".equals(finalStatus))try{
                     long sequence;synchronized(job){sequence=job.receipt.getLong("checkoutSequence");}
-                    if(!edited||webBefore!=null&&webCheckoutUncontended(job,sequence,false)){
+                    if(!versionedWeb||webBefore!=null&&webCheckoutUncontended(job,sequence,false)){
                         JSONObject observed=OriginalNodeWebOutput.observeAtOriginalExit(job.invocation,sequence,webBefore);
-                        if(!edited||webCheckoutUncontended(job,sequence,false))webOutputAtExit=observed;
+                        if(!versionedWeb||webCheckoutUncontended(job,sequence,false))webOutputAtExit=observed;
                     }
                 }catch(Exception unsupportedOrMissing){/* Success of the original process does not attest a complete Web artifact. */}
                 boolean markerClean=job.devSession==null||job.devSession.cleanupMarker();
@@ -589,9 +589,9 @@ public final class ManagedProcessJobs implements AutoCloseable {
         synchronized(job){ref.requireReceipt(job.receipt);if(job.terminalInput==null||job.cancel||!"running".equals(job.receipt.optString("status"))||!Boolean.TRUE.equals(job.receipt.opt("nativeStartObserved"))||Boolean.TRUE.equals(job.receipt.opt("processExited"))||Boolean.TRUE.equals(job.receipt.opt("resourcesReleased")))throw new SecurityException("runtime_pty_original_session_not_live");}
     }
     public synchronized void requireCheckoutWritable(String checkout)throws Exception {
-        // A competing path that asks to write cannot contribute its files to a V2 build's result.
+        // A competing path that asks to write cannot contribute to a versioned build's result.
         // This does not admit or reject that writer and is not persisted as a new runtime lease.
-        for(Job job:live.values())if(!job.invocation.editedWebVersion().isEmpty()&&checkout.equals(job.invocation.executionRef().checkoutId()))
+        for(Job job:live.values())if(job.invocation.versionedWebOutput()&&checkout.equals(job.invocation.executionRef().checkoutId()))
             job.webObservationContended=true;
         File[] directories=root.listFiles();if(directories==null)throw new java.io.IOException("runtime_job_cache_unreadable");
         for(File directory:directories){File record=new File(directory,"receipt.json");if(!record.isFile())continue;Job job=live.get(directory.getName());JSONObject receipt;

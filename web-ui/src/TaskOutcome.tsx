@@ -150,7 +150,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const record = task && typeof task === 'object' ? task as Record<string, any> : {};
   const status = typeof record.status === 'string' && record.status ? record.status : record.raw?.status;
   const buildScope = record.raw?.developmentContext?.ownerDraftFirstBuild;
-  const firstWeb = active && status==='completed' && buildScope && buildScope.existingCheckoutBuild!==true &&
+  const firstWeb = active && status==='completed' && buildScope &&
     typeof record.id==='string' && typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
     ? {taskId:record.id,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
   const packageRead = useProjectPackages(task, active, readIdentity, firstWeb?.taskId);
@@ -225,7 +225,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active && onReadPhoneConversation && <PhoneTaskConversationReturn task={record} onRead={onReadPhoneConversation}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}`} ownerWindow={packageRead.firstWebWindow}
-      target={firstWeb} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
+      target={firstWeb} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
     {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>

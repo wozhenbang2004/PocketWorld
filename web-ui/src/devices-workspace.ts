@@ -257,7 +257,9 @@ export function devicePhoneGoalResult(value: unknown, review: DeviceData): Devic
   return result;
 }
 export function deviceHistoryLabel(value: DeviceData | null, view?: DeviceData): string {
-  if (!value) return view?.phoneGoalResult === true ? '本机保留了这次派发。尚未读取对端接收状态，不能推断机主已读。' : '读取这次操作的最新回执。';
+  if (!value) return view?.phoneGoalResult === true
+    ? view.localPhoneResultPath === 'original_run' ? '本机已保存原接单回执与执行编号；这不代表已读取成果。' : '这里显示本机派发记录，尚未在此窗口重读对方回执。'
+    : '读取这次操作的最新回执。';
   if (value.managementOnly === true) return value.stopped === true ? '执行端报告已停止，请继续查询原操作结果。' : value.requested === true ? '执行端已接受停止请求，仍待核对停止结果。' : '停止结果待核对，请查询原操作回执。';
   if (view?.phoneGoalResult === true) {
     const r = value.operationReceipt;

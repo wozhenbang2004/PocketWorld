@@ -25,7 +25,7 @@ export function firstNodeWebOwnerWindow(taskId: string): string {
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
-export function FirstNodeWebOutput({target, ownerWindow, open, onSaved}: {target: Position; ownerWindow: string; open?: (p: PackagePreviewTarget)=>void;
+export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible}: {target: Position; ownerWindow: string; hideIneligible?: boolean; open?: (p: PackagePreviewTarget)=>void;
   onSaved: (operationId: string, sha256: string) => void}) {
   const [fact, setFact] = useState<Fact|null>(null);
   const [busy, setBusy] = useState('');
@@ -70,7 +70,7 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved}: {target
     return ()=>{alive.current=false;flight.current=false;++sequence.current;};
     // The shared owner-window projection can arrive after the navigation acknowledgement.
   },[target.taskId,target.runId,target.epoch,ownerWindow]);
-  if(!available()||(!fact&&!failure))return null;
+  if(!available()||(!fact&&!failure)||hideIneligible&&fact?.eligible===false&&!failure)return null;
   return <section className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
     {fact?.eligible===false&&fact.message&&<p className="pw-reading-note">{fact.message}</p>}

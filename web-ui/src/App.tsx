@@ -50,7 +50,7 @@ import {NewConversationMemory} from './NewConversationMemory';
 import DeveloperDiagnosticsWorkspace from './DeveloperDiagnosticsWorkspace';
 import {SetupWorkspace,type SetupDestination,type SetupView} from './SetupWorkspace';
 import {readSetup,type SetupCapability} from './setup-contract';
-import {AttachmentWorkspace,type FileDraftTarget} from './AttachmentWorkspace';
+import {AttachmentWorkspace,type FileDraftTarget,type FileResultTopic} from './AttachmentWorkspace';
 import RemoteInboxWorkspace,{type NotificationViewMemory} from './RemoteInboxWorkspace';
 import type {TeamAttentionLocator} from './NotificationTeamAttention';
 import {ConversationOrganization,orderConversations} from './ConversationOrganization';
@@ -428,7 +428,7 @@ export default function App(){
  const registerCapabilityBack=useCallback((handler:(()=>boolean)|null)=>{capabilityBack.current=handler},[]);
  const registerTaskBack=useCallback((handler:(()=>boolean)|null)=>{taskTransientBack.current=handler},[]);
  const attachmentBack=useRef<(()=>boolean)|null>(null);
- const resultFileReturnFocus=useRef<({taskId:string}|{conversationId:string})&{target:HTMLButtonElement}|null>(null);
+ const resultFileReturnFocus=useRef<({taskId:string}|{conversationId:string;resultMessageId:string;result:TaskResult})&{target:HTMLButtonElement}|null>(null);
  const openingChatResult=useRef('');
  const [openingChatResultId,setOpeningChatResultId]=useState('');
  const registerAttachmentBack=useCallback((handler:(()=>boolean)|null)=>{attachmentBack.current=handler},[]);
@@ -829,10 +829,10 @@ export default function App(){
  },[invalidateContinuation]);
  const backFromTask=useCallback(()=>{if(taskMenuOpen){setTaskMenuOpen(false);return}if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.())return;if(taskLayer==='scope'){showTaskLayer('goal');return}const origin=taskReconciliationOrigin.current;if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}void closeTask().then(closed=>{if(closed&&searchReturn)showWorkSearch()})},[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,searchReturn,showWorkSearch]);
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
- const returnToOriginalTaskConversation=async(taskId:string,conversationId:string,work?:Pick<WorkIdentity,'runId'|'epoch'>,phoneRead?:PhoneConversationOrigin,fromTeam=false)=>{
+ const returnToOriginalTaskConversation=async(taskId:string,conversationId:string,work?:Pick<WorkIdentity,'runId'|'epoch'>,phoneRead?:PhoneConversationOrigin,fromTeam=false,stageFile?:(inEditor:()=>boolean)=>Promise<boolean>)=>{
   const associate=!!work;
   if(!conversationId||returningConversation||!can('conversation.select')||
-     (associate||phoneRead)&&bridge.getState().state.chatSubmitting)return;
+     (associate||phoneRead||stageFile)&&bridge.getState().state.chatSubmitting)return;
   if(phoneRead&&(associate||phoneRead.taskId!==taskId||phoneRead.conversationId!==conversationId||!phoneSourceStillOpen(phoneRead))){
    setLocalError('原手机轮次或阅读窗口已变化，没有打开其他对话。');return
   }
@@ -862,7 +862,7 @@ export default function App(){
    if(!atDestination())return;
    const reader=bridge.getState().state.conversationReader;
    if(reader){
-    if(!associate&&!phoneRead&&reader.conversation===conversationId)return;
+    if(!associate&&!phoneRead&&!stageFile&&reader.conversation===conversationId)return;
     if(phoneRead||bridge.getState().state.chatSubmitting)throw new Error('另一份历史阅读窗口已打开，未关闭它或改读其他回执。');
     if(!can('conversation.reader.close'))throw new Error('请先关闭历史阅读窗口，再回到这件事的对话。');
     await act('conversation.reader.close',{window:reader.window,conversationId:reader.conversation});
@@ -870,8 +870,10 @@ export default function App(){
    }
    if(!atDestination())return;
    const before=bridge.getState().state;
-   if(before.chatSubmitting&&(associate||phoneRead))throw new Error('当前消息仍在提交，请稍后回到这件事的对话。');
-   if(before.conversationId!==conversationId)await act('conversation.select',{id:conversationId});
+   const selecting=before.conversationId!==conversationId;
+   const earlierRead=stageFile&&selecting?obj(obj(before.moduleResultInputs)['assistant.get'])._requestId:undefined;
+   if(before.chatSubmitting&&(associate||phoneRead||stageFile))throw new Error('当前消息仍在提交，请稍后回到这件事的对话。');
+   if(selecting)await act('conversation.select',{id:conversationId});
    else if(before.chatSubmitting){
     if(!can('conversation.reader.open'))throw new Error('当前消息仍在提交，暂时不能打开原对话历史。');
     await act('conversation.reader.open',{conversationId});
@@ -881,13 +883,15 @@ export default function App(){
    const arrived=()=>{
     const latest=bridge.getState(),state=latest.state,reader=state.conversationReader;
     if(reader)return reader.conversation===conversationId?'history':null;
-    if(fromTeam&&(obj(latest.view).section||obj(latest.view).taskId||obj(latest.composer).conversationId!==conversationId))return null;
+    if((fromTeam||stageFile)&&(obj(latest.view).section||obj(latest.view).taskId||obj(latest.composer).conversationId!==conversationId))return null;
+    if(stageFile&&(latest.composer?.ready!==true||state.attachmentWorkspace?.open||!fileDraftConversationLoaded(state,conversationId,earlierRead)))return null;
     return !state.chatSubmitting&&state.conversationId===conversationId?'editor':null;
    };
    if(!await waitForSnapshot(()=>arrived()!==null,'尚未确认已回到所属对话，请从对话列表重新打开。'))return;
    if(!atDestination())return;
    if(arrived()==='history'){
     if(associate) setLocalStatus('已打开原对话的历史。当前是只读历史，尚未关联到新输入。');
+    if(stageFile) setLocalStatus('已打开原对话的只读历史。没有加入文件，也未发送。');
     return;
    }
    const inEditor=()=>atDestination()&&arrived()==='editor';
@@ -901,6 +905,10 @@ export default function App(){
       setLocalStatus('已回到原对话。当前消息还在处理，这次成果没有关联到输入。');return;
     }
     if(!await changeIntent('chat')||!inEditor())return;
+    if(stageFile){
+     if(!await stageFile(inEditor)||!inEditor())return;
+     setLocalStatus('已在原话题草稿中核对到这份文件，未发送。');
+    }
     if(work){
       const draftCurrent=()=>inEditor()&&(!fromTeam||!bridge.getState().state.chatBusy);
       if(fromTeam&&asArray<Json>(obj(bridge.getState().composer).objectRefs).some(ref=>
@@ -1178,7 +1186,7 @@ export default function App(){
    if(!stillCurrent())return;
    if(listed?.taskId!==result.taskId||!Array.isArray(listed.files)||!listed.files.length&&!listed.readLimited){fallback();return;}
    const single=listed.files.length===1&&!listed.readLimited?listed.files[0] as TaskResultFile:null;
-   resultFileReturnFocus.current={conversationId,target};opening=true;
+   resultFileReturnFocus.current={conversationId,resultMessageId,result,target};opening=true;
    await bridge.command('attachmentWorkspace.open',{...locator,...(single?{fileId:single.id,sha256:single.sha256,openOriginal:true}:{})});
   }catch(error){
    if(opening){
@@ -1226,10 +1234,38 @@ export default function App(){
      unsubscribe=bridge.subscribe(check);check();
    });
  };
- const conversationDraftId=String(state.conversationId||'');
- const fileDraftTarget:FileDraftTarget|undefined=can('composer.object.add')&&composer.ready===true&&typeof composer.key==='string'&&composer.key&&
-  Number.isSafeInteger(composer.epoch)&&Number.isSafeInteger(composer.revision)&&composer.revision>0&&composer.conversationId===conversationDraftId
-  ?{key:composer.key,epoch:composer.epoch,revision:composer.revision,conversationId:conversationDraftId,label:currentConversation?.title||'当前管家输入'}:undefined;
+ const fileDraftFor=(draft:Json,conversationId:string,label:string):FileDraftTarget|undefined=>
+  can('composer.object.add')&&draft.ready===true&&typeof draft.key==='string'&&draft.key&&
+  Number.isSafeInteger(draft.epoch)&&Number.isSafeInteger(draft.revision)&&draft.revision>0&&draft.conversationId===conversationId
+  ?{key:draft.key,epoch:draft.epoch,revision:draft.revision,conversationId,label}:undefined;
+ const fileDraftTarget=fileDraftFor(composer,String(state.conversationId||''),currentConversation?.title||'当前管家输入');
+ const fileDraftConversationLoaded=(native:Json,conversationId:string,earlierRead?:string)=>{
+  // Selecting a conversation can publish a blank composer before its original history is readable.
+  const read=obj(obj(native.moduleResultInputs)['assistant.get']);
+  return !!read._requestId&&read._requestId!==earlierRead&&read.conversationId===conversationId&&
+   obj(obj(native.moduleResults)['assistant.get']).conversationId===conversationId&&
+   !asArray<string>(native.moduleBusy).includes('assistant.get')&&!obj(native.moduleErrors)['assistant.get'];
+ };
+ const resultTopicOf=(native:ReturnType<typeof bridge.getState>):FileResultTopic|undefined=>{
+  const view=obj(native.state.attachmentWorkspace),taskId=view.taskId,owner=obj(native.view);
+  if(view.open!==true||!taskId||!can('composer.object.add')||owner.section)return;
+  let conversationId:string|null=null;
+  if(view.resultFilesOnly===true){
+   const origin=resultFileReturnFocus.current;
+   if(!origin||!('conversationId' in origin)||owner.taskId||origin.result.taskId!==taskId||native.state.conversationId!==origin.conversationId||native.state.conversationReader)return;
+   const matching=asArray<Json>(native.state.messages).filter(row=>row.id===origin.resultMessageId);
+   const source=matching.length===1?messageTaskResult(matching[0]):null;
+   if(source?.deliveryId!==origin.result.deliveryId||source.taskId!==taskId||source.runId!==origin.result.runId||source.epoch!==origin.result.epoch||source.status!=='completed')return;
+   conversationId=origin.conversationId;
+  }else if(owner.taskId===taskId&&openedTaskId.current===taskId){
+   const work=asArray<Task>(native.state.tasks).find(task=>task.id===taskId);
+   if(!work||work.raw?.contextAvailable===false||work.raw?.contextWithdrawn===true||work.raw?.taskProjection==='source_unavailable')return;
+   // This existing original-request hint permits navigation only, not a draft mutation.
+   conversationId=originatingRequestConversation(work);
+  }
+  if(conversationId)return {taskId,conversationId,label:conversations.find(row=>row.id===conversationId)?.title||'原话题'};
+ };
+ const fileResultTopic=snapshot&&resultTopicOf(snapshot);
  const currentFileDraft=(target:FileDraftTarget)=>{
   const native=bridge.getState(),draft=obj(native.composer);
   if(document.hidden||draft.ready!==true||draft.key!==target.key||draft.epoch!==target.epoch||
@@ -1242,13 +1278,14 @@ export default function App(){
   if(native.chatSubmitting||native.phoneSubmitting||phoneAction.current||phoneReviewPending)throw new Error('输入正在提交，请稍后从这份原件再试。');
   return stageButlerObject(reference,()=>stillOpen()&&!!currentFileDraft(target),true);
  };
+ const matchedDraftFile=(draft:Json,reference:Json)=>asArray<Json>(draft.objectRefs).some(ref=>
+  ref.kind===reference.kind&&ref.id===reference.id&&ref.sha256===reference.sha256);
  const showFileDraft=async(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>{
   const documentEpoch=bridge.getDocumentEpoch(),originalNavigation=navigationWindow.current;
   const stillAttached=()=>{
    if(bridge.getDocumentEpoch()!==documentEpoch)return false;
    const draft=currentFileDraft(target);
-   return !!draft&&Number.isSafeInteger(draft.revision)&&draft.revision>=target.revision&&
-    asArray<Json>(draft.objectRefs).some(ref=>ref.kind===reference.kind&&ref.id===reference.id&&ref.sha256===reference.sha256);
+   return !!draft&&Number.isSafeInteger(draft.revision)&&draft.revision>=target.revision&&matchedDraftFile(draft,reference);
   };
   if(!stillAttached())throw new Error('原草稿中已找不到这份文件，请在原件中重新关联。');
   const native=bridge.getState().state;
@@ -1263,9 +1300,51 @@ export default function App(){
   if(!atDraft())return false;
   if(intent!=='chat'&&!await changeIntent('chat'))return false;
   if(!atDraft())return false;
-  setLocalStatus('文件仍在这份草稿，可以继续编辑。');
+  setLocalStatus('文件仍在这份草稿，可以继续编辑。没有发送。');
   requestAnimationFrame(()=>{if(atDraft())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
   return true;
+ };
+ const useFileInOriginalTopic=async(reference:Json,topic:FileResultTopic,openOnly:boolean,stillOpen:()=>boolean,closeOriginal:()=>Promise<unknown>)=>{
+  const initial=bridge.getState(),documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const {taskId,conversationId,label}=topic;
+  const foreground=()=>!document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation;
+  const current=()=>{
+   const live=resultTopicOf(bridge.getState());
+   return foreground()&&stillOpen()&&live?.taskId===taskId&&live.conversationId===conversationId;
+  };
+  if(!current())return false;
+  if(initial.state.chatSubmitting||initial.state.phoneSubmitting||phoneAction.current||phoneReviewPending||returningConversation)
+   throw new Error('请先等待当前输入处理完成。没有发送这份文件。');
+  const stage=async(target:FileDraftTarget,atDraft:()=>boolean)=>{
+   const draft=currentFileDraft(target);
+   if(!atDraft()||!draft||target.key!==`conversation:${conversationId}`||draft.revision!==target.revision)return false;
+   if(matchedDraftFile(draft,reference))return true;
+   if(openOnly)throw new Error('原草稿已不含这份文件，没有重新加入。');
+   if(asArray<Json>(draft.objectRefs).some(ref=>ref.kind==='artifact'&&ref.id===reference.id))
+    throw new Error('原草稿已关联另一个版本，没有替换。');
+   return stageFileInDraft(reference,target,atDraft);
+  };
+  if(initial.state.conversationId===conversationId&&!initial.state.conversationReader){
+   const target=fileDraftFor(obj(initial.composer),conversationId,label);
+   if(!target||obj(initial.state.attachmentWorkspace).resultFilesOnly!==true&&!fileDraftConversationLoaded(initial.state,conversationId))
+    throw new Error('原话题尚未核对完成，文件仍留在原件。');
+   if(!await stage(target,current)||!current())return false;
+   return showFileDraft(reference,target,closeOriginal);
+  }
+  if(openOnly)throw new Error('原话题草稿已变化，没有加入其他草稿。');
+  if(!can('conversation.select'))throw new Error('原话题暂不可打开。没有加入其他草稿。');
+  await closeOriginal();
+  const after=bridge.getState();
+  if(!foreground()||after.state.conversationId!==initial.state.conversationId||after.composer?.epoch!==initial.composer?.epoch||
+   obj(after.view).taskId!==taskId||openedTaskId.current!==taskId)return false;
+  let linked=false;
+  await returnToOriginalTaskConversation(taskId,conversationId,undefined,undefined,false,async atEditor=>{
+   const target=fileDraftFor(obj(bridge.getState().composer),conversationId,label);
+   if(!target)throw new Error('原话题草稿还没有就绪。没有加入其他草稿。');
+   linked=await stage(target,atEditor);
+   return linked;
+  });
+  return linked;
  };
  const askButlerAbout=(reference:Json)=>{
    if(state.chatSubmitting||state.phoneSubmitting||phoneAction.current||phoneReviewPending){setLocalError('请先等待当前输入处理完成。');return;}
@@ -2484,7 +2563,7 @@ export default function App(){
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
   {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined}
-   draftTarget={fileDraftTarget} onStageFile={can('composer.object.add')?stageFileInDraft:undefined} onOpenDraft={showFileDraft}/>
+   draftTarget={fileDraftTarget} resultTopic={fileResultTopic} onStageFile={can('composer.object.add')?stageFileInDraft:undefined} onOpenDraft={showFileDraft} onUseResult={useFileInOriginalTopic}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.())closeTask()}else setTaskOpen(true)}} direction="right" handleOnly shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;

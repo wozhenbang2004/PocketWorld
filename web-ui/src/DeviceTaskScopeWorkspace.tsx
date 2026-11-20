@@ -166,7 +166,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   };
   return <section className="pw-task-capabilities" aria-label="本任务的远端设备范围">
     <Button variant="secondary" onClick={read} disabled={busy}>{directedId ? '读取' + scopeLabel : '选择本任务的远端设备'}</Button>
-    {directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看这份工作的原派单</Button>}
+    {directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看原派单与结果</Button>}
     {directedId && !open && <p>这份工作只给{deviceName(directedId, peers)}。{directedManual?'点读取只核对这部手机已有的范围，不抓取画面，也不发送输入。':'点读取才核对它已授权的范围，不会发送目标或启动执行。'}</p>}
     {notice && <p role="status">{notice}</p>}
     <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : '核对本任务设备范围' : directedId ? '核对' + scopeLabel : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>

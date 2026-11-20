@@ -36,7 +36,7 @@ public final class ProjectOwnerWorkflows {
         JSONObject picked=new JSONObject().put("projectId",project).put("checkouts",available).put("executionAuthorized",false);
         return includeRuntime?picked.put("runtime",local.projectRuntimeForHost("managed_process_v1")):picked;
     }
-    private static boolean ordinaryCheckout(JSONObject value){return !value.has("teamProjectCopy")&&!value.has("skillExecutionCopy")&&!value.has("isolatedGit")&&!value.has("nativeGitImportPending");}
+    private static boolean ordinaryCheckout(JSONObject value){return OwnerDraftFirstBuild.ordinaryCheckout(value);}
     public JSONObject sourceForOwner(String project,String checkout)throws Exception {return sourceForOwner(project,checkout,false);}
     public JSONObject sourceForOwner(String project,String checkout,boolean observeTooling)throws Exception {
         ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);

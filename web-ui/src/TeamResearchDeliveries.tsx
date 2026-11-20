@@ -67,13 +67,13 @@ export function TeamResearchDeliveries({records,disabled,rawAvailable,open,openA
         const answer=openAnswer&&source.answer, stage=answer?answer.label:`第 ${source.round} 阶段`;
         const rawLabel=`查看${source.name}第 ${source.round} 阶段的原研究任务`;
         return <div className="pw-team-research-delivery" key={source.key}>
-          <Button data-team-delivery={answer?undefined:source.key} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight}
+          <Button data-team-delivery={answer?undefined:source.key} data-team-follow-up={answer?answer.key:source.key} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight}
             aria-label={answer?`阅读${source.name}的${stage}`:rawLabel} aria-description={source.excerpt||undefined} disabled={disabled||!answer&&!rawAvailable}
             onClick={event=>answer?openAnswer!(source,event.currentTarget):open(source)}>
             <span className="pw-team-attention-copy"><strong>{source.name} · {stage}</strong>
               <small dir="auto">{source.excerpt?`${source.excerpt}${source.excerpted?'…':''}`:answer?'阅读成员答复':'查看原研究任务'}</small></span>
           </Button>
-          {answer&&rawAvailable&&<IconButton className="pw-utility-icon" icon={IconExternalLink} data-team-delivery={source.key} aria-label={rawLabel} title={rawLabel}
+          {answer&&rawAvailable&&<IconButton className="pw-utility-icon" icon={IconExternalLink} data-team-delivery={source.key} data-team-follow-up={source.key} aria-label={rawLabel} title={rawLabel}
             disabled={disabled} onClick={()=>open(source)}/>}
         </div>;
       })}</div>

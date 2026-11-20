@@ -185,6 +185,10 @@
 .pw-trace-detail-source { padding: 9px 11px; margin: 0 0 12px; background: var(--pw-inset); border-radius: 9px; color: var(--pw-copy); font-size: 12px; line-height: 19px; overflow-wrap: anywhere; }
 .pw-trace-detail-source p { margin: 0; }
 .pw-trace-detail-source .button-press-motion { min-height: 40px; padding: 6px 8px; margin: 3px -7px -4px; font-size: 12px; }
+.pw-trace-skill-steps { list-style: none; margin: 5px 0 8px; padding: 0; }
+.pw-trace-skill-steps li + li { border-top: 1px solid color-mix(in srgb, var(--pw-copy) 12%, transparent); }
+.pw-trace-skill-steps li > span { display: block; padding: 8px 0; }
+.pw-trace-skill-steps .button-press-motion { min-height: 44px; width: 100%; margin: 0; padding: 8px 0; justify-content: start; text-align: start; white-space: normal; }
 .pw-trace-detail-loading { display: flex; align-items: center; gap: 6px; }
 .pw-trace-token-details { padding: 0; }
 .pw-trace-usage-scope { --ovio-accent: var(--pw-selected, #e5e5e5); --ovio-on-accent: var(--pw-ink); --ovio-track: transparent; margin-bottom: 12px; }
