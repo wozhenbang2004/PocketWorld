@@ -292,18 +292,44 @@ export function deviceWorkspaceTaskMode(value: unknown): 'manual_phone' | 'agent
   if (value.kind === 'assistant' && value.executionMode === 'capabilities' && (value.ownerDeviceWork?.format === 'pocketworld.owner-device-work.v1' || projected && nav.mode === 'agent_device')) return 'agent_device';
   return '';
 }
+type ManualPreparation = { deadlineAt: number; target: { deviceId: string; instanceId: string; certificateFingerprint: string } };
+function originalManualPreparation(task: DeviceData): ManualPreparation | undefined {
+  const raw = task.raw;
+  if (!object(raw) || deviceWorkspaceTaskMode(raw) !== 'manual_phone' || raw.status !== 'paused' || raw.runId !== ''
+    || raw.coordinatorEpoch !== 0 || raw.cancelRequested !== false) return;
+  const marker = raw.ownerPhoneControl;
+  if (marker !== undefined && (!object(marker) || marker.format !== 'pocketworld.owner-phone-control.v1' || marker.requestId !== task.id)) return;
+  const draft = marker ? { deadlineAt: marker.deadlineAt, target: marker.manualPhoneTarget } : raw.deviceWorkspaceNavigation?.manualPhonePreparation;
+  if (!object(draft) || !positiveInteger(draft.deadlineAt) || !object(draft.target)) return;
+  const { deviceId, instanceId, certificateFingerprint } = draft.target;
+  if (!identity(deviceId) || !/^pw1_[a-f0-9]{64}$/.test(deviceId) || !identity(instanceId) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(instanceId) || !digest(certificateFingerprint)) return;
+  return { deadlineAt: draft.deadlineAt, target: { deviceId, instanceId, certificateFingerprint } };
+}
+function samePreparedPhone(saved: ManualPreparation, peer: DeviceData | undefined) {
+  return !!peer && peer.revoked !== true && peer.connection?.state !== 'REVOKED'
+    && peer.deviceId === saved.target.deviceId && peer.instanceId === saved.target.instanceId
+    && peer.certificateFingerprint === saved.target.certificateFingerprint;
+}
+export function deviceManualPhonePreparation(task: DeviceData, peer: DeviceData | undefined): ManualPreparation | undefined {
+  const saved = originalManualPreparation(task);
+  return saved && samePreparedPhone(saved, peer) ? saved : undefined;
+}
 export function deviceTaskRows(tasks: unknown, snapshot: DeviceData | null, peerId = ''): DeviceData[] {
   const links = deviceRows(Array.isArray(snapshot?.taskLinks) ? snapshot.taskLinks : snapshot?.taskLinks?.links);
+  const peer = peerId ? deviceRows(snapshot?.peers).find(item => item.deviceId === peerId) : undefined;
   const originals = deviceRows(tasks).filter(task => identity(task.id));
   const result = originals.filter(task => {
     const raw = object(task.raw) ? task.raw : {}, origin = object(raw.origin) ? raw.origin : {}, operations = deviceRows(raw.operations);
     const prepared = deviceWorkspaceTaskMode(raw) !== '';
+    const manual = peerId && originalManualPreparation(task);
+    if (manual) return samePreparedPhone(manual, peer); // A matching deviceId alone cannot retarget an original preparation.
     const selected = deviceRows(raw.deviceSourceScope?.routes);
     const targets = deviceStrings(raw.deviceWorkspaceNavigation?.targetDeviceIds);
     return peerId ? prepared && (selected.some(route => route.targetDeviceId === peerId) || targets.includes(peerId) || raw.ownerDeviceWork?.directPhone?.deviceId === peerId) || links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
       : prepared || origin.kind === 'paired_device' || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_')) || links.some(link => link.parentTaskId === task.id);
   });
-  for (const link of links) if (identity(link.parentTaskId) && (!peerId || link.targetDeviceId === peerId) && !result.some(task => task.id === link.parentTaskId)) result.push({ id: link.parentTaskId, goal: '原设备关联任务', raw: {}, summaryOnly: true });
+  for (const link of links) if (identity(link.parentTaskId) && (!peerId || link.targetDeviceId === peerId
+    && !originals.some(task => task.id === link.parentTaskId && originalManualPreparation(task))) && !result.some(task => task.id === link.parentTaskId)) result.push({ id: link.parentTaskId, goal: '原设备关联任务', raw: {}, summaryOnly: true });
   return result;
 }
 export function deviceGrantInput(review: DeviceData, draft: DeviceData, now = Date.now()): DeviceData {

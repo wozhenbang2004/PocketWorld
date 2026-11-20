@@ -1,11 +1,13 @@
 import {OriginalPrivateHostAnswer} from './OriginalPrivateHostAnswer';
-import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import { IconClose, IconFolder, IconLink, IconRefresh, IconTool } from './icons';
+import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
+import { IconClose, IconFolder, IconLink, IconMemory, IconRefresh, IconTool } from './icons';
 import {Accordion,AccordionItem,Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
 import {bridge} from './bridge';
 import {AIAnswer,MessageActions} from './library';
 import {AnswerSources,type HistoricalAnswerSource} from './AnswerSources';
+import {ProvidedMemories} from './ProvidedMemories';
+import {originalAnswerMemoryMessage} from './memory-history';
 import {useClosingSnapshot} from './library/surface-motion';
 import {PhoneReturnedReport,type PhoneReportTarget} from './PhoneReturnedReport';
 import {PhoneMessageReturn} from './PhoneMessageReturn';
@@ -13,7 +15,7 @@ import {messagePhoneResult} from './phone-start';
 import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {MessageAttachment} from './MessageAttachment';
 import {RegisteredQuoteTrail,sameQuoteVisit,type HistoryQuoteVisit} from './RegisteredQuoteTrail';
-import {messageTaskResult,type TaskResult} from './conversation-work';
+import {messageReplyContext,messageTaskResult,type TaskResult} from './conversation-work';
 import './conversation-history-window.css';
 
 type Json=Record<string,any>;
@@ -22,9 +24,10 @@ type HistorySource={target:HistoricalAnswerSource;trigger:HTMLButtonElement;top:
 const sourceGeneration=()=>Number(bridge.getState().state.traceSourceRevision||0);
 const hasPublicSources=(row:Json)=>row.role==='assistant'&&typeof row.id==='string'&&!!row.id&&row.retainedSources===true&&
  row.memoryReference==null&&Number.isSafeInteger(row.sourceRevision)&&row.sourceRevision>0;
-function sameHistoricalAnswer(page:Json|null,target:HistoricalAnswerSource){
+const hasProvidedMemory=(row:Json)=>!!originalAnswerMemoryMessage(row,messageReplyContext(row));
+function sameHistoricalAnswer(page:Json|null,target:HistoricalAnswerSource,eligible=hasPublicSources){
  return page?.window===target.readerWindow&&page.conversation===target.readerConversationId&&!page.loading&&!page.error&&!page.limited&&
-  Array.isArray(page.messages)&&page.messages.filter((row:Json)=>row.id===target.messageId&&row.sourceRevision===target.readerSourceRevision&&hasPublicSources(row)).length===1;
+  Array.isArray(page.messages)&&page.messages.filter((row:Json)=>row.id===target.messageId&&row.sourceRevision===target.readerSourceRevision&&eligible(row)).length===1;
 }
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
 export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number};
@@ -41,6 +44,12 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
  const [historySource,setHistorySource]=useState<HistorySource|null>(null);
  const shownSource=historySource&&historySource.generation===sourceGeneration()&&sameHistoricalAnswer(page,historySource.target)?historySource:null;
  useEffect(()=>{if(historySource&&!shownSource)setHistorySource(null)},[historySource,shownSource]);
+ const [historyMemory,setHistoryMemory]=useState<HistorySource|null>(null);
+ const shownMemory=historyMemory&&historyMemory.generation===sourceGeneration()&&sameHistoricalAnswer(page,historyMemory.target,hasProvidedMemory)?historyMemory:null;
+ useEffect(()=>{if(historyMemory&&!shownMemory)setHistoryMemory(null)},[historyMemory,shownMemory]);
+ const memoryBack=useRef<(()=>boolean)|null>(null);
+ const registerMemoryBack=useCallback((handler:(()=>boolean)|null)=>{memoryBack.current=handler},[]);
+ const canReadMemory=can('memoryHistory.open')&&can('taskMemory.answer')&&can('taskMemory.receipt');
  const [phoneOriginal,setPhoneOriginal]=useState<PhoneReportTarget|null>(null);
  const [quoteVisit,setQuoteVisit]=useState<HistoryQuoteVisit|null>(null);
  const visibleVisit=quoteVisit&&sameQuoteVisit(page,quoteVisit)?quoteVisit:null;
@@ -60,7 +69,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
  };
  const returnFromQuote=()=>{const v=visibleVisit;if(!v)return false;setQuoteVisit(null);moveToQuoteRow(v,true);return true};
  useEffect(()=>{if(quoteVisit&&!visibleVisit)setQuoteVisit(null)},[quoteVisit,visibleVisit]);
- useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setHistorySource(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
+ useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setHistorySource(null);setHistoryMemory(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
 
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
  const [resultNotice,setResultNotice]=useState<{window:number;messageId:string;revision:number;error?:string}|null>(null);
@@ -81,6 +90,19 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   const target={readerWindow:h.window,readerConversationId:h.conversation,messageId:message.id,readerSourceRevision:message.sourceRevision};
   if(!sameHistoricalAnswer(h,target))return;
   remember();setHistorySource({target,trigger,top:scroll.current.scrollTop,generation:sourceGeneration()});
+ };
+ const openHistoryMemory=(message:Json,trigger:HTMLButtonElement)=>{
+  const h=live.current;
+  if(document.hidden||!h||!scroll.current?.contains(trigger)||sending.current||!canReadMemory)return;
+  const target={readerWindow:h.window,readerConversationId:h.conversation,messageId:message.id,readerSourceRevision:message.sourceRevision};
+  if(!sameHistoricalAnswer(h,target,hasProvidedMemory))return;
+  remember();setHistoryMemory({target,trigger,top:scroll.current.scrollTop,generation:sourceGeneration()});
+ };
+ const restoreAnswerFocus=(event:Event,shown:HistorySource,eligible:(row:Json)=>boolean)=>{
+  event.preventDefault();
+  if(!document.hidden&&sameHistoricalAnswer(live.current,shown.target,eligible)&&scroll.current?.contains(shown.trigger)&&!shown.trigger.disabled){
+   scroll.current.scrollTop=shown.top;shown.trigger.focus({preventScroll:true});
+  }
  };
  const persist=()=>{
   if(timer.current){clearTimeout(timer.current);timer.current=null}
@@ -164,7 +186,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   catch(failure){if(current())setResultNotice({...notice,error:failure instanceof Error?failure.message:'本次原文件暂不可读取。'})}
   finally{sending.current=false;setPending(false);setResultNotice(value=>value===notice?null:value)}
  };
- const back=()=>{if(shownSource){setHistorySource(null);return true}if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
+ const back=()=>{if(shownMemory){if(!memoryBack.current?.())setHistoryMemory(null);return true}if(shownSource){setHistorySource(null);return true}if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
@@ -218,6 +240,9 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
      {hasPublicSources(message)&&can('sources.open')&&<Button variant="ghost" size="small" leadingIcon={IconLink}
       disabled={!page||page.window!==shown.window||pending||page.loading||!!page.error||page.limited}
       onClick={event=>openHistorySource(message,event.currentTarget)}>查看出处</Button>}
+     {hasProvidedMemory(message)&&canReadMemory&&<Button variant="ghost" size="small" leadingIcon={IconMemory}
+      aria-label="核对这条回答提供给模型的记忆" disabled={!page||page.window!==shown.window||pending||page.loading||!!page.error||page.limited}
+      onClick={event=>openHistoryMemory(message,event.currentTarget)}>本次记忆</Button>}
      {message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
      {fileResult&&<Button variant="ghost" size="small" leadingIcon={IconFolder} disabled={!page||pending||page.loading||page.error||page.limited}
@@ -238,11 +263,9 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}
   {shownSource&&<AnswerSources key={`${shownSource.target.readerWindow}:${shownSource.target.messageId}:${shownSource.target.readerSourceRevision}`}
     target={shownSource.target} revision={shownSource.target.readerSourceRevision} onClose={()=>setHistorySource(null)}
-    onCloseAutoFocus={event=>{
-     event.preventDefault();
-     if(!document.hidden&&sameHistoricalAnswer(live.current,shownSource.target)&&scroll.current?.contains(shownSource.trigger)&&!shownSource.trigger.disabled){
-      scroll.current.scrollTop=shownSource.top;shownSource.trigger.focus({preventScroll:true});
-     }
-    }}/>}
+    onCloseAutoFocus={event=>restoreAnswerFocus(event,shownSource,hasPublicSources)}/>}
+  {shownMemory&&<ProvidedMemories key={`${shownMemory.target.readerWindow}:${shownMemory.target.messageId}:${shownMemory.target.readerSourceRevision}`}
+    messageId={shownMemory.target.messageId} history={shownMemory.target} revision={Number(bridge.getState().state.memoryRefreshRevision||0)}
+    onClose={()=>setHistoryMemory(null)} onCloseAutoFocus={event=>restoreAnswerFocus(event,shownMemory,hasProvidedMemory)} registerBack={registerMemoryBack}/>}
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }

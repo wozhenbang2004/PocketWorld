@@ -4,6 +4,7 @@ import './device-control-reading.css';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { DeviceRequestScope, pickupUnavailable, archivedPhoneAcceptanceLine, archivedPhoneStopAttemptLine, archivedPhoneStopLine, deviceChannelWasConnected, deviceConnectionLabel, deviceGrantInput, deviceHistoryLabel, deviceHistoryReceipt, deviceOriginalTaskActions, isReceivedPhoneTask, receivedPhoneGoalReturn, matchesReceivedPhoneGoal, type ReceivedPhoneGoalReturn, type SentPhoneGoalFocus, PHONE_ACTION_WINDOW_MS, deviceRecordedScopes, devicePhoneGoalArchive, localReceivedPhonePage, localReviewedInbox, samePhoneGoalArchive, receivedPhoneArchiveReturn, waitingPhoneGoalPage, type PhoneArchiveSide, deviceTaskHistoryPage, deviceTaskHistoryLinks, deviceTaskDetails, deviceMethodLabels, deviceOperationLabels, devicePhoneGoalResult, deviceReceipt, deviceReview, deviceRows as rows, deviceSnapshot, deviceStrings as strings, deviceTaskRows, deviceWorkspaceTaskMode, type DeviceData as Data } from './devices-workspace';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconClock, IconDevices, IconLayers, IconMonitor, IconPhone, IconRefresh, IconShieldCheck } from './icons';
+import { deviceManualPhonePreparation } from './devices-workspace';
 import { DesktopViewer } from './DesktopViewer';
 import { ReceivedGoalInputReview, originalDeviceInputReady } from './ReceivedGoalInputReview';
 import { PendingReceivedGoalInput } from './PendingReceivedGoalInput';
@@ -352,6 +353,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       : other === 'inviter' ? '原配对尚未读到已保存的伙伴。请对方核对指纹与范围，再从这台手机继续原配对。' : '配对请求已有回执，尚未核对到同一身份的伙伴。请查看原配对记录。');
   };
   const tasks = deviceTaskRows(state.tasks, snapshot, peerId);
+  const manualPreparationForPeer = (task: Data) => deviceManualPhonePreparation(task, peer);
   // Model settings are local. Restore only the exact saved recipient/task on a new owner view.
   useEffect(() => {
     if (!modelReturn || restoredModelReturn.current === modelReturn || !Array.isArray(state.tasks) || !snapshot || !Number.isSafeInteger(snapshot.capturedAt) || snapshot.capturedAt < modelReturn.leftAt || document.visibilityState !== 'visible') return;
@@ -394,7 +396,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const captured = item?.phoneActionScope ? item.actions.capturedAt : snapshot?.taskActions?.[task.id]?.capturedAt;
     return [captured + PHONE_ACTION_WINDOW_MS, item?.phoneActionScope?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline, grant?.expiresAt];
   });
-  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
+  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...tasks.map(task=>manualPreparationForPeer(task)?.deadlineAt), ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
   useEffect(() => {
@@ -778,11 +780,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const returnedTask = modelReturnFocus && tasks.find(item => !unreadSource(item) && matchesReceivedPhoneGoal(item, snapshot, modelReturnFocus));
   const waiting: Data[] = [], interruptible: Data[] = [], remaining: Data[] = [];
+  const preparedHere = tasks.filter(task => !unreadSource(task) && (manualPreparationForPeer(task)?.deadlineAt || 0) > now);
+  const preparedIds = new Set(preparedHere.map(task => task.id));
   const canStop = (task: Data) => { const facts = actionsFor(task); return available(facts.stop) || available(facts.pendingCancel); };
   // The native 40-action window bounds controls, not the number of saved originals one may open.
-  for (const task of tasks) if (task !== returnedTask) (needsOwner(task) ? waiting : canStop(task) ? interruptible : remaining).push(task);
-  const initialCount = Math.max(0, 2 - Number(!!returnedTask) - waiting.length - interruptible.length);
-  const shownTasks = [...(returnedTask ? [returnedTask] : []), ...waiting, ...interruptible, ...remaining.slice(0, initialCount + extraWork)];
+  for (const task of tasks) if (task !== returnedTask && !preparedIds.has(task.id)) (needsOwner(task) ? waiting : canStop(task) ? interruptible : remaining).push(task);
+  const initialCount = Math.max(0, 2 - Number(!!returnedTask) - waiting.length - interruptible.length - preparedHere.length);
+  const shownTasks = [...(returnedTask ? [returnedTask] : []), ...waiting, ...preparedHere, ...interruptible, ...remaining.slice(0, initialCount + extraWork)];
   const nextCount = Math.min(12, tasks.length - shownTasks.length);
   useLayoutEffect(() => {
     if (!returnedTask || !modelReturnFocus || focusedModelReturn.current === modelReturnFocus) return;
@@ -800,6 +804,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {shownTasks.map(task => {
               const controls = actionsFor(task), request = resumeRequest(task);
               const readable = !unreadSource(task), details = readable ? taskDetails[task.id] : undefined, links = deviceTaskHistoryLinks(details, task.id, peerId);
+              const preparedPhone = readable ? manualPreparationForPeer(task) : undefined;
+              const preparationExpired = !!preparedPhone && preparedPhone.deadlineAt <= now;
               const receivedPhone = readable && isReceivedPhoneTask(task, snapshot), showLocalRead = receivedPhone && (!controls.capturedAt || controls.phoneActionReason);
               const readLocalTask = () => { void invoke('devices.readTask', { taskId: task.id, ...(peerId ? { targetDeviceId: peerId } : {}) }, value => {
                 const actual = deviceTaskDetails(value, task.id); deviceTaskHistoryPage(value, task.id, peerId, 'taskDetails');
@@ -814,9 +820,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 });
               };
               return <article className="pw-device-task" key={task.id} data-motion-key={`task:${task.id}`}>
-                <header><h4 dir="auto" tabIndex={receivedPhone ? -1 : undefined} data-received-goal={receivedPhone ? task.id : undefined}>{readable ? task.goal || '原设备任务' : '原工作来源待核对'}</h4><span>{readable ? taskLabels[task.status] || '状态待读取' : '本机仅留关联'}</span></header>
-                {readable && task.summary && <p className="pw-device-task-summary" dir="auto">{task.summary}</p>}
-                {readable && deviceWorkspaceTaskMode(task.raw) === 'manual_phone' && <p>{task.raw?.runId ? '原手控操作与回执保留；离页后不恢复旧输入权限。' : '手控尚未开始。打开后选择一个手机屏幕，明确审阅，再逐次操作。'}</p>}
+                <header><h4 dir="auto" tabIndex={receivedPhone ? -1 : undefined} data-received-goal={receivedPhone ? task.id : undefined}>{readable ? task.goal || '原设备任务' : '原工作来源待核对'}</h4><span>{preparedPhone ? preparationExpired ? '准备已到期' : '尚未开始' : readable ? taskLabels[task.status] || '状态待读取' : '本机仅留关联'}</span></header>
+                {readable && task.summary && !preparedPhone && <p className="pw-device-task-summary" dir="auto">{task.summary}</p>}
+                {readable && deviceWorkspaceTaskMode(task.raw) === 'manual_phone' && <p>{preparedPhone
+                  ? preparationExpired ? '原准备仍可查看，打开不会延长有效期。' : '已为这部手机保存原准备。返回不会读取屏幕或启动。'
+                  : task.raw?.runId ? '原手控操作与回执保留；离页后不恢复旧输入权限。' : '手控尚未开始。打开后选择一个手机屏幕，明确审阅，再逐次操作。'}</p>}
                 {readable && deviceWorkspaceTaskMode(task.raw) === 'agent_device' && !task.raw?.runId && <p>原目标尚未启动。打开后选择设备范围并审阅开始；取消不会影响其他任务。</p>}
                 {readable && controls.phoneActionReason && <p role="status">{controls.phoneActionReason}</p>}
                 {receivedPhone && !controls.phoneActionReason && !task.raw?.runId
@@ -828,9 +836,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                     <Button variant="ghost" disabled={busy} onClick={() => openModelSettingsFor(task)}>先选本机 API 模型</Button>}
                   {readable && available(controls.resultReview) && <Button disabled={busy} onClick={() => actIfCurrent(task, 'resultReview', () => { void invoke('devices.reviewResult', { taskId: task.id }, acceptReview); })}>核对成果并结束</Button>}
                   <Button variant="secondary" disabled={busy || !supported('devices.openTask')} onClick={() => {
-                    if (selectedPeer.current !== peerId || !deviceTaskRows(state.tasks, snapshot, peerId).some(row => row.id === task.id)) return;
-                    void invoke('devices.openTask', { taskId: task.id });
-                  }}>打开原工作</Button>
+                    if (selectedPeer.current !== peerId) return;
+                    const row = deviceTaskRows(state.tasks, snapshot, peerId).find(row => row.id === task.id); if (!row) return;
+                    const current = manualPreparationForPeer(row);
+                    if (preparedPhone && (!current || JSON.stringify(current) !== JSON.stringify(preparedPhone))) { setError('原准备已变化，请重新读取。'); return; }
+                    void invoke('devices.openTask', { taskId: task.id, ...(current ? { manualPhoneTarget: current.target } : {}) });
+                  }}>{preparedPhone ? preparationExpired ? '查看原准备记录' : '回到原手控准备' : '打开原工作'}</Button>
                   {(['stop', 'pendingCancel'] as const).filter(key => !(key === 'stop' && available(controls.pendingCancel))).map(key => {
                     const operation = key === 'pendingCancel' ? 'task.cancelPending' : 'task.stop';
                     return available(controls[key]) && <Button key={key} variant="ghost" disabled={controlBusy} onClick={() => actIfCurrent(task, key, () => actionReview(operation, { taskId: task.id }))}>{deviceOperationLabels[operation]}</Button>;
@@ -1164,6 +1175,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         </>}
         {!sourceFocus && peerId && !peer && snapshot && <p className="pw-device-feedback" role="alert">这台设备不在当前读取页。保留原身份，请返回后刷新核对。</p>}
         {!sourceFocus && peer && <>
+          {preparedHere.length > 0 && originalWork}
           {quickPhoneArchive && <section className="pw-device-section pw-device-peer-archive" aria-label="这台设备的最近往来工作">
             <header className="pw-device-section-heading"><div><h3>最近往来工作</h3>
               <p>打开清单只读本机留档。需要时，可从那一次原派发向对方读取。</p></div></header>
@@ -1203,7 +1215,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {deviceChannelWasConnected(peer) && peerEntry?.kind!=='capabilities' && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>核对这台手机的能力记录</Button>}
             </div>}
           </section>
-          {originalWork || (!quickPhoneArchive && <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p></section>)}
+          {!preparedHere.length && (originalWork || (!quickPhoneArchive && <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p></section>))}
           <Accordion className="pw-device-disclosures">
             {!quickPhoneArchive && (canReadSentArchive||canReadReceivedArchive) && <AccordionItem id="phone-goal-archive" title={desktopPeer && !phonePeer ? '这台电脑交给本机的工作' : '找回往来目标'} description="查本机留下的记录，无需对方在线" icon={IconClock}>
               {archiveBody}

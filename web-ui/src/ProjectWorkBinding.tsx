@@ -4,7 +4,7 @@ import { bridge } from './bridge';
 import { projectPackageTaskIdentity } from './project-preview';
 
 type Data = Record<string, any>;
-const labels: Record<string, string> = { node: 'Node.js', gradle: 'Gradle', python: 'Python', java: 'Java', static: '静态网页' };
+const labels: Record<string, string> = { node: 'Node.js', gradle: 'Gradle', maven: 'Maven', python: 'Python', java: 'Java', static: '静态网页' };
 const sha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
 const destination = '改动留在这份私人副本。单独保存的文件或固定包可回原任务的概览查看，不会自动写回正式文件或发布。';
 
@@ -25,9 +25,13 @@ function ToolObservation({ facts }: { facts: Data }) {
   if (kinds.includes('python')) { relevant.add('python3'); relevant.add('sh'); }
   if (kinds.includes('gradle')) { relevant.add('gradle'); relevant.add('java'); }
   if (kinds.includes('java')) { relevant.add('javac'); relevant.add('java'); }
+  const maven = kinds.includes('maven'), gradle = kinds.includes('gradle');
   const observed = [...relevant].filter(name => facts.observedTools.includes(name)), missing = [...relevant].filter(name => !facts.observedTools.includes(name));
   return <><div><dt>副本内容</dt><dd>{kinds.length ? kinds.map(kind => labels[kind]).join('、') : '暂未识别项目类型'}{['npm', 'pnpm'].includes(facts.manager) && '；原方案候选 ' + facts.manager}{facts.manager === 'unsupported_or_conflicting' ? '；包管理器不受支持，或声明与锁文件冲突。' : facts.manager === 'not_checked' ? '；未能核对包管理器声明。' : ''}</dd></div>
-    <div><dt>本机工具</dt><dd>{observed.length > 0 && '已观察到 ' + observed.join('、') + '。'}{missing.length > 0 && '未观察到 ' + missing.join('、') + '。'}{!relevant.size && (kinds.includes('static') ? '静态入口不要求编译。' : '尚不能确定这份源码需要哪些工具。')}
+    <div><dt>本机工具</dt><dd>{observed.length > 0 && '已观察到 ' + observed.join('、') + '。'}{missing.length > 0 && '未观察到 ' + missing.join('、') + '。'}
+      {maven && '发现根目录 pom.xml；App 尚无 Maven 构建通道，不会按普通 Java 工程编译。可以继续编辑这份副本。'}
+      {!relevant.size && !maven && (kinds.includes('static') ? '静态入口不要求编译。' : '尚不能确定这份源码需要哪些工具。')}
+      {gradle && '工具记录不是 JDK 版本或工程依赖已就绪的证明。'}
       {facts.runtimeReady === false && '本机运行环境尚未就绪。'}{facts.androidClues === true && 'Android SDK 与 ARM64 构建工具尚未核验。'}这些不是已执行的命令。</dd></div></>;
 }
 

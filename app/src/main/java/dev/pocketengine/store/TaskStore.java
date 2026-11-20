@@ -2687,9 +2687,9 @@ public final class TaskStore {
      * is projected; opening a row still reads/reviews the original task and native scope. */
     private static void projectDeviceWorkspaceNavigation(JSONObject task,JSONObject header)throws Exception {
         if(!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.has("origin"))return;
-        String mode;JSONObject marker;
+        String mode;JSONObject marker,manualPreparation=null;
         if(OwnerPhoneControlScope.marked(task)){
-            try{OwnerPhoneControlScope.require(task);}catch(Exception invalid){return;}
+            try{OwnerPhoneControlScope.require(task);manualPreparation=OwnerPhoneControlScope.directedPreparation(task);}catch(Exception invalid){return;}
             mode="manual_phone";
         }else{
             marker=task.optJSONObject(OWNER_DEVICE_WORK);
@@ -2709,8 +2709,11 @@ public final class TaskStore {
                 if(target.matches("pw1_[a-f0-9]{64}")&&seen.add(target))targets.put(target);
             }
         }
-        header.put("deviceWorkspaceNavigation",new JSONObject().put("format","pocketworld.device-workspace-navigation.v1").put("mode",mode)
-                .put("targetDeviceIds",targets).put("readOnly",true).put("executionAuthorized",false));
+        JSONObject navigation=new JSONObject().put("format","pocketworld.device-workspace-navigation.v1").put("mode",mode)
+                .put("targetDeviceIds",targets).put("readOnly",true).put("executionAuthorized",false);
+        if("manual_phone".equals(mode)&&OwnerPhoneControlScope.unstartedPreparation(task))
+            navigation.put("manualPhonePreparation",manualPreparation==null?JSONObject.NULL:manualPreparation);
+        header.put("deviceWorkspaceNavigation",navigation);
     }
     private JSONObject ownerWorkForUi(JSONObject view)throws Exception {
         if(!OwnerWorkTask.isOwnerWork(view))return ownerResultHandlingForUi(view);
@@ -17411,7 +17414,19 @@ public final class TaskStore {
     public synchronized JSONObject ownerExperienceOutputsForOwner(OwnerExperienceProjection.Gate gate,String task,String cursor,RunControl control)throws Exception{return OwnerExperienceProjection.outputs(db,conversationRepository,gate,task,cursor,control);}
     /** Owner presentation only. Native authorization/recovery continues to use get/hasUnresolved. */
     public synchronized JSONObject taskSummaryPage(String cursor,int limit)throws Exception{
-        JSONObject page=TaskAuditStore.summaryPage(db,cursor,limit);JSONArray rows=page.getJSONArray("tasks"),visible=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("inference".equals(row.optString("kind")))continue;row=ownerWorkForUi(row);conversationPhoneLinkForUi(row);row=phoneOwnerQuestionForUi(row);row.put("hasUnresolvedOperations",hasUnresolved(row.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(row.getString("id")));visible.put(row);}return page.put("tasks",visible).put("accountingRecordsExcluded",rows.length()-visible.length());
+        JSONObject page=TaskAuditStore.summaryPage(db,cursor,limit);JSONArray rows=page.getJSONArray("tasks"),visible=new JSONArray();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if("inference".equals(row.optString("kind")))continue;row=ownerWorkForUi(row);conversationPhoneLinkForUi(row);manualPhoneNavigationForUi(row);row=phoneOwnerQuestionForUi(row);row.put("hasUnresolvedOperations",hasUnresolved(row.getString("id"))).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(row.getString("id")));visible.put(row);}return page.put("tasks",visible).put("accountingRecordsExcluded",rows.length()-visible.length());
+    }
+    /** Existing saves before the navigation field: bounded read of only this already-selected original row. */
+    private void manualPhoneNavigationForUi(JSONObject summary)throws Exception{
+        JSONObject navigation=summary.optJSONObject("deviceWorkspaceNavigation");
+        if(!OwnerPhoneControlScope.unstartedPreparation(summary)||navigation!=null&&navigation.has("manualPhonePreparation"))return;
+        String id=summary.getString("id");long updated=summary.optLong("updatedAt",-1);if(updated<1)return;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=32768 THEN document END FROM tasks WHERE task_id=? AND updated_at=?",new String[]{id,Long.toString(updated)})){
+            if(!row.moveToFirst()||row.isNull(0))return;
+            JSONObject original;try{original=new JSONObject(row.getString(0));}catch(org.json.JSONException unavailable){return;}
+            if(id.equals(original.opt("id"))&&updated==original.optLong("updatedAt",-1)&&OwnerPhoneControlScope.unstartedPreparation(original))
+                projectDeviceWorkspaceNavigation(original,summary);
+        }
     }
     /** Only locally held original first jobs, scoped to the selected logical Companion store + directory. */
     public synchronized JSONObject originalCloudWorkspacePage(JSONObject target,String cursor,SshWorkHistory.Check check)throws Exception {

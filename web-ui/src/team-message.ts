@@ -23,6 +23,48 @@ export function teamMessageDelivery(run: Data, row: Data): string {
     pending: '已定向排队，尚未进入模型', unread: '已定向排队，尚未进入模型' } as Record<string, string>)[letter?.status] || '';
 }
 
+export type TeamDirectedSupplement = {
+  key: string; memberId: string; round: number; text: string; status: string;
+};
+
+const messageId = (value: unknown): value is string => typeof value === 'string' &&
+  /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
+
+/** One visible parent note joined to its exact native recipient, planned phase
+ * and input receipt. No new inbox read, child selection or dispatch. */
+export function teamDirectedSupplement(run: Data, messages: unknown, memberId: string, parentTaskId: string): TeamDirectedSupplement | null {
+  if (run.researchExecutionFormat !== 'pocketworld.team-research-agent.v1' || run.workPlan ||
+      !['collaborate','debate'].includes(run.mode) || !messageId(parentTaskId)) return null;
+  const member = rows(run.members).filter(row => row?.id === memberId);
+  if (member.length !== 1 || member[0].exited) return null;
+  const original = rows(messages);
+  const latest = [...original].reverse().find(row => row?.kind === 'conversation' && row.role === 'parent_model' &&
+    row.senderParentTaskId === parentTaskId && row.recipientMemberId === memberId && row.mode === 'queue');
+  // No replacement with an older, superficially similar note.
+  if (!latest || !messageId(latest.messageId) || latest.deliveryId !== latest.messageId ||
+      !Number.isSafeInteger(latest.researchRound) || latest.researchRound < 1 || latest.researchRound > 6 ||
+      typeof latest.content !== 'string' || !latest.content.trim() || latest.truncated === true ||
+      original.filter(row => row?.messageId === latest.messageId).length !== 1) return null;
+  const round = latest.researchRound;
+  const phase = rows(member[0].roundStates).filter(row => row?.round === round);
+  const matches = rows(run.inbox).filter(row => row?.id === latest.messageId);
+  if (phase.length !== 1 || matches.length !== 1) return null;
+  const letter = matches[0], child = letter.researchTaskId;
+  if (letter.targetMemberId !== memberId || letter.senderParentTaskId !== parentTaskId ||
+      letter.mode !== 'queue' || letter.researchRound !== round || letter.text !== latest.content ||
+      (child != null && (!messageId(child) || child !== phase[0].researchTaskId))) return null;
+  const selected = child ? rows(letter.deliveries).filter(row => row?.memberId === memberId && row.round === round &&
+    row.researchTaskId === child && messageId(row.turnId)) : [];
+  const consumed = Array.isArray(letter.consumedBy) && letter.consumedBy.includes(memberId) && selected.some(row => row.state === 'consumed');
+  const status = consumed ? '原执行已读到，是否采用看答复' :
+    letter.status === 'historical' ? '仅留原记录，没有重新安排' :
+    selected.some(row => row.state === 'claimed') ? '已纳入这阶段输入，尚未确认收到' :
+    ['completed','cancelled','failed','interrupted'].includes(phase[0].status) ? '这阶段已结束，未核对到收到' :
+    !child && ['queued','waiting_dependency'].includes(phase[0].status) ? '已保存，等待这阶段开始' :
+    '已保存，是否收到待核对';
+  return { key: JSON.stringify([run.id, memberId, round, latest.messageId]), memberId, round, text: latest.content, status };
+}
+
 export type AnswerDelivery = 'save' | 'continue' | 'continue_saved';
 type MessageIdentity = { id: string; runId: string; memberId: string; assignmentId?: string; questionId?: string };
 

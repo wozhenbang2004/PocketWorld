@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Button } from './forms-library';
 import { IconChevronRight } from './icons';
 import { AIAnswer } from './library';
-import { teamResultReading, type TeamFollowUp } from './team-result-reading';
+import type { teamPartialReading, teamResultReading, TeamFollowUp } from './team-result-reading';
 
 type Actions = { items: TeamFollowUp[]; disabled: boolean; read: (item: TeamFollowUp) => void; expanded?: boolean; toggle?: () => void };
 export function TeamFollowUps({ items, disabled, read, expanded = true, toggle }: Actions) {
@@ -18,8 +18,9 @@ export function TeamFollowUps({ items, disabled, read, expanded = true, toggle }
   </section>;
 }
 
-export function TeamResultHandoff({ result, actions, sources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview, nextRequest }: {
+export function TeamResultHandoff({ result, partial, memberName, actions, sources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview, nextRequest }: {
   result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; frozenFiles?:ReactNode; finalPackageReader?:ReactNode; revisionOffers?:ReactNode; stopped: boolean;
+  partial: ReturnType<typeof teamPartialReading>; memberName: (id: string) => string;
   openMembers: () => void; openMessage: (id: string) => void; openOriginalReview?: () => void;
   nextRequest?: { open: () => void; disabled: boolean };
 }) {
@@ -28,25 +29,39 @@ export function TeamResultHandoff({ result, actions, sources, frozenFiles, final
     {result.messageId && <Button variant="ghost" size="small" data-team-follow-up="summary-original" disabled={actions.disabled} onClick={() => openMessage(result.messageId)}>查看汇总原消息</Button>}</> : null;
   const memberLink = !sources && !frozenFiles && !finalPackageReader && <Button variant="ghost" trailingIcon={IconChevronRight}
     data-team-follow-up="members" disabled={actions.disabled} onClick={openMembers}>查看分工与产出</Button>;
+  const summaryTitle = result.previous ? '上次保存的共同汇总' : result.partial ? '本次的部分汇总' : '本轮共同汇总';
+  const summaryFirst = result.original && !partial;
+  const summaryByline = result.author && <span className="pw-team-result-caption">由 <bdi>{result.author}</bdi> 汇总</span>;
   return <section className="pw-team-result" aria-label="本次协作成果">
-    <header className="pw-team-result-heading"><h3 data-team-result-heading tabIndex={-1}>{result.previous ? '上次保存的共同汇总' : result.body ? '本轮共同汇总' : '本次协作成果'}</h3>
-      {result.previous && <span className="pw-team-result-stale">历史版本</span>}
-      {result.author && <span className="pw-team-result-caption">由 <bdi>{result.author}</bdi> 汇总</span>}</header>
+    <header className="pw-team-result-heading"><h3 data-team-result-heading tabIndex={-1}>{partial ? '本次已交回的成果' : result.body ? summaryTitle : '本次协作成果'}</h3>
+      {!partial && result.previous && <span className="pw-team-result-stale">历史版本</span>}
+      {!partial && summaryByline}</header>
     <TeamFollowUps {...actions}/>
     {revisionOffers}
     {finalPackageReader}
     {frozenFiles}
     {openOriginalReview && <Button variant="secondary" size="small" disabled={actions.disabled} trailingIcon={IconChevronRight}
       onClick={openOriginalReview}>查看待审阅的原协作任务</Button>}
-    {result.original && summary}
+    {summaryFirst && summary}
     {result.original && nextRequest && <Button variant="secondary" trailingIcon={IconChevronRight} disabled={actions.disabled || nextRequest.disabled}
       onClick={nextRequest.open}>在原对话写后续要求</Button>}
     {sources}
+    {partial && (partial.remaining.length > 0 || partial.synthesizing || !summary || result.previous) && <div className="pw-team-result-remainder">
+      {partial.remaining.length > 0 && <><h4>尚未完成的分工</h4><ul role="list">
+        {partial.remaining.map(item => <li key={item.memberId}><span className="pw-team-attention-copy"><strong><bdi>{memberName(item.memberId)}</bdi></strong>
+          {item.assignment && <small dir="auto">{item.assignment}</small>}</span>
+          <span className="pw-team-result-caption">{item.states}</span>
+        </li>)}
+      </ul></>}
+      {partial.synthesizing ? <p className="pw-team-result-caption">正在整理共同汇总。</p>
+        : (!summary || result.previous) && <p className="pw-team-result-caption">还没有本次的共同汇总。</p>}
+    </div>}
     {result.statusNote && <div className="pw-team-result-caption"><strong>原协作记录</strong><p dir="auto" style={{ whiteSpace: 'pre-wrap' }}>{result.statusNote}</p></div>}
-    {result.previous && <p className="pw-team-result-caption">这是当时保存的汇总，不代表当前进展或授权。</p>}
-    {!result.original && summary}
+    {!summaryFirst && summary && <>{partial && <header className="pw-team-result-heading"><h4>{summaryTitle}</h4>{summaryByline}</header>}
+      {result.previous && <p className="pw-team-result-caption">这是当时保存的汇总，不代表当前进展或授权。</p>}
+      {summary}</>}
     {result.original && memberLink}
-    {!summary && <div className="pw-team-result-empty"><p>{stopped ? '协作已停止后续派发，成员已有的产出和记录仍可查看。' : '还没有能核对来源的共同汇总。各成员已保存的产出可以单独查看。'}</p>
+    {!summary && !partial && <div className="pw-team-result-empty"><p>{stopped ? '协作已停止后续派发，成员已有的产出和记录仍可查看。' : '还没有能核对来源的共同汇总。各成员已保存的产出可以单独查看。'}</p>
       {memberLink}</div>}
   </section>;
 }

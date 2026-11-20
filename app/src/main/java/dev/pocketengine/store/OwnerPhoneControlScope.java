@@ -29,6 +29,18 @@ public final class OwnerPhoneControlScope {
     private static final Set<String> TOOLS=Set.of("device_invoke_tool","device_operation_get");
     private OwnerPhoneControlScope() { }
     public static boolean marked(JSONObject task){return task!=null&&task.has(KEY);}
+    public static boolean unstartedPreparation(JSONObject task){
+        return task!=null&&"owner".equals(task.opt("actorId"))&&"private".equals(task.opt("spaceId"))&&!task.has("origin")
+                &&"tool".equals(task.opt("kind"))&&"OWNER_PHONE_CONTROL".equals(task.opt("nativeExecutionMode"))
+                &&"paused".equals(task.opt("status"))&&"".equals(task.opt("runId"))&&task.optInt("coordinatorEpoch",-1)==0
+                &&Boolean.FALSE.equals(task.opt("cancelRequested"));
+    }
+    /** An unstarted owner's fixed phone; never a new session, screen review or input lease. */
+    public static JSONObject directedPreparation(JSONObject task)throws Exception{
+        if(!unstartedPreparation(task)||!marked(task))return null;
+        long until=require(task);DirectedPhoneTarget original=target(task);
+        return original==null?null:new JSONObject().put("target",original.view()).put("deadlineAt",until);
+    }
     public static JSONObject create(String id,long deadline,int tools)throws Exception {
         return new JSONObject().put("format",SCOPE).put("taskId",id).put("principalId","owner").put("spaceId","private")
                 .put("mode","capabilities").put("state","active").put("revision",1L).put("deadlineAt",deadline).put("lifetime","deadline")

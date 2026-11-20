@@ -63,7 +63,7 @@ export function TeamResearchDeliveries({records,disabled,rawAvailable,open,openA
   return <Accordion className="pw-team-disclosures" variant="divided" expandedKeys={new Set(expanded?['member-originals']:[])}
     onExpandedChange={keys=>onExpanded(Array.from(keys).includes('member-originals'))}>
     <AccordionItem id="member-originals" title="成员交付的原件" description={`${new Set(records.map(s=>s.memberId)).size} 名成员 · ${records.length} 份研究产出`}>
-      <div className="pw-team-action-list">{records.map(source=>{
+      <div className="pw-team-delivery-list">{records.map(source=>{
         const answer=openAnswer&&source.answer, stage=answer?answer.label:`第 ${source.round} 阶段`;
         const rawLabel=`查看${source.name}第 ${source.round} 阶段的原研究任务`;
         return <div className="pw-team-research-delivery" key={source.key}>

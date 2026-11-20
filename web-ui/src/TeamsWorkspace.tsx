@@ -7,7 +7,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, IconButton, SearchFiel
 import { AIAnswer, PressButton, ProgressBar } from './library';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
-import { teamAnswerOutcome, teamMessageConfirmed, teamMessageDelivery, teamMessageRecorded, type AnswerDelivery } from './team-message';
+import { teamAnswerOutcome, teamDirectedSupplement, teamMessageConfirmed, teamMessageDelivery, teamMessageRecorded, type AnswerDelivery, type TeamDirectedSupplement } from './team-message';
 import { teamResearchRecords, type TeamResearchRecord } from './team-research';
 import { teamPhoneChoice, teamPhoneDevice, teamPhoneScopeLabel, teamPhoneSelections, teamPhoneTargetKey, teamPhoneTargetLabel, type TeamPhoneChoice } from './team-phone';
 import { TeamHarnessFields } from './TeamHarnessFields';
@@ -27,7 +27,7 @@ import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelive
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { finalPackage, TeamFinalPackageReading } from './TeamFinalPackageReading';
 import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
-import { settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamMemberProgress, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
+import { settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamMemberProgress, teamPartialReading, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { ownerWorkPresentation } from './owner-work-presentation';
 import { ReadingContext } from './reading-context';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
@@ -740,15 +740,33 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const deliveries = runSection === 'details' ? [] : teamResearchDeliveries(current, messages);
   const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
+  const partialResult = runSection === 'result' && reading?.viewHandle && ownerWorkLink?.currentRun !== false &&
+    deliveries.some(source => canOpenMemberResult || source.answer && openReading) ? teamPartialReading(current, followUps) : null;
+  const rememberSourcesOpened = (id: string) => setShownMemberSources(shown => shown[id] ? shown : { ...shown, [id]: true });
+  const openMemberSupplement = (item: TeamDirectedSupplement, trigger: HTMLButtonElement) => {
+    const original = currentReading.current, link = original?.ownerWorkLink;
+    if (!openReading || !canRead || materialBusy || document.hidden || !ownsNativeWindow() || original?.kind !== 'run' ||
+        original.viewHandle !== reading?.viewHandle || link?.readOnly !== true || link.currentRun !== true ||
+        link.teamRunId !== original.run?.id) return;
+    const same = teamDirectedSupplement(original.run, original.messages, item.memberId, link.taskId);
+    if (!same || same.key !== item.key || same.text !== item.text) {
+      setNotice('这条补充已变化，没有打开另一条。'); return;
+    }
+    setResultSource(null);
+    openReading({kind:'message',title:'给' + name(same.memberId) + '的第 ' + same.round + ' 阶段补充',text:same.text,returnFocus:trigger});
+  };
   const openMemberAnswer=(item:TeamResearchDelivery,trigger:HTMLButtonElement)=>{
     const original=currentReading.current;
     if(!openReading||!item.answer||!canRead||materialBusy||document.hidden||!ownsNativeWindow()||
       original?.kind!=='run'||original.run?.id!==item.team||original.viewHandle!==reading?.viewHandle)return;
     const same=teamResearchDeliveries(original.run,original.messages).find(row=>row.key===item.key&&row.answer?.key===item.answer?.key);
     if(!same?.answer||same.answer.text!==item.answer.text){setNotice('这份成员答复已变化，没有打开其他阶段。');return;}
-    if (runSection === 'result') setResultSource(Number.isSafeInteger(original.run.generation)?resultOrigin(same.answer.key, {
-      id:same.memberId,generation:original.run.generation,deliveryKey:same.key,
-    }):null);
+    if (runSection === 'result') {
+      rememberSourcesOpened(item.team);
+      setResultSource(Number.isSafeInteger(original.run.generation)?resultOrigin(same.answer.key, {
+        id:same.memberId,generation:original.run.generation,deliveryKey:same.key,
+      }):null);
+    }
     else setResultSource(null);
     openReading({kind:'message',title:`${same.name} · ${same.answer.label}`,text:same.answer.text,returnFocus:trigger});
   };
@@ -790,6 +808,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         const member=Number.isSafeInteger(next.run.generation)?{id:same.memberId,generation:next.run.generation,deliveryKey:same.key}:undefined;
         const origin={team:item.team,key:item.key,section,taskId:item.taskId,scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,member};
         if (section === 'progress') setResultSource(null);
+        else rememberSourcesOpened(item.team);
         deliveryReturn.current=origin;
         setOpeningMemberResult(true);
         void run('teams.openResearchTask',{viewHandle:next.viewHandle,memberId:same.memberId,round:same.round,taskId:same.taskId,outputFingerprint:same.hash}).catch(failure=>{
@@ -816,7 +835,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (!fromProgress) setResultSource(target&&sameGeneration
       ? {runId:origin.team,key:origin.key,scroll:origin.scroll,member:origin.member} : null);
     const scroll=root.current?.closest<HTMLElement>('.pw-secondary-scroll');if(scroll)scroll.scrollTop=origin.scroll;
-    if (fromProgress) target?.scrollIntoView({block:'nearest'});
+    // The completed summary may have appeared above this same source while its task was open.
+    if (fromProgress || sameGeneration) target?.scrollIntoView({block:'nearest'});
     (target||(fromProgress?area:area?.querySelector<HTMLElement>('[data-team-result-heading]')))?.focus({preventScroll:true});
   },[workspaceActive,busy,openingMemberResult,reading?.viewHandle,current?.id,runSection,state.webWorkspaceResumeRevision]);
   const openAwaitingReview = () => {
@@ -980,13 +1000,19 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         <TabPanel id="progress">
           <TeamFollowUps items={followUps} read={openFollowUp} disabled={!canRead || materialBusy}/>
           {current.phase === 'intervention' && !hasWorkPlan && <div className="pw-collaboration-attention" role="status"><div><strong>新要求已保存</strong><span>受影响成员已暂停。继续协作后处理，沿用剩余额度。</span></div></div>}
-          {!!teamResult.body && <section className="pw-team-result-overview" aria-label={teamResult.previous ? '上次汇总摘要' : '本轮汇总摘要'}><h3>{teamResult.previous ? '上次保存的共同汇总' : '已有共同汇总'}</h3><p>{teamResult.body.slice(0, 360)}{teamResult.body.length > 360 ? '…' : ''}</p><Button variant="ghost" className="pw-team-result-link" trailingIcon={IconChevronRight} onClick={() => chooseRunSection('result')}>阅读完整汇总</Button></section>}
+          {!!teamResult.body && <section className="pw-team-result-overview" aria-label={teamResult.previous ? '上次汇总摘要' : teamResult.partial ? '部分汇总摘要' : '本轮汇总摘要'}>
+            <h3>{teamResult.previous ? '上次保存的共同汇总' : teamResult.partial ? '本次的部分汇总' : '已有共同汇总'}</h3>
+            <p>{teamResult.body.slice(0, 360)}{teamResult.body.length > 360 ? '…' : ''}</p>
+            <Button variant="ghost" className="pw-team-result-link" trailingIcon={IconChevronRight}
+              onClick={() => chooseRunSection('result')}>{teamResult.partial ? '阅读部分汇总' : teamResult.excerpt ? '阅读汇总节选' : '阅读完整汇总'}</Button></section>}
 
       <section className="pw-team-overview" data-team-section="members" tabIndex={-1} aria-label="成员与当前工作">
         <header className="pw-team-members-heading"><h3 className="pw-team-section-title">成员 <span>{currentMembers.length} 名参与{members.length > currentMembers.length ? ` · ${members.length - currentMembers.length} 名已退出` : ''}</span></h3></header>
         <div className="pw-team-member-board">
           {members.map(member => {
             const model = memberModelLabel(member), progress = teamMemberProgress(current, member, followUps);
+            const supplement = !hasWorkPlan && ownerWorkLink?.readOnly === true && ownerWorkLink.currentRun === true &&
+              ownerWorkLink.teamRunId === current.id ? teamDirectedSupplement(current, messages, member.id, ownerWorkLink.taskId) : null;
             const memberRound = hasWorkPlan ? undefined : rows(member.roundStates).find(round => round.round === member.round && round.generation === member.generation);
             const memberTaskId = member.phoneTask?.taskId || (!hasWorkPlan ? member.assignmentTask?.taskId : undefined);
             const outputMessage = [...messages].reverse().find(message => message.memberId === member.id && ['answer', 'work_item_completed'].includes(message.kind) && message.content === member.text);
@@ -1012,6 +1038,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                   </li>;
                 })}
               </ul>}
+              {supplement && <div className="pw-team-supplement-receipt">
+                <div><strong>管家补充 · 第 {supplement.round} 阶段</strong><span>{supplement.status}</span></div>
+                {openReading && <Button variant="ghost" size="small" trailingIcon={IconChevronRight} disabled={!canRead || materialBusy}
+                  aria-label={'查看给' + name(member.id) + '的第 ' + supplement.round + ' 阶段补充'}
+                  onClick={event => openMemberSupplement(supplement, event.currentTarget)}>查看这条</Button>}
+              </div>}
               {memberRound?.message && <p className="pw-team-member-receipt">{memberRound.message}</p>}
               {memberRound?.nativeErrorMessage && <p className="pw-team-member-error">{memberRound.nativeErrorMessage}</p>}
               {!progress.length && member.text && <p className="pw-team-output-preview">{String(member.text).slice(0, 240)}{String(member.text).length > 240 ? '…' : ''}</p>}
@@ -1041,7 +1073,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} revisionOffers={revisionRows.length||focusedProposal ? <TeamParentRevisions rows={revisionRows} returnToWork={focusedProposal?.returnToWork?()=>leaveWithDrafts(focusedProposal.returnToWork!):undefined} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
+          <TeamResultHandoff result={teamResult} partial={partialResult} memberName={name} revisionOffers={revisionRows.length||focusedProposal ? <TeamParentRevisions rows={revisionRows} returnToWork={focusedProposal?.returnToWork?()=>leaveWithDrafts(focusedProposal.returnToWork!):undefined} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
             const original=reading?.viewHandle;if(!original||!canMutate||materialBusy)return;
             void invoke('teams.reviewParentRevision',{viewHandle:original,operationId:row.operationId},value=>{
               if(currentReading.current?.viewHandle!==original||value.operation!=='reviseFromParent'||value.input?.runId!==current.id||value.input?.operationId!==row.operationId||
@@ -1051,7 +1083,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             });}}/>:undefined} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || hasFrozenRevision || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
             ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} hasRevision={hasFrozenRevision} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy} rawAvailable={canOpenMemberResult}
             open={openMemberDelivery} openAnswer={openReading?openMemberAnswer:undefined}
-            expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
+            expanded={shownMemberSources[current.id] ?? !!partialResult} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}
             finalPackageReader={teamPackage&&reading&&workspaceActive&&runSection==='result'&&bridge.getState().capabilities.commands.includes('teams.readFinalPackageFiles')

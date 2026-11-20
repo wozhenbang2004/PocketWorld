@@ -6,6 +6,8 @@ type Data = Record<string, any>;
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const text = (v: unknown): string => typeof v === 'string' ? v : '';
 const roundId = (v: unknown) => Number.isInteger(v) && Number(v) >= 1 && Number(v) <= 6;
+const activeProgress = (status: string) => ['queued','running','awaiting_user','awaiting_input','awaiting_approval','awaiting_review','needs_confirmation'].includes(status);
+const retainedProgress = (status: string) => ['paused','interrupted','failed'].includes(status);
 
 /** Run.summary doubles as a coordinator progress line. The durable assistant
  * summary message survives an intervention/stop which overwrites that field. */
@@ -36,7 +38,7 @@ export function teamResultReading(run: Data | null, messages: unknown, observed?
     && Number.isSafeInteger(run.generation) && source.generation === run.generation && source.truncated !== true ? source : null;
   const author = original?.memberId === '*' ? '协调助手'
     : original?.memberSnapshot?.id && original.memberSnapshot.id === original.memberId ? text(original.memberSnapshot.name).trim() : '';
-  return { body, previous: !!body && !current, messageId: text(source?.messageId),
+  return { body, previous: !!body && !current, partial: current && run?.status === 'partial', messageId: text(source?.messageId),
     statusNote: raw && raw !== body ? raw : '', excerpt: source?.truncated === true, original: !!original, author };
 }
 
@@ -85,9 +87,9 @@ export function teamFollowUps(run: Data | null, attention: unknown): TeamFollowU
 }
 
 /** Exact progress from the open team's existing roster, plan and decisions. */
-export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollowUp[]) {
-  const active = ['queued','running','awaiting_user','awaiting_input','awaiting_approval','awaiting_review','needs_confirmation'].includes(run.status);
-  if ((!active && run.status !== 'completed' && run.status !== 'partial') ||
+export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollowUp[], readRetained = false) {
+  const active = activeProgress(run.status);
+  if ((!active && run.status !== 'completed' && run.status !== 'partial' && !(readRetained && retainedProgress(run.status))) ||
       member.exited || !text(member.id) || rows(run.members).filter(row => row?.id === member.id).length !== 1) return [];
   const pending = followUps.filter(({ locator }) => locator.runId === run.id && locator.generation === run.generation &&
     locator.memberId === member.id && locator.memberGeneration === member.generation);
@@ -119,6 +121,26 @@ export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollo
         (locator.round != null ? locator.round === phase.round :
           member.round === phase.round && (!locator.assignmentId || locator.assignmentId === member.assignmentTask?.assignmentId))),
     }));
+}
+
+/** Use previously saved originals as the reading priority, not as a team outcome.
+ * Pending stages are from the same roster snapshot, never inferred from missing answers. */
+export function teamPartialReading(run: Data | null, followUps: TeamFollowUp[]) {
+  if (!run?.id || !['collaborate','debate'].includes(run.mode) || run.workPlan || run.productionScope ||
+      !(activeProgress(run.status) || retainedProgress(run.status) || run.status === 'partial')) return null;
+  const roster = rows(run.members);
+  if (!roster.length || roster.some(member => member?.runner !== 'model')) return null;
+  return {
+    synthesizing: run.status === 'running' && run.phase === 'synthesis',
+    remaining: roster.flatMap(member => {
+      const stages = teamMemberProgress(run, member, followUps, true);
+      const unfinished = stages.filter(stage => stage.state !== 'completed');
+      if (!unfinished.length) return [];
+      return [{ memberId: text(member.id), assignment: teamGoalTitle(member.assignment || member.role, ''),
+        states: unfinished.map(stage => (stages.length > 1 ? stage.title + '：' : '') +
+          (stage.state === 'queued' ? '未开始' : stage.state === 'preparing' ? '正在准备' : teamStatusLabel(stage.state))).join('；') }];
+    }),
+  };
 }
 
 export type AttentionFocus = { kind: 'question' | 'member' | 'workItem' | 'changed'; message?: string; memberId?: string; workItemId?: string; messageId?: string; taskId?: string };

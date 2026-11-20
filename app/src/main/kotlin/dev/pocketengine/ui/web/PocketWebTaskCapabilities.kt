@@ -8,6 +8,10 @@ import dev.pocketengine.features.skills.NativeSkillExecutionHost
 import dev.pocketengine.ui.McpInstallPreviewRules
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.SkillExecutionReviewGuard
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -66,6 +70,23 @@ internal class PocketWebTaskCapabilities(
         private fun text(input: JSONObject, key: String): String { val raw = input.opt(key); require(raw is String && raw.isNotBlank() && raw.length <= 240 && '\u0000' !in raw); return raw }
         private fun copy(input: JSONObject) = JSONObject(input.toString())
         private fun rows(input: JSONArray?) = if (input == null) emptyList() else (0 until input.length()).map { input.getJSONObject(it) }
+        private val textArtifactExtensions = setOf("txt", "md", "csv", "tsv", "json", "jsonl", "log", "xml", "yaml", "yml", "html", "htm", "srt", "vtt")
+        private const val maxArtifactPreviewChars = 12_000
+
+        /** No decoder, HTML renderer or new read authority: this is only a view of already verified bytes. */
+        private fun originalTextPreview(path: String, bytes: ByteArray): JSONObject {
+            val extension = path.substringAfterLast('/').substringAfterLast('.', "").lowercase(Locale.ROOT)
+            val text = if (extension in textArtifactExtensions) try {
+                Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString().takeUnless { value ->
+                        value.any { Character.isISOControl(it) && it !in "\t\r\n" }
+                    }
+            } catch (_: CharacterCodingException) { null } else null
+            if (text == null) return JSONObject().put("kind", "unsupported")
+            var end = minOf(text.length, maxArtifactPreviewChars)
+            if (end in 1 until text.length && Character.isHighSurrogate(text[end - 1])) end--
+            return JSONObject().put("kind", "plain_text").put("text", text.substring(0, end)).put("truncated", end < text.length)
+        }
     }
     private fun current(page: Page) = page.alive && page.owner == owner() && visible()
     private fun retire(review: Review) = synchronized(review) { review.alive = false; review.accepted = false; review.consent++; review.window?.close(); review.window = null }
@@ -243,8 +264,18 @@ internal class PocketWebTaskCapabilities(
                     val view = view(page); JSONObject().put("original", value).put("view", view).put("replayAllowed", false).put("retrieved", action == "taskCapabilities.retrieve") }
             }
             "taskCapabilities.artifact" -> {
-                fields(input, "pageHandle", "artifactHandle"); val page = page(input); val file = selected(page, text(input, "artifactHandle"), "artifact")
-                work(page, done) { val bytes = artifact(page.task, file.getString("operationId"), file.getString("artifactId"), file.getString("sha256")); check(bytes.size.toLong() == file.getLong("bytes")); copy(file).put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP)).put("untrusted", true).put("replayAllowed", false) }
+                fields(input, "pageHandle", "artifactHandle", "textPreview")
+                val preview = input.has("textPreview")
+                require(!preview || input.opt("textPreview") == true)
+                val page = page(input); val file = selected(page, text(input, "artifactHandle"), "artifact")
+                work(page, done) {
+                    val bytes = artifact(page.task, file.getString("operationId"), file.getString("artifactId"), file.getString("sha256"))
+                    check(bytes.size.toLong() == file.getLong("bytes"))
+                    val result = copy(file).put("untrusted", true).put("replayAllowed", false)
+                    if (preview) result.put("taskId", page.task).put("pageHandle", page.id).put("executionAuthorized", false)
+                        .put("preview", originalTextPreview(file.getString("path"), bytes))
+                    else result.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                }
             }
             "taskCapabilities.export" -> {
                 fields(input, "pageHandle", "artifactHandle"); val page = page(input); val file = selected(page, text(input, "artifactHandle"), "artifact")

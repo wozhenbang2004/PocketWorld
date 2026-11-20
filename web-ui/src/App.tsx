@@ -2590,7 +2590,7 @@ export default function App(){
   {composerRegion}</main>;
  const tasksPage=<WorkRecoveryDirectory directory={taskDirectory} live={tasks} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')} scroll={taskList} ready={ready} canOpen={can('tasks.open')} canReview={can('tasks.review')}
   scope={filter as WorkCollectionFilter} query={taskQuery} selectScope={selectWorkScope} clearQuery={()=>setTaskQuery('')} drillEnded={drillEndedWork}
-  start={()=>{void navigate('butler')}} history={()=>{void openRelatedWorkspace('history')}} open={(id,entry,query)=>openTask(id,entry,false,undefined,query)}
+  start={()=>{void navigate('butler')}} history={()=>{void openRelatedWorkspace('history')}} open={(id,entry,query,run)=>openTask(id,entry,false,undefined,query,run,undefined,undefined,()=>setLocalError('这份工作未能打开，已留在工作列表。'))}
   registerReturn={registerWorkReturn} extra={can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}/>;
  const showProjectSection=(section:'work'|'files')=>{projectPreview.hide();setProjectSections(previous=>({...previous,[String(state.projectId||'')]:section}))};
  const dismissProjectDraftReturn=(id:string)=>{setProjectDraftReturn(null);setProjectWorkPresentations(previous=>({...previous,[id]:{open:false,mode:'default'}}));};

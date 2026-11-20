@@ -8,7 +8,19 @@ import { firstFollowUp, readFollowUp, WorkBrief, WorkQueueRow, type WorkEntry, t
 import './work-recovery-directory.css';
 
 type Directory = ReturnType<typeof useWorkDirectory>;
-type Origin = { id: string; entry: WorkEntry; scope: WorkCollectionFilter; query: string; updatedAt: number };
+type RunPin = { runId: string; epoch: number };
+type Origin = { id: string; entry: WorkEntry; scope: WorkCollectionFilter; query: string; updatedAt: number; run?: RunPin };
+const runOf = (task: WorkCollectionTask): RunPin | undefined => {
+  const row=task.raw;
+  return row?.id===task.id && row.actorId==='owner' && row.spaceId==='private' &&
+    row.contextAvailable!==false && row.sourceCurrentReadRequired!==true && row.taskProjection!=='source_unavailable' &&
+    typeof row.runId==='string' && row.runId.trim() && Number.isSafeInteger(row.coordinatorEpoch) && row.coordinatorEpoch>0
+    ? { runId:row.runId, epoch:row.coordinatorEpoch } : undefined;
+};
+const sameRun = (task: WorkCollectionTask, wanted?: RunPin) => {
+  if (!wanted) return true;
+  const run=runOf(task); return run?.runId===wanted.runId && run.epoch===wanted.epoch;
+};
 const scopes: { id: WorkCollectionFilter; title: string }[] = [
   { id: 'all', title: '全部' }, { id: 'attention', title: '待处理' }, { id: 'running', title: '进行中' }, { id: 'ended', title: '已结束' },
 ];
@@ -35,7 +47,7 @@ type Props = {
   directory: Directory; live: WorkCollectionTask[]; canContinue: (task: WorkCollectionTask) => boolean; scroll: RefObject<HTMLElement | null>; ready: boolean; canOpen: boolean; canReview: boolean;
   scope: WorkCollectionFilter; query: string; selectScope: (value: WorkCollectionFilter) => void;
   clearQuery: () => void; drillEnded: () => void; start: () => void; history: () => void;
-  open: (id: string, entry: WorkEntry, query: string) => void;
+  open: (id: string, entry: WorkEntry, query: string, run?: RunPin) => void;
   registerReturn: (fn: (() => boolean) | null) => void; extra?: ReactNode;
 };
 export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, ready, canOpen, canReview, scope, query, selectScope,
@@ -62,11 +74,13 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
 
   const visit = (task: WorkCollectionTask, entry: WorkEntry) => {
     if (!canOpen) return;
-    origin.current = { id: task.id, entry, scope, query, updatedAt: task.updatedAt || 0 }; setReturning(null);
+    const run=runOf(task);
+    origin.current = { id: task.id, entry, scope, query, updatedAt: task.updatedAt || 0, run }; setReturning(null);
     if (scroll.current) directory.rememberScroll(scroll.current.scrollTop);
-    open(task.id, entry, query);
+    open(task.id, entry, query, run);
   };
   const focusOriginal = (o: Origin) => {
+    if (o.run && !visible.some(item => item.task.id===o.id && sameRun(item.task,o.run))) return false;
     const buttons = Array.from(scroll.current?.querySelectorAll<HTMLElement>('button[data-task-id]:not(:disabled)') || []).filter(el => el.dataset.taskId === o.id);
     const row = buttons.find(el => el.dataset.workEntry === o.entry) || buttons[0];
     if (!row) return false;
@@ -107,7 +121,9 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
   const located = returning && live.find(t => t.id === returning.id && t.raw?.id === t.id && t.raw.actorId === 'owner'
     && t.raw.spaceId === 'private' && t.raw.kind !== 'inference' && t.raw.contextAvailable !== false
     && t.raw.taskProjection !== 'source_unavailable' && t.raw.sourceCurrentReadRequired !== true
-    && (t.updatedAt || 0) >= returning.updatedAt);
+    && sameRun(t,returning.run) && (t.updatedAt || 0) >= returning.updatedAt);
+  const differentRun = !!returning?.run && [...live, ...items].some(t => t.id===returning.id &&
+    (t.updatedAt||0)>=returning.updatedAt && !!runOf(t) && !sameRun(t,returning.run));
   const targetScope = located ? workCollectionPresentation(located).group : null;
   const norm = (s: string) => s.normalize('NFKC').toLocaleLowerCase('en-US').trim();
   const retainQuery = located ? !norm(query) || norm(located.goal + '\n' + (located.summary || '')).includes(norm(query)) : false;
@@ -125,11 +141,11 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
     }}>
     <div className="pw-task-status-filters" data-work-scopes role="group" aria-label="工作范围">{scopes.map(s => <Button key={s.id} variant="ghost"
       data-work-scope={s.id} aria-pressed={scope === s.id} onClick={() => scopeKey(s.id)}>{s.title}</Button>)}</div>
-    {returning && matchesScope(returning) && directory.loaded && !directory.busy && !directory.error && !visible.some(v => v.task.id === returning.id) &&
+    {returning && matchesScope(returning) && directory.loaded && !directory.busy && !directory.error && !visible.some(v => v.task.id === returning.id && sameRun(v.task,returning.run)) &&
       <div ref={focusReturn} className="pw-work-return-notice" tabIndex={-1} role="status">
-        <span>刚查看的工作不在当前列表。</span>{canLocate ? <Button variant="ghost" onClick={relocate}>在「{scopes.find(s => s.id === targetScope)?.title}」中定位</Button>
+        <span>{differentRun ? '这项工作已经开始了新一轮，刚才查看的是上一轮。' : '刚查看的工作不在当前列表。'}</span>{differentRun ? null : canLocate ? <Button variant="ghost" onClick={relocate}>在「{scopes.find(s => s.id === targetScope)?.title}」中定位</Button>
           : <Button variant="ghost" disabled={!canOpen} onClick={() => {
-          const id = returning.id; origin.current = returning; setReturning(null); open(id, 'overview', '');
+          const id = returning.id; origin.current = returning; setReturning(null); open(id, 'overview', '', returning.run);
         }}>查看原工作</Button>}<IconButton icon={IconClose} aria-label="留在当前列表" onClick={() => { setReturning(null); scroll.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus({ preventScroll: true }); }}/>
       </div>}
     <section className="pw-task-results pw-follow-directory" aria-label="工作列表" data-work-split={!!brief && hasQueue || undefined}>

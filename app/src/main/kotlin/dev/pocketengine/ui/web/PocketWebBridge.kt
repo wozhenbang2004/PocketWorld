@@ -7,9 +7,11 @@ import android.view.Choreographer
 import dev.pocketengine.EngineApplication.OwnerWorkControlRejected
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.core.RuntimeDiagnostics
+import dev.pocketengine.features.devices.DirectedPhoneTarget
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
 import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ReasoningOptions
+import dev.pocketengine.store.OwnerPhoneControlScope
 import dev.pocketengine.store.TaskExecutionScope
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.ChatInputRules
@@ -651,9 +653,17 @@ internal class PocketWebBridge(
                     require(selected.id == taskViewId && selected.raw.optString("actorId") == "owner" && selected.raw.optString("spaceId") == "private") { "请先打开原私人手控任务" }
                 }
                 phoneControl.dispatch(action, args) { result, error ->
-                    if (action == "phoneControl.prepare" && error == null && result?.optBoolean("prepared") == true)
-                        openOriginalTask(id, result.getString("taskId"), true, "devices")
-                    else { complete(id, result, error, retainValue = false); publishState() }
+                    if (action == "phoneControl.prepare" && error == null && result?.optBoolean("prepared") == true) {
+                        val taskId = result.getString("taskId")
+                        openOriginalTask(id, taskId, true, "devices", preparedPhoneReceipt = result,
+                            sourceWindowCurrent = { section == "devices" && taskViewId == null && controller.webPrivateOwnerVisible() }, checkReaderInput = { source ->
+                                OwnerPhoneControlScope.require(source.raw)
+                                require(source.id == taskId && result.opt("taskStarted") == false &&
+                                    OwnerPhoneControlScope.target(source.raw) == result.optJSONObject("manualPhoneTarget")?.let { DirectedPhoneTarget.read(it) }) {
+                                    "原手控准备或手机身份已变化，没有重新创建或启动"
+                                }
+                            })
+                    } else { complete(id, result, error, retainValue = false); publishState() }
                 }; return
             }
             if (action in PocketWebDeviceTaskScope.COMMANDS) {
@@ -761,11 +771,25 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebMemoryHistory.COMMANDS) {
+                var memoryArgs = args
+                var historyAnswer: (() -> JSONObject)? = null
                 if (action == "memoryHistory.open") {
-                    if (args.optString("view") == "answer") require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请在原私聊回答下核对本次提供的记忆" }
-                    else require(section == "memory" && taskViewId == null) { "请从原记忆管理页选择要查阅的范围" }
+                    if (args.optString("view") == "answer") {
+                        require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请在原私聊回答下核对本次提供的记忆" }
+                        val history = setOf("readerWindow", "readerConversationId", "readerSourceRevision")
+                        if (history.any { args.has(it) }) {
+                            checkedPayload(args, history + setOf("view", "messageId"))
+                            val message = requiredString(args, "messageId")
+                            val window = captureWindow()
+                            historyAnswer = memoryHistory.historyAnswer(requiredLong(args, "readerWindow"), requiredString(args, "readerConversationId"),
+                                message, requiredLong(args, "readerSourceRevision")) {
+                                !closed && section == null && taskViewId == null && acceptsWindow(window)
+                            }
+                            memoryArgs = JSONObject().put("view", "answer").put("messageId", message)
+                        }
+                    } else require(section == "memory" && taskViewId == null) { "请从原记忆管理页选择要查阅的范围" }
                 }
-                memoryHistory.dispatch(action, args) { result, error -> completePrivateMemoryReply(id, action, result, error); publishState() }; return
+                memoryHistory.dispatch(action, memoryArgs, historyAnswer) { result, error -> completePrivateMemoryReply(id, action, result, error); publishState() }; return
             }
             if (action in PocketWebBackground.COMMANDS) {
                 background.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }
@@ -1323,7 +1347,11 @@ internal class PocketWebBridge(
             if (action == "devices.openTask") {
                 requireSection("devices")
                 val taskId = devicePages.taskForNavigation(args)
-                if (args.has("archiveHandle") || args.has("sourceViewHandle")) {
+                if (args.has("manualPhoneTarget")) {
+                    val sourceCurrent = { section == "devices" && taskViewId == null && runCatching { devicePages.taskForNavigation(args) == taskId }.getOrDefault(false) }
+                    openOriginalTask(id, taskId, true, "devices", sourceWindowCurrent = sourceCurrent,
+                        checkReaderInput = { source -> devicePages.checkManualPreparationForNavigation(args, source.raw) })
+                } else if (args.has("archiveHandle") || args.has("sourceViewHandle")) {
                     val sourceCurrent = { runCatching { devicePages.taskForNavigation(args) == taskId }.getOrDefault(false) }
                     openOriginalTask(id, taskId, true, "devices", sourceWindowCurrent = sourceCurrent, checkReaderInput = { source ->
                         require(sourceCurrent() && source.id == taskId && source.raw.optString("actorId") == "owner" && source.raw.optString("spaceId") == "private" && !source.raw.has("origin")) { "原工作来源已变化，没有打开其他任务" }
@@ -2356,7 +2384,7 @@ internal class PocketWebBridge(
     private fun projectReadCurrent(scope: ProjectTaskReadScope) = controller.webPrivateOwnerVisible() && section == null &&
         controller.state.projectId == scope.projectId && controller.state.filePath == null
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, originalFileApproval: String? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, originalFileApproval: String? = null, preparedPhoneReceipt: JSONObject? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
         if (projectScope != null) require(projectReadCurrent(projectScope)) { "原项目页面已切换，未打开其他工作" }
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         var entered = false
@@ -2404,7 +2432,11 @@ internal class PocketWebBridge(
                     raw.optString("runId").isNotBlank() && raw.optInt("coordinatorEpoch")>0 && dev.optString("projectId").isNotBlank() &&
                     dev.optString("checkoutId").isNotBlank()) GoalWindow(task.id,raw.getString("runId"),raw.getInt("coordinatorEpoch"),
                     dev.getString("projectId"),dev.getString("checkoutId"),captureWindow()) else null
-                complete(requestId, JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false), null, retainValue = checkedDeviceFile==null)
+                val opened = JSONObject().put("taskId", task.id).put("readOnly", true).put("executionAuthorized", false)
+                // The read-only open must preserve the otherwise lost native save acknowledgment.
+                if (preparedPhoneReceipt != null) opened.put("prepared", true).put("taskStarted", false)
+                    .put("manualPhoneTarget", preparedPhoneReceipt.optJSONObject("manualPhoneTarget"))
+                complete(requestId, opened, null, retainValue = checkedDeviceFile==null && preparedPhoneReceipt==null)
                 publishState()
             } catch (failure: Exception) {
                 if ((requestNavigation || projectScope != null || checkReaderInput != null && entered) && (sourceWindowCurrent == null || entered)) runCatching { restoreTaskWorkspace() }

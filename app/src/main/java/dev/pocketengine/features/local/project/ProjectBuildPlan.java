@@ -34,6 +34,11 @@ public final class ProjectBuildPlan {
                 }
             }
         }else if(files.keySet().stream().anyMatch(ProjectCheckoutTooling::js))ecosystems.put(ecosystem("node",files,ProjectCheckoutTooling::js));
+        boolean maven=ProjectCheckoutTooling.mavenDeclared(source.getJSONArray("files"));
+        if(maven){
+            ecosystems.put(new JSONObject().put("id","maven").put("evidence",new JSONArray().put(ProjectCheckoutTooling.MAVEN_MANIFEST)));
+            warnings.put(ProjectCheckoutTooling.NO_MAVEN);
+        }
         boolean gradle=files.keySet().stream().anyMatch(ProjectCheckoutTooling::gradle);
         if(gradle){ecosystems.put(ecosystem("gradle",files,ProjectCheckoutTooling::gradle));warnings.put("Gradle会执行项目构建逻辑并可能联网；dependencies主要报告依赖图，不证明已缓存全部构建依赖或可离线构建。Android SDK和APK工具链未验证，不等于可在手机构建APK");}
         if(files.keySet().stream().anyMatch(ProjectCheckoutTooling::python)){
@@ -43,30 +48,17 @@ public final class ProjectBuildPlan {
             ecosystems.put(python);
             if(files.containsKey("pyproject.toml"))warnings.put("pyproject.toml已识别；不猜测其构建backend或自动安装包");
         }
-        if(!gradle&&files.keySet().stream().anyMatch(p->p.endsWith(".java")))ecosystems.put(ecosystem("java",files,p->p.endsWith(".java")));
+        if(!gradle&&!maven&&files.keySet().stream().anyMatch(p->p.endsWith(".java")))ecosystems.put(ecosystem("java",files,p->p.endsWith(".java")));
         if(files.containsKey("index.html"))ecosystems.put(ecosystem("static",files,p->p.equals("index.html")));
         JSONObject termux=runtimeId.equals("termux")?local.handle("probe",new JSONObject()).optJSONObject("termux"):null;
-        JSONArray observed=new JSONArray();String probeId="";long newest=-1;
-        JSONArray jobs=runtimeId.equals("termux")?local.handle("listJobs",new JSONObject()).optJSONArray("termuxJobs"):null;
-        if(jobs!=null)for(int i=0;i<jobs.length();i++){
-            JSONObject summary=jobs.getJSONObject(i);
-            if(!"tool_probe".equals(summary.optString("kind"))||!"completed".equals(summary.optString("status"))||summary.optLong("createdAt")<newest)continue;
-            JSONObject receipt=local.handle("getJob",new JSONObject().put("jobId",summary.getString("id")).put("termux",true));
-            Object exit=receipt.opt("exitCode");if(!Boolean.TRUE.equals(receipt.opt("receiptReceived"))||!(exit instanceof Integer||exit instanceof Long)||((Number)exit).longValue()!=0||receipt.optBoolean("outputTruncated"))continue;
-            observed=new JSONArray();for(String line:receipt.optString("stdout").split("\\R")){
-                int equals=line.indexOf('=');if(equals<1)continue;String name=line.substring(0,equals),path=line.substring(equals+1);
-                if(Set.of("node","npm","pnpm","python","python3","java","javac","git","gradle").contains(name)&&path.equals("/data/data/com.termux/files/usr/bin/"+name))observed.put(name);
-            }
-            newest=summary.optLong("createdAt");probeId=receipt.getString("id");
-        }
-        JSONObject runtime;
-        if(runtimeId.equals("termux"))runtime=termux==null?new JSONObject():ProjectSources.copy(termux);
-        else{runtime=local.handle("project.runtime.describe",new JSONObject().put("runtimeId",runtimeId));observed=new JSONArray();JSONArray facts=runtime.optJSONArray("tools");for(int i=0;facts!=null&&i<facts.length();i++){JSONObject fact=facts.getJSONObject(i);if(fact.optBoolean("hashVerified")||fact.optBoolean("probeVerified"))observed.put(fact.getString("name"));}probeId="";newest=-1;}
+        JSONObject runtime=runtimeId.equals("termux")?termux==null?new JSONObject():ProjectSources.copy(termux):
+            local.handle("project.runtime.describe",new JSONObject().put("runtimeId",runtimeId));
+        ProjectCheckoutTooling.ToolObservation toolFacts=ProjectCheckoutTooling.toolObservation(local,runtimeId,runtime);JSONArray observed=toolFacts.tools();
         JSONObject android=ProjectAndroidPreflight.inspect(files,source,observed);
         if(android!=null)warnings.put("发现 Android 项目线索；请读取 androidBuild 的版本声明与真实缺口。基本环境就绪不等于 APK 工具链已准备，不自动安装 SDK、签名或安装 APK。");
         JSONObject result=new JSONObject().put("checkoutId",checkout).put("projectId",source.getString("projectId")).put("sourceDigest",source.getString("sourceDigest")).put("runtimeId",runtimeId).put("runtime",runtime)
                 .put("source",source).put("ecosystems",ecosystems).put("dependencies",dependencies).put("warnings",warnings)
-                .put("termux",termux==null?new JSONObject():termux).put("observedTools",observed).put("toolProbeJobId",probeId).put("toolProbeCreatedAt",newest)
+                .put("termux",termux==null?new JSONObject():termux).put("observedTools",observed).put("toolProbeJobId",toolFacts.id()).put("toolProbeCreatedAt",toolFacts.createdAt())
                 .put("dependencyResolutionComplete",false).put("nativeProgrammingExecution",false).put("untrustedProjectContent",true);
         if(android!=null)result.put("androidBuild",android);return result;
     }
@@ -121,6 +113,8 @@ public final class ProjectBuildPlan {
         Map<String,String> files=ProjectSources.files(snapshot);JSONArray ecosystems=inspection.getJSONArray("ecosystems");String ecosystem=input.optString("ecosystem","");
         if(!intent.equals("prepare")&&!intent.equals("probe")&&!intent.equals("edit")){
             if(ecosystem.isEmpty()){if(ecosystems.length()!=1)throw new IllegalArgumentException("请明确选择此项目的构建类型");ecosystem=ecosystems.getJSONObject(0).getString("id");}
+            if(Set.of("java","maven").contains(ecosystem)&&ProjectCheckoutTooling.mavenDeclared(inspection.getJSONObject("source").getJSONArray("files")))
+                throw new IllegalArgumentException(ProjectCheckoutTooling.NO_MAVEN);
             boolean present=false;for(int i=0;i<ecosystems.length();i++)present|=ecosystem.equals(ecosystems.getJSONObject(i).getString("id"));if(!present)throw new IllegalArgumentException("项目没有该类型的源码证据");
         }
         boolean devWatch=input.optBoolean("devWatch");
@@ -192,7 +186,7 @@ public final class ProjectBuildPlan {
                 }else if(ecosystem.equals("gradle")){
                     if(intent.equals("run"))throw new IllegalArgumentException("Gradle运行task需在项目内明确声明；不猜测APK安装或启动");
                     executable="gradle";argv.put("--no-daemon").put(intent.equals("dependencies")?"dependencies":intent.equals("test")?"test":"assemble");network=true;
-                    if(intent.equals("build"))warnings.put("此构建明确请求 Gradle assemble，不默认连带 check/test；但项目构建脚本仍可自定义依赖任务，执行前须审阅。调用当前登记的 gradle，不擅自执行/下载项目 wrapper，也不假定与 wrapper 声明版本一致。");
+                    if(intent.equals("build"))warnings.put("此构建明确请求 Gradle assemble，不默认连带 check/test；项目构建脚本仍可自定义依赖任务，执行前须审阅。工具登记只说明来源已读取，不证明项目所需 JDK 版本或依赖已就绪；不会代为执行或下载项目 wrapper。");
                 }else throw new IllegalArgumentException("静态HTML无需编译；请使用明确的受限预览，不伪造构建成功");
                 if(!executable.isEmpty()){
                     JSONObject payload=ProjectSources.copy(base).put("executable",executable).put("argv",argv);
@@ -205,8 +199,14 @@ public final class ProjectBuildPlan {
             }
         }
         JSONObject termux=inspection.getJSONObject("runtime");boolean available=runtimeId.equals("termux")?termux.optBoolean("installed")&&termux.optBoolean("permissionGranted")&&termux.optBoolean("enabled"):termux.optBoolean("canExecute");
-        JSONArray observed=inspection.getJSONArray("observedTools");Set<String> tools=new java.util.HashSet<>();for(int i=0;i<observed.length();i++)tools.add(observed.getString(i));
-        for(int i=0;i<steps.length();i++){JSONObject request=steps.getJSONObject(i).getJSONObject("payload");if(request.has("executable")&&!tools.contains(request.getString("executable")))available=false;}
+        Set<String> tools=ProjectCheckoutTooling.toolNames(inspection.getJSONArray("observedTools"));
+        for(int i=0;i<steps.length();i++){
+            JSONObject request=steps.getJSONObject(i).getJSONObject("payload");if(!request.has("executable"))continue;
+            String tool=request.getString("executable"),blocked=ProjectCheckoutTooling.jvmToolBlocker(tool,runtimeId,tools);
+            if(!blocked.isEmpty())throw new IllegalStateException(blocked);
+            if(ProjectCheckoutTooling.JVM_TOOLS.contains(tool)&&!available)throw new IllegalStateException("所选运行环境未就绪，不能审阅这次 Java 或 Gradle 命令；没有运行或改用其它环境。");
+            if(!tools.contains(tool))available=false;
+        }
         if(intent.equals("edit"))available=true;
         if(intent.equals("prepare")&&!runtimeId.equals("termux"))available=termux.optBoolean("preparationAvailable");
         if(!runtimeId.equals("termux"))for(int i=0;i<steps.length();i++){JSONObject item=steps.getJSONObject(i);if(item.getString("localCommand").startsWith("termux."))item.put("localCommand",item.getString("localCommand").replace("termux.","project.runtime."));item.getJSONObject("effects").put("runtime",item.getString("localCommand").equals("writeFile")?"app_private_checkout":runtimeId);}

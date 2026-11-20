@@ -4,6 +4,8 @@ import android.os.Handler
 import android.os.Looper
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost as Host
 import dev.pocketengine.features.devices.DeviceProtocol
+import dev.pocketengine.features.devices.DirectedPhoneTarget
+import dev.pocketengine.store.OwnerPhoneControlScope
 import dev.pocketengine.store.TaskStoreDeviceTasks
 import dev.pocketengine.ui.ReceivedFileSelection
 import dev.pocketengine.ui.PocketWorldController
@@ -156,6 +158,24 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     }
     fun taskForNavigation(args: JSONObject): String {
         check(visible() && controller.webPrivateOwnerVisible())
+        if (args.has("manualPhoneTarget")) {
+            fields(args, "taskId", "manualPhoneTarget")
+            val original = requireNotNull(window()); current(original, generation.get())
+            val id = text(args, "taskId"); val chosen = DirectedPhoneTarget.read(args.getJSONObject("manualPhoneTarget"))
+            val partner = peer(latest, chosen.deviceId())
+            require(partner.opt("instanceId") == chosen.instanceId() && partner.opt("certificateFingerprint") == chosen.certificateFingerprint() &&
+                partner.opt("revoked") != true && partner.optJSONObject("connection")?.opt("state") != "REVOKED") { "原配对手机已变化，不打开其他设备的准备" }
+            val row = controller.state.tasks.singleOrNull { it.id == id } ?: error("这份原手控准备不在本机已读取的工作内")
+            val saved = if (OwnerPhoneControlScope.marked(row.raw)) OwnerPhoneControlScope.directedPreparation(row.raw)
+                else row.raw.optJSONObject("deviceWorkspaceNavigation")?.takeIf {
+                    it.opt("format") == "pocketworld.device-workspace-navigation.v1" && it.opt("mode") == "manual_phone" &&
+                        it.opt("readOnly") == true && it.opt("executionAuthorized") == false
+                }?.optJSONObject("manualPhonePreparation")
+            require(OwnerPhoneControlScope.unstartedPreparation(row.raw) && saved != null && DirectedPhoneTarget.read(saved.getJSONObject("target")) == chosen) {
+                "本机原手控准备已变化，不重新创建或启动"
+            }
+            return id
+        }
         if (args.has("sourceViewHandle")) {
             fields(args, "taskId", "operationId", "sourceViewHandle")
             val original = selected(JSONObject().put("viewHandle",text(args,"sourceViewHandle")),requireNotNull(window()),generation.get(),consume=false)
@@ -173,6 +193,13 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }
         fields(args, "taskId")
         return text(args, "taskId").also { require(it in taskIds()) { "请从原设备任务记录打开" } }
+    }
+    fun checkManualPreparationForNavigation(args: JSONObject, actual: JSONObject) {
+        val saved = OwnerPhoneControlScope.directedPreparation(actual)
+        require(taskForNavigation(args) == actual.opt("id") && saved != null &&
+            DirectedPhoneTarget.read(saved.getJSONObject("target")) == DirectedPhoneTarget.read(args.getJSONObject("manualPhoneTarget"))) {
+            "这份手控准备已不属于所选原手机，没有开始其他任务"
+        }
     }
     @Synchronized private fun waitingFor(handle: String, original: Host.Window, epoch: Long): WaitingPage {
         current(original,epoch); val here=latest.getJSONObject("local")
