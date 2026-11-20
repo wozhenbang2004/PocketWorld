@@ -27,18 +27,31 @@ public final class ProjectPreviewBundle {
         public final String checkoutId,projectId,sourceDigest,entryPath,previewRoot,identity,origin,entryUrl;public final long capturedAt;public final int totalBytes;
         public final String artifactId,artifactSha256;
         private final Map<String,Resource> resources;
+        private final String rootedBase;
         private Verified(String checkout,String project,String source,String entry,String root,Map<String,Resource> resources,int total)throws Exception {
-            this(checkout,project,source,entry,root,resources,total,null,null);
+            this(checkout,project,source,entry,root,resources,total,null,null,"");
         }
-        private Verified(String checkout,String project,String source,String entry,String root,Map<String,Resource> resources,int total,String artifactId,String artifactSha)throws Exception {
+        private Verified(String checkout,String project,String source,String entry,String root,Map<String,Resource> resources,int total,String artifactId,String artifactSha,String rootedBase)throws Exception {
             checkoutId=checkout;projectId=project;sourceDigest=source;entryPath=entry;previewRoot=root;capturedAt=System.currentTimeMillis();totalBytes=total;this.resources=Collections.unmodifiableMap(new LinkedHashMap<>(resources));
-            this.artifactId=artifactId;artifactSha256=artifactSha;
-            JSONObject core=new JSONObject().put("checkoutId",checkout).put("projectId",project).put("sourceDigest",source).put("entryPath",entry).put("previewRoot",root).put("resources",manifest());if(artifactId!=null)core.put("artifactId",artifactId).put("artifactSha256",artifactSha);identity=ProjectSources.digest(core);origin="https://pw-project-"+identity.substring(0,40)+".invalid/";entryUrl=origin+encoded(entry.substring(root.isEmpty()?0:root.length()+1));
+            this.artifactId=artifactId;artifactSha256=artifactSha;this.rootedBase=rootedBase;
+            JSONObject core=new JSONObject().put("checkoutId",checkout).put("projectId",project).put("sourceDigest",source).put("entryPath",entry).put("previewRoot",root).put("resources",manifest());if(artifactId!=null)core.put("artifactId",artifactId).put("artifactSha256",artifactSha);
+            if(!rootedBase.isEmpty())core.put("rootedBase",rootedBase);
+            identity=ProjectSources.digest(core);origin="https://pw-project-"+identity.substring(0,40)+".invalid/";
+            entryUrl=origin+(rootedBase.isEmpty()?"":rootedBase.substring(1))+encoded(entry.substring(root.isEmpty()?0:root.length()+1));
         }
         public JSONObject metadata()throws Exception{return new JSONObject().put("previewId",identity).put("checkoutId",checkoutId).put("projectId",projectId).put("sourceDigest",sourceDigest).put("entryPath",entryPath).put("previewRoot",previewRoot)
                 .put("resources",manifest()).put("resourceCount",resources.size()).put("bytes",totalBytes).put("capturedAt",capturedAt).put("origin",artifactId==null?"active_workspace_observation":"fixed_workspace_project_artifact").put("artifactId",artifactId).put("artifactSha256",artifactSha256).put("atomicArtifactFence",false).put("businessVerified",false).put("persisted",artifactId!=null);}
         public JSONArray manifest()throws Exception {JSONArray result=new JSONArray();for(Resource resource:resources.values())result.put(new JSONObject().put("path",resource.path).put("mimeType",resource.mimeType).put("sha256",resource.sha256).put("bytes",resource.bytes.length));return result;}
-        String resourcePath(String url){try{URI parsed=new URI(url);if(!"https".equals(parsed.getScheme())||!new URI(origin).getRawAuthority().equals(parsed.getRawAuthority())||parsed.getRawUserInfo()!=null)return null;String path=parsed.getPath();if(path==null||!path.startsWith("/"))return null;String relative=path.substring(1);VersionedWorkspace.path(relative);if(!relative.equals(relative.trim())||relative.indexOf('\\')>=0)return null;return relative;}catch(Exception invalid){return null;}}
+        String resourcePath(String url){
+            try {
+                URI parsed=new URI(url);
+                if(!"https".equals(parsed.getScheme())||!new URI(origin).getRawAuthority().equals(parsed.getRawAuthority())||parsed.getRawUserInfo()!=null)return null;
+                String path=parsed.getPath();if(path==null||!path.startsWith("/"))return null;
+                if(!rootedBase.isEmpty())return parsed.getRawQuery()==null&&path.equals(parsed.getRawPath())?ViteOutputMount.relativeMember(rootedBase,path):null;
+                String relative=path.substring(1);VersionedWorkspace.path(relative);
+                if(!relative.equals(relative.trim())||relative.indexOf('\\')>=0)return null;return relative;
+            }catch(Exception invalid){return null;}
+        }
         public Resource resource(String url){String path=resourcePath(url);return path==null?null:resources.get(path);}
         public boolean document(String url){Resource resource=resource(url);return resource!=null&&resource.mimeType.equals("text/html");}
     }
@@ -53,8 +66,12 @@ public final class ProjectPreviewBundle {
             byte[] bytes=frozen.file(path);if(resources.size()>=MAX_RESOURCES||bytes.length>MAX_RESOURCE_BYTES||(total+=bytes.length)>MAX_TOTAL_BYTES)throw new IllegalArgumentException("此固定项目包超出网页预览资源预算，仍可导出或重导入");
             String relative=path.substring(prefix.length());resources.put(relative,new Resource(relative,bytes));
         }
-        if(!resources.containsKey(entry.substring(prefix.length())))throw new IllegalArgumentException("固定项目包没有该HTML入口，不改用当前项目");
-        return new Verified(source.getString("checkoutId"),source.getString("projectId"),source.getString("sourceDigest"),entry,root,resources,total,artifactId,artifactSha);
+        Resource main=resources.get(entry.substring(prefix.length()));
+        if(main==null)throw new IllegalArgumentException("固定项目包没有该HTML入口，不改用当前项目");
+        // Only the single dist entry can mount its own complete archive at a different URL prefix.
+        String rootedBase="web_output".equals(manifest.opt("mode"))&&"dist/index.html".equals(entry)&&manifest.getJSONArray("omitted").length()==0?
+            ViteOutputMount.rootedBase(main.bytes,resources::containsKey):"";
+        return new Verified(source.getString("checkoutId"),source.getString("projectId"),source.getString("sourceDigest"),entry,root,resources,total,artifactId,artifactSha,rootedBase);
     }
     /** Capture the entry's resource directory, excluding dependency/cache trees. No HTTP listener is opened. */
     public static Verified capture(File activeRoot,String checkout,String project,String source,String entryPath)throws Exception {

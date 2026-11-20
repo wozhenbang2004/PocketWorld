@@ -31,7 +31,7 @@ import type {CapabilityWorkspaceMemory} from './CapabilitiesWorkspace';
 import {usePocketAppearance} from './usePocketAppearance';
 import {useClosingSnapshot,useMessageArrivals,useReviewFocus,useSurfaceEnter} from './library/surface-motion';
 import {chatCancelIdentity,chatCancelKey,chatStopObservation,sameChatCancelIdentity,type ChatStopRecord} from './chat-cancel';
-import {presentOperation,getRecentTaskProgress,taskNeedsReconciliation} from './task-presentation';
+import {presentOperation,getRecentTaskProgress,taskNeedsReconciliation,getLoadedFixedDraftGoalDecision} from './task-presentation';
 import {TaskHistory} from './TaskHistory';
 import {composerHasPayload} from './composer-send-policy';
 import {composerPermissionView} from './composer-permissions';
@@ -170,7 +170,7 @@ type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string}};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
-type DraftAcceptanceClick=OriginalProjectDraft&{window:TaskReviewWindow;reviewHandle:string;reviewDigest:string;reviewedRevision:number};
+type DraftAcceptanceClick=OriginalProjectDraft&{window:TaskReviewWindow;reviewHandle:string;reviewDigest:string;reviewedRevision:number;completed:boolean};
 type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
 type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity;result?:{work:TaskResult;navigation:number}};
@@ -178,10 +178,10 @@ type ChatWorkTaskOpen={returnTo:ChatWorkReturn;beforeTaskRequest:number;navigati
 type ChatDrawerReturn=ChatWorkReturn&{taskId:string;navigation:number;resumeRevision:number};
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
-type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedWeb?:{projectId:string;checkoutId:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number};
-type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean};
+type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
 const resultMessageIn=(rows:unknown,id:string,expected:TaskResult,revision?:number)=>{
@@ -241,17 +241,17 @@ function fixedDraftReviewTarget(task?:Task):OriginalProjectDraft|null{
     typeof raw.projectEditDraftId!=='string'||!/^[a-f0-9]{64}$/.test(raw.projectEditDraftId))return null;
  return {taskId:task.id,runId:raw.runId,epoch:raw.coordinatorEpoch,draftId:raw.projectEditDraftId};
 }
-function draftAcceptanceClick(review:Review,window:TaskReviewWindow):DraftAcceptanceClick|null{
+function draftAcceptanceClick(review:Review,window:TaskReviewWindow,completed:boolean):DraftAcceptanceClick|null{
  const original=fixedDraftReviewTarget(review.task),raw=review.task?.raw;
  const digest=raw?.resultReviewDigest,revision=raw?.resultRevision;
  return original?.taskId===window.taskId&&review.task?.status==='needs_confirmation'&&
   typeof digest==='string'&&/^[a-f0-9]{64}$/.test(digest)&&Number.isSafeInteger(revision)&&revision>0
-  ? {...original,window,reviewHandle:review.reviewHandle,reviewDigest:digest,reviewedRevision:revision}:null;
+  ? {...original,window,reviewHandle:review.reviewHandle,reviewDigest:digest,reviewedRevision:revision,completed}:null;
 }
 function savedDraftAcceptanceMatches(task:Task,click:DraftAcceptanceClick){
  const current=fixedDraftReviewTarget(task),receipt=task.raw?.resultConfirmation,revision=task.raw?.resultRevision;
- return task.status==='completed'&&current?.taskId===click.taskId&&current.runId===click.runId&&current.epoch===click.epoch&&current.draftId===click.draftId&&
-  receipt?.completed===true&&receipt.resultReviewDigest===click.reviewDigest&&Number.isSafeInteger(revision)&&revision>click.reviewedRevision&&receipt.confirmedResultRevision===revision;
+ return task.status===(click.completed?'completed':'awaiting_user')&&current?.taskId===click.taskId&&current.runId===click.runId&&current.epoch===click.epoch&&current.draftId===click.draftId&&
+  receipt?.completed===click.completed&&receipt.resultReviewDigest===click.reviewDigest&&Number.isSafeInteger(revision)&&revision>click.reviewedRevision&&receipt.confirmedResultRevision===revision;
 }
 const timeLabel=(value:any)=>typeof value==='number'&&value>0?new Date(value).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
 const sourceRefs=(m:Message)=>asArray<Json>(m.memoryReference?.sources||m.memoryReference?.sourceRefs||m.submission?.sourceRefs).map((s,i)=>({...s,id:String(s.id||s.sourceId||s.sourceRef||i),title:s.title||s.name||s.label||'来源'}));
@@ -594,7 +594,9 @@ export default function App(){
  const noticeCandidate=noticeBinding?tasks.find(t=>t.id===noticeBinding.taskId):null;
  const wrongNoticeRun=!!noticeBinding&&(!noticeCandidate||noticeCandidate.raw?.runId!==noticeBinding.runId||noticeCandidate.raw?.coordinatorEpoch!==noticeBinding.epoch);
  const noticeNotReady=!!noticeBinding&&(wrongNoticeRun||phoneNotification?.token!==noticeBinding.token||!phoneNotification?.current||openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId);
- const selectedTask=noticeNotReady||reportSourceChanged||projectReading&&(openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId||state.projectId!==projectReading.projectId)?undefined:tasks.find(x=>x.id===taskId);const currentProject=projects.find(x=>x.id===state.projectId);const currentConversation=conversations.find(x=>x.id===state.conversationId);
+ const taskCandidate=tasks.find(x=>x.id===taskId),expectedProjectRun=projectReading?.sourcePackageRun??projectReading?.expected;
+ const wrongProjectRun=!!expectedProjectRun&&(taskCandidate?.raw?.runId!==expectedProjectRun.runId||taskCandidate?.raw?.coordinatorEpoch!==expectedProjectRun.epoch);
+ const selectedTask=noticeNotReady||reportSourceChanged||wrongProjectRun||projectReading&&(openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId||state.projectId!==projectReading.projectId)?undefined:taskCandidate;const currentProject=projects.find(x=>x.id===state.projectId);const currentConversation=conversations.find(x=>x.id===state.conversationId);
  const historyPage=state.conversationReader||null,workRequestPin=obj(historyPage?.workRequest),workRequestOrigin=workRequestVisit.current;
  const workRequestPage=taskOpen&&workRequestOrigin&&taskId===workRequestOrigin.work.taskId&&snapshot?.view?.taskId===taskId&&
   workRequestPin.taskId===taskId&&workRequestPin.runId===workRequestOrigin.work.runId&&workRequestPin.epoch===workRequestOrigin.work.epoch&&
@@ -749,6 +751,8 @@ export default function App(){
   if(restoreButlerWork&&route==='butler'&&origin?.taskId===taskId&&
     (origin.report?taskLayer==='homeReport'&&(origin.report===homeReport.current||origin.returning&&!homeReport.current):openedTaskId.current===taskId||origin.returning))origin.returning=true;
   else homeWorkReturn.current=null;
+  const project=projectTaskReturn.current;
+  if(restoreButlerWork&&route==='projects'&&project?.focusShelf&&project.taskId===taskId)project.returning=true;
   releasePhoneNotice();homeReport.current=null;taskHistoryOrigin.current=null;taskReconciliationOrigin.current=null;rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setFocusedOriginalDraft(null);setTaskLayer('overview');setWorkSupplementTarget(null);setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionAnswer('');return closed;};if(guardTaskLeave(()=>{void commit()}))return Promise.resolve(false);return commit();},[can,act,rememberTaskPosition,invalidateContinuation,releasePhoneNotice,route,taskId,taskLayer]);
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
  const navigate=useCallback((requested:string,afterNavigate?:()=>void,options?:{keepOrigin?:boolean;taskClosed?:boolean;stillCurrent?:()=>boolean}):Promise<boolean>=>{
@@ -907,6 +911,7 @@ export default function App(){
    if(origin.savedHostPreparation&&(!savedHost||!source?.draftKey||live.composer?.ready!==true||
       live.composer.key!==source.draftKey||live.composer.conversationId!==savedHost.conversation||
       live.state.conversationReader||!exactSavedHostMessage(asArray<Message>(live.state.messages),savedHost,false)))return false;
+   if(origin.task?.fixedWeb&&source&&(live.composer?.key!==source.draftKey||origin.chatWork&&live.state.conversationReader))return false;
    return sameProposalOwner()&&(!phonePlace||samePhonePlaceDraft(phonePlace))&&(!modelInput||sameModelSetupInput(modelInput,live,bridge.getDocumentEpoch()))&&(!source||(bridge.getDocumentEpoch()===sourceDocument&&String(live.state.conversationId||'')===source.id&&(!!source.id||String(live.composer?.key||'')===source.draftKey)));};
   const closed=await navigate(origin.route==='setup'?'butler':origin.route,()=>{
    if(!keepOrigin)relatedOrigin.current=origin.parent||null;
@@ -927,12 +932,19 @@ export default function App(){
    setPreparationTarget(existing=>existing||target);
   };
   if(origin.task){
-   const {id,layer,expected}=origin.task;
-   const sameWork=()=>!expected||asArray<Task>(bridge.getState().state.tasks).some(row=>row.id===id&&row.raw?.runId===expected.runId&&row.raw?.coordinatorEpoch===expected.epoch);
+   const {id,layer,expected,fixedWeb}=origin.task;
+   const sameWork=()=>!expected||asArray<Task>(bridge.getState().state.tasks).some(row=>{
+    const raw=obj(row.raw),scope=obj(raw.developmentContext);
+    return row.id===id&&raw.runId===expected.runId&&raw.coordinatorEpoch===expected.epoch&&(!fixedWeb||
+     privateProjectTask(row)&&raw.id===id&&raw.contextAvailable!==false&&raw.contextWithdrawn!==true&&
+     raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable'&&scope.projectId===fixedWeb.projectId&&scope.checkoutId===fixedWeb.checkoutId);
+   });
    if(!sameWork()){setLocalError('原工作的执行轮次已变化，没有打开新一轮。');return;}
-   const failedProposal=proposal?()=>{if(current())setLocalError('原工作未能重新打开，没有打开其他提案。');}:undefined;
-   openTask(id,layer,false,undefined,rereadOriginal?'':undefined,expected,proposal?()=>current()&&sameWork():expected?sameWork:undefined,
-    undefined,failedProposal,proposal?returnProposal:undefined);
+   const failedReturn=proposal||fixedWeb?()=>{if(current())setLocalError(fixedWeb?'原运行暂不可打开，未转到其他轮次。固定网页仍保留。':'原工作未能重新打开，没有打开其他提案。');}:undefined;
+   const line=fixedWeb&&origin.route==='chat'?origin.chatWork:undefined;
+   const returnTo=line?.result?{...line,result:{...line.result,navigation:navigation+1}}:line;
+   openTask(id,layer,false,undefined,rereadOriginal?'':undefined,expected,proposal||fixedWeb?()=>current()&&sameWork():expected?sameWork:undefined,
+    undefined,failedReturn,proposal?returnProposal:undefined,returnTo?{returnTo,beforeTaskRequest:reviewRequest.current,navigation:navigation+1}:undefined);
   }
   else if(proposal)returnProposal();
   else if(origin.modelPicker)requestAnimationFrame(()=>{if(current())modelPicker.current?.open('models')});
@@ -1033,6 +1045,12 @@ export default function App(){
   if(noticeOrigin&&!dropNotice&&!expected){expected={runId:noticeOrigin.runId,epoch:noticeOrigin.epoch};nativeWindowAlreadyOpen=false}
   const projectSource=route==='projects'&&projectTaskReturn.current?.taskId===id?projectTaskReturn.current:null;
   if(projectSource&&!nativeWindowAlreadyOpen)searchQuery??=projectSource.query||'';
+  if(projectSource?.sourcePackageRun)expected=projectSource.sourcePackageRun;
+  else if(projectSource?.expected){
+   const original=projectSource.expected;
+   if(expected&&(expected.runId!==original.runId||expected.epoch!==original.epoch))return;
+   expected={...expected,...original};
+  }
   if(stillCurrent){if(!stillCurrent())return}else searchOpenRequest.current++;
   if(!nativeWindowAlreadyOpen&&!expected&&taskOpen&&taskId===id&&taskReconciliationOrigin.current?.openedId===id)expected=taskReconciliationOrigin.current.expected;
   if(guardTaskLeave(()=>openTask(id,entry,nativeWindowAlreadyOpen,historyOrigin,searchQuery,expected,stillCurrent,originalApprovalId,failed,onOpened,chatWorkOpen)))return;
@@ -1060,7 +1078,7 @@ export default function App(){
    const nativeTask=String(obj(bridge.getState().view).taskId||'');
    if(origin&&nativeTask&&nativeTask!==id)await act('tasks.close',{},id);
    if(stillCurrent&&!stillCurrent()||reviewRequest.current!==request||bridge.getDocumentEpoch()!==window.documentEpoch||Number(obj(bridge.getState().view).resumeRevision||0)!==window.resumeRevision||document.hidden)return false;
-   await act('tasks.open',{id,requestNavigation:false,...origin,...(searchQuery===undefined?{}:{searchQuery}),...(projectSource?{expectedProjectId:projectSource.projectId,...(projectSource.checkoutId?{expectedCheckoutId:projectSource.checkoutId}:{})}:{}),...(expected?{expectedRunId:expected.runId,expectedEpoch:expected.epoch}:{})},id);return true;
+   await act('tasks.open',{id,requestNavigation:false,...origin,...(searchQuery===undefined?{}:{searchQuery}),...(projectSource&&!projectSource.sourcePackageRun?{expectedProjectId:projectSource.projectId,...(projectSource.checkoutId?{expectedCheckoutId:projectSource.checkoutId}:{})}:{}),...(expected?{expectedRunId:expected.runId,expectedEpoch:expected.epoch}:{})},id);return true;
   };
   const failedOpen=(reason?:unknown)=>{if(reviewRequest.current!==request)return;setTaskOpening(false);
    if(failed){if(obj(bridge.getState().view).taskId===id&&can('tasks.close'))void bridge.command('tasks.close').catch(()=>{});
@@ -1099,14 +1117,16 @@ export default function App(){
   if(taskLayer==='scope'){showTaskLayer('goal');return}
   const origin=taskReconciliationOrigin.current;
   if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}
-  let returnToChat=false;
+  let returnToSource=false;
   void closeTask(true,searchReturn?()=>{
    const source=chatWorkReturn.current,live=bridge.getState(),view=obj(live.view);
+   const project=projectTaskReturn.current;
    // Search is a parent of the chat, not of a work drawer opened from its message.
-   returnToChat=route==='chat'&&!!source&&source.taskId===taskId&&openedTaskId.current===taskId&&view.taskId===taskId&&
+   returnToSource=route==='projects'&&!!project?.focusShelf&&project.taskId===taskId&&project.projectId===live.state.projectId&&
+    openedTaskId.current===taskId&&view.taskId===taskId||route==='chat'&&!!source&&source.taskId===taskId&&openedTaskId.current===taskId&&view.taskId===taskId&&
     source.navigation===navigationWindow.current&&source.resumeRevision===Number(view.resumeRevision||0)&&
     !live.state.conversationReader&&!!chatWorkLocation(source,undefined,true);
-  }:undefined).then(closed=>{if(closed&&searchReturn&&!returnToChat)showWorkSearch()});
+  }:undefined).then(closed=>{if(closed&&searchReturn&&!returnToSource)showWorkSearch()});
  },[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,searchReturn,showWorkSearch,route,chatWorkLocation]);
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
  const chooseConversation=useCallback((target:string|null)=>{
@@ -1353,12 +1373,14 @@ export default function App(){
  };
  const previewBlocked=!!(searchOriginal||projectWorkReviewOpen||projectConventionMessage||providedMemoryMessage||conversationMemoryOpen||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
  const packageReturn=useRef<{target:PackagePreviewTarget;origin:WorkspaceOrigin;epoch:number;navigation:number;projectFocus:ProjectTaskReturn|null}|null>(null);
- const returnFromPackage=(id:string,operationId?:string,originalChat=false)=>{
+ const returnFromPackage=(id:string,operationId?:string,originalChat=false,fixedWeb=false)=>{
   const saved=packageReturn.current;
   if(saved&&saved.target.taskId===id&&saved.target.operationId===operationId&&saved.epoch===bridge.getDocumentEpoch()&&saved.navigation===navigationWindow.current){
-   packageReturn.current=null;projectTaskReturn.current=saved.projectFocus?{...saved.projectFocus,focusOutcome:false}:null;
+   packageReturn.current=null;
+   projectTaskReturn.current=saved.projectFocus?{...saved.projectFocus,focusOutcome:false,returning:undefined,
+    expected:saved.origin.task?.fixedWeb?saved.origin.task.expected:saved.projectFocus.expected}:null;
    void restoreWorkspace(saved.origin,false,true);
-  }else if(originalChat)setLocalError('原话窗口已经变化，没有转到其他任务。');
+  }else if(originalChat||fixedWeb)setLocalError(originalChat?'原话窗口已经变化，没有转到其他任务。':'原工作窗口已变化，没有打开其他执行轮次。固定网页仍保留。');
   else openTask(id,operationId?'overview':'review',false,undefined,operationId?'':undefined);
  };
  const openSavedWebBuildCopy=(choices:PackagePreviewChoices)=>{
@@ -1387,7 +1409,26 @@ export default function App(){
  const openTaskPackage=(target:PackagePreviewTarget)=>{
   if(!taskOpen||taskOpening||taskId!==target.taskId||openedTaskId.current!==target.taskId)return;
   const origin=captureNavigationOrigin(),projectFocus=projectTaskReturn.current,epoch=bridge.getDocumentEpoch();
-  packageHandoff.open(target,()=>{packageReturn.current={target,origin,projectFocus,epoch,navigation:navigationWindow.current}});
+  const live=bridge.getState(),view=obj(live.view),row=asArray<Task>(live.state.tasks).find(task=>task.id===target.taskId),raw=obj(row?.raw),source=obj(raw.developmentContext);
+  const resume=Number(view.resumeRevision||0);
+  let webReturn:WorkspaceOrigin|undefined;
+  if(origin.task&&privateProjectTask(row)&&raw.id===target.taskId&&raw.contextAvailable!==false&&raw.contextWithdrawn!==true&&
+     raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable'&&view.taskId===target.taskId&&!view.section&&openedTaskResumeRevision.current===resume&&
+     selectedTask?.id===target.taskId&&raw.runId===selectedTask.raw?.runId&&raw.coordinatorEpoch===selectedTask.raw?.coordinatorEpoch&&
+     typeof raw.runId==='string'&&raw.runId&&Number.isSafeInteger(raw.coordinatorEpoch)&&raw.coordinatorEpoch>0){
+   // Back belongs to the work window that opened this archive, not to the
+   // producing run of an older archived version or a newer run.
+   const line=chatWorkReturn.current;
+   const verifiedLine=route==='chat'&&line?.taskId===target.taskId&&line.navigation===navigationWindow.current&&line.resumeRevision===resume&&chatWorkLocation(line,undefined,true)?line:undefined;
+   const drawerChat=route==='chat'?{id:String(live.state.conversationId||''),draftKey:String(live.composer?.key||''),documentEpoch:epoch}:origin.drawerChat;
+   webReturn={...origin,drawerChat,chatWork:verifiedLine,task:{...origin.task,expected:{runId:raw.runId,epoch:raw.coordinatorEpoch},
+    fixedWeb:{projectId:source.projectId,checkoutId:source.checkoutId}}};
+  }
+  packageHandoff.open(target,choices=>{
+   const returnTo=choices.mode==='web_output'?webReturn:origin;
+   packageReturn.current=returnTo&&(choices.mode!=='web_output'||choices.projectId===source.projectId&&choices.checkoutId===source.checkoutId)
+    ?{target,origin:returnTo,projectFocus,epoch,navigation:navigationWindow.current}:null;
+  });
  };
  const previewRefsUnavailable=asArray<Json>(composer.previewRefs).length>0&&composer.previewRefsAvailable!==true;
  const enterPhoneNotification=(note:PhoneNotice)=>{
@@ -2154,7 +2195,7 @@ export default function App(){
   const request=reviewRequest.current,originalTask=taskId;
   const planDecision=action==='tasks.plan.enter'||action==='tasks.approve'&&asArray<Json>(review.approvals).some(row=>(row.approvalId||row.id)===args.approvalId&&row.webReview?.kind==='execution_plan');
   const at=reviewWindow.current;
-  const draftClick=action==='tasks.confirm'&&args.completed===true&&taskLayer==='overview'&&at&&currentReviewWindow(at)?draftAcceptanceClick(review,at):null;
+  const draftClick=action==='tasks.confirm'&&typeof args.completed==='boolean'&&taskLayer==='overview'&&at&&currentReviewWindow(at)?draftAcceptanceClick(review,at,args.completed):null;
   setReviewSubmitted(true);setReviewReceipt('');
   const payload={reviewHandle:review.reviewHandle,...args};
   if(planDecision)setTaskErrors(previous=>({...previous,[originalTask]:''}));
@@ -2189,17 +2230,17 @@ export default function App(){
   const outcome=taskScroll.current?.querySelector<HTMLElement>('.pw-task-outcome');
   if(outcome){origin.focusOutcome=false;outcome.tabIndex=-1;outcome.focus({preventScroll:true});outcome.scrollIntoView({block:'start',behavior:'instant'})}
  },[taskOpen,taskOpening,taskId,taskLayer,selectedTask?.id,snapshot?.view?.taskId]);
- const openProjectWork=(id:string,entry:ProjectWorkEntry='overview',query='',checkoutId?:string,expected?:{runId:string;epoch:number})=>{
+ const openProjectWork=(id:string,entry:ProjectWorkEntry='overview',query='',checkoutId?:string,expected?:{runId:string;epoch:number},focusShelf?:()=>boolean)=>{
   const projectId=String(state.projectId||'');
   if(!projectId||bridge.getState().state.projectId!==projectId||bridge.getState().state.filePath)return;
-  const origin={projectId,checkoutId,query,taskId:id,entry,focusOutcome:entry==='outcomes'};
+  const origin:ProjectTaskReturn={projectId,checkoutId,query,taskId:id,entry,focusOutcome:entry==='outcomes',expected,focusShelf};
   projectTaskReturn.current=origin;
   const navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch(),request=++searchOpenRequest.current;
   const current=()=>searchOpenRequest.current===request&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&
    !document.hidden&&bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath;
   openTask(id,entry==='outcomes'?'overview':entry,false,undefined,query,expected,current,undefined,expected?()=>{
    if(!current()||projectTaskReturn.current!==origin)return;
-   projectTaskReturn.current=null;
+   if(focusShelf){origin.focusOutcome=false;origin.returning=true;}else projectTaskReturn.current=null;
    setLocalError('原构建的工作已换轮或暂不可读取。未打开其他轮次，固定网页仍保留。');
   }:undefined);
  };
@@ -2486,6 +2527,18 @@ export default function App(){
   const inspectResult=stage==='ended'||(actionNames.includes('tasks.confirm')&&!buildNext);
   const decisionFirst=stage==='attention'&&!inspectResult;
   const overviewActive=taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview';
+  const draftView=obj(snapshot?.view);
+  const currentDraft=overviewActive&&!document.hidden&&draftView.taskId===task.id&&draftView.section==null?fixedDraftReviewTarget(task):null;
+  const reviewedDraft=currentDraft&&fixedDraftReviewTarget(review?.task);
+  const draftReviewReady=!!currentDraft&&task.status==='needs_confirmation'&&task.raw?.hasUnresolvedOperations===false&&!taskNeedsReconciliation(task);
+  const originalDraftReview=draftReviewReady&&!!reviewedDraft&&currentDraft.taskId===reviewedDraft.taskId&&currentDraft.runId===reviewedDraft.runId&&
+   currentDraft.epoch===reviewedDraft.epoch&&currentDraft.draftId===reviewedDraft.draftId&&review?.task?.status==='needs_confirmation'&&
+   !reviewStale&&!approved.length&&!unresolved.length&&!review?.ownerQuestion&&actionNames.includes('tasks.confirm')&&
+   can('tasks.confirm')&&currentReviewWindow(reviewWindow.current);
+  const durableDraftDecision=currentDraft?getLoadedFixedDraftGoalDecision(task):undefined;
+  const draftAcceptanceSaved=overviewActive&&reviewSubmitted&&draftAcceptance&&review?.reviewHandle===draftAcceptance.reviewHandle&&
+    currentReviewWindow(draftAcceptance.window)&&!taskErrors[task.id]&&!state.taskActionErrors?.[task.id]&&savedDraftAcceptanceMatches(task,draftAcceptance);
+  const draftOtherOperations=originalDraftReview&&projectControls&&<Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="after-original-draft" title="更多操作">{projectControls}</AccordionItem></Accordion>;
   const ordinaryWork=task.raw?.executionRole==='owner_work'&&!task.raw?.developmentContext&&!task.raw?.ownerPhoneControl&&!task.raw?.ownerDeviceWork;
   const currentResultDecision=ordinaryWork&&overviewActive&&task.status==='needs_confirmation'&&!reviewStale&&
    actionNames.includes('tasks.confirm')&&can('tasks.confirm')&&currentReviewWindow(reviewWindow.current);
@@ -2515,6 +2568,7 @@ export default function App(){
   </section>;
   const originalEvidence=<TaskOutcome key="task-evidence" registerProjectDraftBeforeLeave={registerProjectDraftBeforeLeave} projectDraftSourceRetired={task.raw?.contextAvailable===false||task.raw?.contextWithdrawn===true||task.raw?.sourceCurrentReadRequired===true||task.raw?.taskProjection==='source_unavailable'} task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
    active={overviewActive} focusedOriginalDraft={focusedOriginalDraft?.taskId===task.id?focusedOriginalDraft:undefined} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
+   draftGoalDecision={draftAcceptanceSaved?undefined:durableDraftDecision}
    canReadPhoneTaskOriginal={overviewActive&&!phoneWorkObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('phone.result.taskOriginal')}
    canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
    onContinueBuildCopy={buildCopy&&!failureOverview?()=>void openOriginalBuildCopy(buildCopy):undefined}
@@ -2533,22 +2587,25 @@ export default function App(){
     can('conversation.select')?()=>void returnToTaskConversation(task):undefined}
    onReconcile={overviewActive&&can('tasks.open')?target=>openTask(target.taskId,'process',false,undefined,undefined,target):undefined}/>;
   const refreshControl=can('tasks.review')&&<IconButton icon={IconRefresh} aria-label={review?'重新核对':'读取可用操作'} title={review?'重新核对':'读取可用操作'} disabled={readingReview||questionPending} onClick={showTaskReview}/>;
-  const draftAcceptanceSaved=overviewActive&&reviewSubmitted&&draftAcceptance&&review?.reviewHandle===draftAcceptance.reviewHandle&&
-    currentReviewWindow(draftAcceptance.window)&&!taskErrors[task.id]&&!state.taskActionErrors?.[task.id]&&savedDraftAcceptanceMatches(task,draftAcceptance);
+  const foldAcceptedDraftReview=(durableDraftDecision?.completed===true||draftAcceptanceSaved&&draftAcceptance?.completed===true)&&
+   !continuation&&!approved.length&&!unresolved.length&&!taskNeedsReconciliation(task);
+  const showProjectReview=canReadProject&&!continuationBlocks(continuation);
+  const reviewTools=!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
+    <div className="pw-section-heading pw-task-review-tools">{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</div>;
   const reviewStatus=<>
     {readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}
     {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
     {continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>returnToContinuationConversation(task,continuation)}>返回原对话，草稿保留</Button>}</section>}
-    {draftAcceptanceSaved?<p className="pw-muted" role="status">验收已记录，原稿保留。</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
+    {draftAcceptanceSaved?<p className="pw-muted" role="status">{draftAcceptance?.completed?'验收已记录，原稿保留。':'已记录目标尚未达到，原稿保留。'}</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
   </>;
   const decision=(declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||attention(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
       {taskLayer==='overview'&&reviewStatus}
       {taskLayer==='overview'&&!reviewStale&&actionNames.includes('tasks.confirm')&&noSavedDraftInReview(task,review)&&<p className="pw-field-hint" role="status">本轮还没有可核对的独立改稿。</p>}
       {originalIntegrator&&<TeamOriginalFileReceipt key={task.id+':'+task.raw!.runId+':'+task.raw!.coordinatorEpoch} id={task.id} run={task.raw!.runId} epoch={task.raw!.coordinatorEpoch} directory={task.raw!.originalTeamFileEffects??(!reviewStale?review?.task?.raw?.originalTeamFileEffects:undefined)} disabled={taskOpening||reviewPending||!overviewActive} recover={input=>bridge.command('tasks.recoverTeamFile',input)}/>}
       {originalIntegrator&&overviewActive&&can('tasks.teamRemainder.read')&&can('tasks.teamRemainder.continue')&&(task.raw!.mayReadOriginalFileRemainder??(!reviewStale&&review?.task?.raw?.mayReadOriginalFileRemainder))===true&&<TeamRemainingFiles key={task.id+':remaining:'+task.raw!.runId+':'+task.raw!.coordinatorEpoch} id={task.id} run={task.raw!.runId} epoch={task.raw!.coordinatorEpoch} disabled={reviewPending||taskOpening} command={(action,input)=>bridge.command(action,input)}/>}
-      {!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&<div className="pw-section-heading pw-task-review-tools">{canReadProject&&!continuationBlocks(continuation)?<Button variant="secondary" onClick={showTaskReview}>{nextBuildObserved?'核对下一步本机构建':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{refreshControl}</div>}
+      {reviewTools&&(foldAcceptedDraftReview?<Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="accepted-draft-options" title="更多操作">{reviewTools}</AccordionItem></Accordion>:reviewTools)}
       {review&&!reviewStale&&phoneUnknown.length>0&&<PhoneOriginalActionReview key={review.reviewHandle} taskId={task.id} rows={phoneUnknown} more={task.raw?.privatePhoneUnconfirmed?.hasMore===true} disabled={protectedDisabled} allowRecord={actionNames.includes('tasks.resolve')} submit={args=>reviewedAction('tasks.resolve',args)}/>}
-      {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={project?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={refreshControl}><div className="pw-protected-actions">{projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion}/>}{actionNames.includes('tasks.confirm')&&<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['result-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('result-feedback'))}><AccordionItem id="result-feedback" title="补充说明（可选）" description={reviewNote?'已填写':undefined}><TextAreaField label="本次结果反馈" value={reviewNote} onChange={setReviewNote} placeholder="已完成或仍需调整的内容"/></AccordionItem></Accordion>}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
+      {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={originalDraftReview?'验收本轮原独立改稿':project?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={refreshControl}><div className="pw-protected-actions">{originalDraftReview?<p className="pw-field-hint">这里只验收本轮的原固定稿，不会将你另存的改稿当作本次结果。</p>:projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion}/>}{actionNames.includes('tasks.confirm')&&<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['result-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('result-feedback'))}><AccordionItem id="result-feedback" title="补充说明（可选）" description={reviewNote?'已填写':undefined}><TextAreaField label="本次结果反馈" value={reviewNote} onChange={setReviewNote} placeholder="已完成或仍需调整的内容"/></AccordionItem></Accordion>}{draftOtherOperations}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
       {declinedTeam&&<DeclinedTeamStart key={declinedTeam.id} decision={declinedTeam}/>}
      </div>;
   return <Tabs className="pw-work-object-tabs" selectedKey={taskLayer==='scope'?'goal':taskLayer} onSelectionChange={key=>showTaskLayer(String(key) as TaskLayer)}>
@@ -3549,7 +3606,10 @@ export default function App(){
         savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
           canPreview={can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&!packageOpening}
-          openWork={can('tasks.open')?({taskId,checkoutId,runId,epoch})=>openProjectWork(taskId,'outcomes','',checkoutId,{runId,epoch}):undefined}
+          openWork={can('tasks.open')?({taskId,checkoutId,runId,epoch},restoreShelf)=>{
+           if(projectScroll.current&&!projectPreview.expanded)projectDirectory.rememberScroll(projectScroll.current.scrollTop);
+           openProjectWork(taskId,'outcomes','',checkoutId,{runId,epoch},restoreShelf);
+          }:undefined}
           show={(choices,current,visit)=>{
            const shown=projectPreview.showPackage(choices,undefined,current,visit);
            if(shown){
@@ -3565,7 +3625,22 @@ export default function App(){
           onPresentationChange={presentation=>setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}))}
           defaultStart={can('projects.development.read')?(active,onBusy)=><ProjectDevelopmentWorkspace key={currentProject.id} returnTarget={projectDraftReturn?.projectId===currentProject.id?projectDraftReturn:undefined}
             importedEditor={projectImportedEditor?.projectId===currentProject.id?projectImportedEditor:undefined} onImportedEditorHandled={handledImportedEditor}
-            buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)} onTaskRegistered={projectDirectory.reset} onPrepareTools={()=>void openSetup('tools')} onConnectModel={()=>void openRelatedWorkspace('model-settings')} onOpenTerminal={openProjectTerminal}/>:undefined}
+            buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)}
+            onOpenPackageOriginal={({taskId,runId,epoch})=>{
+             const projectId=currentProject.id,navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+             const atOriginal=()=>navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&
+              !document.hidden&&bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath;
+             if(!atOriginal()||taskOpen||route!=='projects'||projectSection!=='work'||projectPreview.expanded||!can('tasks.open'))return;
+             // The receipt lives in the new project. The verified producing run belongs to the source project.
+             const origin:ProjectTaskReturn={projectId,taskId,entry:'overview',focusOutcome:false,sourcePackageRun:{runId,epoch}};
+             const request=++searchOpenRequest.current,current=()=>searchOpenRequest.current===request&&projectTaskReturn.current===origin&&atOriginal();
+             projectTaskReturn.current=origin;
+             openTask(taskId,'overview',false,undefined,'',origin.sourcePackageRun,current,undefined,()=>{
+              if(!current())return;
+              projectTaskReturn.current=null;
+              setLocalError('保存这版源码的原工作已换轮或暂不可读取。未打开其他轮次，源码副本仍保留。');
+             });
+            }} onTaskRegistered={projectDirectory.reset} onPrepareTools={()=>void openSetup('tools')} onConnectModel={()=>void openRelatedWorkspace('model-settings')} onOpenTerminal={openProjectTerminal}/>:undefined}
           profileStart={can('projectWork.open')&&can('projectWork.confirm')?(active,onBusy)=><ProjectWorkStart
             key={currentProject.id} project={currentProject} embedded
             draft={projectWorkDrafts[currentProject.id]||emptyProjectWorkDraft()}
@@ -3661,6 +3736,27 @@ export default function App(){
    if(route==='tasks'&&workListReturn.current?.()){event.preventDefault();return}
    const origin=projectTaskReturn.current;projectTaskReturn.current=null;
    if(!origin||route!=='projects'||state.projectId!==origin.projectId||state.filePath||projectSection!=='work'||projectPreview.expanded)return;
+   if(origin.focusShelf){
+    if(!origin.returning)return;
+    event.preventDefault();
+    const nav=navigationWindow.current,doc=bridge.getDocumentEpoch(),request=reviewRequest.current,focused=document.activeElement;
+    const current=()=>!document.hidden&&nav===navigationWindow.current&&doc===bridge.getDocumentEpoch()&&request===reviewRequest.current&&
+     bridge.getState().state.projectId===origin.projectId&&!bridge.getState().state.filePath;
+    let unsubscribe=()=>{};
+    const timer=window.setTimeout(()=>unsubscribe(),3000);
+    const finish=()=>{window.clearTimeout(timer);unsubscribe()};
+    const check=()=>{
+     if(!current()){finish();return;}
+     const view=obj(bridge.getState().view);
+     if(view.taskId===origin.taskId)return; // The drawer exit can precede the native close projection.
+     finish();
+     if(!view.taskId&&!view.section)requestAnimationFrame(()=>{
+      const now=obj(bridge.getState().view);
+      if(current()&&!now.taskId&&!now.section&&(document.activeElement===focused||document.activeElement===document.body))origin.focusShelf?.();
+     });
+    };
+    unsubscribe=bridge.subscribe(check);check();return;
+   }
    const overview=projectScroll.current?.querySelector<HTMLElement>('.pw-project-overview');
    const row=Array.from(overview?.querySelectorAll<HTMLElement>('[data-project-task-id]')||[]).find(node=>node.dataset.projectTaskId===origin.taskId);
    const buttons=Array.from(row?.querySelectorAll<HTMLElement>('button:not(:disabled)')||[]);
@@ -3687,7 +3783,7 @@ export default function App(){
      onFiles={can('attachmentWorkspace.open')&&selectedTask.raw?.actorId==='owner'&&selectedTask.raw?.spaceId==='private'?()=>{const open=()=>run('attachmentWorkspace.open',{taskId:selectedTask.id});if(!guardTaskLeave(open))open()}:undefined}
      onScope={can('tasks.review')?()=>{showTaskLayer('scope');if(!review||reviewStale)refreshReview()}:undefined}/>}
    </div>}
-  </header>{selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(selectedTask.id,taskLayer)}>核对原任务状态</Button>}</div>}{taskLayer!=='homeReport'&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:<section className="pw-empty-small"><p className="pw-error" role="alert">{taskLayer==='homeReport'?'原工作或汇报已变化，请返回管家首页核对。':taskId&&taskErrors[taskId]||'原任务暂不可读取，请重新读取原历史窗口。'}</p>{taskLayer!=='homeReport'&&!noticeBinding&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>
+  </header>{selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(selectedTask.id,taskLayer)}>核对原任务状态</Button>}</div>}{taskLayer!=='homeReport'&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:<section className="pw-empty-small"><p className="pw-error" role="alert">{taskLayer==='homeReport'?'原工作或汇报已变化，请返回管家首页核对。':taskId&&taskErrors[taskId]||(expectedProjectRun?'原运行暂不可读取，没有用其他轮次代替。':'原任务暂不可读取，请重新读取原历史窗口。')}</p>{taskLayer!=='homeReport'&&!noticeBinding&&!expectedProjectRun&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>
   <Drawer.Root open={!!phoneReview} onOpenChange={open=>{if(!open&&!phoneReviewPending)setPhoneReview(null)}} dismissible={!phoneReviewPending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-phone-description" inert={!phoneReview} onCloseAutoFocus={finishPhoneReviewExit}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对这次手机任务</Drawer.Title><Drawer.Description id="pw-phone-description">目标、执行位置与本次范围</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭手机任务核对" disabled={phoneReviewPending} onClick={()=>setPhoneReview(null)}/></header><div className="pw-drawer-body">{phoneDisplay&&<PhoneScopeReview key={phoneExit.generation} shown={phoneDisplay} live={phoneReview} pending={phoneReviewPending} unknown={phoneStart?.status==='unknown'} onClose={()=>{if(phoneReviewLive.current)setPhoneReview(null)}} onStart={can('phone.start')?startReviewedPhone:undefined} onCheck={can('phone.prepare')?preparePhone:undefined} onSettings={can('phone.review.settings')?openPhoneReviewSettings:undefined} onPlace={canVisitReviewedPlace?visitReviewedPhonePlace:undefined} error={phoneReviewError?.handle===phoneReview?.reviewHandle?phoneReviewError?.message:undefined}/>}{phoneStart&&phoneStart.status!=='accepted'&&<><Receipt receipt={phoneStart}/>{phoneStart.status==='unknown'&&(phoneStart.draftRequestId?blankReceiptActions(phoneStart):phoneStart.requestId&&phoneStart.conversationId&&can('phone.query')?<Button variant="secondary" disabled={phoneReviewPending} onClick={()=>{if(phoneReviewLive.current)queryOriginalPhone()}}>查询原手机请求</Button>:<Button variant="secondary" onClick={()=>{if(!phoneReviewLive.current)return;setPhoneReview(null);if(phoneStart.taskId)openTask(phoneStart.taskId);else navigate('tasks')}}>核对原任务记录</Button>)}</>}</div></Drawer.Content></Drawer.Portal></Drawer.Root>
   <SettingsDialog isOpen={newProjectOpen||newFileOpen} title={createKind==='project'?'新项目':'新文件'} onClose={closeCreate} closeLabel="关闭创建" className="pw-create-dialog">
    <form className="pw-create-form" onSubmit={event=>{event.preventDefault();if(!createBusy&&(createKind==='project'?projectName:newPath).trim())createObject()}}>

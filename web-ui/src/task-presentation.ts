@@ -150,8 +150,8 @@ export function getTaskOperations(task: unknown): TaskOperation[] {
   return result;
 }
 
-/** Only the existing, complete native audit window can identify the owner's decision. */
-function currentOwnerGoalReview(header: Row, raw: Row, runId: string, page?: Row) {
+/** Compare an actual native decision row to the current persisted result. */
+function currentOwnerGoalReview(header: Row, raw: Row, runId: string, page?: Row, alreadyLoadedHead = false) {
   const id = text(header.id), epoch = raw.coordinatorEpoch, revision = raw.resultRevision;
   const receipt = row(raw.resultConfirmation), completed = receipt?.completed, digest = text(receipt?.resultReviewDigest);
   if (!id || !runId || raw.id !== id || raw.actorId !== 'owner' || raw.spaceId !== 'private' ||
@@ -161,9 +161,14 @@ function currentOwnerGoalReview(header: Row, raw: Row, runId: string, page?: Row
       typeof completed !== 'boolean' || header.status !== (completed ? 'completed' : 'awaiting_user') || raw.status !== header.status ||
       !positiveInt(epoch) || !positiveInt(revision) || receipt?.confirmedResultRevision !== revision || !/^[a-f0-9]{64}$/.test(digest) ||
       !page || page.format !== 'pocketworld.task-audit-page.v1' || page.taskId !== id || page.section !== 'events' ||
-      page.executionAuthorized !== false || page.completeHistory !== true || page.hasMore !== false || page.readLimited !== false) return;
+      page.executionAuthorized !== false || page.readLimited !== false || !Array.isArray(page.entries)) return;
   const entries = rows(page.entries);
-  if (entries.some(entry => entry.status !== 'available')) return;
+  const whole = page.completeHistory === true && page.hasMore === false;
+  // The re-opened result only needs its already-loaded latest decisive row.
+  // Older rows outside that page do not imply that this row is incomplete.
+  const head = alreadyLoadedHead && page.completeHistory === false && page.hasMore === true &&
+    positiveInt(page.upperPosition) && entries[0]?.position === page.upperPosition;
+  if ((!whole && !head) || entries.length !== page.entries.length || entries.some(entry => entry.status !== 'available')) return;
   const matching = entries.filter(entry => {
     if (entry.type !== 'user_verification') return false;
     const event = row(entry.event), position = entry.position;
@@ -174,7 +179,20 @@ function currentOwnerGoalReview(header: Row, raw: Row, runId: string, page?: Row
       event.memorySourceSnapshotForgotten !== true && event.completed === completed && event.resultReviewDigest === digest &&
       positiveInt(event.resultRevision) && event.resultRevision < revision;
   });
-  if (matching.length === 1) return {eventId: text(matching[0].eventKey), completed};
+  if (matching.length === 1) return {eventId: text(matching[0].eventKey), taskId: id, runId, epoch, completed};
+}
+
+export type FixedDraftGoalDecision = { taskId: string; runId: string; epoch: number; draftId: string; completed: boolean };
+
+/** The caller must still match this task fact to the actual draft readback. */
+export function getLoadedFixedDraftGoalDecision(task: unknown): FixedDraftGoalDecision | undefined {
+  const {header, raw, id, runId} = taskParts(task), context = row(raw.developmentContext), preparation = row(raw.ownerWorkPreparation);
+  const draftId = text(raw.projectEditDraftId);
+  if (raw.kind !== 'assistant' || raw.executionMode !== 'capabilities' || context?.format !== 'pocketworld.development-context.v1' ||
+      context.runtime !== 'managed_process_v1' || context.draftOnly !== true || preparation?.format !== 'pocketworld.owner-work-preparation.v1' ||
+      preparation.targetTaskId !== id || !/^[a-f0-9]{64}$/.test(draftId)) return;
+  const fact = currentOwnerGoalReview(header, raw, runId, pageFor(raw, 'historyEventPage', id, 'events'), true);
+  if (fact) return {taskId: fact.taskId, runId: fact.runId, epoch: fact.epoch, draftId, completed: fact.completed};
 }
 
 /** Original task events are an activity history, not generated execution steps. */

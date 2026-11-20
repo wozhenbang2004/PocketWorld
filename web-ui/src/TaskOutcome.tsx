@@ -2,7 +2,7 @@ import { AIAnswer } from './library';
 import { Button, Accordion, AccordionItem } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 import { getTaskOutcome } from './task-outcome';
-import { taskNeedsReconciliation } from './task-presentation';
+import { taskNeedsReconciliation, type FixedDraftGoalDecision } from './task-presentation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCollectionMotion, MotionFeedback } from './library/journey-motion';
 import { ownerWorkPresentation } from './owner-work-presentation';
@@ -135,12 +135,13 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, focusedOriginalDraft, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, focusedOriginalDraft, draftGoalDecision, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
   task: unknown;
   messages: unknown;
   active: boolean;
   canReadReport: boolean;
   focusedOriginalDraft?:OriginalProjectDraft;
+  draftGoalDecision?:FixedDraftGoalDecision;
   registerProjectDraftBeforeLeave?: (guard:()=>boolean)=>()=>void;
   projectDraftSourceRetired?: boolean;
   readIdentity: string;
@@ -240,7 +241,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
     {!projectDraftSourceRetired&&record.raw?.actorId==='owner'&&record.raw?.spaceId==='private'&&record.raw?.contextAvailable!==false&&record.raw?.contextWithdrawn!==true&&
       record.raw?.sourceCurrentReadRequired!==true&&record.raw?.taskProjection!=='source_unavailable'&&record.raw?.developmentContext?.draftOnly===true&&typeof record.raw.projectEditDraftId==='string'&&/^[a-f0-9]{64}$/.test(record.raw.projectEditDraftId)&&<ProjectDraftDifference active={active} id={record.id} project={record.raw.developmentContext.projectId}
-      checkout={record.raw.developmentContext.checkoutId} pin={record.raw.projectEditDraftId} requested={focusedOriginalDraft} registerBeforeLeave={registerProjectDraftBeforeLeave}/>}
+      checkout={record.raw.developmentContext.checkoutId} pin={record.raw.projectEditDraftId} requested={focusedOriginalDraft} goalDecision={draftGoalDecision} registerBeforeLeave={registerProjectDraftBeforeLeave}/>}
     {settlementTitle && <div className="pw-outcome-settlement" role="status">
       <h3>{settlementTitle}</h3>
       {settlementDetail && settlementDetail !== settlementTitle && <p>{settlementDetail}</p>}

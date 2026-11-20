@@ -36,7 +36,7 @@ function page(value:unknown,project:string,selected:string,cursor:string):Shelf 
 
 /** Exact local receipts only. Opening one listed row re-enters B4; visiting the shelf reads no webpage body. */
 export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: {
-  project:string;active:boolean;canPreview:boolean;openWork?:(work:SavedWebWork)=>void;
+  project:string;active:boolean;canPreview:boolean;openWork?:(work:SavedWebWork,restoreShelf:()=>boolean)=>void;
   show:(choices:PackagePreviewChoices,stillCurrent:()=>boolean,visit:SavedWebShelfVisit)=>boolean;
 }) {
   const [expanded,expand]=useState(false),[shelf,setShelf]=useState<Shelf|null>(null),[copy,setCopy]=useState('');
@@ -104,9 +104,26 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
   const matches=(v:Version)=>!selection||v.checkoutId===selection.checkoutId&&v.taskId===selection.taskId&&v.sourceDigest===selection.sourceDigest;
   const versions=shelf?.items.filter(matches)||[];
   const selectedName=selection&&shelf?.checkouts.find(c=>c.id===selection.checkoutId)?.name;
-  const open=(picked:Version,trigger:HTMLButtonElement)=>{
+  const shelfFocus=(trigger:HTMLButtonElement,currentVersion:()=>boolean)=>{
     const scroll=trigger.closest<HTMLElement>('.pw-projects-page');
     const offset=scroll?trigger.getBoundingClientRect().top-scroll.getBoundingClientRect().top:0;
+    return ()=>{
+      if(!current.current.active||!currentVersion()||!scroll?.contains(trigger)||trigger.disabled||trigger.closest('[hidden],[inert]'))return false;
+      scroll.scrollTop+=trigger.getBoundingClientRect().top-scroll.getBoundingClientRect().top-offset;
+      trigger.focus({preventScroll:true});
+      return true;
+    };
+  };
+  const openShelfWork=(work:SavedWebWork,trigger:HTMLButtonElement,containsOriginal:()=>boolean)=>{
+    const original=owner();
+    const sameShelf=()=>original()&&expandedRef.current&&current.current.copy===work.checkoutId&&containsOriginal();
+    if(sameShelf())openWork?.(work,shelfFocus(trigger,sameShelf));
+  };
+  const open=(picked:Version,trigger:HTMLButtonElement)=>{
+    const originalShelf=owner();
+    const sameShelf=()=>originalShelf()&&expandedRef.current&&current.current.copy===picked.checkoutId&&current.current.selection===selection&&
+      current.current.shelf?.items.includes(picked)===true;
+    const focusVersion=shelfFocus(trigger,sameShelf);
     void observe(picked.operationId,async(here,original)=>{
       if(!canPreview||!matches(picked)||picked.checkoutId!==shelf?.checkoutId||!shelf.items.includes(picked))return;
       const target={taskId:picked.taskId,operationId:picked.operationId};
@@ -117,16 +134,11 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
         exact.originalBuild&&(exact.originalBuild.runId!==picked.runId||exact.originalBuild.epoch!==picked.epoch))
         throw Error('选中的已保存网页与当前回执不同，没有改用其它版本。');
       if(selection&&!exact.originalBuild)throw Error('未核对到这条记录的原构建轮次，没有按该轮打开网页。可回原工作，或单独核对副本的归档版本。');
-      const sameShelf=()=>original()&&expandedRef.current&&current.current.copy===picked.checkoutId&&current.current.selection===selection&&
-        current.current.shelf?.items.includes(picked)===true;
-      if(!show(exact,sameShelf,{
+      if(!show(exact,()=>original()&&sameShelf(),{
         restore:()=>{restoreVersion.current=()=>{
-          if(!sameShelf())return;
-          if(!trigger.isConnected||trigger.disabled||trigger.closest('[hidden],[inert]')){heading.current?.focus({preventScroll:true});return;}
-          if(scroll?.contains(trigger))scroll.scrollTop+=trigger.getBoundingClientRect().top-scroll.getBoundingClientRect().top-offset;
-          trigger.focus({preventScroll:true});
+          if(sameShelf()&&!focusVersion())heading.current?.focus({preventScroll:true});
         };},
-        openOriginalWork:exact.originalBuild&&openWork?()=>{if(sameShelf())openWork(picked);}:undefined,
+        openOriginalWork:exact.originalBuild&&openWork?()=>{if(sameShelf())openWork(picked,focusVersion);}:undefined,
       }))throw Error('项目窗口已变化，原网页没有打开。');
     });
   };
@@ -155,13 +167,15 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
         <p className="pw-field-hint">源码 {v.sourceDigest.slice(0,10)} · 固定包 {v.archiveSha256.slice(0,10)}</p>
         <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={!canPreview||!!busy||!active} onClick={event=>open(v,event.currentTarget)}>
           {busy===v.operationId?'正在核对原网页…':'打开这版网页'}</Button>
-          {!selection&&openWork&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>openWork(v)}>查看原工作</Button>}</div>
+          {!selection&&openWork&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
+            ()=>!current.current.selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>}</div>
       </li>)}</ul>}
       {error&&<p role="alert">{error}</p>}
       <div className="pw-form-actions">
         {shelf?.hasMore&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read(shelf.checkoutId,shelf.nextCursor)}>更多原版本</Button>}
         <Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read(selection?.checkoutId||copy)}>{copy?'刷新这份副本':'刷新副本清单'}</Button>
-        {selection&&openWork&&<Button variant="secondary" size="small" disabled={!!busy||!active} onClick={()=>openWork(selection)}>查看原构建任务</Button>}
+        {selection&&openWork&&<Button variant="secondary" size="small" disabled={!!busy||!active} onClick={event=>openShelfWork(selection,event.currentTarget,
+          ()=>current.current.selection===selection)}>查看原构建任务</Button>}
         {selection&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>{select(null);read(selection.checkoutId);}}>查看这份副本的所有版本</Button>}
         {error&&copy&&!selection&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read('')}>重新选择副本</Button>}
       </div>

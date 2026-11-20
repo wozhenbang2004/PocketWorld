@@ -39,6 +39,14 @@ public final class ProjectOwnerWorkflows {
     private static boolean ordinaryCheckout(JSONObject value){return OwnerDraftFirstBuild.ordinaryCheckout(value);}
     public JSONObject sourceForOwner(String project,String checkout)throws Exception {return sourceForOwner(project,checkout,false);}
     public JSONObject sourceForOwner(String project,String checkout,boolean observeTooling)throws Exception {
+        return sourceForOwner(project,checkout,observeTooling,null,null);
+    }
+    /** Compare only an existing native save receipt against the manifest already read for the selected copy. */
+    public JSONObject sourceAfterSaveForOwner(String project,String checkout,String path,String savedHash)throws Exception {
+        if(path==null||savedHash==null||!savedHash.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("没有可核对的原保存回执");
+        return sourceForOwner(project,checkout,true,path,savedHash);
+    }
+    private JSONObject sourceForOwner(String project,String checkout,boolean observeTooling,String savedPath,String savedHash)throws Exception {
         ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);
         if(!project.equals(row.getString("projectId"))||!ordinaryCheckout(row))throw new SecurityException("请选择此项目的普通私人副本");
         JSONObject snapshot=local.handle("export",new JSONObject().put("checkoutId",checkout)),source=ProjectSources.describe(snapshot);
@@ -72,6 +80,15 @@ public final class ProjectOwnerWorkflows {
                     catch(Exception unavailable){source.put("existingNodeBuildUnavailable",true);}
                 }else if(!state.isEmpty())source.put("existingNodeBuildBlocked",state);
             }
+        }
+        if(savedPath!=null){
+            JSONArray manifest=source.getJSONArray("files");boolean matches=false;
+            for(int i=0;i<manifest.length();i++){
+                JSONObject file=manifest.getJSONObject(i);
+                if(savedPath.equals(file.getString("path"))){matches=savedHash.equals(file.opt("sha256"));break;}
+            }
+            source.put("savedEditInSource",new JSONObject().put("path",savedPath).put("savedHash",savedHash)
+                .put("sourceDigest",source.getString("sourceDigest")).put("matches",matches));
         }
         source.remove("files");
         if(wrapper!=null)source.put("androidGradleWrapper",wrapper);

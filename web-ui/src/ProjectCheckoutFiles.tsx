@@ -15,12 +15,13 @@ type SavedEdit = { id: string; filesHandle: string; path: string; beforeHash: st
 type EditorPosition = { start: number; end: number; scrollTop: number; scrollLeft: number };
 // A UI bookmark, not a reusable native save handle or a copy of the file.
 export type CheckoutSavedPosition = { projectId: string; checkoutId: string; path: string; savedHash: string; caret?: EditorPosition };
+export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandle: string; id: string };
 export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
 type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; currentOnly?: boolean; entry?: CheckoutWebEntry };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry;
-  onClose: (saved?: CheckoutSavedPosition) => void; onPrepareBuild?: (saved: CheckoutSavedPosition) => void;
+  onClose: (saved?: CheckoutSavedPosition) => void; onPrepareBuild?: (saved: CheckoutSaveForBuild) => Promise<void>;
   registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
 const windowKey = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
@@ -66,6 +67,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const editorContainer=useRef<HTMLElement>(null);
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
   const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
+  const [checkingSavedSource, setCheckingSavedSource] = useState(false);
   const editorHeading = useRef<HTMLHeadingElement>(null);
   const [orphan, setOrphan] = useState<string | null>(null), [choice, setChoice] = useState<'keep_mine' | 'use_latest' | null>(null);
   const [adoption, setAdoption] = useState<Data | null>(null), [adoptionExpired, setAdoptionExpired] = useState(false);
@@ -198,8 +200,17 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const caret = area?.value===textareaText(recentSave.after) ? {
       start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop, scrollLeft: area.scrollLeft,
     } : undefined;
-    const finish = next === 'prepare-build' ? latest.current.onPrepareBuild : latest.current.onClose;
-    finish?.({ projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret });
+    const position = { projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret };
+    if (!next) { latest.current.onClose(position); return; }
+    const prepare = latest.current.onPrepareBuild;
+    if (!prepare) return;
+    // Keep the ordinary editor and its exact receipt alive until the read-only
+    // source comparison is back. Failure stays here instead of hiding the edit.
+    const sequence = generation.current, token = {};
+    entered.current = token; setBusy(true); setCheckingSavedSource(true); setError('');
+    void prepare({ position, filesHandle: recentSave.filesHandle, id: recentSave.id })
+      .catch(failure => { if (live(sequence)) setError(failureText(failure)); })
+      .finally(() => { if (entered.current === token) { entered.current = null; if (alive.current) { setBusy(false); setCheckingSavedSource(false); } } });
   };
   const closeCurrent = useRef(close); closeCurrent.current = close;
   useEffect(() => {
@@ -347,7 +358,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
           {showingSavedFile ? <Button disabled={locked} onClick={() => close(onPrepareBuild ? 'prepare-build' : undefined)}>
-            {onPrepareBuild ? '接下来：准备构建' : '已保存，回到项目工作区'}
+            {checkingSavedSource ? '正在核对这次保存…' : onPrepareBuild ? '接下来：准备构建' : '已保存，回到项目工作区'}
           </Button> :
             <Button disabled={locked || orphan !== null || blockedEdit.current || !file.dirty || file.conflict || file.saveUnknown} onClick={saveFile}>保存到这个副本</Button>}
         </div>}

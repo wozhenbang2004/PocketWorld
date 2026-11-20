@@ -1,24 +1,27 @@
 import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {bridge} from './bridge';
-import {Button, SettingsDialog} from './forms-library';
-import {registerOverlayBack} from './overlay-back';
+import {Button} from './forms-library';
 import {ProjectDraftChanges} from './ProjectDraftChanges';
 import {ProjectDraftOwnerRevision} from './ProjectDraftOwnerRevision';
 import type {OriginalProjectDraft} from './ButlerPreparations';
+import type {FixedDraftGoalDecision} from './task-presentation';
 
 type Diff={taskId:string;available:boolean;draftId:string;projectId:string;checkoutId:string;path:string;runId:string;epoch:number;code:string;sourceChanged:boolean;executionAuthorized:boolean;
  ownerRevision?:{taskId:string;draftId:string;revisionId:string;sha256:string};before:string;after:string;beforeSha256:string;afterSha256:string;beforeBytes:number;afterBytes:number};
 const action='projectDraft.readDifference',sha=/^[a-f0-9]{64}$/;
 const visible=()=>bridge.getState().view as {resumeRevision?:number;section?:string;taskId?:string}|undefined;
 const ticket=()=>{const v=visible();return JSON.stringify([bridge.getDocumentEpoch(),v?.resumeRevision,v?.section,v?.taskId])};
-export function ProjectDraftDifference({id,active,project,checkout,pin,requested,registerBeforeLeave}:{id:string;active:boolean;project:string;checkout:string;pin?:string;requested?:OriginalProjectDraft;registerBeforeLeave?:(guard:()=>boolean)=>()=>void}){
+export function ProjectDraftDifference({id,active,project,checkout,pin,requested,goalDecision,registerBeforeLeave}:{id:string;active:boolean;project:string;checkout:string;pin?:string;requested?:OriginalProjectDraft;goalDecision?:FixedDraftGoalDecision;registerBeforeLeave?:(guard:()=>boolean)=>()=>void}){
   const [data,show]=useState<Diff|null>(null),[note,tell]=useState(''),[busy,spin]=useState(false),turn=useRef(0),held=useRef(''),flight=useRef(false);
   const [editorProtected,setProtected]=useState(false),shownFromChat=useRef('');
   const locked=useRef(false),[leaveNotice,warn]=useState(false);
   const protect=useCallback((value:boolean)=>{locked.current=value;setProtected(value);if(!value)warn(false)},[]);
+  const dismissLeave=useCallback(()=>warn(false),[]);
   const result=useRef<HTMLElement>(null),arrival=useRef<{scroller:HTMLElement;top:number;ticket:string}|null>(null);
   const exact=requested?.taskId===id&&requested.draftId===pin?requested:undefined;
   const exactKey=exact?JSON.stringify([exact.taskId,exact.runId,exact.epoch,exact.draftId]):'';
+  const originalDecision=data&&goalDecision?.taskId===data.taskId&&goalDecision.draftId===data.draftId&&
+    goalDecision.runId===data.runId&&goalDecision.epoch===data.epoch?goalDecision:undefined;
   const current=()=>{const s=bridge.getState();return active&&!document.hidden&&!visible()?.section&&visible()?.taskId===id&&s.capabilities.commands.includes(action)};
   useLayoutEffect(()=>{
     if(!active||!registerBeforeLeave)return;
@@ -27,7 +30,6 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
       warn(true);return true;
     });
   },[id,project,checkout,pin,active,registerBeforeLeave]);
-  useLayoutEffect(()=>{if(leaveNotice&&editorProtected)return registerOverlayBack(()=>warn(false))},[leaveNotice,editorProtected]);
   const reset=()=>{++turn.current;held.current='';flight.current=false;show(null);tell('');spin(false);protect(false)};
   useEffect(()=>{reset();const leave=()=>{if(held.current&&(!current()||held.current!==ticket()))reset()};
     const off=bridge.subscribe(leave);document.addEventListener('visibilitychange',leave);return()=>{++turn.current;off();document.removeEventListener('visibilitychange',leave)};
@@ -63,14 +65,12 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
   if(requested&&!exact)return <p role="status" className="pw-field-hint">没有打开原对话的这份改稿；不会用其他版本代替。</p>;
   return <section className="pw-project-draft" ref={result} aria-label="这次交办的独立改稿"><div className="pw-section-heading"><h4>独立改稿</h4><Button size="small" variant="ghost" disabled={busy||editorProtected}
       onClick={()=>data?reset():void read()}>{busy?'读取中…':data?'收起差异':pin?'看文件差异':'查看草稿结果'}</Button></div>
-    {leaveNotice&&editorProtected&&data&&current()&&held.current===ticket()&&<SettingsDialog isOpen title="先处理当前稿" closeLabel="回到编辑" onClose={()=>warn(false)}>
-      <p>没有离开，也没有替你保存或放弃。若有未保留的输入，请先点“保留为新稿”，或在“结束编辑”里明确放弃。正在另存时请等原回执。</p>
-      <div className="pw-form-actions"><Button onClick={()=>warn(false)}>回到当前稿</Button></div>
-    </SettingsDialog>}
     {note&&<p className="pw-field-hint" role="status">{note}</p>}
     {data&&held.current===ticket()&&current()&&<><strong className="pw-project-draft-path">{data.path}</strong><p className="pw-field-hint">原工程未写回，没有构建或执行。{data.ownerRevision?'以你点选的已存稿为起点，不是工程原件或最新稿。':'这里比较的是本次固定的两版文件。'}</p>
+      {originalDecision&&<p className="pw-field-hint" role="status">{originalDecision.completed?'这版原改稿已确认达到目标。':'这版原改稿的验收已记录：目标尚未达到。'}</p>}
       <ProjectDraftChanges key={data.draftId} before={data.before} after={data.after} version={data.afterSha256.slice(0,8)} beforeLabel={data.ownerRevision?'选中的已存稿':undefined}/>
-      <ProjectDraftOwnerRevision key={data.draftId} task={id} root={data.draftId} path={data.path} originalHash={data.afterSha256} protect={protect}/>
+      <ProjectDraftOwnerRevision key={data.draftId} task={id} root={data.draftId} path={data.path} originalHash={data.afterSha256} protect={protect}
+        leaveRequested={leaveNotice&&editorProtected} onDismissLeave={dismissLeave}/>
       <details className="pw-field-hint"><summary>文件与版本</summary>工程 {data.projectId} · 副本 {data.checkoutId}<br/>原文 {data.beforeBytes} 字节 · {data.beforeSha256}<br/>改稿 {data.afterBytes} 字节 · {data.afterSha256}</details></>}
   </section>;
 }

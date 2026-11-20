@@ -3,9 +3,9 @@ import type {LocalTerminalCheckout} from './LocalWorkspace';
 import { checkedHostFiles, checkedHostText, ProjectHostComparedFiles, ProjectHostDiff, type HostComparedFile, type HostComparison, type HostDiff, type HostEditorFile } from './ProjectHostFileComparison';
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
-import {ProjectTaskPackageOrigin} from './ProjectTaskPackageOrigin';
+import {ProjectTaskPackageOrigin,type TaskPackageOriginalWork} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
-import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutSavedPosition, type CheckoutWebEntry } from './ProjectCheckoutFiles';
+import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutSavedPosition, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary } from './ProjectWorkBinding';
 import './local-workspace.css';
@@ -29,7 +29,7 @@ type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
-  onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout) => void;
+  onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout) => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
@@ -102,7 +102,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),noticeArea=useRef<HTMLDivElement>(null);
@@ -119,7 +119,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   const [importEditChoice,setImportEditChoice]=useState<{original:ProjectImportedEditor;viewHandle:string}|null>(null);
   const [importEditorNotice,setImportEditorNotice]=useState('');
-  const buildReturnAnchor=useRef<HTMLElement>(null), buildNextAction=useRef<HTMLButtonElement>(null), focusingBeforeDeparture=useRef(false);
+  const buildReturnAnchor=useRef<HTMLElement>(null), buildStepSection=useRef<HTMLElement>(null), buildNextAction=useRef<HTMLButtonElement>(null), focusingBeforeDeparture=useRef(false);
   const buildAfterSave=useRef<{saved:CheckoutSavedPosition;viewHandle:string;window:string}|null>(null);
   const fileCheckout=fileWindow?.checkoutId||'';
   const [buildOrigin,setBuildOrigin]=useState<ProjectBuildCopy|null>(null);
@@ -147,7 +147,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if (scopedBuildReceipt(receipt) && receipt.status !== 'unknown') { sourceAttempt.current = ''; setSource(null); }
     if (receipt.status === 'accepted' && (submission?.status !== 'accepted' || submission.taskId !== receipt.taskId)) onTaskRegistered();
   };
-  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void) => {
+  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void, reject = (failure: unknown) => setError(failureText(failure))) => {
     const ownsProject = () => bridge.getState().state.projectId === projectId && !bridge.getState().state.filePath;
     if (!latest.current.active || entered.current || document.hidden || !ownsProject() || !latest.current.can(action)) return;
     const token = {}, window = ownerWindow(), sequence = generation.current;
@@ -158,7 +158,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       if (current()) { accept?.(value); return value as Data; }
       if (action === 'projects.development.read' && value?.viewHandle) void latest.current.run('projects.development.close', { viewHandle: value.viewHandle }).catch(() => {});
     }
-    catch (failure) { if (current()) setError(failureText(failure)); }
+    catch (failure) { if (current()) reject(failure); }
     finally { if (entered.current === token) { entered.current = null; if (alive.current) setBusy(false); } }
   };
   const read = () => {
@@ -361,12 +361,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
   const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed && can('projects.development.queryCopy'));
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
-  const closeFiles = (saved?:CheckoutSavedPosition, prepareBuild=false) => {
+  const closeFiles = (saved?:CheckoutSavedPosition) => {
     const original=fileWindow?.unselectedImport;
     const sameSave=saved?.projectId===projectId&&saved.checkoutId===fileCheckout&&active&&!document.hidden&&bridge.getState().state.projectId===projectId;
-    if(prepareBuild&&(!sameSave||!canPrepareSavedBuild||draft.current.checkoutId!==saved.checkoutId||view?.viewHandle!==handle.current))return;
-    buildAfterSave.current=prepareBuild&&sameSave?{saved,viewHandle:handle.current,window:ownerWindow()}:null;
-    if(prepareBuild)setError('');
+    buildAfterSave.current=null;
     if(sameSave)setLastSavedFile(saved);
     // The saved file can identify a suggested selection, never make one on return.
     setImportEditChoice(sameSave&&original?.checkoutId===saved.checkoutId&&view?.viewHandle===handle.current&&original.window===ownerWindow()?
@@ -534,13 +532,43 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const buildLookupUnavailable = source?.existingNodeBuild === true ?
     source.existingNodeBuildUnavailable === true || source.existingNodeBuildTask && !versionBuild :
     source?.editedDraftCopy === true && (source.editedDraftBuildUnavailable === true || source.editedDraftBuild && !versionBuild);
+  const buildStepVisible = !filesOpen && !pending && !sourceConflict && !buildCopyMissing && !view?.draftRecoveryRequired;
   const firstBuild = !!nodeTools && !versionBuild && !buildLookupUnavailable && can('projects.development.reviewDraftBuild');
-  const firstBuildVisible = firstBuild && !filesOpen && !pending && !sourceConflict && !buildCopyMissing && !view?.draftRecoveryRequired;
+  const firstBuildVisible = firstBuild && buildStepVisible;
   const showToolSetupByBuild = firstBuildVisible && buildToolsBlocked && !missingPnpm && !builtInSetupUnavailable && canReviewToolSetup;
   const modelStillNeeded = firstBuild && !buildToolsBlocked && view?.model?.configured!==true;
   const firstBuildAction = !firstBuildVisible ? '' : showToolSetupByBuild ? 'tools' : buildToolsBlocked ? 'refresh' : modelStillNeeded ? 'model' : 'review';
   const canPrepareSavedBuild=!!(nodeTools&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
     !view?.draftRecoveryRequired&&can('projects.development.inspect')&&can('projects.development.reviewDraftBuild'));
+  const savedSource = source?.savedEditInSource;
+  const checkedSave = savedFileHere && savedSource?.path===savedFileHere.path && savedSource.savedHash===savedFileHere.savedHash &&
+    savedSource.sourceDigest===source?.sourceDigest && sourceHash(source?.sourceDigest) && typeof savedSource.matches==='boolean' ? savedSource : null;
+  const sourceVersion = source?.projectId===projectId && source.checkoutId===checkout && sourceHash(source.sourceDigest) ? source.sourceDigest : '';
+  const acceptedBuild = selectedCopy && !differentBuildCopy && submission?.status==='accepted' && submission.independentNodeBuild===true && submission.projectId===projectId &&
+    submission.checkoutId===checkout && sourceHash(submission.versionedBuildSourceDigest) &&
+    typeof submission.taskId==='string' && /^[A-Za-z0-9_-]{1,80}$/.test(submission.taskId) &&
+    (!source || submission.versionedBuildSourceDigest===sourceVersion) ? submission : null;
+  const versionWorkAtTop = buildStepVisible && !!versionBuild && source?.existingNodeBuild===true && can('tasks.open');
+  const acceptedWorkAtTop = buildStepVisible && !versionBuild && !!acceptedBuild && can('tasks.open');
+  const prepareSavedBuild = async ({position:saved,filesHandle,id}:CheckoutSaveForBuild) => {
+    const viewHandle=handle.current, window=ownerWindow();
+    if(!active||!canPrepareSavedBuild||!viewHandle||view?.viewHandle!==viewHandle||saved.projectId!==projectId||
+      saved.checkoutId!==fileCheckout||draft.current.checkoutId!==saved.checkoutId||document.hidden)
+      throw Error('原副本或编辑窗口已变化，请先核对原文件。');
+    const fresh=await invoke('projects.development.inspect',{viewHandle,checkoutId:saved.checkoutId,savedEdit:{filesHandle,id}},value=>{
+      const observation=value.savedEditInSource;
+      if(handle.current!==viewHandle||draft.current.checkoutId!==saved.checkoutId||value.projectId!==projectId||
+        value.checkoutId!==saved.checkoutId||!sourceHash(value.sourceDigest)||observation?.sourceDigest!==value.sourceDigest||
+        observation.path!==saved.path||observation.savedHash!==saved.savedHash||typeof observation.matches!=='boolean')
+        throw Error('没有核对到这次原文件保存与当前源码，文件仍留在原编辑器。');
+      buildAfterSave.current={saved,viewHandle,window};
+      setLastSavedFile(saved); setImportEditChoice(null); setFileWindow(null); setHostEditor(null); setHostFiles(null);
+      // The normal inspection already ran with exactly this page and save.
+      // Invalidate as usual on changing copies, reopening files or returning from setup.
+      sourceAttempt.current=`${viewHandle}|${projectId}|${saved.checkoutId}`;setSource(value);
+    },failure=>{throw failure;});
+    if(!fresh)throw Error('没有取得这次原保存的核对回执。');
+  };
   useEffect(()=>{
     const next=buildAfterSave.current;
     if(!next)return;
@@ -548,15 +576,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       ownerWindow()===next.window&&draft.current.checkoutId===next.saved.checkoutId&&bridge.getState().state.projectId===next.saved.projectId;
     if(!current()){buildAfterSave.current=null;return;}
     if(filesOpen||busy||entered.current||!source&&!error)return;
-    // closeFiles retires the old observation. Wait for the fresh read before
-    // moving focus; the ordinary build controls still decide what is available.
+    // The checked source came from the still-open exact editor; the ordinary
+    // next-step controls decide what to offer once the editor is closed.
     const fresh=source?.projectId===projectId&&source?.checkoutId===checkout&&sourceHash(source?.sourceDigest);
     const frame=requestAnimationFrame(()=>{
       if(buildAfterSave.current!==next||!current()||savedFileHere!==next.saved)return;
       buildAfterSave.current=null;
       const action=fresh&&buildNextAction.current;
       if(action&&!action.disabled){
-        action.focus({preventScroll:true});action.scrollIntoView({block:'start',behavior:'auto'});
+        action.focus({preventScroll:true});(buildStepSection.current||action).scrollIntoView({block:'start',behavior:'auto'});
       }else buildReturnAnchor.current?.focus({preventScroll:true});
     });
     return ()=>cancelAnimationFrame(frame);
@@ -565,9 +593,21 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     source?.projectId===projectId && source.checkoutId===checkout && typeof source.sourceDigest==='string' &&
     /^[a-f0-9]{64}$/.test(source.sourceDigest) ? buildOrigin : null;
   const versionChanged = comparedBuild && comparedBuild.sourceDigest!==source?.sourceDigest;
-  const reviewNodeBuild = () => void invoke('projects.development.reviewDraftBuild',{
-    viewHandle:handle.current,checkoutId:checkout,retainedDraft:displayedSavedDraft({...draft.current}),
-  },v=>acceptReview(v,true));
+  const reviewNodeBuild = () => {
+    const viewHandle=handle.current;
+    void invoke('projects.development.reviewDraftBuild',{
+      viewHandle,checkoutId:checkout,retainedDraft:displayedSavedDraft({...draft.current}),
+    },value=>{
+      try { acceptReview(value,true); }
+      catch (failure) {
+        // Native has prepared this review even when it no longer matches the
+        // displayed source. Release only that review so the original file can reopen.
+        if(value.projectId===projectId&&value.checkoutId===checkout&&typeof value.reviewHandle==='string')
+          void latest.current.run('projects.development.dismiss',{viewHandle,reviewHandle:value.reviewHandle}).catch(()=>{});
+        throw failure;
+      }
+    });
+  };
   const openVersionBuild = (destination:'work'|'savedWeb') => void invoke('projects.development.inspect', {viewHandle:handle.current, checkoutId:checkout}, fresh => {
     const current = versionBuildFor(fresh, projectId, checkout);
     if (fresh.projectId === projectId && fresh.checkoutId === checkout) setSource(fresh);
@@ -590,24 +630,38 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
     {importEditorNotice && <p className="pw-local-inline-notice" role="status">{importEditorNotice}</p>}
     {buildCopyMissing&&<p className="pw-local-inline-notice" role="status">原构建所用的私人副本暂不可用，没有打开替代副本。</p>}
-    {nodeTools&&firstBuildAction&&<section aria-label="这份私人副本的构建下一步">
-      <p className="pw-field-hint" role="status">本机副本 <bdi>{selectedCopy?.name||name}</bdi> · <code>{checkout.slice(0,8)}</code>。{buildToolsBlocked?
-        <>{nodeTools.missing.length?`尚未核对到 ${nodeTools.missing.map(tool=>tool==='node'?'Node.js':tool).join('、')}。`:'开发环境尚未核对为可运行。'}
-          {missingPnpm?' 内置准备提供 Node.js 和 npm，不会用 npm 替代 pnpm。':
-            builtInSetupUnavailable?' 当前安装包不能准备本机运行环境；文件仍可编辑。':
-            showToolSetupByBuild?' 请先审阅手机工具的准备内容。返回后重新核对，不会自动构建。':' 这个窗口不能开始内置准备；仍可编辑文件。'}</>:
-        firstBuildAction==='model'?`已核对 Node.js 和 ${nodeTools.manager}。构建任务还需要连接默认模型；连接不会开始构建。`:
-        `已核对 Node.js 和 ${nodeTools.manager}，已有默认模型配置。下一步只看构建方案，依赖和运行仍要分别确认。`}</p>
-      <div className="pw-form-actions">
-        {firstBuildAction==='tools'&&<Button ref={buildNextAction} disabled={disabled} onClick={prepareTools}>{view?.runtime?.installed===true?'检查与修复手机工具':'打开手机工具准备'}</Button>}
-        {firstBuildAction==='refresh'&&<Button ref={buildNextAction} variant="secondary" disabled={disabled} onClick={()=>void read()}>重新核对手机工具</Button>}
-        {firstBuildAction==='model'&&<Button ref={buildNextAction} disabled={disabled||!can('projects.development.draft')} onClick={connectBuildModel}>连接默认模型</Button>}
-        {firstBuildAction==='review'&&<Button ref={buildNextAction} disabled={disabled} onClick={reviewNodeBuild}>核对这个副本的构建方案</Button>}
-      </div>
+    {(firstBuildAction||versionWorkAtTop||acceptedWorkAtTop||checkedSave&&buildStepVisible)&&<section ref={buildStepSection} aria-label="这份私人副本的构建下一步">
+      <p className="pw-field-hint">本机副本 <bdi>{selectedCopy?.name||name}</bdi> · <code>{checkout.slice(0,8)}</code>。
+        {sourceVersion?<> 已保存源码版本 <code>{sourceVersion.slice(0,10)}</code>。</>:
+          acceptedWorkAtTop?<> 已交办版本 <code>{acceptedBuild!.versionedBuildSourceDigest.slice(0,10)}</code>。</>:null}</p>
+      {checkedSave&&<p className="pw-field-hint" role="status">{checkedSave.matches?
+        <>这版包含刚确认保存的 <bdi>{checkedSave.path}</bdi>。</>:
+        <>上次保存的 <bdi>{checkedSave.path}</bdi> 与当前版本不一致。若继续，只审阅上面显示的当前版本。</>}</p>}
+      {(versionWorkAtTop||acceptedWorkAtTop)?<>
+        <p className="pw-field-hint" role="status">{acceptedWorkAtTop?'构建交办已受理，尚不代表命令获准或运行。可在原工作中继续核对。':
+          '这一版已有原构建工作。打开可查看实际进展、待确认命令和已保存成果。'}</p>
+        {acceptedBuild?.error&&<p className="pw-field-hint">{acceptedBuild.error}</p>}
+        <div className="pw-form-actions"><Button ref={buildNextAction} disabled={disabled||versionWorkAtTop&&!can('projects.development.inspect')}
+          onClick={()=>versionWorkAtTop?openVersionBuild('work'):acceptedBuild&&onOpenTask(acceptedBuild.taskId,acceptedBuild.checkoutId)}>打开原构建工作</Button></div>
+      </>:nodeTools&&firstBuildAction&&<>
+        <p className="pw-field-hint" role="status">{buildToolsBlocked?
+          <>{nodeTools.missing.length?`尚未核对到 ${nodeTools.missing.map(tool=>tool==='node'?'Node.js':tool).join('、')}。`:'开发环境尚未核对为可运行。'}
+            {missingPnpm?' 内置准备提供 Node.js 和 npm，不会用 npm 替代 pnpm。':
+              builtInSetupUnavailable?' 当前安装包不能准备本机运行环境；文件仍可编辑。':
+              showToolSetupByBuild?' 请先审阅手机工具的准备内容。返回后重新核对，不会自动构建。':' 这个窗口不能开始内置准备；仍可编辑文件。'}</>:
+          firstBuildAction==='model'?`已核对 Node.js 和 ${nodeTools.manager}。构建任务还需要连接默认模型；连接不会开始构建。`:
+          `已核对 Node.js 和 ${nodeTools.manager}，已有默认模型配置。下一步只看构建方案，依赖和运行仍要分别确认。`}</p>
+        <div className="pw-form-actions">
+          {firstBuildAction==='tools'&&<Button ref={buildNextAction} disabled={disabled} onClick={prepareTools}>{view?.runtime?.installed===true?'检查与修复手机工具':'打开手机工具准备'}</Button>}
+          {firstBuildAction==='refresh'&&<Button ref={buildNextAction} variant="secondary" disabled={disabled} onClick={()=>void read()}>重新核对手机工具</Button>}
+          {firstBuildAction==='model'&&<Button ref={buildNextAction} disabled={disabled||!can('projects.development.draft')} onClick={connectBuildModel}>连接默认模型</Button>}
+          {firstBuildAction==='review'&&<Button ref={buildNextAction} disabled={disabled} onClick={reviewNodeBuild}>{checkedSave?.matches===false?'核对当前版本的构建方案':'核对这个副本的构建方案'}</Button>}
+        </div>
+      </>}
     </section>}
     {!view ? <Button variant="secondary" disabled={busy || !readable} onClick={() => void read()}> {busy ? '正在读取原项目…' : '读取项目开发条件'} </Button> : <>
       {view.draftRecoveryRequired && <p className="pw-local-inline-notice" role="alert">{view.draftRecoveryMessage} 仍可查看下方原任务、文件和工具状态。请保留应用数据，从诊断记录定位草稿存储问题后恢复，不要清空数据或重复提交目标。</p>}
-      {submission && <div className="pw-local-inline-notice" role="status"><p>{submission.message || (pending ? '原项目输入仍待核对。' : submission.status === 'accepted' ? '项目任务已保存。' : '上次输入没有启动。')}</p>
+      {submission && !acceptedWorkAtTop && !(versionWorkAtTop && acceptedBuild?.taskId===versionBuild?.id) && <div className="pw-local-inline-notice" role="status"><p>{submission.message || (pending ? '原项目输入仍待核对。' : submission.status === 'accepted' ? '项目任务已保存。' : '上次输入没有启动。')}</p>
         {submission.status === 'accepted' && !scopedBuildReceipt(submission) && <p>继续同一件事时，请打开原任务补充，不必重新开始。</p>}
         {submission.error && <p>{submission.error}</p>}<div className="pw-form-actions">
           {submission.taskId && submission.taskId!==versionBuild?.id && <Button variant="secondary" disabled={busy || filesOpen || !can('tasks.open')} data-project-receipt-task={submission.taskId} onClick={() => onOpenTask(submission.taskId, submission.checkoutId)}>{scopedBuildReceipt(submission)?'查看上次交办的构建':'查看原任务与结果'}</Button>}
@@ -667,11 +721,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           onClick={() => { setHostEditor(null); setFileWindow({checkoutId:savedFileHere.checkoutId,resumeSaved:savedFileHere}); }}>回到上次保存的文件</Button>}
         {!differentBuildCopy && selectedCopy && (selectedCopy.draftWorkingCopy === true || source?.existingNodeBuild === true) && can('projects.development.reviewDraftBuild') &&
           (versionBuild ? <>
-            {can('tasks.open') && <Button ref={buildNextAction} variant="secondary" disabled={disabled || !can('projects.development.inspect')}
+            {!versionWorkAtTop && can('tasks.open') && <Button ref={buildNextAction} variant="secondary" disabled={disabled || !can('projects.development.inspect')}
               onClick={()=>openVersionBuild('work')}>查看原构建任务</Button>}
             {savedWebLink && <Button variant="ghost" disabled={disabled || !can('projects.development.inspect')}
               onClick={()=>openVersionBuild('savedWeb')}>查找同一源码的已存网页</Button>}
-          </> : !firstBuild && !buildLookupUnavailable && <Button ref={buildNextAction} variant="secondary"
+          </> : !firstBuild && !acceptedWorkAtTop && !buildLookupUnavailable && <Button ref={buildNextAction} variant="secondary"
             disabled={disabled || buildToolsBlocked || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
             onClick={reviewNodeBuild}>{source?.existingNodeBuild===true?(versionChanged?'核对修改后的 Node 构建':'审阅这个副本的 Node 构建'):source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
       </div>
@@ -712,7 +766,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
               origin.localSourceRecorded && !origin.taskVerified ? <p>原私人任务或冻结文件回执目前不能核对。</p> : null}</div>}</div>}
       {view?.viewHandle && available.some(row=>row.checkoutId===checkout && row.taskPackageSource===true) &&
         <ProjectTaskPackageOrigin key={view.viewHandle+':'+checkout} project={projectId} checkout={checkout} view={view.viewHandle}
-          disabled={busy||!!review||filesOpen} invoke={invoke} can={can} open={onOpenHostOriginal}/>}
+          disabled={busy||!!review||filesOpen} invoke={invoke} can={can} open={onOpenPackageOriginal}/>}
       {canPrepareTerminal && <div className="pw-form-actions"><Button variant="ghost" disabled={disabled} data-workspace-entry="project-copy-terminal"
         onClick={()=>void prepareTerminal()}>准备这份副本的终端</Button></div>}
       {view.model?.configured !== true && !(firstBuildVisible&&modelStillNeeded&&can('projects.development.draft')) && <p className="pw-local-inline-notice">交办目标需要默认模型；直接编辑文件、找回已保存的网页不需要。<Button variant="secondary" disabled={busy || pending || !!review || filesOpen} onClick={onConnectModel}>连接模型</Button></p>}
@@ -732,8 +786,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     } : undefined}/>}
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} onClose={closeFiles}
-      onPrepareBuild={canPrepareSavedBuild?saved=>closeFiles(saved,true):undefined} registerBack={registerFilesBack} />}
-    <SettingsDialog isOpen={!!review} title={review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
+      onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} registerBack={registerFilesBack} />}
+    <SettingsDialog isOpen={!!review} title={review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={dismiss} closeLabel={review?.draftBuild===true?'返回项目副本':'返回修改目标'}>{review && <div className="pw-local-review">
       {review.draftBuild === true ? <><strong>{review.dependencyState==='needs_lock_review'?'还缺依赖，先审阅这份锁':review.manager+' run build'}</strong>
         {review.existingCopy && <p className="pw-field-hint">只核对这个私人副本已保存的源码，不含未保存的文件修改。{review.preservedProjectDraft===true && '原项目目标与交付约定留在草稿，不随这次构建提交。'}</p>}
         {versionChanged && comparedBuild && <p className="pw-field-hint">原构建源码 <code>{comparedBuild.sourceDigest.slice(0,8)}</code>。本次核对下方的新版本，需要重新批准。</p>}
@@ -744,7 +798,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           {' '}{review.lockedDependencies.lockPath} 共 {review.lockedDependencies.packages} 个锁条目（含其他平台）。准备时只向 npm 官方注册表请求，不读取用户包管理配置或执行安装脚本。</p><details><summary>核对锁与本机工具</summary><dl className="pw-facts"><div><dt>工具</dt><dd>{review.manager} {review.lockedDependencies.managerVersion}</dd></div><div><dt>下载来源</dt><dd>{review.lockedDependencies.registry}</dd></div><div><dt>锁文件 SHA-256</dt><dd>{review.lockedDependencies.lockSha256}</dd></div></dl></details></>}
         {review.previousVerification?.id && <p className="pw-field-hint">此副本已有一项不含锁准备的原构建。审阅这把锁会另开一项工作，旧任务和授权都保留。
           {can('tasks.open')&&<Button variant="ghost" size="small" disabled={busy} onClick={()=>onOpenTask(review.previousVerification.id,review.checkoutId)}>查看原构建记录</Button>}</p>}
-        <p>下一步仅把目标交给显示的模型，{review.dependencyState==='needs_lock_review'?'缺失的依赖与之后的构建分别确认。':'构建仍要另行确认。'} 构建脚本可以更改此副本或联网。模型可见项目版本及之后明确获取的日志和成果记录；保留输出仍须另行确认。</p>
+        <p>提交会把构建目标交给下方的默认模型，可能产生用量。{review.dependencyState==='needs_lock_review'?'依赖准备和之后的构建命令分别等待你确认。':'构建命令仍要另行确认。'} 构建脚本可以更改此副本或联网。模型可见项目版本及之后明确获取的日志和成果记录；保留输出仍须另行确认。</p>
         <details><summary>查看这一版 package.json 的构建脚本</summary><dl className="pw-facts">{['prebuild','build','postbuild'].filter(k=>typeof review.scripts?.[k]==='string').map(k=><div key={k}><dt>{k}</dt><dd><code dir="ltr" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{review.scripts[k]}</code></dd></div>)}</dl></details></> : <p>{review.goal}</p>}
       {deliveryFields.some(key => review.deliveryContract?.[key]) && <dl className="pw-facts">
         {review.deliveryContract.constraints && <div><dt>{review.ownerPickedConventionRevision?'所选手写约定 · 修订 '+review.ownerPickedConventionRevision:'限制与约束'}</dt><dd>{review.deliveryContract.constraints}</dd></div>}
@@ -754,7 +808,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       <dl className="pw-facts"><div><dt>项目</dt><dd>{name}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>默认模型</dt><dd>{review.model?.label} · {review.model?.provider}</dd></div><div><dt>运行位置</dt><dd>{review.runtimeId === 'managed_process_v1' ? '这台手机 · 本机托管环境' : review.runtime}</dd></div><div><dt>源码版本</dt><dd>{review.source?.sourceDigest}</dd></div><CheckoutGuide source={review.source} projectId={projectId} checkoutId={review.checkoutId}/></dl>
       {review.draftBuild!==true&&<p>将目标交给默认模型，在新的项目任务中处理。不会批准任意命令、安装依赖、读取项目记忆或自动发布。具体文件修改、命令与成果采纳仍按原任务范围审阅。</p>}
       {expired && <p role="status">本次审阅已过期，还未启动。请返回重新核对。</p>}
-      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismiss}>返回修改</Button><Button disabled={busy || expired} onClick={start}>{review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'继续审阅依赖':'继续审阅构建':'开始这个项目任务'}</Button></div>
+      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismiss}>{review.draftBuild===true?'返回副本':'返回修改'}</Button><Button disabled={busy || expired} onClick={start}>{review.draftBuild===true?'提交构建交办':'开始这个项目任务'}</Button></div>
     </div>}</SettingsDialog>
   </section>;
 }

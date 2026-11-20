@@ -315,8 +315,15 @@ internal class PocketWebProjectDevelopment(
                 working(original, done) { controller.projectDevelopmentForWeb().hostSourceOriginForOwner(original.project, checkout, expected) }
             }
             "projects.development.inspect" -> {
-                fields(args, "viewHandle", "checkoutId"); val checkout = text(args, "checkoutId")
-                working(original, done) { source(original, checkout) }
+                fields(args, "viewHandle", "checkoutId", "savedEdit"); val checkout = text(args, "checkoutId")
+                val receipt = if (args.has("savedEdit")) {
+                    val saved = args.getJSONObject("savedEdit"); fields(saved, "filesHandle", "id")
+                    files.savedEditForBuild(original.project, checkout, text(saved, "filesHandle"), text(saved, "id"))
+                } else null
+                working(original, done) {
+                    if (receipt == null) source(original, checkout)
+                    else controller.projectDevelopmentForWeb().sourceAfterSaveForOwner(original.project, checkout, receipt.path, receipt.savedHash)
+                }
             }
             "projects.development.prepare", "projects.development.queryCopy" -> {
                 fields(args, "viewHandle")

@@ -548,14 +548,18 @@ public final class LocalModule implements EngineModule {
     }
     /** Native UI only. No URI, byte input, model tool, or fallback to an identically named file. */
     private JSONObject privateTaskPackage(String task,String operation)throws Exception {
-        JSONObject source=privateTaskPackageLedger(task,operation);requirePackagePreviewOwner(source);return source;
+        JSONObject source=privateTaskPackageLedger(task,operation).source();requirePackagePreviewOwner(source);return source;
     }
-    private JSONObject privateTaskPackageLedger(String task,String operation)throws Exception {
+    private record TaskPackageLedgerRead(JSONObject source, Boolean producingRunCurrent) {}
+    private TaskPackageLedgerRead privateTaskPackageLedger(String task,String operation)throws Exception {
         if(closed||!(context.android instanceof dev.pocketengine.EngineApplication app)||app.tasks==null)throw new SecurityException("原私人任务不可读取");
         JSONObject visible=app.tasks.getForUi(task,false);
         if(visible==null||!task.equals(visible.opt("id"))||!visible.optBoolean("contextAvailable",true)||visible.optBoolean("sourceCurrentReadRequired")||
                 "source_unavailable".equals(visible.opt("taskProjection")))throw new SecurityException("原任务的当前来源不可读取");
-        return app.tasks.ownerPackagePreviewSource(task,operation);
+        JSONObject source=app.tasks.ownerPackagePreviewSource(task,operation);
+        String currentRun=visible.optString("runId");int currentEpoch=visible.optInt("coordinatorEpoch",-1);
+        Boolean producingRunCurrent=currentRun.isBlank()||currentEpoch<1?null:source.getString("runId").equals(currentRun)&&source.getInt("epoch")==currentEpoch;
+        return new TaskPackageLedgerRead(source,producingRunCurrent);
     }
     /** An original-task link needs the private ledger, not a still-running process or a surviving mutable checkout. */
     public JSONObject privateTaskSourceOriginForOwner(String project,String id,String expected)throws Exception {
@@ -583,10 +587,11 @@ public final class LocalModule implements EngineModule {
         String digest=ProjectSources.digest(evidence);if(expected!=null&&!expected.equals(digest))throw new SecurityException("原工作来源已变化");
         JSONObject pin=evidence.getJSONObject("original");result.put("sourceName",evidence.getString("sourceLabel")).put("files",evidence.getInt("files"))
             .put("archiveSha256",pin.getString("archiveSha256")).put("archiveBytes",pin.getLong("archiveBytes")).put("evidenceDigest",digest);
-        boolean verified=false;try{JSONObject current=privateTaskPackageLedger(pin.getString("taskId"),pin.getString("operationId"));
-            verified=ProjectSources.canonical(pin).equals(ProjectSources.canonical(dev.pocketengine.features.local.project.ProjectTaskSourceOrigin.pin(current)));
+        TaskPackageLedgerRead verified=null;try{TaskPackageLedgerRead current=privateTaskPackageLedger(pin.getString("taskId"),pin.getString("operationId"));
+            if(ProjectSources.canonical(pin).equals(ProjectSources.canonical(dev.pocketengine.features.local.project.ProjectTaskSourceOrigin.pin(current.source()))))verified=current;
         }catch(Exception unavailable){/* A historical receipt does not authorize a link to a now unavailable task. */}
-        if(verified)result.put("taskVerified",true).put("taskId",pin.getString("taskId")).put("operationId",pin.getString("operationId"));
+        if(verified!=null)result.put("taskVerified",true).put("taskId",pin.getString("taskId")).put("operationId",pin.getString("operationId"))
+            .put("runId",pin.getString("runId")).put("epoch",pin.getInt("epoch")).put("producingRunCurrent",verified.producingRunCurrent());
         else if(expected!=null)throw new SecurityException("原私人工作与保存操作当前不能核对，没有打开其他工作");
         return result;
     }

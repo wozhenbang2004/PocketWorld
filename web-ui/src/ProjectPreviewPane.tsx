@@ -13,7 +13,7 @@ type Data = Record<string, any>;
 type Action = 'projects.preview.mode' | 'projects.preview.reload' | 'projects.preview.close' | 'projects.preview.return';
 type PackageExportTarget = Pick<PackagePreviewChoices, 'taskId' | 'operationId' | 'artifactId' | 'artifactSha256'>;
 type PackageExportState = PackageExportTarget & { kind: 'project_package_export'; requestId: string; projectId: string; status: string; message: string; exported: boolean; bytes?: number; targetReadback?: {protocol:string;status:string;provider:string;displayName?:string;bytes?:number;sha256?:string} };
-type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string, originalChat?:boolean) => void;
+type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string, originalChat?:boolean, fixedWeb?:boolean) => void;
   openOriginalBuildCopy?: (choices: PackagePreviewChoices) => boolean };
 const fixedPackage = (view: ProjectPreviewState | null) => !!view &&
   (!!view.packageOperationId || view.metadata.origin === 'fixed_workspace_project_artifact');
@@ -252,7 +252,7 @@ export function useProjectPreview(options: Options) {
     const taskId = choices?.taskId || view?.taskId;
     if (!taskId) return false;
     const operationId = choices?.operationId || view?.packageOperationId;
-    hide(); optionsRef.current.onPackageTask(taskId, operationId,fromOriginalChat); return true;
+    hide(); optionsRef.current.onPackageTask(taskId,operationId,fromOriginalChat,choices?.mode==='web_output'); return true;
   };
   const canReturnToSavedWebShelf=!!savedWebShelf&&expanded&&options.active&&!busy&&!exportBusy&&!options.blocked;
   const returnToSavedWebShelf=()=>{

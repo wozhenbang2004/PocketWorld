@@ -13,7 +13,7 @@ type Options = {
 type Handoff = {
   target: PackagePreviewTarget; epoch: number; resume: number; navigation: number; projectId: string;
   phase: 'leaving' | 'waiting' | 'inspecting' | 'selecting' | 'presenting';
-  choices?: PackagePreviewChoices; timer?: number; shown: () => void; originalChat?:()=>boolean;
+  choices?: PackagePreviewChoices; timer?: number; shown: (choices:PackagePreviewChoices) => void; originalChat?:()=>boolean;
 };
 const nativeView = () => bridge.getState().view as { taskId?: string | null; section?: string | null; resumeRevision?: number } | undefined;
 
@@ -44,7 +44,7 @@ export function useProjectPackageHandoff(options: Options) {
       matchesProject(o.projectId) && matchesProject(String(state.projectId || '')) &&
       (!nativeView()?.taskId && nativeView()?.section == null);
   };
-  const open = (target: PackagePreviewTarget, shown: () => void, originalChat?:()=>boolean) => {
+  const open = (target: PackagePreviewTarget, shown: (choices:PackagePreviewChoices) => void, originalChat?:()=>boolean) => {
     const o = latest.current, view = nativeView();
     if (active.current || document.hidden || !view || view.section != null ||
         (originalChat ? o.route!=='chat' || !!view.taskId || !originalChat() : view.taskId !== target.taskId) ||
@@ -104,7 +104,7 @@ export function useProjectPackageHandoff(options: Options) {
           now.navigation() === r.navigation + 1 && now.navigationRevision === r.navigation + 1 && now.route === 'projects' && !now.blocked &&
           now.projectId === id && native.state.projectId === id && !native.state.filePath && !nativeView()?.taskId && nativeView()?.section == null;
       } : undefined;
-      if (o.show(r.choices,r.originalChat,exactWebWindow)) { r.shown(); finish(r); }
+      if (o.show(r.choices,r.originalChat,exactWebWindow)) { r.shown(r.choices); finish(r); }
     }
   });
   return { opening, open };

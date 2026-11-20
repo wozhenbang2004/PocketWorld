@@ -30,7 +30,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     }
     // Only a foreground, path-and-hash receipt. The private editor already has
     // the two bounded texts; no second history store or writer is created here.
-    private data class SavedEdit(val id: String, val path: String, val beforeHash: String, val savedHash: String) {
+    data class SavedEdit(val id: String, val path: String, val beforeHash: String, val savedHash: String) {
         fun view() = JSONObject().put("id",id).put("path",path).put("beforeHash",beforeHash).put("savedHash",savedHash)
     }
     private class Adoption(val handle: String, val file: Opened, val revision: Long, val review: JSONObject, val expires: Long)
@@ -61,6 +61,18 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     }
     private fun selected(args: JSONObject): Page {
         val original = page; check(original != null && current(original) && original.handle == text(args, "filesHandle")) { "原私人副本文件窗口已关闭，请重新打开" }; return original
+    }
+    /** The existing foreground save receipt can only be used for this ordinary editor and open file. */
+    fun savedEditForBuild(project: String, checkout: String, filesHandle: String, saveId: String): SavedEdit {
+        val original = page
+        check(original != null && original.project == project && original.checkout == checkout && original.handle == filesHandle &&
+            original.sourcePath == null && !busy && current(original)) { "原文件窗口已变化，未核对其他副本。" }
+        return synchronized(store) {
+            val receipt = original.savedEdit; val file = original.opened
+            check(receipt != null && receipt.id == saveId && file != null && !file.saveUnknown && !file.draft.dirty() && !file.draft.conflict() &&
+                file.draft.path == receipt.path && file.draft.baseHash == receipt.savedHash) { "原文件保存回执已变化，请先核对原文件。" }
+            receipt
+        }
     }
     private fun textPage(original: Page,args: JSONObject): CheckoutTextMatches {
         check(original.sourcePath==null && SystemClock.elapsedRealtime()<original.textUntil){"原副本搜索已结束，请重新查找"}

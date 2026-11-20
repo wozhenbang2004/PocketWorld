@@ -7,6 +7,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import dev.pocketengine.features.local.runtime.RuntimeInvocation;
+import dev.pocketengine.features.local.preview.ViteOutputMount;
 import java.util.regex.Pattern;
 import java.util.Map;
 import java.util.Set;
@@ -354,8 +355,9 @@ public final class OriginalNodeWebOutput {
                 throw new SecurityException("原固定包文件与已观察 Vite 目录不同");
         }
         byte[] entry=frozen.file(ENTRY);
-        if(entry.length>262144)throw new SecurityException("原网页入口过大，未保存");
+        if(entry.length>ViteOutputMount.MAX_ENTRY_BYTES)throw new SecurityException("原网页入口过大，未保存");
         String html=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(entry)).toString();
+        if(!ViteOutputMount.rootedBase(html,path->paths.contains("dist/"+path)).isEmpty())return;
         var module=VITE_ENTRY.matcher(html);
         if(!module.find()||!paths.contains(viteRelative(module.group(1)))||module.find())
             throw new SecurityException("原网页未引用一个实际同时固定的 Vite 模块入口");
