@@ -3243,8 +3243,61 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     var conversationReader by mutableStateOf<ConversationReadPage?>(null)
         private set
     private var conversationReadSequence=0L
+    private var openingOwnerWorkRequest: dev.pocketengine.core.RunControl? = null
     internal val conversationReaderRevision get() = conversationReadSequence
-    fun canReadConversationWindow(page:ConversationReadPage)=!closed&&privateWorkspaceView()&&conversationReader?.window==page.window&&conversationReader?.conversation==page.conversation
+    // The one-row request view is not a regular conversation reader authority.
+    // Only the existing exact-window close action can consume that reader handle.
+    fun canReadConversationWindow(page:ConversationReadPage)=!closed&&page.workRequestAnchor==null&&privateWorkspaceView()&&conversationReader?.window==page.window&&conversationReader?.conversation==page.conversation
+    private fun workRequestWindowCurrent(task:String,run:String,epoch:Int)=webPrivateOwnerVisible()&&webTaskViewId==task&&
+        state.tasks.singleOrNull { it.id==task }?.raw?.let {
+            it.opt("executionRole")=="owner_work"&&it.opt("actorId")=="owner"&&it.opt("spaceId")=="private"&&
+                it.opt("runId")==run&&it.optInt("coordinatorEpoch",-1)==epoch&&it.opt("contextAvailable")==true
+        }==true
+    internal fun conversationReaderForWeb():ConversationReadPage? {
+        val page=conversationReader?:return null
+        val pin=page.workRequestAnchor?:return page
+        return if(pin.sourceRevision==conversationSourceRevision&&workRequestWindowCurrent(pin.task,pin.run,pin.epoch))page
+            else page.copy(messages=emptyList(),rowBytes=emptyMap(),bytes=0,error="原工作或原请求已变化。请返回当前工作重新核对。")
+    }
+    internal fun closeOwnerWorkRequestHistory() {
+        openingOwnerWorkRequest?.cancel(); openingOwnerWorkRequest=null
+        if(conversationReader?.workRequestAnchor!=null)closeConversationReader()
+    }
+    internal fun openOwnerWorkRequestHistory(task:String,run:String,epoch:Int,current:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val readerAtRequest=conversationReadSequence
+        val sourceRevision=conversationSourceRevision
+        val store=app.tasks
+        fun original()=current()&&workRequestWindowCurrent(task,run,epoch)&&conversationReader==null&&
+            readerAtRequest==conversationReadSequence&&sourceRevision==conversationSourceRevision&&app.tasks===store
+        check(openingOwnerWorkRequest==null&&original()) { "请在已打开的原管家工作中核对原请求" }
+        val control=dev.pocketengine.core.RunControl()
+        openingOwnerWorkRequest=control
+        try { io.execute {
+            val result=runCatching { store.ownerWorkRequestHistoryForOwner(task,run,epoch,control) }
+            main.post {
+                val sameRead=openingOwnerWorkRequest===control
+                if(sameRead)openingOwnerWorkRequest=null
+                if(!sameRead||!original()){done(null,"原工作窗口或来源已变化，没有打开其他消息。");return@post}
+                result.fold({ native ->
+                    val opened=runCatching {
+                        val conversation=native.getString("conversationId")
+                        val pin=OwnerWorkRequestHistoryAnchor(task,run,epoch,native.getString("requestMessageId"),native.getLong("requestRevision"),sourceRevision)
+                        val page=ConversationReadPage(Math.addExact(conversationReadSequence,1L),conversation,"原请求",null,
+                            anchor=pin.message,workRequestAnchor=pin).accept(native,false)
+                        require(pin.revision>0&&page.initialized&&!page.limited&&!page.hasMore&&page.messages.singleOrNull()?.let {
+                            it.role=="user"&&it.id==pin.message&&it.sourceRevision==pin.revision
+                        }==true) { "这件工作的唯一原请求尚未核对，未打开其他消息。" }
+                        conversationReadSequence=page.window;conversationReader=page
+                        JSONObject().put("window",page.window).put("conversationId",conversation).put("taskId",task)
+                            .put("readOnly",true).put("executionAuthorized",false)
+                    }
+                    opened.fold({ done(it,null) },{ failure -> done(null,message(failure)) })
+                },{ failure -> done(null,message(failure)) })
+            }
+        } } catch (failure: java.util.concurrent.RejectedExecutionException) {
+            openingOwnerWorkRequest=null;done(null,"原请求读取窗口不可用，请返回工作重新核对。")
+        }
+    }
     internal fun openOwnerReportHistory(task:String,run:String,epoch:Int,messageId:String,current:()->Boolean,done:(JSONObject?,String?)->Unit) {
         val readerAtRequest=conversationReadSequence
         val sourceRevision=conversationSourceRevision
@@ -5238,7 +5291,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (!keepConversationReader) closeConversationReader()
         if (requestNavigation) state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1)
     }
-    internal fun closeWebTaskView() { webTaskViewId = null; forgetHeldPhoneImage() }
+    internal fun closeWebTaskView() { closeOwnerWorkRequestHistory(); webTaskViewId = null; forgetHeldPhoneImage() }
     /** Opening a bounded owner view is distinct from accepting a complete result review. */
     internal fun readTaskForOpen(id: String, current: () -> Boolean, complete: (UiTask?, String?) -> Unit) =
         readTaskForWeb(id, false, current, complete)

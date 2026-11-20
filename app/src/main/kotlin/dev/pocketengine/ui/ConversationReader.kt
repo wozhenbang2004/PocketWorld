@@ -55,13 +55,15 @@ internal fun originalDefaultWritesBlocked(row: JSONObject, conversation: String)
 }
 
 internal data class OwnerReportHistoryAnchor(val task:String,val run:String,val epoch:Int,val message:String,val revision:Long,val fingerprint:String)
+internal data class OwnerWorkRequestHistoryAnchor(val task:String,val run:String,val epoch:Int,val message:String,val revision:Long,val sourceRevision:Long)
 
 internal data class ConversationReadPage(
     val window: Long, val conversation: String, val title: String, val readingKey: String?,
     val messages: List<UiMessage> = emptyList(), val cursor: String = "", val hasMore: Boolean = false,
     val loading: Boolean = true, val error: String? = null, val notice: String? = null,
     val rowBytes: Map<String,Int> = emptyMap(), val limited: Boolean = false, val index: Int = 0, val offset: Int = 0, val anchor: String = "", val bytes: Int = 0, val initialized: Boolean = false,
-    val quoteTrail: ConversationQuoteTrail = ConversationQuoteTrail(), val reportAnchor: OwnerReportHistoryAnchor? = null
+    val quoteTrail: ConversationQuoteTrail = ConversationQuoteTrail(), val reportAnchor: OwnerReportHistoryAnchor? = null,
+    val workRequestAnchor: OwnerWorkRequestHistoryAnchor? = null
 ) {
     private companion object { const val MAX_PAGE_BYTES = 1024L * 1024L }
 

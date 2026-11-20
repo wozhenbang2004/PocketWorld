@@ -227,7 +227,7 @@ internal object PocketWebState {
                 .put("provider", draft.provider).put("text", draft.text).put("turnEnded", draft.turnEnded)
                 .put("failed", draft.failed).put("truncated", draft.truncated))
         } })
-        data.put("conversationReader", controller.conversationReader?.let { page -> JSONObject()
+        data.put("conversationReader", controller.conversationReaderForWeb()?.let { page -> JSONObject()
             .put("window", page.window).put("conversation", page.conversation).put("title", page.title)
             .put("messages", JSONArray().also { out -> page.messages.forEach { row ->
                 val view = message(row)
@@ -238,6 +238,10 @@ internal object PocketWebState {
             .put("error", page.error ?: JSONObject.NULL).put("notice", page.notice ?: JSONObject.NULL)
             .put("limited", page.limited).put("index", page.index).put("offset", page.offset).put("anchor", page.anchor)
             .put("originalReportMessageId",page.reportAnchor?.message ?: JSONObject.NULL)
+            .also { result -> page.workRequestAnchor?.let { request ->
+                result.put("workRequest", JSONObject().put("taskId",request.task).put("runId",request.run).put("epoch",request.epoch)
+                    .put("messageId",request.message).put("revision",request.revision))
+            } }
         } ?: JSONObject.NULL)
         data.put("queuedInputsPage", controller.queuedInputsPage?.let { page -> JSONObject()
             .put("window", page.window).put("task", page.task).put("conversation", page.conversation)

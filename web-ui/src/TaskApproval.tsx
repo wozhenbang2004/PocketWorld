@@ -1,4 +1,5 @@
 import {useEffect,useState} from 'react';
+import {dequal} from 'dequal/lite';
 import {Accordion,AccordionItem,Button,CheckboxField} from './forms-library';
 import {PressButton} from './library';
 import {originalTeamApprovalFile,TeamApprovalFileComparison} from './TeamApprovalFileComparison';
@@ -87,6 +88,37 @@ export function DeclinedTeamStart({decision}:{decision:NonNullable<ReturnType<ty
    </AccordionItem>
   </Accordion>
  </section>;
+}
+
+/** Join the saved human decision to its original refusal, not to the task's
+ * general approval flag or a recent progress sentence. Reading changes nothing. */
+export function originalTeamStartDecisionReadback(task:unknown) {
+ const identity=ownerWorkIdentity(task),raw=object(object(task).raw),page=object(raw.historyOperationPage);
+ if(!identity?.runId||raw.origin!=null||raw.contextAvailable!==true||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||
+    raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||raw.ownerWorkTeamsUnavailable===true||
+    !Array.isArray(raw.ownerWorkTeams)||raw.ownerWorkTeams.length!==0||!Array.isArray(raw.approvals)||raw.approvals.length>100||
+    page.format!=='pocketworld.task-audit-page.v1'||page.taskId!==identity.taskId||page.section!=='operations'||
+    page.executionAuthorized!==false||!Array.isArray(page.entries)||page.entries.length>24)return null;
+ const rows=list(raw.approvals).map(object),ordinary=(row:Json)=>{
+  const capability=object(row.capability),args=object(row.arguments),kind=teamStartKind(row.tool,capability,args);
+  return row.runId===identity.runId&&nonEmptyText(row.id)&&nonEmptyText(args.goal)&&kind!==null&&!!originalModelTeamStart(capability,args,kind==='one_time');
+ };
+ const positive=rows.filter(row=>ordinary(row)&&['approved','consumed'].includes(row.state)&&row.policyDecision==null&&row.researchStartOperationId==null);
+ if(positive.length!==1)return null;
+ const approval=positive[0];
+ if(rows.filter(row=>row.id===approval.id).length!==1)return null;
+ const matched=list(page.entries).map(object).filter(row=>{
+  const receipt=object(row.receipt);
+  // The stored decision can move to a newer run. The original refusal keeps
+  // its own run; join by the unchanged decision ID and exact frozen arguments.
+  return row.tool==='teams_start'&&row.state==='receipt'&&row.status==='available'&&row.requiresReconciliation!==true&&
+    nonEmptyText(row.operationId)&&nonEmptyText(row.runId)&&
+    receipt.approvalId===approval.id&&receipt.approvalState==='pending'&&receipt.code==='approval_required'&&receipt.ok===false&&receipt.accepted===false&&
+    (receipt.status==null||receipt.status==='not_dispatched')&&receipt.hostTaskId==null&&receipt.teamRunId==null&&dequal(row.arguments,approval.arguments);
+ });
+ if(matched.length!==1)return null;
+ return {used:approval.state==='consumed',priorRun:matched[0].runId!==identity.runId,
+  anotherPending:rows.some(row=>row.id!==approval.id&&ordinary(row)&&row.state==='pending'&&Number.isSafeInteger(row.expiresAt)&&row.expiresAt>Date.now())};
 }
 
 /** Composes the adopted BoardUI disclosure/checkbox and Josh press button sources.

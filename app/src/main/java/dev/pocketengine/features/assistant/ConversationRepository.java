@@ -1047,6 +1047,31 @@ public final class ConversationRepository {
         control.checkpoint();
         return page.put("reportMessageId",ref.sourceId).put("reportRevision",ref.revision).put("bodyFingerprint",fingerprint);
     }
+    /** A regular reader-shaped page containing only the already proven user row. */
+    public JSONObject windowAtOwnerWorkRequest(JSONObject source,RunControl control)throws Exception{
+        if(!Thread.holdsLock(monitor)||!db.inTransaction()||control==null||control.hasHostRun())
+            throw new SecurityException("原请求须在原工作事务中核对");
+        SourceRef ref=SourceRef.fromJson(source.getJSONObject("sourceRef"));
+        String conversation=source.getString("sourceConversationId"),fingerprint=source.getString("bodyFingerprint");
+        CancellationSignal signal=new CancellationSignal();Runnable cancel=signal::cancel;control.onCancel(cancel);
+        var deadline=DEADLINES.schedule(signal::cancel,500,java.util.concurrent.TimeUnit.MILLISECONDS);
+        try{
+            control.checkpoint();
+            if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||
+                    !activeGeneration().equals(source.opt("generation"))||!fingerprint.matches("sha256:[a-f0-9]{64}")||historyPosition(conversation,ref,fingerprint,signal)<1)
+                throw new SecurityException("原请求已换版、撤回或无法核对，未打开其他消息。");
+            JSONObject row;
+            try{row=historyMessage(conversation,ref.sourceId,signal,65536);}
+            catch(ReadLimited limited){throw new SecurityException("原请求超过本次阅读范围，未打开其他消息。",limited);}
+            if(row==null||!"user".equals(row.opt("role"))||!ref.sourceId.equals(row.opt("id"))||ref.revision!=row.getLong("revision")||
+                    !fingerprint.equals("sha256:"+shaBytes(row.getString("content").getBytes(StandardCharsets.UTF_8))))
+                throw new SecurityException("未取得这件工作的原请求，未打开其他消息。");
+            control.checkpoint();
+            return new JSONObject().put("conversationId",conversation).put("title","原请求").put("messages",new JSONArray().put(row))
+                    .put("messagePage",new JSONObject().put("hasMore",false).put("nextCursor",""))
+                    .put("requestMessageId",ref.sourceId).put("requestRevision",ref.revision);
+        }finally{deadline.cancel(false);control.removeCancelAction(cancel);}
+    }
     public JSONObject importedMessage(String conversation,String record)throws Exception{
         String gen=activeGeneration();try(Cursor row=db.rawQuery("SELECT r.record_version,r.historical_revision,r.at_ms,r.role,r.source_sha,r.byte_offset,r.byte_length,r.fragment_sha,length(f.data) FROM assistant_import_records r JOIN assistant_conversations c ON c.generation=r.generation AND c.conversation_id=r.conversation_id JOIN assistant_import_fragments f ON f.generation=r.generation AND f.source_sha=r.source_sha AND f.byte_offset=r.byte_offset WHERE r.generation=? AND r.conversation_id=? AND r.record_id=? AND r.deleted=0 AND c.deleted=0 LIMIT 1",new String[]{gen,conversation,record})){
             if(!row.moveToFirst()||row.isNull(8))return null;if(row.getLong(6)>MAX_BYTES||row.getLong(8)!=row.getLong(6))throw new IllegalStateException("原件段超过读取预算或长度已变化");

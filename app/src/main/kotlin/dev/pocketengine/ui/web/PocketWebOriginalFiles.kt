@@ -16,6 +16,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Original native decoders supply bounded content to the same React document. No file URI or network route is exposed. */
 internal class PocketWebOriginalFiles(private val context: Context, private val visible: () -> Boolean, private val changed: () -> Unit) {
@@ -62,8 +63,16 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         val lifetime = RunControl()
         @Volatile var session: NativeOriginalFileSession? = null
         @Volatile var error: String? = null
+        @Volatile var pdfRaster: PdfRaster? = null
         var information: JSONObject? = null
         var busy = false
+    }
+    private class PdfRaster(val page: Int, val pages: Int, val searchAvailable: Boolean) {
+        val id = UUID.randomUUID().toString()
+        val started = AtomicBoolean(false)
+        @Volatile var rendered = false
+        fun view(): JSONObject = JSONObject().put("pdfRasterId", id).put("page", page)
+            .put("pages", pages).put("searchAvailable", searchAvailable)
     }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
@@ -123,11 +132,25 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         catch (failure: Exception) { done(null, failure.message); return }
         val command = args.optString("command")
         if (command !in setOf("load", "read", "find", "check")) { done(null, "不支持这项原件操作"); return }
+        if (command == "check" && args.has("displayedPdfRaster")) {
+            val raster = pin.pdfRaster
+            if (raster == null || !raster.rendered || raster.id != args.opt("displayedPdfRaster")) {
+                done(null, "这次 PDF 页面显示未确认"); return
+            }
+            // This display acknowledgement cannot render, read or select another page.
+            pin.pdfRaster = null
+            val confirmed = raster.view()
+            pin.information = confirmed
+            preferences.edit().putInt("${pin.source.identity}.page", raster.page).apply()
+            done(confirmed, null); changed(); return
+        }
+        if (pin.kind == "pdf" && command in setOf("load", "read")) pin.pdfRaster = null
         val request = JSONObject(args.toString())
         pin.busy = true; pin.error = null; changed()
         try { worker.execute {
             var value: JSONObject? = null; var error: String? = null; var sourceUnavailable = false
             var officePosition: Pair<Int,Int>? = null
+            var pdfRaster: PdfRaster? = null
             try {
                 requireCurrent(pin); val type = pin.kind; val identity = pin.source.identity
                 // No temp copy or decoder for a format with no reader. A known binary header in a file named .txt also vetoes text decoding.
@@ -148,9 +171,9 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                     else -> when (type) {
                         "pdf" -> {
                             val pages = original.pdfPages()
-                            val page = request.optInt("page", preferences.getInt("$identity.page", 1)).coerceIn(1, pages.coerceAtLeast(1))
-                            preferences.edit().putInt("$identity.page", page).apply()
-                            JSONObject().put("pages", pages).put("page", page).put("searchAvailable", original.pdfSearchAvailable())
+                            check(pages > 0) { "原 PDF 没有可显示的页面" }
+                            val page = request.optInt("page", preferences.getInt("$identity.page", 1)).coerceIn(1, pages)
+                            PdfRaster(page, pages, original.pdfSearchAvailable()).also { pdfRaster = it }.view()
                         }
                         "image" -> { val image = original.image(); try { JSONObject().put("width", image.originalWidth).put("height", image.originalHeight).put("sampled", image.sampled) } finally { image.bitmap.recycle() } }
                         "audio", "video" -> { original.openMediaDescriptor().use { }; JSONObject().put("localMedia", true) }
@@ -185,7 +208,8 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                 if (pins[pin.id] !== pin || pin.lifetime.isCancelled || !visible() || !pin.accepts(pin.ticket)) { done(null, "原文件窗口已变化，没有换用其他文件"); return@post }
                 if (sourceUnavailable) retire(pin)
                 else if (error == null && command != "find" && command != "check") {
-                    pin.information = value
+                    val raster = pdfRaster
+                    if (raster != null) pin.pdfRaster = raster else pin.information = value
                     officePosition?.let { (unit, chunk) ->
                         val key = pin.source.identity
                         preferences.edit().putInt("$key.unit", unit).putInt("$key.chunk", chunk).apply()
@@ -208,13 +232,18 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         fun blocked(status: Int = 403) = WebResourceResponse("text/plain", "UTF-8", status, "Unavailable", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0)))
         if (method != "GET" || uri.port != -1 || uri.userInfo != null || uri.pathSegments.size != 3 || uri.pathSegments[2] != "content") return blocked()
         val pin = pins[uri.pathSegments[1]] ?: return blocked()
+        val raster = if (pin.kind == "pdf") pin.pdfRaster?.takeIf {
+            uri.queryParameterNames == setOf("page", "raster") && uri.getQueryParameters("page") == listOf(it.page.toString()) &&
+                uri.getQueryParameters("raster") == listOf(it.id) && it.started.compareAndSet(false, true)
+        } ?: return blocked() else null
         return try {
             requireCurrent(pin); val type = pin.kind
             if (type !in setOf("image", "pdf", "audio", "video")) return blocked()
+            if (raster != null) check(pin.pdfRaster === raster) { "原 PDF 显示请求已变化" }
             val original = session(pin)
             val bytes: ByteArray; val mime: String; var rangeStart = 0L; var rangeEnd = -1L; var partial = false
             if (type == "image" || type == "pdf") {
-                val image = if (type == "image") original.image().bitmap else original.pdfPage(uri.getQueryParameter("page")?.toIntOrNull() ?: 1, 1536)
+                val image = if (raster == null) original.image().bitmap else original.pdfPage(raster.page, 1536)
                 try { bytes = ByteArrayOutputStream().use { stream -> check(image.compress(Bitmap.CompressFormat.PNG, 100, stream)); stream.toByteArray() } }
                 finally { image.recycle() }; mime = "image/png"
             } else {
@@ -245,10 +274,28 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                 override fun read(buffer: ByteArray, offset: Int, length: Int): Int { requireCurrent(pin); return super.read(buffer, offset, length) }
                 override fun close() { java.util.Arrays.fill(bytes, 0.toByte()); super.close() }
             }
-            WebResourceResponse(mime, null, if (partial) 206 else 200, if (partial) "Partial Content" else "OK", responseHeaders, stream)
-        } catch (_: Exception) { blocked() }
+            WebResourceResponse(mime, null, if (partial) 206 else 200, if (partial) "Partial Content" else "OK", responseHeaders, stream).also {
+                if (raster != null) {
+                    check(pin.pdfRaster === raster) { "原 PDF 显示请求已变化" }
+                    raster.rendered = true
+                }
+            }
+        } catch (_: Exception) {
+            if (raster != null) {
+                val current = runCatching { requireCurrent(pin); pin.source.requireCurrent(pin.lifetime) }.isSuccess
+                main.post {
+                    if (pins[pin.id] === pin && !pin.lifetime.isCancelled && visible() &&
+                        pin.accepts(pin.ticket) && pin.pdfRaster === raster) {
+                        pin.pdfRaster = null
+                        if (!current) { retire(pin); pin.sourceUnavailable = true }
+                        pin.error = "原 PDF 第 ${raster.page} 页未能显示。"; changed()
+                    }
+                }
+            }
+            blocked()
+        }
     }
-    private fun retire(pin: Pin) { pin.lifetime.cancel(); pin.information = null; runCatching { pin.session?.close() }; pin.session = null; pin.busy = false }
+    private fun retire(pin: Pin) { pin.lifetime.cancel(); pin.information = null; pin.pdfRaster = null; runCatching { pin.session?.close() }; pin.session = null; pin.busy = false }
     fun clear() { main.removeCallbacks(watchdog); val old = pins.values.toList(); pins.clear(); primary = null; comparison = null; old.forEach(::retire) }
     fun close() { closed = true; clear(); worker.shutdownNow() }
 }

@@ -345,6 +345,7 @@ internal class PocketWebBridge(
     fun close() {
         if (closed) return
         closed = true
+        controller.closeOwnerWorkRequestHistory()
         controller.forgetHeldPhoneImage()
         started = false
         cancelStatePublication()
@@ -392,6 +393,7 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        controller.closeOwnerWorkRequestHistory()
         controller.forgetHeldPhoneImage()
         cancelStatePublication()
         projectGoal=null; commandFence.invalidate()
@@ -1024,6 +1026,16 @@ internal class PocketWebBridge(
                     "edit"->controller.editOwnerWorkSupplement(expected,requiredString(args,"key"),requiredLong(args,"revision"),requiredString(args,"text",true),requiredString(args,"mode"),done)
                     "send"->controller.sendOwnerWorkSupplement(expected,requiredString(args,"key"),requiredLong(args,"revision"),requiredString(args,"clientMessageId"),done)
                     "query"->controller.queryOwnerWorkSupplement(expected,requiredString(args,"key"),requiredString(args,"clientMessageId"),done)
+                }
+                return
+            }
+            if (action == "conversation.reader.open" && args.has("taskId")) {
+                checkedPayload(args,setOf("taskId","runId","epoch"))
+                val task=requiredString(args,"taskId");val ticket=captureWindow();val document=documentId
+                fun current()=!closed&&document!=null&&documentId==document&&acceptsWindow(ticket)&&section==null&&taskViewId==task&&controller.webPrivateOwnerVisible()
+                require(current()) { "请在当前原工作下查看原请求" }
+                controller.openOwnerWorkRequestHistory(task,requiredString(args,"runId"),requiredInt(args,"epoch"),::current){value,error->
+                    complete(id,value,error,retainValue=false,replayHint="请在原工作重新打开原请求");publishState()
                 }
                 return
             }

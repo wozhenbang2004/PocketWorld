@@ -3,6 +3,7 @@ import { IconChevronRight } from './icons';
 import { ProgressCircle } from './library';
 import { ownerWorkPresentation, type OwnerWorkTeam, type ReportReconciliationTarget } from './owner-work-presentation';
 import { OwnerWorkTeams } from './OwnerWorkTeams';
+import { originalTeamStartDecisionReadback } from './TaskApproval';
 import './owner-work.css';
 
 /** The Brief/Assets relationship from Affect AgentChat, rendered with the
@@ -13,7 +14,8 @@ export function OwnerWorkFacts({ task, onReport, reportLabel, onReconcile, onTea
   const showHandling = work.waitingForButler || work.waitingForChildren || work.delivered ||
     work.state === 'needs_review' || work.state === 'unavailable' || work.resultState === '来源不可用';
   const showResult = work.resultAvailable || work.resultState === '原结果不可用';
-  if (!showHandling && !showResult && !work.teams.length && !work.teamsUnavailable) return null;
+  const teamDecision = originalTeamStartDecisionReadback(task);
+  if (!showHandling && !showResult && !work.teams.length && !work.teamsUnavailable && !teamDecision) return null;
   return <section className="pw-owner-work-facts" aria-label="成果与管家处理" data-handling={work.state}>
     {showHandling && <div className="pw-owner-work-handling">
       {work.waitingForButler && work.state === 'running' && <ProgressCircle isIndeterminate size="sm" aria-label="管家正在核对结果" />}
@@ -22,6 +24,12 @@ export function OwnerWorkFacts({ task, onReport, reportLabel, onReconcile, onTea
       {work.receiptReconciliation && onReconcile && <Button variant="ghost" trailingIcon={IconChevronRight} onClick={() => onReconcile(work.receiptReconciliation!)}>查看整理记录</Button>}
     </div>}
     {showResult && <p className="pw-owner-work-result-state">{work.resultState}</p>}
+    {teamDecision && <div className="pw-owner-work-handling" role="status" aria-label="原团队启动核对"><div>
+      <strong>{teamDecision.used ? '原分工的批准已被原任务使用' : '原分工的批准已保存'}</strong>
+      <p>{teamDecision.priorRun ? '原操作在等待这次批准时未派发，之后执行轮次已有变化。' : '原操作在等待这次批准时未派发。'}
+        当前还没有核对到团队启动回执。请以这件工作的进展为准，不要重复批准或重新交办。</p>
+      {teamDecision.anotherPending && <p>另一笔待审分工是不同申请，不代表这次批准没保存。</p>}
+    </div></div>}
     <OwnerWorkTeams teams={work.teams} onOpen={onTeam} />
     {work.teamsUnavailable && <p className="pw-owner-work-result-state" role="status">协作进展待读取，请稍后重新打开这件工作。</p>}
   </section>;

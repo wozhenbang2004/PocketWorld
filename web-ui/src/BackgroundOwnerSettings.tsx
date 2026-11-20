@@ -96,8 +96,8 @@ export function BackgroundOwnerSettings({ state, supported, run, registerBack }:
   const { pending, act, feedback, available, windowRevision } = useOwnerAction({ run, state, supported });
   const copy = copies.find(row => row.selectionHandle === selected), access = ownerAppAccess(policy, copy);
   const shownCopies = copies.filter(row => row.selectionHandle === selected || `${row.label || ''} ${row.packageName}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  const { automation, ownerShare } = access;
-  const policyWritable = available && !!copy && access.revision !== null && !owner.appsLoading && !owner.policyBusy && !pending && supported('background.apps.set');
+  const { automation, ownerShare } = access, policyKnown = access.revision !== null;
+  const policyWritable = available && !!copy && policyKnown && !owner.appsLoading && !owner.policyBusy && !pending && supported('background.apps.set');
   const idle = available && !connection.taskOwned && !connection.busy && !pending;
   const canForget = connection.supported && connection.wirelessAvailable && connection.identityPresent && idle && !connection.displayBarrier && supported('background.adb.forget');
   const recoveryAvailable = available && typeof recovery.consent === 'boolean' && Number.isSafeInteger(recovery.revision) && recovery.revision >= 0;
@@ -115,19 +115,19 @@ export function BackgroundOwnerSettings({ state, supported, run, registerBack }:
   const setAccess = (nextAutomation: boolean, nextShare: boolean) => { if (copy && policyWritable) void act('background.apps.set', { selectionHandle: copy.selectionHandle, automation: nextAutomation, ownerShare: nextShare, expectedRevision: access.revision }); };
   return <section className="pw-settings-section pw-background-owner-preferences">
     <Accordion variant="divided">
-      <AccordionItem id="background-app-policy" title="应用分享限制与可选粘贴">
-        <p className="pw-field-hint">按系统可见的应用副本选择。读取、截图、动作和分享均会重新核对当前规则。</p>
+      <AccordionItem id="background-app-policy" title="应用访问与屏幕分享">
+        <p className="pw-field-hint">按系统可见的应用副本核对本机规则。这里的选择不会给某个任务指定应用；主屏和独立屏真正用到应用时仍会核对实际窗口和规则。</p>
         <div className="pw-form-actions">{button('background.apps.read', owner.appsLoading ? '正在读取应用…' : '读取应用副本', owner.appsLoading || owner.policyBusy)}</div>
         {owner.appsComplete === false && <p className="pw-field-hint">部分资料已锁定或安装身份不可读；最多显示 200 个可核对副本。</p>}
         {copies.length > 0 && <><TextField label="搜索应用名称或包名" value={query} onChange={value => setQuery(value.slice(0, 160))} isDisabled={!available || !!pending || owner.appsLoading || owner.policyBusy} />
           <SelectField label="应用副本" value={selected} onChange={setSelected} isDisabled={!available || !!pending || owner.appsLoading || owner.policyBusy || shownCopies.length === 0} hint={shownCopies.length === 0 ? '没有匹配的应用副本。' : undefined} options={shownCopies.map(row => ({ id: row.selectionHandle, label: `${row.label || row.packageName} · ${row.packageName}`, description: `${row.currentProfile ? '当前资料' : '关联资料或分身'} · 资料序号 ${row.profileSerial} · 用户 ${row.userId}` }))} /></>}
         {!owner.appsLoading && copies.length === 0 && <p className="pw-field-hint">尚无可核对的应用副本。</p>}
         {copy && <><p className="pw-field-hint">{copy.packageName} · 版本 {copy.versionCode} · 用户 {copy.userId} · UID {copy.uid}</p>
-          <StretchSwitch label="允许自动读取和操作" checked={automation} disabled={!policyWritable} busy={owner.policyBusy === true || pending === 'background.apps.set'} onChange={next => setAccess(next, ownerShare)} />
+          {policyKnown && <><StretchSwitch label="允许自动读取和操作" checked={automation} disabled={!policyWritable} busy={owner.policyBusy === true || pending === 'background.apps.set'} onChange={next => setAccess(next, ownerShare)} />
           <StretchSwitch label="允许主人屏幕分享" checked={ownerShare} disabled={!policyWritable} busy={owner.policyBusy === true || pending === 'background.apps.set'} onChange={next => setAccess(automation, next)} />
-          <p className="pw-field-hint">分享许可与自动操作相互独立。保存前复核资料、UID、版本和安装签名。</p></>}
+          <p className="pw-field-hint">分享许可与自动操作相互独立。保存前复核资料、UID、版本和安装签名。</p></>}</>}
         {owner.policyMessage && <p role="status" className="pw-field-hint">{owner.policyMessage}</p>}
-        {access.revision === null && <p className="pw-field-hint">应用规则尚不可读，修改暂不可用。</p>}
+        {!policyKnown && <p className="pw-field-hint" role="status">本机应用规则尚未核对。不显示是否允许读取、操作或分享，也不能修改。</p>}
       </AccordionItem>
       <AccordionItem id="background-clipboard" title="兼容粘贴与原记录" description="可选剪贴板输入、原记录核对与复原">
         <StretchSwitch label="允许可恢复的剪贴板粘贴" checked={display.clipboardPasteAllowed === true}

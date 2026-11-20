@@ -3311,6 +3311,29 @@ public final class TaskStore {
             checkOwnerWorkReportRead(control,pause,started);db.setTransactionSuccessful();return page;
         }finally{db.endTransaction();}
     }
+    /** Select only the single user message frozen by ordinary native work admission. */
+    public synchronized JSONObject ownerWorkRequestHistoryForOwner(String id,String run,int epoch,RunControl control)throws Exception {
+        if(id==null||id.isBlank()||id.length()>80||run==null||run.isBlank()||run.length()>80||epoch<1||control==null||control.hasHostRun())
+            throw new SecurityException("原工作身份尚不可核对");
+        control.checkpoint();db.beginTransactionNonExclusive();try{
+            JSONObject work;
+            try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=1048576 THEN document END FROM tasks WHERE task_id=?",new String[]{id})){
+                if(!row.moveToFirst()||row.isNull(0))throw new SecurityException("原工作尚不可读取，请返回原记录核对");
+                work=new JSONObject(row.getString(0));
+            }
+            requirePrivateOwner(work);requireOwnerWorkTuple(work,run,epoch);
+            if(!id.equals(work.getString("id"))||work.has("developmentContext")||work.has("ownerPhoneControl")||work.has("ownerDeviceWork"))
+                throw new SecurityException("请在这件普通管家工作的原目标下核对");
+            JSONArray refs=OwnerWorkTask.require(work).optJSONArray("sourceMessageRefs");
+            if(refs==null||refs.length()!=1)throw new SecurityException(refs!=null&&refs.length()>1?"这件工作依据多条原消息，未替你选定其中一条。":"缺少可核对的原请求，没有打开其他消息。");
+            requireOwnerWorkSources(work);
+            var ref=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
+            JSONObject source=conversationRepository.nativeMessageSource(ref);
+            if(!work.getString("conversationId").equals(source.opt("sourceConversationId")))throw new SecurityException("原请求不属于这件工作的所属对话");
+            JSONObject page=conversationRepository.windowAtOwnerWorkRequest(source,control);
+            control.checkpoint();db.setTransactionSuccessful();return page;
+        }finally{db.endTransaction();}
+    }
     /** Only an exact current receipt can select a report. The report producer may be
      * an older butler run; reading it never requires or reopens that run's grant. */
     private JSONObject ownerWorkReportSelection(String id,String run,int epoch,String message)throws Exception {
