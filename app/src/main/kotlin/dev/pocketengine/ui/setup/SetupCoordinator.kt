@@ -31,6 +31,12 @@ class SetupCoordinator(activity: Activity, private val app: EngineApplication) :
         // revision survived. Keep its receipt, but require a new explicit test for a green status.
         private val processIdentity = UUID.randomUUID().toString()
         private val running = AtomicReference<RunningTest?>()
+
+        /** A captured empty default is distinct from a failed or revoked model selection. */
+        internal fun isUnconfiguredDefault(model: ModelConfig): Boolean =
+            model.provider == ModelConfig.DEFAULT_PROVIDER && model.baseUrl.isEmpty() &&
+                model.model.isEmpty() && model.apiKey.isEmpty() && model.accountModel == null &&
+                model.capabilityBinding == null && model.routePlan == null && !model.catalogEnforced
     }
 
     @Throws(Exception::class)
@@ -172,9 +178,7 @@ class SetupCoordinator(activity: Activity, private val app: EngineApplication) :
             result.put("label", safeMessage(selected.model, selected).take(240))
             // A fresh, identity-free API selection is a next step, not a failed
             // connection. Source/revision checks above still reject revoked data.
-            if (selected.provider == ModelConfig.DEFAULT_PROVIDER && selected.baseUrl.isEmpty() &&
-                selected.model.isEmpty() && selected.apiKey.isEmpty() && selected.accountModel == null &&
-                selected.capabilityBinding == null && selected.routePlan == null && !selected.catalogEnforced) {
+            if (isUnconfiguredDefault(selected)) {
                 lastModelFailure = null
                 return result.put("availability", "unconfigured")
             }

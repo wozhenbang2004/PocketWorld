@@ -204,15 +204,20 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
         '已读取的记录里未查到匹配的确认保存回执，可继续查更早的记录。':
         <>{selection?'这次未查到该源码的确认保存回执。':'这次未查到这份副本的确认保存回执。'} 保存结果不明时，回原构建核对原保存。</>}</p>}
       {shelf?.readLimited&&<p className="pw-reading-note" role="status">有些旧保存记录暂不可核对，未将它们当作可打开的网页。</p>}
-      {!!versions.length&&<ul className="pw-form-flow">{versions.map(v=><li key={v.operationId}>
-        <strong>{selection&&`第 ${v.epoch} 轮 · `}保存版本 {v.versionSequence}</strong> <time dateTime={new Date(v.createdAt).toISOString()}>{new Date(v.createdAt).toLocaleString()}</time>
-        {selection&&(v.epoch!==selection.epoch||v.runId!==selection.runId)&&<p className="pw-field-hint">{v.epoch<selection.epoch?'较早轮次保存的网页':'另一轮保存的网页'}，不是进入时所选轮次的结果。</p>}
-        <p className="pw-field-hint">源码 {v.sourceDigest.slice(0,10)} · 固定包 {v.archiveSha256.slice(0,10)}</p>
-        <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={!canPreview||versionBusy||!active} onClick={event=>open(v,event.currentTarget)}>
-          {busy===v.operationId?'正在核对原网页…':'打开这版网页'}</Button>
-          {!selection&&openWork&&<Button variant="ghost" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
-            ()=>!current.current.selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>}</div>
-      </li>)}</ul>}
+      {!!versions.length&&<ul className="pw-form-flow">{versions.map(v=>{
+        const savedAt=new Date(v.createdAt), when=savedAt.toLocaleString();
+        const version=`${selection?`第 ${v.epoch} 轮 · `:''}保存版本 ${v.versionSequence}`;
+        const action=busy===v.operationId?'正在核对原网页…':'打开这版网页';
+        return <li key={v.operationId}>
+          <strong>{version}</strong> <time dateTime={savedAt.toISOString()}>{when}</time>
+          {selection&&(v.epoch!==selection.epoch||v.runId!==selection.runId)&&<p className="pw-field-hint">{v.epoch<selection.epoch?'较早轮次保存的网页':'另一轮保存的网页'}，不是进入时所选轮次的结果。</p>}
+          <p className="pw-field-hint">源码 {v.sourceDigest.slice(0,10)} · 固定包 {v.archiveSha256.slice(0,10)}</p>
+          <div className="pw-form-actions"><Button variant="secondary" size="small" aria-label={`${action}，${version}，${when}`}
+            disabled={!canPreview||versionBusy||!active} onClick={event=>open(v,event.currentTarget)}>{action}</Button>
+            {!selection&&openWork&&<Button variant="ghost" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
+              ()=>!current.current.selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>}</div>
+        </li>;
+      })}</ul>}
       {error&&<p role="alert">{error}</p>}
       <div className="pw-form-actions">
         {shelf?.hasMore&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read(shelf.checkoutId,shelf.nextCursor)}>更多原版本</Button>}

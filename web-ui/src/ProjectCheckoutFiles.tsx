@@ -21,7 +21,8 @@ type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: Che
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry;
-  onClose: (saved?: CheckoutSavedPosition) => void; onPrepareBuild?: (saved: CheckoutSaveForBuild) => Promise<void>;
+  onClose: (saved?: CheckoutSavedPosition) => void;
+  onPrepareBuild?: (saved: CheckoutSaveForBuild) => Promise<void>; prepareBuildAfterPath?: string;
   registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
 const windowKey = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
@@ -55,7 +56,7 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onPrepareBuild, registerBack, sourceMember, hostFile, resumeSaved, firstEntry }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onPrepareBuild, prepareBuildAfterPath, registerBack, sourceMember, hostFile, resumeSaved, firstEntry }: Props) {
   const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
@@ -79,6 +80,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const recentSave = savedEdit?.filesHandle===handle.current ? savedEdit : null;
   const showingSavedFile = !!recentSave && !!file && !file.dirty && !file.conflict && !file.saveUnknown &&
     orphan===null && !blockedEdit.current && file.path===recentSave.path && file.latest?.expectedHash===recentSave.savedHash && text===recentSave.after;
+  const canCheckSavedBuild = !!onPrepareBuild && (!prepareBuildAfterPath || recentSave?.path===prepareBuildAfterPath);
   const keyFor = (path: string) => `${projectId}|${checkoutId}|${path}`;
   const live = (sequence: number) => alive.current && generation.current === sequence && originalWindow.current === windowKey() && !document.hidden;
   const apply = (value: Data, body = true) => {
@@ -203,7 +205,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const position = { projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret };
     if (!next) { latest.current.onClose(position); return; }
     const prepare = latest.current.onPrepareBuild;
-    if (!prepare) return;
+    if (!prepare || !canCheckSavedBuild) return;
     // Keep the ordinary editor and its exact receipt alive until the read-only
     // source comparison is back. Failure stays here instead of hiding the edit.
     const sequence = generation.current, token = {};
@@ -357,8 +359,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {choice ? <div role="region" aria-label="处理文件冲突"><p>{choice === 'keep_mine' ? '把当前副本作为新基线，保留我的草稿文字？下一次保存才会改写文件。' : '放弃这份草稿，采用刚读取的副本内容？不会写入文件。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => setChoice(null)}>返回</Button><Button disabled={locked} onClick={() => void invoke('resolve', { fileHandle: file.fileHandle, revision: file.revision, choice }, value => { interfaceDrafts.delete(keyFor(file.path)); setChoice(null); apply(value); })}>确认这个选择</Button></div></div> : <div className="pw-form-actions">
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
-          {showingSavedFile ? <Button disabled={locked} onClick={() => close(onPrepareBuild ? 'prepare-build' : undefined)}>
-            {checkingSavedSource ? '正在核对这次保存…' : onPrepareBuild ? '接下来：准备构建' : '已保存，回到项目工作区'}
+          {showingSavedFile ? <Button disabled={locked} onClick={() => close(canCheckSavedBuild ? 'prepare-build' : undefined)}>
+            {checkingSavedSource ? '正在核对这次保存…' : canCheckSavedBuild ? '接下来：核对构建条件' : '已保存，回到项目工作区'}
           </Button> :
             <Button disabled={locked || orphan !== null || blockedEdit.current || !file.dirty || file.conflict || file.saveUnknown} onClick={saveFile}>保存到这个副本</Button>}
         </div>}

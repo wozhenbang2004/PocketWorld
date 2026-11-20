@@ -143,7 +143,7 @@ import {PhonePauseInstruction,isPrivateLocalPhone,interruptedPrivatePhone,Interr
 import {PhoneMainOwnerStep,mainPhoneStep} from './PhoneMainOwnerStep';
 import {PhoneServiceRecovery} from './PhoneServiceRecovery';
 import {privatePhoneSurface,phoneSurfaceLabel,sameDisplayedPause,type DisplayedPhonePause} from './private-phone-surface';
-import {ConversationPreparationActions,conversationNext,conversationPreparation,conversationPreparationKey,type ConversationNext,type ConversationPreparation,ButlerPreparationEntries,ButlerPreparationDetail,type ButlerPreparationTarget,type OriginalProjectDraft,type PhonePreparationSetupPin} from './ButlerPreparations';
+import {ConversationPreparationActions,conversationNext,conversationPreparation,conversationPreparationKey,type ConversationNext,type ConversationPreparation,ButlerPreparationEntries,ButlerPreparationDetail,type ButlerPreparationTarget,type OriginalProjectDraft,type PhonePreparationSetupPin,type ProjectModelPreparationPin,sameProjectModelRevision} from './ButlerPreparations';
 import {ownerWorkContinuationNote,ownerWorkContinuationReply,ownerWorkPendingTeamStart,type WorkControlFeedback} from './owner-work-continuation';
 import {backgroundConversationWork,conversationActivityLabel,conversationInlineAttention,conversationTaskCompact,conversationWorkActionLabel,foregroundConversationTurn,messageReplyContext,messageTaskResult,ownerWorkIdentity,privateTaskConversationId,originatingRequestConversation,workIdentityKey,type ReplyContext,type TaskResult,type WorkIdentity} from './conversation-work';
 import './conversation-work.css';
@@ -178,12 +178,18 @@ type ChatWorkTaskOpen={returnTo:ChatWorkReturn;beforeTaskRequest:number;navigati
 type ChatDrawerReturn=ChatWorkReturn&{taskId:string;navigation:number;resumeRevision:number};
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
-type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
+const sameProjectModelChat=(input:ModelSetupInput,source:ChatWorkReturn|undefined,live:ReturnType<typeof bridge.getState>)=>{
+ if(document.hidden||!source||source.conversation!==input.conversation||source.document!==input.document||
+    !sameModelSetupInput(input,live,bridge.getDocumentEpoch()))return false;
+ const rows=asArray<Message>(live.state.messages).filter(row=>row.id===source.message);
+ return rows.length===1&&rows[0].role==='user'&&rows[0].quoteAvailable===true&&rows[0].sourceRevision===source.revision;
+};
 const sameWorkspaceTask=(original:NonNullable<WorkspaceOrigin['task']>,tasks:unknown)=>{
  const {id,expected,fixedArchive}=original;
  if(!expected)return !fixedArchive;
@@ -916,14 +922,15 @@ export default function App(){
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
   const phonePlace=origin.phonePlace?returnToPreparedPhoneDraft(origin.phonePlace):undefined;
   if(origin.phonePlace&&!phonePlace){setLocalError('原手机目标已变化或尚未恢复，没有切换到其他草稿。');return;}
-  const source=origin.drawerChat,savedHost=origin.savedHostPreparation&&origin.chatWork,modelInput=origin.modelInput,proposal=origin.phonePreparation;
+  const source=origin.drawerChat,savedHost=origin.savedHostPreparation&&origin.chatWork,modelInput=origin.modelInput,projectModelInput=origin.projectModelInput,proposal=origin.phonePreparation;
   const sourceDocument=savedHost?documentEpoch:phonePlace?.documentEpoch??source?.documentEpoch;
-  const guarded=!!(source||modelInput||phonePlace||proposal||origin.savedHostPreparation||archiveChatCurrent);
+  const guarded=!!(source||modelInput||projectModelInput||phonePlace||proposal||origin.savedHostPreparation||archiveChatCurrent);
   const sameProposalOwner=()=>!proposal||!document.hidden&&phonePreparationOwner()===proposal.owner;
   // Opening the work directory never changes the native composer. Do not select,
   // overwrite or resurrect a conversation if another surface has replaced that owner.
   const sameChat=(arrived=false)=>{const live=bridge.getState();
    if(archiveChatCurrent?.(live,arrived)===false)return false;
+   if(projectModelInput&&!sameProjectModelChat(projectModelInput,origin.chatWork,live))return false;
    // A retired host review never returns. Only the same saved message and its
    // still-selected editor may be shown through a newly issued document token.
    if(origin.savedHostPreparation&&(!savedHost||!source?.draftKey||live.composer?.ready!==true||
@@ -935,7 +942,7 @@ export default function App(){
    if(!keepOrigin)relatedOrigin.current=origin.parent||null;
    if(origin.settingsDirectory)setSettingsRestore({...origin.settingsDirectory,revision:navigationWindow.current});
   },{keepOrigin:true,...(guarded?{stillCurrent:sameChat}:{})});
-  if(!closed&&guarded&&!sameChat()&&navigationWindow.current===navigation&&!document.hidden){setLocalError(archiveChatCurrent?originalArchiveChatUnavailable:origin.savedHostPreparation?
+  if(!closed&&guarded&&!sameChat()&&navigationWindow.current===navigation&&!document.hidden){setLocalError(archiveChatCurrent||projectModelInput?originalArchiveChatUnavailable:origin.savedHostPreparation?
    '无法核对保存的原话与输入窗口，没有打开其他准备。可从导航手动查看原对话。':'原对话或草稿已切换。未打开其他输入，请从导航重新选择原对话。');return;}
   const current=()=>navigationWindow.current===navigation+1&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden&&sameChat(true);
   if(!closed||!current())return;
@@ -988,7 +995,7 @@ export default function App(){
  };
  const navigateFromSetup=(destination:SetupDestination)=>{const target={connections:'model-settings',background:'background',appearance:'phone:appearance',local:'local'}[destination];void navigate(target,undefined,{keepOrigin:true});setupReturnPending.current=true;};
  const closeSetup=()=>{setupReturnPending.current=false;void restoreWorkspace(setupOrigin.current,true);};
- const returnFromSecondary=()=>{if(route==='profile'){returnFromProfile();return;}if(setupReturnPending.current){void navigate('setup',undefined,{keepOrigin:true});return;}const origin=relatedOrigin.current;if(origin){if(returnOriginalArchiveChat(origin))return;if(!origin.reviewedSkill&&!origin.modelInput&&!origin.savedHostPreparation)relatedOrigin.current=null;void restoreWorkspace(origin);return;}void navigate('butler');};
+ const returnFromSecondary=()=>{if(route==='profile'){returnFromProfile();return;}if(setupReturnPending.current){void navigate('setup',undefined,{keepOrigin:true});return;}const origin=relatedOrigin.current;if(origin){if(returnOriginalArchiveChat(origin))return;if(!origin.reviewedSkill&&!origin.modelInput&&!origin.projectModelInput&&!origin.savedHostPreparation)relatedOrigin.current=null;void restoreWorkspace(origin);return;}void navigate('butler');};
  // Opening the chooser from background preparation is navigation, not a mode change.
  const phoneSettingsOrigin=setupReturnPending.current?setupOrigin.current:relatedOrigin.current;
  const phoneSettingsPin=state.backgroundSetupOpen===true&&!taskOpen&&!phoneSettingsOrigin?.task&&!phoneSettingsOrigin?.phonePreparation&&can('phone.prepare')&&can('composer.intent')
@@ -3444,6 +3451,25 @@ export default function App(){
  const preparationInline=!!preparationTarget&&!taskOpen&&route==='chat'&&preparationTarget.sourceConversationId===state.conversationId;
  const preparationInlineAnchor=preparationInline&&preparationTarget?[...anchoredPreparations].find(([,rows])=>
    rows.some(row=>conversationPreparationKey(row)===conversationPreparationKey(preparationTarget)))?.[0]:undefined;
+ const modelPreparation=preparationInlineAnchor!==undefined&&preparationTarget?anchoredPreparations.get(preparationInlineAnchor)?.find(row=>
+  row.kind==='project'&&row.canPrepare&&row.visibleOwnerRequest&&conversationPreparationKey(row)===conversationPreparationKey(preparationTarget)):undefined;
+ const modelPreparationTrigger=inlinePreparationOrigin.current?.trigger,modelPreparationRequest=modelPreparation?.visibleOwnerRequest;
+ const projectModelInput=modelPreparationRequest?modelSetupInput(bridge.getState(),bridge.getDocumentEpoch()):null;
+ const openProjectProposalModel=modelPreparation&&modelPreparationRequest&&projectModelInput&&modelPreparationTrigger instanceof HTMLButtonElement&&
+  modelPreparationTrigger.closest<HTMLElement>('article[data-message-id]')?.dataset.messageId===modelPreparationRequest.messageId&&
+  can('connections.enter')&&can('connections.leave')?(pin:ProjectModelPreparationPin)=>{
+  const navigation=navigationWindow.current,scroller=scroll.current;
+  if(!scroller||!modelPreparationTrigger.isConnected||conversationPreparationKey(pin)!==conversationPreparationKey(modelPreparation)||
+     pin.sourceRunId!==modelPreparation.sourceRunId||pin.sourceEpoch!==modelPreparation.sourceEpoch)return;
+  const source:ChatWorkReturn={document:projectModelInput.document,conversation:pin.sourceConversationId,message:modelPreparationRequest.messageId,revision:modelPreparationRequest.revision,
+   top:scroller.scrollTop,offset:0,trigger:modelPreparationTrigger};
+  const stillCurrent=()=>{const now=bridge.getState();return navigationWindow.current===navigation&&!obj(now.view).section&&
+   sameProjectModelChat(projectModelInput,source,now)&&sameProjectModelRevision(pin,now.state)&&
+   now.capabilities.commands.includes('connections.enter')&&now.capabilities.commands.includes('connections.leave');};
+  // Settings returns to the same original message, not to a retained review or an automatic retry.
+  const origin:WorkspaceOrigin={...captureWorkspaceOrigin(),label:'返回原话',focus:null,focusKey:undefined,chatWork:source,projectModelInput};
+  void navigate('model-settings',()=>{relatedOrigin.current=origin},{keepOrigin:true,stillCurrent});
+ }:undefined;
  useLayoutEffect(()=>{
   const origin=inlinePreparationOrigin.current;
   if(preparationTarget||!origin)return;
@@ -3480,6 +3506,7 @@ export default function App(){
   onOpenTask={(id, original)=>openTask(id,'overview',false,undefined,undefined,original)}
   onOpenPhoneRun={original=>openTask(original.taskId,'overview',false,undefined,undefined,original)}
   onOpenPhoneReport={setMessageOriginTarget}
+  onPrepareModel={openProjectProposalModel}
   onConversation={!preparationInline&&can('conversation.select')&&!state.chatSubmitting?selectConversation:undefined}
   onSetup={can('setup.read')?(kind,pin)=>{
    if(kind==='phone'&&pin)openPhoneProposalSetup(preparationTarget,pin);

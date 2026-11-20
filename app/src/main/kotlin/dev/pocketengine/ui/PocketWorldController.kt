@@ -800,11 +800,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun refreshCloudWorkspaceForWeb() { native("getFeatures") }
     internal fun butlerPreparationPresentationForWeb() = app.getSharedPreferences("butler_preparation_presentation", android.content.Context.MODE_PRIVATE)
     internal fun projectDevelopmentPresentationForWeb() = app.getSharedPreferences("project_development_presentation", android.content.Context.MODE_PRIVATE)
-    internal fun projectDevelopmentModelForWeb(forSavedRevision:Boolean=false): JSONObject {
+    internal fun projectDevelopmentModelForWeb(forSavedRevision:Boolean=false, reportUnconfiguredDefault:Boolean=false): JSONObject {
         val model = app.captureConversationModel("", "")
         val configured = runCatching { dev.pocketengine.store.SettingsStore.validate(model); dev.pocketengine.runtime.ModelGateway.validate(model) }.isSuccess
         return JSONObject().put("configured", configured).put("label", model.model).put("provider", model.provider).put("route", if (model.usesAccount()) "account" else "api_key").also {
             if(forSavedRevision && configured)it.put("reviewPin",dev.pocketengine.features.local.project.OwnerRevisionRecipient.pin(model)).put("destination",dev.pocketengine.features.local.project.OwnerRevisionRecipient.destination(model))
+            if(reportUnconfiguredDefault && !configured && dev.pocketengine.ui.setup.SetupCoordinator.isUnconfiguredDefault(model))
+                it.put("defaultUnconfigured", true)
         }
     }
     /** Same original project/Assistant admission. A closed queued window is

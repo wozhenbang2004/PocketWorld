@@ -15,6 +15,9 @@ type PhoneMode = 'background' | 'main_screen';
 export type PhonePreparationSetupPin = { digest: string; mode: PhoneMode };
 export type ButlerPreparationTarget = { sourceTaskId: string; proposalId: string; sourceConversationId: string;
   fromPhoneSetup?: PhonePreparationSetupPin & { taskView: string; navigation: number; owner: string } };
+export type ProjectModelPreparationPin = Pick<ButlerPreparationTarget,'sourceTaskId'|'sourceConversationId'|'proposalId'> & {
+  sourceRunId:string; sourceEpoch:number; modelSelectionRevision:number;
+};
 export type OriginalProjectDraft = { taskId:string; runId:string; epoch:number; draftId:string };
 type OriginalTask = { taskId:string; runId:string; epoch:number; status:string };
 type ChatBuild = OriginalTask & {ordinal:number; settledBuild?:true; decision?:'dependencies'|'build'|'collect'; approvalId?:string; packageOperationId?:string};
@@ -134,6 +137,8 @@ const failureText = (value: unknown) => value instanceof Error ? value.message :
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const keyOf = (row: Data) => `${row.sourceTaskId}:${row.proposalId}`;
 const preparation = (value: Data, target?: ButlerPreparationTarget) => value && typeof value.sourceTaskId === 'string' && typeof value.proposalId === 'string' && typeof value.sourceConversationId === 'string' && ['phone', 'project'].includes(value.kind) && value.executionAuthorized === false && (!target || keyOf(value) === keyOf(target) && value.sourceConversationId === target.sourceConversationId);
+export const sameProjectModelRevision = (pin:ProjectModelPreparationPin, state:Data) =>
+  state.modelSelectionBusy === false && state.modelSelectionRevision === pin.modelSelectionRevision;
 const stateLabels: Record<string, string> = { proposed: '待你核对', prepared: '已建立原任务', started: '已关联执行', dismissed: '已取消提案', unavailable: '原来源不可用' };
 const targetStateLabels: Record<string, string> = { queued: '等待执行', preparing: '准备执行', running: '正在执行', verifying: '核对结果中', needs_confirmation: '结果等你核对', awaiting_user: '等你补充', waiting_approval: '等待授权', paused: '已暂停', interrupted: '已中断', completed: '执行已完成', failed: '本次未完成', cancelled: '已停止', stopping: '正在停止' };
 const contractOf = (value: Data | null) => value?.contract && typeof value.contract.goal === 'string' && ['constraints', 'deliverable', 'completionCriteria'].every(key => value.contract[key] === undefined || typeof value.contract[key] === 'string') ? value.contract as { goal: string; constraints?: string; deliverable?: string; completionCriteria?: string } : undefined;
@@ -214,9 +219,10 @@ const projectMethods = {
 
 /** Reuses the existing work goal, project selectors, PermissionReview and Vaul
  * object page. Only the native typed proposal can enter the original admission. */
-export function ButlerPreparationDetail({ target, projects, can, run, onClose, onOpenTask, onOpenPhoneRun, onOpenPhoneReport, onConversation, onSetup, registerBack, registerBeforeLeave, inline = false }: Shared & {
+export function ButlerPreparationDetail({ target, projects, can, run, onClose, onOpenTask, onOpenPhoneRun, onOpenPhoneReport, onConversation, onSetup, onPrepareModel, registerBack, registerBeforeLeave, inline = false }: Shared & {
   target: ButlerPreparationTarget; projects: { id: string; name: string }[]; onClose: () => void; onOpenTask: (id: string, original?: {runId: string; epoch: number}) => void;
   onConversation?: (id: string) => void; onSetup?: (kind: 'phone' | 'project', phone?: PhonePreparationSetupPin) => void; registerBack: (handler: (() => boolean) | null) => void;
+  onPrepareModel?: (pin:ProjectModelPreparationPin) => void;
   onOpenPhoneRun?: (origin:ProposalPhoneRun)=>void; onOpenPhoneReport?: (target:PhoneReportTarget)=>void;
   registerBeforeLeave?: (handler: (() => Promise<boolean>) | null) => void;
   inline?: boolean;
@@ -227,6 +233,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   const [usingRevision,useRevision]=useState(false),[versions,setVersions]=useState<RevisionChoice[]>([]),[picked,pick]=useState<RevisionChoice|null>(null);
   const [versionsCursor,pageVersions]=useState(''),[versionsRead,didReadVersions]=useState(false);
   const [view, setView] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [capabilities, setCapabilities] = useState<Data[]>([]);
+  const [modelBlock,setModelBlock] = useState<(ProjectModelPreparationPin & {projectId:string;checkoutId:string;window:string}) | null>(null);
   const [choices, setChoices] = useState<Choices>(() => choicesOf({})), [inspection, setInspection] = useState<Data | null>(null), [copy, setCopy] = useState<Data | null>(null), [receipt, setReceipt] = useState<Data | null>(null);
   const [working, setWorking] = useState(''), [saving, setSaving] = useState(false), [error, setError] = useState(''), [draftError, setDraftError] = useState(''), [stale, setStale] = useState(false), [saved, setSaved] = useState(true);
   const busy=!!working;
@@ -259,7 +266,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
     }
     verifyPhoneReturn.current = undefined;
     setVersions([]);pick(null);pageVersions('');didReadVersions(false);
-    handle.current = value.viewHandle; setView(value); setStale(false); setReview(null); setInspection(null); setCapabilities([]);
+    handle.current = value.viewHandle; setView(value); setStale(false); setReview(null); setModelBlock(null); setInspection(null); setCapabilities([]);
     baseline.current = encodeChoices(nativeChoices, value.kind);
     needsSave.current = value.preparationDraft?.saved === false;
     if (!touched.current) { choicesRef.current = nativeChoices; setChoices(nativeChoices); }
@@ -272,7 +279,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   const closeNative = (original: string) => { if (original) void latest.current.run('butler.preparation.close', { viewHandle: original }).catch(() => {}); };
   useEffect(() => {
     alive.current = true; let window = ownerWindow();
-    const retire = () => { generation.current++; const original = handle.current; handle.current = ''; closeNative(original); if (alive.current) { setStale(true); setReview(null); setInspection(null); setCapabilities([]); setVersions([]);pick(null);pageVersions('');didReadVersions(false); } };
+    const retire = () => { generation.current++; const original = handle.current; handle.current = ''; closeNative(original); if (alive.current) { setStale(true); setReview(null); setModelBlock(null); setInspection(null); setCapabilities([]); setVersions([]);pick(null);pageVersions('');didReadVersions(false); } };
     const inspect = () => { const next = ownerWindow(); if (next !== window || document.hidden) { window = next; retire(); } };
     const unsubscribe = bridge.subscribe(inspect); document.addEventListener('visibilitychange', inspect);
     void readRef.current();
@@ -313,7 +320,7 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
     });
     return () => registerBeforeLeave(null);
   }, [inline, registerBeforeLeave]);
-  const edit = (next: Choices) => { if (entered.current || reviewRef.current) return; touched.current = true; if (choicesRef.current.projectId !== next.projectId) setInspection(null); choicesRef.current = next; setChoices(next); setSaved(false); setReview(null); setError(''); if (!paused.current) void flush().catch(() => {}); };
+  const edit = (next: Choices) => { if (entered.current || reviewRef.current) return; touched.current = true; if (choicesRef.current.projectId !== next.projectId) setInspection(null); choicesRef.current = next; setChoices(next); setSaved(false); setReview(null); setModelBlock(null); setError(''); if (!paused.current) void flush().catch(() => {}); };
   const close = async (after?: () => void, stillCurrent?: () => boolean) => {
     if (entered.current) return;
     try { await flush(); if (stillCurrent && !stillCurrent()) return;
@@ -361,10 +368,27 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
     setVersions(prior=>{const unique=new Map<string,RevisionChoice>();for(const row of [...(more?prior:[]),...v.entries])unique.set(pinKey(row.ownerRevision),row);return [...unique.values()]});pageVersions(v.nextCursor);didReadVersions(true);
   }));
   const switchProjectSource=(value:string)=>{
-    if(entered.current||reviewRef.current)return;setReview(null);setError('');setDraftOnly(value!=='project');useRevision(value==='saved');pick(null);setVersions([]);pageVersions('');didReadVersions(false);
+    if(entered.current||reviewRef.current)return;setReview(null);setModelBlock(null);setError('');setDraftOnly(value!=='project');useRevision(value==='saved');pick(null);setVersions([]);pageVersions('');didReadVersions(false);
     if(value==='saved')listVersions();
   };
-  const prepareReview = () => void afterSave(() => invoke(view?.kind === 'phone' ? 'butler.preparation.phone.review' : 'butler.preparation.project.review', view?.kind === 'phone' ? { mode: choicesRef.current.mode } : usingRevision ? {draftOnly:true,sourceKind:'owner_saved_revision',ownerRevision:picked?.ownerRevision} : { projectId: choicesRef.current.projectId, checkoutId: choicesRef.current.checkoutId, draftOnly }, value => {
+  const prepareReview = () => void afterSave(() => {
+    setModelBlock(null);
+    return invoke(view?.kind === 'phone' ? 'butler.preparation.phone.review' : 'butler.preparation.project.review', view?.kind === 'phone' ? { mode: choicesRef.current.mode } : usingRevision ? {draftOnly:true,sourceKind:'owner_saved_revision',ownerRevision:picked?.ownerRevision} : { projectId: choicesRef.current.projectId, checkoutId: choicesRef.current.checkoutId, draftOnly }, value => {
+    if(value?.status==='blocked'&&value.prerequisite==='default_model_unconfigured'){
+      const original=viewRef.current,{projectId,checkoutId}=choicesRef.current;
+      if(!inline)throw new Error('模型尚未就绪，提案和项目选择仍可保留');
+      if(!draftOnly||usingRevision||original?.kind!=='project'||original.state!=='proposed'||original.available!==true||original.canPrepare!==true||
+         value.kind!=='project'||value.draftOnly!==true||value.executionAuthorized!==false||value.reviewHandle!==undefined||
+         value.sourceTaskId!==target.sourceTaskId||value.proposalId!==target.proposalId||value.sourceConversationId!==target.sourceConversationId||
+         value.sourceRunId!==original.sourceRunId||!identifier(value.sourceRunId)||value.sourceEpoch!==original.sourceEpoch||!positive(value.sourceEpoch)||
+         value.reviewDigest!==original.reviewDigest||typeof value.reviewDigest!=='string'||!/^[a-f0-9]{64}$/.test(value.reviewDigest)||
+         value.projectId!==projectId||value.checkoutId!==checkoutId||!identifier(projectId)||!identifier(checkoutId)||
+         !Number.isSafeInteger(value.modelSelectionRevision)||value.modelSelectionRevision<0)
+        throw new Error('未能核对这次改稿的模型条件，没有开始工作。');
+      setModelBlock({sourceTaskId:target.sourceTaskId,proposalId:target.proposalId,sourceConversationId:target.sourceConversationId,
+        sourceRunId:value.sourceRunId,sourceEpoch:value.sourceEpoch,projectId,checkoutId,modelSelectionRevision:value.modelSelectionRevision,window:ownerWindow()});
+      return;
+    }
     if (!text(value.reviewHandle) || value.goal !== contractOf(viewRef.current)?.goal || !contractOf(value)) throw new Error('审阅没有完整对应原提案目标，请重新核对。');
     if (viewRef.current?.kind === 'phone' && !reviewedPhone(value,viewRef.current,target,choicesRef.current.mode)) throw new Error('原目标、手机条件和执行范围没有一起核实。没有提交，请重新核对。');
     if(viewRef.current?.kind==='project'){
@@ -373,7 +397,8 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
       if(!usingRevision&&value.source?.ownerRevision)throw new Error('收到与本次选择不同的起始件。');
     }
     setReview(viewRef.current?.kind==='phone'?{...value,documentEpoch:bridge.getDocumentEpoch(),deadline:performance.now()+value.expiresInMs}:value);
-  }));
+    });
+  });
   const acceptReceipt = (value: Data, original?: Data | null) => {
     if (preparation(value, target)) { setView(previous => ({ ...previous, ...value })); setReceipt(null); return; }
     const expected = original || receiptRef.current;
@@ -394,6 +419,13 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
   };
   const blocked = busy || saving || stale || !view || !handle.current, unresolved = !!receipt && ['pending', 'unknown', 'accepted'].includes(receipt.status);
   const canPrepare = !blocked && view?.canPrepare === true && !unresolved && !review && can('butler.preparation.draft');
+  const missingDefaultModel = canPrepare && saved && draftOnly && !usingRevision && modelBlock?.projectId===choices.projectId &&
+    modelBlock.checkoutId===choices.checkoutId && modelBlock.window===ownerWindow() && sameProjectModelRevision(modelBlock,bridge.getState().state) ? modelBlock : null;
+  const openDefaultModel = () => {
+    const pin=missingDefaultModel;
+    if(pin&&!entered.current&&!document.hidden&&pin.window===ownerWindow()&&choicesRef.current.projectId===pin.projectId&&
+       choicesRef.current.checkoutId===pin.checkoutId&&sameProjectModelRevision(pin,bridge.getState().state))onPrepareModel?.(pin);
+  };
   const checkouts = rows(inspection?.checkouts), contract = contractOf(view), targetTaskId = text(receipt?.taskId) || text(view?.target?.taskId);
   const phoneShown=review&&view?.kind==='phone'?reviewedPhone(review,view,target,choices.mode):null;
   const phoneHistory=view?.kind==='phone'&&(!!receipt||!!view.target?.taskId);
@@ -463,7 +495,10 @@ export function ButlerPreparationDetail({ target, projects, can, run, onClose, o
               {copy?.projectId === choices.projectId && <p className="pw-muted" role="status">{copy.found === true ? '原私人副本已准备，请重新读取副本列表后选择。' : copy.partial === true ? '原副本准备中断，已有文件保留。请在原项目入口核对。' : copy.queryRequired ? '原副本准备已有记录，请先查询原请求。' : '这次查询没有读到完整副本，未重复创建。'}</p>}</>}
             </>}
             {!saved && <Button variant="secondary" disabled={blocked} onClick={() => void flush(true).catch(() => {})}>保存保留的选择</Button>}
-            <div className="pw-preparation-start"><Button variant="primary" disabled={!canPrepare || view.kind === 'project' && (usingRevision?!picked:!choices.projectId || !choices.checkoutId)} onClick={prepareReview}>核对{view.kind === 'phone' ? '手机范围' : draftOnly ? '改稿范围' : '源码与模型'}</Button><span role="status">{usingRevision?'本次选稿不会自动发给模型':saving ? '正在保存选择…' : saved ? '准备选择已保留' : '本页选择尚未确认保存'}</span></div>
+            <div className="pw-preparation-start">{missingDefaultModel && onPrepareModel ?
+              <Button variant="primary" onClick={openDefaultModel}>设置默认模型</Button> :
+              <Button variant="primary" disabled={!canPrepare || view.kind === 'project' && (usingRevision?!picked:!choices.projectId || !choices.checkoutId)} onClick={prepareReview}>核对{view.kind === 'phone' ? '手机范围' : draftOnly ? '改稿范围' : '源码与模型'}</Button>}
+              <span role="status">{missingDefaultModel ? '这次改稿需要默认模型，尚未开始。' : usingRevision?'本次选稿不会自动发给模型':saving ? '正在保存选择…' : saved ? '准备选择已保留' : '本页选择尚未确认保存'}</span></div>
             <Accordion variant="divided">{view.kind==='project'&&<AccordionItem id="project-method" title="其他做法">
               <RadioOptions label="本次怎么做" value={projectMethod.id} isDisabled={!canPrepare}
                 options={[projectMethods.draft,...(can('butler.preparation.project.savedRevisions')?[projectMethods.saved]:[]),projectMethods.project]}

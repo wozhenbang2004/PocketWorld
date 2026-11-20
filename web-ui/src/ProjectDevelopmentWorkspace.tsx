@@ -568,7 +568,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     view?.runtime?.preparationAvailable===true && canReviewToolSetup;
   const modelStillNeeded = firstBuild && !buildToolsBlocked && view?.model?.configured!==true;
   const firstBuildAction = !firstBuildVisible || missingRequiredLock ? '' : showToolSetupByBuild ? 'tools' : buildToolsBlocked ? 'refresh' : modelStillNeeded ? 'model' : 'review';
-  const canPrepareSavedBuild=!!(nodeTools&&!missingRequiredLock&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
+  // The pre-editor missing-lock observation may be repaired by saving that exact root path.
+  // Recheck the saved source before deciding what comes next; saving a lock is not dependency readiness.
+  const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
     !view?.draftRecoveryRequired&&can('projects.development.inspect')&&can('projects.development.reviewDraftBuild'));
   const savedSource = source?.savedEditInSource;
   const checkedSave = savedFileHere && savedSource?.path===savedFileHere.path && savedSource.savedHash===savedFileHere.savedHash &&
@@ -589,7 +591,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const prepareSavedBuild = async ({position:saved,filesHandle,id}:CheckoutSaveForBuild) => {
     const viewHandle=handle.current, window=ownerWindow();
     if(!active||!canPrepareSavedBuild||!viewHandle||view?.viewHandle!==viewHandle||saved.projectId!==projectId||
-      saved.checkoutId!==fileCheckout||draft.current.checkoutId!==saved.checkoutId||document.hidden)
+      saved.checkoutId!==fileCheckout||draft.current.checkoutId!==saved.checkoutId||
+      (missingRequiredLock&&saved.path!==missingRequiredLock)||document.hidden)
       throw Error('原副本或编辑窗口已变化，请先核对原文件。');
     const fresh=await invoke('projects.development.inspect',{viewHandle,checkoutId:saved.checkoutId,savedEdit:{filesHandle,id}},value=>{
       const observation=value.savedEditInSource;
@@ -858,7 +861,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     } : undefined}/>}
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} onClose={closeFiles}
-      onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} registerBack={registerFilesBack} />}
+      onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined} registerBack={registerFilesBack} />}
     <SettingsDialog isOpen={!!review} title={review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={dismiss} closeLabel={review?.draftBuild===true?'返回项目副本':'返回修改目标'}>{review && <div className="pw-local-review">
       {review.draftBuild === true ? <><strong>{review.dependencyState==='needs_lock_review'?'还缺依赖，先审阅这份锁':review.manager+' run build'}</strong>
         {review.existingCopy && <p className="pw-field-hint">只核对这个私人副本已保存的源码，不含未保存的文件修改。{review.preservedProjectDraft===true && '原项目目标与交付约定留在草稿，不随这次构建提交。'}</p>}

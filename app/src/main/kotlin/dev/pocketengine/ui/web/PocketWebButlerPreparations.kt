@@ -328,7 +328,24 @@ internal class PocketWebButlerPreparations(
                     val source = if(pinned!=null)host.tasks.reviewOwnerProjectRevision(preparation,pinned)
                         else controller.projectDevelopmentForWeb().sourceForOwner(text(args,"projectId"),text(args,"checkoutId"))
                     val projectId=source.getString("projectId");val checkout=source.getString("checkoutId")
-                    val model = controller.nativeModelSelection().readStable { controller.projectDevelopmentModelForWeb(pinned!=null) }
+                    val conversation=proposed.getString("sourceConversationId")
+                    val reportUnconfigured=plainChat && controller.state.conversationId==conversation && draftOnly && pinned==null &&
+                        proposed.opt("canPrepare")==true
+                    val selection=controller.nativeModelSelection()
+                    val model=selection.readStable { controller.projectDevelopmentModelForWeb(pinned!=null,reportUnconfigured) }
+                    if(reportUnconfigured && model.value().opt("defaultUnconfigured")==true){
+                        preparation.checkCurrent();requireNoUnresolvedStart(original)
+                        val revision=selection.status()
+                        check(current(original) && controller.state.conversationId==conversation &&
+                            !revision.pending() && revision.revision()==model.revision()) { "原项目或模型审阅已变化" }
+                        // A prerequisite is a read result. It carries no review handle or model/source contents.
+                        return@work JSONObject().put("status","blocked").put("prerequisite","default_model_unconfigured")
+                            .put("kind","project").put("draftOnly",true).put("executionAuthorized",false)
+                            .put("sourceTaskId",original.source).put("proposalId",original.proposal).put("sourceConversationId",conversation)
+                            .put("sourceRunId",proposed.getString("sourceRunId")).put("sourceEpoch",proposed.getInt("sourceEpoch"))
+                            .put("reviewDigest",original.digest).put("projectId",projectId).put("checkoutId",checkout)
+                            .put("modelSelectionRevision",model.revision())
+                    }
                     check(model.value().optBoolean("configured")) { "模型尚未就绪，提案和项目选择仍可保留" }
                     val input = JSONObject().put("projectId", projectId).put("checkoutId", checkout).put("expectedSourceDigest", source.getString("sourceDigest"))
                         .put("runtime", "managed_process_v1").put("clientMessageId", proposed.getString("clientMessageId")).put("goal", proposed.getJSONObject("contract").getString("goal"))
