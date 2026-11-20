@@ -1,15 +1,16 @@
 import { Button, CheckboxField, IconButton } from './forms-library';
 import { Drawer } from './shell-library';
 import { PressButton, ProgressBar } from './library';
-import { IconAdd, IconClose } from './icons';
+import { IconAdd, IconClose, IconShieldCheck } from './icons';
 import { exactFileTarget, fileBytes, fileObject, fileRows, type FileJson } from './attachment-workspace';
 
 // Mirror the definite limits in AttachmentRequestProjection; final payload/budget stay native.
 const mib = 1024 * 1024;
 const maxSelections = 4;
 const imageFormats = new Set(['image/png', 'image/jpeg', 'image/webp']);
+export const attachmentPagingTool = 'attachments_read_document';
 
-function fileUse(file: FileJson, model: FileJson): { reason?: string; hint?: string } {
+function fileUse(file: FileJson, model: FileJson): { reason?: string; hint?: string; paged?: true } {
   if (file.outputSourceRetired === true) return { reason: '这个版本已撤回，不能作为本条的附件。' };
   if (!exactFileTarget(file) || typeof file.mimeType !== 'string' || !Number.isSafeInteger(file.size))
     return { reason: '尚未核对到原文件，不能加入这条消息。' };
@@ -31,21 +32,22 @@ function fileUse(file: FileJson, model: FileJson): { reason?: string; hint?: str
     // pass through native content detection; metadata alone cannot reject those.
     return file.size > 2 * mib ? { reason: text } : { hint: text };
   }
-  if (file.size > 2 * mib)
-    return { hint: '发送时只提供文件引用；正文需本次工作按需读取。' };
+  if (file.size > 2 * mib) return { paged: true };
   return {};
 }
 
 type Props = {
   open: boolean; inventory: unknown; selected: unknown; inputModel: unknown;
   importing: boolean; onClose: () => void; onImport?: () => void;
+  pagingDenied: boolean; onReviewPagingRule?: () => void; openingPagingRule?: boolean;
   onToggle?: (id: string, sha256: string) => void;
 };
 
 /** Keep fit guidance with the original picker. Native send still verifies source, model and scope. */
-export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, onClose, onImport, onToggle }: Props) {
+export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, onClose, onImport, onToggle }: Props) {
   const catalog = fileObject(inventory);
   const files = fileRows(catalog.attachments), choices = fileRows(selected), model = fileObject(inputModel);
+  const rows = files.map(file => ({ file, use: fileUse(file, model) }));
   const incomplete = fileObject(catalog.indexDiagnostics).incomplete === true;
   return <Drawer.Root open={open} onOpenChange={next => { if (!next) onClose(); }} shouldScaleBackground={false}>
     <Drawer.Portal>
@@ -61,15 +63,19 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
         </header>
         <div className="pw-drawer-body">
           {incomplete && <p className="pw-error" role="alert">部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。</p>}
+          {pagingDenied && !!onReviewPagingRule && rows.some(row => row.use.paged) &&
+            <div className="pw-form-actions"><Button variant="ghost" leadingIcon={IconShieldCheck}
+              disabled={importing || openingPagingRule} onClick={onReviewPagingRule}>核对分段读取规则</Button></div>}
           <div className="pw-attachment-objects">
             {importing && <ProgressBar label="正在导入附件库" isIndeterminate showValueLabel={false} size="sm"/>}
-            {files.map((file, index) => {
+            {rows.map(({ file, use: { reason, hint, paged } }, index) => {
               const target = exactFileTarget(file);
               const chosen = choices.find(row => row.id === file.id);
               const selectedHere = !!target && chosen?.sha256 === target.sha256;
-              const { reason, hint } = fileUse(file, model);
               const note = chosen && !selectedHere ? '草稿选的是另一版本，可回输入框移除。'
-                : reason ?? hint;
+                : reason ?? (paged ? (pagingDenied
+                  ? '只提供文件引用。当前规则禁止分段读取正文。'
+                  : '只提供文件引用。能否分段读取，发送后由原任务核对。') : hint);
               const disabled = !onToggle || !target || (!selectedHere && (!!chosen || !!reason || choices.length >= maxSelections));
               return <div className="pw-attachment-object" key={target ? `${target.fileId}:${target.sha256}` : index}>
                 <CheckboxField isSelected={selectedHere} isDisabled={disabled} onChange={() => {

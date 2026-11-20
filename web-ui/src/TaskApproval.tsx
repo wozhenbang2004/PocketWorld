@@ -2,6 +2,7 @@ import {useEffect,useState} from 'react';
 import {Accordion,AccordionItem,Button,CheckboxField} from './forms-library';
 import {PressButton} from './library';
 import {originalTeamApprovalFile,TeamApprovalFileComparison} from './TeamApprovalFileComparison';
+import {ownerWorkIdentity} from './conversation-work';
 import './task-decisions.css';
 
 type Json=Record<string,any>;
@@ -10,6 +11,8 @@ const list=(value:unknown):Json[]=>Array.isArray(value)?value:[];
 const labels:Record<string,string>={text:'内容',goal:'目标',url:'网址',path:'文件',packageName:'应用',name:'名称',prompt:'目标',command:'命令',recipient:'接收方',target:'目标对象',amount:'金额',total:'总额',currency:'币种',budget:'预算',maxAmount:'金额上限'};
 
 const nonEmptyText=(value:unknown):value is string=>typeof value==='string'&&value.trim().length>0;
+const teamStartKind=(tool:unknown,capability:Json,args:Json)=>tool!=='teams_start'||capability.feature!=='teams'||capability.command!=='start'?null:
+ Object.hasOwn(args,'members')||object(capability.teamDefinition).definitionKind==='one_time'?'one_time':'saved';
 
 /** Render the frozen native roster of this approval, not draft arguments or a
  * current directory entry. File/device teams keep their own review. */
@@ -42,14 +45,55 @@ function originalModelTeamStart(capability:Json,args:Json,oneTime:boolean){
  }))};
 }
 
+type ModelTeamRoster=NonNullable<ReturnType<typeof originalModelTeamStart>>;
+
+function TeamStartRoster({roster}:{roster:ModelTeamRoster}) {
+ return <><ol className="pw-decision-worklist" role="list">{roster.members.map(member=><li key={member.id}>
+  <div className="pw-decision-work-heading"><h6><bdi>{member.name}</bdi></h6>{member.leads&&<span>计划负责汇总</span>}</div>
+  <p className="pw-approval-copy" dir="auto">{member.assignment||member.role}</p>
+  {member.assignment&&member.assignment.trim()!==member.role.trim()&&<p className="pw-approval-copy" dir="auto">职责：{member.role}</p>}
+  {member.dependencies.length>0&&<p className="pw-decision-meta">先等 <bdi>{member.dependencies.join('、')}</bdi> 的产出</p>}
+ </li>)}</ol>{roster.steps&&<p>{roster.steps}</p>}</>;
+}
+
+/** A native decision on the current original work, not an old request event or a new pending approval. */
+export function originalDeclinedTeamStart(task:unknown) {
+ const identity=ownerWorkIdentity(task),raw=object(object(task).raw);
+ if(!identity?.runId||raw.origin!=null||raw.contextAvailable!==true||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||
+    raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited===true)return null;
+ const rows=list(raw.approvals).map(object),declined=rows.filter(row=>row.runId===identity.runId&&row.state==='denied'&&
+  teamStartKind(row.tool,object(row.capability),object(row.arguments))!==null);
+ if(declined.length!==1)return null;
+ const {id,tool,capability:originalCapability,arguments:originalArgs}=declined[0];
+ if(!nonEmptyText(id)||rows.filter(row=>row.id===id).length!==1)return null;
+ const capability=object(originalCapability),args=object(originalArgs);
+ const roster=originalModelTeamStart(capability,args,teamStartKind(tool,capability,args)==='one_time');
+ return roster&&nonEmptyText(args.goal)?{id,identity,goal:args.goal,roster}:null;
+}
+
+export function DeclinedTeamStart({decision}:{decision:NonNullable<ReturnType<typeof originalDeclinedTeamStart>>}) {
+ return <section className="pw-approval-item pw-task-decision" aria-label="原团队分工拒绝记录">
+  <Accordion className="pw-decision-disclosure" variant="divided">
+   <AccordionItem id={`${decision.id}:declined`} headingLevel={5} title="已拒绝这次团队分工" description="查看原目标和成员">
+    <section className="pw-decision-section" aria-label="这次拒绝的原分工">
+     {!decision.roster.oneTime&&<h5><bdi>{decision.roster.name}</bdi></h5>}
+     <p className="pw-decision-goal pw-approval-copy" dir="auto">{decision.goal}</p>
+     <TeamStartRoster roster={decision.roster}/>
+     <p className="pw-decision-boundary">这次分工没有获准。查看不会提交或派发工作。</p>
+    </section>
+   </AccordionItem>
+  </Accordion>
+ </section>;
+}
+
 /** Composes the adopted BoardUI disclosure/checkbox and Josh press button sources.
  * Decision facts stay visible; only exact technical identities and raw payloads fold away. */
 export function TaskApproval({approval,executionScope={},disabled,onDecision}:{approval:Json;executionScope?:Json;disabled:boolean;onDecision:(args:Json)=>void}) {
  const [scopeReviewed,setScopeReviewed]=useState(false);
  const id=String(approval.approvalId||approval.id||''),capability=object(approval.capability),args=object(approval.arguments),view=object(approval.webReview);
  const team=view.kind==='team_plan',live=view.kind==='live_scope',execution=view.kind==='execution_plan',scope=object(capability.ownedService);
- const rosterStart=view.kind==='operation'&&approval.tool==='teams_start'&&capability.feature==='teams'&&capability.command==='start';
- const oneTimeStart=rosterStart&&(Object.hasOwn(args,'members')||object(capability.teamDefinition).definitionKind==='one_time');
+ const rosterStart=view.kind==='operation'?teamStartKind(approval.tool,capability,args):null;
+ const oneTimeStart=rosterStart==='one_time';
  const plannedTeam=rosterStart?originalModelTeamStart(capability,args,oneTimeStart):null;
  const executionOriginal=object(view.executionPlan),executionPlan=object(executionOriginal.plan);
  const original=object(view.teamPlan),plan=object(original.plan),source=object(plan.sourceParent),previous=object(source.parentBudget),budget=object(plan.budgetPlan);
@@ -97,13 +141,7 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
   {oneTimeStart&&!plannedTeam&&<p role="alert">尚未核对到这次拟定的完整分工，不能批准。请重新打开原待审事项，或拒绝这次申请。</p>}
   {plannedTeam&&<section className="pw-decision-section" aria-label="这次申请的成员与分工">
    <h5>这次由谁负责</h5>
-   <ol className="pw-decision-worklist" role="list">{plannedTeam.members.map(member=><li key={member.id}>
-    <div className="pw-decision-work-heading"><h6><bdi>{member.name}</bdi></h6>{member.leads&&<span>计划负责汇总</span>}</div>
-    <p className="pw-approval-copy" dir="auto">{member.assignment||member.role}</p>
-    {member.assignment&&member.assignment.trim()!==member.role.trim()&&<p className="pw-approval-copy" dir="auto">职责：{member.role}</p>}
-    {member.dependencies.length>0&&<p className="pw-decision-meta">先等 <bdi>{member.dependencies.join('、')}</bdi> 的产出</p>}
-   </li>)}</ol>
-   {plannedTeam.steps&&<p>{plannedTeam.steps}</p>}
+   <TeamStartRoster roster={plannedTeam}/>
    <p className="pw-decision-boundary">{plannedTeam.oneTime?'只批准这次模型分工。不保存为编组，不授予文件写入或设备操作。':'只批准这次分工，不修改已保存的编组。'}</p>
   </section>}
   {capability.pluginId&&<p className="pw-decision-meta">插件 {String(capability.pluginId)} · v{String(capability.version||'')} · 安装 {String(capability.installationId||'').slice(-8)}</p>}

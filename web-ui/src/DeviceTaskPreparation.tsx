@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { deviceChoiceCode } from './device-task-scope';
 
 type Data = Record<string, any>;
 export type PreparedPhone = { deviceId: string; instanceId: string; certificateFingerprint: string; label: string; kind?: 'windows-workspace' };
@@ -44,7 +45,7 @@ export function DeviceTaskPreparation({ open, run, onClose, onPendingChange, pho
   };
   return <SettingsDialog isOpen={open} onClose={() => { if (!pending) onClose(); }} title="让设备完成一件事">
     <div className="pw-collaboration-dialog">
-      <p>{phone ? <>只给 <strong>{phone.label}</strong> 准备这份工作。先存本机，不联系它；在原任务中单独读取并核对可用范围，不会改用其他设备。</> : '先写目标，再为这份原任务选择手机、电脑窗口或工作区。确认范围后才开始，不必先发送普通聊天。'}</p>
+      <p>{phone ? <>只给 <strong><bdi>{phone.label}</bdi>{deviceChoiceCode(phone.deviceId)&&` · ${deviceChoiceCode(phone.deviceId)}`}</strong> 准备这份工作。先存本机，不联系它；在原任务中单独核对可用范围，不会改用其他设备。</> : '先把目标保存在手机，不联系其他设备。回到原任务后，由你核对范围并选择设备。'}</p>
       <TextAreaField label="要完成什么" value={goal} onChange={setGoal} isDisabled={pending || unknown} placeholder={workspace ? '例如：整理这个已授权工作区中的项目结构' : '例如：在另一台手机的已授权应用中找到订单，整理状态'} />
       <p>{workspace ? '仅可列目录、读你核准的文件；启动后这些读取结果会交给本机选定的模型。不改文件、不运行命令、不看屏幕。' : phone ? '接下来可以核对它允许本机助手使用哪些工具，或它是否能用自己的模型接手。' : '由本机当前所选模型协调，只使用你选择的远端设备工具，不挂本机通用工具或预读私人记忆。纯电脑操作不需要安装 Codex 或 Claude。'}</p>
       <Accordion><AccordionItem id="budget" title="本次额度与期限" description={`工具 ${tools} 次 · 模型 ${models} 次 · ${minutes} 分钟`}>
@@ -54,7 +55,7 @@ export function DeviceTaskPreparation({ open, run, onClose, onPendingChange, pho
       </AccordionItem></Accordion>
       {error && <p role="alert">{error}</p>}
       {unknown && <p role="status">原任务可能已经保存。下方只核对同一编号与原期限，不会创建第二份任务、补满预算或启动设备。原期限：{request.current && new Date(request.current.deadlineAt).toLocaleString()}。编号：{request.current?.requestId}</p>}
-      <div className="pw-form-actions"><Button variant="ghost" disabled={pending} onClick={onClose}>返回设备</Button><Button disabled={pending || !goal.trim()} onClick={() => void prepare()}>{pending ? '正在准备原任务…' : unknown ? '核对原准备并打开' : workspace ? '保存这台电脑的只读目标' : phone ? '保存给这部手机的目标' : '准备目标并选择设备'}</Button></div>
+      <div className="pw-form-actions"><Button variant="ghost" disabled={pending} onClick={onClose}>返回设备</Button><Button disabled={pending || !goal.trim()} onClick={() => void prepare()}>{pending ? '正在准备原任务…' : unknown ? '核对原准备并打开' : workspace ? '保存这台电脑的只读目标' : phone ? '保存给这部手机的目标' : '保存目标到本机'}</Button></div>
     </div>
   </SettingsDialog>;
 }

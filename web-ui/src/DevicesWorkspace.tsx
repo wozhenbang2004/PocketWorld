@@ -19,6 +19,7 @@ import { WindowsWorkspaceReadReceipt } from './WindowsWorkspaceReadReceipt';
 import { WindowsFileDeliveryReceipt } from './WindowsFileDeliveryReceipt';
 import { OriginalLocalExportedFile } from './OriginalLocalExportedFile';
 import { DeviceTaskPreparation, type PreparedPhone } from './DeviceTaskPreparation';
+import { deviceChoiceCode } from './device-task-scope';
 import { PhoneControlPreparation } from './PhoneControlPreparation';
 import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
 import { desktopScopes } from './desktop-viewer';
@@ -964,7 +965,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { selectPeer(''); setForm(''); setRaw(''); }}>所有设备</Button>}
           <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : peerPlace.current ? '原设备 · '+peerPlace.current.partner.deviceId.slice(-8) : '设备详情'}</h2>
-          {!desktopOpen && peer && <p>{[peerPlatform(peer), deviceConnectionLabel(peer)].filter(Boolean).join(' · ')}</p>}
+          {!desktopOpen && peer && <p>{[peerPlatform(peer), deviceChoiceCode(peer.deviceId), deviceConnectionLabel(peer)].filter(Boolean).join(' · ')}</p>}
         </div>
         {!desktopOpen && <div className="pw-device-heading-actions">
           {peerEntry && <Button variant="primary" leadingIcon={peerEntry.icon} disabled={busy} onClick={peerEntry.open}>{peerEntry.label}</Button>}
@@ -1181,7 +1182,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
             {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
               {section.peers.map(row => <Button key={row.deviceId} data-peer-entry={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={platformIcon(row)} trailingIcon={IconChevronRight} disabled={busy} onClick={() => { rememberReadingPosition('list'); selectPeer(row.deviceId); }}>
-                <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{peerPlatform(row) || (retired(row) ? '原设备' : '配对设备')} · {row.connection?.observedAt > 0 ? time(row.connection.observedAt) : '尚无检查时间'}</small></span>
+                <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{[peerPlatform(row) || (retired(row) ? '原设备' : '配对设备'),deviceChoiceCode(row.deviceId),row.connection?.observedAt > 0 ? time(row.connection.observedAt) : '尚无检查时间'].filter(Boolean).join(' · ')}</small></span>
               </Button>)}
             </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : null}
           </section>

@@ -82,7 +82,7 @@ internal class PocketWebAttachments(
         val reviewedProcessing = originalReview?.let { original -> original.metadata().also { metadata ->
             if (original.command == "trimMedia") metadata.put("startAlignmentLabel", NativeMediaTrim.startAlignmentLabel(metadata))
         } }
-        val continuationDraft=if(scoped==null&&!state.deviceOriginalOnly&&state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null)runCatching{
+        val continuationDraft=if(scoped==null&&!state.deviceOriginalOnly&&state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null&&controller.webPrivateOwnerVisible())runCatching{
             controller.readArtifactContinuationDraft(state.taskId,state.file.getString("id"),state.file.getString("sha256")).put("available",true)
         }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
         val privateOriginal = !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
@@ -230,7 +230,7 @@ internal class PocketWebAttachments(
                 }
                 "external" -> flow.openExternal()
                 "share" -> flow.shareOriginalFile()
-                "readContinuationDraft", "editContinuationDraft", "continueVersion" -> {
+                "readContinuationDraft", "editContinuationDraft" -> {
                     val original=flow.state;val task=original.taskId?:error("请回到原工作的固定成果")
                     val file=original.file?:error("请先选择原成果版本")
                     check(original.group==null&&original.team==null&&controller.webPrivateOwnerVisible()){ "请在私人原成果中编辑补充" }
@@ -240,14 +240,12 @@ internal class PocketWebAttachments(
                         val revision=args.opt("draftRevision");require(revision is Int||revision is Long){"请重新读取原版本草稿"}
                         val text=args.getString("change");require(text.length<=2000){"成果补充最多2000字"}
                         require(saved.getLong("revision")== (revision as Number).toLong()){ "原版本草稿已有更新，未覆盖本页文字" }
-                        if(command=="editContinuationDraft"){
-                            controller.saveArtifactContinuationDraft(task,file.getString("id"),file.getString("sha256"),revision.toLong(),text){draft,error->
-                                if(error!=null)done(null,error)
-                                else {changed();done(JSONObject().put("continuationDraft",draft?.put("available",true)).put("workspace",snapshot()),null)}
-                            };return
-                        }
-                        require(text.isNotBlank()&&saved.getString("text")==text&&saved.optBoolean("saved")){"请先保存这份原版本补充"}
-                        flow.continueFromVersion(text)
+                        controller.saveArtifactContinuationDraft(task,file.getString("id"),file.getString("sha256"),revision.toLong(),text){draft,error->
+                            if(window!==current||!acceptsWindow(current.ticket)||!flow.state.open||!controller.webPrivateOwnerVisible()||frame.location!=location(flow.state))
+                                done(null,"原成果窗口已离开，请从同一原件核对本机草稿。")
+                            else if(error!=null)done(null,error)
+                            else {changed();done(JSONObject().put("continuationDraft",draft?.put("available",true)).put("workspace",snapshot()),null)}
+                        };return
                     }
                 }
                 "continueTask" -> flow.continueTask()

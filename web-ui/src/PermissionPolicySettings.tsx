@@ -47,7 +47,9 @@ export function PermissionPolicySettings({ conversationId, act, onPendingChange,
     let live = true; ++generation.current; pendingRef.current = false; pendingChange.current?.(false);
     setSnapshot(null); setDrafts(null); setBusy(false); setError(''); setNotice(''); setUncertain(false); setLeaveRequest(null); setCatalog(null); setToolName('');
     actRef.current('permissions.snapshot').then((value: PolicySnapshot) => {
-      if (!live) return; setSnapshot(value); setDrafts(draftsFrom(value)); setScope(value.conversationId ? initialScope || 'conversation' : 'global');
+      if (!live) return;
+      if (value.conversationId !== conversationId) throw new PermissionTargetRetired('原对话已切换，请从原输入重新打开。');
+      setSnapshot(value); setDrafts(draftsFrom(value)); setScope(value.conversationId ? initialScope || 'conversation' : 'global');
     }).catch(e => { if (live) setError(e instanceof Error ? e.message : String(e)); });
     void readCatalog();
     return () => { live = false; ++generation.current; pendingRef.current = false; pendingChange.current?.(false); };

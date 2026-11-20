@@ -279,11 +279,6 @@ internal class AttachmentOutcomeCoordinator(
         work{c,w->val image=if(group==null)app.attachmentOutcomes.thumbnail(task,file.getString("id"),file.getString("sha256"),c)else{var image:android.graphics.Bitmap?=null;groupCall(w){image=app.groupOutcomeThumbnail(group,c);JSONObject()};image?:throw IllegalStateException("图片预览未取得");}
             main.post{if(!closed&&state.open&&wait===c&&!c.isCancelled)state=state.copy(thumbnail=image)else image.recycle()};JSONObject() to null}
     }
-    fun continueFromVersion(change:String){val task=state.taskId?:return;val file=state.file?:return;if(state.group!=null||change.isBlank())return
-        work{c,_->val pin=app.selectOutcomeForTask(task,file.getString("id"),file.getString("sha256"),c)
-            app.dispatchOwnerAction("updateTask",JSONObject().put("taskId",task).put("feedback","继续同一目标，基于以下固定来源版本处理，不改写原件。来源引用："+pin.toString()+"。正文只在所需范围内通过 attachments_read_document 读取。新的要求："+change.take(2000)))
-            JSONObject().put("outcomeNotice","固定来源和补充已保存到原任务；回原任务继续，原文件保留") to null}
-    }
     fun backFromDocument(){cancel();state=state.copy(documentOpen=false)}
     fun openOriginalFile(){
         if(state.busy)return;val selectedTeam=state.team;val selectedGroup=state.group;val selectedFile=state.file;val task=state.taskId

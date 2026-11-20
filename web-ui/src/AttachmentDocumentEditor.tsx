@@ -8,9 +8,11 @@ const validDraft=(draft:Json)=>!!String(draft.name||'').trim()&&String(draft.nam
 
 /** Adapted from the document editor's serialized draft/CAS interaction. Only
  * the selected task and immutable file version receive this text. */
-export function AttachmentVersionContinuation({original,foregroundReady,busy,act,beforeBack}:{original:Json;foregroundReady:boolean;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void}){
+export function AttachmentVersionContinuation({original,foregroundReady,busy,act,beforeBack,onReturn}:{original:Json;foregroundReady:boolean;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void;onReturn?:(frame:AttachmentFrame)=>Promise<void>}){
  const [text,setText]=useState(String(original.text||'')),[error,setError]=useState(''),[saving,setSaving]=useState(false),[applying,setApplying]=useState(false),[saved,setSaved]=useState(original.saved===true);
+ const [checked,setChecked]=useState(false),[competing,setCompeting]=useState<Json|null>(null);
  const current=useRef(text),baseline=useRef(original),alive=useRef(true),paused=useRef(false),flight=useRef<Promise<AttachmentFrame|undefined>|null>(null),action=useRef(act),ready=useRef(foregroundReady);action.current=act;ready.current=foregroundReady;
+ const finishFlight=useRef(false);
  const accepts=(value:Json)=>value.taskId===original.taskId&&value.fileId===original.fileId&&value.sha256===original.sha256&&Number.isSafeInteger(value.revision)&&value.revision>0&&typeof value.text==='string'&&value.text.length<=2000;
  const dirty=()=>current.current!==baseline.current.text||baseline.current.saved!==true;
  async function flush(explicit=false):Promise<AttachmentFrame|undefined>{
@@ -30,7 +32,15 @@ export function AttachmentVersionContinuation({original,foregroundReady,busy,act
    return after;
   }catch(failure){
    paused.current=true;if(alive.current){setSaved(false);setError(failure instanceof Error?failure.message:'原版本补充草稿尚未保存。')}
-   try{const result=await action.current('readContinuationDraft',{},after);if(result.continuationDraft&&accepts(result.continuationDraft))baseline.current=result.continuationDraft}catch{}
+   try{
+    const result=await action.current('readContinuationDraft',{},after),actual=result.continuationDraft,frame=attachmentFrame(result.workspace);
+    if(alive.current&&actual?.saved===true&&accepts(actual)&&frame){
+     if(actual.text===current.current){baseline.current=actual;paused.current=false;setCompeting(null);setSaved(true);setError('');return frame}
+     // Do not move the original CAS base past a different save. This keeps
+     // both the unsaved input and the already saved version intact.
+     if(actual.revision>baseline.current.revision)setCompeting(actual);
+    }
+   }catch{}
    throw failure;
   }finally{flight.current=null;if(alive.current)setSaving(false)}})();
   flight.current=operation;return operation;
@@ -39,22 +49,40 @@ export function AttachmentVersionContinuation({original,foregroundReady,busy,act
  useEffect(()=>{
   if(!accepts(original)||original.revision<baseline.current.revision)return;
   const changed=current.current!==baseline.current.text;
+  if(changed&&original.text!==current.current&&original.revision>baseline.current.revision){
+   if(!flight.current&&original.saved===true){paused.current=true;setCompeting(original);setSaved(false);setChecked(false)}
+   return;
+  }
+  if(original.text===current.current&&original.saved===true){paused.current=false;setCompeting(null)}
   baseline.current=original;if(!changed){current.current=original.text;setText(original.text)}setSaved(!dirty());
  },[original.revision,original.text,original.saved]);
- const edit=(next:string)=>{current.current=next;setText(next);setSaved(false);if(!paused.current)void flush().catch(()=>{})};
- const submit=async()=>{
-  if(busy||applying||!current.current.trim())return;setApplying(true);setError('');
-  try{const after=await flush(true);await act('continueVersion',{change:current.current,draftRevision:baseline.current.revision},after)}
-  catch(failure){if(alive.current)setError(failure instanceof Error?failure.message:'原任务补充尚未确认，请回原工作核对。')}
-  finally{if(alive.current)setApplying(false)}
+ const edit=(next:string)=>{current.current=next;setText(next);setSaved(false);setChecked(false);if(!paused.current)void flush().catch(()=>{})};
+ const finish=async()=>{
+  if(busy||finishFlight.current||competing||!ready.current||!current.current.trim())return;finishFlight.current=true;setApplying(true);setError('');setChecked(false);
+  try{
+   const after=await flush(true),desired=current.current,revision=baseline.current.revision;
+   const result=await action.current('readContinuationDraft',{},after),draft=result.continuationDraft,frame=attachmentFrame(result.workspace);
+   if(!alive.current||!ready.current)return;
+   if(!draft||!accepts(draft)||draft.revision!==revision||draft.text!==desired||current.current!==desired||draft.saved!==true||!frame)
+    throw new Error('本机补充已有变化，没有覆盖其他草稿。请重新打开这份原件核对。');
+   setChecked(true);
+   if(onReturn)await onReturn(frame);
+  }
+  catch(failure){if(alive.current)setError(failure instanceof Error?failure.message:'没有核对到本机保存结果，未离开这份成果。')}
+  finally{finishFlight.current=false;if(alive.current)setApplying(false)}
  };
  if(original.available!==true||!accepts(original))return <p className="pw-error" role="alert">{original.error||'这个原版本的补充草稿暂不可读取。'}</p>;
- return <section className="pw-file-version-continuation" aria-label="基于这个固定版本补充工作">
-  <h3>继续这份成果</h3><p className="pw-muted">补充与当前文件版本一起保留，返回或切换版本后可以接着写。</p>
+ return <section className="pw-file-version-continuation" aria-label="这份成果的补充草稿">
+  <h3>成果补充草稿</h3><p className="pw-muted">只保存在此文件的固定版本旁，不发送给管家，也不会停止或启动任务。</p>
   <TextAreaField label="给原工作的补充" value={text} onChange={edit} placeholder="基于这份成果，希望接下来调整什么？" rows={3} autoResize maxRows={7} maxLength={2000} isDisabled={!foregroundReady||applying}/>
   {error&&<p className="pw-error" role="alert">{error}</p>}
-  <div className="pw-work-supplement-footer"><span role="status">{saving?'正在保存原版本草稿':saved?(text?'原版本草稿已保存':'这个版本还没有补充'):'本页文字尚未确认保存'}</span><div className="pw-action-row">{!saved&&<Button variant="ghost" size="small" disabled={busy||saving||applying} onClick={()=>void flush(true).catch(()=>{})}>保存本页补充</Button>}<Button variant="secondary" disabled={busy||saving||applying||!text.trim()} onClick={()=>void submit()}>把补充保存到原工作</Button></div></div>
-  <p className="pw-muted">保存补充后，可回到原工作核对并继续执行。</p>
+  {competing&&<Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="original-save-conflict" title="这份补充已有另一版" description="没有覆盖本机保存版；本页文字仍可复制">
+   <p className="pw-reading-copy">{competing.text||'（本机保存版没有文字）'}</p>
+   <Button variant="ghost" disabled={!foregroundReady||busy||saving||applying} onClick={()=>{baseline.current=competing;current.current=competing.text;setText(competing.text);paused.current=false;setCompeting(null);setSaved(true);setError('')}}>放弃本页改动，使用本机这版</Button>
+  </AccordionItem></Accordion>}
+  <div className="pw-work-supplement-footer"><span role="status">{applying?'正在核对本机草稿':saving?'正在保存原版本草稿':checked?'已核对原版本的本机草稿':saved?(text?'原版本草稿已保存':'这个版本还没有补充'):'本页文字尚未确认保存'}</span><div className="pw-action-row">
+   <Button variant="secondary" disabled={!foregroundReady||busy||saving||applying||!!competing||!text.trim()} onClick={()=>void finish()}>{onReturn?'保存并回原工作':saved?'核对本机草稿':'保存补充草稿'}</Button>
+  </div></div>
  </section>;
 }
 

@@ -43,6 +43,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const [draftHandoff,setDraftHandoff]=useState<DraftHandoff|null>(null);
  const draftFlight=useRef<DraftHandoff|null>(null);
  const [previewContinuation,setPreviewContinuation]=useState('');
+ useEffect(()=>{if(!view.open)setPreviewContinuation('')},[view.open]);
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
  const continuationHeading=useRef<HTMLDivElement>(null);
  const hasOriginal=Object.keys(obj(view.originalFile)).length>0;
@@ -153,11 +154,25 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const objectTitle=String(file.name||view.documentDraft?.name||snapshot.artifact?.path||(view.taskId?'这次工作的成果':'文件与成果'));
  const objectVersion=Number.isSafeInteger(file.sourceVersion)&&file.sourceVersion>0?`来源版本 ${file.sourceVersion}`:hasFile?'固定原件':'';
  const fileOrigin=typeof file.sourceKind==='string'&&Object.hasOwn(fileOrigins,file.sourceKind)?fileOrigins[file.sourceKind]:'';
- const continuationKey=view.taskId&&hasFile?JSON.stringify([view.windowId,view.taskId,file.id,file.sha256]):'';
+ // The same local draft survives renewal of the native reader window; the
+ // actual read/edit commands still require the fresh window and file frame.
+ const continuationKey=view.taskId&&hasFile?JSON.stringify([view.taskId,file.id,file.sha256]):'';
  const receivedOriginal=file.sourceKind==='device_received_file'&&file.sourceRunEvidence==='original_device_file_receive';
- const canContinue=!receivedOriginal&&!scopedResultOnly&&privateFiles&&!!continuationKey&&view.continuationDraft?.available===true;
- const canContinueFromPreview=canContinue&&state.activeTaskId!==view.taskId;
- const continuationVisible=canContinue&&(mode==='detail'||(mode==='original'&&previewContinuation===continuationKey));
+ const canKeepSupplement=!receivedOriginal&&!scopedResultOnly&&privateFiles&&!!continuationKey&&view.continuationDraft?.available===true;
+ const continuationVisible=canKeepSupplement&&(mode==='detail'||(mode==='original'&&previewContinuation===continuationKey));
+ const returnToOriginalWork=workOutput&&file.sourceTaskId===view.taskId&&openTaskId===view.taskId&&snapshot.taskId===view.taskId&&
+  typeof snapshot.taskRunId==='string'&&!!snapshot.taskRunId&&Number.isSafeInteger(snapshot.coordinatorEpoch)&&snapshot.coordinatorEpoch>0
+  ?async(frame:AttachmentFrame)=>{
+   const native=bridge.getState(),owner=obj(native.view),opened=obj(native.state.attachmentWorkspace),selected=obj(opened.file);
+   const task=rows(native.state.tasks).find(task=>task.id===view.taskId),proof=obj(task?.raw);
+   if(document.hidden||owner.section||owner.taskId!==view.taskId||opened.windowId!==view.windowId||opened.taskId!==view.taskId||
+    selected.id!==file.id||selected.sha256!==file.sha256||proof.id!==view.taskId||proof.actorId!=='owner'||proof.spaceId!=='private'||
+    proof.contextAvailable===false||proof.contextWithdrawn===true||proof.taskProjection==='source_unavailable'||proof.sourceCurrentReadRequired===true||
+    proof.runId!==snapshot.taskRunId||proof.coordinatorEpoch!==snapshot.coordinatorEpoch)
+    throw new Error('原工作窗口已变化。补充仍在这份固定文件旁，没有转到其他执行。');
+   const result=await act('close',{},frame,false);
+   if(result.workspace?.open!==false)throw new Error('草稿已核对，原文件窗口尚未确认关闭。');
+  }:undefined;
  const focusContinuation=()=>{
   continuationHeading.current?.scrollIntoView({block:'start'});
   continuationHeading.current?.focus({preventScroll:true});
@@ -260,7 +275,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  </>}
  {continuationVisible&&<div ref={continuationHeading} tabIndex={-1} className="pw-file-continuation-target">
   <AttachmentVersionContinuation key={continuationKey} original={view.continuationDraft} foregroundReady={view.ready===true}
-    busy={busy||mode==='original'&&!canContinueFromPreview} act={act} beforeBack={registerBeforeBack}/>
+    busy={busy} act={act} beforeBack={registerBeforeBack} onReturn={returnToOriginalWork}/>
  </div>}
  {privateFiles&&hasFile&&view.taskId&&view.ready&&(mode==='detail'||mode==='original')&&view.continuationDraft?.available===false&&
   <p className="pw-error" role="alert">{view.continuationDraft.error||'原版本补充草稿暂不可读取，请重新读取这份成果。'}</p>}
@@ -268,7 +283,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {mode==='original'&&privateFiles&&hasFile&&view.ready&&(!scopedResultOnly||useInTopic)&&<div className="pw-file-use-footer" role="group" aria-label={file.role==='source'?'使用来源文件':'使用此成果'}>
   {preferSave&&exportAction}
   {useInTopic}
-  {canContinueFromPreview&&<Button variant={preferSave||useInTopic?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>在原工作里继续</Button>}
+  {canKeepSupplement&&<Button variant={preferSave||useInTopic?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>{view.continuationDraft?.text?.trim()?'查看补充草稿':'留一条补充'}</Button>}
   {reuseAction}
   {canSaveOriginal&&!preferSave&&exportAction}
  </div>}

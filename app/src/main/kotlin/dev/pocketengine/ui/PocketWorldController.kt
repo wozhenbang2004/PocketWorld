@@ -839,6 +839,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private var attachmentComposerKey: String? = null
     private var attachmentComposerEpoch = -1
+    private var attachmentPagingDeniedAt: Long? = null
     private data class OriginalSourceStage(val key:String,val revision:Long,val viewEpoch:Int,val conversation:String)
     private val originalSourceStages=mutableMapOf<String,OriginalSourceStage>()
     private var submittingChatClient:String?=null
@@ -1408,10 +1409,30 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 else dev.pocketengine.runtime.models.ConversationModelPreferences.draft(draft.key))
         } catch(error:Exception) { state=state.copy(error=message(error));return }
         attachmentComposerKey=draft.key;attachmentComposerEpoch=chatViewEpoch
+        // Only a known saved prohibition for the next ordinary draft, never a verdict
+        // about an active run's captured permissions or a grant to read this document.
+        attachmentPagingDeniedAt = if (attachmentPagingDraftCurrent()) runCatching {
+            val rules = app.settings.permissionPolicySnapshot(draft.conversationId)
+            rules.getLong("revision").takeIf {
+                rules.getJSONObject("effective").getJSONObject("tools").optString("attachments_read_document") == "deny"
+            }
+        }.getOrNull() else null
         state=state.copy(chatAttachmentPickerOpen=true,chatAttachmentModel=model)
         feature("attachments","list")
     }
-    fun closeChatAttachmentPicker() { state=state.copy(chatAttachmentPickerOpen=false) }
+    private fun attachmentPagingDraftCurrent() =
+        webPrivateOwnerVisible() && !hasChannelPhoneOrigin && !state.chatBusy && !state.chatSubmitting && state.chatActiveTurn == null &&
+            composerDraft?.let { it.key == attachmentComposerKey && it.conversationId == state.conversationId.orEmpty() } == true &&
+            attachmentComposerEpoch == chatViewEpoch && conversationReader == null && webTaskViewId == null
+    internal fun webAttachmentPagingDenied(): Boolean {
+        val revision = attachmentPagingDeniedAt ?: return false
+        return state.chatAttachmentPickerOpen && attachmentPagingDraftCurrent() &&
+            runCatching { app.settings.permissionPolicyRevision() == revision }.getOrDefault(false)
+    }
+    fun closeChatAttachmentPicker() {
+        attachmentPagingDeniedAt = null
+        state=state.copy(chatAttachmentPickerOpen=false)
+    }
     fun toggleChatAttachment(meta:JSONObject) {
         if(attachmentComposerKey!=composerDraft?.key||attachmentComposerEpoch!=chatViewEpoch){state=state.copy(error="附件选择的原草稿已变化，请回原输入重新选择");return}
         val selected=ChatInputRules.attachment(meta) ?: run { state=state.copy(error="附件元数据不可核对，请刷新附件库");return }

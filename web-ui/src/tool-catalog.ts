@@ -20,7 +20,7 @@ const titles: Record<string, string> = {
   skills_list: '发现技能', skills_read: '阅读准确版本的技能', skills_reference_decision: '关联技能参考与原步骤', skills_execute: '准备本次技能脚本执行',
   workspace_projects: '列出本地项目', workspace_list: '浏览项目文件', workspace_read: '读取项目文件', workspace_write: '保存项目文件',
   workspace_create: '创建项目', workspace_artifacts: '查找文件成果', workspace_read_artifact: '读取冻结成果',
-  attachments_list: '查找已导入附件', attachments_read_text: '读取附件文字', attachments_create_document: '生成文档附件',
+  attachments_list: '查找已导入附件', attachments_read_text: '读取附件文字', attachments_read_document: '分段读取文档', attachments_create_document: '生成文档附件',
   schedule_propose: '提出定时工作草案', schedule_list: '查看本轮计划草案', post_notice: '提交原任务通知',
   teams_list: '查看已有团队', teams_plan: '提出团队工作计划', teams_start: '准备启动团队', teams_get: '读取团队进展与成果',
   teams_message: '补充团队工作信息', teams_control: '控制原团队工作', teams_wait: '等待原团队进展',

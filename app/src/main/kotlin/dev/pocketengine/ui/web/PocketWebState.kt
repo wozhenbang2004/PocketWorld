@@ -161,6 +161,7 @@ internal object PocketWebState {
             .put("selectedChatAttachments", JSONArray().also { out -> state.selectedChatAttachments.forEach { out.put(attachment(it)) } })
             .put("chatAttachmentPickerOpen", state.chatAttachmentPickerOpen)
             .put("chatAttachmentModel", publicValue(state.chatAttachmentModel))
+            .put("chatAttachmentPagingDenied", controller.webAttachmentPagingDenied())
             .put("attachmentImporting", state.attachmentImporting).put("phoneSubmitting", state.phoneSubmitting)
             .put("phoneDraftAcceptedRevision", controller.phoneDraftAcceptedRevision)
             .put("phoneDraftAcceptedText", controller.phoneDraftAcceptedText)

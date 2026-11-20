@@ -14,6 +14,16 @@ const sameResource = (a: ScopeData, b: ScopeData): boolean => {
   return canonical(a) === canonical(b);
 };
 export const phoneTextOnly = (route: ScopeData) => route.textReturnContract === 'pocketworld.original-phone-allocation.owner-reviewed-text.v1';
+export const deviceChoiceCode = (id: unknown) => typeof id === 'string' && /^pw1_[a-f0-9]{64}$/.test(id) ? id.slice(-6) : '';
+/** Compact projection of the device scope already checked by the native owner window, not a readiness or permission flag. */
+export function routeUseSummary(option: ScopeData, human = false): string {
+  if (phoneTextOnly(option)) return '不用屏幕';
+  if (human) return '仅本人手控';
+  if (option.kind !== 'tool_session') return '';
+  const effects = scopeRows(option.toolDeclarations).map(tool => tool.effect);
+  const labels = [effects.includes('write') ? '含写入' : '', effects.includes('external') ? '含外部影响' : ''].filter(Boolean);
+  return labels.join('、') || (effects.length > 0 && effects.every(effect => effect === 'read') ? '仅可读取' : '');
+}
 export function routeTitle(option: ScopeData, human = false): string {
   if (phoneTextOnly(option)) return "只让这部手机处理文字";
   const scope = option.resourceBinding || {};

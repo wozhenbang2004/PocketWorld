@@ -173,7 +173,7 @@ internal class PocketWebWorkSearch(
                 task.optInt("coordinatorEpoch") == conversationResult.epoch && task.optString("status") == "completed") { "原任务轮次或状态已变化，没有用其他轮次的文件替代" }
             return task
         }
-        requireVisibleTask()
+        val selectedTask = requireVisibleTask()
         val snapshot = host.ownerOutcomeSnapshot(taskId, control)
         check(snapshot.getString("taskId") == taskId) { "原工作成果身份不符" }
         val runFiles = if (conversationResult != null)
@@ -190,6 +190,15 @@ internal class PocketWebWorkSearch(
             val row = fileHeader(file).put("runProvenance", file.optString("runProvenance", "unrecorded"))
             if (file.opt("sourceKind") == "device_received_file" && file.opt("sourceRunEvidence") == "original_device_file_receive")
                 row.put("sourceRunEvidence", "original_device_file_receive")
+            else if (conversationResult == null && !selectedTask.optBoolean("contextWithdrawn") && !selectedTask.optBoolean("sourceCurrentReadRequired")) {
+                // Keep the existing per-file draft as the only source of text. The
+                // original work lists a marker, never an unsubmitted draft body.
+                val hasDraft = runCatching {
+                    val draft = controller.readArtifactContinuationDraft(taskId, file.getString("id"), file.getString("sha256"))
+                    draft.opt("saved") == true && draft.getString("text").isNotBlank()
+                }.getOrDefault(false)
+                if (hasDraft) row.put("hasSavedSupplement", true)
+            }
             files.put(row)
         }
         val readLimited = runFiles?.readLimited ?: snapshot.getJSONObject("indexDiagnostics").getBoolean("incomplete")

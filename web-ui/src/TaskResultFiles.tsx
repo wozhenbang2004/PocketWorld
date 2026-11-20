@@ -4,7 +4,7 @@ import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 
-export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive' };
+export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive'; hasSavedSupplement?: boolean };
 
 type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string };
 
@@ -33,11 +33,15 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
     const view = bridge.getState().view as { taskId?: string; section?: string };
     return !view?.section && view?.taskId === taskId ? bridge.getDocumentEpoch() : -1;
   });
+  const readingFile = useSyncExternalStore(bridge.subscribe, () => {
+    const view = bridge.getState().state.attachmentWorkspace;
+    return view?.open === true && view.taskId === taskId;
+  });
   const key = JSON.stringify([taskId, windowEpoch, readIdentity, retry]);
   const current = page?.key === key ? page : null;
   const busy = active && supported && !current;
   useEffect(() => {
-    if (!active || !supported || windowEpoch < 0) return;
+    if (!active || !supported || windowEpoch < 0 || readingFile) return;
     let alive = true;
     let sequence = 0;
     const read = () => {
@@ -70,7 +74,7 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
       alive = false;
       document.removeEventListener('visibilitychange', read);
     };
-  }, [active, supported, key, taskId, windowEpoch]);
+  }, [active, supported, key, taskId, windowEpoch, readingFile]);
 
   if (windowEpoch < 0) return null;
   const outputs = current?.files ?? [], sources = current?.sources ?? [];
@@ -79,8 +83,8 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
       const metadata = input ? fileBytes(file.size) : `${fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录'} · ${fileBytes(file.size)}`;
       return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
-        aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
-        <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}</small></span>
+      aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}${!input && file.hasSavedSupplement === true ? '，有补充草稿' : ''}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
+        <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}{!input && file.hasSavedSupplement === true && ' · 有补充草稿'}</small></span>
       </Button>;
     })}</div>;
   const sourceContent = <>
