@@ -1619,13 +1619,18 @@ public final class TaskStore {
                     .put("originalRunId",originalRun).put("originalEpoch",originalEpoch)
                     .put("canOpenOriginalRun",!originalRun.isEmpty()&&originalEpoch>0&&originalRun.equals(run)&&originalEpoch==epoch)
                     .put("hasUnresolvedOperations",hasUnresolved(actual.getString("id")));
-            // These pending/interrupted reads belong only to the visible original request,
+            // The additional draft facts belong only to the visible original request,
             // not the build chain or a new decision about the goal.
             String draftId=actual.optString("projectEditDraftId");JSONObject development=actual.optJSONObject("developmentContext");
             if(current&&!dismissed&&linked.optBoolean("canOpenOriginalRun")&&
                 dev.pocketengine.features.local.project.ProjectEditDraft.selected(development)&&draftId.matches("[a-f0-9]{64}")){
-                if("completed".equals(actual.opt("status")))linked.put("originalProjectDraftId",draftId);
-                else if(view.has("visibleOwnerRequest")&&"needs_confirmation".equals(actual.opt("status"))&&
+                if("completed".equals(actual.opt("status"))){
+                    linked.put("originalProjectDraftId",draftId);
+                    if(view.has("visibleOwnerRequest")&&epoch==1&&!development.has(OWNER_REVISION)&&
+                       !linked.getBoolean("hasUnresolvedOperations")&&!actual.optBoolean("cancelRequested")&&
+                       originalDraftAcceptedByOwner(actual,run,epoch,draftId))
+                        linked.put("originalProjectDraftAcceptedId",draftId);
+                }else if(view.has("visibleOwnerRequest")&&"needs_confirmation".equals(actual.opt("status"))&&
                         retainedDraftInRunState(actual,run,epoch,draftId,"needs_confirmation"))
                     linked.put("originalProjectDraftAwaitingAcceptanceId",draftId);
                 // The fixed row has no run column. First/current epoch plus its immutable
@@ -1639,17 +1644,44 @@ public final class TaskStore {
             view.put("target",linked).put("targetTaskId",actual.getString("id")).put("targetConversationId",conversation).put("canPrepare",false);if(current)view.put("state",run.isEmpty()?"prepared":"started");
         }return view;
     }
+    private static boolean currentPrivateDraftMetadata(JSONObject task)throws Exception{
+        return "assistant".equals(task.opt("kind"))&&"capabilities".equals(task.opt("executionMode"))&&
+            task.isNull("origin")&&task.isNull("teamRunId")&&task.isNull("memberId")&&task.isNull("parentTaskId")&&
+            "managed_process_v1".equals(task.getJSONObject("developmentContext").opt("runtime"))&&
+            !Boolean.FALSE.equals(task.opt("contextAvailable"))&&!task.optBoolean("contextWithdrawn")&&!task.optBoolean("sourceCurrentReadRequired");
+    }
     /** The task pointer and fixed row were saved together in the original run.
      * Fetch no manuscript here; the existing exact read revalidates the run and both byte hashes. */
     private boolean retainedDraftInRunState(JSONObject task,String run,int epoch,String draftId,String state)throws Exception{
-        if(!"assistant".equals(task.opt("kind"))||!"capabilities".equals(task.opt("executionMode"))||
-           !task.isNull("origin")||!task.isNull("teamRunId")||!task.isNull("memberId")||!task.isNull("parentTaskId")||
-           !"managed_process_v1".equals(task.getJSONObject("developmentContext").opt("runtime"))||
-           Boolean.FALSE.equals(task.opt("contextAvailable"))||task.optBoolean("contextWithdrawn")||task.optBoolean("sourceCurrentReadRequired"))return false;
+        if(!currentPrivateDraftMetadata(task))return false;
         try(Cursor row=db.rawQuery("SELECT 1 FROM private_project_edit_drafts d JOIN runs r ON r.task_id=d.task_id WHERE d.task_id=? AND d.draft_id=? AND r.run_id=? AND r.epoch=? AND r.status=?",
                 new String[]{task.getString("id"),draftId,run,Integer.toString(epoch),state})){
             return row.moveToFirst()&&!row.moveToNext();
         }catch(android.database.sqlite.SQLiteException unavailable){
+            if(Thread.currentThread().isInterrupted())throw unavailable;
+            return false;
+        }
+    }
+    /** Do not promote a completed task label into an owner verdict. The run keeps its
+     * original needs_confirmation ending; the separate CAS updates the task and writes the verdict. */
+    private boolean originalDraftAcceptedByOwner(JSONObject task,String run,int epoch,String draftId)throws Exception{
+        try{
+            JSONObject receipt=task.optJSONObject("resultConfirmation");
+            if(!currentPrivateDraftMetadata(task)||receipt==null||!Boolean.TRUE.equals(receipt.opt("completed"))||
+                !(receipt.opt("resultReviewDigest") instanceof String digest)||!digest.matches("[a-f0-9]{64}"))return false;
+            long revision=TaskExecutionScope.exactLong(task,"resultRevision",1,Long.MAX_VALUE);
+            if(revision!=TaskExecutionScope.exactLong(receipt,"confirmedResultRevision",1,Long.MAX_VALUE))return false;
+            // One indexed latest verification for this exact task, joined to its immutable draft
+            // and original ended run. A missing/oversized latest row does not select an older one.
+            String sql="SELECT e.event_order,CASE WHEN e.body_bytes BETWEEN 1 AND 32768 AND e.body_bytes=length(CAST(e.event_json AS BLOB)) THEN e.event_json END "+
+                "FROM private_project_edit_drafts d JOIN runs r ON r.task_id=d.task_id "+
+                "JOIN task_events e ON e.task_id=d.task_id AND e.event_order=(SELECT event_order FROM task_events WHERE task_id=d.task_id AND event_type='user_verification' ORDER BY event_order DESC LIMIT 1) "+
+                "WHERE d.task_id=? AND d.draft_id=? AND r.run_id=? AND r.epoch=? AND r.status='needs_confirmation' AND e.native_seq=e.event_order AND e.completed=1";
+            String id=task.getString("id");
+            try(Cursor row=db.rawQuery(sql,new String[]{id,draftId,run,Integer.toString(epoch)})){
+                return row.moveToFirst()&&!row.isNull(1)&&TaskAuditStore.matchesOwnerVerification(row.getString(1),id,run,epoch,row.getLong(0),digest,revision)&&!row.moveToNext();
+            }
+        }catch(Exception unavailable){
             if(Thread.currentThread().isInterrupted())throw unavailable;
             return false;
         }

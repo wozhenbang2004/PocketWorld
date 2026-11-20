@@ -23,7 +23,7 @@ type OriginalTask = { taskId:string; runId:string; epoch:number; status:string }
 type ChatBuild = OriginalTask & {ordinal:number; settledBuild?:true; decision?:'dependencies'|'build'|'collect'; approvalId?:string; packageOperationId?:string};
 export type ConversationPreparation = ButlerPreparationTarget & {
   sourceRunId:string; sourceEpoch:number; kind:'phone'|'project'; canPrepare:boolean; targetTaskId:string; goal:string;
-  originalTask?:OriginalTask; originalDraft?:OriginalProjectDraft; awaitingDraft?:OriginalProjectDraft; interruptedDraft?:OriginalProjectDraft; chatBuild?:ChatBuild; visibleOwnerRequest?:{messageId:string;revision:number}
+  originalTask?:OriginalTask; originalDraft?:OriginalProjectDraft; acceptedDraft?:true; awaitingDraft?:OriginalProjectDraft; interruptedDraft?:OriginalProjectDraft; chatBuild?:ChatBuild; visibleOwnerRequest?:{messageId:string;revision:number}
 };
 const identifier = (value:unknown): value is string => typeof value==='string' && !!value && value.length<=240;
 const positive = (value:unknown): value is number => Number.isSafeInteger(value) && Number(value)>0;
@@ -46,6 +46,8 @@ export function conversationPreparation(row: Data): ConversationPreparation | nu
   const task=originalTask(row.target), draft=originalProjectDraft(row,task), build=row.chatOriginalBuild, child=originalTask(build,false);
   const source=row.kind==='project'&&identifier(row.visibleOwnerRequest?.messageId)&&positive(row.visibleOwnerRequest.revision)
     ? {messageId:row.visibleOwnerRequest.messageId,revision:row.visibleOwnerRequest.revision} : undefined;
+  // Completion alone does not prove the owner accepted this immutable draft.
+  const acceptedDraft=source&&draft&&row.target?.hasUnresolvedOperations===false&&row.target.originalProjectDraftAcceptedId===draft.draftId?true:undefined;
   const waitingId=row.target?.originalProjectDraftAwaitingAcceptanceId;
   const awaitingDraft:OriginalProjectDraft|undefined=source&&task?.status==='needs_confirmation'&&typeof waitingId==='string'&&/^[a-f0-9]{64}$/.test(waitingId)
     ? {taskId:task.taskId,runId:task.runId,epoch:task.epoch,draftId:waitingId} : undefined;
@@ -60,7 +62,7 @@ export function conversationPreparation(row: Data): ConversationPreparation | nu
       ...(identifier(build.packageOperationId)?{packageOperationId:build.packageOperationId}:{})}:undefined;
   return { sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId,
     sourceRunId: row.sourceRunId, sourceEpoch: row.sourceEpoch, kind: row.kind, canPrepare, targetTaskId, goal:text(row.goal),
-    originalTask:task, originalDraft:draft, awaitingDraft, interruptedDraft, chatBuild, visibleOwnerRequest:source };
+    originalTask:task, originalDraft:draft, acceptedDraft, awaitingDraft, interruptedDraft, chatBuild, visibleOwnerRequest:source };
 }
 export type ConversationNext = {action:'prepare';label:string; hint?:string} |
   {action:'task'|'draft'|'package';label:string; hint?:string; target:OriginalTask; draftId?:string; packageOperationId?:string; review?:boolean; approvalId?:string};
@@ -102,7 +104,7 @@ export function conversationNext(row:ConversationPreparation, can:(command:strin
       if(hint)return {action:'task',target:build,label:'查看本机构建进展',hint};
     }
     if(row.originalDraft&&can('projectDraft.readDifference'))
-      return {action:'draft',target:task,draftId:row.originalDraft.draftId,label:'查看这次改稿'};
+      return {action:'draft',target:task,draftId:row.originalDraft.draftId,label:'查看这次改稿',hint:row.acceptedDraft?'原改稿已验收':undefined};
     if(row.awaitingDraft&&can('projectDraft.readDifference')&&can('butler.preparation.project.followup'))
       return {action:'draft',target:task,draftId:row.awaitingDraft.draftId,label:'查看这次改稿',hint:'改稿已保存，目标还待验收'};
     if(row.interruptedDraft&&can('projectDraft.readDifference')&&can('butler.preparation.project.followup'))

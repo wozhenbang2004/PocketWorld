@@ -358,6 +358,43 @@ public final class TaskAuditStore {
     public static JSONObject latest(SQLiteDatabase db,String task,String type)throws Exception{
         try(Cursor row=db.rawQuery("SELECT event_order,body_bytes FROM task_events WHERE task_id=? AND event_type=? ORDER BY event_order DESC LIMIT 1",new String[]{task,type})){return row.moveToFirst()?nativeEvent(db,task,row.getLong(0),row.getLong(1)):null;}
     }
+    /** Compare only the original scalar verdict fields of an already byte-bounded native row.
+     * Feedback and the memory snapshot are skipped, never parsed into fields or returned. */
+    static boolean matchesOwnerVerification(String body,String task,String run,int epoch,long sequence,String digest,long revision)throws IOException{
+        if(sequence<1)return false;
+        Set<String> required=Set.of("type","runId","coordinatorEpoch","seq","resultReviewDigest","resultRevision","completed");
+        Set<String> optional=Set.of("taskId","epoch","memorySourceSnapshotForgotten"),seen=new java.util.HashSet<>();
+        try(JsonReader json=new JsonReader(new java.io.StringReader(body))){
+            json.beginObject();
+            while(json.hasNext()){
+                String key=json.nextName();
+                if(!required.contains(key)&&!optional.contains(key)){
+                    json.skipValue();continue;
+                }
+                if(!seen.add(key))return false;
+                JsonToken kind=json.peek();
+                boolean exact=switch(key){
+                    case "type" -> kind==JsonToken.STRING&&"user_verification".equals(json.nextString());
+                    case "taskId" -> kind==JsonToken.STRING&&task.equals(json.nextString());
+                    case "runId" -> kind==JsonToken.STRING&&run.equals(json.nextString());
+                    case "coordinatorEpoch","epoch" -> kind==JsonToken.NUMBER&&Integer.toString(epoch).equals(json.nextString());
+                    case "seq" -> kind==JsonToken.NUMBER&&Long.toString(sequence).equals(json.nextString());
+                    case "resultReviewDigest" -> kind==JsonToken.STRING&&digest.equals(json.nextString());
+                    case "completed" -> kind==JsonToken.BOOLEAN&&json.nextBoolean();
+                    case "memorySourceSnapshotForgotten" -> kind==JsonToken.BOOLEAN&&!json.nextBoolean();
+                    case "resultRevision" -> {
+                        if(kind!=JsonToken.NUMBER)yield false;
+                        String prior=json.nextString();
+                        yield prior.matches("[1-9][0-9]{0,18}")&&Long.parseLong(prior)<revision;
+                    }
+                    default -> false;
+                };
+                if(!exact)return false;
+            }
+            json.endObject();
+            return seen.containsAll(required)&&json.peek()==JsonToken.END_DOCUMENT;
+        }
+    }
     public static JSONObject call(SQLiteDatabase db,String task,String call)throws Exception{
         JSONObject result=null;try(Cursor rows=db.rawQuery("SELECT event_order,body_bytes FROM task_events WHERE task_id=? AND event_type='inference_receipt' AND call_id=? ORDER BY event_order",new String[]{task,call})){while(rows.moveToNext()){if(result!=null)throw new IllegalStateException("原调用计量出现重复身份");result=nativeEvent(db,task,rows.getLong(0),rows.getLong(1));}}return result;
     }
