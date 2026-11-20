@@ -95,10 +95,10 @@ export function ProjectDraftWorkCopy({task,root,revision,sha,path,ordinal,disabl
     const failed=buildFailure(build),originalLabel=build?.observed?.kind==='saved_file'?'查看第 '+row.ordinal+' 稿的构建结果':
       failed?'查看第 '+row.ordinal+' 稿的'+(failed.kind==='dependency_exit'?'依赖准备失败':'构建失败'):'查看第 '+row.ordinal+' 稿的原构建';
     return <div className="pw-form-actions" key={row.revisionId}>
-      {build?<Button variant="secondary" size="small" disabled={busy||!bridge.getState().capabilities.commands.includes('tasks.open')}
-        onClick={()=>void showBuild(row)}>{originalLabel}</Button>:
-        <Button variant="secondary" size="small" disabled={busy||!bridge.getState().capabilities.commands.includes(openRetained)}
-          onClick={()=>void showRetainedCopy(row)}>{`打开第 ${row.ordinal} 稿的工作副本`}</Button>}
+      <Button variant="secondary" size="small" disabled={busy||!bridge.getState().capabilities.commands.includes(openRetained)}
+        onClick={()=>void showRetainedCopy(row)}>{`打开第 ${row.ordinal} 稿的工作副本`}</Button>
+      {build&&<Button variant="ghost" size="small" disabled={busy||!bridge.getState().capabilities.commands.includes('tasks.open')}
+        onClick={()=>void showBuild(row)}>{originalLabel}</Button>}
       {exactBuild(build?.previousVerification,row.workIdentity)&&
         <Button variant="ghost" size="small" disabled={busy||!bridge.getState().capabilities.commands.includes('tasks.open')}
           onClick={()=>void showBuild(row,true)}>{`第 ${row.ordinal} 稿的此前构建`}</Button>}

@@ -232,7 +232,14 @@ const workStatusLabel=(t:Task)=>workCollectionPresentation(t).label;
 function originalNodeBuildCopy(task?:Task): ProjectBuildCopy|null {
  const raw=task?.raw, scope=obj(raw?.developmentContext), pin=obj(scope.ownerDraftFirstBuild), hash=/^[a-f0-9]{64}$/;
  const key=(value:unknown):value is string=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
- if(!task||!raw||!['completed','failed'].includes(task.status)||!privateProjectTask(task)||raw.id!==task.id||
+ if(!task||!raw)return null;
+ // A real build exit is separate from the owner's review of the overall result.
+ const observedBuildFailure=task.status==='needs_confirmation'&&raw.status===task.status&&
+    raw.taskProjection==='detail_window'&&raw.taskCoreReadLimited===false&&raw.hasUnresolvedOperations===false&&
+    raw.cancelRequested===false&&pin.existingCheckoutBuild===true&&
+    originalFirstBuildFailure(task)?.failureStage==='build'&&
+    !asArray<Json>(raw.approvals).some(approval=>approval?.runId===raw.runId&&['pending','approved'].includes(approval.state));
+ if((!observedBuildFailure&&!['completed','failed'].includes(task.status))||!privateProjectTask(task)||raw.id!==task.id||
     raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||raw.taskProjection==='source_unavailable'||
     taskNeedsReconciliation(task)||!key(task.id)||typeof raw.runId!=='string'||!raw.runId||!Number.isSafeInteger(raw.coordinatorEpoch)||raw.coordinatorEpoch<1||
     scope.format!=='pocketworld.development-context.v1'||scope.runtime!=='managed_process_v1'||scope.draftOnly===true||
