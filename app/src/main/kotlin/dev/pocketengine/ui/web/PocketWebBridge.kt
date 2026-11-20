@@ -689,7 +689,29 @@ internal class PocketWebBridge(
             if (action in PocketWebTeamEvidence.COMMANDS) {
                 teamEvidence.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
+            if (action == "attachments.open" || action == "conversation.reader.attachment") {
+                val source = checkedMessageAttachmentSource(args)
+                require(source.has("window") == (action == "conversation.reader.attachment")) { "原消息窗口身份不匹配" }
+                val file = visibleMessageAttachment(source) ?: error("原消息附件或版本已变化，请在原位置核对")
+                val ticket = captureWindow()
+                val document = documentId
+                val reader = controller.conversationReaderRevision
+                fun current() = !closed && documentId == document && controller.conversationReaderRevision == reader &&
+                    acceptsWindow(ticket) && visibleMessageAttachment(source) == file
+                controller.openMessageAttachment(file, ::current) { status ->
+                    complete(id, source.put("status", status), null, retainValue = false)
+                }
+                return
+            }
             if (action in PocketWebAttachments.COMMANDS) {
+                if (action == "attachmentWorkspace.open" && args.has("messageAttachment")) {
+                    checkedPayload(args, setOf("messageAttachment"))
+                    val file = visibleMessageAttachment(checkedMessageAttachmentSource(args.getJSONObject("messageAttachment")))
+                        ?: error("原消息附件或版本已变化，请在原位置核对")
+                    val fileArgs = JSONObject().put("fileId", file.id).put("sha256", file.sha256)
+                    attachmentPages.dispatch(action, fileArgs) { result, error -> complete(id, result, error); publishState() }
+                    return
+                }
                 val conversationResult = if (action == "attachmentWorkspace.open") visibleChatTaskResult(args) else null
                 if (action == "attachmentWorkspace.open" && args.optBoolean("openOriginal") && conversationResult == null) {
                     require(section == null && taskViewId == requiredString(args, "taskId")) { "请从原工作打开这份成果" }
@@ -1905,13 +1927,6 @@ internal class PocketWebBridge(
                 require(!controller.state.chatSubmitting) { "请等待原输入回执后再切换对话" }
                 controller.switchFromConversationReader(page.window)
             }
-            "conversation.reader.attachment" -> {
-                val page = requireConversationReader(args)
-                val message = requiredString(args, "messageId")
-                val file = page.messages.firstOrNull { it.id == message }?.attachments?.firstOrNull { it.id == requiredString(args, "id") && it.sha256 == requiredString(args, "sha256") }
-                    ?: error("原附件不属于这份阅读窗口")
-                controller.openReaderAttachment(page.window, message, file)
-            }
             "attachments.pick" -> { requireComposer(args, optional = true); controller.pickAttachments() }
             "attachments.openPicker" -> { requireComposer(args, optional = true); controller.openChatAttachmentPicker() }
             "attachments.closePicker" -> controller.closeChatAttachmentPicker()
@@ -1934,12 +1949,6 @@ internal class PocketWebBridge(
             "speech.stop" -> controller.stopSpeaking()
             "sources.close" -> { checkedPayload(args, setOf("windowId")); sourceReader.close(requiredString(args, "windowId")) }
             "speech.stopTaskAnnouncement" -> { checkedPayload(args, setOf("readoutId")); controller.stopTaskAnnouncement(requiredString(args, "readoutId")) }
-            "attachments.open" -> {
-                checkedPayload(args, setOf("messageId", "id", "sha256"))
-                val message = controller.state.messages.firstOrNull { it.id == requiredString(args, "messageId") } ?: error("原消息已不在当前窗口")
-                val file = message.attachments.firstOrNull { it.id == requiredString(args, "id") && it.sha256 == requiredString(args, "sha256") } ?: error("原附件或内容版本已变化，请刷新后核对")
-                controller.openConversationAttachment(message.id ?: error("原消息身份缺失"), file)
-            }
             "tasks.close" -> restoreTaskWorkspace()
             "tasks.stop" -> {
                 checkedPayload(args, setOf("id", "runId", "epoch"))
@@ -2410,6 +2419,33 @@ internal class PocketWebBridge(
     }
     private fun isGroup(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") == "group"
     private fun canUseTaskControls(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") != "paired_device" && (!isGroup(task) || taskPage != null && controller.groupTaskReady)
+    private fun checkedMessageAttachmentSource(args: JSONObject): JSONObject {
+        val source = checkedPayload(args, setOf("conversationId", "window", "taskId", "messageId", "sourceRevision", "id", "sha256"))
+        requiredString(source, "conversationId"); requiredString(source, "messageId"); requiredString(source, "id")
+        require(requiredLong(source, "sourceRevision") >= 0 && requiredString(source, "sha256").matches(Regex("[0-9a-f]{64}"))) { "原附件版本无效" }
+        if (source.has("window")) require(requiredLong(source, "window") > 0) { "原历史阅读窗口无效" }
+        if (source.has("taskId")) {
+            requiredString(source, "taskId")
+            require(!source.has("window")) { "原附件不能同时使用两个窗口" }
+        }
+        return source
+    }
+    private fun visibleMessageAttachment(source: JSONObject): dev.pocketengine.ui.UiChatAttachment? {
+        val task = source.optString("taskId").takeIf { it.isNotEmpty() }
+        if (section != null || taskViewId != task || controller.attachmentOutcomes.state.open || !controller.webPrivateOwnerVisible()) return null
+        val conversation = source.getString("conversationId")
+        val page = controller.conversationReader
+        val rows = if (source.has("window")) {
+            if (page == null || page.window != source.getLong("window") || page.conversation != conversation || !controller.canReadConversationWindow(page)) return null
+            page.messages
+        } else {
+            if ((task == null && page != null) || controller.state.conversationId != conversation) return null
+            controller.state.messages
+        }
+        val row = rows.singleOrNull { it.id == source.getString("messageId") && it.sourceRevision == source.getLong("sourceRevision") } ?: return null
+        if (task != null && (row.role != "assistant" || (row.taskId?.takeIf(String::isNotEmpty) ?: row.submission?.optString("taskId")) != task)) return null
+        return row.attachments.singleOrNull { it.id == source.getString("id") && it.sha256 == source.getString("sha256") }
+    }
     private fun visibleChatTaskResult(args: JSONObject): UiTaskResult? {
         if (!args.has("resultMessageId") && !args.has("conversationId")) return null
         val taskId = requiredString(args, "taskId")

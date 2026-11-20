@@ -19,6 +19,7 @@ import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
 import {PhoneTaskConversationReturn,type PhoneConversationOrigin} from './PhoneTaskConversationReturn';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
 import { HeldPhoneResultImage } from './HeldPhoneResultImage';
+import { MessageAttachment } from './MessageAttachment';
 import './task-reading.css';
 
 const stoppedAttemptTitles: Record<string, string> = {
@@ -119,7 +120,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, onOpenAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, onReadPhoneConversation, focusedOriginalDraft, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, onReadPhoneConversation, focusedOriginalDraft, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -131,7 +132,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   showEmptyResult: boolean;
   deferExecutionDetails: boolean;
   onCopy: (text: string) => Promise<unknown>;
-  onOpenAttachment?: (messageId: string, id: string, sha256: string) => void;
+  attachmentConversation: string;
+  canOpenAttachment: boolean;
+  canLocateAttachment: boolean;
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
   onFollowUp?: () => void;
   onReadPhoneConversation?: (origin:PhoneConversationOrigin) => void;
@@ -261,12 +264,11 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {files.length > 0 && <section className="pw-outcome-deliverables" aria-label="关联答复中的附件">
       <div className="pw-reading-section-heading"><h4>关联答复中的附件</h4><span>{files.length} 个文件</span></div>
       <div className="pw-outcome-files">
-        {files.map(file => <Button key={String(file.id)} data-motion-key={`file:${reply?.id}:${file.id}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
-          disabled={!reply?.id || !onOpenAttachment || typeof file.sha256 !== 'string'}
-          onClick={() => onOpenAttachment?.(reply!.id, String(file.id), String(file.sha256))}>
+        {files.map(file => <MessageAttachment key={`${file.id}:${file.sha256}`} file={file} view={`work:${readIdentity}:${owner}`}
+          origin={{taskId:record.id,conversationId:attachmentConversation,messageId:reply?.id,sourceRevision:reply?.sourceRevision}}
+          enabled={active&&canOpenAttachment} canLocate={canLocateAttachment} workCopy={
           <span className="pw-outcome-file-copy"><span>{typeof file.name === 'string' && file.name ? file.name : '查看附件'}</span>
-            <small>{!reply?.id || typeof file.sha256 !== 'string' ? '原文件身份待核对' : !onOpenAttachment ? '当前无法打开附件' : '打开原附件'}</small></span>
-        </Button>)}
+            <small>{!reply?.id || reply.sourceRevision === undefined || typeof file.sha256 !== 'string' ? '原文件身份待核对' : !canOpenAttachment ? '当前无法打开附件' : '打开原附件'}</small></span>}/>)}
       </div>
     </section>}
 

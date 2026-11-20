@@ -1,5 +1,6 @@
 package dev.pocketengine.ui
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -1419,45 +1420,50 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         else editComposerSelection(state.chatSendMode,state.selectedChatAttachments+selected)
     }
     fun removeChatAttachment(id:String,key:String,viewEpoch:Int) { if(composerDraft?.key==key&&chatViewEpoch==viewEpoch)editComposerSelection(state.chatSendMode,state.selectedChatAttachments.filterNot{it.id==id}) }
-    fun openConversationAttachment(messageId: String, reference: UiChatAttachment) {
-        val conversation = state.conversationId
-        openPrivateAttachment(reference) { state.conversationId == conversation && state.messages.any { it.id == messageId && it.attachments.any { file -> attachmentOpenKey(file) == attachmentOpenKey(reference) } } }
-    }
-    fun openSelectedChatAttachment(reference: UiChatAttachment) {
-        val conversation = state.conversationId
-        openPrivateAttachment(reference) { state.conversationId == conversation && state.selectedChatAttachments.any { attachmentOpenKey(it) == attachmentOpenKey(reference) } }
-    }
-    fun openTaskResultAttachment(taskId: String, reference: UiChatAttachment) {
-        openPrivateAttachment(reference) { state.tasks.find { it.id == taskId }?.let(::taskResultAttachments)?.any { attachmentOpenKey(it) == attachmentOpenKey(reference) } == true }
-    }
-    private fun openPrivateAttachment(reference: UiChatAttachment, stillVisible: () -> Boolean) {
-        val key = attachmentOpenKey(reference)
-        if (closed || groupTaskPage != null || ownerDomain in setOf("groups", "teams") || !stillVisible() || state.attachmentOpens[key]?.checking == true) return
-        val domain = ownerDomain
-        state = state.copy(attachmentOpens = state.attachmentOpens + (key to UiAttachmentOpen(checking = true)))
-        io.execute {
-            try {
-                val repository = dev.pocketengine.features.attachments.AttachmentRepository.get(app)
-                val intent = synchronized(repository.book) {
-                    val meta = repository.book.get(reference.id)
-                    check(meta.optString("principalId") == "owner" && meta.optString("spaceId") == "private" && meta.optString("sha256") == reference.sha256 && meta.optString("mimeType") == reference.mimeType && meta.optLong("size", -1) == reference.size && reference.size in 0..dev.pocketengine.features.attachments.AttachmentBook.MAX_FILE_BYTES) { "原附件已变化或不可用，请保留原引用并重新核对" }
-                    val digest = java.security.MessageDigest.getInstance("SHA-256")
-                    val discard = object : java.io.OutputStream() { override fun write(value: Int) {} ; override fun write(bytes: ByteArray, offset: Int, length: Int) {} }
-                    val count = repository.book.exportTo(reference.id, java.security.DigestOutputStream(discard, digest))
-                    check(count == reference.size && digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) } == reference.sha256) { "原附件字节摘要不匹配，未打开其他内容" }
-                    repository.viewIntent(reference.id)
-                }
-                main.post {
-                    if (closed) return@post
-                    try {
-                        check(ownerDomain == domain && groupTaskPage == null && stillVisible()) { "已离开原私人入口，请返回原位置重新打开" }
-                        check(repository.book.get(reference.id).optString("sha256") == reference.sha256) { "原附件已不可用" }
-                        activity.startActivity(intent)
-                        state = state.copy(attachmentOpens = state.attachmentOpens + (key to UiAttachmentOpen(requested = true)))
-                    } catch (failure: Exception) { state = state.copy(attachmentOpens = state.attachmentOpens + (key to UiAttachmentOpen(error = "附件未打开：" + message(failure)))) }
-                }
-            } catch (failure: Exception) { main.post { if (!closed) state = state.copy(attachmentOpens = state.attachmentOpens + (key to UiAttachmentOpen(error = "附件未打开：" + message(failure)))) } }
+    internal fun openMessageAttachment(reference: UiChatAttachment, current: () -> Boolean, done: (String) -> Unit) {
+        if (!webPrivateOwnerVisible() || !current()) { done("scope_changed"); return }
+        val host = app.attachmentOutcomes
+        fun sameOriginal(): Boolean {
+            val meta = dev.pocketengine.features.attachments.AttachmentRepository.get(app).book.get(reference.id)
+            return meta.optString("principalId") == "owner" && meta.optString("spaceId") == "private" &&
+                meta.optString("sha256") == reference.sha256 && meta.optString("mimeType") == reference.mimeType &&
+                meta.optLong("size", -1) == reference.size && reference.size in 0..dev.pocketengine.features.attachments.AttachmentBook.MAX_FILE_BYTES
         }
+        fun discard(intent: Intent) {
+            // The existing viewer TTL remains the bound if its exact unissued copy cannot be removed.
+            runCatching { io.execute { runCatching { host.discardUnissuedView(intent) } } }
+        }
+        try {
+            io.execute {
+                val prepared = try {
+                    check(sameOriginal())
+                    host.open(null, reference.id, reference.sha256, dev.pocketengine.core.RunControl())
+                } catch (_: Exception) { null }
+                if (!main.post {
+                    val status = when {
+                        !webPrivateOwnerVisible() || !current() -> { prepared?.let(::discard); "scope_changed" }
+                        prepared == null -> "not_prepared"
+                        !runCatching(::sameOriginal).getOrDefault(false) -> { discard(prepared); "not_prepared" }
+                        else -> {
+                            val issued = dev.pocketengine.features.attachments.AttachmentOutcomeHost.NATIVE_VIEW_ISSUED
+                            prepared.putExtra(issued, true)
+                            try {
+                                activity.startActivity(prepared)
+                                "viewer_requested"
+                            } catch (_: ActivityNotFoundException) {
+                                prepared.removeExtra(issued)
+                                discard(prepared)
+                                "no_reader"
+                            } catch (_: Exception) {
+                                // An unknown launch may already have handed off the URI.
+                                "launch_unknown"
+                            }
+                        }
+                    }
+                    done(status)
+                }) prepared?.let { runCatching { host.discardUnissuedView(it) } }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) { done("not_prepared") }
     }
     private var queuedInputsBacking by mutableStateOf<QueuedOwnerInputsPage?>(null)
     var queuedInputsPage: QueuedOwnerInputsPage?
@@ -3069,6 +3075,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     var conversationReader by mutableStateOf<ConversationReadPage?>(null)
         private set
     private var conversationReadSequence=0L
+    internal val conversationReaderRevision get() = conversationReadSequence
     fun canReadConversationWindow(page:ConversationReadPage)=!closed&&privateWorkspaceView()&&conversationReader?.window==page.window&&conversationReader?.conversation==page.conversation
     fun openConversationReader(id:String) {
         if(id.isBlank()||id.length>240||!privateWorkspaceView())return
@@ -3100,10 +3107,6 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun closeConversationReader(){conversationReader=null;++conversationReadSequence}
     fun switchFromConversationReader(window:Long){val page=conversationReader?:return;if(page.window!=window||state.chatSubmitting)return;closeConversationReader();if(page.conversation!=state.conversationId)openConversation(page.conversation)}
-    fun openReaderAttachment(window:Long,message:String,reference:UiChatAttachment){
-        val page=conversationReader?:return;if(page.window!=window||!canReadConversationWindow(page))return
-        openPrivateAttachment(reference){conversationReader?.let{canReadConversationWindow(it)&&it.window==window&&it.messages.any{row->row.id==message&&row.attachments.any{file->attachmentOpenKey(file)==attachmentOpenKey(reference)}}}==true}
-    }
     fun newConversation() {
         compatibilityChat=null
         if(state.chatSubmitting)return

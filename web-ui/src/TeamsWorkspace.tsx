@@ -1,4 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { dequal } from 'dequal/lite';
 import { bridge } from './bridge';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconEdit, IconExternalLink, IconPause, IconPlay, IconRefresh, IconMore, IconStop } from './icons';
 import { Tabs, TabList, Tab, TabPanel, ContextMenuTrigger, ContextMenu, ContextMenuItem } from './shell-library';
@@ -393,6 +394,34 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if(focusedPackage){leaveWithDrafts(focusedPackage.returnToWork);return true;} if (focusedProposal?.returnToWork) { leaveWithDrafts(focusedProposal.returnToWork); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, focusedPackage, focusedProposal, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
+  const definitionMembers = rows(definition?.members);
+  const modelTemplate = !!definition && ['collaborate', 'debate'].includes(definition.mode) && definitionMembers.length > 0 &&
+    definitionMembers.every(member => (!member.runner || member.runner === 'model') && (!member.device || member.device === 'phone'));
+  const templateDraftBlocked = !definitionReady || !startDraft.hasSession || startDraft.loading || !!startDraft.error ||
+    startDraft.stale || startDraft.requiresRecheck || !!startDraft.conflict;
+  const carryModelTemplate = () => {
+    const original = currentReading.current, exactGoal = currentInput.current.goal;
+    if (!onAskButler || !modelTemplate || templateDraftBlocked || busy || materialBusy || exactGoal.length > 8000 || original?.kind !== 'definition' ||
+        original.definition?.id !== definition?.id || !original.viewHandle || startDraftId.current !== original.definition.id) return;
+    const documentEpoch = bridge.getDocumentEpoch();
+    const stillOpen = () => !document.hidden && bridge.getDocumentEpoch() === documentEpoch && ownsNativeWindow() &&
+      currentReading.current?.viewHandle === original.viewHandle;
+    leaveWithDrafts(() => {
+      if (!stillOpen() || currentInput.current.goal !== exactGoal) return;
+      void invoke('teams.readDefinition', { id: original.definition.id }, fresh => {
+        if (fresh.kind !== 'definition' || !fresh.viewHandle || fresh.definition?.id !== original.definition.id) {
+          release(fresh); throw new Error('没有核对到这份原编组，目标仍留在本机。');
+        }
+        if (!stillOpen()) { release(fresh); return; }
+        if (!dequal(original.definition, fresh.definition)) {
+          acceptReading(fresh); setNotice('编组已有变化。目标仍保留，核对当前分工后再带回管家。'); return;
+        }
+        release(fresh);
+        if (currentInput.current.goal !== exactGoal) { setNotice('目标已改动，未带走旧文字。'); return; }
+        onAskButler({ teamId: original.definition.id, ...(exactGoal.trim() ? { goal: exactGoal } : {}) });
+      });
+    });
+  };
   const current = reading?.kind === 'run' ? object(reading.run) : null;
   // This relationship comes only from readRun's native parent-work check.
   const ownerWorkLink = reading?.kind === 'run' && reading.ownerWorkLink ? reading.ownerWorkLink as TeamOwnerWorkLink : null;
@@ -608,7 +637,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const computerProfiles = rows({ ...object(object(state.features).remote), ...object(object(state.ownerSnapshots).remote) }.profiles);
   const computerLabel = (member: Data) => `${computerProfiles.find(profile => profile.id === member.device?.profileId)?.name || member.device?.profileId || '原电脑'} · ${member.device?.environmentId || '环境待选择'}`;
   const phoneMembers = rows(phoneSelection?.view?.members);
-  const hasPhoneMembers = rows(definition?.members).some(member => member.runner === 'phone_agent');
+  const hasPhoneMembers = definitionMembers.some(member => member.runner === 'phone_agent');
   const choosePhoneScope = (member: Data, id: string) => setPhoneChoices(value => ({ ...value, [member.memberId]: teamPhoneChoice(rows(member.options).find(option => option.optionId === id)) }));
   const changePhoneBudget = (memberId: string, field: keyof TeamPhoneChoice, value: string) => setPhoneChoices(old => ({ ...old, [memberId]: { ...old[memberId], [field]: value } }));
   const reviewPhoneStart = () => {
@@ -822,8 +851,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     {!reading && !editor && <Accordion variant="divided" className="pw-team-recovery-access"><AccordionItem id="old-drafts" title="旧草稿与启动核对"><p className="pw-field-hint">以前未发出的目标与分工仍可查看。启动结果未确认的协作，需要先核对原记录。</p><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || formDraft.loading} onClick={() => beginEditor(null, 'start')}>查看旧协作草稿</Button></AccordionItem></Accordion>}
     {!editor && !memberDraft && draftRecovery}
     {!editor && !definition && <FormDraftNotice draft={formDraft} />}
-    {definition && <article className="pw-team-reading pw-team-definition"><header className="pw-object-toolbar pw-team-definition-heading"><div><h2 tabIndex={-1}>{definition.name}</h2><p>{definition.mode === 'produce' ? '原项目文件协作' : definition.mode === 'debate' ? '取证与讨论' : hasPhoneMembers ? '手机分工与共同工作' : '共同分析'} · {rows(definition.members).length} 名成员</p></div>{refreshReading}</header>
-      <section className="pw-team-handoff" aria-label="使用编组安排工作">
+    {definition && <article className="pw-team-reading pw-team-definition"><header className="pw-object-toolbar pw-team-definition-heading"><div><h2 tabIndex={-1}>{definition.name}</h2><p>{definition.mode === 'produce' ? '原项目文件协作' : definition.mode === 'debate' ? '取证与讨论' : hasPhoneMembers ? '手机分工与共同工作' : '共同分析'} · {definitionMembers.length} 名成员</p></div>{refreshReading}</header>
+      {!modelTemplate && <section className="pw-team-handoff" aria-label="使用编组安排工作">
         <p>这份编组保存常用成员与职责。把目标交给管家后，再按实际工作安排分工与范围。</p>
         {onAskButler && <Button trailingIcon={IconChevronRight} disabled={busy || materialBusy || startDraft.loading || startDraft.requiresRecheck || !!startDraft.conflict || goal.length > 8000} onClick={() => askButler(goal.trim() ? { goal } : {})}>回管家安排协作</Button>}
         {(goal.trim() || startDraft.savedAt || startDraft.loading || startDraft.error || startDraft.conflict || startDraft.requiresRecheck) && <Accordion variant="divided" className="pw-team-saved-goal"><AccordionItem id="saved-goal" title="这份编组的旧目标草稿" description={goal.trim() ? teamGoalTitle(goal) : undefined}>
@@ -831,8 +860,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           <TextAreaField label="保留的目标" value={goal} onChange={setGoal} maxLength={8000} rows={3} autoResize maxRows={8} resize="none" isDisabled={busy || startDraft.requiresRecheck} />
           <p className="pw-field-hint">目标会带回管家输入区，由你继续交办；这份草稿与分工保留。</p>
         </AccordionItem></Accordion>}
-      </section>
-      <section className="pw-team-members"><header className="pw-team-members-heading"><h3>成员与职责</h3><Button variant="ghost" leadingIcon={IconEdit} disabled={busy || !definitionReady} onClick={() => beginEditor(definition)}>编辑编组</Button></header><Accordion variant="divided" className="pw-team-definition-member-list">{rows(definition.members).map(member => <AccordionItem key={member.id} id={member.id} data-motion-key={`definition-member:${member.id}`} title={<TeamMemberIdentity member={member} name={teamMemberLabel(member, rows(definition.members))} detail={member.id === definition.leaderId ? teamRoleLabel(definition) : undefined} size={32} />} description={<span className="pw-team-definition-duty">{member.role}</span>}><div className="pw-team-detail-body"><p>{member.role}</p>
+      </section>}
+      <section className="pw-team-members"><header className="pw-team-members-heading"><h3>成员与职责</h3><Button variant="ghost" leadingIcon={IconEdit} disabled={busy || !definitionReady} onClick={() => beginEditor(definition)}>编辑编组</Button></header><Accordion variant="divided" className="pw-team-definition-member-list">{definitionMembers.map(member => <AccordionItem key={member.id} id={member.id} data-motion-key={`definition-member:${member.id}`} title={<TeamMemberIdentity member={member} name={teamMemberLabel(member, definitionMembers)} detail={member.id === definition.leaderId ? teamRoleLabel(definition) : undefined} size={32} />} description={<span className="pw-team-definition-duty">{modelTemplate ? member.assignment || member.role : member.role}</span>}><div className="pw-team-detail-body"><p>{member.role}</p>
+        {modelTemplate && member.assignment && member.assignment !== member.role && <p className="pw-team-goal-copy" dir="auto">具体分工：{member.assignment}</p>}
         {member.runner === 'phone_agent' ? <><small>{teamPhoneTargetLabel(member.device, phoneTargets)}</small><p>{member.assignment}</p></>
           : member.runner === 'model' || !member.runner ? <small>模型：{memberModelLabel(member) || '沿用实际启动时的主模型'} · 本机模型连接</small>
           : <><small>执行器：{harnessWorkerLabel(undefined, member.runner)} · 模型：{member.model || '执行器默认'}</small><p className="pw-field-hint">电脑：{computerLabel(member)}</p>
@@ -840,6 +870,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             {memberProbes[`${definition.id}:${member.id}`]?.definition === JSON.stringify(member) && <HarnessEvidence probe={memberProbes[`${definition.id}:${member.id}`].value} id={`saved-member-evidence-${member.id}`} />}
           </>}
       </div></AccordionItem>)}</Accordion></section>
+      {modelTemplate && onAskButler && <section className="pw-team-handoff" aria-label="使用编组安排工作">
+        <TextAreaField className="pw-team-saved-goal" label="这次想完成什么" value={goal} onChange={setGoal} maxLength={8000} rows={2} autoResize maxRows={8} resize="none"
+          isDisabled={busy || materialBusy || templateDraftBlocked} hint="文字先留作本机草稿。留空只带编组，不改管家的已有文字。" />
+        {(startDraft.loading || startDraft.saving || startDraft.error || startDraft.stale || startDraft.conflict || startDraft.requiresRecheck || startDraft.savedAt > 0) && <FormDraftNotice draft={startDraft} />}
+        <Button trailingIcon={IconChevronRight} disabled={busy || materialBusy || templateDraftBlocked || goal.length > 8000} onClick={carryModelTemplate}>
+          {goal.trim() ? '带目标和编组回管家' : '带编组回管家'}</Button>
+        <p>回到管家可继续编辑，确认发送后才交办。实际分工仍由你审阅。</p>
+      </section>}
       <div className="pw-team-definition-settings"><Accordion variant="divided"><AccordionItem id="definition-management" title="管理编组"><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.reviewRemove', { viewHandle: reading!.viewHandle }, reviewResult)}>移除编组</Button></AccordionItem></Accordion></div>
 
     </article>}

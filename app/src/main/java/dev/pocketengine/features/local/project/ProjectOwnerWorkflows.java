@@ -44,27 +44,43 @@ public final class ProjectOwnerWorkflows {
         JSONObject snapshot=local.handle("export",new JSONObject().put("checkoutId",checkout)),source=ProjectSources.describe(snapshot);
         JSONObject wrapper=ProjectAndroidPreflight.ownerWrapper(snapshot,source);
         if(!project.equals(source.getString("projectId"))||!checkout.equals(source.getString("checkoutId")))throw new SecurityException("原项目副本已变化");
-        if(observeTooling)try{source.put("checkoutTooling",ProjectCheckoutTooling.describe(snapshot,source,local.projectRuntimeForHost("managed_process_v1")).put("androidClues",wrapper!=null));}
-        catch(Exception unavailable){/* Optional observation must not block reading/editing a verified checkout. */}
+        if(observeTooling){
+            try{source.put("checkoutTooling",ProjectCheckoutTooling.describe(snapshot,source,local.projectRuntimeForHost("managed_process_v1")).put("androidClues",wrapper!=null));}
+            catch(Exception unavailable){/* Optional observation must not block reading/editing a verified checkout. */}
+            JSONObject copy=snapshot.getJSONObject("checkout").optJSONObject(OwnerDraftWorkCopy.FIELD);
+            if(copy!=null&&copy.optString("initialCopyDigest").matches("[a-f0-9]{64}")&&
+                !source.getString("sourceDigest").equals(copy.opt("initialCopyDigest"))){
+                source.put("editedDraftCopy",true);
+                try{source.putOpt("editedDraftBuild",tasks.editedBuildForDraftCopy(copy.getString("workIdentity"),project,checkout,source.getString("sourceDigest")));}
+                catch(Exception unavailable){source.put("editedDraftBuildUnavailable",true);}
+            }
+        }
         source.remove("files");
         if(wrapper!=null)source.put("androidGradleWrapper",wrapper);
         return source;
     }
-    /** One real managed build, not code execution. Both the original kept edition and the derived whole tree must still agree. */
+    /** Recheck the original kept edition and pin the actual current tree of its opened copy, without running anything. */
     public JSONObject reviewFirstBuildForOwner(String project,String checkout)throws Exception {
         requireOrdinaryFileOwner(project,checkout);JSONObject mark=local.projectCheckoutForHost(checkout).getJSONObject(OwnerDraftWorkCopy.FIELD);
         var seed=tasks.ownerDraftWorkCopySeed(mark.getString("taskId"),mark.getString("draftId"),mark.getString("revisionId"),mark.getString("sha256"));
         if(!seed.projectId.equals(project)||!seed.checkoutId.equals(checkout))throw new SecurityException("原稿没有建立这个工作副本");
-        JSONObject copy=local.findDraftWorkCopy(seed),plan=ProjectBuildPlan.create(local,new JSONObject().put("checkoutId",checkout).put("runtimeId","managed_process_v1")
-            .put("intent","build").put("ecosystem","node").put("expectedSourceDigest",copy.getString("initialCopyDigest")));
+        JSONObject copy=local.findDraftWorkCopy(seed);
+        if(!"ready".equals(copy.opt("status"))||!Boolean.FALSE.equals(copy.opt("recyclable")))
+            throw new SecurityException("请先打开这份原稿的实际独立副本。");
+        JSONObject snapshot=local.handle("export",new JSONObject().put("checkoutId",checkout));
+        String digest=ProjectSources.describe(snapshot).getString("sourceDigest");
+        JSONObject plan=ProjectBuildPlan.create(local,new JSONObject().put("checkoutId",checkout).put("runtimeId","managed_process_v1")
+            .put("intent","build").put("ecosystem","node").put("expectedSourceDigest",digest));
         JSONObject pin=OwnerDraftFirstBuild.pin(seed,copy,plan),runtime=local.projectRuntimeForHost("managed_process_v1");
         OwnerDraftFirstBuild.requireTooling(pin,runtime);
-        JSONObject snapshot=local.handle("export",new JSONObject().put("checkoutId",checkout)), scripts=OwnerDraftFirstBuild.scripts(snapshot,pin);
+        JSONObject scripts=OwnerDraftFirstBuild.scripts(snapshot,pin);
         OwnerDraftFirstBuild.chooseDependencies(pin,snapshot,runtime);
         JSONObject deps=OwnerDraftFirstBuild.dependencies(pin);
         JSONObject result=new JSONObject().put("pin",pin).put("scripts",scripts).putOpt("dependencies",deps);
-        if(deps!=null)result.put("dependencyState",local.draftDependencyFilesReady(checkout,deps)?"current_packages_checked":"needs_lock_review")
-            .putOpt("previousVerification",tasks.classicFirstBuildForDraft(seed));
+        if(deps!=null){
+            result.put("dependencyState",local.draftDependencyFilesReady(checkout,deps)?"current_packages_checked":"needs_lock_review");
+            if(!OwnerDraftFirstBuild.edited(pin))result.putOpt("previousVerification",tasks.classicFirstBuildForDraft(seed));
+        }
         return result;
     }
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
@@ -211,7 +227,7 @@ public final class ProjectOwnerWorkflows {
                 .put("initialSourceDigest",digest).put("clientMessageId",client).put("filesAreUntrusted",true).put("authorityAdded",false);
         if(ownerInput.has(OwnerDraftFirstBuild.FIELD)){
             if(ownerStartFence.get()==null||ownerConvention.get()!=null||butlerPreparation.get()!=null||
-                ownerInput.has("draftOnly")||ownerInput.has(OwnerRevisionSource.FIELD))throw new SecurityException("首次构建必须由主人独立核对此副本，不能继承别的任务或项目约定");
+                ownerInput.has("draftOnly")||ownerInput.has(OwnerRevisionSource.FIELD))throw new SecurityException("构建必须由主人独立核对此副本版本，不能继承别的任务或项目约定");
             JSONObject pin=reviewFirstBuildForOwner(project,checkout).getJSONObject("pin");OwnerDraftFirstBuild.requireContext(pin,context);
             if(!OwnerDraftFirstBuild.goal(pin).equals(goal))throw new SecurityException("这不是已审阅的本机独立构建目标");
             if(!ProjectSources.canonical(pin).equals(ProjectSources.canonical(ownerInput.getJSONObject(OwnerDraftFirstBuild.FIELD))))throw new SecurityException("原稿副本或构建条件在审阅后已变化，没有提交");

@@ -162,7 +162,6 @@ internal object PocketWebState {
             .put("chatAttachmentPickerOpen", state.chatAttachmentPickerOpen)
             .put("chatAttachmentModel", publicValue(state.chatAttachmentModel))
             .put("attachmentImporting", state.attachmentImporting).put("phoneSubmitting", state.phoneSubmitting)
-            .put("attachmentOpens", JSONObject().also { out -> state.attachmentOpens.forEach { (key, value) -> out.put(key, JSONObject().put("checking", value.checking).put("requested", value.requested).put("error", value.error ?: JSONObject.NULL)) } })
             .put("phoneDraftAcceptedRevision", controller.phoneDraftAcceptedRevision)
             .put("phoneDraftAcceptedText", controller.phoneDraftAcceptedText)
             .put("listening", state.listening).put("speaking", state.speaking).put("speechAvailable", state.speechAvailable)

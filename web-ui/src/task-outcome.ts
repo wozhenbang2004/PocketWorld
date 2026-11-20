@@ -18,7 +18,7 @@ export interface TaskOutcome {
   evidenceRunBound?: boolean;
   screenshot?: { imageId: string; state: string; currentRun: boolean; encrypted: boolean; legacyRetained: boolean; createdAt?: number; expiresAt?: number; readState: string; deletionPending: boolean };
   /** A linked reply has task identity, but the message protocol has no run identity. */
-  reply?: { id: string; text: string; at?: number; attachments: Row[] };
+  reply?: { id: string; sourceRevision?: number; text: string; at?: number; attachments: Row[] };
   projectPackages: ProjectPackageOutcome[];
   projectPackagesPartial: boolean;
   partial: boolean;
@@ -87,7 +87,7 @@ export function getTaskOutcome(input: unknown, messages: unknown = [], now: numb
   const attachments = rows(linked?.attachments).filter(file => typeof file.id === 'string' && file.id);
   const replyText = linked && text(linked.content) !== output ? text(linked.content) : '';
   const reply = linked && (replyText || attachments.length) ? {
-    id: text(linked.id), text: replyText, at: finite(linked.at), attachments,
+    id: text(linked.id), sourceRevision: finite(linked.sourceRevision), text: replyText, at: finite(linked.at), attachments,
   } : undefined;
   const retained = !useEvidence && (evidenceText || image && !remotePhoneSnapshot) ? {text: evidenceText, ...(image && !remotePhoneSnapshot ? {image} : {})} : undefined;
   const packagePage = row(packageRead ?? raw.projectPackageOutcomes), hasPackagePage = Object.keys(packagePage).length > 0;

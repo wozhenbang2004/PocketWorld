@@ -1,6 +1,6 @@
 import {OriginalPrivateHostAnswer} from './OriginalPrivateHostAnswer';
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import { IconClose, IconFile, IconLink, IconRefresh, IconTool } from './icons';
+import { IconClose, IconLink, IconRefresh, IconTool } from './icons';
 import {Accordion,AccordionItem,Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
 import {bridge} from './bridge';
@@ -11,6 +11,7 @@ import {PhoneReturnedReport,type PhoneReportTarget} from './PhoneReturnedReport'
 import {PhoneMessageReturn} from './PhoneMessageReturn';
 import {messagePhoneResult} from './phone-start';
 import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
+import {MessageAttachment} from './MessageAttachment';
 import {RegisteredQuoteTrail,sameQuoteVisit,type HistoryQuoteVisit} from './RegisteredQuoteTrail';
 import './conversation-history-window.css';
 
@@ -172,7 +173,11 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
       onOriginal={readPhone?t=>{remember();setPhoneOriginal(t)}:undefined}>
       <AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>
      </PhoneMessageReturn>:message.originalHostFinal?<p className="pw-user-text">{message.content}</p>:message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
-    {Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><Button key={`${file.id}:${file.sha256}`} variant="ghost" leadingIcon={IconFile} disabled={!page||pending||!can('conversation.reader.attachment')} onClick={()=>void invoke('conversation.reader.attachment',{messageId:message.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
+    {Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><MessageAttachment
+     key={`${file.id}:${file.sha256}`} file={file} history view={`history:${shown.window}`}
+     origin={{conversationId:shown.conversation,messageId:message.id,sourceRevision:message.sourceRevision,window:shown.window}}
+     enabled={!!page&&page.window===shown.window&&!pending&&can('conversation.reader.attachment')} canLocate={can('attachmentWorkspace.open')}
+     beforeOpen={()=>{remember();persist()}}/>)}</div>}
     {page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{message.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p></AccordionItem></Accordion>}
     {page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
      const h=live.current;if(!h||!scroll.current?.contains(from)||h.window!==shown.window||h.conversation!==shown.conversation)return;

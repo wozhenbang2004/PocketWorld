@@ -1,0 +1,15 @@
+.pw-message-file { min-width: 0; max-width: 100%; }
+.pw-message-files > .pw-message-file > button {
+  min-width: 0;
+  min-height: 44px;
+  max-width: 100%;
+}
+.pw-message-files > .pw-message-file > button > span {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pw-outcome-files .pw-message-file > .pw-outcome-file { width: 100%; }
+.pw-message-file .pw-message-file-feedback { margin: 4px 0 0; max-width: 34ch; text-align: start; overflow-wrap: anywhere; }
+.pw-message-file > .pw-message-file-next { min-height: 44px; }

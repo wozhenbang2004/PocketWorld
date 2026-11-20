@@ -59,7 +59,7 @@ internal class PocketWebFirstNodeWebOutput(
                 if(build==null){
                     check(action==READ){"尚没有这轮实际成功的原构建"}
                     return@runCatching JSONObject().put("eligible",false)
-                        .put("message","原构建没有可核对的整站退出证据，不能用当前同名网页补回。如果已保存单文件，可在原工作查看。")
+                        .put("message","这次未核对到可保存的完整网页，不会用旧输出补回。已记录的构建退出与此前保存的成品不受影响。")
                 }
                 val state=store.firstWebOutputForOwner(build)
                 when(action){

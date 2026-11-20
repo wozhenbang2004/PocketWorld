@@ -13,6 +13,7 @@ public final class RuntimeInvocation {
     private final long pauseRevision;
     private final RuntimeWorkspace workspace;
     private final boolean ownerLockedBuild;
+    private final String editedWebVersion;
 
     public RuntimeInvocation(JSONObject exact,JSONObject nativeBinding,JSONObject frozenSourceSnapshot,
             RunControl original,ProjectRuntime.LiveGate liveGate) throws Exception {
@@ -27,6 +28,8 @@ public final class RuntimeInvocation {
         if(ownerLockedBuild&&(!"build".equals(exact.opt("stepId"))||!"project.runtime.run".equals(exact.opt("command"))||
             !"managed_process_v1".equals(exact.opt("runtimeId"))))throw new SecurityException("runtime_owner_locked_build_scope_mismatch");
         this.ownerLockedBuild=ownerLockedBuild;
+        // An optional identifier from the original native admission, never read from model arguments.
+        editedWebVersion=nativeBinding.optString(dev.pocketengine.features.local.project.OriginalNodeWebOutput.EDITED_ROUTE);
         reference=RuntimeExecutionRef.fromHost(exact,nativeBinding);
         source=ProjectSources.copy(frozenSourceSnapshot);
         JSONObject actual=ProjectSources.describe(source);
@@ -42,6 +45,7 @@ public final class RuntimeInvocation {
     public JSONObject sourceSnapshot() throws Exception { return ProjectSources.copy(source); }
     public RunControl originalControl() { return original; }
     boolean ownerLockedBuild(){return ownerLockedBuild;}
+    public String editedWebVersion(){return editedWebVersion;}
     public RuntimeWorkspace workspace() {
         if(workspace==null)throw new SecurityException("runtime_native_active_workspace_required");
         return workspace;
