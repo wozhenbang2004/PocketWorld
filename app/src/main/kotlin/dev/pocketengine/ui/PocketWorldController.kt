@@ -3480,11 +3480,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     @JvmOverloads fun sendChat(text:String,key:String,viewEpoch:Int,primaryDisplayRevision:Long?=null,primaryDisplayWindow:(()->Boolean)?=null,
-        originalOrdinaryComposer:Boolean=false) {
+        originalOrdinaryComposer:Boolean=false,expectedDraftRevision:Long?=null) {
         if((text.isBlank()&&state.selectedChatAttachments.isEmpty())||text.trim().length>12000||state.chatSubmitting||releasingFirstChat!=null)return
         val model=ownerComposer ?: run{state=state.copy(error="原草稿尚未读取，未发送");return}
         val draft=model.active()
         if(draft.key!=key||chatViewEpoch!=viewEpoch||text!=draft.text||draft.conversationId!=state.conversationId.orEmpty()){state=state.copy(error="原输入视图已变化，请核对保留草稿；没有发送到其他对话");return}
+        // Bind to the same captured input used to prepare the durable request. Changing a
+        // source can change this revision without changing the text or the conversation.
+        require(!originalOrdinaryComposer||primaryDisplayRevision!=null||expectedDraftRevision!=null) { "请重新打开原对话核对草稿版本；没有发送。" }
+        require(expectedDraftRevision==null||expectedDraftRevision==draft.revision) { "草稿或引用已变化；没有发送，请核对当前草稿。" }
         val displayGate=primaryDisplayDraftGate(draft)
         if(displayGate!=null&&displayGate!="ready"){state=state.copy(error="原私人窗口或本机执行尚未就绪，请先核对。没有读取，也没有改用模型");return}
         if((displayGate!=null||primaryDisplayRevision!=null)&&(displayGate!="ready"||primaryDisplayRevision!=draft.revision||primaryDisplayWindow?.invoke()!=true)) {

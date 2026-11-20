@@ -205,9 +205,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     finally { if (scope.current.finish(ticket) && alive.current) setPending(false); }
   };
   // Supplying a deviceId asks that peer for fresh capabilities. Local reads must also work offline.
-  const refresh = () => { void invoke('devices.snapshot',{},(_value,actual)=>{
-    if (actual) { placeRead.current = true; setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision }); }
-  }); };
+  const refresh = () => {
+    if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending()) return;
+    setLocalRead(undefined); // A failed reread must not mark the previous directory as current.
+    void invoke('devices.snapshot', {}, (_value, actual) => {
+      if (actual) { placeRead.current = true; setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision }); }
+    });
+  };
   const closeReview = () => {
     const old = handle.current; handle.current = ''; scope.current.invalidate(document.visibilityState === 'visible');
     setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
@@ -376,12 +380,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const tasks = deviceTaskRows(state.tasks, snapshot, peerId);
   const manualPreparationForPeer = (task: Data) => deviceManualPhonePreparation(task, peer);
   const localReadReady = !!localRead && !!snapshot && snapshot.capturedAt >= localRead.capturedAt;
-  const manualReadReady = localReadReady && localRead.revision === state.deviceWorkspaceRevision;
+  const localReadCurrent = localReadReady && localRead.revision === state.deviceWorkspaceRevision;
   const overviewManualPreparation = (task: Data) => {
     const preparation = deviceOriginalManualPhonePreparation(task);
     if (!preparation) return;
     const candidates = peers.filter(row => row.deviceId === preparation.target.deviceId);
-    const partner = manualReadReady && !unreadSource(task) && candidates.length === 1 && deviceManualPhonePreparation(task, candidates[0]) ? candidates[0] : undefined;
+    const partner = localReadCurrent && !unreadSource(task) && candidates.length === 1 && deviceManualPhonePreparation(task, candidates[0]) ? candidates[0] : undefined;
     return { preparation, partner, place: deviceReadingPlace(local, partner) };
   };
   const locateOriginalManualPreparation = (taskId: string, deadlineAt: number, place: DeviceReadingPlace) => {
@@ -788,7 +792,22 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const pairings = rows(snapshot?.pendingPairings);
   const pendingPairs = pairings.filter(row => !pairConclusion(row.state) && !ownerWindowEnded(row, now));
   const trusted = peers.filter(row => !retired(row));
-  const visiblePeers = peers.filter(peer => [name(peer), peer.deviceId, peerPlatform(peer)].filter(Boolean).join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const directoryQuery = query.trim().normalize('NFC').toLocaleLowerCase();
+  const shortNumberQuery = /^[a-f0-9]{6}$/.test(directoryQuery), fullNumberQuery = /^pw1_[a-f0-9]{64}$/.test(directoryQuery);
+  const shortNumberCounts = new Map<string, number>();
+  for (const row of peers) {
+    const code = deviceChoiceCode(row.deviceId);
+    if (code) shortNumberCounts.set(code, (shortNumberCounts.get(code) || 0) + 1);
+  }
+  const visiblePeers = peers.filter(row => {
+    const code = deviceChoiceCode(row.deviceId);
+    if (shortNumberQuery) return code === directoryQuery;
+    if (fullNumberQuery) return row.deviceId === directoryQuery;
+    return [name(row), peerPlatform(row), code].filter(Boolean).join(' ').normalize('NFC').toLocaleLowerCase().includes(directoryQuery);
+  });
+  const directoryDescription = !localReadCurrent ? `上次本机目录 · ${time(snapshot?.capturedAt)}`
+    : trusted.length ? `${snapshot?.hasMorePeers ? '本次范围内' : '本次读到'} ${trusted.length} 台 · 按上次连接检查分组`
+    : snapshot?.hasMorePeers ? '本次范围内没有读到有效配对' : '本次未读到有效配对';
   const peerSections = [
     { id: 'online', title: '上次检查已接通', peers: visiblePeers.filter(row => !retired(row) && row.connection?.state === 'ONLINE') },
     { id: 'degraded', title: '上次连接不稳定', peers: visiblePeers.filter(row => !retired(row) && row.connection?.state === 'DEGRADED') },
@@ -840,7 +859,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     else {closeReview();openModels(origin);}
   };
   const returnedTask = modelReturnFocus && tasks.find(item => !unreadSource(item) && matchesReceivedPhoneGoal(item, snapshot, modelReturnFocus));
-  const focusedManualTask = manualFocus && peer && manualReadReady && sameDeviceReadingPlace(manualFocus.place, local, peer)
+  const focusedManualTask = manualFocus && peer && localReadCurrent && sameDeviceReadingPlace(manualFocus.place, local, peer)
     ? tasks.find(task => task.id === manualFocus.taskId && !unreadSource(task) && manualPreparationForPeer(task)?.deadlineAt === manualFocus.deadlineAt)
     : undefined;
   const waiting: Data[] = [], interruptible: Data[] = [], remaining: Data[] = [];
@@ -884,7 +903,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                   <header><h4 dir="auto">{unreadSource(task) ? '原手控准备待核对' : task.goal || '手控准备'}</h4><span>{!place ? '原手机待核对' : expired ? '准备已到期' : '尚未开始'}</span></header>
                   {partner && place ? <><p><bdi>{name(partner)}</bdi> · 设备编号 {deviceChoiceCode(partner.deviceId)} · 原有效期至 {time(preparation.deadlineAt)}</p>
                     <Button variant="secondary" disabled={busy} onClick={() => locateOriginalManualPreparation(task.id, preparation.deadlineAt, place)}>在原手机记录中查看</Button></>
-                    : <p>{!manualReadReady ? '需先读取本机配对记录。' : '本机这次没有核对到原配对与准备。未改选其他手机。'}</p>}
+                    : <p>{!localReadCurrent ? '需先读取本机配对记录。' : '本机这次没有核对到原配对与准备。未改选其他手机。'}</p>}
                 </article>;
               }
               const selected = task.savedDeviceChoice;
@@ -1253,18 +1272,29 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           </section>}
           <section className="pw-device-section" aria-label="设备配对">
             <WorkspaceSectionHeading title="配对伙伴"
-              description={trusted.length ? `${snapshot.hasMorePeers ? '本页' : '已配对'} ${trusted.length} 台 · 按上次检查分组` : snapshot.hasMorePeers ? '当前读取页没有有效配对' : peers.length ? '目前没有有效配对' : '尚未配对其他设备'}
+              description={directoryDescription}
               actions={<>
-                <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="刷新设备状态" title="刷新设备状态" disabled={busy} onClick={refresh} />
-                <Button variant={pendingPairs.length || trusted.length ? 'secondary' : 'primary'} leadingIcon={IconAdd} disabled={busy} onClick={() => openPairEntry('add')}>配对设备</Button>
+                <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="重读本机配对记录" title="重读本机配对记录" disabled={busy} onClick={refresh} />
+                <Button variant={!localReadCurrent || pendingPairs.length || trusted.length ? 'secondary' : 'primary'} leadingIcon={IconAdd} disabled={busy} onClick={() => openPairEntry('add')}>配对设备</Button>
               </>} />
-            {!trusted.length && !snapshot.hasMorePeers && <p className="pw-device-pair-note">{pendingPairs.length ? '已有配对等待核对，无需重新发起。' : '已有对方的邀请可直接加入；从这台手机发邀请才需要先开本机接收。'}</p>}
-            {(peers.length > 5 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索已配对设备" placeholder="搜索名称或设备" value={query} onChange={setQuery} />}
-            {peers.length ? <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
-              {section.peers.map(row => <Button key={row.deviceId} data-peer-entry={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={platformIcon(row)} trailingIcon={IconChevronRight} disabled={busy} onClick={() => { rememberReadingPosition('list'); selectPeer(row.deviceId); }}>
-                <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{[peerPlatform(row) || (retired(row) ? '原设备' : '配对设备'),deviceChoiceCode(row.deviceId),row.connection?.observedAt > 0 ? time(row.connection.observedAt) : '尚无检查时间'].filter(Boolean).join(' · ')}</small></span>
-              </Button>)}
-            </div></section>)}{query && !visiblePeers.length && <div className="pw-device-empty"><h3>没有匹配的设备</h3><p>换个名称搜索，或查看全部已配对设备。</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}</div> : null}
+            {!localReadCurrent && <p className="pw-device-pair-note" role="status">{busy ? '正在重读本机配对记录。' : '先重读本机配对记录再选择设备，不会联系对方。'}</p>}
+            {localReadCurrent && snapshot.hasMorePeers && <p className="pw-device-pair-note">只查本次读到的记录，未列出不代表没有配对。</p>}
+            {localReadCurrent && !trusted.length && !snapshot.hasMorePeers && <p className="pw-device-pair-note">{pendingPairs.length ? '已有配对等待核对，无需重新发起。' : '已有对方的邀请可直接加入；从这台手机发邀请才需要先开本机接收。'}</p>}
+            {(peers.length > 0 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索设备名称或编号" placeholder="名称或设备编号末六位" clearLabel="清除设备搜索" value={query} onChange={setQuery} />}
+            {shortNumberQuery && visiblePeers.length > 1 && <p className="pw-device-pair-note" role="status">末六位有重复，请核对下面的完整编号。</p>}
+            {visiblePeers.length > 0 && <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
+              {section.peers.map(row => {
+                const code = deviceChoiceCode(row.deviceId);
+                return <Button key={row.deviceId} data-peer-entry={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={platformIcon(row)} trailingIcon={IconChevronRight} disabled={busy || !localReadCurrent} onClick={() => {
+                  if (!localReadCurrent) return;
+                  rememberReadingPosition('list'); selectPeer(row.deviceId);
+                }}>
+                  <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{row.ownerLocalName || name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{[peerPlatform(row) || (retired(row) ? '原设备' : '配对设备'),code && '编号 ' + code,row.connection?.observedAt > 0 ? time(row.connection.observedAt) : '尚无检查时间'].filter(Boolean).join(' · ')}</small>
+                    {(shortNumberCounts.get(code) || 0) > 1 && <small>完整编号 <bdi>{row.deviceId}</bdi></small>}</span>
+                </Button>;
+              })}
+            </div></section>)}</div>}
+            {directoryQuery && !visiblePeers.length && <div className="pw-device-empty"><h3>{!localReadCurrent ? '上次记录未匹配' : '本次本机记录未匹配'}</h3><p>{snapshot.hasMorePeers || !localReadCurrent ? '这不是完整的当前配对结论。可清除搜索，查看已读到的记录。' : shortNumberQuery ? '没有读到这个末六位编号。也可用部分名称或完整编号查找。' : '请核对名称、编号末六位或完整编号。'}</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}
           </section>
           {originalWork}
           {(trusted.length > 0 || snapshot.hasMorePeers) && supported('deviceTaskScope.prepare') && <section className="pw-device-section" aria-label="准备新的设备工作">
@@ -1278,7 +1308,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           ? '本机或原配对身份已变化，没有打开其他设备。可返回所有设备重新选择。'
           : '这台原设备不在本次本机读取范围。没有改选其他伙伴。'}</p>}
         {!sourceFocus && peer && <>
-          {manualFocus && manualReadReady && !focusedManualTask && <p className="pw-device-feedback" role="status">原手控准备已不在这次本机记录中，未打开其他工作。</p>}
+          {manualFocus && localReadCurrent && !focusedManualTask && <p className="pw-device-feedback" role="status">原手控准备已不在这次本机记录中，未打开其他工作。</p>}
           {preparedHere.length > 0 && originalWork}
           <section className="pw-device-connection pw-device-observation" aria-label="这台设备的工作范围与连接">
             <MotionFeedback identity={JSON.stringify([peer.deviceId, peer.connection?.state, peer.revoked])} initial={false} className="pw-device-connection-heading" role="status">

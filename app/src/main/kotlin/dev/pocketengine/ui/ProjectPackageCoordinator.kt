@@ -764,19 +764,22 @@ internal class ProjectPackageCoordinator(
         val pin = state.staged ?: return
         work { _, _ -> local().discardStagedProjectPackageForOwner(pin.getString("selectionId"), pin.getString("sha256")); return@work { state = state.copy(staged = null, stagedPackages = state.stagedPackages.filterNot { it.optString("selectionId") == pin.getString("selectionId") }, importPlan = null, notice = "仅移除了这份导入临时包；未删除项目、固定成果或环境。") } }
     }
-    fun continueImported() {
-        val selected = state.imported ?: return
-        val source = webSourcePin?.takeIf { matchesWebSourceReceipt(selected) }?.let { JSONObject(it.toString()) }
+    fun continueWebSourceImport(stillSelected: () -> Boolean, opened: () -> Unit) {
+        val selected = state.imported?.takeIf(::matchesWebSourceReceipt) ?: error("没有已核对的原工作副本")
+        val source = JSONObject(checkNotNull(webSourcePin).toString())
         work { _, _ ->
-            if (source != null) {
-                val now = local().queryReviewedPhoneSource(source)
-                if (!now.optBoolean("found") || now.optString("id") != selected.optString("id") || now.optString("projectId") != selected.optString("projectId"))
-                    return@work { state = state.copy(imported = null, pendingImport = source, retryImport = false, missingSourceAction = null,
-                        notice = "上次副本或项目登记已变化。请核对原创建记录，没有打开别的项目。") }
+            // This read checks the exact publication, its checkout directory
+            // and project registration. Opening is not an export or source read.
+            val now = local().queryReviewedPhoneSource(source, false)
+            if (!now.optBoolean("found") || now.optString("id") != selected.optString("id") || now.optString("projectId") != selected.optString("projectId"))
+                return@work { state = state.copy(imported = null, pendingImport = source, retryImport = false, missingSourceAction = null,
+                    notice = "上次副本或项目登记已变化。请核对原创建记录，没有打开别的项目。") }
+            return@work {
+                if (stillSelected()) {
+                    importedCheckout(now)
+                    opened()
+                }
             }
-            val actual = local().handle("changes", JSONObject().put("checkoutId", selected.getString("id")))
-            check(actual.getString("projectId") == selected.getString("projectId")) { "原导入副本身份已不可核对，未打开其他项目" }
-            return@work { importedCheckout(JSONObject(selected.toString())) }
         }
     }
     fun foreground(visible: Boolean) {

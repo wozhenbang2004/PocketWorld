@@ -170,8 +170,14 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
             "discard" -> { check(matches(state.staged) && plan() == null && result() == null) { "原临时选择已变化" }; original.discardStage() }
             "openProject" -> {
                 val row = result() ?: error("没有已核对的原工作副本")
-                check(row.getString("projectId") == args.getString("project") && row.getString("id") == args.getString("checkout")) { "项目或工作副本已变化" }
-                original.continueImported()
+                val requestedWindow = window
+                val target = row.getString("projectId")
+                check(target == args.getString("project") && row.getString("id") == args.getString("checkout")) { "项目或工作副本已变化" }
+                original.continueWebSourceImport({ window == requestedWindow && here() && result() === row }) {
+                    // Selecting the same project does not retire this window.
+                    // Close only after the original native open has happened.
+                    if (window == requestedWindow && current() && project() == target) close()
+                }
             }
             "another" -> original.newWebSourceSelection()
             else -> error("不支持这个本机源码操作")

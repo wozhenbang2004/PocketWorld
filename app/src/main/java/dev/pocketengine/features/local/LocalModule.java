@@ -725,9 +725,12 @@ public final class LocalModule implements EngineModule {
         return status;
     }
     public JSONObject queryReviewedPhoneSource(JSONObject expected)throws Exception {
+        return queryReviewedPhoneSource(expected,true);
+    }
+    public JSONObject queryReviewedPhoneSource(JSONObject expected,boolean checkStaging)throws Exception {
         synchronized(ownerSourcePosition){
             ownerSourcePosition.checkLookup(expected);
-            return actualPhoneSourcePosition(expected,true);
+            return actualPhoneSourcePosition(expected,checkStaging);
         }
     }
     public JSONObject releaseReviewedPhoneSource(JSONObject expected,boolean expectedFound)throws Exception {

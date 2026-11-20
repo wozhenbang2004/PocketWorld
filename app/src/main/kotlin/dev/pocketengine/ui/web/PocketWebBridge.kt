@@ -1963,7 +1963,10 @@ internal class PocketWebBridge(
                         val localRevision=if(args.has("primaryDisplayRevision"))requiredLong(args,"primaryDisplayRevision").also { require(it>0) } else null
                         val ordinary=section==null && taskViewId==null && documentId!=null && !phoneComposer.intent &&
                             controller.conversationReader==null && controller.webPrivateOwnerVisible()
-                        controller.sendChat(text,key,epoch,localRevision,localRevision?.let { primaryDisplayComposerWindow() },originalOrdinaryComposer=ordinary)
+                        val expectedDraftRevision=if(localRevision==null&&args.has("expectedDraftRevision"))
+                            requiredLong(args,"expectedDraftRevision").also { require(it>0) { "原草稿版本无效；没有发送。" } } else null
+                        controller.sendChat(text,key,epoch,localRevision,localRevision?.let { primaryDisplayComposerWindow() },
+                            originalOrdinaryComposer=ordinary,expectedDraftRevision=expectedDraftRevision)
                     }
                 }
             }
