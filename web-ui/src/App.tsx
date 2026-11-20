@@ -31,7 +31,7 @@ import type {CapabilityWorkspaceMemory} from './CapabilitiesWorkspace';
 import {usePocketAppearance} from './usePocketAppearance';
 import {useClosingSnapshot,useMessageArrivals,useReviewFocus,useSurfaceEnter} from './library/surface-motion';
 import {chatCancelIdentity,chatCancelKey,chatStopObservation,sameChatCancelIdentity,type ChatStopRecord} from './chat-cancel';
-import {presentOperation,getRecentTaskProgress,taskNeedsReconciliation,getLoadedFixedDraftGoalDecision} from './task-presentation';
+import {presentOperation,getRecentTaskProgress,taskNeedsReconciliation,observedLateProjectDependency,getLoadedFixedDraftGoalDecision} from './task-presentation';
 import {TaskHistory} from './TaskHistory';
 import {composerHasPayload} from './composer-send-policy';
 import {composerPermissionView} from './composer-permissions';
@@ -2568,6 +2568,13 @@ export default function App(){
   const current=originalNodeBuildAfterDependencies(task),shown=originalNodeBuildAfterDependencies(review.task);
   return current&&shown&&JSON.stringify(current)===JSON.stringify(shown)?current:null;
  };
+ const lateDependencyForOverview=(task:Task)=>{
+  const nativeView=obj(bridge.getState().view);
+  if(taskLayer!=='overview'||!taskOpen||taskOpening||document.hidden||openedTaskId.current!==task.id||nativeView.taskId!==task.id||nativeView.section!=null)return false;
+  const current=observedLateProjectDependency(task);
+  return !!current&&(!review||reviewStale||
+    currentReviewWindow(reviewWindow.current)&&JSON.stringify(originalNodeBuildAfterDependencies(review.task))===JSON.stringify(current));
+ };
  const prepareNextBuildNote=(task:Task,buildNext:NonNullable<ReturnType<typeof originalNodeBuildAfterDependencies>>)=>{
   if(!review||reviewStale||reviewPending||reviewSubmitted||taskOpening||openedTaskId.current!==task.id||
     !currentReviewWindow(reviewWindow.current)||continuationBlocks(continuationsRef.current[task.id]))return;
@@ -2630,9 +2637,10 @@ export default function App(){
   const projectNote=projectFeedback[projectFeedbackKey(task)]||'';
   const nextBuildObserved=originalNodeBuildAfterDependencies(task);
   const buildNext=reviewedBuildAfterDependencies(task,project,actionNames);
+  const lateDependencyObserved=lateDependencyForOverview(task);
   const projectControls=fixedDraftOptions||(project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label="原项目续接范围">
    {review?.task&&!reviewStale&&<ContinuedProjectBinding key={review.reviewHandle} task={review.task} projects={projects} read={can('projectRuntime.read')?args=>bridge.command('projectRuntime.read',args):undefined}/>}
-   <p>{buildNext?'已核对同一副本的依赖准备命令退出 0，本轮还没有运行构建。继续后先核对实际依赖；本机构建命令仍需你单独批准。':'继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。'}</p>
+   <p>{buildNext?.receiptWasLate&&lateDependencyObserved?'继续后先核对实际依赖。本机构建命令仍需你单独批准。':buildNext?'已核对同一副本的依赖准备命令退出 0，本轮还没有运行构建。继续后先核对实际依赖；本机构建命令仍需你单独批准。':'继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。'}</p>
    <p className="pw-muted">工具调用已用 {String(scope.toolsUsed??'未读取')} / 总上限 {String(scope.toolLimit??'未读取')}；模型调用已用 {String(scope.modelCallsUsed??'未读取')} / 总上限 {String(scope.modelCallLimit??'未读取')}。本次不增加额度，不延长截止时间。</p>
    <p className="pw-muted">{scope.deadlineAt===0?'沿用原任务未设置截止时间的范围，仍受剩余预算约束。':typeof scope.deadlineAt==='number'?`原截止时间：${new Date(scope.deadlineAt).toLocaleString('zh-CN')}。`:'原任务期限尚未读取。'}{scope.executionPhase==='planning'?' 原任务仍处于只读规划，继续不会批准具体执行。':''}</p>
    {project.reason&&<p role="status" className="pw-muted">{project.reason}</p>}
@@ -2715,7 +2723,7 @@ export default function App(){
   </section>;
   const originalEvidence=<TaskOutcome key="task-evidence" registerProjectDraftBeforeLeave={registerProjectDraftBeforeLeave} projectDraftSourceRetired={task.raw?.contextAvailable===false||task.raw?.contextWithdrawn===true||task.raw?.sourceCurrentReadRequired===true||task.raw?.taskProjection==='source_unavailable'} task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
    active={overviewActive} focusedOriginalDraft={focusedOriginalDraft?.taskId===task.id?focusedOriginalDraft:undefined} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
-   draftGoalDecision={draftAcceptanceSaved?settledOriginalDraft:durableDraftDecision}
+   draftGoalDecision={draftAcceptanceSaved?settledOriginalDraft:durableDraftDecision} lateDependencyObserved={lateDependencyObserved}
    draftReview={inlineDraftDecision?{original:inlineDraftDecision,render:readback=><section className="pw-form-flow" aria-label="验收本轮原改稿">
     <div className="pw-section-heading"><h4>验收本轮原改稿</h4>{refreshControl}</div>{resultFeedback}
     <div className="pw-action-row">{taskResultDecision(task,protectedDisabled,false,readback)}</div>
@@ -2754,7 +2762,7 @@ export default function App(){
   const reviewTools=(!fixedDraft||draftReviewReady)&&!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
     <div className="pw-section-heading pw-task-review-tools">{pendingNodeCommand?
       <Button disabled={questionPending} onClick={readPendingNodeCommand}>{pendingNodeCommand.action==='dependencies'?'核对本次依赖准备':'核对本机构建命令'}</Button>:
-      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':observedDraft?'核对原改稿的可用操作':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
+      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':observedDraft?'核对原改稿的可用操作':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!lateDependencyObserved&&!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
   const reviewStatus=<>
     {readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}
     {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
@@ -2921,6 +2929,7 @@ export default function App(){
   :!selectedLocalPhone&&selectedTask.raw?.executionRole!=='owner_work'&&!terminal(selectedTask)&&can('tasks.stop')));
  const selectedWorkPresentation=selectedTask?workCollectionPresentation(selectedTask):null;
  const selectedTaskUnavailable=taskOpening||!selectedTask||openedTaskId.current!==selectedTask.id;
+ const settledDependencyInOverview=selectedTask&&selectedWorkPresentation?.reconciliation&&lateDependencyForOverview(selectedTask);
  const stopSelectedTask=()=>{
   if(!selectedTask||selectedTaskUnavailable||!selectedTaskStop||selectedWorkControl?.pending||selectedWorkControl?.unknown||selectedWorkControl?.usedForContinuation||selectedTask.status==='stopping')return;
   if(selectedPhoneStop)triggerPhoneControl('phone.stop',selectedPhoneStop,selectedLocalPhone);
@@ -4016,7 +4025,7 @@ export default function App(){
     {selectedLocalPhone&&!selectedPhoneSurface&&selectedTask&&!terminal(selectedTask)&&<p className="pw-field-hint">原记录计划使用{(selectedTask.executionMode||selectedTask.raw?.executionMode)==='main_screen'?'主屏':'独立屏'}，当前未核实这次执行的手机连接。</p>}
     {selectedTask&&selectedWorkPresentation&&<div className="pw-task-header-status" data-task-status={selectedWorkPresentation.completed?'completed':selectedWorkPresentation.group==='attention'?'attention':selectedWorkPresentation.group==='running'?'running':selectedTask.status}>
      {selectedWorkPresentation.busy?<ProgressCircle aria-label={selectedWorkPresentation.label} isIndeterminate size="sm"/>:<span className="pw-task-state-dot" aria-hidden="true"/>}
-     <span>{selectedWorkPresentation.label}</span>
+     <span>{settledDependencyInOverview?'需要你处理':selectedWorkPresentation.label}</span>
     </div>}
    </div>
    {taskLayer!=='homeReport'&&<div className="pw-task-header-actions">

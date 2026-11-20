@@ -2,6 +2,7 @@ package dev.pocketengine.store;
 
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.local.project.OwnerDraftFirstBuild;
+import dev.pocketengine.features.local.project.ProjectDevelopment;
 import dev.pocketengine.features.local.project.ProjectPackageDelivery;
 import dev.pocketengine.features.workspace.WorkspaceArtifacts;
 import dev.pocketengine.phone.MainPhoneOwnerStep;
@@ -11898,14 +11899,21 @@ public final class TaskStore {
         db.beginTransaction();try{
             requireExecutionEnabled();JSONObject task=developmentContinuationTask(reviewed,false);String id=task.getString("id"),run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
             if(!task.getString("status").matches("paused|interrupted|awaiting_user|needs_confirmation|failed|completed")||epoch==Integer.MAX_VALUE||hasUnresolved(id))throw new SecurityException("原项目仍在执行、已停止或有动作待核对，不能继续");
-            JSONObject previous,oldGrant;
+            String previousStatus;
             // The original continuation transaction pins this exact ended attempt;
             // transfer checkpoint/grant through the shared reader without widening scope.
             try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){
-                if(!row.moveToFirst()||!row.getString(0).matches("paused|interrupted|awaiting_user|needs_confirmation|failed|completed"))throw new SecurityException("原项目执行尚未结束或已不可核对");
-                previous=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.RUN_CHECKPOINT,run));
-                oldGrant=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.RUN_GRANT,run));
+                if(!row.moveToFirst())throw new SecurityException("原项目执行尚未结束或已不可核对");
+                previousStatus=row.getString(0);
             }
+            if(!previousStatus.matches("paused|interrupted|awaiting_user|needs_confirmation|failed|completed")){
+                JSONObject displayed=reviewed.optJSONObject("originalFirstBuildNext");
+                JSONObject proved="reconciling".equals(previousStatus)&&displayed!=null&&Boolean.TRUE.equals(displayed.opt("receiptWasLate"))
+                    &&reviewed.getLong("updatedAt")==task.getLong("updatedAt")?recoveredManagedDependencyNext(task):null;
+                if(proved==null||!canonical(proved).equals(canonical(displayed)))throw new SecurityException("原项目执行尚未结束或已不可核对");
+            }
+            JSONObject previous=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.RUN_CHECKPOINT,run));
+            JSONObject oldGrant=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.RUN_GRANT,run));
             try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{id})){if(active.moveToFirst())throw new SecurityException("原项目仍有执行尚未结束，未创建并发尝试");}
             if(!"owner".equals(oldGrant.optString("principalId"))||!"private".equals(oldGrant.optString("spaceId"))||!"capabilities".equals(oldGrant.optString("mode")))throw new SecurityException("原项目累计额度不属于此私人执行");
             int oldCeiling=TaskExecutionScope.exactInt(oldGrant,"stepCeiling",1,400),consumed=previous.has("steps")?TaskExecutionScope.exactInt(previous,"steps",0,400):0;
@@ -12539,29 +12547,132 @@ public final class TaskStore {
     private JSONObject firstBuildAfterDependenciesForUi(JSONObject task,JSONObject context,JSONObject pin,JSONObject fact){
         String status=task.optString("status");
         if(!("awaiting_user".equals(status)||"needs_confirmation".equals(status))||task.optBoolean("cancelRequested")||
-            !Boolean.FALSE.equals(task.opt("hasUnresolvedOperations"))||
-            !OwnerDraftFirstBuild.existingCheckout(pin)||fact==null||!"dependency_exit".equals(fact.opt("kind"))||fact.optInt("value",-1)!=0)return null;
+            !Boolean.FALSE.equals(task.opt("hasUnresolvedOperations")))return null;
         try{
-            OwnerDraftFirstBuild.requireContext(pin,context);
-            JSONObject lock=OwnerDraftFirstBuild.dependencies(pin);
-            if(lock==null)return null;
-            String id=task.getString("id"),run=task.getString("runId"),operation=fact.getString("actionOperationId");
-            int epoch=task.getInt("coordinatorEpoch");
-            String manager=pin.getString("manager"),path=lock.getString("lockPath"),sha=lock.getString("lockSha256");
-            if(run.isEmpty()||epoch<1||!run.equals(fact.opt("actionRunId"))||epoch!=fact.optInt("actionEpoch",-1)||
-                !manager.equals(lock.opt("manager"))||!"npm".equals(manager)&&!"pnpm".equals(manager)||
-                !("npm".equals(manager)?"package-lock.json":"pnpm-lock.yaml").equals(path)||!sha.matches("[a-f0-9]{64}"))return null;
-            // Require the settled original run and a sole command action. A second
-            // action, even if it did not dispatch, is not this first-build handoff.
-            try(Cursor original=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status=?",
-                new String[]{id,run,Integer.toString(epoch),status})){if(!original.moveToFirst())return null;}
-            try(Cursor other=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND run_id=? AND tool='project_execute' AND operation_id<>? LIMIT 1",
-                new String[]{id,run,operation})){if(other.moveToFirst())return null;}
-            return new JSONObject().put("format","pocketworld.owner-node-build-next.v1").put("taskId",id).put("runId",run).put("epoch",epoch)
-                .put("operationId",operation).put("projectId",pin.getString("projectId")).put("checkoutId",pin.getString("checkoutId"))
-                .put("sourceDigest",pin.getString("sourceDigest")).put("manager",manager).put("lockPath",path).put("lockSha256",sha)
-                .put("dependencyExitCode",0).put("buildStarted",false);
+            JSONObject next=firstBuildDependencyNext(task,context,pin,fact);
+            if(next==null)return null;
+            String id=next.getString("taskId"),run=next.getString("runId");
+            String runStatus;
+            try(Cursor original=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",
+                    new String[]{id,run,Integer.toString(next.getInt("epoch"))})){
+                if(!original.moveToFirst())return null;runStatus=original.getString(0);
+            }
+            if(status.equals(runStatus)){
+                // Even a second explicitly unsent command is not this handoff.
+                try(Cursor other=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND run_id=? AND tool='project_execute' AND operation_id<>? LIMIT 1",
+                        new String[]{id,run,next.getString("operationId")})){return other.moveToFirst()?null:next;}
+            }
+            if(!"awaiting_user".equals(status)||!"reconciling".equals(runStatus))return null;
+            boolean owns=!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
+            try{
+                JSONObject current=developmentContinuationTask(task,false);
+                JSONObject recovered=current.getLong("updatedAt")==task.getLong("updatedAt")?recoveredManagedDependencyNext(current):null;
+                if(owns)db.setTransactionSuccessful();
+                return recovered;
+            }finally{if(owns)db.endTransaction();}
         }catch(Exception unverified){return null;}
+    }
+    private static JSONObject firstBuildDependencyNext(JSONObject task,JSONObject context,JSONObject pin,JSONObject fact)throws Exception {
+        if(!OwnerDraftFirstBuild.existingCheckout(pin)||fact==null||!"dependency_exit".equals(fact.opt("kind"))||fact.optInt("value",-1)!=0)return null;
+        OwnerDraftFirstBuild.requireContext(pin,context);
+        JSONObject lock=OwnerDraftFirstBuild.dependencies(pin);
+        if(lock==null)return null;
+        String id=task.getString("id"),run=task.getString("runId"),operation=fact.getString("actionOperationId");
+        int epoch=task.getInt("coordinatorEpoch");
+        String manager=pin.getString("manager"),path=lock.getString("lockPath"),sha=lock.getString("lockSha256");
+        if(run.isEmpty()||epoch<1||!run.equals(fact.opt("actionRunId"))||epoch!=fact.optInt("actionEpoch",-1)||
+            !manager.equals(lock.opt("manager"))||!"npm".equals(manager)&&!"pnpm".equals(manager)||
+            !("npm".equals(manager)?"package-lock.json":"pnpm-lock.yaml").equals(path)||!sha.matches("[a-f0-9]{64}"))return null;
+        return new JSONObject().put("format","pocketworld.owner-node-build-next.v1").put("taskId",id).put("runId",run).put("epoch",epoch)
+            .put("operationId",operation).put("projectId",pin.getString("projectId")).put("checkoutId",pin.getString("checkoutId"))
+            .put("sourceDigest",pin.getString("sourceDigest")).put("manager",manager).put("lockPath",path).put("lockSha256",sha)
+            .put("dependencyExitCode",0).put("buildStarted",false);
+    }
+    private static final String MANAGED_DEPENDENCY_WAIT="managedDependencyReceiptPending";
+    private record OriginalManagedDependency(JSONObject pin,JSONObject row,JSONObject envelope){}
+    /** Same transaction, same prepared native plan and already-consumed original owner decision. */
+    private OriginalManagedDependency soleOriginalManagedDependency(JSONObject task)throws Exception {
+        JSONObject context=task.optJSONObject("developmentContext"),scope=task.optJSONObject("executionScope");
+        JSONObject pin=context==null?null:context.optJSONObject(OwnerDraftFirstBuild.FIELD);
+        if(!db.inTransaction()||pin==null||!ordinaryPlanningSource(task)||!"assistant".equals(task.opt("kind"))||
+            !"capabilities".equals(task.opt("executionMode"))||!task.isNull("origin")||OwnerWorkTask.isOwnerWork(task)||
+            task.has("workProfileRef")||task.has("workProfileIntent")||task.has("developmentSession")||
+            !Boolean.FALSE.equals(task.opt("cancelRequested"))||scope==null||TaskExecutionScope.planning(scope)||
+            !OwnerDraftFirstBuild.existingCheckout(pin)||OwnerDraftFirstBuild.dependencies(pin)==null)return null;
+        OwnerDraftFirstBuild.requireContext(pin,context);
+        String id=task.getString("id"),run=task.getString("runId"),operation;
+        int epoch=task.getInt("coordinatorEpoch");
+        try(Cursor rows=db.rawQuery("SELECT operation_id FROM operations WHERE task_id=? AND run_id=? AND tool='project_execute' LIMIT 2",new String[]{id,run})){
+            if(!rows.moveToFirst())return null;operation=rows.getString(0);if(rows.moveToNext())return null;
+        }
+        JSONObject binding=new JSONObject().put("taskId",id).put("runId",run).put("coordinatorEpoch",epoch).put("operationId",operation);
+        JSONObject row=projectOperationForHost(binding),envelope=row.getJSONObject("receipt"),route=envelope.getJSONObject("projectExecution");
+        JSONObject request=ProjectDevelopment.originalPollRequest(task,row),plan=request.getJSONObject("plan");
+        OwnerDraftFirstBuild.requirePlan(pin,plan,id);
+        OwnerDraftFirstBuild.requireSourceBinding(binding,request.getJSONObject("binding"));
+        if(!"dependencies".equals(plan.opt("intent"))||route.optBoolean("cancelRequested")||envelope.optBoolean("cancelRequested")||
+            !row.getJSONObject("journalArguments").has("planRef"))return null;
+        JSONArray approvals=task.getJSONArray("approvals");JSONObject used=null;
+        for(int i=0;i<approvals.length();i++){
+            JSONObject approval=approvals.getJSONObject(i);
+            // The next review must not carry any still-live decision or scope permit.
+            if(approval.optString("state").matches("pending|approved|scope_active|scope_waiting_run"))return null;
+            if(route.getString("approvalId").equals(approval.opt("id"))){if(used!=null)return null;used=approval;}
+        }
+        if(used==null||!"consumed".equals(used.opt("state"))||!"project_execute".equals(used.opt("tool"))||!run.equals(used.opt("runId"))||
+            !used.isNull("policyDecision")||!capabilityFingerprint(row.getJSONObject("journalArguments")).equals(used.opt("argumentsHash"))||
+            !capabilityFingerprint(used.getJSONObject("capability")).equals(route.opt("capabilityFingerprint")))return null;
+        // A copied comparison of the same approval at its consume point also checks the
+        // existing explicit, definitely-not-dispatched approval transfer. Nothing is re-approved.
+        JSONObject decision=new JSONObject(used.toString()).put("state","approved");
+        if(!OwnerDraftFirstBuild.sameApprovedProposal(decision,OwnerDraftFirstBuild.reviewOperation(pin,plan,binding)))return null;
+        return new OriginalManagedDependency(pin,row,envelope);
+    }
+    /** This witness is added only to the existing finish event, never to historical results. */
+    private JSONObject managedDependencyWaitWitness(JSONObject task,String requestedStatus,RunControl original){
+        try{
+            JSONObject evidence=task.optJSONObject("evidence");
+            if(!"awaiting_user".equals(requestedStatus)||!"reconciling".equals(task.opt("status"))||original.isCancelled()||original.isPaused()||
+                evidence==null||!Boolean.TRUE.equals(evidence.opt("requiresReconciliation"))||evidence.has("unverifiedProjectRunningAck"))return null;
+            OriginalManagedDependency dependency=soleOriginalManagedDependency(task);
+            if(dependency==null||!"unknown".equals(dependency.row().opt("state"))||!"unknown".equals(dependency.envelope().opt("status"))||
+                !"project_pending".equals(dependency.envelope().opt("code"))||dependency.envelope().opt("accepted")!=JSONObject.NULL)return null;
+            String operation=dependency.row().getString("operationId");
+            if(hasUnresolvedExcept(task.getString("id"),operation))return null;
+            return new JSONObject().put("operationId",operation).put("scopeRevision",task.getJSONObject("executionScope").getLong("revision"));
+        }catch(Exception unverified){return null;}
+    }
+    /** SQL-only reconciliation proof. The old run remains reconciling in historical diagnostics. */
+    private JSONObject recoveredManagedDependencyNext(JSONObject task)throws Exception {
+        if(!db.inTransaction()||!"awaiting_user".equals(task.opt("status"))||hasUnresolved(task.getString("id")))return null;
+        String id=task.getString("id"),run=task.getString("runId"),epoch=Integer.toString(task.getInt("coordinatorEpoch"));
+        JSONObject mailbox=task.optJSONObject("ownerInputMailbox");
+        if(mailbox!=null&&(!Boolean.FALSE.equals(mailbox.opt("open"))||!run.equals(mailbox.opt("runId"))||task.getInt("coordinatorEpoch")!=mailbox.optInt("epoch")))return null;
+        try(Cursor row=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='reconciling'",new String[]{id,run,epoch})){
+            if(!row.moveToFirst())return null;
+        }
+        try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' UNION ALL SELECT 1 FROM leases WHERE run_id=? AND epoch=? LIMIT 1",new String[]{id,run,epoch})){
+            if(active.moveToFirst())return null;
+        }
+        JSONObject end;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN body_bytes BETWEEN 1 AND 65536 AND body_bytes=length(CAST(event_json AS BLOB)) THEN event_json END FROM task_events WHERE task_id=? AND event_type='result' ORDER BY event_order DESC LIMIT 1",new String[]{id})){
+            if(!row.moveToFirst()||row.isNull(0))return null;end=new JSONObject(row.getString(0));
+        }
+        JSONObject wait=end.optJSONObject(MANAGED_DEPENDENCY_WAIT);
+        if(wait==null||!"result".equals(end.opt("type"))||!"reconciling".equals(end.opt("status"))||
+            !id.equals(end.opt("taskId"))||!run.equals(end.opt("runId"))||task.getInt("coordinatorEpoch")!=end.optInt("coordinatorEpoch")||
+            end.optLong("timestamp")<=0||end.optLong("at")<=0||wait.getLong("scopeRevision")!=task.getJSONObject("executionScope").getLong("revision"))return null;
+        executionScopeCurrent(task,run,grant(run));
+        OriginalManagedDependency dependency=soleOriginalManagedDependency(task);
+        if(dependency==null||!"receipt".equals(dependency.row().opt("state"))||!wait.getString("operationId").equals(dependency.row().opt("operationId"))||
+            !"completed".equals(dependency.envelope().opt("status"))||!"project_process_receipt".equals(dependency.envelope().opt("code"))||
+            !Boolean.TRUE.equals(dependency.envelope().opt("accepted")))return null;
+        JSONObject backend=dependency.envelope().getJSONObject("executionReceipt");
+        if(!"managed_process".equals(backend.opt("provider"))||!"command".equals(backend.opt("kind"))||!"foreground".equals(backend.opt("runMode"))||
+            !Boolean.FALSE.equals(backend.opt("ownedWorkerLive"))||!backend.isNull("receiptPersistence"))return null;
+        JSONObject fact=OwnerDraftFirstBuild.outcomeFact(dependency.pin(),task,dependency.row());
+        JSONObject next=firstBuildDependencyNext(task,task.getJSONObject("developmentContext"),dependency.pin(),fact);
+        return next==null?null:next.put("receiptWasLate",true);
     }
     private JSONObject lastFirstBuildDependency(JSONObject task,JSONObject pin)throws Exception{
         var owner=pin.optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.DEPENDENCIES);
@@ -15005,7 +15116,8 @@ public final class TaskStore {
             JSONObject settled=required(id);
             appendEvent(settled,new JSONObject().put("taskId",id).put("runId",runId).put("coordinatorEpoch",epoch)
                     .put("type","result").put("status",settled.getString("status"))
-                    .put("message",settled.optString("summary")).put("timestamp",System.currentTimeMillis()));
+                    .put("message",settled.optString("summary")).put("timestamp",System.currentTimeMillis())
+                    .putOpt(MANAGED_DEPENDENCY_WAIT,managedDependencyWaitWitness(settled,status,original)));
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }

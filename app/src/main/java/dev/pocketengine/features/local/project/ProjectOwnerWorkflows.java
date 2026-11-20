@@ -66,7 +66,7 @@ public final class ProjectOwnerWorkflows {
             }
             try{source.put("checkoutTooling",ProjectCheckoutTooling.describe(snapshot,source,local.projectRuntimeForHost("managed_process_v1")).put("androidClues",wrapper!=null));}
             catch(Exception unavailable){/* Optional observation must not block reading/editing a verified checkout. */}
-            JSONObject copy=snapshot.getJSONObject("checkout").optJSONObject(OwnerDraftWorkCopy.FIELD);
+            JSONObject copy=metadata.optJSONObject(OwnerDraftWorkCopy.FIELD);
             if(copy!=null&&copy.optString("initialCopyDigest").matches("[a-f0-9]{64}")&&
                 !source.getString("sourceDigest").equals(copy.opt("initialCopyDigest"))){
                 source.put("editedDraftCopy",true);
@@ -81,6 +81,10 @@ public final class ProjectOwnerWorkflows {
                     try{source.putOpt("existingNodeBuildTask",tasks.existingNodeBuildForOwner(project,checkout,source.getString("sourceDigest")));}
                     catch(Exception unavailable){source.put("existingNodeBuildUnavailable",true);}
                 }else if(!state.state().isEmpty())source.put("existingNodeBuildBlocked",state.state());
+            }else if(ordinaryCheckout(metadata)&&OwnerDraftWorkCopy.matchesRetainedPublication(metadata,copy)){
+                // Same observed source revision; do not turn an independent draft copy into an ordinary build.
+                String missingLock=OwnerDraftFirstBuild.existingBuildState(snapshot).missingLock();
+                if(!missingLock.isEmpty())source.put("draftCopyNodeBuildMissingLock",missingLock);
             }
         }
         if(savedPath!=null){

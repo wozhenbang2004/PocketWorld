@@ -24,6 +24,16 @@ public final class OwnerDraftWorkCopy {
         public JSONObject view()throws Exception{return new JSONObject(record).put("workIdentity",identity).put("projectId",projectId).put("checkoutId",checkoutId).put("executionAuthorized",false);}
         byte[] bytes(){return replacement.clone();}
     }
+    /** Only the selected published checkout's own stored retained-version receipt, never its source or a collected copy. */
+    static boolean matchesRetainedPublication(JSONObject checkout,JSONObject copy){
+        JSONObject origin=checkout.optJSONObject("sourceImport");
+        return KIND.equals(copy.opt("format"))&&copy.opt("ordinal") instanceof Integer n&&n>0&&n<=8&&
+            checkout.optString("id").equals(copy.opt("checkoutId"))&&checkout.optString("projectId").equals(copy.opt("projectId"))&&
+            copy.optString("workIdentity").matches("[a-f0-9]{64}")&&copy.optString("initialCopyDigest").matches("[a-f0-9]{64}")&&
+            origin!=null&&"new_project".equals(origin.opt("mode"))&&Boolean.FALSE.equals(origin.opt("executionAuthorityRestored"))&&
+            copy.optString("packageSha256").matches("[a-f0-9]{64}")&&copy.optString("packageSha256").equals(origin.opt("packageSha256"))&&
+            copy.optString("manifestIdentity").matches("[a-f0-9]{64}")&&copy.optString("manifestIdentity").equals(origin.opt("manifestIdentity"));
+    }
     /** Called with verified private TaskStore rows. A follow-up's one-file digest is never treated as the checkout digest. */
     public static Seed fromRecords(JSONObject root,JSONObject chosen,JSONObject oldest)throws Exception{
         if(root.opt("available")!=Boolean.TRUE||oldest.opt("available")!=Boolean.TRUE||oldest.has(OwnerRevisionSource.FIELD)

@@ -2,7 +2,7 @@ import { AIAnswer } from './library';
 import { Button, Accordion, AccordionItem } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 import { getTaskOutcome } from './task-outcome';
-import { taskNeedsReconciliation, type FixedDraftGoalDecision } from './task-presentation';
+import { observedLateProjectDependency, taskNeedsReconciliation, type FixedDraftGoalDecision } from './task-presentation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCollectionMotion, MotionFeedback } from './library/journey-motion';
 import { ownerWorkPresentation } from './owner-work-presentation';
@@ -135,7 +135,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -145,6 +145,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   draftReview?:FixedDraftDecisionSlot;
   registerProjectDraftBeforeLeave?: (guard:()=>boolean)=>()=>void;
   projectDraftSourceRetired?: boolean;
+  lateDependencyObserved?: boolean;
   readIdentity: string;
   showEmptyResult: boolean;
   deferExecutionDetails: boolean;
@@ -170,6 +171,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const buildScope = record.raw?.developmentContext?.ownerDraftFirstBuild;
   const buildOwner = buildScope && projectPackageTaskIdentity(task);
   const reconciliation = taskNeedsReconciliation(task);
+  const recoveredDependency = active && lateDependencyObserved && !document.hidden && packageWindowOwns(record.id) && !!observedLateProjectDependency(task);
+  const showReconciliation = reconciliation && !recoveredDependency;
   const ordinaryBuild = buildScope?.existingCheckoutBuild===true && !record.raw?.cancelRequested;
   const checkBuildAfterFailure = status==='failed' && ordinaryBuild && !reconciliation;
   // The original archive's own pending journal may look unresolved to the generic timeline.
@@ -201,11 +204,11 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const work = ownerWorkPresentation(task);
   // The store can reconcile an attempted stop after the runner emits its result.
   // Keep the authoritative state separate from the output and saved files.
-  const settlementTitle = reconciliation ? '有操作结果待核对'
+  const settlementTitle = showReconciliation ? '有操作结果待核对' : recoveredDependency ? '原依赖准备已结束'
     : typeof status === 'string' && Object.hasOwn(stoppedAttemptTitles, status) ? stoppedAttemptTitles[status] : '';
   const currentSummary = typeof record.summary === 'string' && record.summary.trim() ? record.summary
     : typeof record.raw?.summary === 'string' ? record.raw.summary : '';
-  const settlementDetail = reconciliation ? '操作可能已经发生，请在这件工作里核对原操作。'
+  const settlementDetail = showReconciliation ? '操作可能已经发生，请在这件工作里核对原操作。' : recoveredDependency ? '同一副本的依赖准备命令退出 0。本轮没有运行构建。'
     : currentSummary.trim() || (outcome.source === 'result-event' && outcome.resultStatus === status ? outcome.text.trim() : '');
   const resultText = settlementTitle && (outcome.text.trim() === settlementDetail || outcome.text.trim() === settlementTitle)
     ? '' : outcome.text;

@@ -3,6 +3,8 @@
  * A bounded record is never an execution authority or proof that a goal succeeded.
  * That SQL projection has no execution duration; createdAt is registration time.
  */
+import { originalNodeBuildAfterDependencies } from './project-execution-exit';
+
 type Row = Record<string, unknown>;
 
 export type OperationStatus = 'running' | 'waiting' | 'needs_approval' | 'unknown' | 'error' | 'returned' | 'stopped';
@@ -292,10 +294,21 @@ export function presentOperation(input: unknown): OperationPresentation {
 /** A whole-journal native warning can refer to operations outside this page.
  * A recent successful event or a superficially completed task cannot clear it. */
 export function taskNeedsReconciliation(task: unknown): boolean {
+  return reconciliationNeeded(task, false);
+}
+
+/** The original project overview can replace only the Runner's historical wait flag. */
+export function observedLateProjectDependency(task: unknown) {
+  const {header}=taskParts(task);
+  const receipt=originalNodeBuildAfterDependencies(header);
+  return receipt?.receiptWasLate===true&&!reconciliationNeeded(task,true)?receipt:null;
+}
+
+function reconciliationNeeded(task: unknown, lateDependency: boolean): boolean {
   const {header, raw, runId} = taskParts(task);
   const state = text(header.status) || text(raw.status);
   const operations = getTaskOperations(task);
-  if (['reconciling', 'reconciliation_required', 'unknown'].includes(state) || row(raw.evidence)?.requiresReconciliation === true ||
+  if (['reconciling', 'reconciliation_required', 'unknown'].includes(state) || (!lateDependency && row(raw.evidence)?.requiresReconciliation === true) ||
       operations.some(op => presentOperation(op).status === 'unknown' && (op.bodyAvailable || op.state.includes('unknown') || op.requiresReconciliation))) return true;
   const unconfirmed = typeof raw.historyHasUnconfirmedOperations === 'boolean' ? raw.historyHasUnconfirmedOperations : raw.hasUnresolvedOperations === true;
   const active = ['preparing', 'running', 'verifying', 'pausing', 'stopping', 'cancelling'].includes(state);

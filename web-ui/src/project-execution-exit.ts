@@ -5,7 +5,7 @@ export type ExecutionExit={format:string;taskId:string;runId:string;epoch:number
 const sha=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const word=(v:unknown)=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(v);
 type NextNodeBuild={taskId:string;runId:string;epoch:number;operationId:string;projectId:string;checkoutId:string;sourceDigest:string;
-  manager:'npm'|'pnpm';lockPath:string;lockSha256:string};
+  manager:'npm'|'pnpm';lockPath:string;lockSha256:string;receiptWasLate?:true};
 /** Native getForUi readback of the only settled command in this original run. */
 export function originalNodeBuildAfterDependencies(task?:Data|null):NextNodeBuild|null{
   const raw=task?.raw,c=raw?.developmentContext,pin=c?.ownerDraftFirstBuild,r=raw?.originalFirstBuildNext;
@@ -18,8 +18,12 @@ export function originalNodeBuildAfterDependencies(task?:Data|null):NextNodeBuil
     (r.manager!=='npm'&&r.manager!=='pnpm')||r.manager!==pin.manager||r.manager!==lock?.manager||
     r.lockPath!==(r.manager==='npm'?'package-lock.json':'pnpm-lock.yaml')||r.lockPath!==lock?.lockPath||
     !sha(r.lockSha256)||r.lockSha256!==lock?.lockSha256)return null;
+  if(r.receiptWasLate!==undefined&&(r.receiptWasLate!==true||status!=='awaiting_user'||raw.cancelRequested!==false||
+    raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||raw.historyHasUnconfirmedOperations!==false||
+    raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true))return null;
   return {taskId:r.taskId,runId:r.runId,epoch:r.epoch,operationId:r.operationId,projectId:r.projectId,checkoutId:r.checkoutId,
-    sourceDigest:r.sourceDigest,manager:r.manager,lockPath:r.lockPath,lockSha256:r.lockSha256};
+    sourceDigest:r.sourceDigest,manager:r.manager,lockPath:r.lockPath,lockSha256:r.lockSha256,
+    ...(r.receiptWasLate===true?{receiptWasLate:true as const}:{})};
 }
 export function nodeBuildContinuationText(next:NextNodeBuild):string{
   return `请按原来的 ${next.lockPath} 核对同一副本中的实际依赖。若已就绪，请只提出这版源码的 ${next.manager} run build 供我另行批准。不改源码或锁，不自动下载、构建或启动服务。`;

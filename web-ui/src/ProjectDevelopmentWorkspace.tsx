@@ -564,9 +564,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     source.existingNodeBuildUnavailable === true || source.existingNodeBuildTask && !versionBuild :
     source?.editedDraftCopy === true && (source.editedDraftBuildUnavailable === true || source.editedDraftBuild && !versionBuild);
   const buildStepVisible = !filesOpen && !pending && !sourceConflict && !buildCopyMissing && !view?.draftRecoveryRequired;
-  const observedLockPath = source?.existingNodeBuildMissingLock;
+  const observedLockPath = source?.existingNodeBuild===true ? source.existingNodeBuildMissingLock :
+    selectedCopy?.draftWorkingCopy===true && !versionBuild && !buildLookupUnavailable ? source?.draftCopyNodeBuildMissingLock : undefined;
   const missingRequiredLock = !!selectedCopy && !differentBuildCopy && source?.projectId===projectId && source.checkoutId===checkout &&
-    sourceHash(source.sourceDigest) && source.existingNodeBuild===true &&
+    sourceHash(source.sourceDigest) &&
     (observedLockPath==='package-lock.json'||observedLockPath==='pnpm-lock.yaml') ? observedLockPath : '';
   const firstBuild = !!(nodeTools || missingRequiredLock) && !versionBuild && !buildLookupUnavailable && can('projects.development.reviewDraftBuild');
   const firstBuildVisible = firstBuild && buildStepVisible;
