@@ -31,9 +31,8 @@ export function firstNodeWebOwnerWindow(taskId: string): string {
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
-export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, listedSavedVersion}: {target: BuildPosition; ownerWindow: string; hideIneligible?: boolean; checkBuildAfterFailure?: boolean; open?: (p: PackagePreviewTarget)=>void;
-  onSaved: (operationId: string, sha256: string) => void;
-  listedSavedVersion?: (saved: SavedTarget) => boolean}) {
+export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure}: {target: BuildPosition; ownerWindow: string; hideIneligible?: boolean; checkBuildAfterFailure?: boolean; open?: (p: PackagePreviewTarget)=>void;
+  onSaved: (operationId: string, sha256: string) => void}) {
   const [fact, setFact] = useState<Fact|null>(null);
   const [busy, setBusy] = useState('');
   const [failure, setFailure] = useState('');
@@ -113,7 +112,6 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     fact.artifactId && fact.archiveSha256 && fact.buildOperationId ? {taskId:target.taskId,operationId:fact.packageOperationId,
       savedBuildWeb:{projectId:target.projectId,checkoutId:target.checkoutId,sourceDigest:fact.sourceDigest,artifactId:fact.artifactId,
         artifactSha256:fact.archiveSha256,runId:target.runId,epoch:target.epoch,buildOperationId:fact.buildOperationId}} : undefined;
-  const listed = !!savedTarget && listedSavedVersion?.(savedTarget)===true;
   return <section className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
     {checkBuildAfterFailure && fact?.eligible===true && <p className="pw-reading-note">这项工作没有完成，但本机构建步骤已核对为成功退出。下面只处理原构建的网页。</p>}
@@ -134,8 +132,8 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     {fact?.state==='not_published'&&<p className="pw-reading-note" role="status">这次构建成功，但网页包没有保存。
       {fact.reason==='artifact_count_limit'?'保存时文件成果已达 200 项上限。':'当时存入这份网页包会超过固定项目包共用的 64 MiB 上限。'}
       没有改动已有成果，这笔保存不会重试。</p>}
-    {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">{listed?'已保存，在下方「项目固定成果」打开这次网页。':'已经保留原构建退出时核对的网页文件。打开此固定版不联网、不重跑，也不会读取当前同名文件。'}</p>
-      {!listed&&savedTarget&&<Button size="small" variant="secondary" disabled={!!busy||!open} onClick={()=>{if(available())open?.(savedTarget)}}>打开固定网页</Button>}</>}
+    {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">网页已固定保存。打开这一版不会联网、重新构建或读取当前同名文件。</p>
+      {savedTarget&&<Button size="small" variant="primary" disabled={!!busy||!open} onClick={()=>{if(available())open?.(savedTarget)}}>打开固定网页</Button>}</>}
     {failure&&<><p className="pw-error" role="alert">{failure}</p>
       {!saveUnconfirmed&&fact?.state!=='pending'&&<Button size="small" variant="ghost" disabled={!!busy} onClick={()=>void call(read)}>核对原结果</Button>}</>}
   </section>;

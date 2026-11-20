@@ -848,14 +848,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     return [name(row), peerPlatform(row), code].filter(Boolean).join(' ').normalize('NFC').toLocaleLowerCase().includes(directoryQuery);
   });
   const directoryDescription = !localReadCurrent ? `上次本机目录 · ${time(snapshot?.capturedAt)}`
-    : trusted.length ? `${snapshot?.hasMorePeers ? '本次范围内' : '本次读到'} ${trusted.length} 台 · 按上次连接检查分组`
+    : trusted.length ? `${snapshot?.hasMorePeers ? '本次范围内' : '本次读到'} ${trusted.length} 台已配对设备`
     : snapshot?.hasMorePeers ? '本次范围内没有读到有效配对' : '本次未读到有效配对';
-  const peerSections = [
-    { id: 'online', title: '上次检查已接通', peers: visiblePeers.filter(row => !retired(row) && row.connection?.state === 'ONLINE') },
-    { id: 'degraded', title: '上次连接不稳定', peers: visiblePeers.filter(row => !retired(row) && row.connection?.state === 'DEGRADED') },
-    { id: 'other', title: '未接通或待核对', peers: visiblePeers.filter(row => !retired(row) && !deviceChannelWasConnected(row)) },
-    { id: 'revoked', title: '已撤销的设备记录', peers: visiblePeers.filter(retired) },
-  ];
   const deviceView = desktopOpen ? 'desktop' : peerId ? `detail:${peerId}` : 'list';
   // The media viewport keeps its real geometry; only directory/detail surfaces move.
   useSurfaceEnter(readingRoot, deviceView, { selector: '', depth: desktopOpen ? 2 : peerId ? 1 : 0, active: !desktopOpen && !!snapshot });
@@ -930,7 +924,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     heading?.focus({ preventScroll: true }); heading?.scrollIntoView({ block: 'nearest' });
   }, [manualFocus, focusedManualTask?.id]);
   useCollectionMotion(readingRoot, JSON.stringify([state.webWorkspaceResumeRevision, peerId, query.trim()]),
-    JSON.stringify([localExpanded, peerSections.map(section => [section.id, section.peers.map(row => row.deviceId)]), pairings.map(row => [row.candidateId || row.inviteId, row.state]), shownTasks.map(task => [task.id, task.status])]),
+    JSON.stringify([localExpanded, visiblePeers.map(row => row.deviceId), pairings.map(row => [row.candidateId || row.inviteId, row.state]), shownTasks.map(task => [task.id, task.status])]),
     { active: !desktopOpen && !!snapshot });
   const originalWork = snapshot && (!peerId || peer) && tasks.length > 0 ? (
         <section className="pw-device-section pw-device-tasks" aria-label={peer ? "这台设备的原工作" : "设备相关工作"}>
@@ -1323,18 +1317,20 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {localReadCurrent && !trusted.length && !snapshot.hasMorePeers && <p className="pw-device-pair-note">{pendingPairs.length ? '已有配对等待核对，无需重新发起。' : '已有对方的邀请可直接加入；从这台手机发邀请才需要先开本机接收。'}</p>}
             {(peers.length > 0 || query) && <SearchField className="pw-device-search" fieldClassName="pw-collaboration-search" shape="rounded" aria-label="搜索设备名称或编号" placeholder="名称或设备编号末六位" clearLabel="清除设备搜索" value={query} onChange={setQuery} />}
             {shortNumberQuery && visiblePeers.length > 1 && <p className="pw-device-pair-note" role="status">末六位有重复，请核对下面的完整编号。</p>}
-            {visiblePeers.length > 0 && <div className="pw-device-directory">{peerSections.filter(section => section.peers.length > 0).map(section => <section className="pw-collaboration-group" key={section.id} aria-label={section.title}><header className="pw-collaboration-group-heading"><h3>{section.title}</h3><span>{section.peers.length} 台</span></header><div className="pw-device-list">
-              {section.peers.map(row => {
+            {visiblePeers.length > 0 && <div className="pw-device-directory"><div className="pw-device-list">
+              {visiblePeers.map(row => {
                 const code = deviceChoiceCode(row.deviceId);
-                return <Button key={row.deviceId} data-peer-entry={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={platformIcon(row)} trailingIcon={IconChevronRight} disabled={busy || !localReadCurrent} onClick={() => {
+                return <Button key={row.deviceId} data-peer-entry={row.deviceId} data-motion-key={`peer:${row.deviceId}`} variant="ghost" className="pw-device-row" leadingIcon={localReadCurrent ? platformIcon(row) : IconDevices} trailingIcon={localReadCurrent ? IconChevronRight : undefined} disabled={busy || !localReadCurrent} onClick={() => {
                   if (!localReadCurrent) return;
                   rememberReadingPosition('list'); selectPeer(row.deviceId);
                 }}>
-                  <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{row.ownerLocalName || name(row)}</span><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{[peerPlatform(row) || (retired(row) ? '原设备' : '配对设备'),code && '编号 ' + code,row.connection?.observedAt > 0 ? time(row.connection.observedAt) : '尚无检查时间'].filter(Boolean).join(' · ')}</small>
-                    {(shortNumberCounts.get(code) || 0) > 1 && <small>完整编号 <bdi>{row.deviceId}</bdi></small>}</span>
+                  <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{row.ownerLocalName || name(row)}</span>
+                    {localReadCurrent && <><span className="pw-device-row-status">{deviceConnectionLabel(row)}</span><small>{[peerPlatform(row) || (retired(row) ? '原设备' : '配对设备'), code && '编号 ' + code].filter(Boolean).join(' · ')}</small></>}
+                    {(!localReadCurrent || (shortNumberCounts.get(code) || 0) > 1) && <small>完整编号 <bdi>{row.deviceId}</bdi></small>}
+                  </span>
                 </Button>;
               })}
-            </div></section>)}</div>}
+            </div></div>}
             {directoryQuery && !visiblePeers.length && <div className="pw-device-empty"><h3>{!localReadCurrent ? '上次记录未匹配' : '本次本机记录未匹配'}</h3><p>{snapshot.hasMorePeers || !localReadCurrent ? '这不是完整的当前配对结论。可清除搜索，查看已读到的记录。' : shortNumberQuery ? '没有读到这个末六位编号。也可用部分名称或完整编号查找。' : '请核对名称、编号末六位或完整编号。'}</p><Button variant="secondary" onClick={() => setQuery('')}>清除搜索</Button></div>}
           </section>
           {originalWork}

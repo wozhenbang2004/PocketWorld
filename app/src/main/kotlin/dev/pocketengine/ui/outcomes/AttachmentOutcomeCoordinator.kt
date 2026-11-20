@@ -124,7 +124,8 @@ internal data class AttachmentOutcomeState(
     val processingReview:dev.pocketengine.features.attachments.processing.NativeFileProcess.Review?=null,val pendingProcessingTask:String?=null,
     val comparison:Pair<dev.pocketengine.features.attachments.OwnerFilePreviewSource,dev.pocketengine.features.attachments.OwnerFilePreviewSource>?=null,
     val fromWorkResult:Boolean=false,val resultRun:AttachmentResultRun?=null,val externalViewerResult:String?=null,
-    val copyReceipt:OwnerAttachmentCopyReceipt?=null,val libraryImport:AttachmentLibraryImport?=null,
+    val copyReceipt:OwnerAttachmentCopyReceipt?=null,val previousCopyInFile:OwnerAttachmentCopyReceipt?=null,
+    val libraryImport:AttachmentLibraryImport?=null,
     val workReturn:AttachmentWorkReturn?=null,val restoredWorkReturn:Boolean=false
 )
 
@@ -150,11 +151,15 @@ internal class AttachmentOutcomeCoordinator(
     }
     fun privateCopyReceipt(originalConfirmed:Boolean):JSONObject?{
         val key=state.file?.let(::copySource)?:return null
-        state.copyReceipt?.takeIf{it.source()==key}?.let{return it.toJson()}
-        // Prior proof is historical, not a statement about the current provider file.
-        if(!originalConfirmed)return null
-        return verifiedCopies[key]?.takeIf{it.result.verifiedBytes==state.originalFile?.sizeBytes}
-            ?.toJson()?.put("historical",true)
+        if(privateCopyStage()!=null)return null
+        val current=state.copyReceipt?.takeIf{it.source()==key}
+        if(current?.result?.status==OwnerCopyStatus.VERIFIED)return current.toJson()
+        // A receipt already verified here survives a cancelled attempt even in file details.
+        // Other historical receipts still require re-admission of the exact original.
+        val prior=(state.previousCopyInFile?.takeIf{it.source()==key}?:verifiedCopies[key]?.takeIf{
+            originalConfirmed&&it.result.verifiedBytes==state.originalFile?.sizeBytes
+        })?.toJson()?.put("historical",true)
+        return current?.toJson()?.also{if(prior!=null)it.put("previousVerified",prior)}?:prior
     }
     private fun restoreVerifiedCopies(bundle:Bundle?){
         bundle?.getStringArrayList("attachmentOutcomeVerifiedCopies")?.takeLast(8)?.forEach { saved ->
@@ -196,7 +201,7 @@ internal class AttachmentOutcomeCoordinator(
         // The Web view still exposes it only beside the freshly resolved file.
         val file=privateCopyFile(pin)?:returningPrivateCopyFile(pin)?:return
         val receipt=OwnerAttachmentCopyReceipt(pin.getString("exportRequestId"),pin.getString("taskId"),file.getString("id"),file.getString("sha256"),result)
-        state=state.copy(copyReceipt=receipt)
+        state=state.copy(copyReceipt=receipt,previousCopyInFile=state.previousCopyInFile.takeUnless{result.status==OwnerCopyStatus.VERIFIED})
         rememberVerifiedCopy(receipt)
     }
     fun privateCopyStage():String?=export?.takeIf {privateCopyFile(it)!=null||returningPrivateCopyFile(it)!=null}?.let {pin->
@@ -306,12 +311,12 @@ internal class AttachmentOutcomeCoordinator(
             else "原汇报或本轮文件来源已变化，没有打开其他成果"
         }
     }
-    fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null,originalReturn=AttachmentOriginalReturn.DETAILS,externalViewerResult=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
+    fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null,originalReturn=AttachmentOriginalReturn.DETAILS,externalViewerResult=null,copyReceipt=null,previousCopyInFile=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
     fun backFromFile(){
         if(state.originalReturn==AttachmentOriginalReturn.ENTRY){close();return}
         cancel();restoreFile=null
         state=state.copy(group=state.group?.withoutArtifact(),file=null,document=null,documentOpen=false,thumbnail=null,originalFile=null,
-            originalReturn=AttachmentOriginalReturn.DETAILS)
+            originalReturn=AttachmentOriginalReturn.DETAILS,copyReceipt=null,previousCopyInFile=null)
         refresh()
     }
     fun chooseSource(){if(state.team!=null||state.group!=null||state.taskId.isNullOrBlank())return;restoreFile=null;state=state.copy(choosingSource=true,file=null,originalFile=null);work{c,_->app.ownerOutcomeSnapshot(null,c) to null}}
@@ -588,7 +593,9 @@ internal class AttachmentOutcomeCoordinator(
         work(onSuccess = {
             if (current() && state.resultRun == run) original?.let { source ->
                 restoreFile = null
-                state = state.copy(file = selected, originalFile = source, originalReturn = originalReturn, thumbnail = null, document = null)
+                val same = state.file?.let(::copySource) == copySource(selected)
+                state = state.copy(file = selected, originalFile = source, originalReturn = originalReturn, thumbnail = null, document = null,
+                    copyReceipt = state.copyReceipt.takeIf { same }, previousCopyInFile = state.previousCopyInFile.takeIf { same })
                 onOpened?.invoke()
             }
         }) { control, _ ->
@@ -675,9 +682,12 @@ internal class AttachmentOutcomeCoordinator(
         }
         pin.put("exportRequestId",java.util.UUID.randomUUID().toString()).put("exportPhase","waiting")
         export=pin;exportResult=null;exportAbandoned=false;exportPending=true
+        // The new picker has no receipt yet. The old success is evidence about a different attempt.
         privateCopyFile(pin)?.let{file->
-            verifiedCopies.remove(copySource(file)) // Do not show the older verification as this attempt's receipt.
-            state=state.copy(copyReceipt=null)
+            val key=copySource(file)
+            val prior=state.copyReceipt?.takeIf{it.source()==key&&it.result.status==OwnerCopyStatus.VERIFIED}
+                ?:state.previousCopyInFile?.takeIf{it.source()==key}
+            state=state.copy(copyReceipt=null,previousCopyInFile=prior,error=null)
         }
         val requestId=pin.getString("exportRequestId")
         try{activity.createOutcomeDocument(mime,name)}

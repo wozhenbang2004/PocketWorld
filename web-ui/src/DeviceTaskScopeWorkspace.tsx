@@ -168,18 +168,25 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     return labels.size===1 && !labels.has('') ? [...labels][0] : deviceName(id,peers);
   };
   const showDispatch = !open && startedPhone && directed && onOpenOriginal && !directedWorkspace && !directedManual;
+  // A pinned Windows connection record does not depend on whether this task can still edit its scope.
+  const openWindowsConnection = directedWorkspace && !directed && !directedManual ? onOpenDevices : undefined;
+  const devicesLabel = openWindowsConnection ? '核对原电脑连接记录' : directedId ? '查看这份工作的原设备连接' : '管理设备与连接';
   const scopeReadNote = directedId ? '点击可向原设备核对范围，只用已有的连接。' : '点击可向已有连接的候选设备核对范围。';
   return <section className="pw-task-capabilities" aria-label="本任务的远端设备范围">
     {showDispatch && <OriginalPhoneDispatchStatus key={`${taskId}:${directed.deviceId}:${directed.instanceId}:${directed.certificateFingerprint}`} source={{taskId, ...directed}} canRead={canReadDispatch === true} onOpen={onOpenOriginal} />}
     <Button variant={showDispatch ? 'ghost' : 'secondary'} onClick={read} disabled={busy}>{directedId ? '核对' + scopeLabel : '核对已连接设备的范围'}</Button>
+    {!open && openWindowsConnection && <Button variant="ghost" disabled={busy} onClick={openWindowsConnection}>{devicesLabel}</Button>}
     {!startedPhone && directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看原派单与结果</Button>}
-    {!open && <p>{directedId ? `固定目标：${deviceName(directedId, peers)}。` : ''}{scopeReadNote}{showDispatch?'核对范围与读取原派单是两件事。':'不会自动连接、读取画面或派发。'}</p>}
+    {!open && <p>{directedId ? `固定目标：${deviceName(directedId, peers)}。` : ''}{openWindowsConnection ? '核对范围只使用原连接；核对连接记录只读本机。' : scopeReadNote}{showDispatch?'核对范围与读取原派单是两件事。':'不会自动连接、读取画面或派发。'}</p>}
     {notice && <p role="status">{notice}</p>}
     <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : '核对本任务设备范围' : directedId ? '核对' + scopeLabel : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>
       <div className="pw-collaboration-dialog">
         {busy && <p role="status">正在读取原设备范围回执…</p>}
         {error && <p role="alert">{error}</p>}
-        {!review && !view && !busy && <><p>{notice || '核对允许的范围可读取已有连接的能力说明，不会发送目标或启动模型。'}</p><Button onClick={read}>重新核对设备范围</Button></>}
+        {!review && !view && !busy && <><p>{notice || '核对允许的范围可读取已有连接的能力说明，不会发送目标或启动模型。'}</p><div className="pw-form-actions">
+          <Button onClick={read}>重新核对设备范围</Button>
+          {openWindowsConnection && <Button variant="ghost" onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
+        </div></>}
         {view && !review && <>
           <h3>{view.goal}</h3>
           <p>{view.humanInputOnly ? '只选择一个手机屏幕。需要对端主人已明确授予全屏捕获、输入及准确应用范围。你逐次操作，不调用模型，不发送材料或转派。' : '只选择这项原任务可以用的设备。工具份额来自本任务剩余预算，设备已配对不等于已授权。默认不发送文件、项目或私人记忆。'}</p>
@@ -222,7 +229,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
           {rows(view.unavailableOptions).length > 0 && <Accordion><AccordionItem id="unavailable" title={`有 ${rows(view.unavailableOptions).length} 项范围暂不可用`}><p>这些范围没有替换成其他设备，也不阻止你选择已核对的设备。</p>{rows(view.unavailableOptions).map((item,index) => <p key={index}>{deviceName(item.targetDeviceId, peers)}：{item.reason === 'grant_unavailable' ? '原授权到期、撤销或无法核对' : item.reason === 'capability_read_unavailable' ? '连接或能力读取未完成，请核对对端接收服务与当前网络' : '设备身份或能力时效不匹配，需要重新读取'}</p>)}</AccordionItem></Accordion>}
           {!peerIds.length && <p>{view.manualPhoneTarget ? '未核对到这部原手机已授权的手控屏幕。不改用别台手机；可查看原连接与两端范围。' : view.directWorkspace ? '这台原电脑没有授予可用的只读工作区。请在电脑上核对原范围，不会改用其他设备。' : view.directPhone ? '未读取到这部原手机可用的直接范围。请检查对端连接及已有授权；不会改投其他设备或继续转派。' : view.humanInputOnly ? '没有可手控的手机范围。请先连接对端，并由对端主人授权主屏或独立屏、准确应用、全屏捕获与输入，再重新读取。不会改用电脑或模型代理。' : '未读取到可选择的设备范围。请在设备页连接对端，并由对端明确授权工具或目标范围，再回来重新读取。'}</p>}
           {view.hasMoreOptions && <p>还有未读取的授权记录。未显示的设备不会自动加入本任务。</p>}
-          <div className="pw-form-actions"><Button disabled={busy || unavailable.length > 0 && !removeUnavailable} onClick={prepare}>核对这次范围修改</Button><Button variant="ghost" disabled={busy} onClick={read}>重新核对设备范围</Button>{onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>{directedId?'查看这份工作的原设备连接':'管理设备与连接'}</Button>}</div>
+          <div className="pw-form-actions"><Button disabled={busy || unavailable.length > 0 && !removeUnavailable} onClick={prepare}>核对这次范围修改</Button><Button variant="ghost" disabled={busy} onClick={read}>重新核对设备范围</Button>{onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}</div>
           {rows(view.pendingProjectImports).map(item => <div key={item.operationId || item.receiveOperationId}><p>原项目包等待独立导入确认</p><Button variant="secondary" disabled={busy} onClick={() => { void invoke('deviceTaskScope.reviewImport', { pageHandle: page.current, operationId: item.receiveOperationId || item.operationId }, acceptReview); }}>核对这份原项目包</Button></div>)}
         </>}
         {review && <>

@@ -16939,6 +16939,15 @@ public final class TaskStore {
             }
             if(!"needs_confirmation".equals(task.optString("status"))||!digest.equals(resultReviewDigest(task)))throw new SecurityException("成果版本已变化，请重新打开当前成果后再确认");
             if(feedback.length()>8000)throw new IllegalArgumentException("补充要求最多8000字");
+            if(completed&&dev.pocketengine.features.local.project.ProjectEditDraft.selected(task.optJSONObject("developmentContext"))){
+                // This exact reviewed run needs the saved original, not text or a draft from a prior run.
+                JSONObject draft=null;
+                try{draft=readPrivateProjectEditDraft(id);}catch(Exception unavailable){if(Thread.currentThread().isInterrupted())throw unavailable;}
+                String run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch",-1);
+                if(draft==null||draft.opt("available")!=Boolean.TRUE||run.isEmpty()||epoch<1||
+                   !id.equals(draft.opt("taskId"))||!run.equals(draft.opt("runId"))||epoch!=draft.optInt("epoch",-1))
+                    throw new SecurityException("本轮没有可核对的独立改稿，不能确认达到目标。仍可记录“目标尚未达到”。");
+            }
             appendEvent(task,new JSONObject().put("type","user_verification").put("completed",completed).put("feedback",feedback).put("resultReviewDigest",digest).put("resultRevision",task.optLong("resultRevision")));
             if(!feedback.trim().isEmpty())feedback(id,feedback);
             status(id,completed?"completed":"awaiting_user",completed?"已由主人确认完成":"已保留原任务，补充要求后可继续");

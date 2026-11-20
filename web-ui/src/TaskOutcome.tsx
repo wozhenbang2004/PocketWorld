@@ -228,11 +228,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active&&<TaskPhoneFinalScreen task={record}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}:${status}`} ownerWindow={packageRead.firstWebWindow}
-      target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}
-      listedSavedVersion={({taskId, operationId, savedBuildWeb:saved})=>packageRead.eligible && !!onOpenProjectPackage &&
-        outcome.projectPackages.some(item=>item.savedBuildWeb?.buildOperationId===saved.buildOperationId&&item.taskId===taskId&&
-          item.operationId===operationId&&item.archiveSha256===saved.artifactSha256&&item.artifactId===saved.artifactId&&
-          item.runId===saved.runId&&item.epoch===saved.epoch&&item.projectId===saved.projectId&&item.checkoutId===saved.checkoutId&&item.sourceDigest===saved.sourceDigest)}/>}
+      target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
       {outcome.projectPackages.length > 0 && <div hidden={!!readingPackage}>
