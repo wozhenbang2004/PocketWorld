@@ -121,6 +121,9 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         require(args.keys().asSequence().toSet() == fields) { "请重新打开原源码审阅" }
         if (op == "open" || op == "openPrepared") {
             check(current()) { "请回到本机私人项目目录" }
+            if (op == "openPrepared" && here()) check(original.webSourceRecovery == null) {
+                "请先关闭原导入核对，再选择其他来源"
+            }
             val prepared = if (op == "openPrepared") {
                 val id = args.getString("id"); val sha = args.getString("sha")
                 require(id.matches(Regex("[a-f0-9-]{36}")) && sha.matches(Regex("[a-f0-9]{64}")))

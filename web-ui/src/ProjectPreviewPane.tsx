@@ -265,6 +265,9 @@ export function useProjectPreview(options: Options) {
   };
   const openSavedWebOriginalWork=savedWebShelf?.openOriginalWork&&options.can('tasks.open')?()=>{
     if(!canReturnToSavedWebShelf)return;
+    if(savedWebShelf.originalWorkHasMoved?.()){
+      setError('这版网页的原工作已换轮。已保存的网页仍可查看。');return;
+    }
     hide();savedWebShelf.openOriginalWork?.();
   }:undefined;
   const handleBack = () => {

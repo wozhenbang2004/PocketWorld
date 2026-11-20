@@ -12,13 +12,23 @@ type CheckoutSelection={projectId:string;checkoutId:string};
 type BuildSelection=CheckoutSelection&{taskId:string;sourceDigest:string;runId:string;epoch:number};
 type ShelfSelection=(CheckoutSelection&{kind:'checkout'})|(BuildSelection&{kind:'build'});
 export type SavedWebWork=Pick<Version,'taskId'|'checkoutId'|'runId'|'epoch'>;
-export type SavedWebShelfVisit={restore:()=>void;openOriginalWork?:()=>void};
+export type SavedWebShelfVisit={restore:()=>void;openOriginalWork?:()=>void;originalWorkHasMoved?:()=>boolean};
 export type FindSavedBuildWeb=(selection:ShelfSelection)=>boolean;
 // This link only reveals the existing receipt shelf in the same project workspace.
 export const ProjectSavedWebLink=createContext<RefObject<FindSavedBuildWeb|null>|null>(null);
 const id=(v:unknown):v is string=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(v);
 const hash=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const int=(v:unknown,min:number)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=min;
+function newerOriginalWork(picked:Version){
+  const tasks=bridge.getState().state.tasks;
+  if(!Array.isArray(tasks))return false;
+  const matches=tasks.filter(task=>task?.id===picked.taskId);
+  if(matches.length!==1)return false;
+  const original=matches[0],binding=projectPackageTaskIdentity(original),raw=original.raw;
+  // A bounded projection may lag. Only a strictly later persisted round of this exact task and copy rules the archive's round out.
+  return binding?.projectId===picked.projectId&&binding.checkoutId===picked.checkoutId&&raw.contextWithdrawn!==true&&raw.metadataLimited!==true&&
+    id(raw.runId)&&raw.runId!==picked.runId&&int(raw.coordinatorEpoch,picked.epoch+1);
+}
 function page(value:unknown,project:string,selected:string,cursor:string):Shelf {
   const r=value as Shelf&Record<string,unknown>;
   if(!r||r.format!=='pocketworld.saved-build-web.v1'||r.projectId!==project||r.bodyRead!==false||r.readOnly!==true||
@@ -163,6 +173,7 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
           if(sameShelf()&&!focusVersion())heading.current?.focus({preventScroll:true});
         };},
         openOriginalWork:exact.originalBuild&&openWork?()=>{if(sameShelf())openWork(picked,focusVersion);}:undefined,
+        originalWorkHasMoved:exact.originalBuild&&openWork?()=>sameShelf()&&newerOriginalWork(picked):undefined,
       }))throw Error('项目窗口已变化，原网页没有打开。');
     },true);
   };
