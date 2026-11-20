@@ -23,13 +23,13 @@ export function sameQuoteVisit(page:Row|null,visit:HistoryQuoteVisit):boolean {
     page.messages.some((m:Row)=>m.id===visit.target&&m.sourceRevision===visit.revision);
 }
 
-export function RegisteredQuoteTrail({message,locked,locate}:{message:Row;locked:boolean;locate:(range:Range,target:string,from:HTMLElement)=>void}) {
+export function RegisteredQuoteTrail({message,locked,hasEarlier,locate}:{message:Row;locked:boolean;hasEarlier:boolean;locate:(range:Range,target:string,from:HTMLElement)=>void}) {
   const selected=ranges(message);
   if(!selected.length)return null;
   return <Accordion className="pw-compact-disclosures"><AccordionItem id={'quotes-'+message.id} title={`随这条请求提交的引用 · ${selected.length}`}>
     <ol className="pw-history-quote-ranges">{selected.map((r,i)=><li key={[i,r.visibleMessageId,r.offset,r.chars,r.revision].join(':')}>
       <span>第 {r.offset+1} 至 {r.offset+r.chars} 位 · 原消息第 {r.revision} 版</span>
-      {r.visibleMessageId?<Button variant="ghost" size="small" leadingIcon={IconArrowUpRight} disabled={locked} data-quote-start={r.offset} data-quote-size={r.chars} data-quote-target={r.visibleMessageId} onClick={event=>locate(r,r.visibleMessageId!,event.currentTarget)}>定位原消息</Button>:<small>这份阅读窗口没有可核对的原消息。</small>}
+      {r.visibleMessageId?<Button variant="ghost" size="small" leadingIcon={IconArrowUpRight} disabled={locked} data-quote-start={r.offset} data-quote-size={r.chars} data-quote-target={r.visibleMessageId} onClick={event=>locate(r,r.visibleMessageId!,event.currentTarget)}>定位原消息</Button>:<small>{hasEarlier?'本页尚未核对到这一版原消息，可先查看更早消息。':'这份阅读窗口没有可核对的这一版原消息。'}</small>}
     </li>)}</ol>
     <p className="pw-muted">位置按原文 UTF-16 计，部分表情占两位。登记不等于模型已经读取或采用。</p>
   </AccordionItem></Accordion>;

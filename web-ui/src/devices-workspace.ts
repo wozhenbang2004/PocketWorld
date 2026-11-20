@@ -7,7 +7,7 @@ export const deviceRows = (value: unknown): DeviceData[] => Array.isArray(value)
 export const deviceStrings = (value: unknown): string[] => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
 
 type ReadingIdentity = { deviceId: string; instanceId: string; certificateFingerprint: string };
-export type DeviceReadingPlace = { here: ReadingIdentity; partner: ReadingIdentity };
+export type DeviceReadingPlace = { here: ReadingIdentity; partner: ReadingIdentity; lastLocalArchive?: { side: PhoneArchiveSide; authorizationEpoch: number } };
 /** One Settings navigation, held in memory only. No text, grant or native handle survives. */
 export type DeviceReadingSlot = { entry: string; selected?: DeviceReadingPlace };
 function readingIdentity(value: unknown): ReadingIdentity | undefined {

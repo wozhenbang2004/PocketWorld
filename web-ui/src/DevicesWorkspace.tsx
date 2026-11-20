@@ -36,7 +36,7 @@ type Run = (action: string, args?: Data) => Promise<any>;
 type PhoneArchiveRead = 'devices.queryHistory' | 'devices.queryPhoneGoalResult';
 const sentPhoneRead = (row: Data): PhoneArchiveRead | undefined => row.targetRunRecorded === true ? 'devices.queryPhoneGoalResult'
   : (Number.isSafeInteger(row.targetAcceptedAt) && row.targetAcceptedAt > 0 || row.sourceSendPhase === 'write_claimed') ? 'devices.queryHistory' : undefined;
-const sentPhoneReadLabel = (action: PhoneArchiveRead) => action === 'devices.queryPhoneGoalResult' ? '读取这次原结果' : '向原手机核对派发';
+const sentPhoneReadLabel = (action: PhoneArchiveRead) => action === 'devices.queryPhoneGoalResult' ? '向原手机读取结果' : '向原手机核对是否接收';
 const name = (peer: Data) => peer.label || peer.name || (retired(peer) ? '已撤销的设备' : '已配对设备');
 const time = (value: any) => typeof value === 'number' && value > 0 ? new Date(value).toLocaleString() : '尚未读取';
 const available = (value: any) => value?.available === true;
@@ -631,7 +631,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const needsProof=side==='sent' && !sourceId && (filterMissing ?? (activeArchive?.side==='sent' && activeArchive.needsAcceptanceProof===true));
     void invoke(side === 'received' ? 'devices.readReceivedPhoneGoals' : 'devices.readPhoneGoalArchive', direction ? { archiveHandle: activeArchive!.archiveHandle, direction } : { targetDeviceId: target, ...(sourceId?{sourceTaskId:sourceId}:{}), ...(keyword?{searchText:keyword}:{}), ...(needsProof?{needsAcceptanceProof:true}:{}) }, value => {
       const actual = devicePhoneGoalArchive(value, peer, local, side,sourceId); if(String(actual.searchText||'')!==keyword || (actual.needsAcceptanceProof===true)!==needsProof)throw new Error('这次本机查找已变化，请再查一次。');
-      if (selectedPeer.current === target) {setPhoneArchive(actual); setArchiveFind({key:JSON.stringify([local?.deviceId,local?.instanceId,peer.deviceId,peer.instanceId,peer.certificateFingerprint,side]),text:keyword});}
+      if (selectedPeer.current === target) {
+        setPhoneArchive(actual); setArchiveFind({key:JSON.stringify([local?.deviceId,local?.instanceId,peer.deviceId,peer.instanceId,peer.certificateFingerprint,side]),text:keyword});
+        // Keep only the local direction, not the data, filter or authority to read it again.
+        const place = peerPlace.current;
+        if (!sourceFocus && !retired(peer) && place && sameDeviceReadingPlace(place, local, peer) &&
+            Number.isSafeInteger(peer.authorizationEpoch) && peer.authorizationEpoch > 0) {
+          peerPlace.current = { ...place, lastLocalArchive: { side, authorizationEpoch: peer.authorizationEpoch } };
+          if (reading) reading.selected = peerPlace.current;
+        }
+      }
     });
   };
   useEffect(()=>{
@@ -926,9 +935,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
 
   const canReadSentArchive=(!desktopPeer || phonePeer) && supported('devices.readPhoneGoalArchive');
   const canReadReceivedArchive=supported('devices.readReceivedPhoneGoals');
-  // A platform-less pairing after a cold/offline start must not require a
-  // remote describe to reach local work. Identified desktops keep their route.
-  const quickPhoneArchive=!!peer&&!retired(peer)&&!desktopPeer&&(canReadSentArchive||canReadReceivedArchive);
+  // Local history is a first-level route for any paired partner, including a Windows peer or a peer with no current capability record.
+  const showPeerArchive=!!peer&&!retired(peer)&&(canReadSentArchive||canReadReceivedArchive);
+  const quickPhoneArchive=showPeerArchive&&!desktopPeer;
+  const lastLocalArchive=peerPlace.current?.lastLocalArchive;
+  const previousArchiveSide=showPeerArchive&&!activeArchive&&lastLocalArchive&&lastLocalArchive.authorizationEpoch===peer?.authorizationEpoch&&
+    (lastLocalArchive.side==='sent'?canReadSentArchive:canReadReceivedArchive) ? lastLocalArchive.side : undefined;
   const archiveRows=rows(activeArchive?.rows);
   const compactArchive=quickPhoneArchive&&activeArchive&&!activeArchive.canReadNewer&&!activeArchive.searchText&&
     !activeArchive.needsAcceptanceProof&&expandedArchive!==activeArchive.archiveHandle;
@@ -943,18 +955,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
          disabled={busy} onClick={()=>readPhoneArchive('sent',undefined,archiveDraft,!activeArchive.needsAcceptanceProof)}>只看缺接单回执</Button>}
      </form>;
   const archiveBody=<>
-    <div className="pw-form-actions" role="group" aria-label="读取方向">
-      {canReadSentArchive && <Button variant={(activeArchive ? archiveSide === 'sent' : quickPhoneArchive) ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'sent'}
-        disabled={busy} onClick={() => readPhoneArchive('sent',undefined,'',quickPhoneArchive?false:undefined)}>我交给它的</Button>}
-      {canReadReceivedArchive && <Button variant={activeArchive && archiveSide === 'received' ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'received'} disabled={busy} onClick={() => readPhoneArchive('received')}>{desktopPeer && !phonePeer ? '读取本机接纳的电脑派工' : '它交给我的'}</Button>}
+    <div className="pw-form-actions" role="group" aria-label="本机记录的收发方向">
+      {canReadSentArchive && <Button variant={(activeArchive ? archiveSide === 'sent' : previousArchiveSide !== 'received') ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'sent'}
+        disabled={busy} onClick={() => readPhoneArchive('sent',undefined,'',quickPhoneArchive?false:undefined)}>{previousArchiveSide === 'sent' ? '重读本机发出的记录' : '本机发出的'}</Button>}
+      {canReadReceivedArchive && <Button variant={(activeArchive ? archiveSide === 'received' : previousArchiveSide === 'received' || !canReadSentArchive) ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'received'}
+        disabled={busy} onClick={() => readPhoneArchive('received')}>{previousArchiveSide === 'received' ? '重读本机收到的记录' : '本机收到的'}</Button>}
     </div>
     {activeArchive && <>
-      {!quickPhoneArchive&&<p role="status">{archiveSide === 'received' ? '这里只列本机从这台伙伴当前身份收到的目标，不代表已同意开始。换证或换实例前的来单不混入；找回原工作不会重启。' : '这里只读本机留档。设备接收不是机主已读；过去登记过执行也不代表现在仍在运行或已经完成。'}</p>}
+      <p role="status">{archiveSide === 'received' ? '本机收到不等于机主已同意开始。换证或换实例前的来单不混入；找回原工作不会重启。' : '对端接收不等于机主已读。过去登记过执行，不代表现在仍在运行或已经完成。'}</p>
       {!quickPhoneArchive&&archiveSearch}
       {archiveSide==='sent' && activeArchive.oldTargetIdentityChanged===true && <p>这台设备曾更换配对身份。不能核对目标的旧派单不归入这里，仍可从当时的本机原任务查找。</p>}
       {activeArchive.searchText && <p role="status">只在这部设备的{archiveSide==='received'?'本机已接收':'本机已发出'}原目标中查找「{activeArchive.searchText}」，不会查询对端或成果。</p>}
       {activeArchive.needsAcceptanceProof && <p role="status">只列本机尚无可核对接单回执的派单。缺回执或过了原请求期限，都不代表对方没有收到或已经停下。</p>}
-      {!activeArchive.rows.length && <p>{activeArchive.needsAcceptanceProof ? activeArchive.hasMore?'这段没有符合筛选的派单，可以继续查更早的记录。':'这段没有符合筛选的派单。' : activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这一批本机记录里没有能核对的直接手机目标。'}</p>}
+      {!activeArchive.rows.length && <p>{activeArchive.needsAcceptanceProof ? activeArchive.hasMore?'这段没有符合筛选的派单，可以继续查更早的记录。':'这段没有符合筛选的派单。' : activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这次本机读取没有找到符合条件的往来记录。'}</p>}
       {shownArchiveRows.map(row => {
         const localResult=archiveSide==='received'&&row.mayCheckLocalText===true&&supported('devices.readLocalReviewedPhoneGoal');
         const nextRead=archiveSide==='sent'?sentPhoneRead(row):undefined;
@@ -991,7 +1004,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { selectPeer(''); setForm(''); setRaw(''); }}>所有设备</Button>}
           <h2 tabIndex={-1}>{desktopOpen ? '电脑桌面' : peer ? name(peer) : peerPlace.current ? '原设备 · '+peerPlace.current.partner.deviceId.slice(-8) : '设备详情'}</h2>
-          {!desktopOpen && peer && <p>{[peerPlatform(peer), deviceChoiceCode(peer.deviceId), deviceConnectionLabel(peer)].filter(Boolean).join(' · ')}</p>}
+          {!desktopOpen && peer && <p>{[peerPlatform(peer), deviceChoiceCode(peer.deviceId)].filter(Boolean).join(' · ')}</p>}
         </div>
         {!desktopOpen && <div className="pw-device-heading-actions">
           {peerEntry && <Button variant="primary" leadingIcon={peerEntry.icon} disabled={busy} onClick={peerEntry.open}>{peerEntry.label}</Button>}
@@ -1225,52 +1238,43 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           : '这台原设备不在本次本机读取范围。没有改选其他伙伴。'}</p>}
         {!sourceFocus && peer && <>
           {preparedHere.length > 0 && originalWork}
-          {quickPhoneArchive && <section className="pw-device-section pw-device-peer-archive" aria-label="这台设备的最近往来工作">
-            <header className="pw-device-section-heading"><div><h3>最近往来工作</h3>
-              <p>打开清单只读本机留档。需要时，可从那一次原派发向对方读取。</p></div></header>
-            {archiveBody}
-          </section>}
           <section className="pw-device-connection pw-device-observation" aria-label="这台设备的工作范围与连接">
-            {phonePeer && !desktopPeer && !retired(peer) && <div>
-              <h3>这部手机能接什么工作</h3>
-              {phoneWork.labels.size>0 ? <>
-                <p>本机保留的授权：{[...phoneWork.labels].join('；')}。</p>
-                {phoneWork.textStatus&&deviceChannelWasConnected(peer)&&<p>{phoneWork.textStatus}</p>}
-                <p>准备只在本机保存目标，已选定这部手机。实际可用范围仍需从原工作核对，不会换设备。</p>
-              </> : <p>没有核对到对方给本机的新工作范围。配对或连接成功不等于可以交办；旧工作仍可打开。</p>}
-            </div>}
             <MotionFeedback identity={JSON.stringify([peer.deviceId, peer.connection?.state, peer.revoked])} initial={false} className="pw-device-connection-heading" role="status">
               <PeerIcon size={20} aria-hidden/>
               <div><span className="pw-device-observation-label">上次连接检查</span><h3>{deviceConnectionLabel(peer)}</h3></div>
             </MotionFeedback>
             <p><IconClock size={14} aria-hidden/> {time(peer.connection?.observedAt)}</p>
-            {peer.connection?.unconfirmedTransportWrite === true && <p className="pw-device-inline-notice">有操作结果待核对，请查看原工作记录。</p>}
+            {peer.connection?.unconfirmedTransportWrite === true && <p className="pw-device-inline-notice">有发送结果未确认。请查看那次原操作的回执，连接状态不能证明对方已接单。</p>}
             {retired(peer) ? <p>{peer.revocation?.peerAcknowledged === true ? '本机信任已撤销，对端已回执。' : '本机信任已撤销或连接已被撤销，请核对原记录。'}</p>
               : peer.connection?.state === 'DEGRADED' ? <p>上次通道不稳定。打开本机记录不需要重新配对；读取对端最新结果需重新核对。</p>
               : !deviceChannelWasConnected(peer) ? <p>未接通不等于工作停止。先查看原记录，需要对端时再核对连接。</p>
               : <p>当时通道已接通；画面、输入和本次执行范围另行核对。</p>}
             {!retired(peer) && windowsObservation && <p className="pw-field-hint">{windowsObservation}</p>}
             {!retired(peer) && <><dl className="pw-device-scope-directions">
-              <div><dt>对方给本机</dt><dd>{received?.text}</dd></div>
-              <div><dt>本机给对方</dt><dd>{given?.text}</dd></div>
-            </dl><p>这是已读授权，不是执行回执。准确应用、工具和额度见「能力与两端权限」。</p></>}
-            {phoneAccess && <div><h4>本机可用的手机工具</h4>
-              {phoneAccess.note && <p>{phoneAccess.note}</p>}
-              {phoneAccess.entries.map(entry => <div key={entry.key}><h4>{entry.title}{entry.packages && ' · ' + entry.packages}</h4>
-                <dl className="pw-facts"><div><dt>读屏节点</dt><dd>{entry.read}</dd></div>
-                  <div><dt>操作</dt><dd>{entry.control}</dd></div><div><dt>整屏截图</dt><dd>{entry.capture}</dd></div></dl>
-                {entry.next && <p>{entry.next}</p>}</div>)}
-              {phoneAccess.entries.length > 0 && <p>这是上次核对的条件，不是已经看见或操作了画面。工作开始前仍会核对当前范围。</p>}
-              {deviceChannelWasConnected(peer) && peerEntry?.kind!=='capabilities' && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>核对这台手机的能力记录</Button>}
-            </div>}
+              <div><dt>对方授予本机</dt><dd>{received?.text}</dd></div>
+              <div><dt>本机授予对方</dt><dd>{given?.text}</dd></div>
+            </dl><p>这是本机留存的授权，不是此刻可执行或已接单的证明。详细范围见「能力与两端权限」。</p></>}
           </section>
+          {showPeerArchive && <section className="pw-device-section pw-device-peer-archive" aria-label="这台设备的本机往来记录">
+            <header className="pw-device-section-heading"><div><h3>本机往来记录</h3>
+              <p>只打开本机留档，不联系对方。{canReadSentArchive && '已派出的工作若需确认对端最新反馈，请核对那次原派发。'}</p></div></header>
+            {archiveBody}
+          </section>}
           {!preparedHere.length && (originalWork || (!quickPhoneArchive && <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p></section>))}
           <Accordion className="pw-device-disclosures">
-            {!quickPhoneArchive && (canReadSentArchive||canReadReceivedArchive) && <AccordionItem id="phone-goal-archive" title={desktopPeer && !phonePeer ? '这台电脑交给本机的工作' : '找回往来目标'} description="查本机留下的记录，无需对方在线" icon={IconClock}>
+            {!showPeerArchive && (canReadSentArchive||canReadReceivedArchive) && <AccordionItem id="phone-goal-archive" title={desktopPeer && !phonePeer ? '这台电脑交给本机的工作' : '找回往来目标'} description="查本机留下的记录，无需对方在线" icon={IconClock}>
               {archiveBody}
             </AccordionItem>}
             {!retired(peer) && (desktopPeer || phonePeer || supported('deviceTaskScope.prepare')) && <AccordionItem id="peer-work-options" title="新工作与手动查看" description="新目标要重新选择设备和范围，不沿用原工作的权限" icon={IconLayers}>
               {!deviceChannelWasConnected(peer) && <p>准备目标不代表对端已接收。实际执行仍需核对原设备连接和本次授权。</p>}
+              {phonePeer && !desktopPeer && <div>
+                <h4>这部手机能接什么工作</h4>
+                {phoneWork.labels.size > 0 ? <>
+                  <p>本机留存的授权：{[...phoneWork.labels].join('；')}。</p>
+                  {phoneWork.textStatus && deviceChannelWasConnected(peer) && <p>{phoneWork.textStatus}</p>}
+                  <p>准备只在本机保存目标。实际范围仍需从原工作核对，不会换设备。</p>
+                </> : <p>没有核对到对方给本机的新工作范围。配对或连接成功不等于可以交办。</p>}
+              </div>}
               <div className="pw-form-actions">
               {desktopPeer && !identityOnlyHere && peerEntry?.kind !== 'desktop' && <Button disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对并选择桌面范围</Button>}
               {phonePeer && !desktopPeer && !identityOnlyHere && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => openDirectedPhone('manual')}>手动查看这部手机的屏幕范围</Button>}
@@ -1302,6 +1306,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <AccordionItem id="capabilities" title="能力与两端权限" description="查看范围，调整本机授予的权限" icon={IconShieldCheck}>
               {!retired(peer) && <>{!phoneAccess && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>向这台设备更新能力记录</Button>}{!deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}</>}
               <p>上次能力记录：{time(peer.capabilitySnapshot?.capturedAt)}</p>
+              {phoneAccess && <div><h4>本机可用的手机工具</h4>
+                {phoneAccess.note && <p>{phoneAccess.note}</p>}
+                {phoneAccess.entries.map(entry => <div key={entry.key}><h4>{entry.title}{entry.packages && ' · ' + entry.packages}</h4>
+                  <dl className="pw-facts"><div><dt>读屏节点</dt><dd>{entry.read}</dd></div>
+                    <div><dt>操作</dt><dd>{entry.control}</dd></div><div><dt>整屏截图</dt><dd>{entry.capture}</dd></div></dl>
+                  {entry.next && <p>{entry.next}</p>}</div>)}
+                {phoneAccess.entries.length > 0 && <p>这是上次核对的条件，不是已经看见或操作了画面。工作开始前仍会核对当前范围。</p>}
+                {deviceChannelWasConnected(peer) && peerEntry?.kind !== 'capabilities' && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>核对这台手机的能力记录</Button>}
+              </div>}
               {peer.capabilitySnapshot?.metadata?.disclosureScope === 'pair_identity_only' &&
                 peer.capabilitySnapshot.deviceId === peer.deviceId && peer.capabilitySnapshot.instanceId === peer.instanceId &&
                 peer.capabilitySnapshot.capabilities?.length === 0 &&

@@ -88,28 +88,43 @@ export function teamResearchDeliveries(run:Row|null,messages:unknown,edition:'cu
   return results;
 }
 
-export function TeamResearchDeliveries({records,disabled,rawAvailable,open,openAnswer,expanded,onExpanded,archived=false}:{records:TeamResearchDelivery[];disabled:boolean;rawAvailable:boolean;
-  open:(source:TeamResearchDelivery)=>void;openAnswer?:(source:TeamResearchDelivery,trigger:HTMLButtonElement)=>void;expanded:boolean;onExpanded:(v:boolean)=>void;archived?:boolean}){
+export function TeamResearchDeliveries({records,disabled,rawAvailable,open,openAnswer,expanded,onExpanded,archived=false,groupByMember,locate}:{records:TeamResearchDelivery[];disabled:boolean;rawAvailable:boolean;
+  open:(source:TeamResearchDelivery)=>void;openAnswer?:(source:TeamResearchDelivery,trigger:HTMLButtonElement)=>void;expanded:boolean;onExpanded:(v:boolean)=>void;archived?:boolean;
+  groupByMember?:(id:string)=>string;locate?:{deliveryKey:string;open:()=>void}}){
   if(!records.length)return null;
   const group=archived?'archived-member-originals':'member-originals';
+  const grouped=groupByMember&&!archived?new Map<string,TeamResearchDelivery[]>():null;
+  if(grouped)for(const row of records){const member=grouped.get(row.memberId);if(member)member.push(row);else grouped.set(row.memberId,[row]);}
+  const rowsFor=(source:TeamResearchDelivery,byline=true)=>{
+    const answer=openAnswer&&source.answer, stage=source.archivedVersion?`第 ${source.round} 阶段 · 第 ${source.archivedVersion} 版`:answer?answer.label:`第 ${source.round} 阶段`;
+    const rawLabel=source.archivedVersion?`查看${source.name}的${stage}答复的原任务`:`查看${source.name}第 ${source.round} 阶段的原研究任务`;
+    return <div key={source.key}>
+      <div className="pw-team-research-delivery">
+        <Button data-team-delivery={answer?undefined:source.key} data-team-follow-up={answer?answer.key:source.key} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight}
+          aria-label={answer?`阅读${source.name}的${stage}`:rawLabel} aria-description={source.excerpt||undefined} disabled={disabled||!answer&&!rawAvailable}
+          onClick={event=>answer?openAnswer!(source,event.currentTarget):open(source)}>
+          <span className="pw-team-attention-copy"><strong>{byline?<><bdi>{source.name}</bdi> · </>:null}{stage}</strong>
+            <small dir="auto">{source.excerpt?`${source.excerpt}${source.excerpted?'…':''}`:source.archivedVersion?(source.revisionNote||'查看原答复的任务记录'):answer?'阅读成员答复':'查看原研究任务'}</small></span>
+        </Button>
+        {answer&&rawAvailable&&<IconButton className="pw-utility-icon" icon={IconExternalLink} data-team-delivery={source.key} data-team-follow-up={source.key} aria-label={rawLabel} title={rawLabel}
+          disabled={disabled} onClick={()=>open(source)}/>}
+      </div>
+      {locate?.deliveryKey===source.key&&<Button variant="ghost" size="small" className="pw-team-delivery-locate" trailingIcon={IconChevronRight}
+        disabled={disabled} onClick={locate.open}>在进展定位此阶段</Button>}
+    </div>;
+  };
   return <Accordion className="pw-team-disclosures" variant="divided" expandedKeys={new Set(expanded?[group]:[])}
     onExpandedChange={keys=>onExpanded(Array.from(keys).includes(group))}>
-    <AccordionItem id={group} title={archived?'修订前已交回的答复':'成员交付的原件'} description={`${new Set(records.map(s=>s.memberId)).size} 名成员 · ${records.length} 份研究产出`}>
+    <AccordionItem id={group} title={archived?'修订前已交回的答复':grouped?'已保存的成员答复':'成员交付的原件'}
+      description={`${new Set(records.map(s=>s.memberId)).size} 名成员 · ${records.length} 份${grouped?'阶段答复':'研究产出'}`}>
       {archived&&<p className="pw-field-hint">这些是修改要求前已交回的版本，不算本次新稿。点选可查看答复的原任务，不会让成员重做。</p>}
-      <div className="pw-team-delivery-list">{records.map(source=>{
-        const answer=openAnswer&&source.answer, stage=source.archivedVersion?`第 ${source.round} 阶段 · 第 ${source.archivedVersion} 版`:answer?answer.label:`第 ${source.round} 阶段`;
-        const rawLabel=source.archivedVersion?`查看${source.name}的${stage}答复的原任务`:`查看${source.name}第 ${source.round} 阶段的原研究任务`;
-        return <div className="pw-team-research-delivery" key={source.key}>
-          <Button data-team-delivery={answer?undefined:source.key} data-team-follow-up={answer?answer.key:source.key} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight}
-            aria-label={answer?`阅读${source.name}的${stage}`:rawLabel} aria-description={source.excerpt||undefined} disabled={disabled||!answer&&!rawAvailable}
-            onClick={event=>answer?openAnswer!(source,event.currentTarget):open(source)}>
-            <span className="pw-team-attention-copy"><strong>{source.name} · {stage}</strong>
-              <small dir="auto">{source.excerpt?`${source.excerpt}${source.excerpted?'…':''}`:source.archivedVersion?(source.revisionNote||'查看原答复的任务记录'):answer?'阅读成员答复':'查看原研究任务'}</small></span>
-          </Button>
-          {answer&&rawAvailable&&<IconButton className="pw-utility-icon" icon={IconExternalLink} data-team-delivery={source.key} data-team-follow-up={source.key} aria-label={rawLabel} title={rawLabel}
-            disabled={disabled} onClick={()=>open(source)}/>}
-        </div>;
-      })}</div>
+      <div className="pw-team-delivery-list">{grouped?Array.from(grouped,([id,member])=>{
+        const author=member[0].name, sameName=member.every(source=>source.name===author);
+        return <section className="pw-team-delivery-member" key={id}>
+          <h4><bdi>{sameName?author:groupByMember!(id)+'（当前名称）'}</bdi><span>{member.length} 份</span></h4>
+          {member.slice().sort((a,b)=>a.round-b.round).map(source=>rowsFor(source,!sameName))}
+        </section>;
+      }):records.map(source=>rowsFor(source))}</div>
     </AccordionItem>
   </Accordion>;
 }

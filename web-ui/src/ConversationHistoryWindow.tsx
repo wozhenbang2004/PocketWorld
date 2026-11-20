@@ -19,7 +19,13 @@ import {messageReplyContext,messageTaskResult,type TaskResult} from './conversat
 import './conversation-history-window.css';
 
 type Json=Record<string,any>;
-type Position={index:number;offset:number;anchor:string};
+type Position={index:number;offset:number;anchor:string;revision?:number};
+const readerScope=(page:Json|null|undefined)=>page?JSON.stringify([bridge.getDocumentEpoch(),page.window,page.conversation]):'';
+const exactRow=(page:Json|null|undefined,id:string,revision?:number):Json|null=>{
+ const matches=Array.isArray(page?.messages)?page.messages.filter((row:Json)=>row.id===id):[];
+ return matches.length===1&&(revision===undefined||matches[0].sourceRevision===revision)?matches[0]:null;
+};
+const readyPage=(page:Json|null|undefined):page is Json=>!!page&&!page.loading&&!page.error&&!page.limited;
 type HistorySource={target:HistoricalAnswerSource;trigger:HTMLButtonElement;top:number;generation:number};
 const sourceGeneration=()=>Number(bridge.getState().state.traceSourceRevision||0);
 const hasPublicSources=(row:Json)=>row.role==='assistant'&&typeof row.id==='string'&&!!row.id&&row.retainedSources===true&&
@@ -30,15 +36,23 @@ function sameHistoricalAnswer(page:Json|null,target:HistoricalAnswerSource,eligi
   Array.isArray(page.messages)&&page.messages.filter((row:Json)=>row.id===target.messageId&&row.sourceRevision===target.readerSourceRevision&&eligible(row)).length===1;
 }
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
-export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number};
-type Props={page:Json|null;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
+export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number;restore:()=>boolean};
+type Props={page:Json|null;covered?:boolean;onReturnToChat?:()=>void;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
  onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,registerBack,onCopy,onOpenTask,onOpenResultFiles}:Props){
+export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can,act,registerBack,onCopy,onOpenTask,onOpenResultFiles}:Props){
+ const page=covered?null:nativePage,scope=readerScope(nativePage);
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const scroll=useRef<HTMLDivElement>(null),live=useRef(page);live.current=page;
- const restored=useRef<number|null>(null),position=useRef<Position>({index:0,offset:0,anchor:''});
+ const restored=useRef(''),position=useRef<Position>({index:0,offset:0,anchor:''});
+ const closingFromReader=useRef(''),unresolved=useRef(''),programScroll=useRef<{scope:string;top:number}|null>(null);
+ const [positionNote,setPositionNote]=useState<{scope:string;text:string}|null>(null);
+ const [quoteNote,setQuoteNote]=useState('');
+ const setMissingPlace=(missing:boolean,text='')=>{
+  unresolved.current=missing?scope:'';
+  setPositionNote(missing?{scope,text}:null);
+ };
  const timer=useRef<ReturnType<typeof setTimeout>|null>(null),sending=useRef(false);
  const [pending,setPending]=useState(false),[error,setError]=useState('');
  const [historySource,setHistorySource]=useState<HistorySource|null>(null);
@@ -51,14 +65,15 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
  const registerMemoryBack=useCallback((handler:(()=>boolean)|null)=>{memoryBack.current=handler},[]);
  const canReadMemory=can('memoryHistory.open')&&can('taskMemory.answer')&&can('taskMemory.receipt');
  const [phoneOriginal,setPhoneOriginal]=useState<PhoneReportTarget|null>(null);
- const [quoteVisit,setQuoteVisit]=useState<HistoryQuoteVisit|null>(null);
- const visibleVisit=quoteVisit&&sameQuoteVisit(page,quoteVisit)?quoteVisit:null;
+ const [quoteVisit,setQuoteVisit]=useState<(HistoryQuoteVisit&{scope:string})|null>(null);
+ const visibleVisit=quoteVisit&&quoteVisit.scope===scope&&sameQuoteVisit(page,quoteVisit)?quoteVisit:null;
  const [reuse,setReuse]=useState<MessageQuoteTarget|null>(null);
  const canReuse=!!visibleVisit&&activeDraft?.conversation===visibleVisit.conversation&&!submitting&&can('messageQuote.open')&&can('messageQuote.stage')&&can('conversation.reader.close');
  const reviewing=canReuse&&reuse?.prior&&reuse.key===activeDraft?.key&&reuse.epoch===activeDraft?.epoch&&reuse.prior.reader===visibleVisit?.window&&reuse.prior.request===visibleVisit.request&&reuse.prior.revision===visibleVisit.requestRevision&&reuse.messageId===visibleVisit.target&&reuse.sourceRevision===visibleVisit.revision&&reuse.prior.offset===visibleVisit.offset&&reuse.prior.chars===visibleVisit.chars?reuse:null;
  useEffect(()=>{if(reuse&&!reviewing)setReuse(null)},[reuse,reviewing]);
  const moveToQuoteRow=(visit:HistoryQuoteVisit,returning:boolean)=>{
-  if(document.hidden||sending.current||!scroll.current||!sameQuoteVisit(live.current,visit))return false;
+  const native=bridge.getState().state.conversationReader;
+  if(document.hidden||sending.current||!scroll.current||readerScope(native)!==scope||!sameQuoteVisit(native,visit)||!sameQuoteVisit(live.current,visit))return false;
   const box=scroll.current;
   const id=returning?visit.request:visit.target;
   const row=Array.from(box.querySelectorAll<HTMLElement>('[data-reader-id]')).find(item=>item.dataset.readerId===id);
@@ -67,9 +82,18 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   const anchor=origin&&!origin.disabled?origin:row;anchor.focus({preventScroll:true});
   box.scrollTop+=anchor.getBoundingClientRect().top-box.getBoundingClientRect().top-(returning&&origin?visit.returnInset:0);return true;
  };
- const returnFromQuote=()=>{const v=visibleVisit;if(!v)return false;setQuoteVisit(null);moveToQuoteRow(v,true);return true};
- useEffect(()=>{if(quoteVisit&&!visibleVisit)setQuoteVisit(null)},[quoteVisit,visibleVisit]);
- useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setHistorySource(null);setHistoryMemory(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
+ const returnFromQuote=()=>{const v=visibleVisit;if(!v)return false;setQuoteVisit(null);if(!moveToQuoteRow(v,true))setQuoteNote('当前窗口还没有读到引用它的原请求，没有跳到其他消息。');return true};
+ useEffect(()=>{
+  // The same native history may be covered by an opened work. A temporary
+  // loading or covered state hides the visit without replacing its two anchors.
+  if(!quoteVisit)return;
+  if(quoteVisit.scope!==scope){setQuoteVisit(null);return}
+  if(!nativePage?.loading&&!sameQuoteVisit(nativePage,quoteVisit)){
+   setQuoteVisit(null);setQuoteNote('当前窗口未能同时核对原请求和引用的原消息，没有跳到其他消息。');
+  }
+ },[quoteVisit,nativePage,scope]);
+ useEffect(()=>{setQuoteNote('')},[scope]);
+ useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setQuoteNote('');setHistorySource(null);setHistoryMemory(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
 
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
  const [resultNotice,setResultNotice]=useState<{window:number;messageId:string;revision:number;error?:string}|null>(null);
@@ -77,12 +101,38 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
  const rows:Json[]=Array.isArray(shown.messages)?shown.messages:[];
  const marker=rows.map(row=>`${row.id}:${row.sourceRevision||0}`).join('|');
  const loadingInput=(id:string)=>pending&&inputNotice?.window===shown.window&&inputNotice?.messageId===id&&!inputNotice?.error;
- const args=()=>({window:live.current?.window,conversationId:live.current?.conversation});
+ const shownRow=(messageId:string,revision?:number)=>{
+  if(!exactRow(live.current,messageId,revision))return;
+  return Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-reader-id]')||[]).find(row=>row.dataset.readerId===messageId&&
+   (revision===undefined||Number(row.dataset.readerRevision)===revision));
+ };
  const remember=()=>{
-  const node=scroll.current;if(!node||!live.current||restored.current!==live.current.window)return;
+  const node=scroll.current,h=live.current;
+  if(!node||!readyPage(h)||restored.current!==scope||unresolved.current===scope)return;
   const items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
-  const row=items.find(item=>item.getBoundingClientRect().bottom>node.getBoundingClientRect().top)||items.at(-1);if(!row)return;
-  position.current={index:Number(row.dataset.readerIndex),offset:Math.max(0,Math.round(node.getBoundingClientRect().top-row.getBoundingClientRect().top)),anchor:row.dataset.readerId||''};
+  const row=items.find(item=>item.getBoundingClientRect().bottom>node.getBoundingClientRect().top)||items.at(-1);
+  const anchor=row?.dataset.readerId,revision=Number(row?.dataset.readerRevision);
+  if(!row||!anchor||!Number.isSafeInteger(revision)||!exactRow(h,anchor,revision))return;
+  position.current={index:Number(row.dataset.readerIndex),offset:Math.max(0,Math.round(node.getBoundingClientRect().top-row.getBoundingClientRect().top)),anchor,revision};
+ };
+ const restoreReaderRow=(original:Json,message:Json,trigger:HTMLButtonElement,box:HTMLElement)=>{
+  const ticket=readerScope(original),id=String(message.id),revision=Number(message.sourceRevision);
+  const base=box.getBoundingClientRect().top,inset=trigger.getBoundingClientRect().top-base;
+  const rowInset=(trigger.closest<HTMLElement>('[data-reader-id]')?.getBoundingClientRect().top??base)-base;
+  return ()=>{
+   const h=live.current,node=scroll.current;
+   const native=bridge.getState().state.conversationReader;
+   if(document.hidden||!node||readerScope(h)!==ticket||readerScope(native)!==ticket||!readyPage(h)||!readyPage(native))return false;
+   const row=exactRow(native,id,revision)&&shownRow(id,revision);
+   if(!row){
+    setQuoteNote('当前窗口还没有读到刚才那条原消息，未跳到其他位置。');
+    return false;
+   }
+   const focus=row.contains(trigger)&&!trigger.disabled?trigger:row;
+   node.scrollTop+=focus.getBoundingClientRect().top-node.getBoundingClientRect().top-(focus===trigger?inset:rowInset);
+   programScroll.current={scope:ticket,top:node.scrollTop};focus.focus({preventScroll:true});
+   return true;
+  };
  };
  const openHistorySource=(message:Json,trigger:HTMLButtonElement)=>{
   const h=live.current;
@@ -104,17 +154,35 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
    scroll.current.scrollTop=shown.top;shown.trigger.focus({preventScroll:true});
   }
  };
- const persist=()=>{
+ const persist=async()=>{
   if(timer.current){clearTimeout(timer.current);timer.current=null}
-  if(!live.current||restored.current!==live.current.window||!can('conversation.reader.position'))return;
-  void act('conversation.reader.position',{...args(),index:position.current.index,offset:position.current.offset}).catch(()=>{});
+  const actual=bridge.getState().state.conversationReader,place=position.current;
+  if(!live.current||!readyPage(actual)||readerScope(actual)!==scope||readerScope(live.current)!==scope||
+     restored.current!==scope||unresolved.current===scope||!place.anchor||!can('conversation.reader.position'))return;
+  const saved=exactRow(actual,place.anchor,place.revision);
+  if(!saved)return;
+  const index=actual.messages.indexOf(saved);
+  try{await act('conversation.reader.position',{window:actual.window,conversationId:actual.conversation,index,offset:place.offset})}
+  catch{/* The original place can still be used locally, never substitute a different row. */}
  };
- const saveReading=()=>{remember();if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(persist,180)};
+ const saveReading=()=>{
+  const prior=programScroll.current;programScroll.current=null;
+  if(sending.current||prior?.scope===scope&&Math.abs((scroll.current?.scrollTop??0)-prior.top)<1)return;
+  remember();if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>void persist(),180);
+ };
  const invoke=async(action:string,extra:Json={})=>{
-  const original=live.current;if(!original||sending.current)return;
-  sending.current=true;setPending(true);setError('');remember();persist();
-  try{await act(action,{window:original.window,conversationId:original.conversation,...extra})}
-  catch(failure){if(live.current?.window===original.window)setError(failure instanceof Error?failure.message:'原历史暂不可读取，请重新打开。')}
+  const original=live.current;if(!original||sending.current||document.hidden)return;
+  if(action!=='conversation.reader.close')closingFromReader.current='';
+  sending.current=true;setPending(true);setError('');remember();
+  try{
+   const saved=persist();
+   if(action==='conversation.reader.earlier'||action==='conversation.reader.refresh')await saved;
+   if(!document.hidden&&readerScope(live.current)===scope&&readerScope(bridge.getState().state.conversationReader)===scope)
+    await act(action,{window:original.window,conversationId:original.conversation,...extra});
+  }catch(failure){
+   if(closingFromReader.current===scope)closingFromReader.current='';
+   if(readerScope(live.current)===scope)setError(failure instanceof Error?failure.message:'原历史暂不可读取，请重新打开。');
+  }
   finally{sending.current=false;setPending(false)}
  };
  const readHostFinal=async(message:Json)=>{
@@ -145,7 +213,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   if(timer.current){clearTimeout(timer.current);timer.current=null}
   try{
    // Preserve the reader and its underlying draft. Never select the conversation.
-   if(can('conversation.reader.position'))await act('conversation.reader.position',{window:original.window,conversationId:original.conversation,index:position.current.index,offset:position.current.offset});
+   await persist();
    if(!sameWindow())return;
    if(!input){onOpenTask(String(taskId),entry,origin);return}
    if(!checkInput())return;
@@ -183,41 +251,63 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   if(!original||sending.current||!onOpenResultFiles)return;
   const current=()=>{
    const next=live.current;
-   return !document.hidden&&next?.window===original.window&&next?.conversation===original.conversation&&!next?.loading&&!next?.error&&!next?.limited&&
-    next?.messages?.some((row:Json)=>row.id===message.id&&row.sourceRevision===message.sourceRevision);
+   return !document.hidden&&readyPage(next)&&readerScope(next)===scope&&!!exactRow(next,message.id,message.sourceRevision);
   };
   if(!current())return;
+  const node=scroll.current;
+  if(!node?.contains(trigger))return;
+  const restore=restoreReaderRow(original,message,trigger,node);
   const notice={window:original.window,messageId:message.id,revision:message.sourceRevision};
-  sending.current=true;setPending(true);setResultNotice(notice);remember();persist();
-  try{await onOpenResultFiles(message.id,result,trigger,{window:original.window,conversationId:original.conversation,sourceRevision:message.sourceRevision})}
+  sending.current=true;setPending(true);setResultNotice(notice);remember();void persist();
+  try{await onOpenResultFiles(message.id,result,trigger,{window:original.window,conversationId:original.conversation,sourceRevision:message.sourceRevision,restore})}
   catch(failure){if(current())setResultNotice({...notice,error:failure instanceof Error?failure.message:'本次原文件暂不可读取。'})}
   finally{sending.current=false;setPending(false);setResultNotice(value=>value===notice?null:value)}
  };
- const back=()=>{if(shownMemory){if(!memoryBack.current?.())setHistoryMemory(null);return true}if(shownSource){setHistorySource(null);return true}if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
+ const back=()=>{if(!live.current)return false;if(shownMemory){if(!memoryBack.current?.())setHistoryMemory(null);return true}if(shownSource){setHistorySource(null);return true}if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!sending.current){closingFromReader.current=scope;void invoke('conversation.reader.close')}return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
-  if(!page){restored.current=null;return}
-  const node=scroll.current;if(!node||!rows.length)return;
-  const first=restored.current!==page.window;
-  const saved=first?{index:Number(page.index||0),offset:Number(page.offset||0),anchor:String(page.anchor||'')}:position.current;
+  if(!nativePage){restored.current='';unresolved.current='';return}
+  const node=scroll.current;
+  if(!readyPage(page)||!node||!page)return;
+  const first=restored.current!==scope;
+  const saved:Position=first?{index:Number(page.index||0),offset:Number(page.offset||0),anchor:String(page.anchor||'')}:position.current;
   const items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
-  const row=items.find(item=>item.dataset.readerId===saved.anchor)||items[Math.min(Math.max(0,saved.index),items.length-1)];
-  if(row)node.scrollTop+=row.getBoundingClientRect().top-node.getBoundingClientRect().top+saved.offset;
-  restored.current=page.window;remember();if(first)focusOpenedRow();
- },[page?.window,marker]);
+  // A native bookmark identifies a saved message. Its former index is no
+  // substitute if this bounded history has not loaded that original row.
+  const row=saved.anchor?shownRow(saved.anchor,saved.revision):items[Math.min(Math.max(0,saved.index),items.length-1)];
+  restored.current=scope;position.current=saved;
+  if(saved.anchor&&!row){
+   setMissingPlace(true,page.hasMore?'还没读到保存位置的原消息，可查看更早消息。未跳到其他位置。':'当前阅读窗口未核对到保存位置的原消息，未跳到其他位置。');
+   return;
+  }
+  setMissingPlace(false);
+  if(row){
+   node.scrollTop+=row.getBoundingClientRect().top-node.getBoundingClientRect().top+saved.offset;
+   programScroll.current={scope,top:node.scrollTop};
+  }
+  if(!saved.anchor)remember();
+  if(first)focusOpenedRow();
+ },[scope,page?.window,page?.loading,page?.error,page?.limited,marker,positionNote?.scope]);
  useEffect(()=>{setError('');setPhoneOriginal(null)},[page?.window]);
- return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)back()}} dismissible={!pending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-conversation-history-window" aria-describedby="pw-history-window-description" inert={!page} onOpenAutoFocus={event=>{if(focusOpenedRow())event.preventDefault()}} onCloseAutoFocus={exit.onCloseAutoFocus}>
+ return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)back()}} dismissible={!pending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-conversation-history-window" aria-describedby="pw-history-window-description" inert={!page} onOpenAutoFocus={event=>{if(focusOpenedRow())event.preventDefault()}} onCloseAutoFocus={event=>{
+  exit.onCloseAutoFocus(event);
+  const origin=closingFromReader.current;closingFromReader.current='';
+  if(origin&&!document.hidden&&!bridge.getState().state.conversationReader)onReturnToChat?.();
+ }}>
   <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">只读查看，原输入和发送回执仍留在原对话。</Drawer.Description></div><IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/><IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':'返回原输入'} disabled={!page||pending} onClick={back}/></header>
   <div className="pw-drawer-body pw-history-window-messages" ref={scroll} onScroll={saveReading}>
    {(error||shown.error)&&<p className="pw-error" role="alert">{error||shown.error}</p>}
-   {shown.notice&&<p className="pw-muted">{shown.notice}</p>}
+   {shown.notice&&shown.notice!=='上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。'&&<p className="pw-muted">{shown.notice}</p>}
+   {page&&positionNote?.scope===scope&&<div className="pw-action-row"><p className="pw-muted" role="status">{positionNote.text}</p>
+    {!!rows.length&&<Button variant="ghost" size="small" disabled={pending||shown.loading} onClick={()=>{setMissingPlace(false);remember();void persist()}}>从这里继续阅读</Button>}</div>}
+   {page&&quoteNote&&<p className="pw-muted" role="status">{quoteNote}</p>}
    {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
    {rows.map((message,index)=>{const phone=message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
     const result=messageTaskResult(message),fileResult=onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
     const readingFiles=resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
-    return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
+    return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} data-reader-revision={message.sourceRevision} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
     {shown.originalReportMessageId===message.id&&<p className="pw-field-hint">这件工作的原汇报</p>}
     {phone&&message.id?<PhoneMessageReturn result={phone} conversation={shown.conversation} reader={shown.window} messageId={message.id} revision={message.sourceRevision}
       body={message.content} locked={!page||page.window!==shown.window||page.loading||!!page.error||page.limited||pending}
@@ -230,10 +320,10 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
      enabled={!!page&&page.window===shown.window&&!pending&&can('conversation.reader.attachment')} canLocate={can('attachmentWorkspace.open')}
      beforeOpen={()=>{remember();persist()}}/>)}</div>}
     {page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{message.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p></AccordionItem></Accordion>}
-    {page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
+    {page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} hasEarlier={shown.hasMore===true} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
      const h=live.current;if(!h||!scroll.current?.contains(from)||h.window!==shown.window||h.conversation!==shown.conversation)return;
-     const visit={...range,returnInset:from.getBoundingClientRect().top-scroll.current.getBoundingClientRect().top,window:h.window,conversation:h.conversation,request:message.id,requestRevision:message.sourceRevision,target};
-     if(moveToQuoteRow(visit,false))setQuoteVisit(visit);
+     const visit={...range,scope,returnInset:from.getBoundingClientRect().top-scroll.current.getBoundingClientRect().top,window:h.window,conversation:h.conversation,request:message.id,requestRevision:message.sourceRevision,target};
+     if(moveToQuoteRow(visit,false)){setQuoteNote('');setQuoteVisit(visit)}else setQuoteNote('当前窗口还没有核对到引用的原消息，没有跳到其他位置。');
     }}/>}
     {visibleVisit?.target===message.id&&<div className="pw-action-row">
      {canReuse&&activeDraft&&<Button variant="secondary" size="small" disabled={pending} onClick={()=>setReuse({messageId:visibleVisit.target,sourceRevision:visibleVisit.revision,key:activeDraft.key,epoch:activeDraft.epoch,prior:{reader:visibleVisit.window,request:visibleVisit.request,revision:visibleVisit.requestRevision,offset:visibleVisit.offset,chars:visibleVisit.chars}})}>本次再引用这段…</Button>}
@@ -264,7 +354,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
     {inputNotice?.error&&inputNotice.window===shown.window&&inputNotice.messageId===message.id&&<p className="pw-input-work-error" role="status">{inputNotice.error}</p>}
     {readingFiles?.error&&<p className="pw-input-work-error" role="status">{readingFiles.error}</p>}
    </article>})}
-   {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">这份对话没有可读取的消息。</p>}
+   {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">当前窗口未读到可显示的消息。</p>}
   </div>
   <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':'返回原输入'}</Button><Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button></footer>
   {reviewing&&<MessageQuote target={reviewing} onClose={()=>setReuse(null)} onStaged={()=>{if(live.current?.window===reviewing.prior?.reader)void invoke('conversation.reader.close')}}/>}

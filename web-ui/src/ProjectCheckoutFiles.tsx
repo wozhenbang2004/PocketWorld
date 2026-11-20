@@ -12,12 +12,18 @@ import './project-workspace-manga.css';
 
 type Data = Record<string, any>;
 type SavedEdit = { id: string; filesHandle: string; path: string; beforeHash: string; savedHash: string; before: string; after: string };
+type EditorPosition = { start: number; end: number; scrollTop: number; scrollLeft: number };
+// A UI bookmark, not a reusable native save handle or a copy of the file.
+export type CheckoutSavedPosition = { projectId: string; checkoutId: string; path: string; savedHash: string; caret?: EditorPosition };
+type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; currentOnly?: boolean };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
-  hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string }; onClose: () => void; registerBack: (handler: (() => boolean) | null) => void };
+  hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
+  resumeSaved?: CheckoutSavedPosition; onClose: (saved?: CheckoutSavedPosition) => void; registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
 const windowKey = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const fileHash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const textareaText = (value: string) => value.replace(/\r\n?/g, '\n');
 function observedSave(submitted: Data, response: Data): SavedEdit | null {
   const proof = response.savedEdit, actual = response.latest;
   if (response.saveStatus !== 'observed' || response.executionAuthorized !== false || response.projectVersionWritten !== false ||
@@ -36,7 +42,9 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack, sourceMember, hostFile }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack, sourceMember, hostFile, resumeSaved }: Props) {
+  const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
+    fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const [listing, setListing] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [text, setText] = useState('');
   const [finding,setFinding]=useState(false),[finder,setFinder]=useState<'path'|'text'|'git'>('path');
   const [gitView,setGitView]=useState<CheckoutGitView|null>(null);
@@ -53,6 +61,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const entered = useRef<object | null>(null), edits = useRef(0), editSequence = useRef(0), blockedEdit = useRef(false);
   const latest = useRef({ run, onClose }); latest.current = { run, onClose };
   const originalWindow = useRef(windowKey());
+  const recentSave = savedEdit?.filesHandle===handle.current ? savedEdit : null;
+  const showingSavedFile = !!recentSave && !!file && !file.dirty && !file.conflict && !file.saveUnknown &&
+    orphan===null && !blockedEdit.current && file.path===recentSave.path && file.latest?.expectedHash===recentSave.savedHash && text===recentSave.after;
   const keyFor = (path: string) => `${projectId}|${checkoutId}|${path}`;
   const live = (sequence: number) => alive.current && generation.current === sequence && originalWindow.current === windowKey() && !document.hidden;
   const apply = (value: Data, body = true) => {
@@ -88,18 +99,35 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     setListing(previous => ({ ...value, files: more ? [...rows(previous?.files), ...rows(value.files)] : rows(value.files) }));
     setListingStale(false);
   });
-  const readFile = (path: string, gitStatusOperation?: string, saved?: SavedEdit) => {
+  const readFile = (path: string, { gitStatusOperation, saved, position, currentOnly }: FileRead = {}) => {
     if (sourceMember || hostFile) {
       if (path !== (sourceMember || hostFile)!.path || entered.current || edits.current) return;
       setReviewed(false); currentFile.current = null; setFile(null);
     }
     return invoke('read', { path, ...(gitStatusOperation?{gitStatusOperation}:{}), ...(saved?{savedEditId:saved.id}:{}) }, value => {
-      if ((sourceMember || hostFile || gitStatusOperation || saved) && (value.path !== path || value.latest?.deleted !== false ||
+      if ((sourceMember || hostFile || gitStatusOperation || saved || position || currentOnly) && (value.path !== path || value.latest?.deleted !== false ||
           !fileHash(value.latest?.expectedHash) || typeof value.latest.content !== 'string'))
         throw new Error('没有取得原副本这个文件的当前内容，未打开替代文件。');
       if (saved && (value.savedEditId !== saved.id || value.latest.expectedHash !== saved.savedHash || value.latest.content !== saved.after))
         throw new Error('未核对到这次保存的原文件内容，未打开其他版本。');
-      setChoice(null); setAdoption(null); apply(value); setTreeOpen(false); requestAnimationFrame(() => { editorHeading.current?.scrollIntoView({ block: 'nearest' }); editorHeading.current?.focus({ preventScroll: true }); }); });
+      if ((position || currentOnly) && (value.latest.projectId !== projectId || value.latest.checkoutId !== checkoutId || value.latest.path !== path))
+        throw new Error('读取内容不属于这份副本的这个路径。');
+      if (position && value.latest.expectedHash !== position.savedHash)
+        throw new Error('此路径当前字节不再是上次保存的版本，没有切换到其他版本。');
+      setChoice(null); setAdoption(null); apply(value); setTreeOpen(false);
+      const sequence = generation.current, caret = position?.caret;
+      requestAnimationFrame(() => {
+        if (!live(sequence) || currentFile.current?.fileHandle !== value.fileHandle) return;
+        editorHeading.current?.scrollIntoView({ block: 'nearest' });
+        const area = editorContainer.current?.querySelector('textarea');
+        if (caret && area && value.dirty===false && !value.conflict && !value.saveUnknown &&
+          value.text===value.latest.content && currentText.current===value.text && !interfaceDrafts.has(keyFor(path)) &&
+          area.value===textareaText(value.text) && caret.start>=0 && caret.start<=caret.end && caret.end<=area.value.length) {
+          area.focus({ preventScroll: true }); area.setSelectionRange(caret.start, caret.end);
+          area.scrollTop=caret.scrollTop; area.scrollLeft=caret.scrollLeft;
+        } else editorHeading.current?.focus({ preventScroll: true });
+      });
+    });
   };
   const openFiles = async () => {
     const pin = sourceMember && { taskId: sourceMember.taskId, operationId: sourceMember.operationId, artifactId: sourceMember.artifactId,
@@ -113,7 +141,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           typeof value.savedMember.text !== 'string' || new TextEncoder().encode(value.savedMember.text).length !== sourceMember!.bytes)) throw new Error('原任务保存的文件与所选副本不符。');
       handle.current = value.filesHandle; setListing(value);
     });
-    if (result && (pin || hostFile) && handle.current === result.filesHandle && live(generation.current)) await readFile((pin || hostFile)!.path);
+    const target = pin || hostFile || resume;
+    if (result && target && handle.current === result.filesHandle && live(generation.current))
+      await readFile(target.path, { position: resume });
   };
   const edit = (value: string) => {
     const original = currentFile.current;
@@ -132,7 +162,20 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       .finally(() => { edits.current--; if (alive.current) setEditing(edits.current > 0); });
   };
   const dismissAdoption = () => { if (entered.current || edits.current) return; const selected = activeAdoption.current; activeAdoption.current = null; setAdoption(null); if (selected) void latest.current.run(command + 'dismissImport', { viewHandle, filesHandle: handle.current, importHandle: selected.importHandle }).catch(() => {}); };
-  const close = () => { if (entered.current || edits.current) return; if (activeAdoption.current) { dismissAdoption(); return; } if (choice) { setChoice(null); return; } latest.current.onClose(); };
+  const close = () => {
+    if (entered.current || edits.current) return;
+    if (activeAdoption.current) { dismissAdoption(); return; }
+    if (choice) { setChoice(null); return; }
+    if (!showingSavedFile || !recentSave || !live(generation.current) || currentFile.current!==file) {
+      latest.current.onClose(); return;
+    }
+    const area = editorContainer.current?.querySelector('textarea');
+    const caret = area?.value===textareaText(recentSave.after) ? {
+      start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop, scrollLeft: area.scrollLeft,
+    } : undefined;
+    latest.current.onClose({ projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret });
+  };
+  const closeCurrent = useRef(close); closeCurrent.current = close;
   useEffect(() => {
     alive.current = true; originalWindow.current = windowKey();
     const retire = () => {
@@ -145,9 +188,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', hidden); };
   }, [projectId, checkoutId, viewHandle]);
   useEffect(() => {
-    registerBack(() => { if (entered.current || edits.current) return true; if (activeAdoption.current) { dismissAdoption(); return true; } if (choice) { setChoice(null); return true; } close(); return true; });
+    registerBack(() => { closeCurrent.current(); return true; });
     return () => registerBack(null);
-  }, [registerBack, choice]);
+  }, [registerBack]);
   useEffect(() => {
     if (adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
     const timer = window.setTimeout(() => { void invoke('cache', { fileHandle: file.fileHandle, retry: false }, value => apply(value, false)); }, 600);
@@ -176,9 +219,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       }
     });
   };
-  const recentSave = savedEdit?.filesHandle===handle.current ? savedEdit : null;
-  const showingSavedFile = !!recentSave && !!file && !file.dirty && !file.conflict && !file.saveUnknown &&
-    orphan===null && !blockedEdit.current && file.path===recentSave.path && file.latest?.expectedHash===recentSave.savedHash && text===recentSave.after;
+  const reopenedVersion = resume && file?.path===resume.path && file?.latest?.expectedHash===resume.savedHash ? resume : undefined;
+  const editState = orphan!==null || blockedEdit.current ? '界面文字尚未核对' : file?.saveUnknown ? '保存结果待核对' :
+    editing ? '正在保留编辑文字，未写入副本' : file?.dirty ?
+    file.draftDurable===true && !file.draftError ? '手机草稿已保留，未写入副本' : '草稿仍在当前会话，尚未确认写入手机' : '没有未保存修改';
   const locked = busy || editing || !!adoption, nativeText = file?.text || '';
   const canFindText=['findText','findTextNext','readTextHit'].every(a=>bridge.getState().capabilities.commands.includes(command+a));
   const sourceHit=file?.sourceHit,anchorable=!!(sourceHit&&file&&file.path===sourceHit.path&&file.latest?.expectedHash===sourceHit.sha256&&
@@ -202,9 +246,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small>
     {error && <p role="alert">{error}</p>}
     {!listing ? <Button variant="secondary" disabled={busy} onClick={() => void openFiles()}>{busy ? '正在核对原副本…' : '重新读取副本文件'}</Button> : <>
+      {resume && !file && !busy && <div className="pw-form-actions">
+        <Button variant="secondary" disabled={locked} onClick={()=>void readFile(resume.path,{position:resume})}>重新核对原保存版本</Button>
+        <Button variant="ghost" disabled={locked} onClick={()=>void readFile(resume.path,{currentOnly:true})}>读取这一路径的当前内容</Button>
+      </div>}
       {sourceMember || hostFile ? !file && <div><p dir="auto">{(sourceMember || hostFile)!.path}</p><Button variant="secondary" disabled={locked} onClick={() => void readFile((sourceMember || hostFile)!.path)}>{busy ? '正在读取同一文件…' : '重读原副本中的这个文件'}</Button></div> : <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={listingStale?'完整清单待重新核对':`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
         {recentSave && <div className="pw-checkout-file-list" aria-label="最近一次已核对的保存">
-          <Button variant="secondary" disabled={locked} onClick={()=>void readFile(recentSave.path,undefined,recentSave)}>
+          <Button variant="secondary" disabled={locked} onClick={()=>void readFile(recentSave.path,{saved:recentSave})}>
             <span dir="auto">{recentSave.path}</span><small>最近保存 · {recentSave.savedHash.slice(0,8)}</small>
           </Button>
         </div>}
@@ -215,7 +263,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           {v==='path'?'文件名':v==='text'?'代码文字':'Git 变更'}</Button>)}</div>}
         {finder==='git'&&listing.gitAvailable===true&&<ProjectCheckoutGitChanges value={gitView} busy={locked}
           inspect={request=>void invoke('list',{gitRead:request},v=>setGitView(checkoutGitView(v,projectId,checkoutId,handle.current)))}
-          open={(path,op)=>void readFile(path,op)}/>}
+          open={(path,op)=>void readFile(path,{gitStatusOperation:op})}/>}
         {finder==='text'&&canFindText&&<ProjectCheckoutTextSearch key={searchVersion} project={projectId} checkout={checkoutId} filesHandle={handle.current} busy={locked} visible={setFinding} invoke={invoke}
           open={(textHandle,hit,row,query)=>void invoke('readTextHit',{textHandle,hit},v=>{
             const a=v.sourceHit;
@@ -237,7 +285,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {finder!=='git'&&<><TextField label="相对文件路径" value={newPath} onChange={setNewPath} isDisabled={locked} hint="例如 index.html 或 src/main.ts；不操作运行缓存和 Git 内部目录。" />
         <Button variant="secondary" disabled={locked || !newPath.trim()} onClick={() => void readFile(newPath.trim())}>打开或准备新文件草稿</Button></>}
       </AccordionItem></Accordion>}
-      {file && <section ref={editorContainer} className="pw-checkout-editor"><header><h3 ref={editorHeading} tabIndex={-1}>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {file.dirty ? '有未保存修改' : '没有未保存修改'}</small></header>
+      {file && <section ref={editorContainer} className="pw-checkout-editor"><header><h3 ref={editorHeading} tabIndex={-1}>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {editState}</small>
+        {reopenedVersion && <p className="pw-field-hint">已从同一副本重读保存版本 <code>{reopenedVersion.savedHash.slice(0,10)}</code>。{(file.dirty||orphan!==null)&&'编辑框仍保留未保存文字，不套用原光标位置。'}</p>}
+      </header>
         {sourceMember && !reviewed ? <div>
           <p role="status">{file.latest.expectedHash === sourceMember.fileSha256 ? '刚读取的副本与任务当时保存的内容一致。' : '副本在交付后已改变。编辑的是当前副本，不会用旧包覆盖它。'}
             {(file.dirty || orphan !== null) && ' 此文件另有未保存草稿，进入编辑后可核对。'}</p>

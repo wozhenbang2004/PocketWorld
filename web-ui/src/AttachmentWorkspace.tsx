@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
-import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconClose, IconExternalLink, IconFileAdd, IconFolder, IconMore, IconRefresh, IconShare, IconUpload } from './icons';
+import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconClose, IconExternalLink, IconFileAdd, IconFolder, IconInfo, IconMore, IconRefresh, IconShare, IconUpload } from './icons';
 import {bridge} from './bridge';
 import {Accordion,AccordionItem,Button,IconButton,TextField} from './forms-library';
 import {Drawer,ContextMenuTrigger,ContextMenu,ContextMenuItem} from './shell-library';
@@ -24,6 +24,7 @@ type Props={
  onChooseAttachment?:(file:OriginalAttachmentChoice,target:FileDraftTarget,stillCurrent:()=>boolean,closeOriginal:()=>Promise<void>)=>Promise<void>;
 };
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
+type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
 const mayReferenceOriginal=(view:Json)=>view.canSaveOriginal===true||view.historyResultOnly===true&&view.canReferenceHistoryOriginal===true;
 function draftContainsFile(target:FileDraftTarget,file:{fileId:string;sha256:string}){
  const native=bridge.getState(),draft=obj(native.composer);
@@ -61,8 +62,13 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const continuationHeading=useRef<HTMLDivElement>(null);
  const hasOriginal=Object.keys(obj(view.originalFile)).length>0;
  const mode=view.documentDraft?'edit':view.comparison?'compare':view.processingOpen?'process':hasOriginal?'original':view.documentOpen?'read':file.id?'detail':'list';
- const location=JSON.stringify([view.windowId,view.taskId,file.id,file.sha256,mode]),locationRef=useRef(location);locationRef.current=location;
  const reportOnly=view.reportResultOnly===true,scopedResultOnly=reportOnly||view.historyResultOnly===true;
+ const privateFiles=!view.group&&!view.team&&!view.deviceOriginalOnly;
+ const listScope=privateFiles&&!view.choosingSource?JSON.stringify([view.taskId||'',snapshot.taskRunId||'',snapshot.coordinatorEpoch||0,
+  view.resultFilesOnly===true,reportOnly,view.historyResultOnly===true]):'';
+ const location=JSON.stringify([mode==='list'&&listScope?listScope:view.windowId,view.taskId,file.id,file.sha256,mode]);
+ const listOrigin=useRef<{scope:string;collection?:string;inset:number}|null>(null);
+ const displayedFile=useRef<{scope:string;target:ExactFile}|null>(null);
  const workOutput=file.role==='result'&&!!view.taskId&&(view.resultFilesOnly===true||view.fromWorkResult===true||view.taskId===openTaskId);
  const topic=workOutput&&mode==='original'&&mayReferenceOriginal(view)&&file.sourceTaskId===view.taskId&&resultTopic?.taskId===view.taskId?resultTopic:undefined;
  // Success remains attached to the same draft after native receipt advances its revision.
@@ -72,14 +78,16 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const selection=exactFileTarget(file),draftHasFile=!!(draftTarget&&selection&&draftContainsFile(draftTarget,selection));
  const handoff=!topic&&((currentHandoff?.phase==='added'&&!draftHasFile)||(currentHandoff?.phase==='failed'&&draftHasFile))?null:currentHandoff;
  const draftBusy=draftHandoff?.phase==='adding'||draftHandoff?.phase==='opening';
- const rememberPosition=()=>{if(scroller.current)positions.current.set(locationRef.current,scroller.current.scrollTop)};
+ const rememberPosition=()=>{if(view.ready&&scroller.current)positions.current.set(location,scroller.current.scrollTop)};
  useLayoutEffect(()=>{
   if(!view.open){positions.current.clear();return;}
+  if(!view.ready)return;
   if(scroller.current)scroller.current.scrollTop=positions.current.get(location)||0;
   heading.current?.focus({preventScroll:true});
- },[view.open,location]);
+ },[view.open,view.ready,location]);
  useEffect(()=>{if(view.open)returningToSearch.current=false},[view.windowId]);
  const alive=useRef(true),tail=useRef<Promise<unknown>>(Promise.resolve()),beforeBack=useRef<(()=>Promise<AttachmentFrame|undefined>)|null>(null),latest=useRef(view);latest.current=view;
+ const backFlight=useRef(false);
  const act=useCallback((command:string,args:Json={},after?:AttachmentFrame,showError=true)=>{
   let payload:Json;
   try{payload=attachmentActionPayload(after??attachmentFrame(view),command,structuredClone(args))}catch(cause){if(showError)setError(cause instanceof Error?cause.message:'原文件页面已变化');return Promise.reject(cause)}
@@ -96,21 +104,22 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  },[view.windowId,view.frameId,view.ready]);
  const run=(command:string,args:Json={})=>{
   rememberPosition();
-  const leavesEditor=['openOriginal','continueDocument','openProcessing','compareParent','read','ocr','selectFile','attach','chooseSource','newDocument','continueTask','refresh'].includes(command);
+  const leavesEditor=['openOriginal','originalDetails','continueDocument','openProcessing','compareParent','read','ocr','selectFile','attach','chooseSource','newDocument','continueTask','refresh'].includes(command);
   void Promise.resolve(leavesEditor?beforeBack.current?.():undefined).then(frame=>act(command,args,frame)).catch(()=>{});
  };
  const goBack=useCallback(()=>{
   const current=latest.current,transfer=draftFlight.current;
   if(!current.open)return false;
-  if(current.busy||!current.ready||transfer&&(transfer.phase==='opening'||!current.originalFile))return true;
-  if(scroller.current)positions.current.set(locationRef.current,scroller.current.scrollTop);
-  void Promise.resolve(beforeBack.current?.()).then(frame=>act('back',{},frame)).catch(()=>{});
+  if(backFlight.current||current.busy||!current.ready||transfer&&(transfer.phase==='opening'||!current.originalFile))return true;
+  if(scroller.current)positions.current.set(location,scroller.current.scrollTop);
+  backFlight.current=true;
+  void Promise.resolve().then(()=>beforeBack.current?.()).then(frame=>act('back',{},frame)).catch(()=>{}).finally(()=>{backFlight.current=false});
   return true;
- },[act]);
+ },[act,location]);
  const registerBeforeBack=useCallback((handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>{beforeBack.current=handler},[]);
  useEffect(()=>{alive.current=true;registerBack(goBack);return()=>{alive.current=false;registerBack(null)}},[registerBack,goBack]);
  useEffect(()=>{setError('');setPage('1')},[view.windowId,file.id,file.sha256]);
- const busy=pending>0||!!view.busy||!view.ready,privateFiles=!view.group&&!view.team&&!view.deviceOriginalOnly,hasFile=typeof file.id==='string';
+ const busy=pending>0||!!view.busy||!view.ready,hasFile=typeof file.id==='string';
  const canStage=!scopedResultOnly&&!workOutput&&privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
  const title=view.documentDraft?'编辑文档':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
@@ -273,7 +282,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const confirmed=inThisFile&&copyReceipt.status==='verified'&&Number.isSafeInteger(copyReceipt.verifiedBytes)&&copyReceipt.verifiedBytes>=0&&
   (!Number.isSafeInteger(listedSize)||copyReceipt.verifiedBytes===listedSize);
  const destination=typeof copyReceipt.displayName==='string'&&copyReceipt.displayName?`「${copyReceipt.displayName}」`:'所选位置的副本';
- const savedCopy=confirmed?`已保存并核对${destination}：本次回读 ${copyReceipt.verifiedBytes.toLocaleString()} 字节，SHA-256 与原件一致。`
+ const savedCopy=confirmed?`${copyReceipt.historical===true?'上次另存时已核对':'已保存并核对'}${destination}：回读 ${copyReceipt.verifiedBytes.toLocaleString()} 字节，SHA-256 与原件一致。`
   :!inThisFile?'':copyReceipt.status==='no_target'?'未取得保存位置，PocketWorld 没有写入内容。原件保留。'
   :copyReceipt.status==='could_not_read'?`${destination}返回了写入结果，但不能回读核对。请在刚选的位置检查。`
   :copyReceipt.status==='content_mismatch'?`${destination}与原件不一致，不能确认保存。请在刚选的位置检查，原件保留。`
@@ -290,13 +299,43 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    {privateFiles&&<ContextMenuItem id="share" icon={IconShare}>系统分享…</ContextMenuItem>}
   </ContextMenu>
  </>}</ContextMenuTrigger>;
- const sourceReturnLabel=reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':'返回原工作区';
- const backLabel=view.deviceOriginalOnly?'返回原工作':mode==='list'?sourceReturnLabel:mode==='detail'?'返回文件列表':mode==='edit'&&hasOriginal?'返回这份原件':'返回文件详情';
+ const sourceReturnLabel=reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':
+  view.resultFilesOnly===true&&!view.fromWorkResult&&view.taskId!==openTaskId?'返回原消息':view.taskId?'返回原工作':'返回原工作区';
+ const entryBack=(mode==='original'||mode==='detail')&&view.originalReturn==='entry';
+ const originalHasDirectBack=mode==='original'&&(view.originalReturn==='entry'||view.originalReturn==='list');
+ const detailsLabel=scopedResultOnly?'文件来源':'来源与操作';
+ const backLabel=view.deviceOriginalOnly?'返回原工作':entryBack||mode==='list'?sourceReturnLabel:
+  mode==='detail'||originalHasDirectBack?'返回文件列表':mode==='edit'&&hasOriginal?'返回这份原件':'返回文件详情';
  const fileList=(label:string,files:Json[],opensOriginal=false)=><AttachmentFileCollection label={label} files={files} busy={busy} choosing={!!view.choosingSource} opensOriginal={opensOriginal}
-  onSelect={target=>run(view.choosingSource?'attach':opensOriginal?'openOriginal':'selectFile',target)}/>;
+  onSelect={(target,row)=>{
+   const body=scroller.current;
+   if(listScope&&body)listOrigin.current={scope:listScope,collection:label,inset:row.getBoundingClientRect().top-body.getBoundingClientRect().top};
+   run(view.choosingSource?'attach':opensOriginal?'openOriginal':'selectFile',target);
+  }}/>;
  // A source picker reads the private library, not the task it will return to.
  // Do not show retained rows from the preceding location while the new read settles.
  const catalogUnread=privateFiles&&(snapshot.taskId!==(view.choosingSource?'':view.taskId||'')||!Array.isArray(snapshot.sources)||!Array.isArray(snapshot.artifacts));
+ useLayoutEffect(()=>{
+  if(!view.open){displayedFile.current=null;listOrigin.current=null;return;}
+  if(!view.ready)return;
+  if(mode!=='list'){
+   displayedFile.current=listScope&&selection?{scope:listScope,target:selection}:null;
+   return;
+  }
+  const previous=displayedFile.current,body=scroller.current;
+  if(busy||catalogUnread||view.error||!previous||!body)return;
+  displayedFile.current=null;
+  if(previous.scope!==listScope)return;
+  const remembered=listOrigin.current,origin=remembered?.scope===listScope?remembered:null;
+  const matches=Array.from(body.querySelectorAll<HTMLButtonElement>('button[data-attachment-file-id][data-attachment-file-sha]')).filter(row=>
+   !row.disabled&&row.dataset.attachmentFileId===previous.target.fileId&&row.dataset.attachmentFileSha===previous.target.sha256&&row.getClientRects().length>0);
+  const sameCollection=origin?matches.filter(row=>row.closest<HTMLElement>('[data-attachment-collection]')?.dataset.attachmentCollection===origin.collection):[];
+  const row=matches.length===1?matches[0]:sameCollection.length===1?sameCollection[0]:null;
+  if(!row)return; // A withdrawn/replaced file must not focus any similarly named row.
+  const bounds=row.getBoundingClientRect(),offset=Math.max(0,Math.min(body.clientHeight-bounds.height,origin?.inset??16));
+  body.scrollTop+=bounds.top-body.getBoundingClientRect().top-offset;
+  row.focus({preventScroll:true});
+ },[view.open,view.ready,mode,listScope,selection?.fileId,selection?.sha256,busy,catalogUnread,view.error]);
  const media=catalogUnread||view.choosingSource?[]:rows(snapshot.media).length?rows(snapshot.media):snapshot.kind==='group_media_result'?[{...snapshot,operationId:snapshot.sourceOperationId,status:snapshot.mediaState}]:[];
  const allSources=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts);
  const privateLibrary=privateFiles&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
@@ -327,12 +366,20 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const catalogUnconfirmed=catalogIncomplete||catalogUnread;
  const refreshList=()=>run(view.choosingSource?'chooseSource':'refresh');
  const sourcesList=fileList(view.choosingSource?'可用文件':'来源文件',sourceFiles);
- const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存成果',savedFiles,privateLibrary||allowsBrowse||reportOnly);
+ const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存成果',savedFiles,privateLibrary||resultFilesOnly);
  const editableSourceList=editableSources.length>0&&<Accordion className="pw-attachment-tools"><AccordionItem id="library-editable-sources" title={`文档编辑源 · ${editableSources.length} 项`}>
   {fileList('已关联成品的编辑源',editableSources)}
  </AccordionItem></Accordion>;
  const libraryActions=privateFiles&&!resultFilesOnly&&<div className="pw-action-row pw-file-library-actions"><Button variant={hasLibraryFiles?'secondary':'primary'} leadingIcon={IconUpload} disabled={busy} onClick={()=>run('import')}>导入文件</Button><Button variant="ghost" leadingIcon={IconFileAdd} disabled={busy||!!view.pendingDocumentTask} onClick={()=>run('newDocument')}>创建文档</Button>{view.taskId&&!view.choosingSource&&<Button variant="ghost" disabled={busy} onClick={()=>run('chooseSource')}>从附件库关联</Button>}</div>;
- return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{if(returningToSearch.current)event.preventDefault();onReturnFocus?.(event)}} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description"><header className="pw-drawer-header pw-file-page-header">{mode==='original'?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>{scopedResultOnly?'文件来源':'来源与操作'}</Button>:<IconButton icon={IconArrowLeft} aria-label={backLabel} title={backLabel} onClick={goBack} disabled={!!view.busy||draftBusy}/>} <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance,file.sourceRunEvidence),objectVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>{!scopedResultOnly&&onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy||draftBusy} onClick={returnToSearch}>返回搜索</Button>}<IconButton icon={IconClose} aria-label={sourceReturnLabel} title={sourceReturnLabel} disabled={pending>0||draftBusy} onClick={close}/></header>
+ return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{if(returningToSearch.current)event.preventDefault();onReturnFocus?.(event)}} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description">
+ <header className="pw-drawer-header pw-file-page-header">
+  {mode==='original'&&!originalHasDirectBack?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>{detailsLabel}</Button>:
+   <IconButton icon={IconArrowLeft} aria-label={backLabel} title={backLabel} onClick={goBack} disabled={busy||draftBusy}/>}
+  <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance,file.sourceRunEvidence),objectVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>
+  {originalHasDirectBack&&<IconButton icon={IconInfo} aria-label={detailsLabel} title={detailsLabel} disabled={busy||draftBusy} onClick={()=>run('originalDetails')}/>}
+  {!scopedResultOnly&&onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy||draftBusy} onClick={returnToSearch}>返回搜索</Button>}
+  {!entryBack&&<IconButton icon={IconClose} aria-label={sourceReturnLabel} title={sourceReturnLabel} disabled={pending>0||draftBusy} onClick={close}/>}
+ </header>
  {mode==='original'&&view.ready&&runIndex>=0&&<nav className="pw-result-file-navigation" aria-label="本轮已列出的文件">
   {browseRunFile(-1)}<span role="status">第 {runIndex+1} 份 · 已列出 {runFiles.length} 份</span>{browseRunFile(1)}
  </nav>}

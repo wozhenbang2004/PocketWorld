@@ -5,7 +5,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import {ProjectTaskPackageOrigin} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
-import { ProjectCheckoutFiles } from './ProjectCheckoutFiles';
+import { ProjectCheckoutFiles, type CheckoutSavedPosition } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import { CheckoutGuide, checkoutKindSummary } from './ProjectWorkBinding';
 import './local-workspace.css';
@@ -33,6 +33,8 @@ const ownerWindow = () => { const view = bridge.getState().view as Data; return 
 const unresolved = (value: Data | null) => !!value && ['pending', 'unknown', 'unconfirmed'].includes(value.status);
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : String(failure);
 const scopedBuildReceipt = (receipt: Data) => receipt.independentNodeBuild === true || !!(receipt.versionedBuildSourceDigest || receipt.editedBuildSourceDigest);
+const copyIdentity = (value: unknown): value is string =>
+  typeof value==='string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 function existingBuildBlocked(value: unknown): string {
   switch(value){
     case 'workspaces': return '这个副本使用工作区，本机快捷构建目前只支持单个 Node 项目。';
@@ -85,7 +87,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [requirements, setRequirements] = useState<DeliveryRequirements>(() => deliveryRequirements());
   const [source, setSource] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [submission, setSubmission] = useState<Data | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
-  const [fileCheckout,setFileCheckout]=useState(''),[buildOrigin,setBuildOrigin]=useState<ProjectBuildCopy|null>(null);
+  const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition}|null>(null);
+  const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
+  const fileCheckout=fileWindow?.checkoutId||'';
+  const [buildOrigin,setBuildOrigin]=useState<ProjectBuildCopy|null>(null);
   const buildCheckout=buildOrigin?.checkoutId||'';
   const [buildCopyMissing,setBuildCopyMissing]=useState(false);
   const filesOpen=!!fileCheckout, filesBack = useRef<(() => boolean) | null>(null);
@@ -138,6 +143,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     }
     handle.current = value.viewHandle; setView(value); sourceAttempt.current = ''; setSource(null);
     const incoming = value.draft || {}, here = draft.current;
+    if(value.draftRecoveryRequired!==true)setCopyResult(previous =>
+      incoming.copyRequestId && (previous?.unconfirmed===true || previous?.requestId===incoming.copyRequestId) ? previous : null);
     const selectedCopy = incoming.ownerPickedConvention && (!here.constraints || keptNativePick.current) && (!here.checkoutId || here.checkoutId===incoming.checkoutId) &&
       here.goal === (incoming.goal||'') && here.deliverable === (incoming.deliverable||'') && here.completionCriteria === (incoming.completionCriteria||'');
     setSourceConflict(false);
@@ -212,7 +219,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const retire = () => {
       generation.current++; entered.current = null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null;
-      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setSource(null); setBusy(false); setFileCheckout(''); }
+      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setSource(null); setBusy(false); setFileWindow(null); }
       if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
     };
     // Switching the start method retires its window, never its plain draft or
@@ -238,6 +245,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const readable = can('projects.development.read');
   const available = rows(view?.checkouts);
   const selectedCopy = available.find(row => row.projectId === projectId && row.checkoutId === checkout);
+  const savedFileHere = selectedCopy && lastSavedFile?.projectId===projectId && lastSavedFile.checkoutId===checkout ? lastSavedFile : null;
   const differentBuildCopy=buildCheckout&&checkout!==buildCheckout&&available.find(row=>row.projectId===projectId&&row.checkoutId===buildCheckout);
   useEffect(() => { if (active && readable && !handle.current) void readRef.current(); }, [active, readable]);
   useEffect(() => {
@@ -302,11 +310,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       keptNativePick.current=false;setSourceConflict(false);setView(v=>v?{...v,draft:{...v.draft,ownerPickedConvention:null,constraints:here.constraints}}:v);
     });
   };
-  const copyUnconfirmed = copyResult?.unconfirmed === true || copyResult?.found === false && copyResult?.partial !== true
-    || !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
-  const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed);
+  const copyUnconfirmed = copyResult?.unconfirmed === true ||
+    !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
+  const interactionBusy = active && (busy || pending || !!review || filesOpen || copyUnconfirmed && can('projects.development.queryCopy'));
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
-  const closeFiles = () => { setFileCheckout(''); setHostEditor(null); setHostFiles(null); sourceAttempt.current = ''; setSource(null); };
+  const closeFiles = (saved?:CheckoutSavedPosition) => {
+    if(saved?.projectId===projectId && saved.checkoutId===fileCheckout && active && !document.hidden && bridge.getState().state.projectId===projectId)
+      setLastSavedFile(saved);
+    setFileWindow(null); setHostEditor(null); setHostFiles(null); sourceAttempt.current = ''; setSource(null);
+  };
   useEffect(()=>{
     if(!buildReturn||!active||!view||busy||review||fileCheckout||document.hidden||
        handle.current!==view.viewHandle||!latest.current.can('projects.development.files.open'))return;
@@ -320,7 +332,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     }
     // The clicked task chooses only the editor. The current submission draft
     // and any other checkout selection are intentionally left unchanged.
-    sourceAttempt.current='';setSource(null);setHostEditor(null);setBuildOrigin(buildReturn);setFileCheckout(buildReturn.checkoutId);
+    sourceAttempt.current='';setSource(null);setHostEditor(null);setBuildOrigin(buildReturn);setFileWindow({checkoutId:buildReturn.checkoutId});
   },[buildReturn,onBuildReturnHandled,active,view,busy,review,fileCheckout,projectId]);
   const unfinishedInput=!!(goal||view?.draft?.goal||view?.draft?.ownerPickedConvention||deliveryFields.some(k=>requirements[k]||view?.draft?.[k]));
   const selectBuildCopy=()=>{
@@ -371,14 +383,34 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       setHostDiff({ ...checkedHostText(value, file), path: file.path, originalSha256: file.originalSha256, phoneSha256: file.phoneSha256!, snapshotVersion, evidenceDigest, viewHandle });
     });
   };
+  const chooseCheckout = (value:string) => {
+    const clear = !!currentPicked && checkout!==value;
+    if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
+    setCheckout(value); setBuildOrigin(null); setBuildCopyMissing(false); setSource(null); setHostOrigin(null); setHostFiles(null);
+    sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value, ...(clear?{constraints:''}:{}) });
+  };
   const copy = (query: boolean) => {
-    if (!query) setCopyResult({ unconfirmed: true });
-    return invoke(query ? 'projects.development.queryCopy' : 'projects.development.prepare', { viewHandle: handle.current }, value => {
-    if (value.projectId !== projectId) throw new Error('副本准备回执不属于当前项目。');
-    setCopyResult(value);
-    setView(previous => previous ? { ...previous, draft: { ...previous.draft, copyRequestId: value.requestId },
-      checkouts: value.found && value.checkout ? [...rows(previous.checkouts).filter(row => row.checkoutId !== value.checkoutId), { ...value.checkout, checkoutId: value.checkoutId }] : previous.checkouts } : previous);
-    if (value.found) { setCheckout(value.checkoutId); retain({ ...draft.current, checkoutId: value.checkoutId }); sourceAttempt.current = ''; }
+    const action=query?'projects.development.queryCopy':'projects.development.prepare', expected=view?.draft?.copyRequestId;
+    const state=bridge.getState().state;
+    if(!active||entered.current||!view||!can(action)||document.hidden||state.projectId!==projectId||state.filePath||
+      !query&&(disabled||copyUnconfirmed||copyResult?.partial===true))return;
+    if(!query)setCopyResult({unconfirmed:true});
+    return invoke(action,{viewHandle:handle.current},value=>{
+      if(!value||value.projectId!==projectId||!copyIdentity(value.requestId)||!copyIdentity(value.checkoutId)||
+        expected&&value.requestId!==expected||typeof value.found!=='boolean'||typeof value.partial!=='boolean'||value.replayAllowed!==false)
+        throw Error('没有核对到原副本准备回执，未更换所选副本。');
+      const raw=value.checkout;
+      if(value.found&&(value.partial||!raw||raw.id!==value.checkoutId||raw.projectId!==projectId||raw.ownerDevelopmentRequestId!==value.requestId||
+        typeof raw.name!=='string'||!Number.isSafeInteger(raw.createdAt)||raw.createdAt<1||raw.createdAt>8.64e15))
+        throw Error('副本登记不属于原准备请求，未更换所选副本。');
+      const prepared=value.found?{checkoutId:value.checkoutId,projectId,name:raw.name,createdAt:raw.createdAt}:null;
+      setCopyResult({requestId:value.requestId,found:value.found,partial:value.partial,checkout:prepared});
+      setView(previous=>previous?{...previous,draft:{...previous.draft,copyRequestId:value.requestId,copyStatus:prepared?'ready':'unknown'},
+        checkouts:prepared&&!rows(previous.checkouts).some(row=>row.projectId===projectId&&row.checkoutId===prepared.checkoutId)?
+          [...rows(previous.checkouts),prepared]:previous.checkouts}:previous);
+      // Checking an older request is just observation. Only an explicit initial
+      // prepare in an unselected project can present its new copy by default.
+      if(prepared&&!query&&!draft.current.checkoutId&&!currentPicked)chooseCheckout(prepared.checkoutId);
     });
   };
   const start = () => {
@@ -441,12 +473,20 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       <SelectField label="选择私人副本" value={checkout} isDisabled={disabled} options={[{ id: '', label: available.length ? '选择已有私人副本' : '尚未准备私人副本' },
         ...available.map(row => ({ id: row.checkoutId, label: `${row.name || name} · ${row.checkoutId.slice(0,8)} · ${new Date(row.createdAt || 0).toLocaleString()}` })),
         ...(checkout && !available.some(row => row.checkoutId === checkout) ? [{ id: checkout, label: '原副本暂不可用，请核对' }] : [])]}
-        onChange={value => { const clear = !!currentPicked && checkout!==value; if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
-          setCheckout(value); setBuildOrigin(null); setBuildCopyMissing(false); setSource(null); setHostOrigin(null); setHostFiles(null); sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value, ...(clear?{constraints:''}:{}) }); }} />
-      {available.length === 0 && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
-      {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
+        onChange={chooseCheckout} />
+      {available.length === 0 && can('projects.development.prepare') && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyUnconfirmed || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
+      {(view.draft?.copyRequestId || copyResult) && <div>
+        {copyUnconfirmed&&<p className="pw-field-hint" role="status">{can('projects.development.queryCopy')?
+          '副本准备结果还未核对。先查原请求，不会重复创建副本。':'副本准备结果未知，这个窗口暂时不能查询；不会重新创建副本。'}</p>}
+        {can('projects.development.queryCopy')&&<Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>}
+        {copyResult?.found===true&&copyResult.checkout&&<div role="status" className="pw-field-hint pw-checkout-identity">
+          <p>已核对本机副本登记：<bdi>{copyResult.checkout.name||name}</bdi> · <code>{copyResult.checkout.checkoutId.slice(0,8)}</code>。
+            {checkout===copyResult.checkout.checkoutId?' 当前选中这一份。':' 未切换当前副本或交办。'}</p>
+          {checkout!==copyResult.checkout.checkoutId&&!currentPicked&&(!checkout||!unfinishedInput)&&<Button variant="secondary" size="small" disabled={disabled}
+            onClick={()=>chooseCheckout(copyResult.checkout.checkoutId)}>选择这份副本</Button>}
+        </div>}
         {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={()=>onOpenTerminal()}>打开副本准备入口</Button></div>}
-        {copyResult && !copyResult.found && !copyResult.partial && <p role="status">未发现这次准备的副本；显式准备仍使用同一请求，不会换一个身份重建。</p>}</div>}
+        {copyResult?.found===false && !copyResult.partial && <p role="status">未找到这次准备的副本。没有自动重试或切换工作位置。</p>}</div>}
       {!filesOpen&&differentBuildCopy&&<div className="pw-local-inline-notice" role="status">
         <p>这次构建使用的是 {differentBuildCopy.name||'私人副本'} · {buildCheckout.slice(0,8)}。{unfinishedInput||pending?'另一份交办仍保留，没有切换。':'可以选这份副本，再审阅下一次构建。'}</p>
         <div className="pw-form-actions">
@@ -458,9 +498,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         {versionChanged ? <>当前已保存源码 <code>{source?.sourceDigest.slice(0,8)}</code> 不同于原构建 <code>{comparedBuild.sourceDigest.slice(0,8)}</code>。旧批准不会用于新版本。</>
           : '当前已保存源码仍是原构建使用的版本。'}
       </p>}
+      {!filesOpen && savedFileHere && <p className="pw-field-hint pw-checkout-identity">
+        上次确认保存：<bdi>{savedFileHere.path}</bdi> · <code>{savedFileHere.savedHash.slice(0,10)}</code>。重开时会核对原文件，没有另存一份历史副本。
+      </p>}
       <div className="pw-form-actions">
         {selectedCopy && can('projects.development.files.open') && <Button variant="secondary" disabled={busy || !!review || filesOpen}
-          onClick={() => { setHostEditor(null); setFileCheckout(selectedCopy.checkoutId); }}>编辑这份副本的文件</Button>}
+          onClick={() => { setHostEditor(null); setFileWindow({checkoutId:selectedCopy.checkoutId}); }}>编辑这份副本的文件</Button>}
+        {savedFileHere && can('projects.development.files.open') && <Button variant="ghost" disabled={busy || !!review || filesOpen}
+          onClick={() => { setHostEditor(null); setFileWindow({checkoutId:savedFileHere.checkoutId,resumeSaved:savedFileHere}); }}>回到上次保存的文件</Button>}
         {!differentBuildCopy && selectedCopy && (selectedCopy.draftWorkingCopy === true || source?.existingNodeBuild === true) && can('projects.development.reviewDraftBuild') &&
           (versionBuild ? <>
             {can('tasks.open') && <Button variant="secondary" disabled={disabled || !can('projects.development.inspect')}
@@ -524,9 +569,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     {active && !document.hidden && hostDiff && origin && hostDiff.viewHandle === view?.viewHandle && hostDiff.evidenceDigest === origin.evidenceDigest && <ProjectHostDiff diff={hostDiff} close={closeHostDiff} edit={can('projects.development.files.openHostChange') ? () => {
       if (visibleHostDiff.current !== hostDiff || handle.current !== hostDiff.viewHandle || document.hidden) return;
       const { path, evidenceDigest, originalSha256, phoneSha256 } = hostDiff; setHostEditor({ path, evidenceDigest, originalSha256, phoneSha256 });
-      closeHostDiff(); setFileCheckout(checkout);
+      closeHostDiff(); setFileWindow({checkoutId:checkout});
     } : undefined}/>}
-    {active && view && fileCheckout && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined} onClose={closeFiles} registerBack={registerFilesBack} />}
+    {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
+      resumeSaved={fileWindow.resumeSaved} onClose={closeFiles} registerBack={registerFilesBack} />}
     <SettingsDialog isOpen={!!review} title={review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
       {review.draftBuild === true ? <><strong>{review.dependencyState==='needs_lock_review'?'还缺依赖，先审阅这份锁':review.manager+' run build'}</strong>
         {review.existingCopy && <p className="pw-field-hint">只核对这个私人副本已保存的源码，不含未保存的文件修改。{review.preservedProjectDraft===true && '原项目目标与交付约定留在草稿，不随这次构建提交。'}</p>}

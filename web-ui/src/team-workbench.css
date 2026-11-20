@@ -71,6 +71,10 @@
 .pw-team-question-row > span { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; }
 .pw-team-research-delivery { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 8px; }
 .pw-team-delivery-list { display: grid; gap: 4px; min-width: 0; }
+.pw-team-delivery-member + .pw-team-delivery-member { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--pw-divider); }
+.pw-team-delivery-member > h4 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.pw-team-delivery-member > h4 > span { color: var(--pw-copy); font-size: 12px; font-weight: 400; }
+.pw-team-delivery-list .pw-team-delivery-locate { min-height: 44px; }
 .pw-team-attention-copy { display: grid; gap: 4px; flex: 1 1 auto; min-width: 0; }
 .pw-team-attention-copy > strong { font-size: 15px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
 .pw-team-attention-copy > small { color: var(--pw-copy); font-size: 12px; line-height: 1.6; }

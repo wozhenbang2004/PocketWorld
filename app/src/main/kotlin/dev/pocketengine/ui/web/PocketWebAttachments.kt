@@ -24,7 +24,7 @@ internal class PocketWebAttachments(
 ) {
     companion object {
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
-        private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal")
+        private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
     }
     private val flow get() = controller.attachmentOutcomes
@@ -47,7 +47,7 @@ internal class PocketWebAttachments(
     }
     private fun location(s: AttachmentOutcomeState): String = listOf(s.taskId, s.group?.requestId, s.group?.artifactId,
         s.team?.toJson()?.toString(), s.file?.optString("id"), s.file?.optString("sha256"), s.choosingSource,
-        s.documentOpen, s.originalFile?.identity, s.documentDraft?.toString(), s.processingSource?.identity,
+        s.documentOpen, s.originalFile?.identity, s.originalReturn, s.documentDraft?.toString(), s.processingSource?.identity,
         s.processingReview?.metadata()?.toString(), s.comparison?.first?.identity, s.comparison?.second?.identity).joinToString("\u0000")
 
     private var deviceTaskCurrent:(()->Boolean)?=null
@@ -92,8 +92,7 @@ internal class PocketWebAttachments(
         }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
         val privateOriginal = !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
         val ownedCopy= scoped == null && !state.deviceOriginalOnly && state.group == null && state.team == null && controller.webPrivateOwnerVisible()
-        val copyReceipt=state.copyReceipt?.takeIf { receipt -> ownedCopy && receipt.taskId==state.taskId.orEmpty() &&
-            state.file?.let { file->receipt.fileId==file.optString("id")&&receipt.sha256==file.optString("sha256") }==true }
+        val copyReceipt=if(ownedCopy)flow.privateCopyReceipt(privateOriginal) else null
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
             .put("canOpenReportOriginalWork", canNavigateFromReport(state))
@@ -111,11 +110,11 @@ internal class PocketWebAttachments(
             .put("processingInfo", processingInfo).put("processingReview", reviewedProcessing).put("processingReviewId", processingReview?.id)
             .put("processingOpen", state.processingSource != null).put("pendingProcessingTask", state.pendingProcessingTask.takeUnless { report })
             .put("progress", state.progress).put("observing", state.observing).put("exportPending", flow.exportPending)
-            .put("privateCopyStage", if(ownedCopy)flow.privateCopyStage() else null).put("privateCopyReceipt",copyReceipt?.toJson())
+            .put("privateCopyStage", if(ownedCopy)flow.privateCopyStage() else null).put("privateCopyReceipt",copyReceipt)
             .put("canRequestOcr", flow.canRequestOcr()).put("canSaveRead", flow.canSaveRead())
             .put("canReadTeamDifference", state.team != null && flow.canReadTeamDifference())
             .put("teamDifference", state.teamDifference).put("hasPreviousTeamArtifact", state.teamPrevious != null)
-            .put("originalFile", viewer.snapshot()).put("comparison", viewer.comparisonSnapshot())
+            .put("originalFile", viewer.snapshot()).put("originalReturn", state.originalReturn.value).put("comparison", viewer.comparisonSnapshot())
     }
 
     fun dispatch(action: String, args: JSONObject, resultRun: AttachmentResultRun? = null,
@@ -152,7 +151,8 @@ internal class PocketWebAttachments(
                     require(file.length <= 240 && '\u0000' !in file && sha.matches(Regex("[0-9a-f]{64}"))) { "原文件版本无效，请重新查找" }
                     clear(); scopedResultCurrent = readerCurrent
                     flow.openFile(JSONObject().put("id", file).put("sha256", sha), task, openOriginal == true,
-                        fromWorkResult = openOriginal == true && resultRun == null, resultRun = resultRun)
+                        fromWorkResult = openOriginal == true && resultRun == null, resultRun = resultRun,
+                        returnToEntry = openOriginal == true)
                 } else {
                     require(!args.has("sha256")) { "请选择对应的原文件" }
                     // The coordinator rereads the original owner task on its IO executor.
@@ -226,6 +226,7 @@ internal class PocketWebAttachments(
                 "read" -> flow.read(DocumentContent.Request(args.optInt("unit", 1), args.optInt("chunk", 0), 4, 12000, 48, "text"))
                 "ocr" -> flow.readImageText()
                 "saveRead" -> flow.saveReadAsFile()
+                "originalDetails" -> { flow.showOriginalDetails(); viewer.clear() }
                 "openOriginal" -> {
                     if (args.has("fileId") || args.has("sha256")) {
                         val file = selected()

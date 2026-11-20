@@ -50,7 +50,8 @@ type RunSection = 'progress' | 'result' | 'details';
 type EditorPurpose = 'start' | 'definition';
 type MessageInput = { recipient: string; replyId: string; mode: string };
 type PendingStart = { teamId: string; since: number; goal: string };
-type ResultOrigin = { runId: string; key: string; scroll: number; member?: { id: string; generation: number; deliveryKey: string } };
+type ResultMember = { id: string; generation: number; deliveryKey: string; round: number };
+type ResultOrigin = { runId: string; key: string; scroll: number; member?: ResultMember };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const object = (value: unknown): Data => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 const label = (value: unknown): string => typeof value === 'string' ? value : '';
@@ -131,7 +132,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const [shownMemberSources,setShownMemberSources]=useState<Record<string,boolean>>({});
   const [shownArchives,setShownArchives]=useState<Record<string,boolean>>({});
   const [openingMemberResult, setOpeningMemberResult] = useState(false);
-  const deliveryReturn=useRef<{team:string;key:string;section:'progress'|'result';taskId:string;scroll:number;entered:boolean;member?:ResultOrigin['member']}|null>(null);
+  const deliveryReturn=useRef<{team:string;key:string;section:'progress'|'result';taskId:string;sourceHandle:string;scroll:number;entered:boolean;member?:ResultMember}|null>(null);
   const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
@@ -689,6 +690,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const followUps = teamFollowUps(current, reading?.attention);
   const deliveries = teamResearchDeliveries(current, messages);
   const archivedDeliveries = teamResearchDeliveries(current, messages, 'archived');
+  const ordinaryAnswers = current?.mode === 'collaborate' && !hasWorkPlan && !current.productionScope &&
+    current.researchExecutionFormat === 'pocketworld.team-research-agent.v1';
+  const resultPhaseLink = ordinaryAnswers && resultSource?.member && resultSource.runId === current.id &&
+    resultSource.member.generation === current.generation ? resultSource.member.deliveryKey : '';
   const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
   const remainingMember = teamRemainingMember(reading, deliveries.filter(source => canOpenMemberResult || source.answer && openReading), state.tasks);
   const scopedFollowUps = remainingMember?.canReview && !uncertain ? followUps.map(item => item.key === remainingMember.item.key
@@ -724,14 +729,22 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const resultOrigin = (key = '', member?: ResultOrigin['member']): ResultOrigin | null => current
     ? { runId: String(current.id), key, member, scroll: root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0 } : null;
+  const memberStage = (member: ResultMember) => {
+    const candidates = root.current?.querySelectorAll<HTMLElement>(
+      `[data-team-member-id="${CSS.escape(member.id)}"] [data-team-progress-round="${member.round}"]`);
+    const node = candidates?.length === 1 ? candidates[0] : undefined;
+    return node?.closest('[hidden],[inert]') ? undefined : node;
+  };
   resultBack.current = () => {
     if (!resultSource || runSection === 'result' || resultSource.runId !== current?.id || !workspaceActive || !ownsNativeWindow()) return false;
     const original = resultSource;
     chooseRunSection('result', () => {
       if (currentReading.current?.run?.id !== original.runId || !ownsNativeWindow()) return;
       const result = root.current?.querySelector<HTMLElement>('.pw-team-result');
-      const row = Array.from(result?.querySelectorAll<HTMLElement>('[data-team-follow-up]') || []).find(v => v.dataset.teamFollowUp === original.key);
+      const row = Array.from(result?.querySelectorAll<HTMLElement>('[data-team-follow-up]') || [])
+        .find(v => v.dataset.teamFollowUp === original.key && !v.closest('[hidden],[inert]'));
       if (!original.member || !row) setResultSource(saved => saved === original ? null : saved);
+      if (original.member && !row) setNotice('已返回协作成果，刚才的答复不在当前清单。');
       const target = row || result?.querySelector<HTMLElement>('[data-team-result-heading]');
       const scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
       if (scroll) scroll.scrollTop = original.scroll;
@@ -798,10 +811,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (runSection === 'result') {
       rememberSourcesOpened(item.team);
       setResultSource(Number.isSafeInteger(original.run.generation)?resultOrigin(same.answer.key, {
-        id:same.memberId,generation:original.run.generation,deliveryKey:same.key,
+        id:same.memberId,generation:original.run.generation,deliveryKey:same.key,round:same.round,
       }):null);
     }
-    else setResultSource(null);
+    else setResultSource(saved=>saved?.runId===item.team&&saved.member?.deliveryKey===same.key?saved:null);
     openReading({kind:'message',title:`${same.name} · ${same.answer.label}`,text:same.answer.text,returnFocus:trigger});
   };
   const selectRunTab = (section: RunSection) => {
@@ -813,14 +826,13 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       source.runId === current?.id && member.generation === current.generation &&
       [...deliveries,...archivedDeliveries].some(row => row.memberId === member.id && row.key === member.deliveryKey && (row.key === source.key || row.answer?.key === source.key)) &&
       members.filter(row => row.id === member.id).length === 1) {
-      setExpandedMembers(old => ({ ...old, [source.runId]: [...new Set([...(old[source.runId] || []), member.id])] }));
       chooseRunSection('progress', () => {
         if (!ownsNativeWindow() || document.hidden || currentReading.current?.run?.id !== source.runId ||
           currentReading.current.run.generation !== member.generation) return;
-        const row = root.current?.querySelector<HTMLElement>(`[data-team-member-id="${CSS.escape(member.id)}"]`);
-        if (!row || row.closest('[hidden],[inert]')) return;
-        row.scrollIntoView({ block: 'start' });
-        if (!document.activeElement?.closest('[role="tablist"]')) row.querySelector<HTMLElement>('button[aria-expanded]')?.focus({ preventScroll: true });
+        const stage = memberStage(member);
+        if (!stage) { setNotice('进展暂无法定位原阶段，没有选中另一项分工。'); return; }
+        stage.scrollIntoView({ block: 'center' });
+        if (!document.activeElement?.closest('[role="tablist"]')) stage.focus({ preventScroll: true });
       });
       return;
     }
@@ -839,15 +851,22 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         const same=teamResearchDeliveries(next.run,next.messages,item.archivedVersion?'archived':'current').find(s=>s.key===item.key);
         acceptReading(next);
         if(!same){setNotice('这份成员原件已变化，请重新核对。没有打开另一阶段。');return}
-        const member=Number.isSafeInteger(next.run.generation)?{id:same.memberId,generation:next.run.generation,deliveryKey:same.key}:undefined;
-        const origin={team:item.team,key:item.key,section,taskId:item.taskId,scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,member};
-        if (section === 'progress') setResultSource(null);
+        const member=Number.isSafeInteger(next.run.generation)?{id:same.memberId,generation:next.run.generation,deliveryKey:same.key,round:same.round}:undefined;
+        const origin={team:item.team,key:item.key,section,taskId:item.taskId,sourceHandle:next.viewHandle,
+          scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,member};
+        if (section === 'progress') setResultSource(saved=>saved?.runId===item.team&&saved.member?.deliveryKey===same.key?saved:null);
         else if(same.archivedVersion)setShownArchives(old=>({...old,[item.team]:true}));
         else rememberSourcesOpened(item.team);
         deliveryReturn.current=origin;
         setOpeningMemberResult(true);
         void run('teams.openResearchTask',{viewHandle:next.viewHandle,memberId:same.memberId,round:same.round,taskId:same.taskId,outputFingerprint:same.hash,
-          ...(same.archivedVersion?{archivedVersion:same.archivedVersion}:{})}).catch(failure=>{
+          ...(same.archivedVersion?{archivedVersion:same.archivedVersion}:{})}).then(value=>{
+          // A very quick close can occur before React observes the native task view.
+          if(deliveryReturn.current!==origin)return;
+          const opened=object(value);
+          if(opened.taskId===origin.taskId&&opened.readOnly===true&&opened.executionAuthorized===false)origin.entered=true;
+          else if(!origin.entered&&object(bridge.getState().view).taskId!==origin.taskId)throw new Error('没有核对到原任务的阅读回执。');
+        }).catch(failure=>{
           if(deliveryReturn.current===origin)deliveryReturn.current=null;
           if(alive.current&&!backgrounded.current&&ownsNativeWindow()&&currentReading.current?.run?.id===item.team)
             setError(failure instanceof Error?failure.message:'原答复暂时无法打开。');
@@ -859,22 +878,30 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const origin=deliveryReturn.current;if(!origin)return;
     const view=object(bridge.getState().view);
     if(view.taskId===origin.taskId){origin.entered=true;return}
-    if(!origin.entered||!workspaceActive||!ownsNativeWindow()||busy||openingMemberResult||!reading?.viewHandle)return;
+    if(view.taskId||view.section&&view.section!=='teams'){deliveryReturn.current=null;return}
+    // The native task retires the source handle. Restore only after a fresh
+    // reading has committed, not while the last team's DOM is still on screen.
+    if(!origin.entered||!workspaceActive||!ownsNativeWindow()||busy||openingMemberResult||changed||!reading?.viewHandle||
+      reading.viewHandle===origin.sourceHandle||document.hidden)return;
     deliveryReturn.current=null;
     if(current?.id!==origin.team||runSection!==origin.section)return;
     const fromProgress = origin.section === 'progress';
     const area=root.current?.querySelector<HTMLElement>(fromProgress ? '[data-team-section="members"]' : '.pw-team-result');
     const selector = fromProgress ? '[data-team-progress-delivery]' : '[data-team-delivery]';
     const sameGeneration = !!origin.member && current.generation === origin.member.generation;
-    const target=fromProgress&&!sameGeneration ? undefined : Array.from(area?.querySelectorAll<HTMLButtonElement>(selector)||[])
-      .find(row=>(fromProgress?row.dataset.teamProgressDelivery:row.dataset.teamDelivery)===origin.key);
-    if (!fromProgress) setResultSource(target&&sameGeneration
-      ? {runId:origin.team,key:origin.key,scroll:origin.scroll,member:origin.member} : null);
+    const exact = Array.from(area?.querySelectorAll<HTMLButtonElement>(selector)||[])
+      .find(row=>(fromProgress?row.dataset.teamProgressDelivery:row.dataset.teamDelivery)===origin.key&&!row.disabled&&!row.closest('[hidden],[inert]'));
+    const stage = fromProgress && origin.member && sameGeneration ? memberStage(origin.member) : undefined;
+    if (!fromProgress) setResultSource(exact&&origin.member&&Number.isSafeInteger(current.generation)
+      ? {runId:origin.team,key:origin.key,scroll:origin.scroll,member:{...origin.member,generation:current.generation}} : null);
     const scroll=root.current?.closest<HTMLElement>('.pw-secondary-scroll');if(scroll)scroll.scrollTop=origin.scroll;
-    // The completed summary may have appeared above this same source while its task was open.
-    if (fromProgress || sameGeneration) target?.scrollIntoView({block:'nearest'});
+    // A summary or a newer receipt may have arrived while its task was open.
+    // Losing the old button is not permission to select the new receipt.
+    const target = exact || stage;
+    if(!exact)setNotice(stage?'已返回原成员阶段；刚才的答复不在这个入口，没有打开另一份。':'刚才的答复已不在当前列表，没有转到另一份。');
+    target?.scrollIntoView({block:'nearest'});
     (target||(fromProgress?area:area?.querySelector<HTMLElement>('[data-team-result-heading]')))?.focus({preventScroll:true});
-  },[workspaceActive,busy,openingMemberResult,reading?.viewHandle,current?.id,runSection,state.webWorkspaceResumeRevision]);
+  },[workspaceActive,busy,openingMemberResult,changed,reading?.viewHandle,current?.id,runSection,state.webWorkspaceResumeRevision]);
   const openAwaitingReview = () => {
     const original = currentReading.current, owner = original?.taskId, id = current?.id;
     if (!canRead || materialBusy || !id || !owner || original?.run?.id !== id || current.status !== 'awaiting_review') return;
@@ -1031,7 +1058,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       {reading?.taskLookupNotice && <p className="pw-field-hint" role="status">{reading.taskLookupNotice}</p>}
       <Tabs selectedKey={runSection} onSelectionChange={value => { if (value === 'progress' || value === 'result' || value === 'details') selectRunTab(value); }} className="pw-team-workbench">
         <div className="pw-team-workbench-bar pw-material-navigation"><TabList aria-label="这次协作"><Tab id="progress" isDisabled={materialBusy || openingMemberResult}>进展</Tab><Tab id="result" isDisabled={materialBusy || openingMemberResult}>成果</Tab><Tab id="details" isDisabled={openingMemberResult}>详情</Tab></TabList></div>
-        {resultSource && resultSource.runId === current.id && !resultSource.member && runSection !== 'result' && <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy || materialBusy}
+        {resultSource && !resultSource.member && resultSource.runId === current.id && runSection !== 'result' && <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy || materialBusy}
           onClick={() => resultBack.current()}>返回协作成果</Button>}
         <TabPanel id="progress">
           <TeamFollowUps items={scopedFollowUps} read={openFollowUp} disabled={!canRead || materialBusy}/>
@@ -1076,14 +1103,19 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                   const prior = !source && !hasWorkPlan && canOpenMemberResult ? archivedDeliveries.find(item => item.memberId === member.id && String(item.round) === fact.key) : undefined;
                   const inPlace = source?.answer && !!openReading;
                   const execution = observed && fact.state === 'completed' && String(observed.round) === fact.key ? observed : null;
-                  return <li key={fact.key}><span dir="auto">{fact.title}</span><span className="pw-team-state" data-state={fact.state}>
-                    {fact.state === 'completed' ? '已完成' : fact.state === 'preparing' ? '正在准备' : fact.state === 'queued' && (member.paused || current.status === 'paused') ? '未开始' : status(fact.state)}</span>
+                  const checkReceipt = fact.state === 'completed' && ordinaryAnswers && researchMember;
+                  return <li key={fact.key} data-team-progress-round={hasWorkPlan ? undefined : fact.key} tabIndex={hasWorkPlan ? undefined : -1}>
+                    <span dir="auto">{fact.title}</span><span className="pw-team-state" data-state={checkReceipt && !source ? 'blocked_unknown' : fact.state}>
+                    {checkReceipt ? (source ? '答复已保存' : '完成 · 答复待核对') : fact.state === 'completed' ? '已完成' : fact.state === 'preparing' ? '正在准备' : fact.state === 'queued' && (member.paused || current.status === 'paused') ? '未开始' : status(fact.state)}</span>
                     {source && (inPlace || canOpenMemberResult) && <Button className="pw-team-progress-read" size="small" variant="ghost"
                       trailingIcon={IconChevronRight} aria-label={'查看' + source.name + '的' + fact.title + '答复'} data-team-progress-delivery={source.key}
                       disabled={!canRead || materialBusy} onClick={event => inPlace ? openMemberAnswer(source, event.currentTarget) : openMemberDelivery(source, 'progress')}>查看答复</Button>}
                     {prior && <Button className="pw-team-progress-read" size="small" variant="ghost" trailingIcon={IconChevronRight}
                       aria-label={`查看${prior.name}第 ${prior.round} 阶段第 ${prior.archivedVersion} 版答复的原任务`} data-team-progress-delivery={prior.key}
                       disabled={!canRead || materialBusy} onClick={() => openMemberDelivery(prior, 'progress')}>第 {prior.archivedVersion} 版原答复</Button>}
+                    {resultPhaseLink && resultSource?.member?.id === member.id && String(resultSource?.member?.round) === fact.key &&
+                      <Button className="pw-team-progress-read" size="small" variant="ghost" leadingIcon={IconArrowLeft}
+                        disabled={!canRead || materialBusy} onClick={() => resultBack.current()}>返回该份成果</Button>}
                     {execution && <small className="pw-team-progress-source">{execution.reportedModel ? <>答复模型：<bdi>{execution.reportedModel}</bdi></> :
                       execution.requestedModel ? <>请求模型：<bdi>{execution.requestedModel}</bdi>（答复型号未确认）</> : '答复型号未确认'}。{execution.location}</small>}
                   </li>;
@@ -1127,7 +1159,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} partial={partialResult} memberName={name} revisionOffers={revisionRows.length||focusedProposal ? <TeamParentRevisions rows={revisionRows} returnToWork={focusedProposal?.returnToWork?()=>leaveWithDrafts(focusedProposal.returnToWork!):undefined} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
+          <TeamResultHandoff result={teamResult} partial={partialResult} memberName={name} showSourcesFirst={ordinaryAnswers} revisionOffers={revisionRows.length||focusedProposal ? <TeamParentRevisions rows={revisionRows} returnToWork={focusedProposal?.returnToWork?()=>leaveWithDrafts(focusedProposal.returnToWork!):undefined} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
             const original=reading?.viewHandle;if(!original||!canMutate||materialBusy)return;
             void invoke('teams.reviewParentRevision',{viewHandle:original,operationId:row.operationId},value=>{
               if(currentReading.current?.viewHandle!==original||value.operation!=='reviseFromParent'||value.input?.runId!==current.id||value.input?.operationId!==row.operationId||
@@ -1137,8 +1169,11 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             });}}/>:undefined} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || hasFrozenRevision || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
             ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} hasRevision={hasFrozenRevision} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy} rawAvailable={canOpenMemberResult}
             open={openMemberDelivery} openAnswer={openReading?openMemberAnswer:undefined}
-            expanded={shownMemberSources[current.id] ?? !!partialResult} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined}
+            groupByMember={ordinaryAnswers ? name : undefined}
+            locate={resultPhaseLink ? {deliveryKey:resultPhaseLink,open:()=>selectRunTab('progress')} : undefined}
+            expanded={shownMemberSources[current.id] ?? (!!partialResult || ordinaryAnswers && deliveries.length <= 3)} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined}
             archivedSources={archivedDeliveries.length>0 && canOpenMemberResult ? <TeamResearchDeliveries records={archivedDeliveries} archived disabled={!canRead||materialBusy} rawAvailable={canOpenMemberResult} open={openMemberDelivery}
+              locate={resultPhaseLink ? {deliveryKey:resultPhaseLink,open:()=>selectRunTab('progress')} : undefined}
               expanded={shownArchives[current.id] ?? !deliveries.length} onExpanded={value=>setShownArchives(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: scopedFollowUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}

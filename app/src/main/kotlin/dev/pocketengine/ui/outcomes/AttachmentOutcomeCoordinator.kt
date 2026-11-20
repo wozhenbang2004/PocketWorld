@@ -80,6 +80,8 @@ internal data class OwnerAttachmentCopyReceipt(val requestId:String,val taskId:S
         .put("status",result.status.value).put("displayName",result.displayName).put("verifiedBytes",result.verifiedBytes)
 }
 
+internal enum class AttachmentOriginalReturn(val value:String) { DETAILS("details"), LIST("list"), ENTRY("entry") }
+
 internal data class AttachmentOutcomeState(
     val open:Boolean=false,val taskId:String?=null,val deviceOriginalOnly:Boolean=false,val group:GroupResultAccess.Selection?=null,
     val snapshot:JSONObject?=null,val file:JSONObject?=null,val document:JSONObject?=null,
@@ -87,6 +89,7 @@ internal data class AttachmentOutcomeState(
     val error:String?=null,val progress:JSONObject?=null,val observing:Boolean=false,val notice:String?=null,val thumbnail:android.graphics.Bitmap?=null,
     val team:TeamWorkspaceOutcomeHost.Selection?=null,val teamDifference:JSONObject?=null,val teamPrevious:TeamWorkspaceOutcomeHost.Selection?=null,
     val originalFile:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null,
+    val originalReturn:AttachmentOriginalReturn=AttachmentOriginalReturn.DETAILS,
     val documentDraft:JSONObject?=null,val documentDraftEdited:Boolean=false,val pendingDocumentTask:String?=null,
     val processingSource:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null,val processingInfo:JSONObject?=null,
     val processingReview:dev.pocketengine.features.attachments.processing.NativeFileProcess.Review?=null,val pendingProcessingTask:String?=null,
@@ -105,6 +108,38 @@ internal class AttachmentOutcomeCoordinator(
     private var restoredDocumentDraft:JSONObject?=null
     private var restoredExportNotice:String?=null
     private var restoredCopyLocator:JSONObject?=null
+    private data class CopySource(val task:String,val file:String,val sha:String)
+    private val verifiedCopies=linkedMapOf<CopySource,OwnerAttachmentCopyReceipt>()
+    private fun copySource(file:JSONObject)=CopySource(state.taskId.orEmpty(),file.optString("id"),file.optString("sha256"))
+    private fun OwnerAttachmentCopyReceipt.source()=CopySource(taskId,fileId,sha256)
+    private fun rememberVerifiedCopy(receipt:OwnerAttachmentCopyReceipt){
+        if(receipt.result.status!=OwnerCopyStatus.VERIFIED)return
+        val key=receipt.source()
+        verifiedCopies.remove(key);verifiedCopies[key]=receipt
+        while(verifiedCopies.size>8)verifiedCopies.remove(verifiedCopies.keys.first())
+    }
+    fun privateCopyReceipt(originalConfirmed:Boolean):JSONObject?{
+        val key=state.file?.let(::copySource)?:return null
+        state.copyReceipt?.takeIf{it.source()==key}?.let{return it.toJson()}
+        // Prior proof is historical, not a statement about the current provider file.
+        if(!originalConfirmed)return null
+        return verifiedCopies[key]?.takeIf{it.result.verifiedBytes==state.originalFile?.sizeBytes}
+            ?.toJson()?.put("historical",true)
+    }
+    private fun restoreVerifiedCopies(bundle:Bundle?){
+        bundle?.getStringArrayList("attachmentOutcomeVerifiedCopies")?.takeLast(8)?.forEach { saved ->
+            runCatching {
+                check(saved.length<=1500)
+                val proof=JSONObject(saved);val request=proof.getString("requestId");val task=proof.getString("taskId")
+                val file=proof.getString("fileId");val sha=proof.getString("sha256");val bytes=proof.optLong("verifiedBytes",-1)
+                check(proof.opt("status")==OwnerCopyStatus.VERIFIED.value&&java.util.UUID.fromString(request).toString()==request&&
+                    task.length<=240&&'\u0000' !in task&&file.length in 1..240&&'\u0000' !in file&&sha.matches(Regex("[0-9a-f]{64}"))&&
+                    proof.opt("verifiedBytes").let{it is Int||it is Long}&&bytes in 0..dev.pocketengine.features.attachments.AttachmentBook.MAX_FILE_BYTES)
+                val name=(proof.opt("displayName") as? String)?.takeIf{it.length in 1..240&&it.none{ch->ch.isISOControl()||Character.getType(ch)==Character.FORMAT.toInt()}}
+                rememberVerifiedCopy(OwnerAttachmentCopyReceipt(request,task,file,sha,OwnerCopyResult(OwnerCopyStatus.VERIFIED,name,bytes)))
+            }
+        }
+    }
     private var generation=0L;private var wait:RunControl?=null;private var observation:RunControl?=null
     private var export:JSONObject?=null;private var restoreFile:JSONObject?=null;private var exportResult:Uri?=null;private var exportAbandoned=false;private var resumed=false;private var closed=false
     var exportPending by mutableStateOf(false);private set
@@ -130,7 +165,9 @@ internal class AttachmentOutcomeCoordinator(
         // Keep the receipt in memory while the same restored original has not been read yet.
         // The Web view still exposes it only beside the freshly resolved file.
         val file=privateCopyFile(pin)?:returningPrivateCopyFile(pin)?:return
-        state=state.copy(copyReceipt=OwnerAttachmentCopyReceipt(pin.getString("exportRequestId"),pin.getString("taskId"),file.getString("id"),file.getString("sha256"),result))
+        val receipt=OwnerAttachmentCopyReceipt(pin.getString("exportRequestId"),pin.getString("taskId"),file.getString("id"),file.getString("sha256"),result)
+        state=state.copy(copyReceipt=receipt)
+        rememberVerifiedCopy(receipt)
     }
     fun privateCopyStage():String?=export?.takeIf {privateCopyFile(it)!=null||returningPrivateCopyFile(it)!=null}?.let {pin->
         val phase=pin.getString("exportPhase")
@@ -175,13 +212,15 @@ internal class AttachmentOutcomeCoordinator(
             JSONObject().put("kind","only_this_device_file").put("taskId",selected.task) to row
         }
     }
-    fun openFile(meta:JSONObject,fromTask:String?=null,showOriginal:Boolean=false,fromWorkResult:Boolean=showOriginal,resultRun:AttachmentResultRun?=null) {
+    fun openFile(meta:JSONObject,fromTask:String?=null,showOriginal:Boolean=false,fromWorkResult:Boolean=showOriginal,
+                 resultRun:AttachmentResultRun?=null,returnToEntry:Boolean=false) {
         cancel();restoredDocumentDraft=null
         // A pending locator is navigation intent, never an already-read file.
         // Preserve it across first-read failure, cancellation and foreground restore.
         restoreFile=JSONObject().put("id",meta.optString("id")).put("sha256",meta.optString("sha256"))
             .put("showOriginal",showOriginal)
-        state=AttachmentOutcomeState(open=true,taskId=fromTask,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,fromWorkResult=fromWorkResult,resultRun=resultRun)
+        val originalReturn=if(showOriginal&&returnToEntry)AttachmentOriginalReturn.ENTRY else AttachmentOriginalReturn.DETAILS
+        state=AttachmentOutcomeState(open=true,taskId=fromTask,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,fromWorkResult=fromWorkResult,resultRun=resultRun,originalReturn=originalReturn)
         refresh()
     }
     fun close(){if(export!=null)exportAbandoned=true;cancel();restoreFile=null;restoredDocumentDraft=null;releaseWindow();state=AttachmentOutcomeState()}
@@ -233,8 +272,14 @@ internal class AttachmentOutcomeCoordinator(
             else "原汇报或本轮文件来源已变化，没有打开其他成果"
         }
     }
-    fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null,externalViewerResult=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
-    fun backFromFile(){cancel();restoreFile=null;state=state.copy(group=state.group?.withoutArtifact(),file=null,document=null,documentOpen=false,thumbnail=null,originalFile=null);refresh()}
+    fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null,originalReturn=AttachmentOriginalReturn.DETAILS,externalViewerResult=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
+    fun backFromFile(){
+        if(state.originalReturn==AttachmentOriginalReturn.ENTRY){close();return}
+        cancel();restoreFile=null
+        state=state.copy(group=state.group?.withoutArtifact(),file=null,document=null,documentOpen=false,thumbnail=null,originalFile=null,
+            originalReturn=AttachmentOriginalReturn.DETAILS)
+        refresh()
+    }
     fun chooseSource(){if(state.team!=null||state.group!=null||state.taskId.isNullOrBlank())return;restoreFile=null;state=state.copy(choosingSource=true,file=null,originalFile=null);work{c,_->app.ownerOutcomeSnapshot(null,c) to null}}
     fun attach(file:JSONObject){val task=state.taskId?:return;if(state.group!=null)return
         work{c,_->app.selectOutcomeForTask(task,file.getString("id"),file.getString("sha256"),c);app.ownerOutcomeSnapshot(task,c) to null}
@@ -245,8 +290,8 @@ internal class AttachmentOutcomeCoordinator(
     fun closeProcessing(){if(!state.busy)state=state.copy(processingSource=null,processingInfo=null,processingReview=null)}
     fun forgetProcessingReview(){if(!state.busy)state=state.copy(processingReview=null)}
     fun reviewProcessing(args:JSONObject){val source=state.processingSource?:return;if(state.busy||state.group!=null||state.team!=null)return;val pin=JSONObject(args.toString());var review:dev.pocketengine.features.attachments.processing.NativeFileProcess.Review?=null;work(onSuccess={state=state.copy(processingReview=review)}){c,_->review=originalAttachments().reviewProcessingForOwner(source,pin,c);review!!.metadata() to null}}
-    fun applyProcessing(){val review=state.processingReview?:return;if(state.busy||state.group!=null||state.team!=null||pendingProcessingAction!=null)return;val action=java.util.UUID.randomUUID().toString();pendingProcessingAction=action;state=state.copy(pendingProcessingTask=action);work(onSuccess={result->if(result.optBoolean("outputNotPublished")){pendingProcessingAction=null;state=state.copy(pendingProcessingTask=null,error=result.optString("message"),processingReview=null)}else if(result.optBoolean("found")){pendingProcessingAction=null;state=state.copy(pendingProcessingTask=null,processingSource=null,processingInfo=null,processingReview=null,taskId=action,file=result,snapshot=null,notice="新的加工原件已保存，父原件保留。可打开原件或与原版本对照。")}}){c,_->app.features.processFileForOwner(review,c,action) to null}}
-    fun queryProcessing(){val action=state.pendingProcessingTask?:return;if(state.busy||state.group!=null||state.team!=null)return;work(onSuccess={result->if(result.optBoolean("found")){pendingProcessingAction=null;state=state.copy(pendingProcessingTask=null,processingSource=null,processingInfo=null,processingReview=null,taskId=action,file=result,snapshot=null,notice="已找到原加工动作的固定产物，未再次加工")}else state=state.copy(notice="原加工动作尚无完整发布回执，保留原编号，不自动重复。")}){c,_->app.features.fileProcessResultForOwner(action,c) to null}}
+    fun applyProcessing(){val review=state.processingReview?:return;if(state.busy||state.group!=null||state.team!=null||pendingProcessingAction!=null)return;val action=java.util.UUID.randomUUID().toString();pendingProcessingAction=action;state=state.copy(pendingProcessingTask=action);work(onSuccess={result->if(result.optBoolean("outputNotPublished")){pendingProcessingAction=null;state=state.copy(pendingProcessingTask=null,error=result.optString("message"),processingReview=null)}else if(result.optBoolean("found")){pendingProcessingAction=null;state=state.copy(pendingProcessingTask=null,processingSource=null,processingInfo=null,processingReview=null,taskId=action,file=result,snapshot=null,originalReturn=AttachmentOriginalReturn.DETAILS,notice="新的加工原件已保存，父原件保留。可打开原件或与原版本对照。")}}){c,_->app.features.processFileForOwner(review,c,action) to null}}
+    fun queryProcessing(){val action=state.pendingProcessingTask?:return;if(state.busy||state.group!=null||state.team!=null)return;work(onSuccess={result->if(result.optBoolean("found")){pendingProcessingAction=null;state=state.copy(pendingProcessingTask=null,processingSource=null,processingInfo=null,processingReview=null,taskId=action,file=result,snapshot=null,originalReturn=AttachmentOriginalReturn.DETAILS,notice="已找到原加工动作的固定产物，未再次加工")}else state=state.copy(notice="原加工动作尚无完整发布回执，保留原编号，不自动重复。")}){c,_->app.features.fileProcessResultForOwner(action,c) to null}}
     fun compareImageParent(){val file=state.file?:return;if(state.busy||state.group!=null||state.team!=null)return;val parent=file.optJSONObject("parentArtifact")?:file.optJSONObject("source")?.optJSONObject("parentArtifact")?:return;val task=state.taskId;var pair:Pair<dev.pocketengine.features.attachments.OwnerFilePreviewSource,dev.pocketengine.features.attachments.OwnerFilePreviewSource>?=null;work(onSuccess={state=state.copy(comparison=pair)}){c,_->val selected=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),c);val before=app.attachmentOutcomes.originalFile(null,parent.getString("id"),parent.getString("sha256"),c);check(selected.mimeType.startsWith("image/")&&before.mimeType.startsWith("image/")){"原父版本不是图片，未换用其他来源"};pair=before to selected;JSONObject().put("outcomeNotice","对照的是两份固定原图，不是最新版本或缩略图替代。") to null}}
     fun closeComparison(){state=state.copy(comparison=null)}
     fun newDocument(){if(state.busy||state.team!=null||state.group!=null||pendingDocumentAction!=null)return;restoreFile=null;restoredDocumentDraft=null;state=state.copy(documentDraft=JSONObject().put("format","docx").put("name","文档").put("title","").put("body","").put("fontPoints",12),documentDraftEdited=false,error=null)}
@@ -381,7 +426,19 @@ internal class AttachmentOutcomeCoordinator(
             };JSONObject() to null
         }
     }
-    fun backFromOriginalFile(){state=state.copy(originalFile=null)}
+    fun backFromOriginalFile(){
+        when(state.originalReturn){
+            AttachmentOriginalReturn.ENTRY->close()
+            AttachmentOriginalReturn.LIST->backFromFile()
+            AttachmentOriginalReturn.DETAILS->state=state.copy(originalFile=null)
+        }
+    }
+    /** Show the same file's existing actions, without adopting another source or reopening its bytes. */
+    fun showOriginalDetails(){
+        check(state.originalReturn!=AttachmentOriginalReturn.DETAILS&&state.originalFile!=null&&state.file!=null&&
+            state.group==null&&state.team==null&&!state.deviceOriginalOnly){"请先打开这份固定原件"}
+        state=state.copy(originalFile=null)
+    }
     /** Re-admit the displayed private report original in its already-open work, not as an export. */
     fun openReportOriginalInWork(current: () -> Boolean, entered: () -> Unit) {
         val reportRun = state.resultRun?.takeIf { it.report != null } ?: error("请先打开原汇报的本轮成果")
@@ -407,11 +464,16 @@ internal class AttachmentOutcomeCoordinator(
         val selected = entries.singleOrNull { it.optString("id") == id && it.optString("sha256") == sha256 &&
             it.optString("role") == "result" && it.optString("availability") == "available" }
             ?.let { JSONObject(it.toString()) } ?: error("所选原件不在这次已核对的成果中")
+        val originalReturn = when {
+            onOpened != null -> AttachmentOriginalReturn.ENTRY // Re-admitted inside the already-open original work.
+            state.file == null -> AttachmentOriginalReturn.LIST
+            else -> state.originalReturn
+        }
         var original: dev.pocketengine.features.attachments.OwnerFilePreviewSource? = null
         work(onSuccess = {
             if (current() && state.resultRun == run) original?.let { source ->
                 restoreFile = null
-                state = state.copy(file = selected, originalFile = source, thumbnail = null, document = null)
+                state = state.copy(file = selected, originalFile = source, originalReturn = originalReturn, thumbnail = null, document = null)
                 onOpened?.invoke()
             }
         }) { control, _ ->
@@ -498,7 +560,10 @@ internal class AttachmentOutcomeCoordinator(
         }
         pin.put("exportRequestId",java.util.UUID.randomUUID().toString()).put("exportPhase","waiting")
         export=pin;exportResult=null;exportAbandoned=false;exportPending=true
-        if(privateCopyFile(pin)!=null)state=state.copy(copyReceipt=null)
+        privateCopyFile(pin)?.let{file->
+            verifiedCopies.remove(copySource(file)) // Do not show the older verification as this attempt's receipt.
+            state=state.copy(copyReceipt=null)
+        }
         val requestId=pin.getString("exportRequestId")
         try{activity.createOutcomeDocument(mime,name)}
         catch(_:android.content.ActivityNotFoundException){exportLaunchResult(requestId,OutcomeExportLaunch.NOT_STARTED)}
@@ -583,22 +648,31 @@ internal class AttachmentOutcomeCoordinator(
         state=state.copy(busy=true,error=null,externalViewerResult=null,observing=false,documentOpen=document||state.documentOpen)
         try{io.execute{try{val(result,file)=call(c,window);c.check();main.post{if(!closed&&state.open&&generation==token&&wait===c&&!c.isCancelled){
             val actualFile=if(group!=null&&result.optJSONObject("artifact")!=null)result.getJSONObject("artifact").let{JSONObject(it.toString()).put("id",it.getString("artifactId")).put("size",it.getLong("bytes")).put("name","群任务成果")}else file
-            state=if(teamDifference)state.copy(busy=false,teamDifference=result)else if(document)state.copy(busy=false,document=result)else state.copy(busy=false,snapshot=if(result.has("sources")||result.has("kind")||result.optString("provider")=="teams"&&result.has("artifact"))result else state.snapshot,file=actualFile?:state.file,notice=result.optString("outcomeNotice").takeIf{it.isNotBlank()},documentOpen=if(replaceDocumentWithFile)false else state.documentOpen,document=if(replaceDocumentWithFile)null else state.document,thumbnail=if(replaceDocumentWithFile)null else state.thumbnail)
+            state=if(teamDifference)state.copy(busy=false,teamDifference=result)else if(document)state.copy(busy=false,document=result)else state.copy(busy=false,snapshot=if(result.has("sources")||result.has("kind")||result.optString("provider")=="teams"&&result.has("artifact"))result else state.snapshot,file=actualFile?:state.file,notice=result.optString("outcomeNotice").takeIf{it.isNotBlank()},documentOpen=if(replaceDocumentWithFile)false else state.documentOpen,document=if(replaceDocumentWithFile)null else state.document,thumbnail=if(replaceDocumentWithFile)null else state.thumbnail,originalReturn=if(replaceDocumentWithFile)AttachmentOriginalReturn.DETAILS else state.originalReturn)
             if(file!=null)restoreFile=null
             restoredExportNotice?.let{state=state.copy(error=it);restoredExportNotice=null}
             onSuccess?.invoke(result)
         };val preview=!state.deviceOriginalOnly&&state.file?.optString("mimeType")?.startsWith("image/")==true&&state.thumbnail==null&&file!=null;if(wait===c)wait=null;c.cancel();if(preview&&generation==token)loadThumbnail()}}catch(e:Exception){main.post{if(!closed&&state.open&&generation==token&&wait===c){val message=if(onFinished!=null)"导出未完整确认，目标可能已有部分内容；请核对所选文件，没有自动重写。"else if(c.isCancelled)"读取已停止；原文件与任务保留"else safe(e);state=state.copy(busy=false,error=listOfNotNull(restoredExportNotice,message).joinToString(" "));restoredExportNotice=null;wait=null};c.cancel()}}finally{if(onFinished!=null)main.post{finished()}}}}catch(rejected:java.util.concurrent.RejectedExecutionException){if(onFinished==null)throw rejected;state=state.copy(busy=false,error="导出未开始，原文件保留；请稍后明确重试");if(wait===c)wait=null;c.cancel();finished()}
     }
     private fun groupCall(window:String?,call:()->JSONObject):JSONObject {val actual=window?:throw SecurityException("当前原生主人窗口不可用");return app.groupOwnerWorkflows.call(actual){call()}}
-    fun save(bundle:Bundle){pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator().toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
-    fun restore(bundle:Bundle?){bundle?.getString("attachmentPendingProcessingTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingProcessingAction=it;state=state.copy(pendingProcessingTask=it)};bundle?.getString("attachmentPendingDocumentTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingDocumentAction=it;state=state.copy(pendingDocumentTask=it)};try{bundle?.getString("attachmentOutcomeExport")?.let{val pin=JSONObject(it);val requestId=pin.optString("exportRequestId")
+    fun save(bundle:Bundle){
+        bundle.remove("attachmentOutcomeVerifiedCopies")
+        if(verifiedCopies.isNotEmpty())bundle.putStringArrayList("attachmentOutcomeVerifiedCopies",ArrayList(verifiedCopies.values.map{it.toJson().toString()}))
+        pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator().toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
+    fun restore(bundle:Bundle?){
+        restoreVerifiedCopies(bundle)
+        bundle?.getString("attachmentPendingProcessingTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingProcessingAction=it;state=state.copy(pendingProcessingTask=it)};bundle?.getString("attachmentPendingDocumentTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingDocumentAction=it;state=state.copy(pendingDocumentTask=it)};try{bundle?.getString("attachmentOutcomeExport")?.let{val pin=JSONObject(it);val requestId=pin.optString("exportRequestId")
             if(requestId.matches(Regex("[a-f0-9-]{36}"))&&pin.optString("exportPhase","waiting")=="waiting"){
                 export=pin;exportPending=true;exportAbandoned=bundle.getBoolean("attachmentOutcomeExportAbandoned");if(pin.optBoolean("exportLaunchUnknown"))restoredExportNotice="系统文件选择器是否启动尚未确认；请先返回原选择器完成或取消，没有重新请求导出。"
-            }else {restoredExportNotice="原导出结果尚未确认；请核对所选目标文件，没有自动重写或重新打开选择器。";state=state.copy(error=restoredExportNotice)}};bundle?.getString("attachmentOutcomeLocator")?.let{val pin=JSONObject(it);val team=pin.optJSONObject("team")?.let{TeamWorkspaceOutcomeHost.Selection(it)};val previous=runCatching{pin.optJSONObject("teamPrevious")?.let{TeamWorkspaceOutcomeHost.Selection(it)}}.getOrNull();restoreFile=pin.optJSONObject("file");state=AttachmentOutcomeState(open=true,error=state.error,pendingDocumentTask=state.pendingDocumentTask,pendingProcessingTask=state.pendingProcessingTask,taskId=team?.toJson()?.getString("taskId")?:pin.optString("taskId").takeIf(String::isNotBlank),group=groupFrom(pin.optJSONObject("group")),team=team,teamPrevious=team?.let{matchingPrevious(it,previous)},fromWorkResult=pin.optBoolean("fromWorkResult"),resultRun=resultRunFrom(pin));bundle?.getString("attachmentDocumentDraft")?.let{saved->check(team==null&&state.group==null&&saved.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES){"原文档草稿超出可恢复范围"};val draft=JSONObject(saved);DocumentDraft(draft);restoredDocumentDraft=draft}
+            }else {restoredExportNotice="原导出结果尚未确认；请核对所选目标文件，没有自动重写或重新打开选择器。";state=state.copy(error=restoredExportNotice)}};bundle?.getString("attachmentOutcomeLocator")?.let{val pin=JSONObject(it);val team=pin.optJSONObject("team")?.let{TeamWorkspaceOutcomeHost.Selection(it)};val previous=runCatching{pin.optJSONObject("teamPrevious")?.let{TeamWorkspaceOutcomeHost.Selection(it)}}.getOrNull();restoreFile=pin.optJSONObject("file");state=AttachmentOutcomeState(open=true,error=state.error,pendingDocumentTask=state.pendingDocumentTask,pendingProcessingTask=state.pendingProcessingTask,taskId=team?.toJson()?.getString("taskId")?:pin.optString("taskId").takeIf(String::isNotBlank),group=groupFrom(pin.optJSONObject("group")),team=team,teamPrevious=team?.let{matchingPrevious(it,previous)},fromWorkResult=pin.optBoolean("fromWorkResult"),resultRun=resultRunFrom(pin),
+                originalReturn=if(restoreFile!=null&&team==null&&!pin.has("group"))AttachmentOriginalReturn.entries.firstOrNull{
+                    it.value==pin.optString("originalReturn")
+                }?:AttachmentOriginalReturn.DETAILS else AttachmentOriginalReturn.DETAILS);bundle?.getString("attachmentDocumentDraft")?.let{saved->check(team==null&&state.group==null&&saved.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES){"原文档草稿超出可恢复范围"};val draft=JSONObject(saved);DocumentDraft(draft);restoredDocumentDraft=draft}
             // Pin only this restored navigation object, not a later opening of an identical file.
             restoredCopyLocator=restoreFile?.takeIf {file->export?.takeUnless{exportAbandoned}?.let{privateCopyFile(it,file)}!=null}
             main.post{if(!closed&&resumed&&!state.busy){if(exportResult!=null)finishExport()else refresh()}}}}catch(_:Exception){restoredDocumentDraft=null;restoredCopyLocator=null;restoreFile=null;state=AttachmentOutcomeState(open=true,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,error="原成果定位或文档草稿暂不可恢复，请从原任务重新打开；已有保存动作仍只核对原结果")}}
     private fun locator():JSONObject=JSONObject().put("taskId",state.taskId.orEmpty()).put("fromWorkResult",state.fromWorkResult).also{value->
+        if(state.originalReturn!=AttachmentOriginalReturn.DETAILS)value.put("originalReturn",state.originalReturn.value)
         val result=state.resultRun?.takeIf{it.taskId==state.taskId}
         if(result!=null)value.put("resultRunId",result.runId).put("resultEpoch",result.epoch)
         state.team?.let{value.put("team",it.toJson())};state.teamPrevious?.let{value.put("teamPrevious",it.toJson())}
