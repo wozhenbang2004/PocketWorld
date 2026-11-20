@@ -31,7 +31,7 @@ public final class ProjectOwnerWorkflows {
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!project.equals(row.optString("projectId"))||!ordinaryCheckout(row))continue;
             available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt"))
                 .put("draftWorkingCopy",row.optJSONObject(OwnerDraftWorkCopy.FIELD)!=null)
-                .put("taskPackageSource",row.optJSONObject("sourceImport")!=null&&ProjectTaskSourceOrigin.KIND.equals(row.getJSONObject("sourceImport").opt("sourceKind")))
+                .put("taskPackageSource",ProjectTaskSourceRecord.hasPublishedIdentity(row))
                 .put("hostSource",row.optJSONObject("sourceImport")!=null&&"host_saved_snapshot".equals(row.getJSONObject("sourceImport").opt("sourceKind"))));}
         JSONObject picked=new JSONObject().put("projectId",project).put("checkouts",available).put("executionAuthorized",false);
         return includeRuntime?picked.put("runtime",local.projectRuntimeForHost("managed_process_v1")):picked;
@@ -56,11 +56,12 @@ public final class ProjectOwnerWorkflows {
             JSONObject metadata=snapshot.getJSONObject("checkout"),archiveRoot=ProjectArchiveRoot.checkout(metadata,source.getJSONArray("files"));
             source.putOpt("retainedArchiveRoot",archiveRoot);
             JSONObject origin=metadata.optJSONObject("sourceImport");
+            boolean taskFork=ordinaryCheckout(metadata)&&ProjectTaskSourceRecord.hasPublishedIdentity(metadata);
             if(origin!=null&&"new_project".equals(origin.opt("mode"))&&Boolean.FALSE.equals(origin.opt("executionAuthorityRestored"))&&
-                ("external_zip".equals(origin.opt("sourceKind"))||"saf_tree".equals(origin.opt("sourceKind")))){
+                ("external_zip".equals(origin.opt("sourceKind"))||"saf_tree".equals(origin.opt("sourceKind"))||taskFork)){
                 String root=archiveRoot==null?"":archiveRoot.getString("directory");
                 JSONObject entry=ProjectArchiveRoot.firstWebFile(snapshot.getJSONArray("files"),root);
-                if(entry!=null)source.put("firstImportedWebFile",entry.put("projectId",project).put("checkoutId",checkout)
+                if(entry!=null&&(!taskFork||unchangedForkStarter(metadata,entry)))source.put("firstImportedWebFile",entry.put("projectId",project).put("checkoutId",checkout)
                     .put("sourceDigest",source.getString("sourceDigest")));
             }
             try{source.put("checkoutTooling",ProjectCheckoutTooling.describe(snapshot,source,local.projectRuntimeForHost("managed_process_v1")).put("androidClues",wrapper!=null));}
@@ -94,6 +95,21 @@ public final class ProjectOwnerWorkflows {
         source.remove("files");
         if(wrapper!=null)source.put("androidGradleWrapper",wrapper);
         return source;
+    }
+    /** Open a starter from the actual new copy only if its published baseline still matches.
+     * Any change, ambiguity or missing proof leaves the ordinary exact file list. */
+    private static boolean unchangedForkStarter(JSONObject checkout,JSONObject entry){
+        JSONArray baseline=checkout.optJSONArray("files");
+        if(baseline==null||baseline.length()>ProjectSources.MAX_FILES)return false;
+        String path=entry.optString("path");JSONObject matched=null;
+        for(int i=0;i<baseline.length();i++){
+            JSONObject item=baseline.optJSONObject(i);if(item==null)return false;
+            Object name=item.opt("path");
+            // Don't substitute package.json if the original root index disappeared or became unreadable.
+            if("index.html".equals(name)&&!path.equals(name))return false;
+            if(path.equals(name)){if(matched!=null)return false;matched=item;}
+        }
+        return matched!=null&&matched.optInt("sourceVersion",-1)==0&&entry.optString("sha256").equals(matched.opt("sha256"));
     }
     /** Pin one actual private source tree; a normal checkout does not acquire draft provenance. */
     public JSONObject reviewNodeBuildForOwner(String project,String checkout)throws Exception {

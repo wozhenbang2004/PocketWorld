@@ -12028,6 +12028,8 @@ public final class TaskStore {
                 if(!t.optString("status").matches("queued|paused|awaiting_user|needs_confirmation|cancelled|interrupted|failed"))throw new IllegalStateException("渠道任务已有执行或已完成，不能重复启动");
             }
             requireOwnerDeviceWorkScope(t);requireOwnerWorkPreparationTargetCurrent(t);
+            if(reviewedCapabilityContinuation&&"capabilities".equals(mode)&&fixedDraftFollowup(t,true)!=null)
+                throw new SecurityException("这项工作已保存固定改稿。可编辑另存，或回原对话交代新的修改目标；不会另起一轮替换原稿。");
             boolean phoneMode=!mode.equals("capabilities");
             // First admission only, within the store transaction creating this run. Never consult later chat to change an existing run.
             JSONObject phoneLink=t.optJSONObject("conversationPhoneHandoff");
@@ -13500,6 +13502,31 @@ public final class TaskStore {
             if(!originalWindow.getAsBoolean())throw new SecurityException("原私人改稿窗口已离开，未保留这次编辑");
             db.setTransactionSuccessful();return kept;
         }finally{db.endTransaction();}
+    }
+    /** A fixed draft occupies the sole result row for this task. This is neither
+     * acceptance nor proof that the original text can still be opened. */
+    private JSONObject fixedDraftFollowup(JSONObject task,boolean originalPreparationChecked)throws Exception{
+        JSONObject context=task.optJSONObject("developmentContext"),link=task.optJSONObject("ownerWorkPreparation");
+        if(!dev.pocketengine.features.local.project.ProjectEditDraft.selected(context)||
+           context.has(OWNER_REVISION)||context.has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD)||
+           !"pocketworld.development-context.v1".equals(context.opt("format"))||!currentPrivateDraftMetadata(task)||
+           !ordinaryPlanningSource(task)||OwnerWorkTask.isOwnerWork(task)||task.optBoolean("cancelRequested")||
+           !task.optString("status").matches("paused|interrupted|awaiting_user|needs_confirmation|failed|completed"))return null;
+        String id=task.getString("id");
+        if(link==null||!OWNER_WORK_PREPARATION_FORMAT.equals(link.opt("format"))||!id.equals(link.opt("targetTaskId"))||
+           !(task.opt("runId") instanceof String run)||run.isBlank()||
+           !(task.opt("projectEditDraftId") instanceof String pin)||!pin.matches("[a-f0-9]{64}"))return null;
+        try{
+            int epoch=TaskExecutionScope.exactInt(task,"coordinatorEpoch",1,Integer.MAX_VALUE);
+            requireDevelopmentContinuationDecisions(task);
+            if(!PrivateProjectDraftRecords.hasEndedCopy(db,id,run,epoch,pin,context))return null;
+            if(!originalPreparationChecked)requireOwnerWorkPreparationTargetCurrent(task);
+            return new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("draftId",pin)
+                    .put("projectId",context.getString("projectId")).put("checkoutId",context.getString("checkoutId"));
+        }catch(Exception unavailable){
+            if(Thread.currentThread().isInterrupted())throw unavailable;
+            return null;
+        }
     }
     public synchronized JSONObject readPrivateProjectEditDraft(String id)throws Exception{
         JSONObject t=required(id),ctx=requirePrivateDraftTask(t);if(ctx.has(OWNER_REVISION))requireStoredOwnerRevisionLineage(t);Object pin=t.opt("projectEditDraftId");
@@ -17858,6 +17885,8 @@ public final class TaskStore {
         JSONArray chronological=new JSONArray();for(int i=eventBodies.length()-1;i>=0;i--)chronological.put(eventBodies.get(i));
         for(int i=operationRows.length()-1;i>=0;i--){JSONObject row=operationRows.getJSONObject(i);if(!"available".equals(row.optString("status")))continue;JSONObject operation=new JSONObject(row.toString());operation.remove("status");operationBodies.put(operation);}
         result.put("events",chronological).put("operations",operationBodies).put("taskProjection","detail_window").put("auditBodyIncluded",true).put("historyEventPage",events).put("historyOperationPage",operations).put("hasUnresolvedOperations",hasUnresolved(id)).put("historyHasUnconfirmedOperations",hasUnconfirmedForUi(id));
+        result.remove("originalFixedDraftFollowup");
+        if(!limited&&!result.getBoolean("hasUnresolvedOperations"))result.putOpt("originalFixedDraftFollowup",fixedDraftFollowup(result,false));
         JSONObject development=result.optJSONObject("developmentContext"),first=development==null?null:development.optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
         result.remove("originalFirstBuildNext");
         if(!limited&&first!=null&&"assistant".equals(result.opt("kind"))&&"owner".equals(result.opt("actorId"))&&"private".equals(result.opt("spaceId"))&&result.isNull("origin")){

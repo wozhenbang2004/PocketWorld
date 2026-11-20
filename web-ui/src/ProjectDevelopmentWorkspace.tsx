@@ -24,7 +24,8 @@ const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
 const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
   deliveryFields.every(key => draft[key] === (original[key] || ''));
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string };
-export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; window:string};
+type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package';
+export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
@@ -51,15 +52,19 @@ export function originalImportedEditor(projectId:string):ProjectImportedEditor|n
     row.sourceImport?.clientId===origin.clientId&&row.sourceImport?.packageSha256===origin.packageSha256);
   if(matches.length!==1)return null;
   const copy=matches[0], source=copy.sourceImport;
+  const sourceKind:unknown=source.sourceKind;
+  // A collected Termux checkout can inherit sourceImport but is not the published fork.
+  const collectedTaskCopy=sourceKind==='task_source_package'&&('collectedFromCheckoutId' in copy||'collectionOperationId' in copy);
   if(!copyIdentity(copy.id)||source.mode!=='new_project'||source.executionAuthorityRestored!==false||
-    !['external_zip','saf_tree'].includes(source.sourceKind)||!sourceHash(source.manifestIdentity)||!sourceHash(source.sourceEvidenceSha256)||
-    ['teamProjectCopy','skillExecutionCopy','isolatedGit','nativeGitImportPending'].some(key=>key in copy))return null;
+    (sourceKind!=='external_zip'&&sourceKind!=='saf_tree'&&sourceKind!=='task_source_package')||
+    !sourceHash(source.manifestIdentity)||!sourceHash(source.sourceEvidenceSha256)||
+    collectedTaskCopy||['teamProjectCopy','skillExecutionCopy','isolatedGit','nativeGitImportPending'].some(key=>key in copy))return null;
   return {projectId,checkoutId:copy.id,importIdentity:JSON.stringify([origin.clientId,origin.packageSha256,source.manifestIdentity,source.sourceEvidenceSha256]),
-    window:ownerWindow()};
+    sourceKind,window:ownerWindow()};
 }
 export const sameImportedEditor = (target:ProjectImportedEditor, observed:ProjectImportedEditor|null) =>
   !!observed&&target.projectId===observed.projectId&&target.checkoutId===observed.checkoutId&&
-  target.importIdentity===observed.importIdentity&&target.window===observed.window;
+  target.importIdentity===observed.importIdentity&&target.sourceKind===observed.sourceKind&&target.window===observed.window;
 export const canEditImportedCheckout = (can:(action:string)=>boolean) =>
   ['projects.development.read','projects.development.files.open','projects.development.files.read',
     'projects.development.files.edit','projects.development.files.save'].every(can);
@@ -403,7 +408,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const originalIsCurrent=()=>alive.current&&latest.current.active&&generation.current===sequence&&handle.current===view.viewHandle&&
       sameImportedEditor(importedEditor,originalImportedEditor(projectId))&&canEditImportedCheckout(latest.current.can);
     if(!originalIsCurrent()||view.projectId!==projectId||view.executionAuthorized!==false||
-       !rows(view.checkouts).some(copy=>copy.projectId===projectId&&copy.checkoutId===checkoutId)){
+       !rows(view.checkouts).some(copy=>copy.projectId===projectId&&copy.checkoutId===checkoutId&&
+         (importedEditor.sourceKind!=='task_source_package'||copy.taskPackageSource===true))){
       setImportEditorNotice('原导入副本已不能核对，没有打开其他文件。');return;
     }
     const hasDifferentCopy=()=>[draft.current.checkoutId,view.draft?.checkoutId].some(id=>id&&id!==checkoutId);

@@ -4,7 +4,8 @@ const object = (value: unknown): Data => value !== null && typeof value === 'obj
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 const epoch = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= 2147483647;
 
-export type ProjectContinuation = { feedbackRequired: true; conversationId: string; reason?: string };
+export type FixedProjectDraft = { taskId:string; runId:string; epoch:number; draftId:string; projectId:string; checkoutId:string };
+export type ProjectContinuation = { feedbackRequired: true; conversationId: string; reason?: string; fixedDraft?: FixedProjectDraft };
 export type ContinuationOriginal = { taskId: string; conversationId: string; runId: string; epoch: number; reviewHandle: string };
 export type ContinuationSubmission = { original: ContinuationOriginal; status: 'pending' | 'unknown' | 'continued' | 'rejected'; message: string };
 
@@ -14,12 +15,43 @@ export function privateProjectTask(value: unknown): boolean {
   return text(task.id) && raw.kind === 'assistant' && raw.actorId === 'owner' && raw.spaceId === 'private' && raw.origin == null && text(context.projectId) && text(context.checkoutId);
 }
 
+function fixedDraftPin(value:unknown):FixedProjectDraft|undefined {
+  const draft=object(value);
+  if(text(draft.taskId)&&text(draft.runId)&&epoch(draft.epoch)&&text(draft.draftId)&&/^[a-f0-9]{64}$/.test(draft.draftId)&&text(draft.projectId)&&text(draft.checkoutId))
+    return {taskId:draft.taskId,runId:draft.runId,epoch:draft.epoch,draftId:draft.draftId,projectId:draft.projectId,checkoutId:draft.checkoutId};
+}
+
+/** An already verified, navigation-only return can recheck this identity after the detail closes. */
+export function sameFixedProjectDraftIdentity(value:unknown,pin:FixedProjectDraft):boolean {
+  const task=object(value),raw=object(task.raw),scope=object(raw.developmentContext),source=object(raw.ownerWorkPreparation);
+  return privateProjectTask(task)&&task.id===pin.taskId&&raw.id===pin.taskId&&raw.runId===pin.runId&&raw.coordinatorEpoch===pin.epoch&&
+    raw.projectEditDraftId===pin.draftId&&scope.projectId===pin.projectId&&scope.checkoutId===pin.checkoutId&&scope.draftOnly===true&&
+    scope.format==='pocketworld.development-context.v1'&&scope.runtime==='managed_process_v1'&&raw.executionMode==='capabilities'&&
+    source.format==='pocketworld.owner-work-preparation.v1'&&source.targetTaskId===pin.taskId&&
+    raw.contextAvailable!==false&&raw.contextWithdrawn!==true&&raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable'&&raw.hasUnresolvedOperations!==true;
+}
+
+/** Route hints require the current full native view, not a retained review or a task-list pointer. */
+export function observedFixedProjectDraft(value:unknown):FixedProjectDraft|undefined {
+  const raw=object(object(value).raw),pin=fixedDraftPin(raw.originalFixedDraftFollowup);
+  if(pin&&raw.taskProjection==='detail_window'&&raw.taskCoreReadLimited===false&&raw.hasUnresolvedOperations===false&&sameFixedProjectDraftIdentity(value,pin))return pin;
+}
+
+export function matchesFixedProjectDraft(value:unknown,pin:FixedProjectDraft):boolean {
+  return !!observedFixedProjectDraft(value)&&sameFixedProjectDraftIdentity(value,pin);
+}
+
 export function projectContinuation(value: unknown): ProjectContinuation | null {
   const review = object(value), candidate = object(review.projectContinuation), task = object(review.task), raw = object(task.raw);
   if (!privateProjectTask(task) || candidate.feedbackRequired !== true || typeof candidate.conversationId !== 'string' ||
       candidate.conversationId !== (typeof raw.conversationId === 'string' ? raw.conversationId : '') ||
       candidate.reason !== undefined && !text(candidate.reason)) return null;
-  return { feedbackRequired: true, conversationId: candidate.conversationId, ...(candidate.reason ? { reason: candidate.reason } : {}) };
+  const fixedDraft=text(candidate.reason)&&Array.isArray(review.actions)&&
+    review.actions.every((action:unknown)=>['tasks.confirm','tasks.scope','tasks.plan.enter','tasks.deleteScreenshot'].includes(object(action).action))&&
+    review.ownerQuestion==null&&Array.isArray(review.approvals)&&!review.approvals.length&&Array.isArray(review.unresolvedOperations)&&!review.unresolvedOperations.length
+    ? fixedDraftPin(candidate.fixedDraft):undefined;
+  return { feedbackRequired: true, conversationId: candidate.conversationId, ...(candidate.reason ? { reason: candidate.reason } : {}),
+    ...(fixedDraft&&matchesFixedProjectDraft(task,fixedDraft)?{fixedDraft}:{}) };
 }
 
 export function continuationRequest(value: unknown, taskId: string, feedback: string) {

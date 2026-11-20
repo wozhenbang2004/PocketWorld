@@ -19,12 +19,22 @@ public final class ProjectTaskSourceRecord {
         return new File(directory,"private-task-source.json");
     }
     private static String stable(String prefix,String client){return UUID.nameUUIDFromBytes((prefix+client).getBytes(StandardCharsets.UTF_8)).toString();}
-    public static JSONObject verified(JSONObject checkout,JSONObject evidence)throws Exception{
-        JSONObject imported=checkout.getJSONObject("sourceImport");String client=imported.getString("clientId");
-        if(!client.matches("[a-f0-9-]{36}")||!stable("project-package-import:",client).equals(checkout.opt("projectId"))||
-                !stable("project-package-checkout:",client).equals(checkout.opt("id"))||!"new_project".equals(imported.opt("mode"))||
+    /** Metadata already read with the checkout, not a resolution of the original task or archive. */
+    static boolean hasPublishedIdentity(JSONObject checkout){
+        JSONObject imported=checkout.optJSONObject("sourceImport");
+        if(imported==null||!(imported.opt("clientId") instanceof String client))return false;
+        if(!client.matches("[a-f0-9-]{36}")||!"new_project".equals(imported.opt("mode"))||
                 !ProjectTaskSourceOrigin.KIND.equals(imported.opt("sourceKind"))||!Boolean.FALSE.equals(imported.opt("executionAuthorityRestored"))||
-                !ProjectSources.digest(evidence).equals(imported.opt("sourceEvidenceSha256")))throw changed();
+                !stable("project-package-import:",client).equals(checkout.opt("projectId"))||
+                !stable("project-package-checkout:",client).equals(checkout.opt("id")))return false;
+        for(String field:new String[]{"packageSha256","manifestIdentity","sourceEvidenceSha256"})
+            if(!(imported.opt(field) instanceof String digest)||!digest.matches("[a-f0-9]{64}"))return false;
+        return true;
+    }
+    public static JSONObject verified(JSONObject checkout,JSONObject evidence)throws Exception{
+        if(!hasPublishedIdentity(checkout))throw changed();
+        JSONObject imported=checkout.getJSONObject("sourceImport");
+        if(!ProjectSources.digest(evidence).equals(imported.opt("sourceEvidenceSha256")))throw changed();
         ProjectTaskSourceOrigin.requireStage(evidence,evidence.getJSONObject("original"),imported.getString("packageSha256"),imported.getString("manifestIdentity"));
         return evidence;
     }

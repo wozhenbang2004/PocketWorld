@@ -115,7 +115,7 @@ import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentatio
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
 import {teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
 import {DeclinedTeamStart,originalDeclinedTeamStart,originalPendingNodeCommand,TaskApproval} from './TaskApproval';
-import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,privateProjectTask,projectContinuation,type ContinuationSubmission} from './task-continuation';
+import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,matchesFixedProjectDraft,observedFixedProjectDraft,privateProjectTask,projectContinuation,sameFixedProjectDraftIdentity,type ContinuationSubmission,type FixedProjectDraft} from './task-continuation';
 import {TaskInference} from './TaskInference';
 import {TokenBudgetsWorkspace} from './TokenBudgetsWorkspace';
 import {QuickPanelVoiceDraft} from './QuickPanelVoiceDraft';
@@ -1265,6 +1265,23 @@ export default function App(){
   if(!conversation)return;
   const work=associate?{runId:task.raw?.runId,epoch:task.raw?.coordinatorEpoch}:undefined;
   await returnToOriginalTaskConversation(task.id,conversation,work);
+ };
+ const returnFromFixedDraft=(task:Task,draft:FixedProjectDraft)=>{
+  const conversation=originatingRequestConversation(task),request=reviewRequest.current;
+  const stillSource=()=>{
+   const live=bridge.getState(),reader=live.state.conversationReader,nativeTask=obj(live.view).taskId;
+   const rows=asArray<Task>(live.state.tasks).filter(item=>item.id===draft.taskId);
+   return !!conversation&&(reviewRequest.current===request||reviewRequest.current===request+1)&&
+    (!nativeTask||nativeTask===task.id)&&(!reader||reader.conversation===conversation)&&rows.length===1&&
+    (nativeTask?matchesFixedProjectDraft(rows[0],draft):sameFixedProjectDraftIdentity(rows[0],draft))&&originatingRequestConversation(rows[0])===conversation;
+  };
+  const live=bridge.getState(),view=obj(live.view);
+  if(!conversation||document.hidden||!can('tasks.close')||!can('conversation.select')||openedTaskId.current!==task.id||
+     view.taskId!==task.id||view.section!=null||live.state.conversationReader||!stillSource()){
+   setLocalError('暂不能核对原对话，没有打开其他对话。请从原工作重新核对。');return;
+  }
+  // Only navigation: don't stage the project, old task, or draft into the composer.
+  void returnToOriginalTaskConversation(task.id,conversation,undefined,false,undefined,undefined,stillSource);
  };
  const returnToContinuationConversation=(task:Task,shown:ContinuationSubmission)=>{
   const original=shown.original,scope=task.raw?.developmentContext;
@@ -2578,11 +2595,22 @@ export default function App(){
   const scope=obj(review?.approvalExecutionScope||review?.task?.raw?.executionScope),currentScope=obj(task.raw?.executionScope);
   const project=projectContinuation(review),continuation=continuations[task.id];
   const canReadProject=privateProjectTask(task)&&['paused','interrupted','awaiting_user','needs_confirmation','failed','completed'].includes(task.status);
+  const taskView=obj(snapshot?.view);
+  const observedDraft=observedFixedProjectDraft(task);
+  const fixedDraft=project?.fixedDraft&&!reviewStale&&canReadProject&&taskOpen&&!taskOpening&&taskLayer==='overview'&&!document.hidden&&
+   openedTaskId.current===task.id&&taskView.taskId===task.id&&taskView.section==null&&matchesFixedProjectDraft(task,project.fixedDraft)?project.fixedDraft:undefined;
+  const fixedDraftOptions=fixedDraft&&<section className="pw-form-flow" aria-label="这份原改稿的下一步">
+   <p className="pw-field-hint">原改稿保留在这里。{['projectDraft.readDifference','projectDraft.editLocal','projectDraft.keepRevision','projectDraft.closeEditor'].every(can)&&'自己编辑时可保留为新稿。'}要让管家再改，请另写一个目标。</p>
+   {originatingRequestConversation(task)&&can('conversation.select')&&can('tasks.close')&&!state.conversationReader&&<>
+    <Button variant="secondary" leadingIcon={IconChat} disabled={!!returningConversation} onClick={()=>returnFromFixedDraft(task,fixedDraft)}>返回原对话</Button>
+    <p className="pw-field-hint">返回时不会自动加入旧稿，也不会发送消息。</p>
+   </>}
+  </section>;
   const projectBlocked=protectedDisabled||continuationBlocks(continuation);
   const projectNote=projectFeedback[projectFeedbackKey(task)]||'';
   const nextBuildObserved=originalNodeBuildAfterDependencies(task);
   const buildNext=reviewedBuildAfterDependencies(task,project,actionNames);
-  const projectControls=project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label="原项目续接范围">
+  const projectControls=fixedDraftOptions||(project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label="原项目续接范围">
    {review?.task&&!reviewStale&&<ContinuedProjectBinding key={review.reviewHandle} task={review.task} projects={projects} read={can('projectRuntime.read')?args=>bridge.command('projectRuntime.read',args):undefined}/>}
    <p>{buildNext?'已核对同一副本的依赖准备命令退出 0，本轮还没有运行构建。继续后先核对实际依赖；本机构建命令仍需你单独批准。':'继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。'}</p>
    <p className="pw-muted">工具调用已用 {String(scope.toolsUsed??'未读取')} / 总上限 {String(scope.toolLimit??'未读取')}；模型调用已用 {String(scope.modelCallsUsed??'未读取')} / 总上限 {String(scope.modelCallLimit??'未读取')}。本次不增加额度，不延长截止时间。</p>
@@ -2591,7 +2619,7 @@ export default function App(){
    <TextAreaField label={buildNext?'接下来核对什么':'本次修改要求'} value={projectNote} onChange={value=>putProjectFeedback(projectFeedbackKey(task),value)} placeholder={buildNext?'核对同一副本的实际依赖与构建命令':'看过原结果后，希望继续修改什么？'} hint={buildNext?(projectNote===''?'可以自己填写，或点下方按钮填入建议内容，不会继续或运行构建。':'先核对这里的内容，再明确继续。对话草稿不变。'):'必填，最多 8000 字。对话中的文字、引用和附件保持原样。'} isRequired maxLength={8000} showCount isDisabled={projectBlocked||!actionNames.includes('tasks.resume')}/>
    {!buildNext&&actionNames.includes('tasks.resume')&&actionNames.includes('tasks.confirm')&&<Button variant="secondary"
      disabled={projectBlocked||!projectNote.trim()||projectNote.trim().length>8000} onClick={()=>reviewedAction('tasks.resume')}>按本次反馈继续项目任务</Button>}
-  </section>;
+  </section>);
   const resultFeedback=actionNames.includes('tasks.confirm')&&<Accordion variant="divided" className="pw-compact-disclosures"
    expandedKeys={reviewFeedbackOpen?['result-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('result-feedback'))}>
    <AccordionItem id="result-feedback" title={buildNext?'验收整项工作':'补充说明（可选）'} description={reviewNote?'已填写':undefined}>
@@ -2675,7 +2703,7 @@ export default function App(){
    canReadPhoneTaskOriginal={overviewActive&&!phoneWorkObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('phone.result.taskOriginal')}
    canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
    onContinueBuildCopy={buildCopy&&!failureOverview?()=>void openOriginalBuildCopy(buildCopy):undefined}
-   onCopy={copyWithLocalFeedback} onFollowUp={followOriginal} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
+   onCopy={copyWithLocalFeedback} onFollowUp={fixedDraft?undefined:followOriginal} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
    attachmentConversation={String(state.conversationId||'')} canOpenAttachment={can('attachments.open')} canLocateAttachment={can('attachmentWorkspace.open')}/>;
   const evidence=<TaskPackageProjectContext.Provider key="task-evidence" value={taskOpen&&!taskOpening&&can('projects.localSource.openPrepared')&&can('tasks.close')?(original,pin)=>{
     if(document.hidden||original!==taskId||openedTaskId.current!==original)return;
@@ -2703,10 +2731,10 @@ export default function App(){
    }
    loadTaskReview(task.id,pendingNodeCommand.approvalId);
   };
-  const reviewTools=!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
+  const reviewTools=(!fixedDraft||draftReviewReady)&&!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
     <div className="pw-section-heading pw-task-review-tools">{pendingNodeCommand?
       <Button disabled={questionPending} onClick={readPendingNodeCommand}>{pendingNodeCommand.action==='dependencies'?'核对本次依赖准备':'核对本机构建命令'}</Button>:
-      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
+      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':observedDraft?'核对原改稿的可用操作':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
   const reviewStatus=<>
     {readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}
     {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
@@ -2719,8 +2747,9 @@ export default function App(){
       {originalIntegrator&&<TeamOriginalFileReceipt key={task.id+':'+task.raw!.runId+':'+task.raw!.coordinatorEpoch} id={task.id} run={task.raw!.runId} epoch={task.raw!.coordinatorEpoch} directory={task.raw!.originalTeamFileEffects??(!reviewStale?review?.task?.raw?.originalTeamFileEffects:undefined)} disabled={taskOpening||reviewPending||!overviewActive} recover={input=>bridge.command('tasks.recoverTeamFile',input)}/>}
       {originalIntegrator&&overviewActive&&can('tasks.teamRemainder.read')&&can('tasks.teamRemainder.continue')&&(task.raw!.mayReadOriginalFileRemainder??(!reviewStale&&review?.task?.raw?.mayReadOriginalFileRemainder))===true&&<TeamRemainingFiles key={task.id+':remaining:'+task.raw!.runId+':'+task.raw!.coordinatorEpoch} id={task.id} run={task.raw!.runId} epoch={task.raw!.coordinatorEpoch} disabled={reviewPending||taskOpening} command={(action,input)=>bridge.command(action,input)}/>}
       {reviewTools&&(foldAcceptedDraftReview?<Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="accepted-draft-options" title="更多操作">{reviewTools}</AccordionItem></Accordion>:reviewTools)}
+      {!inlineDraftDecision&&(!actionNames.includes('tasks.confirm')||reviewStale)&&fixedDraftOptions}
       {review&&!reviewStale&&phoneUnknown.length>0&&<PhoneOriginalActionReview key={review.reviewHandle} taskId={task.id} rows={phoneUnknown} more={task.raw?.privatePhoneUnconfirmed?.hasMore===true} disabled={protectedDisabled} allowRecord={actionNames.includes('tasks.resolve')} submit={args=>reviewedAction('tasks.resolve',args)}/>}
-      {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(inlineDraftDecision?draftOtherOperations:ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={originalDraftReview?'验收本轮原独立改稿':project?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={refreshControl}><div className="pw-protected-actions">{originalDraftReview?<p className="pw-field-hint">这里只验收本轮的原固定稿，不会将你另存的改稿当作本次结果。</p>:projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion}/>}{resultFeedback}{draftOtherOperations}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
+      {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(inlineDraftDecision?draftOtherOperations:fixedDraft&&!actionNames.includes('tasks.confirm')?null:ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={originalDraftReview?'验收本轮原独立改稿':project?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={refreshControl}><div className="pw-protected-actions">{originalDraftReview?<p className="pw-field-hint">这里只验收本轮的原固定稿，不会将你另存的改稿当作本次结果。</p>:projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion}/>}{resultFeedback}{draftOtherOperations}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
       {declinedTeam&&<DeclinedTeamStart key={declinedTeam.id} decision={declinedTeam}/>}
      </div>;
   return <Tabs className="pw-work-object-tabs" selectedKey={taskLayer==='scope'?'goal':taskLayer} onSelectionChange={key=>showTaskLayer(String(key) as TaskLayer)}>
@@ -3725,6 +3754,7 @@ export default function App(){
   !projectWorkDrafts[importedCopy.projectId]?.expanded?importedCopy:null;
  const importedFileTarget=importedCopy&&projectSection==='files'&&projectListInput.projectId===importedCopy.projectId&&
   !projectListBusy&&!projectListError&&!files.length&&!fileQuery?importedCopy:null;
+ const fixedTaskCopy=importedCopy?.sourceKind==='task_source_package';
  const openOriginalImportedFiles=(target:ProjectImportedEditor,from:'work'|'files')=>{
   const live=bridge.getState().state,list=obj(obj(live.moduleResultInputs)['workspace.list']);
   if(route!=='projects'||projectSection!==from||live.localSourceIntake?.window||
@@ -3739,10 +3769,11 @@ export default function App(){
   setProjectWorkPresentations(previous=>({...previous,[target.projectId]:{open:true,mode:'default'}}));
  };
  const projectFilesEmpty=<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/>
-  <h3>{fileQuery?'没有匹配的文件':importedFileTarget?'导入源码在本机副本':'暂无列出的文件'}</h3>
-  <p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':importedFileTarget?'这里还没有正式文件。编辑和后续本机构建都用这份导入副本。':'从一个新文件开始，也可以重新读取当前项目。'}</p>
+  <h3>{fileQuery?'没有匹配的文件':importedFileTarget?fixedTaskCopy?'源码在新工作副本':'导入源码在本机副本':'暂无列出的文件'}</h3>
+  <p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':importedFileTarget?fixedTaskCopy?
+    '这里还没有正式文件。可编辑新副本中的源码，原固定包保持不变。':'这里还没有正式文件。编辑和后续本机构建都用这份导入副本。':'从一个新文件开始，也可以重新读取当前项目。'}</p>
   {fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<div className="pw-action-row">
-   {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget,'files')}>编辑导入的本机源码</Button>}
+   {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget,'files')}>{fixedTaskCopy?'编辑新副本源码':'编辑导入的本机源码'}</Button>}
    {can('projects.newFile')&&<Button variant={importedFileTarget?'ghost':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('file')}>{importedFileTarget?'新建正式文件':'新建文件'}</Button>}
    {can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}
   </div>}
@@ -3774,7 +3805,7 @@ export default function App(){
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
-        onEditImported={importedWorkTarget?()=>openOriginalImportedFiles(importedWorkTarget,'work'):undefined}
+        editImported={importedWorkTarget?{onOpen:()=>openOriginalImportedFiles(importedWorkTarget,'work'),label:fixedTaskCopy?'编辑新副本源码':'编辑导入源码'}:undefined}
         importedSourceFirst={importedSourceFirst}
         savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}

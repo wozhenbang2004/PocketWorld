@@ -76,10 +76,20 @@ internal object PocketWebProjectContinuation {
 
     fun view(task: UiTask, active: Boolean, now: Long = System.currentTimeMillis()): JSONObject? {
         val raw = task.raw
+        val context = raw.optJSONObject("developmentContext")
         if (raw.optString("kind") != "assistant" || raw.optString("actorId") != "owner" || raw.optString("spaceId") != "private" ||
-            raw.has("origin") && !raw.isNull("origin") || raw.optJSONObject("developmentContext") == null) return null
+            raw.has("origin") && !raw.isNull("origin") || context == null) return null
         val conversation = raw.opt("conversationId") as? String ?: ""
         val view = JSONObject().put("feedbackRequired", true).put("conversationId", conversation)
+        val fixedDraft = raw.optJSONObject("originalFixedDraftFollowup")?.takeIf {
+            val epoch = exactPositive(it.opt("epoch"))
+            raw.opt("taskProjection") == "detail_window" && raw.opt("taskCoreReadLimited") == false &&
+                raw.opt("hasUnresolvedOperations") == false && context.opt("draftOnly") == true &&
+                it.opt("taskId") == task.id && it.opt("runId") == raw.opt("runId") &&
+                epoch != null && epoch == exactPositive(raw.opt("coordinatorEpoch")) &&
+                it.opt("draftId") == raw.opt("projectEditDraftId") &&
+                it.opt("projectId") == context.opt("projectId") && it.opt("checkoutId") == context.opt("checkoutId")
+        }
         val reason = when {
             dedicated.any(raw::has) || isDeviceWorkspaceTask(task) || MediaOwnerUi.isTask(raw) ||
                 raw.optString("feature") == "attachments" && raw.optString("command") in setOf("createDocument", "transformImage", "trimMedia") -> "这项专用任务须回原入口处理，不能在此续接。"
@@ -89,6 +99,10 @@ internal object PocketWebProjectContinuation {
             raw.optString("executionMode") != "capabilities" -> "这不是原私人项目能力任务，请回原入口核对。"
             PocketWebOwnerQuestions.blocksGenericResume(raw) -> "请先回答原任务的问题，再核对是否继续。"
             raw.optJSONArray("approvals").objects().any { it.optString("state", it.optString("status")) == "pending" } || unresolvedOperations(task).isNotEmpty() -> "请先处理原任务的审批或未决操作；草稿仍保留。"
+            fixedDraft != null -> {
+                view.put("fixedDraft", fixedDraft)
+                "这项工作已保存固定改稿。可编辑另存，或回原对话交代新的修改目标；不会另起一轮替换原稿。"
+            }
             else -> try {
                 val scope = raw.optJSONObject("executionScope") ?: throw IllegalStateException("原任务范围缺失，不能自动创建新的额度。")
                 when {
