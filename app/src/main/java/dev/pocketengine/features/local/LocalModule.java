@@ -686,8 +686,28 @@ public final class LocalModule implements EngineModule {
         if(plan.getString("mode").equals("same_project_new_checkout")){allowed.addAll(java.util.Set.of("targetCheckoutId","projectId","expectedTargetSourceDigest"));packageIdentity(plan.getString("targetCheckoutId"));packageIdentity(plan.getString("projectId"));packageHash(plan.getString("expectedTargetSourceDigest"));}
         var keys=plan.keys();while(keys.hasNext())if(!allowed.contains(keys.next()))throw new SecurityException("项目包方案含未支持字段，未恢复授权");return plan;
     }
+    private static String importedProjectId(String client){return UUID.nameUUIDFromBytes(("project-package-import:"+client).getBytes(StandardCharsets.UTF_8)).toString();}
     /** Controller-only. Nothing in the feature/model command surface can write or retrieve this locator. */
     public JSONObject ownerSourcePosition()throws Exception{return ownerSourcePosition.read();}
+    public JSONObject ownerSourcePosition(String project,String action,String digest)throws Exception {
+        JSONObject position=ownerSourcePosition.read(),plan=position.optJSONObject("plan");
+        if(plan==null||!project.equals(importedProjectId(action))||!action.equals(plan.opt("clientImportId"))||!digest.equals(plan.opt("planDigest")))
+            throw new SecurityException("原导入定位已变化，请返回原项目核对。没有打开其他导入。");
+        return position;
+    }
+    /** The original catalog insert can survive interruption before its checkout is atomically published. */
+    public JSONObject pendingPhoneSourceForProject(String project)throws Exception {
+        synchronized(ownerSourcePosition){
+            JSONObject plan=ownerSourcePosition.read().optJSONObject("plan");
+            if(plan==null)return null;
+            String action=plan.getString("clientImportId");
+            if(!project.equals(importedProjectId(action)))return null;
+            JSONObject actual=actualPhoneSourcePosition(plan,false);
+            if(!Boolean.TRUE.equals(actual.opt("projectRegistered"))||!Boolean.FALSE.equals(actual.opt("found"))||
+                !Boolean.FALSE.equals(actual.opt("checkoutWithoutProject"))||!action.equals(actual.opt("clientImportId")))return null;
+            return new JSONObject().put("projectId",project).put("actionId",action).put("planDigest",plan.getString("planDigest"));
+        }
+    }
     public JSONObject publishReviewedPhoneSource(JSONObject approved)throws Exception {
         synchronized(ownerSourcePosition){
             JSONObject plan=verifiedPackageImportPlan(approved);
@@ -764,7 +784,7 @@ public final class LocalModule implements EngineModule {
     private JSONObject publishPrivatePackageCheckout(JSONObject plan,String client,String sha,String id,JSONObject staged,JSONObject sourceEvidence,JSONObject deviceSource,
             dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,dev.pocketengine.features.local.project.ProjectGitImport.Result nativeGit,RunControl gitControl,
             dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Review draft,dev.pocketengine.features.local.project.OwnerDraftWorkCopy.Current current)throws Exception {
-        String projectId=plan.getString("mode").equals("new_project")?UUID.nameUUIDFromBytes(("project-package-import:"+client).getBytes(StandardCharsets.UTF_8)).toString():plan.getString("projectId");
+        String projectId=plan.getString("mode").equals("new_project")?importedProjectId(client):plan.getString("projectId");
         File staging=new File(root,"package-checkout-staging");if(Files.isSymbolicLink(staging.toPath())||!staging.isDirectory()&&!staging.mkdirs()||!staging.getAbsoluteFile().equals(staging.getCanonicalFile()))throw new IllegalStateException("无法建立原项目导入暂存目录");File prepared=Files.createTempDirectory(staging.toPath(),"checkout-").toFile();
         try{
             File files=new File(prepared,"files");

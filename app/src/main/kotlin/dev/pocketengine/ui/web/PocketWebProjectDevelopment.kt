@@ -177,6 +177,11 @@ internal class PocketWebProjectDevelopment(
     private fun model() = controller.nativeModelSelection().readStable { controller.projectDevelopmentModelForWeb() }
     private fun metadata(original: Page): JSONObject {
         val actual = controller.projectDevelopmentForWeb().inspectForOwner(original.project)
+        if (actual.getJSONArray("checkouts").length() == 0) {
+            // No guessed absence from the catalog snapshot; only the phone import's original durable locator can prove this.
+            val recovery = runCatching { controller.projectPackages.pendingWebSourceForProject(original.project) }.getOrNull()
+            actual.putOpt("phoneSourceRecovery", recovery)
+        }
         val selectedModel = model()
         return actual.put("viewHandle", original.handle).put("model", selectedModel.value()).put("modelRevision", selectedModel.revision())
             .put("draft", shownDraft(original)).put("commandsAuthorized", false)

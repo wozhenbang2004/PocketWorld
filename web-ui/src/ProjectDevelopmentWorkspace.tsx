@@ -121,6 +121,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [importEditorNotice,setImportEditorNotice]=useState('');
   const buildReturnAnchor=useRef<HTMLElement>(null), buildStepSection=useRef<HTMLElement>(null), buildNextAction=useRef<HTMLButtonElement>(null), focusingBeforeDeparture=useRef(false);
   const buildAfterSave=useRef<{saved:CheckoutSavedPosition;viewHandle:string;window:string}|null>(null);
+  const sourceRecoveryReturn=useRef<{window:string;viewHandle:string;seen:boolean}|null>(null);
   const fileCheckout=fileWindow?.checkoutId||'';
   const [buildOrigin,setBuildOrigin]=useState<ProjectBuildCopy|null>(null);
   const buildCheckout=buildOrigin?.checkoutId||'';
@@ -249,7 +250,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   useEffect(() => {
     alive.current = true; let owner = ownerWindow();
     const retire = () => {
-      generation.current++; entered.current = null; buildAfterSave.current=null;
+      generation.current++; entered.current = null; buildAfterSave.current=null; sourceRecoveryReturn.current=null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null;
       if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); }
       if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
@@ -260,6 +261,16 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const inspect = () => {
       const next = ownerWindow();
       if (next !== owner || document.hidden) { owner = next; retire(); }
+      const recovery = sourceRecoveryReturn.current;
+      if (recovery && recovery.viewHandle === handle.current) {
+        const intake = bridge.getState().state.localSourceIntake;
+        if (intake?.recoveryOnly && intake.window === recovery.window) recovery.seen = true;
+        else if (recovery.seen && !intake?.window && !entered.current) {
+          // Opening the original can return to this same project ID. Do not keep its pre-recovery empty view.
+          sourceRecoveryReturn.current = null;
+          void readRef.current();
+        }
+      }
       if (latest.current.active && !document.hidden && !handle.current && !entered.current && readAttempt.current !== next && latest.current.can('projects.development.read')) void readRef.current();
     };
     const unsubscribe = bridge.subscribe(inspect); document.addEventListener('visibilitychange', inspect); window.addEventListener('pagehide', retire);
@@ -276,6 +287,18 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     setView(value=>value ? {...value,draft:{...value.draft,ownerPickedConvention:null}} : value); };
   const readable = can('projects.development.read');
   const available = rows(view?.checkouts);
+  const recovery = view?.phoneSourceRecovery;
+  const sourceRecovery = !available.length && recovery?.projectId===projectId && copyIdentity(recovery.actionId) &&
+    sourceHash(recovery.planDigest) ? recovery : null;
+  const openSourceRecovery = () => {
+    const viewHandle = handle.current;
+    if (!sourceRecovery || !viewHandle || viewHandle !== view?.viewHandle) return;
+    void invoke('projects.localSource.open',{recovery:sourceRecovery},value=>{
+      if (value.opened!==true || !copyIdentity(value.recoveryWindow)) throw Error('没有打开原导入核对窗口。');
+      const intake = bridge.getState().state.localSourceIntake;
+      sourceRecoveryReturn.current = {window:value.recoveryWindow,viewHandle,seen:intake?.recoveryOnly===true&&intake.window===value.recoveryWindow};
+    });
+  };
   const selectedCopy = available.find(row => row.projectId === projectId && row.checkoutId === checkout);
   const savedFileHere = selectedCopy && lastSavedFile?.projectId===projectId && lastSavedFile.checkoutId===checkout ? lastSavedFile : null;
   const differentBuildCopy=buildCheckout&&checkout!==buildCheckout&&available.find(row=>row.projectId===projectId&&row.checkoutId===buildCheckout);
@@ -690,7 +713,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {editedCopy&&can('projects.development.draft')&&<div className="pw-form-actions"><Button variant="ghost" size="small" disabled={disabled} onClick={()=>{
         if(!disabled&&!entered.current&&latest.current.can('projects.development.draft')&&editedImportCopy()?.checkoutId===editedCopy.checkoutId)chooseCheckout(editedCopy.checkoutId);
       }}>选我刚编辑的副本 · <bdi>{editedCopy.name||name}</bdi> · <code>{editedCopy.checkoutId.slice(0,8)}</code></Button></div>}
-      {available.length === 0 && can('projects.development.prepare') && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyUnconfirmed || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
+      {sourceRecovery ? <>
+        <p className="pw-field-hint" role="status">原项目已登记，还没有核对到这次导入的工作副本。请先核对原导入，不另建空副本。</p>
+        {can('projects.localSource.open') && <div className="pw-form-actions"><Button variant="secondary" disabled={!active || busy || !!review || filesOpen}
+          onClick={openSourceRecovery}>核对原导入</Button></div>}
+      </> : available.length === 0 && can('projects.development.prepare') && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyUnconfirmed || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
       {(view.draft?.copyRequestId || copyResult) && <div>
         {copyUnconfirmed&&<p className="pw-field-hint" role="status">{can('projects.development.queryCopy')?
           '副本准备结果还未核对。先查原请求，不会重复创建副本。':'副本准备结果未知，这个窗口暂时不能查询；不会重新创建副本。'}</p>}

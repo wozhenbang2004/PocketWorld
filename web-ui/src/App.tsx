@@ -2939,7 +2939,8 @@ export default function App(){
      if(index==null)continue;
      const matches=anchoredPreparations.get(index)||[];
      // These locators require the exact owner request, not the model reply used as a fallback.
-     anchoredPreparations.set(index,[...matches,!exactOwner&&(item.chatBuild||item.awaitingDraft)?{...item,chatBuild:undefined,awaitingDraft:undefined}:item]);
+     anchoredPreparations.set(index,[...matches,!exactOwner&&(item.chatBuild||item.awaitingDraft||item.interruptedDraft)?
+       {...item,chatBuild:undefined,awaitingDraft:undefined,interruptedDraft:undefined}:item]);
      placedProposalKeys.add(conversationPreparationKey(item));
    }
  }
@@ -3377,7 +3378,8 @@ export default function App(){
   const owner=row.visibleOwnerRequest;
   const originalOwner=message.role==='user'&&owner?.messageId===message.id&&owner.revision===original.revision;
   if(row.chatBuild?.taskId===next.target.taskId&&!originalOwner)return;
-  if(next.action==='draft'&&row.awaitingDraft&&(!originalOwner||!can('butler.preparation.project.followup')))return;
+  const interruptedRead=next.action==='draft'&&!!row.interruptedDraft;
+  if(next.action==='draft'&&(row.awaitingDraft||interruptedRead)&&(!originalOwner||!can('butler.preparation.project.followup')))return;
   if(originalOwner&&can('butler.preparation.project.followup')){
    chatOpenFlight.current=true;setChatWorkReading(true);
    try{
@@ -3390,11 +3392,11 @@ export default function App(){
       throw new Error('原话与这次工作暂不能核对，没有打开另一项工作。');
     // An explicit original-draft choice remains valid after the
     // main action advances to its exact build or fixed webpage.
-    const savedDraft=fresh.originalDraft??fresh.awaitingDraft;
+    const savedDraft=interruptedRead?fresh.interruptedDraft:fresh.originalDraft??fresh.awaitingDraft;
     const readDraft=next.action==='draft'&&savedDraft&&next.draftId===savedDraft.draftId&&
       workIdentityKey(next.target)===workIdentityKey(savedDraft);
     const resolved=readDraft?next:conversationNext(fresh,can);
-    if(resolved.action==='prepare'||resolved.action!==next.action||workIdentityKey(resolved.target)!==workIdentityKey(next.target)||
+    if((interruptedRead&&!readDraft)||resolved.action==='prepare'||resolved.action!==next.action||workIdentityKey(resolved.target)!==workIdentityKey(next.target)||
        resolved.label!==next.label||resolved.draftId!==next.draftId||resolved.approvalId!==next.approvalId||resolved.packageOperationId!==next.packageOperationId)
       throw new Error('这次交办已有变化，请按原话下的新入口核对。');
    }catch(error){if(stillCurrent()){setPreparationRevision(value=>value+1);setLocalError(error instanceof Error?error.message:'暂不能核对这次原工作。');}return;}
@@ -3420,9 +3422,10 @@ export default function App(){
    };},{originalChat:()=>sameLine(bridge.getState()),departed:()=>{relatedOrigin.current=origin;}});
    return;
   }
+  // The exact interrupted-draft link reads the difference, not the separate retry review.
   openTask(next.target.taskId,next.review?'review':'overview',false,undefined,undefined,{runId:next.target.runId,epoch:next.target.epoch,draftId:next.draftId},stillCurrent,next.approvalId,()=>{
    if(stillCurrent()){setPreparationRevision(value=>value+1);setLocalError('这次原工作暂不能打开，没有转到另一轮。');}
-  },undefined,{returnTo:original,beforeTaskRequest,navigation});
+  },interruptedRead?()=>{}:undefined,{returnTo:original,beforeTaskRequest,navigation});
  };
  const preparationEntries=(conversationId:string,homeRows?:Task[])=>{
   const representedTaskIds=new Set<string>();

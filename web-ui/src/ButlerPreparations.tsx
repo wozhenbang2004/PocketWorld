@@ -20,7 +20,7 @@ type OriginalTask = { taskId:string; runId:string; epoch:number; status:string }
 type ChatBuild = OriginalTask & {ordinal:number; settledBuild?:true; decision?:'dependencies'|'build'|'collect'; approvalId?:string; packageOperationId?:string};
 export type ConversationPreparation = ButlerPreparationTarget & {
   sourceRunId:string; sourceEpoch:number; kind:'phone'|'project'; canPrepare:boolean; targetTaskId:string; goal:string;
-  originalTask?:OriginalTask; originalDraft?:OriginalProjectDraft; awaitingDraft?:OriginalProjectDraft; chatBuild?:ChatBuild; visibleOwnerRequest?:{messageId:string;revision:number}
+  originalTask?:OriginalTask; originalDraft?:OriginalProjectDraft; awaitingDraft?:OriginalProjectDraft; interruptedDraft?:OriginalProjectDraft; chatBuild?:ChatBuild; visibleOwnerRequest?:{messageId:string;revision:number}
 };
 const identifier = (value:unknown): value is string => typeof value==='string' && !!value && value.length<=240;
 const positive = (value:unknown): value is number => Number.isSafeInteger(value) && Number(value)>0;
@@ -46,6 +46,10 @@ export function conversationPreparation(row: Data): ConversationPreparation | nu
   const waitingId=row.target?.originalProjectDraftAwaitingAcceptanceId;
   const awaitingDraft:OriginalProjectDraft|undefined=source&&task?.status==='needs_confirmation'&&typeof waitingId==='string'&&/^[a-f0-9]{64}$/.test(waitingId)
     ? {taskId:task.taskId,runId:task.runId,epoch:task.epoch,draftId:waitingId} : undefined;
+  const interruptedId=row.target?.originalProjectDraftInterruptedId;
+  const interruptedDraft:OriginalProjectDraft|undefined=source&&task?.status==='interrupted'&&task.epoch===1&&
+    row.target?.hasUnresolvedOperations===false&&typeof interruptedId==='string'&&/^[a-f0-9]{64}$/.test(interruptedId)
+    ? {taskId:task.taskId,runId:task.runId,epoch:task.epoch,draftId:interruptedId} : undefined;
   const chatBuild:ChatBuild|undefined=draft&&child&&child.taskId!==draft.taskId&&build.draftTaskId===draft.taskId&&build.draftId===draft.draftId&&
       build.draftRunId===draft.runId&&build.draftEpoch===draft.epoch&&build.executionAuthorized===false&&
       Number.isInteger(build.ordinal)&&build.ordinal>=0&&build.ordinal<=8
@@ -53,7 +57,7 @@ export function conversationPreparation(row: Data): ConversationPreparation | nu
       ...(identifier(build.packageOperationId)?{packageOperationId:build.packageOperationId}:{})}:undefined;
   return { sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId,
     sourceRunId: row.sourceRunId, sourceEpoch: row.sourceEpoch, kind: row.kind, canPrepare, targetTaskId, goal:text(row.goal),
-    originalTask:task, originalDraft:draft, awaitingDraft, chatBuild, visibleOwnerRequest:source };
+    originalTask:task, originalDraft:draft, awaitingDraft, interruptedDraft, chatBuild, visibleOwnerRequest:source };
 }
 export type ConversationNext = {action:'prepare';label:string; hint?:string} |
   {action:'task'|'draft'|'package';label:string; hint?:string; target:OriginalTask; draftId?:string; packageOperationId?:string; review?:boolean; approvalId?:string};
@@ -98,6 +102,8 @@ export function conversationNext(row:ConversationPreparation, can:(command:strin
       return {action:'draft',target:task,draftId:row.originalDraft.draftId,label:'查看这次改稿'};
     if(row.awaitingDraft&&can('projectDraft.readDifference')&&can('butler.preparation.project.followup'))
       return {action:'draft',target:task,draftId:row.awaitingDraft.draftId,label:'查看这次改稿',hint:'改稿已保存，目标还待验收'};
+    if(row.interruptedDraft&&can('projectDraft.readDifference')&&can('butler.preparation.project.followup'))
+      return {action:'draft',target:task,draftId:row.interruptedDraft.draftId,label:'查看这次改稿',hint:'执行已中断，原改稿已保存'};
     return taskNext(task,can('tasks.review'));
   }
   return {action:'prepare',label:row.targetTaskId?'核对这次工作':row.kind==='project'?'审阅项目交办':'核对手机工作',

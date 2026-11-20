@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pocketengine.features.local.project.ProjectArchiveRoot
 import dev.pocketengine.ui.ProjectPackageCoordinator
+import dev.pocketengine.ui.ProjectSourceRecoveryPin
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -85,14 +86,16 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
     fun snapshot(): JSONObject? {
         if (!here()) return null
         val state = original.state
-        val plan = plan(); val pending = pending(); val result = result()
+        val recovery = original.webSourceRecovery != null
+        val plan = if (recovery) null else plan(); val pending = pending(); val result = result()
         return JSONObject().put("window", window).put("busy", state.busy).put("picking", original.webSourcePickerPending)
-            .put("suggestedSkip", state.sourceSkipCandidate?.takeIf { state.error != null && state.staged == null })
-            .put("notice", state.notice).put("error", displayError(state.error)).put("staged", stageRow(state.staged, true))
-            .put("saved", JSONArray(state.stagedPackages.mapNotNull { stageRow(it) }.take(4)))
+            .put("recoveryOnly", recovery)
+            .put("suggestedSkip", state.sourceSkipCandidate?.takeIf { !recovery && state.error != null && state.staged == null })
+            .put("notice", state.notice).put("error", displayError(state.error)).put("staged", if (recovery) null else stageRow(state.staged, true))
+            .put("saved", if (recovery) JSONArray() else JSONArray(state.stagedPackages.mapNotNull { stageRow(it) }.take(4)))
             .put("reviewId", plan?.getString("clientImportId")).put("reviewName", plan?.getString("projectName"))
             .put("pendingId", pending?.getString("clientImportId")).put("pendingName", pending?.getString("projectName"))
-            .put("otherPending", state.pendingImport != null && pending == null).put("mayRetry", pending != null && state.retryImport)
+            .put("otherPending", !recovery && state.pendingImport != null && pending == null).put("mayRetry", pending != null && state.retryImport)
             .put("mayRelease", pending != null && (state.retryImport || state.missingSourceAction == pending.optString("clientImportId")))
             .put("project", result?.getString("projectId")).put("checkout", result?.getString("id")).put("name", result?.optString("name"))
     }
@@ -105,7 +108,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
     fun dispatch(action: String, args: JSONObject): JSONObject {
         val op = action.removePrefix(PREFIX)
         val fields = when (op) {
-            "open" -> emptySet()
+            "open" -> if (args.has("recovery")) setOf("recovery") else emptySet()
             "openPrepared" -> setOf("id", "sha")
             "select", "discard" -> setOf("window", "id", "sha")
             "review" -> setOf("window", "id", "sha", "name")
@@ -123,18 +126,30 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
                 require(id.matches(Regex("[a-f0-9-]{36}")) && sha.matches(Regex("[a-f0-9]{64}")))
                 id to sha
             } else null
-            if (prepared != null) check(!original.state.busy && !original.webSourcePickerPending) { "请先结束已有的本机源码操作" }
+            val recovery = if (op == "open" && args.has("recovery")) {
+                val pin = args.getJSONObject("recovery")
+                require(pin.keys().asSequence().toSet() == setOf("projectId", "actionId", "planDigest"))
+                val projectId = pin.getString("projectId"); val action = pin.getString("actionId"); val digest = pin.getString("planDigest")
+                check(!here() && projectId == project() && action.matches(Regex("[a-f0-9-]{36}")) && digest.matches(Regex("[a-f0-9]{64}"))) {
+                    "请回到原导入的项目核对"
+                }
+                ProjectSourceRecoveryPin(projectId, action, digest)
+            } else null
+            if (prepared != null || recovery != null) check(!original.state.busy && !original.webSourcePickerPending) { "请先结束已有的本机源码操作" }
             if (!here() || prepared != null) {
                 if (!here()) close()
-                original.openWebSourceIntake(prepared)
+                original.openWebSourceIntake(prepared, recovery)
                 origin = project(); window = UUID.randomUUID().toString()
             }
-            return JSONObject().put("opened", true)
+            return JSONObject().put("opened", true).also { if (recovery != null) it.put("recoveryWindow", window) }
         }
         check(window != null && args.getString("window") == window) { "原源码选择窗口已变化" }
         if (op == "close") { close(); return JSONObject().put("closed", true) }
         check(here()) { "请回到原私人项目目录" }
         val state = original.state
+        check(original.webSourceRecovery == null || op in setOf("query", "retry", "releaseMissing", "openProject")) {
+            "请先关闭原导入核对，再选择其他来源"
+        }
         check(!state.busy && !original.webSourcePickerPending) { "请等待当前文件选择或本机读取结束" }
         if (op !in setOf("query", "retry", "releaseMissing")) check(state.pendingImport == null) { "请先核对原创建结果" }
         fun matches(row: JSONObject?) = row != null && evidence(row) != null && row.optString("selectionId") == args.getString("id") && row.optString("sha256") == args.getString("sha")

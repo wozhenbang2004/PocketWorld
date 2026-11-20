@@ -1619,28 +1619,35 @@ public final class TaskStore {
                     .put("originalRunId",originalRun).put("originalEpoch",originalEpoch)
                     .put("canOpenOriginalRun",!originalRun.isEmpty()&&originalEpoch>0&&originalRun.equals(run)&&originalEpoch==epoch)
                     .put("hasUnresolvedOperations",hasUnresolved(actual.getString("id")));
-            // Saving the draft and accepting the goal are separate. Keep the
-            // pending locator private to the exact visible request, not to the build chain.
-            String draftId=actual.optString("projectEditDraftId");
+            // These pending/interrupted reads belong only to the visible original request,
+            // not the build chain or a new decision about the goal.
+            String draftId=actual.optString("projectEditDraftId");JSONObject development=actual.optJSONObject("developmentContext");
             if(current&&!dismissed&&linked.optBoolean("canOpenOriginalRun")&&
-                dev.pocketengine.features.local.project.ProjectEditDraft.selected(actual.optJSONObject("developmentContext"))&&draftId.matches("[a-f0-9]{64}")){
+                dev.pocketengine.features.local.project.ProjectEditDraft.selected(development)&&draftId.matches("[a-f0-9]{64}")){
                 if("completed".equals(actual.opt("status")))linked.put("originalProjectDraftId",draftId);
                 else if(view.has("visibleOwnerRequest")&&"needs_confirmation".equals(actual.opt("status"))&&
-                        retainedDraftAwaitingAcceptance(actual,run,epoch,draftId))
+                        retainedDraftInRunState(actual,run,epoch,draftId,"needs_confirmation"))
                     linked.put("originalProjectDraftAwaitingAcceptanceId",draftId);
+                // The fixed row has no run column. First/current epoch plus its immutable
+                // task pointer rules out reading an artifact saved in a different attempt.
+                else if(view.has("visibleOwnerRequest")&&"interrupted".equals(actual.opt("status"))&&epoch==1&&
+                        !development.has(OWNER_REVISION)&&!linked.getBoolean("hasUnresolvedOperations")&&
+                        !actual.optBoolean("cancelRequested")&&!actual.has("resultConfirmation")&&
+                        retainedDraftInRunState(actual,run,epoch,draftId,"interrupted"))
+                    linked.put("originalProjectDraftInterruptedId",draftId);
             }
             view.put("target",linked).put("targetTaskId",actual.getString("id")).put("targetConversationId",conversation).put("canPrepare",false);if(current)view.put("state",run.isEmpty()?"prepared":"started");
         }return view;
     }
     /** The task pointer and fixed row were saved together in the original run.
      * Fetch no manuscript here; the existing exact read revalidates the run and both byte hashes. */
-    private boolean retainedDraftAwaitingAcceptance(JSONObject task,String run,int epoch,String draftId)throws Exception{
+    private boolean retainedDraftInRunState(JSONObject task,String run,int epoch,String draftId,String state)throws Exception{
         if(!"assistant".equals(task.opt("kind"))||!"capabilities".equals(task.opt("executionMode"))||
            !task.isNull("origin")||!task.isNull("teamRunId")||!task.isNull("memberId")||!task.isNull("parentTaskId")||
            !"managed_process_v1".equals(task.getJSONObject("developmentContext").opt("runtime"))||
            Boolean.FALSE.equals(task.opt("contextAvailable"))||task.optBoolean("contextWithdrawn")||task.optBoolean("sourceCurrentReadRequired"))return false;
-        try(Cursor row=db.rawQuery("SELECT 1 FROM private_project_edit_drafts d JOIN runs r ON r.task_id=d.task_id WHERE d.task_id=? AND d.draft_id=? AND r.run_id=? AND r.epoch=? AND r.status='needs_confirmation'",
-                new String[]{task.getString("id"),draftId,run,Integer.toString(epoch)})){
+        try(Cursor row=db.rawQuery("SELECT 1 FROM private_project_edit_drafts d JOIN runs r ON r.task_id=d.task_id WHERE d.task_id=? AND d.draft_id=? AND r.run_id=? AND r.epoch=? AND r.status=?",
+                new String[]{task.getString("id"),draftId,run,Integer.toString(epoch),state})){
             return row.moveToFirst()&&!row.moveToNext();
         }catch(android.database.sqlite.SQLiteException unavailable){
             if(Thread.currentThread().isInterrupted())throw unavailable;

@@ -28,6 +28,10 @@ internal data class ProjectPackageState(
     val notice: String? = null, val error: String? = null, val sourceSkipCandidate: String? = null
 )
 
+internal data class ProjectSourceRecoveryPin(val projectId: String, val actionId: String, val planDigest: String) {
+    fun matches(plan: JSONObject) = plan.opt("clientImportId") == actionId && plan.opt("planDigest") == planDigest
+}
+
 /** Owner navigation and cancellable document IO. Existing LocalModule/workspace remain authoritative. */
 internal class ProjectPackageCoordinator(
     private val activity: ComposeActivity, private val app: EngineApplication,
@@ -44,6 +48,7 @@ internal class ProjectPackageCoordinator(
     private var pickerImport by mutableStateOf<JSONObject?>(null)
     private var webSourcePin: JSONObject? = null
     private var preferredWebSource: Pair<String, String>? = null
+    var webSourceRecovery: ProjectSourceRecoveryPin? = null; private set
     private class HostSourceWait(val task: String, val token: String, val done: (JSONObject?, String?) -> Unit) { @Volatile var active = true }
     private var hostSourceWait: HostSourceWait? = null
     private fun finishHostSource(wait: HostSourceWait, value: JSONObject?, error: String?) {
@@ -79,6 +84,7 @@ internal class ProjectPackageCoordinator(
         positions[positionKey(state.projectId, state.checkoutId)] = JSONObject().put("projectId", state.projectId.orEmpty()).put("checkoutId", state.checkoutId.orEmpty()).put("pendingFreeze", state.pendingFreeze).put("pendingImport", state.pendingImport)
     }
     private fun local() = app.features.module("local") as? LocalModule ?: error("原项目模块不可用")
+    fun pendingWebSourceForProject(project: String): JSONObject? = local().pendingPhoneSourceForProject(project)
     private fun requireOwner() { check(!closed && mounted && privateOwner()) { "请返回原私人项目入口操作" } }
     fun activate(project: String?, checkout: JSONObject?, sourcesOnly: Boolean = false, prepared: Pair<String, String>? = null) {
         check(!closed && privateOwner()) { "请返回原私人项目入口操作" }; mounted = true
@@ -481,8 +487,9 @@ internal class ProjectPackageCoordinator(
     }
     // The web owner directory only reads prior selections. Opening it never opens a provider,
     // mounts a checkout, or fetches unrelated task artifacts and received attachments.
-    private fun refreshSourceStages(prepared: Pair<String, String>?) = work { _, _ ->
-        val position = local().ownerSourcePosition()
+    private fun refreshSourceStages(prepared: Pair<String, String>?, recovery: ProjectSourceRecoveryPin? = webSourceRecovery) = work { _, _ ->
+        val position = if (recovery != null) local().ownerSourcePosition(recovery.projectId, recovery.actionId, recovery.planDigest)
+            else local().ownerSourcePosition()
         val durable = position.optJSONObject("plan")
         if (durable != null) {
             // The source cache or provider may have vanished. Its failure must not hide a published checkout.
@@ -515,14 +522,16 @@ internal class ProjectPackageCoordinator(
             } else state = state.copy(stagedPackages = rows)
         }
     }
-    fun openWebSourceIntake(prepared: Pair<String, String>? = null) {
+    fun openWebSourceIntake(prepared: Pair<String, String>? = null, recovery: ProjectSourceRecoveryPin? = null) {
         check(foreground && !closed && privateOwner() && !state.busy && pickerExport == null &&
             state.pendingFreeze == null && taskExport?.phase !in setOf("checking", "document_requested", "selection_returned", "writing") &&
             (pickerImport == null || pickerImport?.optString("sourceKind") in setOf("saf_tree", "external_zip")) &&
             (state.pendingImport == null || state.pendingImport?.optString("clientImportId") == webSourcePin?.optString("clientImportId"))) {
             "请先结束当前项目包操作，再导入本机源码"
         }
+        check(prepared == null || recovery == null)
         preferredWebSource = prepared
+        webSourceRecovery = recovery
         activate(null, null, sourcesOnly = true, prepared = prepared)
         val original = webSourcePin
         val found = matchesWebSourceReceipt(state.imported)
@@ -532,7 +541,7 @@ internal class ProjectPackageCoordinator(
     }
     fun closeWebSourceIntake() {
         if (!state.sourceImportRequested || state.checkoutId != null || state.projectId != null) return
-        preferredWebSource = null; retireOwnerSourcePicker()
+        preferredWebSource = null; webSourceRecovery = null; retireOwnerSourcePicker()
         if (pickerImport != null) restoredPicker = true
         forgetImportPlan(); closeOwnerPanel(); deactivate()
     }
@@ -556,19 +565,22 @@ internal class ProjectPackageCoordinator(
                 else if (found.optBoolean("positionReleased")) {
                     webSourcePin = null
                     state = state.copy(pendingImport = null, retryImport = false, importPlan = null, imported = null, staged = null, notice = "原操作仍未找到已发布副本。已放下定位，没有重试或删除项目。")
-                    val next = preferredWebSource; preferredWebSource = null; refreshSourceStages(next)
+                    val next = preferredWebSource; preferredWebSource = null
+                    if (webSourceRecovery == null) refreshSourceStages(next)
                 }
             }
         }
     }
     fun matchesWebSourcePlan(pin: JSONObject): Boolean {
         val original = webSourcePin ?: return false
-        return original.getString("clientImportId") == pin.optString("clientImportId") &&
+        return webSourceRecovery?.matches(original) != false && original.getString("clientImportId") == pin.optString("clientImportId") &&
             original.getString("planDigest") == pin.optString("planDigest") && original.getString("selectionId") == pin.optString("selectionId")
     }
     fun matchesWebSourceReceipt(row: JSONObject?): Boolean {
         val original = webSourcePin ?: return false
         val source = row?.optJSONObject("sourceImport") ?: return false
+        val recovery = webSourceRecovery
+        if (recovery != null && (!recovery.matches(original) || row.opt("projectId") != recovery.projectId)) return false
         return source.optString("clientId") == original.getString("clientImportId") && source.optString("mode") == "new_project" &&
             source.optString("packageSha256") == original.getString("packageSha256") && source.optString("manifestIdentity") == original.getString("manifestIdentity") &&
             source.optString("sourceEvidenceSha256") == original.getString("sourceEvidenceSha256") && row.optString("name") == original.getString("projectName")

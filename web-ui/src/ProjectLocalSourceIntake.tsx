@@ -4,7 +4,7 @@ import {Button, SettingsDialog, StretchSwitch, TextField} from './forms-library'
 import './project-git-intake.css';
 
 type Source = {retainedArchiveRoot?:{directory:string;descriptor:string};strippedArchiveRoot?:string;firstWebFile?:string;id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
-type Intake = {window:string;busy:boolean;picking:boolean;notice?:string;error?:string;suggestedSkip?:string;staged?:Source;saved:Source[];
+type Intake = {window:string;busy:boolean;picking:boolean;recoveryOnly?:boolean;notice?:string;error?:string;suggestedSkip?:string;staged?:Source;saved:Source[];
   reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string};
 const prefix='projects.localSource.', number=(n:number)=>new Intl.NumberFormat('zh-CN').format(n);
 const sourceKind=(s:Source)=>s.kind==='task_source_package'?'原私人任务的固定源码':s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':s.fixedPackage?'PocketWorld 源项目包':'源码 ZIP';
@@ -32,7 +32,7 @@ function SourcePanel({state}:{state:Intake}){
   }
   const pin=source?{id:source.id,sha:source.sha}:{};
   const close=()=>{void act('close');};
-  return <SettingsDialog isOpen title="导入手机上的工程" closeLabel="返回项目" onClose={close}>
+  return <SettingsDialog isOpen title={state.recoveryOnly?'核对原导入':'导入手机上的工程'} closeLabel="返回项目" onClose={close}>
     <div className="pw-project-git-body" aria-busy={busy}>
       {(error||state.error)&&<p className="pw-error" role="alert">{error||state.error}</p>}
       {state.picking?<p role="status">等待系统文件选择器返回…</p>:state.busy?<p role="status">正在核对本机原件…</p>:state.notice&&<p role="status">{state.notice}</p>}
@@ -43,8 +43,8 @@ function SourcePanel({state}:{state:Intake}){
         {state.mayRelease&&<Button variant="ghost" disabled={busy} onClick={()=>void act('releaseMissing',{actionId:state.pendingId})}>放下这次创建定位</Button>}</div></>
       :state.project&&state.checkout?<><h3>{state.name} · 本机私人项目</h3><p>新工作副本已登记。打开项目后，可从「工作」编辑这份副本。没有启动任务。</p>
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('openProject',{project:state.project,checkout:state.checkout})}>打开这个项目</Button>
-          <Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>导入另一份源码</Button></div></>
-      :source?<><h3>{state.reviewId?'核对新项目':'已固定本次源码'}</h3>
+          {!state.recoveryOnly&&<Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>导入另一份源码</Button>}</div></>
+      :state.recoveryOnly?(!busy&&!state.notice&&!state.error&&!error&&<p>原导入定位尚未载入，请返回项目后重新核对。</p>):source?<><h3>{state.reviewId?'核对新项目':'已固定本次源码'}</h3>
         {source.kind==='task_source_package'&&<p>从原任务保存的这版源码另建项目，不复制现在的工作目录，也不覆盖原副本。</p>}
         {source.kind==='host_saved_snapshot'&&<p>只包含在原任务中选定的 UTF-8 文件，不是整份主机仓库，也没有授予运行权限。</p>}
         {source.excludedDirectory&&<p>按你的选择跳过目录 <bdi>{source.excludedDirectory}/</bdi>。其中的文件没有读取，也不会进入新项目。</p>}
