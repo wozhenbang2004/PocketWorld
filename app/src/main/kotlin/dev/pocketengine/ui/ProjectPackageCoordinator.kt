@@ -10,6 +10,7 @@ import dev.pocketengine.EngineApplication
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.preview.ProjectPreviewBundle
+import dev.pocketengine.features.local.project.ProjectTaskSourceOrigin
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ExecutorService
@@ -550,7 +551,8 @@ internal class ProjectPackageCoordinator(
         val pin = state.importPlan?.optJSONObject("plan") ?: error("请重新核对这份源码")
         check(!state.busy && state.pendingImport == null && pin.optString("clientImportId") == client &&
             pin.optString("mode") == "new_project" && pin.has("sourceEvidenceSha256") && !pin.has("targetCheckoutId") &&
-            state.staged?.optJSONObject("sourceEvidence")?.optString("sourceKind") in setOf("saf_tree", "external_zip", "host_saved_snapshot")) { "来源或创建方案已变化，没有开始新的导入" }
+            state.staged?.optJSONObject("sourceEvidence")?.optString("sourceKind") in
+                setOf("saf_tree", "external_zip", "host_saved_snapshot", ProjectTaskSourceOrigin.KIND)) { "来源或创建方案已变化，没有开始新的导入" }
         webSourcePin = JSONObject(pin.toString())
         confirmImport()
     }

@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import {bridge} from './bridge';
 import {Button} from './forms-library';
 import {ProjectDraftChanges} from './ProjectDraftChanges';
@@ -10,6 +10,7 @@ import type {FixedDraftGoalDecision} from './task-presentation';
 type Diff={taskId:string;available:boolean;draftId:string;projectId:string;checkoutId:string;path:string;runId:string;epoch:number;code:string;sourceChanged:boolean;executionAuthorized:boolean;
  ownerRevision?:{taskId:string;draftId:string;revisionId:string;sha256:string};before:string;after:string;beforeSha256:string;afterSha256:string;beforeBytes:number;afterBytes:number};
 type ShownDiff=Diff&{retainedHead?:SavedPin};
+export type FixedDraftDecisionSlot={original:OriginalProjectDraft;render:(readback:false|(()=>boolean))=>ReactNode};
 const action='projectDraft.readDifference',sha=/^[a-f0-9]{64}$/;
 const visible=()=>bridge.getState().view as {resumeRevision?:number;section?:string;taskId?:string}|undefined;
 function retainedPin(value:unknown,diff:Diff,window:string):SavedPin|undefined{
@@ -23,7 +24,7 @@ function retainedPin(value:unknown,diff:Diff,window:string):SavedPin|undefined{
     typeof row.bytes!=='number'||!Number.isSafeInteger(row.bytes)||row.bytes<0||row.bytes>24576)return;
   return {taskId:ref.taskId,draftId:ref.draftId,path:diff.path,revisionId:ref.revisionId,sha256:ref.sha256,ordinal:row.ordinal,bytes:row.bytes,window};
 }
-export function ProjectDraftDifference({id,active,project,checkout,pin,requested,goalDecision,registerBeforeLeave}:{id:string;active:boolean;project:string;checkout:string;pin?:string;requested?:OriginalProjectDraft;goalDecision?:FixedDraftGoalDecision;registerBeforeLeave?:(guard:()=>boolean)=>()=>void}){
+export function ProjectDraftDifference({id,active,project,checkout,pin,requested,goalDecision,draftReview,registerBeforeLeave}:{id:string;active:boolean;project:string;checkout:string;pin?:string;requested?:OriginalProjectDraft;goalDecision?:FixedDraftGoalDecision;draftReview?:FixedDraftDecisionSlot;registerBeforeLeave?:(guard:()=>boolean)=>()=>void}){
   const [data,show]=useState<ShownDiff|null>(null),[note,tell]=useState(''),[busy,spin]=useState(false),turn=useRef(0),held=useRef(''),flight=useRef(false);
   const [editorProtected,setProtected]=useState(false),shownFromChat=useRef('');
   const locked=useRef(false),[leaveNotice,warn]=useState(false);
@@ -89,6 +90,16 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
   if(!active||!bridge.getState().capabilities.commands.includes(action))return null;
   if(requested&&!exact)return <p role="status" className="pw-field-hint">没有打开原对话的这份改稿；不会用其他版本代替。</p>;
   const original=data&&held.current===ticket()&&current()?data:null;
+  const reviewTarget=draftReview?.original;
+  const reviewHere=current()&&reviewTarget?.taskId===id&&reviewTarget.draftId===pin&&
+    (!exact||reviewTarget.runId===exact.runId&&reviewTarget.epoch===exact.epoch);
+  const readTurn=turn.current,readWindow=held.current;
+  const readback=reviewHere&&original&&original.taskId===reviewTarget.taskId&&original.draftId===reviewTarget.draftId&&
+    original.runId===reviewTarget.runId&&original.epoch===reviewTarget.epoch
+    ? ()=>{
+      const shown=result.current?.querySelector('.pw-project-draft-result');
+      return !!shown&&!shown.closest('[hidden],[inert]')&&turn.current===readTurn&&held.current===readWindow&&ticket()===readWindow&&current();
+    } : false;
   const keepBeginning=()=>{
     if(!keepScope||!original||original.draftId!==pin||held.current!==ticket()||!current())return;
     const attempt={scope:keepScope,window:held.current,documentEpoch:bridge.getDocumentEpoch()};
@@ -99,12 +110,16 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
     onClick={()=>data?reset():void read()}>{busy?'读取中…':data?'收起原差异':pin?'查看原改稿':'查看草稿结果'}</Button></div>
     {keepReminder&&keepReminder===keepScope&&nativeReady&&<p className="pw-field-hint" role="status">上次保留尚未确认。请先查看原改稿，核对已保留的稿。</p>}
     {note&&<p className="pw-field-hint" role="status">{note}</p>}</>;
+  const verdict=originalDecision&&<p className="pw-field-hint" role="status" data-fixed-draft-decision-receipt={originalDecision.epoch===1?true:undefined}>
+    {originalDecision.completed?'这版原改稿已确认达到目标。':'这版原改稿的验收已记录：目标尚未达到。'}</p>;
   return <section className="pw-project-draft" ref={result} aria-label="这次交办的独立改稿">
     {original?<ProjectDraftOwnerRevision key={original.draftId} task={id} root={original.draftId} path={original.path} originalHash={original.afterSha256} protect={protect}
       retainedHead={original.retainedHead} leaveRequested={leaveNotice&&editorProtected} onDismissLeave={dismissLeave} onKeepBeginning={keepBeginning}
       originalHeader={<>{heading}<strong className="pw-project-draft-path">{original.path}</strong><p className="pw-field-hint">原工程未写回，没有构建或执行。{original.ownerRevision?'原差异以你点选的已存稿为起点。':''}</p>
-        {originalDecision&&<p className="pw-field-hint" role="status">{originalDecision.completed?'这版原改稿已确认达到目标。':'这版原改稿的验收已记录：目标尚未达到。'}</p>}</>}
+        {originalDecision?.epoch!==1&&verdict}</>}
       originalContent={<><ProjectDraftChanges key={original.draftId} before={original.before} after={original.after} version={original.afterSha256.slice(0,8)} beforeLabel={original.ownerRevision?'选中的已存稿':undefined}/>
-        <details className="pw-field-hint"><summary>文件与版本</summary>工程 {original.projectId} · 副本 {original.checkoutId}<br/>原文 {original.beforeBytes} 字节 · {original.beforeSha256}<br/>改稿 {original.afterBytes} 字节 · {original.afterSha256}</details></>}/>:heading}
+        {originalDecision?(originalDecision.epoch===1&&verdict):
+          readback?draftReview?.render(readback):reviewHere&&<><p className="pw-field-hint">这不是当前审阅轮次的改稿，不能据此确认达到目标。</p>{draftReview?.render(false)}</>}
+        <details className="pw-field-hint"><summary>文件与版本</summary>工程 {original.projectId} · 副本 {original.checkoutId}<br/>原文 {original.beforeBytes} 字节 · {original.beforeSha256}<br/>改稿 {original.afterBytes} 字节 · {original.afterSha256}</details></>}/>:<>{heading}{reviewHere&&note&&draftReview?.render(false)}</>}
   </section>;
 }

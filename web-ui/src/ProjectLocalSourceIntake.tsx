@@ -1,6 +1,6 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useId, useRef, useState} from 'react';
 import {bridge} from './bridge';
-import {Button, SettingsDialog, StretchSwitch, TextField} from './forms-library';
+import {Button, SettingsDialog, TextField} from './forms-library';
 import './project-git-intake.css';
 
 type Source = {retainedArchiveRoot?:{directory:string;descriptor:string};strippedArchiveRoot?:string;firstWebFile?:string;id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
@@ -18,8 +18,9 @@ export function ProjectLocalSourceIntake({state}:{state?:Intake}) {
   return state?.window?<SourcePanel key={state.window} state={state}/>:null;
 }
 function SourcePanel({state}:{state:Intake}){
-  const source=state.staged, root=source?.retainedArchiveRoot, inflight=useRef(false);
-  const [name,setName]=useState(''),[strip,setStrip]=useState(false),[discard,setDiscard]=useState(false);
+  const source=state.staged, inflight=useRef(false), zipRootHint=useId();
+  const root=source?.kind==='external_zip'&&!source.fixedPackage&&!source.strippedArchiveRoot?source.retainedArchiveRoot:undefined;
+  const [name,setName]=useState(''),[discard,setDiscard]=useState(false);
   const [pending,setPending]=useState(false),[error,setError]=useState(''),[excluded,setExcluded]=useState('');
   useEffect(()=>{setName((source?.label||'').slice(0,80));setDiscard(false);setError('');if(source?.id)setExcluded('');},[source?.id]);
   const busy=pending||state.busy||state.picking;
@@ -44,14 +45,14 @@ function SourcePanel({state}:{state:Intake}){
       :state.project&&state.checkout?<><h3>{state.name} · 本机私人项目</h3><p>新工作副本已登记。打开项目后，可从「工作」编辑这份副本。没有启动任务。</p>
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('openProject',{project:state.project,checkout:state.checkout})}>打开这个项目</Button>
           {!state.recoveryOnly&&<Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>导入另一份源码</Button>}</div></>
-      :state.recoveryOnly?(!busy&&!state.notice&&!state.error&&!error&&<p>原导入定位尚未载入，请返回项目后重新核对。</p>):source?<><h3>{state.reviewId?'核对新项目':'已固定本次源码'}</h3>
+      :state.recoveryOnly?(!busy&&!state.notice&&!state.error&&!error&&<p>原导入定位尚未载入，请返回项目后重新核对。</p>):source?<><h3>{state.reviewId?'核对新项目':root&&!discard?'选择工程根':'已固定本次源码'}</h3>
         {source.kind==='task_source_package'&&<p>从原任务保存的这版源码另建项目，不复制现在的工作目录，也不覆盖原副本。</p>}
         {source.kind==='host_saved_snapshot'&&<p>只包含在原任务中选定的 UTF-8 文件，不是整份主机仓库，也没有授予运行权限。</p>}
         {source.excludedDirectory&&<p>按你的选择跳过目录 <bdi>{source.excludedDirectory}/</bdi>。其中的文件没有读取，也不会进入新项目。</p>}
         {source.fixedPackage&&<p>已核对包内文件，按原相对路径放进新项目，不带外层 project/。{source.fixedPackage.omitted>0&&`原包另有 ${number(source.fixedPackage.omitted)} 项未收录。`}不会恢复旧任务、工具环境或执行权限。</p>}
-        {root&&<><p>工程入口或配置位于 <bdi>{root.descriptor}</bdi>。</p>
-          {!state.reviewId&&!discard&&<div className="pw-action-row"><Button variant="secondary" disabled={busy}
-            onClick={()=>void act('zip',{stripRoot:true})}>重新选择 ZIP 并去掉外层目录</Button></div>}</>}
+        {root&&<><p>工程入口或配置在 <bdi>{root.descriptor}</bdi>。保留外层目录时，本机快捷构建不会自动进入 <bdi>{root.directory}/</bdi>。</p>
+          {!state.reviewId&&!discard&&<div className="pw-action-row"><Button variant="primary" disabled={busy}
+            onClick={()=>void act('zip',{stripRoot:true})}>重选同一 ZIP，尝试去掉外层</Button></div>}</>}
         <dl><div><dt>来源</dt><dd dir="auto">{source.label} · {sourceKind(source)}</dd></div>
           {source.kind==='saf_tree'&&<div><dt>项目根</dt><dd>所选文件夹的顶层。</dd></div>}
           {source.kind==='external_zip'&&!source.fixedPackage&&<div><dt>项目根</dt><dd>{source.strippedArchiveRoot?
@@ -73,20 +74,23 @@ function SourcePanel({state}:{state:Intake}){
           <div className="pw-action-row"><Button variant="secondary" disabled={busy} onClick={()=>void act('discard',pin)}>确认清理临时包</Button>
             <Button variant="ghost" disabled={busy} onClick={()=>setDiscard(false)}>保留</Button></div></>
         :<><TextField label="新项目名称" maxLength={80} value={name} onChange={setName} isDisabled={busy}/>
-          <div className="pw-action-row"><Button variant="primary" disabled={busy||!name.trim()} onClick={()=>void act('review',{...pin,name:name.trim()})}>核对新项目</Button>
+          <div className="pw-action-row"><Button variant={root?'secondary':'primary'} disabled={busy||!name.trim()} onClick={()=>void act('review',{...pin,name:name.trim()})}>
+              {root?'保留外层目录，继续核对':'核对新项目'}
+            </Button>
             <Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>换一份源码</Button>
             <Button variant="ghost" disabled={busy} onClick={()=>setDiscard(true)}>清理临时包</Button></div></>}
       </>:<><p>选择手机上一份已有工程，先读进私人临时区。看到实际清单后，再决定是否创建新项目。</p>
         {state.suggestedSkip&&<section aria-label="按刚才的文件路径调整范围"><p>如果不需要 <bdi>{state.suggestedSkip}/</bdi> 中的全部文件，可以只导入其余源码。</p>
           <Button variant="secondary" disabled={busy} onClick={()=>void act('folder',{excludedDirectory:state.suggestedSkip})}>跳过这个目录，重选文件夹</Button></section>}
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('folder',excluded?{excludedDirectory:excluded}:{})}>选择文件夹</Button>
-          <Button variant="secondary" disabled={busy} onClick={()=>void act('zip',{stripRoot:strip})}>选择源码 ZIP</Button></div>
+          <Button variant="secondary" disabled={busy} onClick={()=>void act('zip',{stripRoot:false})}>选择源码 ZIP</Button>
+          <Button variant="ghost" disabled={busy} aria-describedby={zipRootHint} onClick={()=>void act('zip',{stripRoot:true})}>选择 ZIP，尝试去掉外层</Button></div>
+        <p className="pw-field-hint" id={zipRootHint}>普通选择保留原路径。去掉外层的选项只在核对到唯一外层目录时移除一层。</p>
         {excluded&&<p className="pw-field-hint">下次选择文件夹会跳过 <bdi>{excluded}/</bdi>；ZIP 不受影响。</p>}
         <details><summary>导入范围与选项</summary>
           <p>默认跳过依赖、常见凭据文件和构建输出。最多 2,000 个文件，单文件 2 MiB，解包合计 16 MiB，原 ZIP 最多 20 MiB。不联网、不执行代码。</p>
           <TextField label="文件夹内要跳过的目录（可选）" value={excluded} onChange={setExcluded} maxLength={240} isDisabled={busy}
-            placeholder="例如 app/build" hint="只限这次选择的文件夹。写一个完整相对路径，不使用通配符；被跳过的内容不会删除。"/>
-          <StretchSwitch label="去掉普通 ZIP 唯一外层目录" checked={strip} disabled={busy} onChange={setStrip}/></details>
+            placeholder="例如 app/build" hint="只限这次选择的文件夹。写一个完整相对路径，不使用通配符；被跳过的内容不会删除。"/></details>
         {state.saved?.length>0&&<><h3>已固定、可继续的源码</h3>{state.saved.map(s=>
           <Button key={s.id} variant="ghost" disabled={busy} onClick={()=>void act('select',{id:s.id,sha:s.sha})}>
             {s.label} · {sourceKind(s)} · {number(s.files)} 个文件</Button>)}</>}

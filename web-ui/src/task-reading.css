@@ -5,6 +5,9 @@
 .pw-task-drawer:has(> .pw-task-body .pw-project-draft [data-owner-draft-editor]) > .pw-task-footer[data-fixed-draft-acceptance] {
   display: none;
 }
+.pw-task-body:has(.pw-project-draft-result:not([hidden]) [data-fixed-draft-decision-receipt], .pw-project-draft [data-owner-draft-editor]) [data-fixed-draft-decision-fallback] {
+  display: none;
+}
 .pw-task-outcome.pw-task-reading {
   gap: var(--pw-gap-section);
   min-width: 0;
