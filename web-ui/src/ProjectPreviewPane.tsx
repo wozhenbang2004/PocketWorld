@@ -13,7 +13,7 @@ type Data = Record<string, any>;
 type Action = 'projects.preview.mode' | 'projects.preview.reload' | 'projects.preview.close' | 'projects.preview.return';
 type PackageExportTarget = Pick<PackagePreviewChoices, 'taskId' | 'operationId' | 'artifactId' | 'artifactSha256'>;
 type PackageExportState = PackageExportTarget & { kind: 'project_package_export'; requestId: string; projectId: string; status: string; message: string; exported: boolean; bytes?: number; targetReadback?: {protocol:string;status:string;provider:string;displayName?:string;bytes?:number;sha256?:string} };
-type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string, originalChat?:boolean, fixedWeb?:boolean) => void;
+type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string, originalChat?:boolean) => boolean;
   openOriginalBuildCopy?: (choices: PackagePreviewChoices) => boolean };
 const fixedPackage = (view: ProjectPreviewState | null) => !!view &&
   (!!view.packageOperationId || view.metadata.origin === 'fixed_workspace_project_artifact');
@@ -252,7 +252,11 @@ export function useProjectPreview(options: Options) {
     const taskId = choices?.taskId || view?.taskId;
     if (!taskId) return false;
     const operationId = choices?.operationId || view?.packageOperationId;
-    hide(); optionsRef.current.onPackageTask(taskId,operationId,fromOriginalChat,choices?.mode==='web_output'); return true;
+    // A refused fixed-package return leaves the currently read evidence in view.
+    if (operationId && !optionsRef.current.onPackageTask(taskId,operationId,fromOriginalChat)) return true;
+    hide();
+    if (!operationId) optionsRef.current.onPackageTask(taskId,undefined,fromOriginalChat);
+    return true;
   };
   const canReturnToSavedWebShelf=!!savedWebShelf&&expanded&&options.active&&!busy&&!exportBusy&&!options.blocked;
   const returnToSavedWebShelf=()=>{
@@ -326,7 +330,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
   const refs = Array.isArray(composer.previewRefs) ? composer.previewRefs : [];
   const count = view ? refs.filter((ref: Data) => ref.previewId === view.metadata.previewId).length : 0;
   const problem = error || view?.error;
-  const choices = control.choices, choosing = !!choices && !view, fixedWeb = choices?.mode === 'web_output';
+  const choices = control.choices, choosing = !!choices && !view;
   const fixed = fixedPackage(view), copy = view?.metadata.checkoutId ?? choices?.checkoutId, source = view?.metadata.sourceDigest ?? choices?.sourceDigest;
   if (choosing && choices?.sourceMember) return !blocked
     ? <ProjectPackageCheckout key={JSON.stringify([choices.taskId, choices.operationId, choices.artifactId, choices.sourceMember.path])}
@@ -381,8 +385,8 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
         onClick={control.openSavedBuildCopy}>{busy==='package.copy'?'正在核对原副本…':'打开原副本的当前源码'}</Button>}
       {!control.fromSavedWebShelf&&(choosing || fixed) && (control.fromOriginalChat||can('tasks.open')) && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={working || blocked} onClick={control.returnToPackageTask}>{control.fromOriginalChat?'返回原话':'返回原工作'}</Button>}
       {!control.fromSavedWebShelf&&!control.fromOriginalChat&&<Button variant="ghost" size="small" disabled={control.exportBusy} onClick={control.hide}>{choosing || fixed ? '留在项目' : '返回项目'}</Button>}
-      {/* A fixed webpage's execution conversation is not necessarily the owner's original request. */}
-      {view && !fixedWeb && !control.fromSavedWebShelf && !control.fromOriginalChat && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
+      {/* An immutable package's execution conversation is not necessarily the owner's original request. */}
+      {view && !fixed && !control.fromSavedWebShelf && !control.fromOriginalChat && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
     </footer>}
   </section>;
 }

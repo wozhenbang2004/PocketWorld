@@ -10,7 +10,7 @@ import { OwnerWorkReport } from './OwnerWorkReport';
 import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
-import { FirstNodeWebOutput, firstNodeWebOwnerWindow } from './FirstNodeWebOutput';
+import { FirstNodeWebOutput, firstNodeWebOwnerWindow, savedBuildWebOpenKey } from './FirstNodeWebOutput';
 import { ProjectDraftDifference } from './ProjectDraftDifference';
 import type { OriginalProjectDraft } from './ButlerPreparations';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
@@ -183,6 +183,10 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const packageKey = (item: typeof outcome.projectPackages[number]) => JSON.stringify([readIdentity, item.taskId, item.operationId, item.archiveSha256]);
   const inWorkReader = (item: typeof outcome.projectPackages[number]) => item.mode === 'source_project' && canReadProjectPackageFiles();
   const readingPackage = active && outcome.projectPackages.find(item => selectedPackage === packageKey(item) && inWorkReader(item));
+  const listedCurrentWeb = firstWeb && ordinaryBuild && packageRead.page && !readingPackage && onOpenProjectPackage
+    ? outcome.projectPackages.filter(item => item.currentRun && item.savedBuildWeb) : [];
+  const listedWeb = listedCurrentWeb.length===1 ? listedCurrentWeb[0] : undefined;
+  const listedOpenKey = listedWeb ? savedBuildWebOpenKey(listedWeb) : undefined;
   const screenshot = outcome.screenshot;
   const remotePhone = outcome.remotePhoneSnapshot;
   const phoneStatus = outcome.remotePhoneSnapshotStatus;
@@ -252,12 +256,13 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}:${status}`} ownerWindow={packageRead.firstWebWindow}
       target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} beforeGoalAcceptance={beforeGoalAcceptance}
       hideIneligible={buildScope.existingCheckoutBuild===true} buildExitedWithoutWeb={ordinaryBuild&&originalBuildExitedWithoutWeb(record)}
-      open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
+      open={onOpenProjectPackage} listedOpenKey={listedOpenKey} onSaved={packageRead.refreshAfterFirstWebSave}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
       {outcome.projectPackages.length > 0 && <div hidden={!!readingPackage}>
         <p className="pw-reading-note">这些版本已由原保存操作生成。任务完成、生成成果、发出与发布各有自己的回执；打开时会核对原文件。</p>
         <div className="pw-outcome-files">{outcome.projectPackages.map(item => <Button key={item.operationId} data-motion-key={`package:${item.operationId}:${item.archiveSha256}`}
+          data-saved-build-web-open={item===listedWeb?listedOpenKey:undefined}
           variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight} disabled={!active || !inWorkReader(item) && !onOpenProjectPackage}
           onClick={event => { if (inWorkReader(item)) { packageButton.current = event.currentTarget; selectPackage(packageKey(item)); } else onOpenProjectPackage?.({ taskId: item.taskId, operationId: item.operationId, savedBuildWeb: item.savedBuildWeb }); }}>
           <span className="pw-outcome-file-copy"><span>{item.name}</span>

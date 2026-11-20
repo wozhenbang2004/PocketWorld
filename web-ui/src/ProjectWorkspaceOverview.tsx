@@ -30,6 +30,7 @@ export type ProjectWorkspaceOverviewProps = {
   onOpenTerminal: () => void;
   onAskButler?: () => void;
   onEditImported?: () => void;
+  importedSourceFirst?: boolean;
   startContent?: ReactNode;
   savedWebContent?: ReactNode;
 };
@@ -38,7 +39,7 @@ export type ProjectWorkEntry = WorkEntry | 'outcomes';
 export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionFilter; expanded: boolean; selected: string; selectedEntry?: ProjectWorkEntry };
 
 /** Project work directory; saved Web versions separately use exact original B4 receipts. */
-export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, onEditImported, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
+export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, onEditImported, importedSourceFirst = false, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
   const savedWebLink = useRef<FindSavedBuildWeb|null>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
@@ -73,6 +74,24 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
   };
 
   const askButler = onAskButler && <Button variant="ghost" size="small" onClick={onAskButler}>问管家</Button>;
+  const tools = directoryAvailable && <section key="work-search" className="pw-project-work-tools" aria-label="查找这个项目的工作">
+    <SearchField value={view.query} onChange={query => onViewChange({ query, selected: '', expanded: false })}
+      maxLength={500} aria-label="搜索这个项目保存的工作" placeholder="搜索项目工作目标或摘要…" clearLabel="清空项目工作搜索" />
+    <div className="pw-project-work-filters" role="group" aria-label="项目工作状态">
+      {([{ id: 'all', label: '全部' }, { id: 'attention', label: '待处理' }, { id: 'running', label: '进行中' }, { id: 'ended', label: '已结束' }] as const).map(option =>
+        <Button key={option.id} variant="ghost" aria-pressed={view.filter === option.id}
+          onClick={() => onViewChange({ filter: option.id, selected: '', expanded: false })}>{option.label}</Button>)}
+    </div>
+  </section>;
+  const needsOwner = attention.length > 0 && <section key="work-attention" className="pw-project-work-group pw-project-work-attention" aria-label="需要你处理">
+    <h3><IconAttention size={17} aria-hidden />需要你处理</h3>
+    <ol className="pw-project-work-list pw-depth-tasks">{attention.map(renderTask)}</ol>
+  </section>;
+  const running = active.length > 0 && <section key="work-running" className="pw-project-work-group" aria-label="进行中的项目工作"><h3>进行中</h3><ol className="pw-project-work-list pw-depth-tasks">{active.map(renderTask)}</ol></section>;
+  const start = startContent && <section key="work-start" className="pw-project-new-work" aria-label="开始或继续项目工作">{startContent}</section>;
+  // Same keyed launcher under the same provider in either order. Reordering the
+  // directory never starts a second native file, setup or review window.
+  const sections = importedSourceFirst ? [needsOwner, start, tools, running] : [tools, needsOwner, running, start];
   return <section ref={root} className="pw-project-overview" aria-label={`${project.name}的项目工作`}>
     <header className="pw-project-overview-heading">
       <div><p className="pw-project-overview-eyebrow">项目工作台</p><h2>{project.name}</h2></div>
@@ -82,23 +101,9 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
       </div> : askButler}
     </header>
     <div className="pw-project-overview-layout">
-      <div className="pw-project-overview-work">
-        {directoryAvailable && <section className="pw-project-work-tools" aria-label="查找这个项目的工作">
-          <SearchField value={view.query} onChange={query => onViewChange({ query, selected: '', expanded: false })}
-            maxLength={500} aria-label="搜索这个项目保存的工作" placeholder="搜索项目工作目标或摘要…" clearLabel="清空项目工作搜索" />
-          <div className="pw-project-work-filters" role="group" aria-label="项目工作状态">
-            {([{ id: 'all', label: '全部' }, { id: 'attention', label: '待处理' }, { id: 'running', label: '进行中' }, { id: 'ended', label: '已结束' }] as const).map(option =>
-              <Button key={option.id} variant="ghost" aria-pressed={view.filter === option.id}
-                onClick={() => onViewChange({ filter: option.id, selected: '', expanded: false })}>{option.label}</Button>)}
-          </div>
-        </section>}
-        {attention.length > 0 && <section className="pw-project-work-group pw-project-work-attention" aria-label="需要你处理">
-          <h3><IconAttention size={17} aria-hidden />需要你处理</h3>
-          <ol className="pw-project-work-list pw-depth-tasks">{attention.map(renderTask)}</ol>
-        </section>}
-        {active.length > 0 && <section className="pw-project-work-group" aria-label="进行中的项目工作"><h3>进行中</h3><ol className="pw-project-work-list pw-depth-tasks">{active.map(renderTask)}</ol></section>}
+      <div className="pw-project-overview-work" data-imported-source-first={importedSourceFirst || undefined}>
         <ProjectSavedWebLink.Provider value={savedWebContent ? savedWebLink : null}>
-          {startContent && <section className="pw-project-new-work" aria-label="开始或继续项目工作">{startContent}</section>}
+          {sections}
           {savedWebContent && <section className="pw-project-saved-web" aria-label="找回这个项目的已保存网页">{savedWebContent}</section>}
         </ProjectSavedWebLink.Provider>
         {recent.length > 0 && <section className="pw-project-work-group" aria-label="已结束的项目工作"><h3>{hasFilters ? '已结束' : '最近结束'}</h3><ol className="pw-project-work-list pw-depth-tasks">{(hasFilters ? recent : recent.slice(0, 3)).map(renderTask)}</ol>

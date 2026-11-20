@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button } from './forms-library';
 import { bridge } from './bridge';
 import type { PackagePreviewTarget } from './project-preview';
@@ -23,6 +23,13 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type SavedTarget = PackagePreviewTarget & {savedBuildWeb: NonNullable<PackagePreviewTarget['savedBuildWeb']>};
 type SaveIdentity = {buildOperationId: string; operationId: string; sourceDigest: string; archiveSha256: string};
 
+/** Presentation equality only; opening still uses the original package verifier. */
+export function savedBuildWebOpenKey(target: PackagePreviewTarget) {
+  const pick = target.savedBuildWeb;
+  return pick ? JSON.stringify([target.taskId,target.operationId,pick.projectId,pick.checkoutId,pick.runId,pick.epoch,
+    pick.buildOperationId,pick.sourceDigest,pick.artifactId,pick.artifactSha256]) : '';
+}
+
 export function firstNodeWebOwnerWindow(taskId: string): string {
   const {view, capabilities} = bridge.getState();
   const v = view as {taskId?: string; section?: string | null; resumeRevision?: number}|undefined;
@@ -31,9 +38,9 @@ export function firstNodeWebOwnerWindow(taskId: string): string {
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
-export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, beforeGoalAcceptance, buildExitedWithoutWeb}: {
+export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, beforeGoalAcceptance, buildExitedWithoutWeb, listedOpenKey}: {
   target: BuildPosition; ownerWindow: string; hideIneligible?: boolean; checkBuildAfterFailure?: boolean; beforeGoalAcceptance?: boolean;
-  buildExitedWithoutWeb?: boolean;
+  buildExitedWithoutWeb?: boolean; listedOpenKey?: string;
   open?: (p: PackagePreviewTarget)=>void; onSaved: (operationId: string, sha256: string) => void}) {
   const [fact, setFact] = useState<Fact|null>(null);
   const [busy, setBusy] = useState('');
@@ -41,6 +48,8 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
   const [saveUnconfirmed, setSaveUnconfirmed] = useState(false);
   const saveRequest = useRef<SaveIdentity|null>(null);
   const sequence = useRef(0), flight = useRef(false), alive = useRef(false);
+  const panel = useRef<HTMLElement>(null), savedOpen = useRef<HTMLButtonElement>(null);
+  const [listedOpenReady, setListedOpenReady] = useState('');
   const available = () => !!ownerWindow && firstNodeWebOwnerWindow(target.taskId)===ownerWindow;
   async function call(command: Command) {
     let attempt = saveRequest.current;
@@ -109,13 +118,33 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     // The shared owner-window projection can arrive after the navigation acknowledgement.
   },[target.taskId,target.runId,target.epoch,target.projectId,target.checkoutId,ownerWindow]);
   const noSavedWeb=fact?.eligible===false&&buildExitedWithoutWeb&&!failure;
-  if(!available()||(!fact&&!failure)||hideIneligible&&fact?.eligible===false&&!noSavedWeb&&!failure)return null;
+  const visible=available() && (!!fact||!!failure) && !(hideIneligible&&fact?.eligible===false&&!noSavedWeb&&!failure);
   const savedTarget: SavedTarget | undefined = fact?.state==='saved' && fact.projectId===target.projectId && fact.checkoutId===target.checkoutId &&
     fact.runId===target.runId && fact.epoch===target.epoch && fact.packageOperationId && fact.sourceDigest &&
     fact.artifactId && fact.archiveSha256 && fact.buildOperationId ? {taskId:target.taskId,operationId:fact.packageOperationId,
       savedBuildWeb:{projectId:target.projectId,checkoutId:target.checkoutId,sourceDigest:fact.sourceDigest,artifactId:fact.artifactId,
         artifactSha256:fact.archiveSha256,runId:target.runId,epoch:target.epoch,buildOperationId:fact.buildOperationId}} : undefined;
-  return <section className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>
+  const exactListedOpen=visible&&savedTarget&&open&&!busy&&!failure&&listedOpenKey===savedBuildWebOpenKey(savedTarget)?listedOpenKey:'';
+  useLayoutEffect(()=>{
+    if(!exactListedOpen){setListedOpenReady('');return;}
+    // The confirmed save action stays put until the exact second action really
+    // exists in this outcome. Move focus before retiring the now-duplicate action.
+    const buttons=panel.current?.closest('.pw-task-outcome')?.querySelectorAll<HTMLButtonElement>('button[data-saved-build-web-open]');
+    const exact=Array.from(buttons??[]).filter(button=>button.dataset.savedBuildWebOpen===exactListedOpen);
+    const replacement=exact.length===1?exact[0]:null;
+    if(!replacement?.isConnected||replacement.disabled||replacement.getAttribute('aria-disabled')==='true'||
+        replacement.closest('[hidden],[inert],[aria-hidden="true"]')||!replacement.getClientRects().length){
+      setListedOpenReady('');return;
+    }
+    if(savedOpen.current&&document.activeElement===savedOpen.current){
+      replacement.focus({preventScroll:true});
+      if(document.activeElement!==replacement)return;
+    }
+    setListedOpenReady(exactListedOpen);
+  },[exactListedOpen]);
+  if(!visible)return null;
+  const openListed=!!exactListedOpen&&listedOpenReady===exactListedOpen;
+  return <section ref={panel} className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
     {checkBuildAfterFailure && fact?.eligible===true && <p className="pw-reading-note">这项工作没有完成，但本机构建步骤已核对为成功退出。下面只处理原构建的网页。</p>}
     {beforeGoalAcceptance && fact?.eligible===true && <p className="pw-reading-note">本机构建已核对为成功退出。核对或保存网页不会替你验收目标。</p>}
@@ -138,7 +167,7 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
       {fact.reason==='artifact_count_limit'?'保存时文件成果已达 200 项上限。':'当时存入这份网页包会超过固定项目包共用的 64 MiB 上限。'}
       没有改动已有成果，这笔保存不会重试。</p>}
     {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">网页已固定保存。打开这一版不会联网、重新构建或读取当前同名文件。</p>
-      {savedTarget&&<Button size="small" variant="primary" disabled={!!busy||!open} onClick={()=>{if(available())open?.(savedTarget)}}>打开固定网页</Button>}</>}
+      {savedTarget&&!openListed&&<Button ref={savedOpen} size="small" variant="primary" disabled={!!busy||!open} onClick={()=>{if(available())open?.(savedTarget)}}>打开固定网页</Button>}</>}
     {failure&&<><p className="pw-error" role="alert">{failure}</p>
       {!saveUnconfirmed&&fact?.state!=='pending'&&<Button size="small" variant="ghost" disabled={!!busy} onClick={()=>void call(read)}>核对原结果</Button>}</>}
   </section>;

@@ -1,4 +1,6 @@
-.pw-project-draft {
+.pw-project-draft,
+.pw-project-draft-result:not([hidden]),
+.pw-project-draft-editor {
   min-width: 0;
   display: grid;
   gap: var(--pw-gap-related, 10px);
@@ -7,7 +9,9 @@
   font: 600 15px / 1.45 var(--pw-font);
   overflow-wrap: anywhere;
 }
-.pw-project-draft > :is(p, .pw-section-heading) { margin-block: 0; }
+.pw-project-draft > :is(p, .pw-section-heading),
+.pw-project-draft-result > :is(p, .pw-section-heading),
+.pw-project-draft-editor > :is(h4, p) { margin-block: 0; }
 .pw-draft-changes { display: grid; min-width: 0; gap: 8px; }
 .pw-draft-change-count {
   display: flex;

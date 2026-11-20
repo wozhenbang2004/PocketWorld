@@ -76,14 +76,16 @@ export function ProjectDraftDifference({id,active,project,checkout,pin,requested
   },[data]);
   if(!active||!bridge.getState().capabilities.commands.includes(action))return null;
   if(requested&&!exact)return <p role="status" className="pw-field-hint">没有打开原对话的这份改稿；不会用其他版本代替。</p>;
-  return <section className="pw-project-draft" ref={result} aria-label="这次交办的独立改稿"><div className="pw-section-heading"><h4>独立改稿</h4><Button size="small" variant="ghost" disabled={busy||editorProtected}
-      onClick={()=>data?reset():void read()}>{busy?'读取中…':data?'收起差异':pin?'看文件差异':'查看草稿结果'}</Button></div>
-    {note&&<p className="pw-field-hint" role="status">{note}</p>}
-    {data&&held.current===ticket()&&current()&&<><strong className="pw-project-draft-path">{data.path}</strong><p className="pw-field-hint">原工程未写回，没有构建或执行。{data.ownerRevision?'以你点选的已存稿为起点，不是工程原件或最新稿。':'这里比较的是本次固定的两版文件。'}</p>
-      {originalDecision&&<p className="pw-field-hint" role="status">{originalDecision.completed?'这版原改稿已确认达到目标。':'这版原改稿的验收已记录：目标尚未达到。'}</p>}
-      <ProjectDraftChanges key={data.draftId} before={data.before} after={data.after} version={data.afterSha256.slice(0,8)} beforeLabel={data.ownerRevision?'选中的已存稿':undefined}/>
-      <ProjectDraftOwnerRevision key={data.draftId} task={id} root={data.draftId} path={data.path} originalHash={data.afterSha256} protect={protect}
-        retainedHead={data.retainedHead} leaveRequested={leaveNotice&&editorProtected} onDismissLeave={dismissLeave}/>
-      <details className="pw-field-hint"><summary>文件与版本</summary>工程 {data.projectId} · 副本 {data.checkoutId}<br/>原文 {data.beforeBytes} 字节 · {data.beforeSha256}<br/>改稿 {data.afterBytes} 字节 · {data.afterSha256}</details></>}
+  const original=data&&held.current===ticket()&&current()?data:null;
+  const heading=<><div className="pw-section-heading"><h4>本轮原改稿</h4><Button size="small" variant="ghost" disabled={busy||editorProtected}
+    onClick={()=>data?reset():void read()}>{busy?'读取中…':data?'收起原差异':pin?'查看原改稿':'查看草稿结果'}</Button></div>
+    {note&&<p className="pw-field-hint" role="status">{note}</p>}</>;
+  return <section className="pw-project-draft" ref={result} aria-label="这次交办的独立改稿">
+    {original?<ProjectDraftOwnerRevision key={original.draftId} task={id} root={original.draftId} path={original.path} originalHash={original.afterSha256} protect={protect}
+      retainedHead={original.retainedHead} leaveRequested={leaveNotice&&editorProtected} onDismissLeave={dismissLeave}
+      originalHeader={<>{heading}<strong className="pw-project-draft-path">{original.path}</strong><p className="pw-field-hint">原工程未写回，没有构建或执行。{original.ownerRevision?'原差异以你点选的已存稿为起点。':''}</p>
+        {originalDecision&&<p className="pw-field-hint" role="status">{originalDecision.completed?'这版原改稿已确认达到目标。':'这版原改稿的验收已记录：目标尚未达到。'}</p>}</>}
+      originalContent={<><ProjectDraftChanges key={original.draftId} before={original.before} after={original.after} version={original.afterSha256.slice(0,8)} beforeLabel={original.ownerRevision?'选中的已存稿':undefined}/>
+        <details className="pw-field-hint"><summary>文件与版本</summary>工程 {original.projectId} · 副本 {original.checkoutId}<br/>原文 {original.beforeBytes} 字节 · {original.beforeSha256}<br/>改稿 {original.afterBytes} 字节 · {original.afterSha256}</details></>}/>:heading}
   </section>;
 }

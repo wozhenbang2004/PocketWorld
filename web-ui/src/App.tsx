@@ -178,12 +178,22 @@ type ChatWorkTaskOpen={returnTo:ChatWorkReturn;beforeTaskRequest:number;navigati
 type ChatDrawerReturn=ChatWorkReturn&{taskId:string;navigation:number;resumeRevision:number};
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
-type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedWeb?:{projectId:string;checkoutId:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
+const sameWorkspaceTask=(original:NonNullable<WorkspaceOrigin['task']>,tasks:unknown)=>{
+ const {id,expected,fixedArchive}=original;
+ if(!expected)return !fixedArchive;
+ return asArray<Task>(tasks).some(row=>{
+  const raw=obj(row.raw),scope=obj(raw.developmentContext);
+  return row.id===id&&raw.runId===expected.runId&&raw.coordinatorEpoch===expected.epoch&&(!fixedArchive||
+   privateProjectTask(row)&&raw.id===id&&raw.contextAvailable!==false&&raw.contextWithdrawn!==true&&
+   raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable'&&scope.projectId===fixedArchive.projectId&&scope.checkoutId===fixedArchive.checkoutId);
+ });
+};
 const resultMessageIn=(rows:unknown,id:string,expected:TaskResult,revision?:number)=>{
  const matches=asArray<Json>(rows).filter(row=>row.id===id);
  const message=matches.length===1?matches[0]:null,result=messageTaskResult(message);
@@ -240,6 +250,11 @@ function fixedDraftReviewTarget(task?:Task):OriginalProjectDraft|null{
     typeof raw.runId!=='string'||!raw.runId.trim()||!Number.isSafeInteger(raw.coordinatorEpoch)||raw.coordinatorEpoch<1||
     typeof raw.projectEditDraftId!=='string'||!/^[a-f0-9]{64}$/.test(raw.projectEditDraftId))return null;
  return {taskId:task.id,runId:raw.runId,epoch:raw.coordinatorEpoch,draftId:raw.projectEditDraftId};
+}
+function exactReviewedOriginalDraft(task?:Task,reviewed?:Task):OriginalProjectDraft|null{
+ const current=fixedDraftReviewTarget(task),original=fixedDraftReviewTarget(reviewed);
+ return current&&original&&current.taskId===original.taskId&&current.runId===original.runId&&
+  current.epoch===original.epoch&&current.draftId===original.draftId?current:null;
 }
 function draftAcceptanceClick(review:Review,window:TaskReviewWindow,completed:boolean):DraftAcceptanceClick|null{
  const original=fixedDraftReviewTarget(review.task),raw=review.task?.raw;
@@ -911,7 +926,7 @@ export default function App(){
    if(origin.savedHostPreparation&&(!savedHost||!source?.draftKey||live.composer?.ready!==true||
       live.composer.key!==source.draftKey||live.composer.conversationId!==savedHost.conversation||
       live.state.conversationReader||!exactSavedHostMessage(asArray<Message>(live.state.messages),savedHost,false)))return false;
-   if(origin.task?.fixedWeb&&source&&(live.composer?.key!==source.draftKey||origin.chatWork&&live.state.conversationReader))return false;
+   if(origin.task?.fixedArchive&&source&&(live.composer?.key!==source.draftKey||origin.chatWork&&live.state.conversationReader))return false;
    return sameProposalOwner()&&(!phonePlace||samePhonePlaceDraft(phonePlace))&&(!modelInput||sameModelSetupInput(modelInput,live,bridge.getDocumentEpoch()))&&(!source||(bridge.getDocumentEpoch()===sourceDocument&&String(live.state.conversationId||'')===source.id&&(!!source.id||String(live.composer?.key||'')===source.draftKey)));};
   const closed=await navigate(origin.route==='setup'?'butler':origin.route,()=>{
    if(!keepOrigin)relatedOrigin.current=origin.parent||null;
@@ -932,18 +947,13 @@ export default function App(){
    setPreparationTarget(existing=>existing||target);
   };
   if(origin.task){
-   const {id,layer,expected,fixedWeb}=origin.task;
-   const sameWork=()=>!expected||asArray<Task>(bridge.getState().state.tasks).some(row=>{
-    const raw=obj(row.raw),scope=obj(raw.developmentContext);
-    return row.id===id&&raw.runId===expected.runId&&raw.coordinatorEpoch===expected.epoch&&(!fixedWeb||
-     privateProjectTask(row)&&raw.id===id&&raw.contextAvailable!==false&&raw.contextWithdrawn!==true&&
-     raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable'&&scope.projectId===fixedWeb.projectId&&scope.checkoutId===fixedWeb.checkoutId);
-   });
-   if(!sameWork()){setLocalError('原工作的执行轮次已变化，没有打开新一轮。');return;}
-   const failedReturn=proposal||fixedWeb?()=>{if(current())setLocalError(fixedWeb?'原运行暂不可打开，未转到其他轮次。固定网页仍保留。':'原工作未能重新打开，没有打开其他提案。');}:undefined;
-   const line=fixedWeb&&origin.route==='chat'?origin.chatWork:undefined;
+   const original=origin.task,{id,layer,expected,fixedArchive}=original;
+   const sameWork=()=>sameWorkspaceTask(original,bridge.getState().state.tasks);
+   if(!sameWork()){setLocalError(fixedArchive?'原工作的执行轮次已变化或暂不可读取。固定包仍保留，未打开其他轮次。':'原工作的执行轮次已变化，没有打开新一轮。');return;}
+   const failedReturn=proposal||fixedArchive?()=>{if(current())setLocalError(fixedArchive?'原运行暂不可打开，未转到其他轮次。固定包仍保留。':'原工作未能重新打开，没有打开其他提案。');}:undefined;
+   const line=fixedArchive&&origin.route==='chat'?origin.chatWork:undefined;
    const returnTo=line?.result?{...line,result:{...line.result,navigation:navigation+1}}:line;
-   openTask(id,layer,false,undefined,rereadOriginal?'':undefined,expected,proposal||fixedWeb?()=>current()&&sameWork():expected?sameWork:undefined,
+   openTask(id,layer,false,undefined,rereadOriginal?'':undefined,expected,proposal||fixedArchive?()=>current()&&sameWork():expected?sameWork:undefined,
     undefined,failedReturn,proposal?returnProposal:undefined,returnTo?{returnTo,beforeTaskRequest:reviewRequest.current,navigation:navigation+1}:undefined);
   }
   else if(proposal)returnProposal();
@@ -1373,15 +1383,22 @@ export default function App(){
  };
  const previewBlocked=!!(searchOriginal||projectWorkReviewOpen||projectConventionMessage||providedMemoryMessage||conversationMemoryOpen||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
  const packageReturn=useRef<{target:PackagePreviewTarget;origin:WorkspaceOrigin;epoch:number;navigation:number;projectFocus:ProjectTaskReturn|null}|null>(null);
- const returnFromPackage=(id:string,operationId?:string,originalChat=false,fixedWeb=false)=>{
+ const returnFromPackage=(id:string,operationId?:string,originalChat=false)=>{
   const saved=packageReturn.current;
   if(saved&&saved.target.taskId===id&&saved.target.operationId===operationId&&saved.epoch===bridge.getDocumentEpoch()&&saved.navigation===navigationWindow.current){
+   const original=saved.origin.task;
+   if(!originalChat&&operationId&&(!original?.fixedArchive||!sameWorkspaceTask(original,bridge.getState().state.tasks))){
+    setLocalError('原工作的执行轮次已变化或暂不可读取。固定包仍保留，未打开其他轮次。');return false;
+   }
    packageReturn.current=null;
    projectTaskReturn.current=saved.projectFocus?{...saved.projectFocus,focusOutcome:false,returning:undefined,
-    expected:saved.origin.task?.fixedWeb?saved.origin.task.expected:saved.projectFocus.expected}:null;
-   void restoreWorkspace(saved.origin,false,true);
-  }else if(originalChat||fixedWeb)setLocalError(originalChat?'原话窗口已经变化，没有转到其他任务。':'原工作窗口已变化，没有打开其他执行轮次。固定网页仍保留。');
-  else openTask(id,operationId?'overview':'review',false,undefined,operationId?'':undefined);
+    expected:original?.fixedArchive?original.expected:saved.projectFocus.expected}:null;
+   void restoreWorkspace(saved.origin,false,true);return true;
+  }
+  if(originalChat||operationId){
+   setLocalError(originalChat?'原话窗口已经变化，没有转到其他任务。':'原工作窗口已变化，没有打开其他执行轮次。固定包仍保留。');return false;
+  }
+  openTask(id,'review');return true; // Existing live preview, not a fixed package return.
  };
  const openSavedWebBuildCopy=(choices:PackagePreviewChoices)=>{
   const {projectId,checkoutId,sourceDigest,taskId,mode,originalBuild}=choices;
@@ -1421,20 +1438,20 @@ export default function App(){
     value.contextAvailable!==false&&value.contextWithdrawn!==true&&value.sourceCurrentReadRequired!==true&&value.taskProjection!=='source_unavailable'&&
     scope.projectId===source.projectId&&scope.checkoutId===source.checkoutId;
   };
-  let webReturn:WorkspaceOrigin|undefined;
+  let archiveReturn:WorkspaceOrigin|undefined;
   if(origin.task&&view.taskId===target.taskId&&!view.section&&currentWork()){
    // Back belongs to the work window that opened this archive, not to the
    // producing run of an older archived version or a newer run.
    const line=chatWorkReturn.current;
    const verifiedLine=route==='chat'&&line?.taskId===target.taskId&&line.navigation===navigationWindow.current&&line.resumeRevision===resume&&chatWorkLocation(line,undefined,true)?line:undefined;
    const drawerChat=route==='chat'?{id:String(live.state.conversationId||''),draftKey:String(live.composer?.key||''),documentEpoch:epoch}:origin.drawerChat;
-   webReturn={...origin,drawerChat,chatWork:verifiedLine,task:{...origin.task,expected:{runId:raw.runId,epoch:raw.coordinatorEpoch},
-    fixedWeb:{projectId:source.projectId,checkoutId:source.checkoutId}}};
+   archiveReturn={...origin,drawerChat,chatWork:verifiedLine,task:{...origin.task,expected:{runId:raw.runId,epoch:raw.coordinatorEpoch},
+    fixedArchive:{projectId:source.projectId,checkoutId:source.checkoutId}}};
   }
   packageHandoff.open(target,choices=>{
-   const returnTo=choices.mode==='web_output'?webReturn:origin;
-   packageReturn.current=returnTo&&(choices.mode!=='web_output'||choices.projectId===source.projectId&&choices.checkoutId===source.checkoutId)
-    ?{target,origin:returnTo,projectFocus,epoch,navigation:navigationWindow.current}:null;
+   // The task's producing checkout is not necessarily the user's return project (e.g. an imported copy).
+   packageReturn.current=archiveReturn&&choices.projectId===source.projectId&&choices.checkoutId===source.checkoutId
+    ?{target,origin:archiveReturn,projectFocus,epoch,navigation:navigationWindow.current}:null;
   },{currentWork,sourceError:message=>setTaskErrors(previous=>({...previous,[target.taskId]:message}))});
  };
  const previewRefsUnavailable=asArray<Json>(composer.previewRefs).length>0&&composer.previewRefsAvailable!==true;
@@ -2174,6 +2191,14 @@ export default function App(){
  };
  const reviewedAction=(action:string,args:Json={})=>{
   if(!taskId||!review||reviewStale||reviewSubmitted||!can(action))return;
+  if(action==='tasks.confirm'&&taskLayer==='overview'){
+   const original=exactReviewedOriginalDraft(selectedTask,review.task),view=obj(bridge.getState().view);
+   if(original?.taskId===taskId&&openedTaskId.current===taskId&&view.taskId===taskId&&view.section==null){
+    // Match the rendered editor, not a cached editing flag or a previously opened revision.
+    const editor=taskScroll.current?.querySelector(`[data-owner-draft-editor="${original.draftId}"]`);
+    if(editor&&!editor.closest('[hidden]'))return;
+   }
+  }
   if(action==='tasks.resolve'&&args.checkedOriginal===true){
    const originalTask=taskId,doc=bridge.getDocumentEpoch(),v=bridge.getState().view as {resumeRevision?:number}|undefined,resume=v?.resumeRevision;
    const fact=asArray<Json>(review.unresolvedOperations).find(r=>r.format===PHONE_RECORD&&r.taskId===originalTask&&r.operationId===args.operationId&&r.runId===args.operationRun&&r.epoch===args.operationEpoch&&r.tool===args.operationTool&&r.state==='unknown'&&r.canRecord===true);
@@ -2752,7 +2777,10 @@ export default function App(){
   if(taskLayer==='process'||taskLayer==='homeReport'||openedTaskId.current!==task.id||!review||reviewStale)return null;
   const actions=asArray<{action:string}>(review.actions).map(x=>x.action),disabled=taskOpening||reviewSubmitted||reviewPending;
   if(taskLayer==='scope'&&actions.includes('tasks.scope'))return <footer className="pw-task-footer"><PressButton label="确认本次范围修订" disabled={disabled||!/^\d+$/.test(scopeTools)||!/^\d+$/.test(scopeModels)||Number(scopeTools)<1||Number(scopeTools)>400||Number(scopeModels)<1||Number(scopeModels)>512} onClick={()=>reviewedAction('tasks.scope',{minutes:Number(scopeMinutes),tools:Number(scopeTools),models:Number(scopeModels)})}/></footer>;
-  if(taskLayer==='overview'&&actions.includes('tasks.confirm'))return <footer className="pw-task-footer"><Button variant="secondary" disabled={disabled} onClick={()=>reviewedAction('tasks.confirm',{completed:false,feedback:reviewNote})}>目标尚未达到</Button>{!noSavedDraftInReview(task,review)&&<PressButton label="确认达到目标" disabled={disabled} onClick={()=>reviewedAction('tasks.confirm',{completed:true,feedback:reviewNote})}/>}</footer>;
+  if(taskLayer==='overview'&&actions.includes('tasks.confirm')){
+   const original=exactReviewedOriginalDraft(task,review.task);
+   return <footer className="pw-task-footer" data-fixed-draft-acceptance={original?true:undefined}><Button variant="secondary" disabled={disabled} onClick={()=>reviewedAction('tasks.confirm',{completed:false,feedback:reviewNote})}>目标尚未达到</Button>{!noSavedDraftInReview(task,review)&&<PressButton label={original?'确认原改稿达到目标':'确认达到目标'} disabled={disabled} onClick={()=>reviewedAction('tasks.confirm',{completed:true,feedback:reviewNote})}/>}</footer>;
+  }
   if(taskLayer==='overview'&&actions.includes('tasks.resume')){
    const project=projectContinuation(review),note=projectFeedback[projectFeedbackKey(task)]||'';
    const next=project&&!project.reason?originalNodeBuildAfterDependencies(review.task):null;
@@ -3583,7 +3611,13 @@ export default function App(){
  const importedCopy=currentProject&&route==='projects'&&!previewBlocked&&!projectPreview.expanded&&!packageOpening&&!state.localSourceIntake?.window&&
   !projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&!projectWorkDrafts[currentProject.id]?.operation&&canOpenImported?
   originalImportedEditor(currentProject.id):null;
- const importedWorkTarget=importedCopy&&projectSection==='work'&&!projectWorkPresentations[importedCopy.projectId]?.open&&
+ const importedPresentation=importedCopy?projectWorkPresentations[importedCopy.projectId]:null;
+ // The current full native registry must identify only this original import.
+ // Layout never selects a copy; the existing development window still verifies it.
+ const importedCheckouts=importedCopy?asArray<Json>(state.features?.local?.checkouts).filter(row=>row?.projectId===importedCopy.projectId):[];
+ const importedSourceFirst=!!importedCopy&&projectSection==='work'&&importedPresentation?.open===true&&importedPresentation.mode==='default'&&
+  importedCheckouts.length===1&&importedCheckouts[0].id===importedCopy.checkoutId;
+ const importedWorkTarget=importedCopy&&projectSection==='work'&&!importedPresentation?.open&&
   !projectWorkDrafts[importedCopy.projectId]?.expanded?importedCopy:null;
  const importedFileTarget=importedCopy&&projectSection==='files'&&projectListInput.projectId===importedCopy.projectId&&
   !projectListBusy&&!projectListError&&!files.length&&!fileQuery?importedCopy:null;
@@ -3637,6 +3671,7 @@ export default function App(){
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
         onEditImported={importedWorkTarget?()=>openOriginalImportedFiles(importedWorkTarget,'work'):undefined}
+        importedSourceFirst={importedSourceFirst}
         savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
           canPreview={can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&!packageOpening}

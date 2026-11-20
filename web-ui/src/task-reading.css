@@ -2,6 +2,9 @@
  * Accordion/Button sources. Their disclosure, keyboard, focus and press behavior
  * is unchanged. One result owns the reading surface; supporting records stay flat.
  * Scoped selectors deliberately outrank app/product/workspace CSS loaded later. */
+.pw-task-drawer:has(> .pw-task-body .pw-project-draft [data-owner-draft-editor]) > .pw-task-footer[data-fixed-draft-acceptance] {
+  display: none;
+}
 .pw-task-outcome.pw-task-reading {
   gap: var(--pw-gap-section);
   min-width: 0;
