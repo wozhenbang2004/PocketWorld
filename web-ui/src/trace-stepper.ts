@@ -1,11 +1,13 @@
-import { durationLabel, traceDuration, traceFailed, traceRows, traceStatus, traceRoleLabel, type TraceFilter, type TraceNode } from './execution-trace.ts';
+import { durationLabel, traceDisplayName, traceDuration, traceFailed, traceRecordStatus, traceRows, traceRoleLabel, type TraceFilter, type TraceNode } from './execution-trace.ts';
 import type { Step } from './library/types';
 
 /** Glyphs describe observed outcomes; a returned handler never confirms its action effect. */
 function stepState(node: TraceNode): string {
   const status = node.status.toUpperCase();
-  if (node.effectPending) return 'returned';
-  if (['COMPLETED', 'COMPLETE', 'SUCCESS', 'SUCCEEDED', 'DONE'].includes(status)) return 'complete';
+  const settled = ['COMPLETED', 'COMPLETE', 'SUCCESS', 'SUCCEEDED', 'DONE'].includes(status);
+  if (node.kind === 'tool' && (node.effectPending || settled))
+    return node.source === 'native_tool_trace' && !node.legacy && node.dispatchEntered === true && node.finishedAt !== null ? 'returned' : 'unknown';
+  if (settled) return 'complete';
   if (['FAILED', 'ERROR', 'TIMED_OUT', 'TIMEOUT', 'REJECTED'].includes(status)) return 'error';
   if (['CANCELLED', 'CANCELED', 'STOPPED', 'INTERRUPTED', 'ABANDONED'].includes(status)) return 'stopped';
   if (['WAITING_APPROVAL', 'NEEDS_CONFIRMATION'].includes(status)) return 'needs_approval';
@@ -42,13 +44,12 @@ export function traceSteps(nodes: readonly TraceNode[], folded: ReadonlySet<stri
   const roots: Step[] = [], parents: Step[] = [];
   for (const row of traceRows(safe, new Set(), filter, query)) {
     const node = byId.get(row.node.id)!, duration = traceDuration(node);
-    const label = [traceRoleLabel(node), traceStatus(node.status),
-      node.effectPending ? '动作效果待确认' : null,
+    const label = [traceRoleLabel(node), traceRecordStatus(node),
       traceFailed(node) && !['FAILED', 'ERROR', 'TIMED_OUT', 'TIMEOUT', 'REJECTED'].includes(node.status.toUpperCase()) ? '有错误记录' : null,
       duration === null ? '耗时未记录' : null,
       cyclic.has(node.id) ? '父子关系待核对' : row.missingParent ? `父记录未读入：${node.parentId}` : null,
       row.context ? '筛选上下文' : null].filter(Boolean).join(' · ');
-    const step: Step = { id: node.id, title: node.name, status: stepState(node), statusLabel: label,
+    const step: Step = { id: node.id, title: traceDisplayName(node), status: stepState(node), statusLabel: label,
       ...(duration === null ? {} : { durationMs: duration, durationLabel: durationLabel(duration) }),
       depth: row.level, hasChildren: row.hasChildren, expanded: row.hasChildren && (filtering || !folded.has(node.id)),
       canToggle: !filtering, context: row.context, children: [] };

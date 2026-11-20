@@ -5,7 +5,7 @@
 import { useRef, useState } from 'react';
 import { IconCheck, IconChevronDown, IconChevronRight, IconClose, IconCpu, IconInfo, IconLoading, IconTool } from '../../icons';
 import { IconButton } from '../../forms-library';
-import { durationLabel, nodeDurationLabel, traceBar, traceFailed, traceInProgress, traceKind, traceStatus, type TraceBounds, type TraceNode, type TraceRow } from '../../execution-trace';
+import { durationLabel, nodeDurationLabel, traceBar, traceDisplayName, traceFailed, traceInProgress, traceKind, traceRecordStatus, type TraceBounds, type TraceNode, type TraceRow } from '../../execution-trace';
 
 export function TraceWaterfall({ rows, bounds, mode, selectedId, filtering, onToggle, onSelect }: {
   rows: TraceRow[]; bounds: TraceBounds; mode: 'timeline' | 'tree'; selectedId: string | null; filtering: boolean;
@@ -23,13 +23,14 @@ export function TraceWaterfall({ rows, bounds, mode, selectedId, filtering, onTo
     <div role="tree" aria-label={mode === 'timeline' ? '执行轨迹时间轴' : '执行调用树'} className="pw-trace-tree">
       {rows.map((row, index) => {
         const node = row.node, bar = traceBar(node, bounds), ongoing = traceInProgress(node.status), failed = traceFailed(node);
+        const title = traceDisplayName(node), recorded = traceRecordStatus(node);
         const Kind = node.kind === 'model' ? IconCpu : node.kind === 'tool' ? IconTool : IconInfo;
-        const State = failed ? IconClose : ongoing ? IconLoading : ['COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE'].includes(node.status.toUpperCase()) ? IconCheck : IconInfo;
+        const State = failed ? IconClose : ongoing ? IconLoading : node.kind !== 'tool' && ['COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE'].includes(node.status.toUpperCase()) ? IconCheck : IconInfo;
         return <div key={node.id} ref={element => { if (element) rowRefs.current.set(node.id, element); else rowRefs.current.delete(node.id); }}
           className="pw-trace-row" role="treeitem" aria-level={row.level + 1} aria-expanded={row.hasChildren ? row.expanded : undefined}
           aria-selected={selectedId === node.id} tabIndex={activeId === node.id ? 0 : -1} data-node-id={node.id}
           data-kind={node.kind} data-failed={failed || undefined} data-context={row.context || undefined} data-running={ongoing || undefined}
-          onFocus={() => setFocusId(node.id)} aria-label={`${node.name}，${traceKind(node.kind)}，${traceStatus(node.status)}，${nodeDurationLabel(node)}`}
+          onFocus={() => setFocusId(node.id)} aria-label={`${title}，${traceKind(node.kind)}，${recorded}，${nodeDurationLabel(node)}`}
           onKeyDown={event => {
             if (event.target !== event.currentTarget) return;
             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(event.key)) event.preventDefault();
@@ -43,16 +44,16 @@ export function TraceWaterfall({ rows, bounds, mode, selectedId, filtering, onTo
           }}>
           <div className="pw-trace-name" style={{ paddingInlineStart: Math.min(row.level, 5) * 12 }}>
             {row.hasChildren && !filtering ? <IconButton className="pw-trace-fold" size="small" tabIndex={-1}
-              icon={row.expanded ? IconChevronDown : IconChevronRight} aria-label={`${row.expanded ? '折叠' : '展开'} ${node.name}`}
+              icon={row.expanded ? IconChevronDown : IconChevronRight} aria-label={`${row.expanded ? '折叠' : '展开'} ${title}`}
               aria-expanded={row.expanded} onClick={() => onToggle(node.id)}/> : <span className="pw-trace-kind" aria-hidden="true"><Kind size={16}/></span>}
-            <button type="button" tabIndex={-1} className="pw-trace-title" onClick={() => onSelect(node)} aria-label={`查看 ${node.name} 的调用详情`}>
-              <span>{node.name}</span><small>{[node.kind === 'model' && node.model !== node.name ? node.model : null,
-                ['UNKNOWN', 'AWAITING_USER', 'NEEDS_CONFIRMATION', 'REJECTED', 'CANCELLED', 'CANCELED'].includes(node.status.toUpperCase()) ? traceStatus(node.status) : null, row.missingParent ? '上级调用在其他页' : null,
+            <button type="button" tabIndex={-1} className="pw-trace-title" onClick={() => onSelect(node)} aria-label={`查看 ${title} 的调用详情`}>
+              <span>{title}</span><small>{[node.kind === 'model' && node.model !== node.name ? node.model : null,
+                node.kind === 'tool' || ['UNKNOWN', 'AWAITING_USER', 'NEEDS_CONFIRMATION', 'REJECTED', 'CANCELLED', 'CANCELED'].includes(node.status.toUpperCase()) ? recorded : null, row.missingParent ? '上级调用在其他页' : null,
                 node.attemptNo && node.attemptNo > 1 ? `第 ${node.attemptNo} 次尝试` : null].filter(Boolean).join(' · ')}</small>
             </button>
             <span className="pw-trace-duration"><State aria-hidden="true" size={13}/>{nodeDurationLabel(node)}</span>
           </div>
-          {mode === 'timeline' && <button type="button" tabIndex={-1} className="pw-trace-timeline" onClick={() => onSelect(node)} aria-label={`查看 ${node.name} 的时间与用量`}>
+          {mode === 'timeline' && <button type="button" tabIndex={-1} className="pw-trace-timeline" onClick={() => onSelect(node)} aria-label={`查看 ${title} 的时间与用量`}>
             {bar ? <i className={bar.width === null ? 'pw-trace-start-marker' : 'pw-trace-duration-bar'} data-timing={bar.width === null ? 'start-only' : 'elapsed'}
               style={{ left: `min(${bar.left}%, calc(100% - 2px))`, ...(bar.width === null ? {} : { width: `${bar.width}%` }) }}/>
               : <span className="pw-trace-unplaced">开始时间未记录</span>}

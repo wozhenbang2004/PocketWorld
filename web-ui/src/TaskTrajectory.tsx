@@ -13,7 +13,7 @@ import { useSurfaceEnter } from './library/surface-motion';
 import { MarkdownBody } from './library/MarkdownBody';
 import { traceSteps } from './trace-stepper';
 import { durationLabel, executionTraceDetail, executionTracePage, mergeTraceNodes, nodeDurationLabel, tokenLabel, traceBody, traceBounds, traceCount,
-  traceEventMatches, traceEvents, traceFailed, traceInProgress, traceRequestTiming, traceRole, traceRoleLabel, traceRows, traceStatus, traceSummary,
+  traceDisplayName, traceEventMatches, traceEvents, traceFailed, traceInProgress, traceRecordStatus, traceRequestTiming, traceRole, traceRoleLabel, traceRows, traceStatus, traceSummary,
   traceTime, traceTurnCount, traceUsageBreakdown, type ExecutionTraceDetail, type ExecutionTracePage, type TraceAggregate, type TraceFilter, type TraceNode } from './execution-trace';
 import { taskHistoryIdentity, type TaskHeader } from './task-history';
 import { SavedDefaultChange } from './SavedDefaultChange';
@@ -205,6 +205,7 @@ function SourceDetails({ node, selection }: { node: TraceNode; selection: Select
   const route = node.route || {};
   return <Accordion variant="divided" className="pw-trace-disclosures"><AccordionItem id="trace-source" title="来源与关联" headingLevel={4}>
     <dl className="pw-trace-facts"><div><dt>来源</dt><dd>{traceBody(node.source).text || '未记录'}</dd></div>
+      {node.kind === 'tool' && <div><dt>工具标识</dt><dd>{node.name}</dd></div>}
       <div><dt>执行</dt><dd>{selection.runId}</dd></div><div><dt>恢复版本</dt><dd>{selection.epoch}</dd></div>
       <div><dt>记录标识</dt><dd>{node.id}</dd></div>
       {node.turnIndex != null && <div><dt>轮次</dt><dd>Turn {node.turnIndex}</dd></div>}
@@ -241,6 +242,7 @@ function TraceDetails({ selection, page, complete, close, active }: { selection:
   const node = read.detail?.sourceState === 'current' ? { ...read.detail.node, ...(compact || {}), ...Object.fromEntries(bodyKeys
     .map(key => [key, read.detail!.node[key]])) } : metadata ? metadataOnly(metadata) : undefined;
   const role = node ? traceRole(node) : 'event';
+  const status = node ? traceRecordStatus(compact ?? node) : '';
   const tabs = node?.kind === 'model' ? [['summary', '摘要'], ['options', '选项'], ['usage', '用量'], ['timing', '耗时']]
     : node?.kind === 'tool' ? [['summary', '摘要'], ['input', '参数'], ['output', '结果'], ...(role === 'subtool' ? [] : [['schema', 'Schema']]), ['timing', '耗时']]
       : [['summary', '摘要'], ['preview', '预览'], ['raw', '原始']];
@@ -252,7 +254,7 @@ function TraceDetails({ selection, page, complete, close, active }: { selection:
       <Drawer.Content className="pw-drawer pw-trace-detail" aria-describedby={descriptionId}>
         <Drawer.Handle aria-label="拖动调整详情高度"/>
         <header className="pw-drawer-header"><div><Drawer.Title>{node?.kind === 'model' ? '模型请求' : node ? traceRoleLabel(node) : '记录详情'}{node?.sequence != null && <small>#{node.sequence}</small>}</Drawer.Title>
-          <Drawer.Description id={descriptionId}>{node ? `${node.name} · ${traceStatus(node.status)}` : '原任务的一次调用'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭调用详情" onClick={close}/></header>
+          <Drawer.Description id={descriptionId}>{node ? `${traceDisplayName(node)} · ${status}` : '原任务的一次调用'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭调用详情" onClick={close}/></header>
         {node && selection && <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setSnap(.94); }} className="pw-trace-detail-tabs">
           <TabList aria-label="记录详情页签">{tabs.map(([id, label]) => <Tab id={id} key={id}>{label}</Tab>)}</TabList>
           <div className="pw-trace-detail-scroll" style={{ maxHeight: `calc(${typeof snap === 'number' ? snap * 100 : 94}dvh - 148px)` }} data-vaul-no-drag>
@@ -262,7 +264,7 @@ function TraceDetails({ selection, page, complete, close, active }: { selection:
             {node.contentLimited && <p className="pw-trace-note">正文仅保留已记录的部分。</p>}
             <TabPanel id="summary">
               {node.kind === 'tool' && node.name === 'agent_settings_set' && read.detail?.sourceState === 'current' && !read.busy && !read.error && <SavedDefaultChange value={node.preferenceChange} />}
-              <dl className="pw-trace-facts pw-trace-primary-facts"><div><dt>状态</dt><dd>{traceStatus(node.status)}</dd></div><div><dt>耗时</dt><dd>{nodeDurationLabel(node)}</dd></div>
+              <dl className="pw-trace-facts pw-trace-primary-facts"><div><dt>状态</dt><dd>{status}</dd></div><div><dt>耗时</dt><dd>{nodeDurationLabel(node)}</dd></div>
                 {node.model && <div><dt>模型</dt><dd>{node.model}</dd></div>}
                 {node.turnIndex != null && <div><dt>轮次</dt><dd>Turn {node.turnIndex}{node.stepIndex != null ? ` · Step ${node.stepIndex}` : ''}</dd></div>}
                 {!!(node.attemptNo || node.route?.attemptNo) && <div><dt>本次尝试</dt><dd>{String(node.attemptNo || node.route?.attemptNo)}</dd></div>}
@@ -349,6 +351,8 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
   const steps = useMemo(() => viewMode === 'steps' ? traceSteps(nodes, stepFolded, filter, query) : [], [page?.nodes, stepFolded, filter, query, viewMode]);
   useSurfaceEnter(currentView, `${identity}:${page?.runId || ''}:${page?.epoch ?? ''}:${viewMode}:${intervalMode}`, {selector: '', active: active && readWindow.enabled && !!page});
   const stats = traceSummary(nodes), filtering = filter !== 'all' || query.trim() !== '';
+  const empty = filter === 'tool' ? '已读轨迹没有匹配工具，不能据此判断有没有用过，也不能说明原因。'
+    : filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。';
   const select = (node: TraceNode) => { if (page) setSelection({ node, taskId: task.id, runId: page.runId, epoch: page.epoch, documentEpoch }); };
   const locate = (node: TraceNode) => { setQuery(''); setFilter('all'); setViewMode('events'); setHighlighted(node.id); setLocateTicket(value => value + 1); };
   const runs = page?.runs || [], currentRunId = typeof task.raw?.runId === 'string' ? task.raw.runId : '';
@@ -375,20 +379,21 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
       <TraceOverview rows={events} mode={overviewMode} onModeChange={setOverviewMode} highlightedId={highlighted} turnCount={traceTurnCount(nodes)} toolCount={stats.tools} onLocate={locate}/>
       <div className="pw-trace-completeness" role="status"><span>{readWindow.view?.backfilling ? '正在补齐较早记录' : complete ? '当前快照已完整读取' : '当前为部分记录'} · {nodes.length} 条</span><span>{stats.models} 次请求{stats.failed ? ` · ${stats.failed} 条异常` : ''}</span></div>
       {stats.models > 0 && <dl className="pw-trace-token-summary" aria-label={complete ? '本次执行模型用量' : '已读取请求的部分用量'}><div><dt>输入 token</dt><dd>{aggregateLabel(stats.input)}</dd></div><div><dt>输出 token</dt><dd>{aggregateLabel(stats.output)}</dd></div></dl>}
-      <div className="pw-trace-search-row"><SearchField aria-label="搜索执行轨迹" placeholder="搜索调用、模型、轮次" clearLabel="清空轨迹搜索" value={query} onChange={setQuery}/>
+      <div className="pw-trace-search-row"><SearchField aria-label="搜索执行轨迹" placeholder={filter === 'tool' ? '按工具用途或名称搜索' : '搜索调用、模型、轮次'} clearLabel="清空轨迹搜索" value={query} onChange={setQuery}/>
         <IconButton icon={viewMode === 'intervals' ? IconList : IconClock} aria-label={viewMode === 'intervals' ? '返回轮次列表' : '查看执行区间'} onClick={() => setViewMode(viewMode === 'intervals' ? 'events' : 'intervals')}/>
         <Button variant={viewMode === 'steps' ? 'secondary' : 'ghost'} aria-label="查看执行步骤" aria-pressed={viewMode === 'steps'} onClick={() => setViewMode(viewMode === 'steps' ? 'events' : 'steps')}>步骤</Button>
       </div>
       <LiquidTabs className="pw-trace-filters" variant="minimal" tabs={['全部', '模型', '工具', '异常']} value={filters.indexOf(filter)} onValueChange={index => setFilter(filters[index])} label="轨迹筛选"/>
+      {filter === 'tool' && filteredEvents.length > 0 && <p className="pw-trace-note">“工具已返回”仅表示收到了本次调用的结果，不代表动作或工作已成功。点原记录核对。</p>}
       {page.limited && <p className="pw-trace-note pw-trace-read-limit">原记录有部分内容未包含；即使已读到分页末尾，仍不是完整记录。</p>}
       <div ref={currentView} className="pw-trace-current-view">{viewMode === 'events' ? filteredEvents.length ? <TraceEventList rows={filteredEvents} selectedId={selected?.node.id || null} highlightedId={highlighted} locateTicket={locateTicket} onHighlightEnd={endHighlight} onSelect={select} complete={complete}/>
-        : <div className="pw-trace-empty"><p>{filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。'}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>
+        : <div className="pw-trace-empty"><p>{empty}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>
         : viewMode === 'intervals' ? <><div className="pw-trace-interval-controls"><p className="pw-trace-note">原始父子关系和实际执行区间</p><Button variant="ghost" onClick={() => setIntervalMode(intervalMode === 'timeline' ? 'tree' : 'timeline')}>{intervalMode === 'timeline' ? '调用树' : '时间轴'}</Button></div>
           <TraceWaterfall rows={traceRows(nodes, folded, filter, query)} bounds={traceBounds(nodes)} mode={intervalMode} selectedId={selected?.node.id || null} filtering={filtering} onToggle={toggle} onSelect={select}/></>
           : <><p className="pw-trace-note">按原记录的父子层级展开；连线不代表执行依赖或完成进度。</p>
             {steps.length ? <ExecutionSteps steps={steps} scope={`${identity}:${page.runId}:${page.epoch}:${documentEpoch}`} active={active && readWindow.enabled && !readWindow.view?.backfilling}
               onSelect={id => { const node = nodes.find(value => value.id === id); if (node) select(node); }} onToggle={filtering ? undefined : toggleStep}/>
-              : <div className="pw-trace-empty"><p>{filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。'}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>}</>}</div>
+              : <div className="pw-trace-empty"><p>{empty}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>}</>}</div>
       <p className="pw-trace-note pw-trace-timing-note">轮次来自原执行记录；总览的累计耗时包含并行重叠。缺失的计时、用量与正文保持可见。</p>
     </>}
     {!page && canRead && !readWindow.busy && !readWindow.error && <p className="pw-trace-note">打开此页后读取原任务轨迹。</p>}

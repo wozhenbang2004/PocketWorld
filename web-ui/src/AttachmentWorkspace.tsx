@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
-import { IconArrowLeft, IconClose, IconExternalLink, IconFileAdd, IconFolder, IconMore, IconRefresh, IconShare, IconUpload } from './icons';
+import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconClose, IconExternalLink, IconFileAdd, IconFolder, IconMore, IconRefresh, IconShare, IconUpload } from './icons';
 import {bridge} from './bridge';
 import {Accordion,AccordionItem,Button,IconButton,TextField} from './forms-library';
 import {Drawer,ContextMenuTrigger,ContextMenu,ContextMenuItem} from './shell-library';
@@ -180,19 +180,36 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  </>}</ContextMenuTrigger>;
  const resultFilesOnly=view.resultFilesOnly===true;
  const backLabel=view.deviceOriginalOnly?'返回原工作':mode==='list'?'返回原工作区':mode==='detail'?'返回文件列表':'返回文件详情';
- const fileList=(label:string,files:Json[])=><AttachmentFileCollection label={label} files={files} busy={busy} choosing={!!view.choosingSource} onSelect={target=>run(view.choosingSource?'attach':'selectFile',target)}/>;
+ const fileList=(label:string,files:Json[],opensOriginal=false)=><AttachmentFileCollection label={label} files={files} busy={busy} choosing={!!view.choosingSource} opensOriginal={opensOriginal}
+  onSelect={target=>run(view.choosingSource?'attach':opensOriginal?'openOriginal':'selectFile',target)}/>;
  // A source picker reads the private library, not the task it will return to.
  // Do not show retained rows from the preceding location while the new read settles.
  const catalogUnread=privateFiles&&(snapshot.taskId!==(view.choosingSource?'':view.taskId||'')||!Array.isArray(snapshot.sources)||!Array.isArray(snapshot.artifacts));
  const media=catalogUnread||view.choosingSource?[]:rows(snapshot.media).length?rows(snapshot.media):snapshot.kind==='group_media_result'?[{...snapshot,operationId:snapshot.sourceOperationId,status:snapshot.mediaState}]:[];
  const sourceFiles=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts),hasLibraryFiles=sourceFiles.length+savedFiles.length>0;
+ const runFiles=privateFiles&&resultFilesOnly?savedFiles.flatMap(row=>{
+  const target=exactFileTarget(row);
+  return row.runProvenance==='current'&&row.availability==='available'&&target?[{target,name:String(row.name||'原件')}]:[];
+ }):[];
+ const allowsBrowse=runFiles.length>1;
+ const runIndex=allowsBrowse&&selection?runFiles.findIndex(({target})=>target.fileId===selection.fileId&&target.sha256===selection.sha256):-1;
+ const browseRunFile=(direction:-1|1)=>{
+  const next=runFiles[runIndex+direction],label=direction<0?'上一份文件':'下一份文件';
+  return <IconButton icon={direction<0?IconChevronLeft:IconChevronRight}
+   aria-label={next?`${label}：${next.name}`:label} title={next?`${label}：${next.name}`:label}
+   disabled={!next||busy||draftBusy||view.exportPending} onClick={()=>{if(next)run('openOriginal',next.target)}}/>;
+ };
  const catalogIncomplete=privateFiles&&!catalogUnread&&(resultFilesOnly?snapshot.resultFilesReadLimited===true:snapshot.indexDiagnostics?.incomplete===true);
  const catalogUnconfirmed=catalogIncomplete||catalogUnread;
  const refreshList=()=>run(view.choosingSource?'chooseSource':'refresh');
  const sourcesList=fileList(view.choosingSource?'可用文件':'来源文件',sourceFiles);
- const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存成果',savedFiles);
+ const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存成果',savedFiles,allowsBrowse);
  const libraryActions=privateFiles&&!resultFilesOnly&&<div className="pw-action-row pw-file-library-actions"><Button variant={hasLibraryFiles?'secondary':'primary'} leadingIcon={IconUpload} disabled={busy} onClick={()=>run('import')}>导入文件</Button><Button variant="ghost" leadingIcon={IconFileAdd} disabled={busy||!!view.pendingDocumentTask} onClick={()=>run('newDocument')}>创建文档</Button>{view.taskId&&!view.choosingSource&&<Button variant="ghost" disabled={busy} onClick={()=>run('chooseSource')}>从附件库关联</Button>}</div>;
- return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{if(returningToSearch.current)event.preventDefault();onReturnFocus?.(event)}} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description"><header className="pw-drawer-header pw-file-page-header">{mode==='original'?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>来源与操作</Button>:<IconButton icon={IconArrowLeft} aria-label={backLabel} title={backLabel} onClick={goBack} disabled={!!view.busy||draftBusy}/>} <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance),objectVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>{onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy||draftBusy} onClick={returnToSearch}>返回搜索</Button>}<IconButton icon={IconClose} aria-label="返回原工作区" title="返回原工作区" disabled={pending>0||draftBusy} onClick={close}/></header><div className="pw-drawer-body pw-file-page-scroll" ref={scroller} onScroll={rememberPosition}>
+ return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{if(returningToSearch.current)event.preventDefault();onReturnFocus?.(event)}} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description"><header className="pw-drawer-header pw-file-page-header">{mode==='original'?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>来源与操作</Button>:<IconButton icon={IconArrowLeft} aria-label={backLabel} title={backLabel} onClick={goBack} disabled={!!view.busy||draftBusy}/>} <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance),objectVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>{onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy||draftBusy} onClick={returnToSearch}>返回搜索</Button>}<IconButton icon={IconClose} aria-label="返回原工作区" title="返回原工作区" disabled={pending>0||draftBusy} onClick={close}/></header>
+ {mode==='original'&&view.ready&&runIndex>=0&&<nav className="pw-result-file-navigation" aria-label="本轮已列出的文件">
+  {browseRunFile(-1)}<span role="status">第 {runIndex+1} 份 · 已列出 {runFiles.length} 份</span>{browseRunFile(1)}
+ </nav>}
+ <div className="pw-drawer-body pw-file-page-scroll" ref={scroller} onScroll={rememberPosition}>
  {file.sourceRunEvidence==='original_snapshot_capture'&&file.sourceKind==='remote_result_snapshot'&&<p className="pw-field-hint">这份文件在原主机作业结束后被选中并固定。采集轮次已核对，不代表文件一定由该作业生成。</p>}
  {view.busy&&<div className="pw-action-row"><p role="status">正在核对原记录…</p><Button variant="ghost" onClick={()=>run('cancel')}>停止本次读取</Button></div>}
  {(error||view.error)&&<p className="pw-error" role="alert">{error||view.error}</p>}{view.notice&&<p role="status">{view.notice}</p>}

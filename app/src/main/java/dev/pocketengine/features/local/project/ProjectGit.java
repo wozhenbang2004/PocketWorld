@@ -16,6 +16,7 @@ public final class ProjectGit {
     public static final int MAX_SELECTED=40,MAX_STATUS_PAGE=40,MAX_DIFF_PAGE_BYTES=16000,MAX_RESULT_BYTES=262144;
     private static final Set<String> ACTIONS=Set.of("status","history","diff","init","stage","unstage","resolve","commit","isolate");
     private static final Set<String> MUTATIONS=Set.of("init","stage","unstage","resolve","commit","isolate");
+    private static final String LAUNCHER_FIELD="gitInterpreterMode",ISOLATED_LAUNCHER="python_isolated_no_site_v1";
     private static final Set<String> PIN_KEYS=Set.of("head","headRef","headFileSha256","indexSha256","configSha256","mergeHeadSha256","worktreeSha256","statusSha256","snapshotDigest");
     private ProjectGit(){}
     public static boolean writes(String action){return MUTATIONS.contains(action);}
@@ -108,7 +109,7 @@ public final class ProjectGit {
         for(String key:Set.of("executable","argv","env","cwd","timeoutMillis","terminal","runMode","content","edits","devWatch","liveEditServiceExecutionId","revertOperationId","packageMode"))if(input.has(key))throw new SecurityException("固定Git动作不能夹入任意命令、终端、网络或文件写入");
         JSONObject inspection=ProjectBuildPlan.inspect(local,input.getString("checkoutId"),"managed_process_v1"),source=inspection.getJSONObject("source"),runtime=inspection.getJSONObject("runtime");if(!source.getString("sourceDigest").equals(input.getString("expectedSourceDigest")))throw new SecurityException("源码已变化，请重新读取Git与项目版本后审阅");
         JSONObject git=tool(runtime,"git"),python=tool(runtime,"python3");String gitSha=git==null?"0".repeat(64):git.getString("sha256");JSONObject request=request(input,gitSha);String action=request.getString("action");
-        JSONObject payload=new JSONObject().put("checkoutId",input.getString("checkoutId")).put("expectedSourceDigest",source.getString("sourceDigest")).put("executable","python3").put("workingDirectory",".").put("timeoutMillis",120000).put("runMode","foreground").put("terminalMode","pipes").put("gitProtocolVersion",1).put("gitProgramDigest",ProjectGitProgram.identity()).put("gitRequest",request);
+        JSONObject payload=new JSONObject().put("checkoutId",input.getString("checkoutId")).put("expectedSourceDigest",source.getString("sourceDigest")).put("executable","python3").put("workingDirectory",".").put("timeoutMillis",120000).put("runMode","foreground").put("terminalMode","pipes").put("gitProtocolVersion",1).put("gitProgramDigest",ProjectGitProgram.identity()).put(LAUNCHER_FIELD,ISOLATED_LAUNCHER).put("gitRequest",request);
         JSONObject step=new JSONObject().put("id","git_"+action).put("stepId","git_"+action).put("localCommand","project.runtime.run").put("payload",payload).put("label",label(action)).put("approvalRequired",true).put("cancelReliable",false).put("effects",new JSONObject().put("writes",writes(action)).put("networkMayBeUsed",false).put("scopeEnforced",false).put("runtime","managed_process_v1").put("fixedGitProtocol",true).put("repositoryHooks",false).put("arbitraryShell",false));
         JSONArray warnings=new JSONArray().put("Git只作用于当前原生选定副本的普通.git仓库，或本入口完整创建的私有common隔离，不是原正式项目版本库。HEAD→暂存区与暂存区→工作树分别核对；暂存与提交不会自动推送，也不会自动导回正式项目或共享成果。").put("不启用仓库hooks、fsmonitor、filter、外部diff、pager或网络Git；未经本入口原生归属核验的外部gitdir/worktree、共享对象库、链接、超限文件和不支持配置仍明确拒绝。每次变更按刚审阅HEAD/index/工作树核对，使用Git索引锁与原分支CAS；同UID绕过Git锁的任意进程不是OS隔离保证。派发后失败可能保留未引用Git对象；未发布不是全部零写入。单次Git语义请求上限16KiB。");
         if(action.equals("isolate"))warnings.put("本次仅从已审baseCommit及其可达历史对象建立私有common库和真实Git worktree；不带原仓配置/hooks/remote凭据，不读网络，不复制未提交WIP。原仓refs与文件不变。成功后另行选择新副本；失败现场保留，不自动合并或删除。此副本与用户原common库不直接链接；同UID/PRoot不是安全沙箱。");
@@ -121,12 +122,37 @@ public final class ProjectGit {
         if(!"managed_process_v1".equals(core.optString("runtimeId"))||!"native_git".equals(core.optString("ecosystem"))||steps.length()!=1||!Boolean.FALSE.equals(core.opt("automaticChaining"))||!"foreground".equals(core.optString("runMode")))throw new SecurityException("Git必须是原本机运行环境的一个固定普通步骤");
         JSONObject s=steps.getJSONObject(0),p=s.getJSONObject("payload"),r=verifiedRequest(p.getJSONObject("gitRequest"));String action=r.getString("action");JSONObject effects=s.getJSONObject("effects");
         if(!("git_"+action).equals(s.getString("id"))||!s.getString("id").equals(s.getString("stepId"))||!"project.runtime.run".equals(s.optString("localCommand"))||!Boolean.TRUE.equals(s.opt("approvalRequired"))||!Boolean.FALSE.equals(s.opt("cancelReliable"))||!Integer.valueOf(1).equals(p.opt("gitProtocolVersion"))||!ProjectGitProgram.identity().equals(p.optString("gitProgramDigest"))||!"python3".equals(p.optString("executable"))||!".".equals(p.optString("workingDirectory"))||!Long.valueOf(120000).equals(Long.valueOf(p.getLong("timeoutMillis")))||!"foreground".equals(p.optString("runMode"))||!"pipes".equals(p.optString("terminalMode"))||!core.getString("checkoutId").equals(p.getString("checkoutId"))||!core.getString("sourceDigest").equals(p.getString("expectedSourceDigest")))throw new SecurityException("Git步骤、固定协议或源版本绑定不同");
-        if(!keys(p).equals(Set.of("checkoutId","expectedSourceDigest","executable","workingDirectory","timeoutMillis","runMode","terminalMode","gitProtocolVersion","gitProgramDigest","gitRequest"))||!Boolean.valueOf(writes(action)).equals(effects.opt("writes"))||!Boolean.FALSE.equals(effects.opt("networkMayBeUsed"))||!Boolean.FALSE.equals(effects.opt("scopeEnforced"))||!"managed_process_v1".equals(effects.optString("runtime"))||!Boolean.TRUE.equals(effects.opt("fixedGitProtocol"))||!Boolean.FALSE.equals(effects.opt("repositoryHooks"))||!Boolean.FALSE.equals(effects.opt("arbitraryShell")))throw new SecurityException("Git含未审阅参数或效果声明不同");
+        Set<String> fields=new HashSet<>(Set.of("checkoutId","expectedSourceDigest","executable","workingDirectory","timeoutMillis","runMode","terminalMode","gitProtocolVersion","gitProgramDigest","gitRequest"));
+        if(isolatedLauncher(p))fields.add(LAUNCHER_FIELD);
+        if(!keys(p).equals(fields)||!Boolean.valueOf(writes(action)).equals(effects.opt("writes"))||!Boolean.FALSE.equals(effects.opt("networkMayBeUsed"))||!Boolean.FALSE.equals(effects.opt("scopeEnforced"))||!"managed_process_v1".equals(effects.optString("runtime"))||!Boolean.TRUE.equals(effects.opt("fixedGitProtocol"))||!Boolean.FALSE.equals(effects.opt("repositoryHooks"))||!Boolean.FALSE.equals(effects.opt("arbitraryShell")))throw new SecurityException("Git含未审阅参数或效果声明不同");
     }
-    /** Native construction only. Immutable plans carry semantic Git request + fixed program SHA, never a huge nested script. */
-    public static JSONArray arguments(JSONObject payload)throws Exception {if(!ProjectGitProgram.identity().equals(payload.optString("gitProgramDigest"))||!Integer.valueOf(1).equals(payload.opt("gitProtocolVersion")))throw new SecurityException("原Git程序版本已变化");return new JSONArray().put("-c").put(ProjectGitProgram.source()).put(ProjectSources.canonical(verifiedRequest(payload.getJSONObject("gitRequest"))));}
+    private static boolean isolatedLauncher(JSONObject payload)throws Exception {
+        if(!ProjectGitProgram.identity().equals(payload.optString("gitProgramDigest"))||!Integer.valueOf(1).equals(payload.opt("gitProtocolVersion")))throw new SecurityException("原Git程序版本已变化");
+        if(!payload.has(LAUNCHER_FIELD))return false;
+        if(!ISOLATED_LAUNCHER.equals(payload.opt(LAUNCHER_FIELD)))throw new SecurityException("原Git解释器启动模式无效");
+        return true;
+    }
+    private static JSONArray fixedArguments(JSONObject payload,JSONArray prefix)throws Exception {
+        return prefix.put("-c").put(ProjectGitProgram.source()).put(ProjectSources.canonical(verifiedRequest(payload.getJSONObject("gitRequest"))));
+    }
+    public static void requireIsolatedLaunch(JSONObject payload)throws Exception {
+        if(!isolatedLauncher(payload))throw new ProjectDevelopment.NotDispatched(new JSONObject().put("status","not_dispatched").put("accepted",false)
+                .put("code","project_git_legacy_observation_only").put("message","旧版Git方案仅可核对原回执，不能再执行；请重新审阅当前副本。"));
+    }
+    /** Native dispatch only. The worktree and Python site initialization cannot provide helper imports. */
+    public static JSONArray arguments(JSONObject payload)throws Exception {
+        requireIsolatedLaunch(payload);
+        return fixedArguments(payload,new JSONArray().put("-I").put("-S"));
+    }
+    /** Historical argv stay private to verification; no alternative launch or retry is returned. */
+    static boolean matchesReceiptArguments(JSONObject payload,JSONObject receipt)throws Exception {
+        Object count=receipt.opt("argvCount");
+        if(!Boolean.FALSE.equals(receipt.opt("argumentValuesIncluded"))||receipt.has("argv")||receipt.has("requestedArgv")||!(count instanceof Integer||count instanceof Long))return false;
+        JSONArray expected=isolatedLauncher(payload)?arguments(payload):fixedArguments(payload,new JSONArray());
+        return ((Number)count).longValue()==expected.length()&&ProjectSources.digest(new JSONObject().put("argv",expected)).equals(receipt.optString("argvDigest"));
+    }
     public static void requireCurrentTools(JSONObject exact,JSONObject runtime)throws Exception {
-        if(!exact(exact))throw new SecurityException("不是原固定Git执行");JSONObject git=tool(runtime,"git"),python=tool(runtime,"python3"),r=verifiedRequest(exact.getJSONObject("payload").getJSONObject("gitRequest"));if(git==null||python==null||!runtime.optBoolean("canExecute")||!git.getString("sha256").equals(r.getString("gitExecutableSha256")))throw new ProjectDevelopment.NotDispatched(new JSONObject().put("status","not_dispatched").put("accepted",false).put("code","project_git_tools_unavailable").put("message","原Git/Python工具未就绪或版本已变；本次没有派发，请重新准备并审阅"));
+        if(!exact(exact))throw new SecurityException("不是原固定Git执行");requireIsolatedLaunch(exact.getJSONObject("payload"));JSONObject git=tool(runtime,"git"),python=tool(runtime,"python3"),r=verifiedRequest(exact.getJSONObject("payload").getJSONObject("gitRequest"));if(git==null||python==null||!runtime.optBoolean("canExecute")||!git.getString("sha256").equals(r.getString("gitExecutableSha256")))throw new ProjectDevelopment.NotDispatched(new JSONObject().put("status","not_dispatched").put("accepted",false).put("code","project_git_tools_unavailable").put("message","原Git/Python工具未就绪或版本已变；本次没有派发，请重新准备并审阅"));
     }
     public static JSONObject semantic(JSONObject payload)throws Exception {
         JSONObject r=verifiedRequest(payload.getJSONObject("gitRequest")),result=new JSONObject().put("action",r.getString("action")).put("label",label(r.getString("action"))).put("writesGit",writes(r.getString("action"))).put("writesWorktree",r.getString("action").equals("isolate")).put("network",false).put("hooks",false).put("fixedProgramDigest",payload.getString("gitProgramDigest"));

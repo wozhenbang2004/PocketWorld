@@ -1009,6 +1009,12 @@ public final class LocalModule implements EngineModule {
         packageIdentity(newProject);packageIdentity(nativeImportId);packageIdentity(originalCheckout);packageHash(sectionDigest);packageHash(manifest);String id=ownerArchiveCheckoutId(nativeImportId,originalCheckout);File directory=new File(new File(root,"checkouts"),id),record=new File(directory,"checkout.json");if(!Files.exists(directory.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))return new JSONObject().put("found",false).put("status","unknown").put("checkoutId",id).put("replayAllowed",false);if(Files.isSymbolicLink(directory.toPath())||Files.isSymbolicLink(record.toPath())||!record.isFile())throw new SecurityException("原恢复副本记录不可用，未重新创建");JSONObject value=JsonFiles.read(record),pin=value.getJSONObject("ownerArchiveImport");if(!newProject.equals(value.getString("projectId"))||!nativeImportId.equals(pin.getString("nativeImportId"))||!sectionDigest.equals(pin.getString("sectionDigest"))||!originalCheckout.equals(pin.getString("originalCheckoutId"))||!manifest.equals(pin.getString("manifestIdentity")))throw new SecurityException("恢复副本不是此原归档动作");return new JSONObject().put("found",true).put("status","found").put("id",id).put("checkoutId",id).put("projectId",newProject).put("name",value.getString("name")).put("restoredTaskOrGrant",false).put("currentBytesRevalidated",false).put("replayAllowed",false);
     }
     private static String ownerArchiveCheckoutId(String action,String old){return UUID.nameUUIDFromBytes(("owner-checkout-restore-v1:"+action+":"+old).getBytes(StandardCharsets.UTF_8)).toString();}
+    /** Metadata only for the private file window. No Git command, include or hook runs here. */
+    public synchronized boolean hasOrdinaryGitDirectoryForOwner(String checkoutId)throws Exception {
+        if(closed)throw new IllegalStateException("本机项目宿主已关闭");
+        File git=new File(content(checkoutId),".git");
+        return Files.isDirectory(git.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)&&git.equals(git.getCanonicalFile());
+    }
     /** Native project page only. The returned Java value is never accepted by generic feature/model JSON. */
     public synchronized dev.pocketengine.features.local.project.ProjectGit.OwnerRequest reviewGitForOwner(String checkoutId,JSONObject selected)throws Exception {
         if(closed)throw new IllegalStateException("原项目模块已关闭");requireIdle(checkoutId);if(dev.pocketengine.features.local.project.ProjectGit.writes(selected.optString("gitAction")))requireCheckoutWritable(checkoutId);

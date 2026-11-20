@@ -4,7 +4,7 @@
 import { useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { IconClock } from '../../icons';
 import { Button } from '../../forms-library';
-import { durationLabel, traceFailed, traceInProgress, traceOverviewLayout, traceRoleLabel, traceStatus, type TraceEventRow, type TraceNode } from '../../execution-trace';
+import { durationLabel, traceDisplayName, traceFailed, traceInProgress, traceOverviewLayout, traceRecordStatus, traceRoleLabel, type TraceEventRow, type TraceNode } from '../../execution-trace';
 
 export function TraceOverview({ rows, mode, onModeChange, highlightedId, turnCount, toolCount, onLocate }: {
   rows: TraceEventRow[]; mode: 'order' | 'duration'; onModeChange: (mode: 'order' | 'duration') => void;
@@ -38,7 +38,7 @@ export function TraceOverview({ rows, mode, onModeChange, highlightedId, turnCou
   return <section className="pw-trace-lanes" aria-label="轨迹总览" data-overview-mode={mode}>
     <header className="pw-trace-lanes-header">
       <Button variant="ghost" leadingIcon={IconClock} aria-pressed={mode === 'duration'} aria-label="按实际耗时展示总览" onClick={() => onModeChange(mode === 'order' ? 'duration' : 'order')}>{mode === 'duration' ? '时长' : '顺序'}</Button>
-      <span><b>{turnCount}</b> Turns</span><span><b>{toolCount}</b> Calls</span>
+      <span><b>{turnCount}</b> Turns</span><span><b>{toolCount}</b> 条工具记录</span>
       <span className="pw-trace-measured" title="已记录调用耗时之和；并行调用可能重叠，不等同于执行总历时">{durationLabel(entries.some(entry => entry.duration !== null) ? duration : null)}{unknown > 0 && entries.some(entry => entry.duration !== null) && <small>已测</small>}</span>
     </header>
     <div className="pw-trace-lane-plot">
@@ -47,13 +47,13 @@ export function TraceOverview({ rows, mode, onModeChange, highlightedId, turnCou
         <svg ref={svg} role="group" aria-label="三泳道轨迹。左右方向键选择，回车定位到轮次列表" width="100%" height="84" style={{ minWidth: `${Math.max(240, entries.length * 8)}px` }} onClick={locateNearest}>
           {[14, 42, 70].map(y => <line key={y} x1="0" x2="100%" y1={y} y2={y} className="pw-trace-lane-guide"/>)}
           {entries.map((entry, index) => <g key={entry.node.id} role="button" tabIndex={entry.node.id === focused ? 0 : -1}
-            aria-label={`定位 ${traceRoleLabel(entry.node)} ${entry.node.name}，${entry.node.turnIndex == null ? '轮次未记录' : `Turn ${entry.node.turnIndex}`}，${traceStatus(entry.node.status)}，${durationLabel(entry.duration)}`}
+            aria-label={`定位 ${traceRoleLabel(entry.node)} ${traceDisplayName(entry.node)}，${entry.node.turnIndex == null ? '轮次未记录' : `Turn ${entry.node.turnIndex}`}，${traceRecordStatus(entry.node)}，${durationLabel(entry.duration)}`}
             data-overview-node={entry.node.id} data-lane={entry.lane} data-highlighted={entry.node.id === highlightedId || undefined}
             data-failed={traceFailed(entry.node) || entry.request && traceFailed(entry.request) || undefined}
             data-running={traceInProgress(entry.node.status) || undefined} data-timing={entry.duration === null ? 'unknown' : 'observed'}
             onFocus={() => setFocusId(entry.node.id)} onKeyDown={event => onKey(event, index)}
             onClick={event => { event.stopPropagation(); setFocusId(entry.node.id); onLocate(entry.node); }}>
-            <title>{`${traceRoleLabel(entry.node)} · ${entry.node.name} · ${durationLabel(entry.duration)}`}</title>
+            <title>{`${traceRoleLabel(entry.node)} · ${traceDisplayName(entry.node)} · ${durationLabel(entry.duration)}`}</title>
             <rect className="pw-trace-lane-hit" x={`${entry.start * 100}%`} y={entry.lane * 28} width={`${(entry.end - entry.start) * 100}%`} height="28"/>
             <rect className="pw-trace-lane-bar" x={`${(entry.start + (entry.end - entry.start) * .08) * 100}%`} y={entry.lane * 28 + (entry.lane === 1 ? 9 : 10)}
               width={`${Math.max(.08, (entry.end - entry.start) * .84 * 100)}%`} height={entry.lane === 1 ? 10 : 8} rx="1.5"/>

@@ -2,7 +2,7 @@
  * The assistant's request entry remains separate from its message detail. */
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { IconChevronRight, IconError } from '../../icons';
-import { nodeDurationLabel, traceFailed, traceInProgress, traceRole, traceRoleLabel, traceStatus, traceTurns, type TraceEventRow, type TraceNode } from '../../execution-trace';
+import { nodeDurationLabel, traceDisplayName, traceFailed, traceInProgress, traceRecordStatus, traceRole, traceRoleLabel, traceTurns, type TraceEventRow, type TraceNode } from '../../execution-trace';
 
 export function TraceEventList({ rows, selectedId, highlightedId, locateTicket, onSelect, onHighlightEnd, complete }: {
   rows: TraceEventRow[]; selectedId: string | null; highlightedId: string | null; locateTicket: number;
@@ -23,7 +23,7 @@ export function TraceEventList({ rows, selectedId, highlightedId, locateTicket, 
       <h4 className="pw-trace-turn-header"><span>{group.turnIndex != null ? `Turn ${group.turnIndex}` : group.turnId ? '已记录轮次' : '未关联轮次的记录'}</span><i aria-hidden="true"/></h4>
       {group.rows.map(({ node, request }) => {
         const role = traceRole(node), failed = traceFailed(node) || !!request && traceFailed(request);
-        const measured = request || node;
+        const measured = request || node, title = traceDisplayName(node), state = traceRecordStatus(node);
         return <div className="pw-trace-event-row" key={node.id} data-node-id={node.id} data-role={role} data-kind={node.kind}
           data-highlighted={highlightedId === node.id || undefined} data-selected={selectedId === node.id || undefined}
           data-failed={failed || undefined} data-running={traceInProgress(node.status) || undefined}>
@@ -33,11 +33,11 @@ export function TraceEventList({ rows, selectedId, highlightedId, locateTicket, 
               title={request ? '查看这次模型请求' : complete ? '关联请求未保留' : '正在补齐关联请求'} onClick={() => request && onSelect(request)}><i aria-hidden="true"/></button>
               : <span className="pw-trace-event-dot" aria-hidden="true"><i/></span>}
           </div>
-          <button type="button" className="pw-trace-event-open" aria-label={`打开 ${traceRoleLabel(node)} ${node.name}`} onClick={() => onSelect(node)}>
+          <button type="button" className="pw-trace-event-open" aria-label={`打开 ${traceRoleLabel(node)} ${title}，${state}`} onClick={() => onSelect(node)}>
             <span className="pw-trace-role-tag">{traceRoleLabel(node)}</span>
-            <span className="pw-trace-event-name">{node.name}</span>
+            <span className="pw-trace-event-name">{title}</span>
             <span className="pw-trace-event-sequence">#{node.sequence}</span>
-            <span className="pw-trace-event-meta">{failed && <IconError size={11} aria-hidden="true"/>}{traceStatus(node.status)}<i aria-hidden="true">·</i>{nodeDurationLabel(measured)}{node.legacy && <><i aria-hidden="true">·</i>早先记录</>}</span>
+            <span className="pw-trace-event-meta">{failed && <IconError size={11} aria-hidden="true"/>}{state}<i aria-hidden="true">·</i>{nodeDurationLabel(measured)}{node.legacy && <><i aria-hidden="true">·</i>早先记录</>}</span>
             <IconChevronRight className="pw-trace-event-chevron" size={14} aria-hidden="true"/>
           </button>
         </div>;

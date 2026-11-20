@@ -12,6 +12,11 @@
 .pw-file-page-header p { margin: 0; color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
 .pw-file-page[data-file-view="original"] .pw-file-page-header > div { flex: 1 1 120px; }
 .pw-file-page[data-file-view="original"] .pw-file-page-header > button { flex: none; white-space: nowrap; }
+.pw-file-page .pw-result-file-navigation {
+ display: flex; flex: none; align-items: center; justify-content: center; gap: var(--pw-gap-related, 8px);
+ padding: 0 var(--pw-page-gutter, 20px) 4px; color: var(--pw-copy); font: 400 13px/20px var(--pw-font);
+}
+.pw-result-file-navigation > button { min-width: var(--pw-control-target, 44px); }
 .pw-file-page .pw-original-text { min-width: 0; overflow-wrap: anywhere; }
 .pw-file-page .pw-original-text > .pw-action-row:empty { display: none; }
 .pw-drawer.pw-file-workspace.pw-file-page .pw-file-page-scroll { width: 100%; padding: 16px max(20px, calc((100vw - 960px) / 2)) max(28px, env(safe-area-inset-bottom)); overscroll-behavior: contain; scroll-padding-block: 20px; }

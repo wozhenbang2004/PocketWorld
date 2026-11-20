@@ -275,6 +275,32 @@ internal class AttachmentOutcomeCoordinator(
         }
     }
     fun backFromOriginalFile(){state=state.copy(originalFile=null)}
+    /** An explicit navigation among the same run's listed originals, not a new inventory read. */
+    fun openListedOriginal(id: String, sha256: String, current: () -> Boolean) {
+        val run = state.resultRun ?: error("请在本轮成果中打开原件")
+        check(current() && state.open && !state.busy && !exportPending &&
+            state.group == null && state.team == null && !state.deviceOriginalOnly && !state.choosingSource &&
+            state.documentDraft == null && state.processingSource == null && state.comparison == null && !state.documentOpen &&
+            (state.file == null || state.originalFile != null)) { "请先返回本轮成果或完成当前文件操作" }
+        val listed = state.snapshot ?: error("本轮文件清单尚未读取")
+        val selected = run.files(listed).entries.singleOrNull { it.optString("id") == id && it.optString("sha256") == sha256 }
+            ?.let { JSONObject(it.toString()) } ?: error("所选原件不在这次已核对的成果中")
+        var original: dev.pocketengine.features.attachments.OwnerFilePreviewSource? = null
+        work(onSuccess = {
+            if (current() && state.resultRun == run) original?.let { source ->
+                restoreFile = null
+                state = state.copy(file = selected, originalFile = source, thumbnail = null, document = null)
+            }
+        }) { control, _ ->
+            requireConversationResult(run, control)
+            val source = app.attachmentOutcomes.originalFile(run.taskId, id, sha256, control)
+            check(source.name == selected.getString("name") && source.mimeType == selected.getString("mimeType") &&
+                source.sizeBytes == selected.getLong("size")) { "原文件信息已变化，请重新读取本轮成果" }
+            requireConversationResult(run, control)
+            original = source
+            JSONObject() to null
+        }
+    }
     fun shareOriginalFile(){
         if(state.busy||state.group!=null||state.team!=null)return;val file=state.file?:return;val task=state.taskId
         var prepared:Intent?=null;val issued=java.util.concurrent.atomic.AtomicBoolean(false)

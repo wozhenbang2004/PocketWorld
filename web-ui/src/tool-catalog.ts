@@ -14,9 +14,10 @@ export const categoryLabels: Record<string, string> = {
 export const decisionLabels: Record<ToolDecision, string> = { allow: '直接允许', ask: '询问我', deny: '禁止', review: 'AI 审批' };
 export const toolSource = (tool: CatalogTool) => tool.source === 'installed_plugin' ? '已注册插件' : tool.source === 'saved_rule' ? '保存的工具名，目录未登记' : tool.source === 'original_task' ? '原任务登记，目录未发现' : tool.source === 'task_bound' ? '按任务接入的内置定义' : '内置注册定义';
 const titles: Record<string, string> = {
+  web_search: '搜索公开网页', web_fetch: '读取公开网页', web_research: '检索公开资料', web_sources: '查看已保留的网页出处',
   semantic_discover: '查找日历、时钟与 App 入口', semantic_dispatch: '执行已核对的日历或 App 操作',
   memory_search: '检索私人记忆', memory_recall: '召回记忆与来源', memory_raw_query: '查找原始任务记录', memory_raw_read: '读取原始任务记录',
-  skills_list: '发现技能', skills_read: '阅读准确版本的技能', skills_execute: '准备本次技能脚本执行',
+  skills_list: '发现技能', skills_read: '阅读准确版本的技能', skills_reference_decision: '关联技能参考与原步骤', skills_execute: '准备本次技能脚本执行',
   workspace_projects: '列出本地项目', workspace_list: '浏览项目文件', workspace_read: '读取项目文件', workspace_write: '保存项目文件',
   workspace_create: '创建项目', workspace_artifacts: '查找文件成果', workspace_read_artifact: '读取冻结成果',
   attachments_list: '查找已导入附件', attachments_read_text: '读取附件文字', attachments_create_document: '生成文档附件',

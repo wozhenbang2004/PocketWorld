@@ -10,7 +10,7 @@ const fileTypes: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint 演示文稿',
 };
 
-export function AttachmentFileCollection({ label, files, busy, choosing, onSelect }: { label: string; files: FileJson[]; busy: boolean; choosing: boolean; onSelect: (target: FileJson) => void }) {
+export function AttachmentFileCollection({ label, files, busy, choosing, opensOriginal, onSelect }: { label: string; files: FileJson[]; busy: boolean; choosing: boolean; opensOriginal?: boolean; onSelect: (target: FileJson) => void }) {
   if (!files.length) return null;
   return <section className="pw-outcome-files" aria-label={label}>
     <h3>{label}</h3>
@@ -18,7 +18,7 @@ export function AttachmentFileCollection({ label, files, busy, choosing, onSelec
       const target = exactFileTarget(item), mime = String(item.mimeType || ''), size = item.size ?? item.sizeBytes;
       const type = fileTypes[mime] || (mime.startsWith('image/') ? '图片' : mime.startsWith('video/') ? '视频' : mime.startsWith('audio/') ? '音频' : mime || '文件');
       const metadata = [type, typeof size === 'number' && Number.isFinite(size) ? fileBytes(size) : '大小未记录', fileRunProvenance(item.runProvenance)].filter(Boolean).join(' · ');
-      const action = choosing ? '选择来源' : '查看版本';
+      const action = choosing ? '选择来源' : opensOriginal ? '查看原件' : '查看版本';
       return <Button key={`${item.id}:${item.sha256}:${index}`} variant="ghost" className="pw-file-collection-row" leadingIcon={mime.startsWith('image/') ? IconFileImage : IconFile} trailingIcon={IconChevronRight} aria-label={`${action}：${item.name || '原文件'}，${metadata}`} disabled={busy || !target} onClick={() => target && onSelect(target)}><span className="pw-file-collection-copy"><strong>{item.name || '原文件'}</strong><small>{metadata}</small>{!target && <small>原文件或版本当前不可用</small>}</span><span className="pw-file-collection-action">{target ? action : '不可用'}</span></Button>;
     })}</div>
   </section>;

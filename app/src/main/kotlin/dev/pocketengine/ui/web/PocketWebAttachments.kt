@@ -194,7 +194,14 @@ internal class PocketWebAttachments(
                 "read" -> flow.read(DocumentContent.Request(args.optInt("unit", 1), args.optInt("chunk", 0), 4, 12000, 48, "text"))
                 "ocr" -> flow.readImageText()
                 "saveRead" -> flow.saveReadAsFile()
-                "openOriginal" -> flow.openOriginalFile()
+                "openOriginal" -> {
+                    if (args.has("fileId") || args.has("sha256")) {
+                        val file = selected()
+                        flow.openListedOriginal(file.getString("id"), file.getString("sha256")) {
+                            window === current && acceptsWindow(current.ticket) && controller.webPrivateOwnerVisible()
+                        }
+                    } else flow.openOriginalFile()
+                }
                 "export" -> flow.prepareExport()
                 "openInReader" -> {
                     check(flow.state.group == null && flow.state.team == null && viewer.canOpenInReader(flow.state.file)) {

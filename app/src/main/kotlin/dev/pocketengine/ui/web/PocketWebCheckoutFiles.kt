@@ -23,6 +23,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         @Volatile var matchesUntil: Long = 0
         @Volatile var textPage: CheckoutTextMatches? = null
         @Volatile var textUntil: Long = 0
+        val git = PocketWebCheckoutGit(project, checkout)
         var opened: Opened? = null
         var adoption: Adoption? = null
     }
@@ -110,6 +111,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         return JSONObject().put("filesHandle", original.handle).put("projectId", original.project).put("checkoutId", original.checkout)
             .put("sourceDigest", digest).put("files", JSONArray(selected.take(40).map { it.value })).put("fileCount", source.getInt("fileCount"))
             .put("nextPath", if (selected.size > 40) selected[39].key else "").put("draftError", cacheError).put("readOnly", true)
+            .put("gitAvailable", runCatching { PocketWebCheckoutGit.available(controller, original.checkout) }.getOrDefault(false))
     }
     fun dispatch(action: String, args: JSONObject, project: String, parentCurrent: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         require(action in COMMANDS)
@@ -224,10 +226,19 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 }
             }
             "projects.development.files.list" -> {
-                fields(args, "viewHandle", "filesHandle", "afterPath", "sourceDigest")
                 check(original.sourcePath == null) { "这个入口只打开原任务选中的那一个文件" }
-                val after = text(args, "afterPath", 240, true); val expected = text(args, "sourceDigest", 64, true)
-                work(original, done) { listing(original, after, expected) }
+                if(args.has("gitRead")){
+                    fields(args,"viewHandle","filesHandle","gitRead")
+                    val request=JSONObject(args.getJSONObject("gitRead").toString())
+                    work(original,done) {
+                        original.git.read(controller,request){ current(original) }.put("filesHandle",original.handle)
+                            .put("projectId",original.project).put("checkoutId",original.checkout)
+                    }
+                }else{
+                    fields(args, "viewHandle", "filesHandle", "afterPath", "sourceDigest")
+                    val after = text(args, "afterPath", 240, true); val expected = text(args, "sourceDigest", 64, true)
+                    work(original, done) { listing(original, after, expected) }
+                }
             }
             "projects.development.files.find", "projects.development.files.findNext" -> {
                 check(original.sourcePath == null) { "原任务单文件入口不能搜索整个副本" }
@@ -277,14 +288,22 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     check(original.sourcePath==null){"原任务只读所选文件"};fields(args,"viewHandle","filesHandle","searchHandle","hit")
                     val index=number(args,"hit");require(index in 0L..1999L);check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已过期，请重新查找"}
                     (original.matches?:error("原查询已结束，请重新查找")).selected(text(args,"searchHandle"),index.toInt())
-                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path");null}
+                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path", "gitStatusOperation");null}
+                val gitStatus=if(args.has("gitStatusOperation")){
+                    check(action.endsWith(".read")&&original.sourcePath==null){"只能在原副本目录选择 Git 文件"}
+                    text(args,"gitStatusOperation")
+                }else null
                 val path=located?.second?.getString("path")?:hit?.path()?:text(args,"path",240)
                 if (original.sourcePath != null) {
                     check(path == original.sourcePath && !busy) { "只能重新核对已选择的原文件" }
                     original.opened?.let { store.release(it.draft) }; original.opened = null
                 }
                 work(original, done) {
+                    val gitSha=gitStatus?.let { original.git.shaForEditor(it,path) }
                     val actual = controller.projectDevelopmentForWeb().fileForOwner(original.project, original.checkout, path)
+                    if(gitSha!=null)check(!actual.getBoolean("deleted")&&actual.getString("expectedHash")==gitSha){
+                        "上次 Git 读取后文件内容已变化，请重读同一副本的 Git 状态。"
+                    }
                     val anchor=located?.let{(source,selected)->
                         check(textPage(original,args)===source){"原查询已经改变"};source.anchor(selected,actual)
                     }

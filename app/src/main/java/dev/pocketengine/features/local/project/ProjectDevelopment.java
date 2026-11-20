@@ -216,8 +216,13 @@ public final class ProjectDevelopment {
         if(route==null||!"native_host_operation".equals(binding.optString("authority"))||!"native_host_operation".equals(route.optString("authority"))||!"managed_process".equals(job.optString("provider"))||!"project.runtime.run".equals(route.optString("command"))||!"managed_process_v1".equals(route.optString("runtimeId"))||!plan.getString("runtimeIdentity").equals(route.optString("runtimeIdentity")))throw new SecurityException("精确命令缺少原native运行位置与回执绑定");
         verifyLink(plan,step,route);for(String key:new String[]{"taskId","runId","operationId","coordinatorEpoch"})if(!ProjectSources.canonical(binding.get(key)).equals(ProjectSources.canonical(route.opt(key))))throw new SecurityException("精确命令回执属于其他task/run/epoch");
         if(!plan.getString("projectId").equals(route.optString("projectId"))||!plan.getString("checkoutId").equals(route.optString("checkoutId"))||!job.getString("id").equals(binding.getString("operationId"))||!job.optString("operationId").equals(binding.getString("operationId")))throw new SecurityException("精确命令原job身份不一致");
-        JSONArray arguments=ProjectGit.plan(plan)?ProjectGit.arguments(payload):payload.getJSONArray("argv");Object count=job.opt("argvCount");String digest=ProjectSources.digest(new JSONObject().put("argv",arguments));
-        if(!payload.getString("executable").equals(job.optString("requestedExecutable"))||!Boolean.FALSE.equals(job.opt("argumentValuesIncluded"))||job.has("argv")||job.has("requestedArgv")||!(count instanceof Integer||count instanceof Long)||((Number)count).longValue()!=arguments.length()||!digest.equals(job.optString("argvDigest")))throw new SecurityException("真实job可执行文件或参数摘要不同");
+        boolean sameArguments;
+        if(ProjectGit.plan(plan))sameArguments=ProjectGit.matchesReceiptArguments(payload,job);
+        else {
+            JSONArray arguments=payload.getJSONArray("argv");Object count=job.opt("argvCount");String digest=ProjectSources.digest(new JSONObject().put("argv",arguments));
+            sameArguments=Boolean.FALSE.equals(job.opt("argumentValuesIncluded"))&&!job.has("argv")&&!job.has("requestedArgv")&&(count instanceof Integer||count instanceof Long)&&((Number)count).longValue()==arguments.length()&&digest.equals(job.optString("argvDigest"));
+        }
+        if(!payload.getString("executable").equals(job.optString("requestedExecutable"))||!sameArguments)throw new SecurityException("真实job可执行文件或参数摘要不同");
     }
     private JSONObject artifact(JSONObject input)throws Exception {
         JSONObject receipt=receipt(input);requireBuild(receipt);JSONObject plan=ProjectBuildPlan.verified(input.getJSONObject("plan"));String path=VersionedWorkspace.path(input.getString("path"));

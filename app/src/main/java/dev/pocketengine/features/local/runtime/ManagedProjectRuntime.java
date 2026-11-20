@@ -223,6 +223,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         boolean passedToJobs=false;try{
         requireProvider(invocation.executionRef());invocation.checkCurrent();
         JSONObject exact=invocation.exact();
+        if(dev.pocketengine.features.local.project.ProjectGit.exact(exact))dev.pocketengine.features.local.project.ProjectGit.requireIsolatedLaunch(exact.getJSONObject("payload"));
         if(dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.exact(exact))
             dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.requireLaunch(exact,invocation.sourceSnapshot(),describe(),invocation.workspace());
         if(dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact()))dev.pocketengine.features.skills.ManagedSkillBackend.requireProgram(invocation.exact());
@@ -248,8 +249,11 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             case COMMAND:
                 RuntimeTool tool=tools.get(payload.getString("executable"));
                 if(tool==null)throw new IllegalArgumentException("runtime_tool_not_installed");
-                JSONArray requested=dev.pocketengine.features.local.project.ProjectGit.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGitImport.arguments(payload):payload.getJSONArray("argv");List<String> argv=new ArrayList<>();
-                for(int i=0;i<requested.length();i++)argv.add(requested.getString(i));command=tool.command(argv);break;
+                boolean fixedGit=dev.pocketengine.features.local.project.ProjectGit.exact(exact);
+                JSONArray requested=fixedGit?dev.pocketengine.features.local.project.ProjectGit.arguments(payload):dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())?dev.pocketengine.features.local.project.ProjectGitImport.arguments(payload):payload.getJSONArray("argv");List<String> argv=new ArrayList<>();
+                for(int i=0;i<requested.length();i++)argv.add(requested.getString(i));command=tool.command(argv);
+                if(fixedGit&&(command.size()!=argv.size()+1||!command.subList(1,command.size()).equals(argv)))throw new SecurityException("固定Git解释器不接受安装端前置参数");
+                break;
             default:throw new IllegalArgumentException("runtime_phase_requires_native_artifact_reader");
         }
         File directory=workspace.resolve(payload.optString("workingDirectory","."),false);

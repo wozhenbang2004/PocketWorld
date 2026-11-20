@@ -1,5 +1,7 @@
 /** Read-only presentation of the original task execution. Cursors and nanosecond
  * strings are opaque: neither is reconstructed from a browser clock. */
+import { toolTitle } from './tool-catalog.ts';
+
 export type TraceKind = 'model' | 'tool' | 'event';
 export type TraceRole = 'input' | 'context' | 'assistant' | 'request' | 'tool' | 'subtool' | 'event';
 export type TraceFilter = 'all' | 'model' | 'tool' | 'failed';
@@ -16,7 +18,7 @@ export type TraceNode = {
   generationDurationMs?: number | null; generationTimingMeaning?: string | null;
   contextMeaning?: string; optionsSource?: string;
   providerToolCallId?: string; purpose?: string; message?: unknown; sourceStatus?: string;
-  contentLimited?: boolean; effectPending?: boolean; completionMeaning?: string; timingMeaning?: string; wallClockAdjusted?: boolean;
+  contentLimited?: boolean; dispatchEntered?: boolean; effectPending?: boolean; completionMeaning?: string; timingMeaning?: string; wallClockAdjusted?: boolean;
   preview?: unknown; raw?: unknown; options?: unknown; schema?: unknown; sourceRefs?: unknown;
   contentUnavailable?: unknown; preferenceChange?: unknown;
 };
@@ -141,6 +143,35 @@ export function traceStatus(status: string): string {
 }
 export const traceKind = (kind: TraceKind) => ({ model: '模型', tool: '工具', event: '事件' })[kind];
 
+export function traceDisplayName(node: TraceNode): string {
+  if (node.kind !== 'tool') return node.name;
+  const title = toolTitle({name: node.name, category: '', description: '', source: '', configurable: false});
+  return typeof title === 'string' ? title : node.name;
+}
+
+/** Native trace records the tool handler's boundary, not the success of an effect. */
+export function traceRecordStatus(node: TraceNode): string {
+  if (node.kind !== 'tool') return traceStatus(node.status);
+  if (node.source !== 'native_tool_trace' || node.legacy || !node.runId || !integer(node.epoch) || typeof node.dispatchEntered !== 'boolean')
+    return '派发未核对';
+  if (node.finishedAt === null) return traceInProgress(node.status) ? '等待原回执' : '没有终态回执';
+  if (!node.dispatchEntered) {
+    // Only a refusal before entering the original handler establishes one of these causes.
+    switch (object(node.error)?.code) {
+      case 'tool_policy_denied': return '规则禁止，未派发';
+      case 'tool_schema_not_published': return '定义未提供，未派发';
+      case 'tool_withdrawn': return '工具已变化，未派发';
+      case 'owner_intent_read_only': return '本次只读，未派发';
+      default: return '未进入工具';
+    }
+  }
+  if (node.effectPending === true) return '已返回，效果待确认';
+  if (node.status === 'completed') return '工具已返回';
+  if (node.status === 'rejected') return '未受理';
+  if (node.status === 'unknown') return '结果待核对';
+  return traceStatus(node.status);
+}
+
 /** Only native observed elapsed time creates a duration bar. A wall clock
  * subtraction, snapshot time or STARTED receipt never becomes tool latency. */
 export function traceDuration(node: TraceNode): number | null {
@@ -167,9 +198,9 @@ export function nodeDurationLabel(node: TraceNode): string {
 
 const order = (a: TraceNode, b: TraceNode) => (a.startedAt ?? Number.MAX_SAFE_INTEGER) - (b.startedAt ?? Number.MAX_SAFE_INTEGER) || a.sequence - b.sequence || a.id.localeCompare(b.id);
 function searchText(node: TraceNode) {
-  return [node.name, node.kind === 'tool' && node.name === 'agent_settings_set' ? '保存默认偏好' : '', node.model, node.callId, node.operationId, node.memberId, node.turnId, node.logicalRequestId,
+  return [node.name, traceDisplayName(node), node.kind === 'tool' && node.name === 'agent_settings_set' ? '保存默认偏好' : '', node.model, node.callId, node.operationId, node.memberId, node.turnId, node.logicalRequestId,
     node.stepId, node.requestId, traceRoleLabel(node), node.turnIndex == null ? '' : `Turn ${node.turnIndex}`,
-    traceStatus(node.status), traceKind(node.kind), traceBody(node.error).text, traceBody(node.message).text].filter(Boolean).join(' ').toLocaleLowerCase();
+    traceStatus(node.status), traceRecordStatus(node), traceKind(node.kind), traceBody(node.error).text, traceBody(node.message).text].filter(Boolean).join(' ').toLocaleLowerCase();
 }
 
 export function traceRole(node: TraceNode): TraceRole { return node.role || (node.kind === 'model' ? 'request' : node.kind === 'tool' ? 'tool' : 'event'); }
