@@ -4,6 +4,7 @@ import {Accordion,AccordionItem,Button,CheckboxField} from './forms-library';
 import {PressButton} from './library';
 import {originalTeamApprovalFile,TeamApprovalFileComparison} from './TeamApprovalFileComparison';
 import {ownerWorkIdentity} from './conversation-work';
+import {privateProjectTask} from './task-continuation';
 import {missingOneTimeTeamReview,teamPlannedModel} from './team-preparation';
 import './task-decisions.css';
 
@@ -121,6 +122,32 @@ export function originalTeamStartDecisionReadback(task:unknown) {
   anotherPending:rows.some(row=>row.id!==approval.id&&ordinary(row)&&row.state==='pending'&&Number.isSafeInteger(row.expiresAt)&&row.expiresAt>Date.now())};
 }
 
+type NodeCommandReview = { approvalId:string; runId:string; epoch:number; operationId:string; action:'dependencies'|'build' };
+const nodeSourceHash = (value:unknown):value is string => typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+const originalId = (value:unknown):value is string => typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
+
+/** Navigation from an already observed pending command. Only tasks.review can provide a decision handle. */
+export function originalPendingNodeCommand(task?:Json):NodeCommandReview|null {
+ const raw=object(task?.raw), context=object(raw.developmentContext), pin=object(context.ownerDraftFirstBuild);
+ const runId=raw.runId,epoch=raw.coordinatorEpoch;
+ if(!task||!privateProjectTask(task)||raw.id!==task.id||raw.status!==task.status||
+    !['awaiting_user','waiting_user','waiting_approval','awaiting_approval','waiting_permission','awaiting_permission'].includes(task.status)||
+    raw.cancelRequested===true||raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||
+    raw.taskProjection==='source_unavailable'||!originalId(runId)||!Number.isSafeInteger(epoch)||epoch<1||
+    context.format!=='pocketworld.development-context.v1'||context.runtime!=='managed_process_v1'||context.draftOnly===true||
+    pin.existingCheckoutBuild!==true||pin.projectId!==context.projectId||pin.checkoutId!==context.checkoutId||
+    !nodeSourceHash(pin.sourceDigest)||pin.sourceDigest!==context.initialSourceDigest||!['npm','pnpm'].includes(pin.manager))return null;
+ const pending=list(raw.approvals).filter(row=>row?.state==='pending'&&row.runId===runId&&Number.isSafeInteger(row.expiresAt)&&row.expiresAt>Date.now());
+ if(pending.length!==1)return null;
+ const row=pending[0], review=object(row.firstBuildReview), cap=object(row.capability), action=review.action;
+ if(row.tool!=='project_execute'||!originalId(row.id)||cap.command!=='project.runtime.run'||cap.checkoutId!==pin.checkoutId||cap.sourceDigest!==pin.sourceDigest||
+    (action!=='dependencies'&&action!=='build')||review.taskId!==task.id||review.actionRunId!==runId||review.actionEpoch!==epoch||
+    !originalId(review.actionOperationId)||review.projectId!==pin.projectId||review.checkoutId!==pin.checkoutId||review.sourceDigest!==pin.sourceDigest||
+    review.manager!==pin.manager||action==='dependencies'&&(!nodeSourceHash(review.lock?.lockSha256)||
+      review.lock.lockSha256!==pin.lockedDependencies?.review?.lockSha256||review.lock.lockPath!==pin.lockedDependencies?.review?.lockPath))return null;
+ return {approvalId:row.id,runId,epoch,operationId:review.actionOperationId,action};
+}
+
 /** Composes the adopted BoardUI disclosure/checkbox and Josh press button sources.
  * Decision facts stay visible; only exact technical identities and raw payloads fold away. */
 export function TaskApproval({approval,executionScope={},disabled,onDecision}:{approval:Json;executionScope?:Json;disabled:boolean;onDecision:(args:Json)=>void}) {
@@ -148,6 +175,8 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
      validDependencies||reviewedBuild.action==='build'&&['npm','pnpm'].includes(reviewedBuild.manager)||reviewedBuild.action==='collect'&&positiveId(reviewedBuild.buildRunId)&&
      positiveId(reviewedBuild.buildOperationId)&&reviewedBuild.buildOperationId!==reviewedBuild.actionOperationId&&goodEpoch(reviewedBuild.buildEpoch)&&
      typeof reviewedBuild.path==='string'&&Number.isSafeInteger(reviewedBuild.bytes)&&reviewedBuild.bytes>=0&&/^[a-f0-9]{64}$/.test(reviewedBuild.sha256));
+ const nodeCommand=hasBuild&&buildValid&&(dependencies||reviewedBuild.action==='build')&&
+   originalId(reviewedBuild.checkoutId)&&nodeSourceHash(reviewedBuild.sourceDigest);
  const canApprove=buildValid&&view.canApprove===true&&planMatches&&(!oneTimeStart||!!plannedTeam)&&(!execution||executionMatches)&&(!(team||live||execution)||scopeReviewed);
  const decide=(approved:boolean)=>onDecision({approvalId:id,approved,...(approved&&(team||live||execution)?{scopeReviewed}:{}),...(approved&&team?{planRef:original.planRef,planHash:original.planHash}:{}),...(approved&&execution?{planRevision:executionOriginal.planRevision,planArtifactRef:executionOriginal.planArtifactRef,planHash:executionOriginal.planHash}:{})});
  const originalFile=originalTeamApprovalFile(approval);
@@ -155,11 +184,12 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
  return <section className="pw-approval-item pw-task-decision" aria-label="本次操作授权">
   <header className="pw-decision-heading">
    <span className="pw-decision-eyebrow">{execution?'审阅原任务计划':team?'确认工作计划':live?'确认服务范围':plannedTeam||oneTimeStart?'确认团队分工':'需要你的确认'}</span>
-   <h4>{oneTimeStart?'管家为这件事安排的分工':plannedTeam?<>{'使用编组：'}<bdi>{plannedTeam.name}</bdi></>:String(approval.message||approval.title||(execution?'计划审阅':approval.toolName||approval.tool||'这次操作授权'))}</h4>
+   <h4>{nodeCommand?(dependencies?'核对本机依赖准备':'核对这次本机构建'):oneTimeStart?'管家为这件事安排的分工':plannedTeam?<>{'使用编组：'}<bdi>{plannedTeam.name}</bdi></>:String(approval.message||approval.title||(execution?'计划审阅':approval.toolName||approval.tool||'这次操作授权'))}</h4>
    {approval.reason&&<p className="pw-decision-context">{String(approval.reason)}</p>}
    {approval.description&&<p className="pw-decision-context">{String(approval.description)}</p>}
   </header>
   {hasBuild&&(buildValid?<section className="pw-decision-section"><h5>{dependencies?'准备锁定依赖':reviewedBuild.action==='build'?reviewedBuild.manager+' run build':'保留 '+reviewedBuild.path+' · '+reviewedBuild.bytes+' 字节'}</h5>
+    {nodeCommand&&<p>这台手机 · 私人副本 <code>{reviewedBuild.checkoutId.slice(0,8)}</code> · 源码 <code>{reviewedBuild.sourceDigest.slice(0,10)}</code></p>}
     {dependencies?<><p>{lock.lockPath} · {lock.manager} {lock.managerVersion} · {lock.packages} 个锁条目</p><p>仅从 {lock.registry} 准备此副本。不会运行安装脚本；{reviewedBuild.manager==='npm'?'npm ci 可能替换当前副本的 node_modules。':'不覆盖这份锁。'} 本次不批准构建。</p>
       <details><summary>核对确切命令和锁指纹</summary><p><code dir="ltr">{lock.manager} {reviewedBuild.argv.join(' ')}</code></p><p>SHA-256：{lock.lockSha256}</p></details></>:reviewedBuild.action==='collect'?<><p>选自第 {reviewedBuild.buildEpoch} 轮原构建后观察到的文件。现在第 {reviewedBuild.actionEpoch} 轮申请保存所选版本，不重新构建；确认不等于文件已保存。实际保存轮次以任务文件回执为准。</p><p>核对文件：{reviewedBuild.sha256}</p></>:<p>只批准在这份独立副本上运行这次命令。脚本可能联网、执行其他脚本或改动该副本，不包含收件许可。</p>}
     <details><summary>核对副本与原操作编号</summary><p>副本：{reviewedBuild.checkoutId} · 版本：{reviewedBuild.sourceDigest}</p>{reviewedBuild.action==='collect'&&<p>源构建：{reviewedBuild.buildRunId} / {reviewedBuild.buildOperationId}</p>}<p>{dependencies?'本次依赖准备提案':reviewedBuild.action==='collect'?'本次收件提案':'本次构建提案'}：{reviewedBuild.actionRunId} / {reviewedBuild.actionOperationId}</p></details>
@@ -258,7 +288,7 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
    {(team||live||execution)&&view.canApprove===true&&(!execution||executionMatches)&&<CheckboxField className="pw-decision-reviewed" isSelected={scopeReviewed} onChange={setScopeReviewed} isDisabled={disabled}>
     {execution?`我已核对计划版本 ${String(executionOriginal.planRevision)} 的完整步骤和原任务范围`:team?'我已核对原成员、依赖、文件基线、范围与累计预算':'我已核对原文件范围，并允许这些源码后续修改在本轮服务中执行'}
    </CheckboxField>}
-   <div className="pw-decision-actions"><PressButton label={execution?'确认这版计划，在原范围内继续':team?'批准此计划与可见预算':live?'允许启动与限定热改':view.programRisk?'允许运行本机程序':dependencies?'批准此锁的依赖下载':plannedTeam||oneTimeStart?'批准这次分工':'允许这次操作'} disabled={disabled||!id||!canApprove} onClick={()=>decide(true)}/><Button variant="secondary" disabled={disabled||!id} onClick={()=>decide(false)}>拒绝</Button></div>
+   <div className="pw-decision-actions"><PressButton label={execution?'确认这版计划，在原范围内继续':team?'批准此计划与可见预算':live?'允许启动与限定热改':nodeCommand?(dependencies?'批准此锁的依赖下载':'批准运行本机构建'):view.programRisk?'允许运行本机程序':dependencies?'批准此锁的依赖下载':plannedTeam||oneTimeStart?'批准这次分工':'允许这次操作'} disabled={disabled||!id||!canApprove} onClick={()=>decide(true)}/><Button variant="secondary" disabled={disabled||!id} onClick={()=>decide(false)}>拒绝</Button></div>
   </footer>
  </section>;
 }

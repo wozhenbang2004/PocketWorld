@@ -13474,6 +13474,19 @@ public final class TaskStore {
         }
         return dev.pocketengine.features.local.project.ProjectEditDraft.receipt(record).put("available",true).put("before",record.getString("before")).put("after",record.getString("after"));
     }
+    /** Only the original owner difference view can attach a retained revision locator to this receipt. */
+    public synchronized JSONObject readPrivateProjectEditDraftForOwnerView(String id,String expectedDraft,String expectedRun,int expectedEpoch)throws Exception{
+        JSONObject original=readPrivateProjectEditDraft(id);
+        if(expectedDraft!=null&&(original.opt("available")!=Boolean.TRUE||!expectedDraft.equals(original.opt("draftId"))||
+           !Objects.equals(expectedRun,original.opt("runId"))||expectedEpoch!=original.optInt("epoch",-1)))
+            throw new SecurityException("原对话的这份改稿暂不可核对；没有读取别的轮次");
+        if(original.opt("available")==Boolean.TRUE)try{
+            JSONObject head=PrivateProjectDraftRevisions.retainedHead(db,original);
+            if(head!=null)original.put("retainedHead",head.put("runId",original.getString("runId")).put("epoch",original.getInt("epoch"))
+                .put("readOnly",true).put("executionAuthorized",false));
+        }catch(Exception unavailable){if(Thread.currentThread().isInterrupted())throw unavailable;/* Omit an unverified locator, not the original difference. */}
+        return original;
+    }
     public synchronized JSONObject recordProjectPlan(String id,String run,int epoch,RunControl original,JSONObject full)throws Exception {
         if(dev.pocketengine.features.local.project.ProjectEditDraft.selected(required(id).optJSONObject("developmentContext")))throw new SecurityException("独立改稿不能创建可执行计划");
         checkCapability(id,run,epoch,"project_plan",original);JSONObject plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(full);projectPlanContext(id,run,epoch,plan);requireNewTeamWholePackage(id,plan);

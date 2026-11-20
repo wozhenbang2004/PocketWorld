@@ -49,10 +49,7 @@ internal class PocketWebProjectDraftDifference(private val context:Context,priva
             work(Runnable{
                 val result=runCatching{
                     check(turn==generation&&current(task,window))
-                    val receipt=tasks().readPrivateProjectEditDraft(task)
-                    check(bound==null||receipt.opt("available")==true&&receipt.opt("draftId")==bound.first&&
-                        receipt.opt("runId")==bound.second&&receipt.optInt("epoch",-1)==bound.third){"原对话的这份改稿暂不可核对；没有读取别的轮次"}
-                    receipt
+                    tasks().readPrivateProjectEditDraftForOwnerView(task,bound?.first,bound?.second,bound?.third ?: -1)
                 }
                 main.post{if(turn!=generation||!current(task,window))done(null,"原私人任务已离开，没有保留差异正文")
                     else result.fold({if(it.opt("available")==true)source=Source(task,it.getString("draftId"),it.getString("runId"),it.getInt("epoch"),it.getString("path"),window,turn);done(it,null)},{done(null,it.message?:"这一次交办的原稿暂不可读")})}

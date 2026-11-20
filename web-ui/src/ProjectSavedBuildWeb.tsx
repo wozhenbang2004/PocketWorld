@@ -8,10 +8,12 @@ type Copy={id:string;name:string;createdAt:number};
 type Version={taskId:string;operationId:string;runId:string;epoch:number;projectId:string;checkoutId:string;
   sourceDigest:string;artifactId:string;archiveSha256:string;archiveBytes:number;createdAt:number;versionSequence:number;entryPath:'dist/index.html'};
 type Shelf={checkoutId:string;checkouts:Copy[];items:Version[];hasMore:boolean;nextCursor:string;readLimited:boolean};
-type BuildSelection={projectId:string;checkoutId:string;taskId:string;sourceDigest:string;runId:string;epoch:number};
+type CheckoutSelection={projectId:string;checkoutId:string};
+type BuildSelection=CheckoutSelection&{taskId:string;sourceDigest:string;runId:string;epoch:number};
+type ShelfSelection=(CheckoutSelection&{kind:'checkout'})|(BuildSelection&{kind:'build'});
 export type SavedWebWork=Pick<Version,'taskId'|'checkoutId'|'runId'|'epoch'>;
 export type SavedWebShelfVisit={restore:()=>void;openOriginalWork?:()=>void};
-export type FindSavedBuildWeb=(selection:BuildSelection)=>boolean;
+export type FindSavedBuildWeb=(selection:ShelfSelection)=>boolean;
 // This link only reveals the existing receipt shelf in the same project workspace.
 export const ProjectSavedWebLink=createContext<RefObject<FindSavedBuildWeb|null>|null>(null);
 const id=(v:unknown):v is string=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(v);
@@ -76,10 +78,13 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
   useLayoutEffect(()=>{
     if(!link||!active)return;
     const reveal:FindSavedBuildWeb=picked=>{
-      if(picked.projectId!==project||!id(picked.checkoutId)||!id(picked.taskId)||!hash(picked.sourceDigest)||
-        !picked.runId||picked.runId.length>240||!int(picked.epoch,1)||!owner()())return false;
+      if(picked.projectId!==project||!id(picked.checkoutId)||!current.current.active||!owner()())return false;
+      const build=picked.kind==='build'?picked:null;
+      if(build&&(!id(build.taskId)||!hash(build.sourceDigest)||typeof build.runId!=='string'||
+        !build.runId||build.runId.length>240||!int(build.epoch,1)))return false;
+      // A checkout visit removes only the source filter, never the exact original checkout.
       // Supersede only an old presentation read. Its token cannot open a late preview.
-      request.current=null;focusOnOpen.current=true;expandedRef.current=true;expand(true);select(picked);read(picked.checkoutId);
+      request.current=null;focusOnOpen.current=true;expandedRef.current=true;expand(true);select(build);read(picked.checkoutId);
       return true;
     };
     link.current=reveal;return()=>{if(link.current===reveal)link.current=null;};

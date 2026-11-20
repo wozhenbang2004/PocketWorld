@@ -114,7 +114,7 @@ import {sameTeamPackage} from './team-delivered-package';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
 import {teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
-import {DeclinedTeamStart,originalDeclinedTeamStart,TaskApproval} from './TaskApproval';
+import {DeclinedTeamStart,originalDeclinedTeamStart,originalPendingNodeCommand,TaskApproval} from './TaskApproval';
 import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,privateProjectTask,projectContinuation,type ContinuationSubmission} from './task-continuation';
 import {TaskInference} from './TaskInference';
 import {TokenBudgetsWorkspace} from './TokenBudgetsWorkspace';
@@ -1411,11 +1411,18 @@ export default function App(){
   const origin=captureNavigationOrigin(),projectFocus=projectTaskReturn.current,epoch=bridge.getDocumentEpoch();
   const live=bridge.getState(),view=obj(live.view),row=asArray<Task>(live.state.tasks).find(task=>task.id===target.taskId),raw=obj(row?.raw),source=obj(raw.developmentContext);
   const resume=Number(view.resumeRevision||0);
+  const request=reviewRequest.current;
+  const currentWork=()=>{
+   if(openedTaskId.current!==target.taskId||reviewRequest.current!==request||openedTaskResumeRevision.current!==resume||
+     selectedTask?.id!==target.taskId||raw.runId!==selectedTask.raw?.runId||raw.coordinatorEpoch!==selectedTask.raw?.coordinatorEpoch||
+     typeof raw.runId!=='string'||!raw.runId||!Number.isSafeInteger(raw.coordinatorEpoch)||raw.coordinatorEpoch<1)return false;
+   const current=asArray<Task>(bridge.getState().state.tasks).find(task=>task.id===target.taskId),value=obj(current?.raw),scope=obj(value.developmentContext);
+   return privateProjectTask(current)&&value.id===target.taskId&&value.runId===raw.runId&&value.coordinatorEpoch===raw.coordinatorEpoch&&
+    value.contextAvailable!==false&&value.contextWithdrawn!==true&&value.sourceCurrentReadRequired!==true&&value.taskProjection!=='source_unavailable'&&
+    scope.projectId===source.projectId&&scope.checkoutId===source.checkoutId;
+  };
   let webReturn:WorkspaceOrigin|undefined;
-  if(origin.task&&privateProjectTask(row)&&raw.id===target.taskId&&raw.contextAvailable!==false&&raw.contextWithdrawn!==true&&
-     raw.sourceCurrentReadRequired!==true&&raw.taskProjection!=='source_unavailable'&&view.taskId===target.taskId&&!view.section&&openedTaskResumeRevision.current===resume&&
-     selectedTask?.id===target.taskId&&raw.runId===selectedTask.raw?.runId&&raw.coordinatorEpoch===selectedTask.raw?.coordinatorEpoch&&
-     typeof raw.runId==='string'&&raw.runId&&Number.isSafeInteger(raw.coordinatorEpoch)&&raw.coordinatorEpoch>0){
+  if(origin.task&&view.taskId===target.taskId&&!view.section&&currentWork()){
    // Back belongs to the work window that opened this archive, not to the
    // producing run of an older archived version or a newer run.
    const line=chatWorkReturn.current;
@@ -1428,7 +1435,7 @@ export default function App(){
    const returnTo=choices.mode==='web_output'?webReturn:origin;
    packageReturn.current=returnTo&&(choices.mode!=='web_output'||choices.projectId===source.projectId&&choices.checkoutId===source.checkoutId)
     ?{target,origin:returnTo,projectFocus,epoch,navigation:navigationWindow.current}:null;
-  });
+  },{currentWork,sourceError:message=>setTaskErrors(previous=>({...previous,[target.taskId]:message}))});
  };
  const previewRefsUnavailable=asArray<Json>(composer.previewRefs).length>0&&composer.previewRefsAvailable!==true;
  const enterPhoneNotification=(note:PhoneNotice)=>{
@@ -2590,8 +2597,21 @@ export default function App(){
   const foldAcceptedDraftReview=(durableDraftDecision?.completed===true||draftAcceptanceSaved&&draftAcceptance?.completed===true)&&
    !continuation&&!approved.length&&!unresolved.length&&!taskNeedsReconciliation(task);
   const showProjectReview=canReadProject&&!continuationBlocks(continuation);
+  const pendingNodeCommand=overviewActive&&obj(snapshot?.view).taskId===task.id&&obj(snapshot?.view).section==null&&can('tasks.review')
+   ?originalPendingNodeCommand(task):null;
+  const readPendingNodeCommand=()=>{
+   const live=bridge.getState(),nativeView=obj(live.view),current=asArray<Task>(live.state.tasks).find(row=>row.id===task.id);
+   if(!pendingNodeCommand||reviewPending||questionPending||document.hidden||openedTaskId.current!==task.id||
+      nativeView.taskId!==task.id||nativeView.section!=null)return;
+   if(JSON.stringify(originalPendingNodeCommand(current))!==JSON.stringify(pendingNodeCommand)){
+    setTaskErrors(previous=>({...previous,[task.id]:'原命令已变化或过期，请重新读取原工作；未提交决定。'}));return;
+   }
+   loadTaskReview(task.id,pendingNodeCommand.approvalId);
+  };
   const reviewTools=!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
-    <div className="pw-section-heading pw-task-review-tools">{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</div>;
+    <div className="pw-section-heading pw-task-review-tools">{pendingNodeCommand?
+      <Button disabled={questionPending} onClick={readPendingNodeCommand}>{pendingNodeCommand.action==='dependencies'?'核对本次依赖准备':'核对本机构建命令'}</Button>:
+      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
   const reviewStatus=<>
     {readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}
     {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
@@ -3338,8 +3358,8 @@ export default function App(){
    const leaves=()=>{const now=bridge.getState();return now.state.conversationId===conversation&&now.composer?.key===native.composer?.key&&
     asArray<Message>(now.state.messages).filter(m=>m.id===original.message).length===1&&
     asArray<Message>(now.state.messages).some(m=>m.id===original.message&&m.quoteAvailable===true&&m.sourceRevision===original.revision);};
-   if(packageHandoff.open(target,()=>{packageReturn.current={target,origin,epoch:documentEpoch,navigation:navigationWindow.current,projectFocus:null};},leaves))
-    relatedOrigin.current=origin;
+   packageHandoff.open(target,()=>{packageReturn.current={target,origin,epoch:documentEpoch,navigation:navigationWindow.current,projectFocus:null};},
+    {originalChat:leaves,departed:()=>{relatedOrigin.current=origin;}});
    return;
   }
   openTask(next.target.taskId,next.review?'review':'overview',false,undefined,undefined,{runId:next.target.runId,epoch:next.target.epoch,draftId:next.draftId},stillCurrent,next.approvalId,()=>{
@@ -3594,6 +3614,20 @@ export default function App(){
       <div className="pw-project-list-caption"><MotionFeedback as="span" identity={`${projectListBusy}:${fileQuery}:${shownFiles.length}`} initial={false} role="status">{projectListBusy?'正在刷新 · ':''}{fileQuery?`匹配 ${shownFiles.length} 个文件`:`${files.length} 个文件`}</MotionFeedback>{fileQuery&&<Button variant="ghost" size="small" onClick={()=>setFileQuery('')}>清空搜索</Button>}{can('projects.refresh')&&<IconButton icon={IconRefresh} size="small" aria-label="重新读取项目文件" onClick={()=>run('projects.refresh')}/>}</div>
       </>}<div className="pw-project-objects" aria-busy={projectListBusy||undefined}>{!ready||packageOpening||projectListBusy&&!files.length?<p className="pw-muted" role="status">正在读取项目文件…</p>:projectListError?<div className="pw-empty pw-project-empty" role="alert"><h3>无法读取文件</h3><p>{projectListError}</p>{can('projects.refresh')&&<Button variant="secondary" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div>:!shownFiles.length?projectFilesEmpty:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser identity={JSON.stringify([state.projectId,fileQuery.trim().toLocaleLowerCase()])} files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div>
       {currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&!taskOpen&&can('projects.removedFiles.list')&&<ProjectRemovedFiles key={currentProject.id} project={currentProject.id}/>}</>;
+ const canImportLocalProject=ready&&can('projects.localSource.open');
+ const openLocalProjectSource=()=>{
+  if(!canImportLocalProject||document.hidden)return;
+  if(route==='projects'){run('projects.localSource.open');return;}
+  if(route!=='butler')return;
+  const origin=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+  const sameColdHome=()=>{
+   const live=bridge.getState(),view=obj(live.view);
+   return navigationWindow.current===origin&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden&&
+    view.section==null&&!view.taskId&&!live.state.filePath&&!live.state.projectId&&
+    Array.isArray(live.state.projects)&&live.state.projects.length===0&&live.capabilities.commands.includes('projects.localSource.open');
+  };
+  void navigate('projects',()=>run('projects.localSource.open'),{stillCurrent:sameColdHome});
+ };
  const projectsPage=<motion.main layoutScroll ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded){if(state.projectId&&projectSection==='work')projectDirectory.rememberScroll(event.currentTarget.scrollTop);else projectListTop.current.set(projectPositionKey,event.currentTarget.scrollTop)}}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
   {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} adoption={fileAdoption} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
@@ -3659,7 +3693,14 @@ export default function App(){
       <TabPanel id="preview" className="pw-project-preview-panel" style={{translate:'none',opacity:1,transition:'none'}}>{desktopNavigation?<div className="pw-project-connected-workspace" data-preview-open="true"><motion.section layoutScroll className="pw-project-files-pane" aria-label="正式项目文件"><header className="pw-project-connected-header"><h2>正式项目文件</h2></header>{projectFiles}</motion.section><section className="pw-project-preview-panel" aria-label="项目预览"><ProjectPreviewPane control={projectPreview} composer={composer}/></section></div>:<ProjectPreviewPane control={projectPreview} composer={composer}/>}</TabPanel>
     </Tabs>
 
-  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2><div className="pw-project-library-actions">{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>run('projects.localSource.open')}>从手机导入</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新项目</Button>}</div></header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/><h3>从一个项目开始</h3><p>把相关任务、文件和成果放在一起，随时接着做。</p><div className="pw-project-library-actions">{can('projects.create')&&<Button variant="primary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新建项目</Button>}{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>run('projects.localSource.open')}>从手机导入</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}</div></div>}
+  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2><div className="pw-project-library-actions">{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>run('projects.localSource.open')}>从手机导入</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>新项目</Button>}</div></header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/>
+   <h3>{canImportLocalProject?'把已有工程带到这台手机':'从一个项目开始'}</h3>
+   <p>{canImportLocalProject?'先从 ZIP 或文件夹核对源码，再建立私人副本。导入和编辑不需要先准备开发工具或连接模型。':'把相关任务、文件和成果放在一起，随时接着做。'}</p>
+   <div className="pw-project-library-actions">
+    {canImportLocalProject&&<Button onClick={openLocalProjectSource}>导入 ZIP 或文件夹</Button>}
+    {can('projects.create')&&<Button variant={canImportLocalProject?'secondary':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('project')}>{canImportLocalProject?'新建空白项目':'新建项目'}</Button>}
+    {can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}
+   </div></div>}
   <ProjectLocalSourceIntake state={state.localSourceIntake}/>
   <ProjectGitIntake state={state.projectGitImport} toolReturn={projectGitToolReturn} onPrepareTools={can('setup.runtime.read')?()=>{void openSetup('tools')}:undefined}/>
  </motion.main>;
@@ -3709,7 +3750,7 @@ export default function App(){
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
   </NavigationChrome>:workspaceNotices}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
     if(report){homeReport.current=report;homeWorkReturn.current=null;taskReading.current.delete(`${task.id}:homeReport`);
      openTask(task.id,'homeReport',alreadyOpen,undefined,undefined,undefined,()=>homeReport.current===report&&currentHomeReport(report),undefined,undefined,
       returnWorkFocus?()=>{homeWorkReturn.current={taskId:task.id,report,focus:returnWorkFocus}}:undefined);return}

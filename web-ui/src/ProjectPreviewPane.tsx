@@ -326,7 +326,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
   const refs = Array.isArray(composer.previewRefs) ? composer.previewRefs : [];
   const count = view ? refs.filter((ref: Data) => ref.previewId === view.metadata.previewId).length : 0;
   const problem = error || view?.error;
-  const choices = control.choices, choosing = !!choices && !view;
+  const choices = control.choices, choosing = !!choices && !view, fixedWeb = choices?.mode === 'web_output';
   const fixed = fixedPackage(view), copy = view?.metadata.checkoutId ?? choices?.checkoutId, source = view?.metadata.sourceDigest ?? choices?.sourceDigest;
   if (choosing && choices?.sourceMember) return !blocked
     ? <ProjectPackageCheckout key={JSON.stringify([choices.taskId, choices.operationId, choices.artifactId, choices.sourceMember.path])}
@@ -340,6 +340,8 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
         disabled={!view?.ready || !view.selectionAvailable && !view.selecting || working || unknown || blocked || !can('projects.preview.mode')} aria-pressed={view?.selecting === true}
         onClick={() => control.action('projects.preview.mode', { enabled: !view?.selecting })}>{view?.selecting ? '退出选择' : '选择元素'}</Button>}
       {fixed && control.exportTarget && <Button variant="secondary" size="small" disabled={working || unknown || blocked || !can('projects.package.export')} onClick={control.exportPackage}>导出固定包</Button>}
+      {control.fromSavedWebShelf && control.openSavedWebOriginalWork && <Button variant="ghost" size="small" disabled={working || blocked}
+        onClick={control.openSavedWebOriginalWork}>查看原工作</Button>}
       <span className="pw-grow"/>
       {view && !fixed && can('tasks.open') && <IconButton icon={IconHistory} aria-label="核对原任务" title="核对原任务" disabled={working} onClick={control.returnToPackageTask}/>}
       <IconButton icon={IconRefresh} aria-label="重新载入预览" title="重新载入会使旧元素引用失效" disabled={!view || working || unknown || !can('projects.preview.reload')} onClick={() => control.action('projects.preview.reload')}/>
@@ -373,17 +375,14 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
     {view && !control.fromOriginalChat && <MotionFeedback identity={`${sessionId}:${count}`} initial={false} className="pw-preview-draft-status" role="status">{count > 0 ? `草稿中有 ${count} 处元素引用，尚未发送` : '选择的元素会留在原对话草稿中'}</MotionFeedback>}
     {view && (!control.fromOriginalChat || fixed) && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
         <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd><dt>来源副本</dt><dd>{String(view.metadata.checkoutId || '')}</dd><dt>来源源码</dt><dd>{String(view.metadata.sourceDigest || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
-        {control.fromSavedWebShelf&&<div className="pw-preview-actions">
-          {control.openSavedWebOriginalWork&&<Button variant="ghost" size="small" disabled={working||blocked} onClick={control.openSavedWebOriginalWork}>查看原工作</Button>}
-          <Button variant="ghost" size="small" disabled={working||unknown||!can('projects.preview.return')} onClick={()=>control.action('projects.preview.return')}>返回原对话</Button>
-        </div>}
       </AccordionItem></Accordion>}
     {(!control.fromSavedWebShelf||control.canOpenSavedBuildCopy)&&<footer className="pw-preview-footer">
       {control.canOpenSavedBuildCopy && <Button variant="secondary" size="small" disabled={working || blocked || unknown || !!view?.selecting}
         onClick={control.openSavedBuildCopy}>{busy==='package.copy'?'正在核对原副本…':'打开原副本的当前源码'}</Button>}
       {!control.fromSavedWebShelf&&(choosing || fixed) && (control.fromOriginalChat||can('tasks.open')) && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={working || blocked} onClick={control.returnToPackageTask}>{control.fromOriginalChat?'返回原话':'返回原工作'}</Button>}
       {!control.fromSavedWebShelf&&!control.fromOriginalChat&&<Button variant="ghost" size="small" disabled={control.exportBusy} onClick={control.hide}>{choosing || fixed ? '留在项目' : '返回项目'}</Button>}
-      {view && !control.fromSavedWebShelf && !control.fromOriginalChat && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
+      {/* A fixed webpage's execution conversation is not necessarily the owner's original request. */}
+      {view && !fixedWeb && !control.fromSavedWebShelf && !control.fromOriginalChat && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
     </footer>}
   </section>;
 }

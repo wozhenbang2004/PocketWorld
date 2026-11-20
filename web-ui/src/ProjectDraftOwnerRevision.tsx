@@ -8,19 +8,20 @@ import {InlineDiff} from './shell-library/InlineDiff';
 
 type Revision={taskId:string;draftId:string;path:string;revisionId:string;parentId?:string;ordinal:number;text:string;sha256:string;bytes:number;
   editHandle:string;retained:boolean;sourceChanged:boolean;executionAuthorized:boolean};
-type SavedPin=Pick<Revision,'taskId'|'draftId'|'path'|'revisionId'|'ordinal'|'sha256'|'bytes'>&{window:string};
+export type SavedPin=Pick<Revision,'taskId'|'draftId'|'path'|'revisionId'|'ordinal'|'sha256'|'bytes'>&{window:string};
 const EDIT='projectDraft.editLocal',KEEP='projectDraft.keepRevision',CLOSE='projectDraft.closeEditor',sha=/^[a-f0-9]{64}$/;
 function view(){return bridge.getState().view as {section?:string;taskId?:string;resumeRevision?:number}|undefined;}
-function ticket(){const v=view();return JSON.stringify([bridge.getDocumentEpoch(),v?.section,v?.taskId,v?.resumeRevision]);}
+function ticket(){const v=view();return JSON.stringify([bridge.getDocumentEpoch(),v?.resumeRevision,v?.section,v?.taskId]);}
+export {ticket as projectDraftWindowTicket};
 
 /** Continuation of an actual retained after-text, not saving into the original project or replacing the AI's receipt. */
-export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect,leaveRequested,onDismissLeave}:{task:string;root:string;path:string;originalHash:string;protect:(value:boolean)=>void;
-  leaveRequested:boolean;onDismissLeave:()=>void}){
+export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect,retainedHead,leaveRequested,onDismissLeave}:{task:string;root:string;path:string;originalHash:string;protect:(value:boolean)=>void;
+  retainedHead?:SavedPin;leaveRequested:boolean;onDismissLeave:()=>void}){
   const editSource=useId();
   const [head,setHead]=useState<Revision|null>(null),[text,change]=useState(''),[note,state]=useState(''),[busy,spin]=useState(false);
   const [fileLock,lockFile]=useState(false),[workLock,lockWork]=useState(false);
   const [compare,preview]=useState(false),[discard,ask]=useState(false),live=useRef(false),active=useRef(''),generation=useRef(0),request=useRef(false);
-  const saved=useRef<SavedPin|null>(null),editorHeading=useRef<HTMLHeadingElement>(null);
+  const saved=useRef<SavedPin|null>(retainedHead??null),editorHeading=useRef<HTMLHeadingElement>(null);
   const can=()=>!document.hidden&&!view()?.section&&view()?.taskId===task&&[EDIT,KEEP,CLOSE].every(k=>bridge.getState().capabilities.commands.includes(k));
   const editing=!!head,dirty=!!head&&text!==head.text,count=head?new TextEncoder().encode(text).length:0;
   const protectedNow=busy||fileLock||workLock||dirty,leaveOpen=leaveRequested&&protectedNow&&can();
@@ -31,9 +32,9 @@ export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect,l
   useLayoutEffect(()=>{if(editing)editorHeading.current?.focus({preventScroll:true})},[editing]);
   function reset(forget=true){if(forget)saved.current=null;++generation.current;active.current='';request.current=false;setHead(null);change('');state('');spin(false);preview(false);ask(false)}
   function savedHere(){const pin=saved.current;return pin&&pin.taskId===task&&pin.draftId===root&&pin.path===path&&pin.window===ticket()?pin:null}
-  useEffect(()=>{live.current=true;reset();const leave=()=>{const opened=active.current||saved.current?.window;if(opened&&(!can()||ticket()!==opened))reset()};
+  useEffect(()=>{live.current=true;saved.current=retainedHead??null;reset(false);const leave=()=>{const opened=active.current||saved.current?.window;if(opened&&(!can()||ticket()!==opened))reset()};
     const off=bridge.subscribe(leave);document.addEventListener('visibilitychange',leave);return()=>{live.current=false;++generation.current;off();document.removeEventListener('visibilitychange',leave)};
-  },[task,root,path,originalHash]);
+  },[task,root,path,originalHash,retainedHead]);
   async function run(keep:boolean){
     if(request.current||!can()||keep&&!mayKeep())return;
     const token=ticket(),turn=++generation.current,prior=head,input=text,expected=keep?null:savedHere();active.current=token;request.current=true;spin(true);state('');ask(false);
@@ -69,7 +70,7 @@ export function ProjectDraftOwnerRevision({task,root,path,originalHash,protect,l
   const retained=savedHere();
   if(!head)return <div className="pw-draft-actions">
     <Button size="small" variant="secondary" disabled={busy||fileLock||workLock} aria-describedby={editSource} onClick={()=>void run(false)}>{busy?'正在读取独立稿…':retained?`继续编辑第 ${retained.ordinal} 稿`:'继续编辑独立稿'}</Button>
-    <p id={editSource} className="pw-field-hint">{retained?'上方仍是最初的差异；继续编辑只打开这份已保留稿。':'只编辑独立稿，不改原项目。已有保留稿时打开最后一稿，否则从当前改稿开始。'}</p>
+    <p id={editSource} className="pw-field-hint">{retained?'上方仍是最初的差异；核对后才会打开这一稿。':'只编辑独立稿，不改原项目。已有保留稿时打开最后一稿，否则从当前改稿开始。'}</p>
     <ProjectDraftFileCopy task={task} root={root} revision={root} sha={originalHash} path={path} ordinal={0} disabled={busy||workLock} lock={lockFile}/>
     <ProjectDraftWorkCopy task={task} root={root} revision={root} sha={originalHash} path={path} ordinal={0} disabled={busy||fileLock} lock={lockWork}/>
     {!leaveOpen&&note&&<p className="pw-field-hint" role="status">{note}</p>}{leaveDialog}</div>;

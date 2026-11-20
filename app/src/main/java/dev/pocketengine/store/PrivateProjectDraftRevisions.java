@@ -30,6 +30,9 @@ final class PrivateProjectDraftRevisions {
         int ordinal=previous.getInt("ordinal")+1;if(ordinal>LIMIT)throw new IllegalStateException("这份原稿已保留八个后续版本，没有替换旧稿");
         byte[] payload=bytes(text);String sha=ProjectSources.sha256(payload);if(sha.equals(previous.getString("sha256")))throw new IllegalArgumentException("没有文字变化，未另存重复草稿");
         JSONObject id=identity(previous.getString("taskId"),previous.getString("draftId"),previous.getString("path"),previous.getString("revisionId"),ordinal,payload.length,sha);
+        return withText(id,text);
+    }
+    private static JSONObject withText(JSONObject id,String text)throws Exception{
         return id.put("revisionId",ProjectSources.digest(id)).put("text",text).put("sourceChanged",false).put("executionAuthorized",false);
     }
     private static JSONObject identity(String task,String draft,String path,String parent,int ordinal,int size,String sha)throws Exception{
@@ -50,6 +53,26 @@ final class PrivateProjectDraftRevisions {
         db.execSQL("CREATE TABLE IF NOT EXISTS private_project_owner_draft_revisions(task_id TEXT NOT NULL,ordinal INTEGER NOT NULL,revision_id TEXT NOT NULL,parent_id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(task_id,ordinal),UNIQUE(task_id,revision_id),UNIQUE(task_id,parent_id))");
         db.execSQL("CREATE TRIGGER IF NOT EXISTS retire_private_project_owner_draft_revisions AFTER DELETE ON tasks BEGIN DELETE FROM private_project_owner_draft_revisions WHERE task_id=OLD.task_id; END");
     }
+    private static boolean present(SQLiteDatabase db){
+        try(Cursor table=db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_project_owner_draft_revisions'",null)){return table.moveToFirst();}
+    }
+    /** One locator for a verified original difference. Opening the editor still verifies the full saved chain. */
+    static JSONObject retainedHead(SQLiteDatabase db,JSONObject root)throws Exception{
+        if(!present(db))return null;
+        String task=root.getString("taskId"),draft=root.getString("draftId"),path=root.getString("path");
+        try(Cursor row=db.rawQuery("SELECT ordinal,revision_id,parent_id,CASE WHEN length(CAST(body AS BLOB))<=160000 THEN body END FROM private_project_owner_draft_revisions WHERE task_id=? ORDER BY ordinal DESC LIMIT 1",new String[]{task})){
+            if(!row.moveToFirst())return null;
+            long index=row.getLong(0);
+            if(row.isNull(3)||row.getType(0)!=Cursor.FIELD_TYPE_INTEGER||index<1||index>LIMIT)throw changed();
+            int ordinal=(int)index;String revision=row.getString(1),parent=row.getString(2);
+            if(revision.equals(draft)||revision.equals(parent)||
+               !parent.matches("[a-f0-9]{64}")||(ordinal==1)!=parent.equals(draft))throw changed();
+            JSONObject stored=new JSONObject(row.getString(3));String text=stored.getString("text");byte[] payload=bytes(text);
+            JSONObject actual=withText(identity(task,draft,path,parent,ordinal,payload.length,ProjectSources.sha256(payload)),text);
+            if(!revision.equals(actual.getString("revisionId"))||!ProjectSources.canonical(actual).equals(ProjectSources.canonical(stored)))throw changed();
+            return OwnerRevisionSource.metadata(actual);
+        }
+    }
     static JSONObject head(SQLiteDatabase db,JSONObject root)throws Exception{
         return read(db,root,null,null);
     }
@@ -58,7 +81,7 @@ final class PrivateProjectDraftRevisions {
     private static JSONObject read(SQLiteDatabase db,JSONObject root,JSONObject requested,JSONArray choices)throws Exception{
         JSONObject prior=base(root);String task=root.getString("taskId");
         if(requested!=null&&(!task.equals(requested.getString("taskId"))||!root.getString("draftId").equals(requested.getString("draftId"))))throw changed();
-        try(Cursor present=db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='private_project_owner_draft_revisions'",null)){if(!present.moveToFirst()){if(requested!=null)throw changed();return prior;}}
+        if(!present(db)){if(requested!=null)throw changed();return prior;}
         try(Cursor rows=db.rawQuery("SELECT ordinal,revision_id,parent_id,CASE WHEN length(CAST(body AS BLOB))<=160000 THEN body END FROM private_project_owner_draft_revisions WHERE task_id=? ORDER BY ordinal ASC LIMIT 9",new String[]{task})){
             while(rows.moveToNext()){
                 if(rows.isNull(3)||!prior.getString("revisionId").equals(rows.getString(2))||rows.getInt(0)!=prior.getInt("ordinal")+1||rows.getInt(0)>LIMIT)throw changed();

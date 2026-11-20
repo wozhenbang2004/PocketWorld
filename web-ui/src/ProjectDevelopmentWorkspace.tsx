@@ -615,9 +615,22 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         current.id !== versionBuild.id || current.runId !== versionBuild.runId || current.epoch !== versionBuild.epoch)
       throw new Error('副本版本或原任务已变化。没有打开另一版，请按更新后的记录选择。');
     if(destination==='work')onOpenTask(current.id, checkout);
-    else if(!savedWebLink?.current?.({projectId,checkoutId:checkout,taskId:current.id,sourceDigest:fresh.sourceDigest,runId:current.runId,epoch:current.epoch}))
+    else if(!savedWebLink?.current?.({kind:'build',projectId,checkoutId:checkout,taskId:current.id,sourceDigest:fresh.sourceDigest,runId:current.runId,epoch:current.epoch}))
       throw new Error('网页版本区暂不可用，请回到原项目工作页再核对。没有打开其他网页。');
   });
+  const canReviewSelectedBuild=!differentBuildCopy&&!!selectedCopy&&
+    (selectedCopy.draftWorkingCopy===true||source?.existingNodeBuild===true)&&can('projects.development.reviewDraftBuild');
+  const findSameSourceWeb=!!versionBuild&&canReviewSelectedBuild&&can('projects.development.inspect');
+  const findSavedWeb=()=>{
+    if(disabled||entered.current||!alive.current||!latest.current.active||!selectedCopy||
+      selectedCopy.checkoutId!==draft.current.checkoutId||view?.projectId!==projectId||
+      view?.executionAuthorized!==false||!handle.current||view?.viewHandle!==handle.current)return;
+    if(findSameSourceWeb){openVersionBuild('savedWeb');return;}
+    // The existing shelf checks the exact checkout again. Do not inspect the
+    // current source or require it to have a build before looking for older saves.
+    if(!savedWebLink?.current?.({kind:'checkout',projectId,checkoutId:selectedCopy.checkoutId}))
+      setError('原副本的网页版本区暂不可用，没有读取其他副本。');
+  };
   if(returnTarget&&returned.current!==returnTarget.handle)return <section hidden={!active} className="pw-project-development pw-settings-section" aria-label="核对原项目草稿">
     <p role="status">{error||'正在核对刚才写入的原项目草稿…'}</p>
     {error&&<Button variant="ghost" onClick={onDismissReturn}>收起定位，返回项目概览</Button>}
@@ -719,15 +732,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           onClick={() => { setHostEditor(null); setFileWindow({checkoutId:selectedCopy.checkoutId}); }}>{importedEntry?'编辑其他源文件':'编辑这份副本的文件'}</Button>}
         {savedFileHere && can('projects.development.files.open') && <Button variant="ghost" disabled={busy || !!review || filesOpen}
           onClick={() => { setHostEditor(null); setFileWindow({checkoutId:savedFileHere.checkoutId,resumeSaved:savedFileHere}); }}>回到上次保存的文件</Button>}
-        {!differentBuildCopy && selectedCopy && (selectedCopy.draftWorkingCopy === true || source?.existingNodeBuild === true) && can('projects.development.reviewDraftBuild') &&
-          (versionBuild ? <>
-            {!versionWorkAtTop && can('tasks.open') && <Button ref={buildNextAction} variant="secondary" disabled={disabled || !can('projects.development.inspect')}
-              onClick={()=>openVersionBuild('work')}>查看原构建任务</Button>}
-            {savedWebLink && <Button variant="ghost" disabled={disabled || !can('projects.development.inspect')}
-              onClick={()=>openVersionBuild('savedWeb')}>查找同一源码的已存网页</Button>}
-          </> : !firstBuild && !acceptedWorkAtTop && !buildLookupUnavailable && <Button ref={buildNextAction} variant="secondary"
+        {canReviewSelectedBuild &&
+          (versionBuild ? !versionWorkAtTop && can('tasks.open') && <Button ref={buildNextAction} variant="secondary" disabled={disabled || !can('projects.development.inspect')}
+            onClick={()=>openVersionBuild('work')}>查看原构建任务</Button> :
+          !firstBuild && !acceptedWorkAtTop && !buildLookupUnavailable && <Button ref={buildNextAction} variant="secondary"
             disabled={disabled || buildToolsBlocked || source?.existingNodeBuild!==true && (!!goal || deliveryFields.some(k=>!!requirements[k])) || !source || view.model?.configured !== true}
             onClick={reviewNodeBuild}>{source?.existingNodeBuild===true?(versionChanged?'核对修改后的 Node 构建':'审阅这个副本的 Node 构建'):source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
+        {!differentBuildCopy&&selectedCopy&&savedWebLink&&<Button variant="ghost" disabled={disabled} onClick={findSavedWeb}>
+          {findSameSourceWeb?'查找同一源码的已存网页':'查找这份副本的已存网页'}</Button>}
       </div>
       {buildLookupUnavailable && <p role="status" className="pw-field-hint">这一版的构建记录暂未核对，请重新读取项目条件，不重复交办。</p>}
       {nodeBlocked && can('projects.development.reviewDraftBuild') && <p className="pw-field-hint" role="status">{nodeBlocked} 你仍可浏览和编辑这个副本。</p>}
