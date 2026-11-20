@@ -3480,14 +3480,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     @JvmOverloads fun sendChat(text:String,key:String,viewEpoch:Int,primaryDisplayRevision:Long?=null,primaryDisplayWindow:(()->Boolean)?=null,
-        originalOrdinaryComposer:Boolean=false,expectedDraftRevision:Long?=null) {
+        originalOrdinaryComposer:Boolean=false,expectedDraftRevision:Long?=null,expectedForegroundTurn:JSONObject?=null) {
         if((text.isBlank()&&state.selectedChatAttachments.isEmpty())||text.trim().length>12000||state.chatSubmitting||releasingFirstChat!=null)return
         val model=ownerComposer ?: run{state=state.copy(error="原草稿尚未读取，未发送");return}
         val draft=model.active()
         if(draft.key!=key||chatViewEpoch!=viewEpoch||text!=draft.text||draft.conversationId!=state.conversationId.orEmpty()){state=state.copy(error="原输入视图已变化，请核对保留草稿；没有发送到其他对话");return}
         // Bind to the same captured input used to prepare the durable request. Changing a
         // source can change this revision without changing the text or the conversation.
-        require(!originalOrdinaryComposer||primaryDisplayRevision!=null||expectedDraftRevision!=null) { "请重新打开原对话核对草稿版本；没有发送。" }
+        require(!originalOrdinaryComposer||primaryDisplayRevision!=null||(expectedDraftRevision!=null&&expectedForegroundTurn!=null)) { "请重新打开原对话核对草稿和回合；没有发送。" }
         require(expectedDraftRevision==null||expectedDraftRevision==draft.revision) { "草稿或引用已变化；没有发送，请核对当前草稿。" }
         val displayGate=primaryDisplayDraftGate(draft)
         if(displayGate!=null&&displayGate!="ready"){state=state.copy(error="原私人窗口或本机执行尚未就绪，请先核对。没有读取，也没有改用模型");return}
@@ -3497,6 +3497,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (!refreshCurrentConversationTurn(readWithoutModel=displayGate!=null)) return
         if(displayGate!=null&&state.chatBusy){state=state.copy(error="原对话仍有工作，未开始另一次读数");return}
         val binding=state.chatActiveTurn
+        if(expectedForegroundTurn!=null) {
+            val same=if(expectedForegroundTurn.length()==0) !state.chatBusy&&binding==null
+                else state.chatBusy&&binding!=null&&binding.optString("conversationId")==draft.conversationId&&
+                    binding.optString("taskId")==expectedForegroundTurn.getString("taskId")&&binding.optString("runId")==expectedForegroundTurn.getString("runId")&&
+                    binding.optInt("epoch")==expectedForegroundTurn.getInt("epoch")
+            require(same) { "原对话的回合已变化；没有发送，请核对当前回合，草稿仍保留。" }
+        }
         if(state.chatBusy&&(binding==null||binding.optString("conversationId")!=state.conversationId)){state=state.copy(error="原任务绑定仍在准备或收尾，请稍后刷新；没有新建第二任务");return}
         if(state.chatBusy&&try{!app.chatInputModel(binding!!).optBoolean("available")}catch(_:Exception){true}){state=state.copy(error="原任务正在收尾，请核对原消息后再发送");return}
         if(draft.key in unconfirmedDraftMemory || writingDraftMemory==draft.key){state=state.copy(error="这份草稿的记忆选择尚未确认保存。请先核对，不会按默认规则发送");return}
@@ -3517,6 +3524,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             draft.key.startsWith("new:") && webPrivateOwnerVisible() && !hasChannelPhoneOrigin && conversationReader==null &&
             selected.isEmpty() && selectedSources.length()==0 && selectedPreviews.length()==0 && selectedObjects.length()==0 && draft.voiceText.isEmpty()
         val input=JSONObject().put("message",ChatInputRules.submittedText(text,selected)).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources);if(selectedPreviews.length()>0)input.put("ownerPreviewRefs",selectedPreviews)
+        if(expectedForegroundTurn!=null)input.put("mustMatchObservedForeground",true)
         if(firstPaused)input.put("firstMessageWithoutPersonalMemory",true)
         if(excluded)input.put("excludeThisInputFromLearning",true)
         if(lockDefaults)input.put("firstTaskWithoutDefaultWrites",true)

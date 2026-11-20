@@ -297,14 +297,20 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const listedSize=file.size??file.sizeBytes;
  const confirmed=inThisFile&&copyReceipt.status==='verified'&&Number.isSafeInteger(copyReceipt.verifiedBytes)&&copyReceipt.verifiedBytes>=0&&
   (!Number.isSafeInteger(listedSize)||copyReceipt.verifiedBytes===listedSize);
- const destination=typeof copyReceipt.displayName==='string'&&copyReceipt.displayName?`「${copyReceipt.displayName}」`:'所选位置的副本';
- const savedCopy=confirmed?`${copyReceipt.historical===true?'上次另存时已核对':'已保存并核对'}${destination}：回读 ${copyReceipt.verifiedBytes.toLocaleString()} 字节，SHA-256 与原件一致。`
+ const destinationName=typeof copyReceipt.displayName==='string'?copyReceipt.displayName:'';
+ const destination=destinationName?`「${destinationName}」`:'所选位置的副本';
+ const savedCopy=confirmed?`${copyReceipt.historical===true?'上次另存时已核对':'已保存并核对'}${destination}：回读 ${copyReceipt.verifiedBytes.toLocaleString()} 字节，SHA-256 与原件一致。${destinationName?'':'目标文件名未核对。'}`
   :!inThisFile?'':copyReceipt.status==='no_target'?'未取得保存位置，PocketWorld 没有写入内容。原件保留。'
   :copyReceipt.status==='could_not_read'?`${destination}返回了写入结果，但不能回读核对。请在刚选的位置检查。`
   :copyReceipt.status==='content_mismatch'?`${destination}与原件不一致，不能确认保存。请在刚选的位置检查，原件保留。`
   :copyReceipt.status==='destination_changed'?'写入后目标文件已变化，不能确认保存。请在刚选的位置检查，原件保留。'
   :copyReceipt.status==='unconfirmed'?'保存未确认，目标可能已有部分内容。请先检查刚选的位置；没有自动重写。':'';
- const copyFeedback=savedCopy&&<p className="pw-file-draft-status" role="status">{savedCopy}</p>;
+ // This is the evidence stored with the exact save, not a new verification of the destination.
+ const copyVersion=confirmed?`原件：${file.name||'原文件'} · ${attachmentFileFormat(file.mimeType,file.name).label} · ${objectVersion}\n回读匹配的 SHA-256：${copyReceipt.sha256}`:null;
+ const copyFeedback=savedCopy&&<div className="pw-file-draft-status">
+  <span role="status">{savedCopy}</span>
+  {copyVersion&&<FileDetails key={copyReceipt.requestId} title="核对另存的版本" value={copyVersion}/>}
+ </div>;
  const exportLabel=copyStage==='writing'?'正在另存…':copyStage==='picker_unconfirmed'?'保存位置尚未确认…':
   view.exportPending?'等待选择保存位置…':'另存原件…';
  const exportAction=<Button variant={preferSave?'primary':'secondary'} disabled={busy||draftBusy||view.exportPending} onClick={()=>run('export')}>{exportLabel}</Button>;

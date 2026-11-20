@@ -1965,8 +1965,16 @@ internal class PocketWebBridge(
                             controller.conversationReader==null && controller.webPrivateOwnerVisible()
                         val expectedDraftRevision=if(localRevision==null&&args.has("expectedDraftRevision"))
                             requiredLong(args,"expectedDraftRevision").also { require(it>0) { "原草稿版本无效；没有发送。" } } else null
+                        val expectedForegroundTurn=if(localRevision==null&&args.has("expectedForegroundTurn")) {
+                            val shown=args.getJSONObject("expectedForegroundTurn")
+                            if(shown.length()==0) shown else {
+                                checkedPayload(shown,setOf("taskId","runId","epoch"))
+                                val turnEpoch=requiredInt(shown,"epoch").also { require(it>0) { "原回合版本无效；没有发送。" } }
+                                JSONObject().put("taskId",requiredString(shown,"taskId")).put("runId",requiredString(shown,"runId")).put("epoch",turnEpoch)
+                            }
+                        } else null
                         controller.sendChat(text,key,epoch,localRevision,localRevision?.let { primaryDisplayComposerWindow() },
-                            originalOrdinaryComposer=ordinary,expectedDraftRevision=expectedDraftRevision)
+                            originalOrdinaryComposer=ordinary,expectedDraftRevision=expectedDraftRevision,expectedForegroundTurn=expectedForegroundTurn)
                     }
                 }
             }

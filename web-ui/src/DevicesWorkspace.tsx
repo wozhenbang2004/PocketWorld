@@ -56,10 +56,19 @@ const pairConclusion = (state: unknown): string => {
     case 'rejected': return '对方已拒绝这次原配对，不再继续握手。';
     case 'remote_trust_ended': return '对方保留了上次提交记录，但已不再信任这份原配对。请双方各自在设备上核对。';
     case 'local_pair_followup_unverified': return '原配对已在本机保存，授权回执或连接地址等后续步骤尚未核完。请查看已保存的伙伴，不必重新配对。';
-    case 'local_pair_connection_unavailable': return '原配对与对方授权回执已经保存，但本机没有成功开启连接。请到伙伴详情核对连接。';
-    case 'local_pair_saved': return '原配对已在本机保存，正在处理连接。不必重复握手。';
+    case 'local_pair_connection_unavailable': return '原配对与对方授权回执已保存在本机。首次连接尚未核实，请看这台原设备的本机连接记录。不用重新配对。';
+    case 'local_pair_saved': return '原配对已在本机保存。连接是否已建立需另看本机通道检查，不必重复握手。';
     default: return '';
   }
+};
+const connectionRecoveryLine = (peer: Data) => {
+  const state = peer.connection?.state, reason = peer.actions?.connect?.reason;
+  // Button availability is independently sampled after the channel snapshot, not evidence of a connection.
+  if (reason === '设备已连接') return '本机两次检查的状态不一致。请先重读这台设备的本机连接记录。';
+  if (state === 'CONNECTING' || peer.connection?.reconnectClientRunning === true) return '上次检查时本机仍在尝试连接，尚未核实控制通道接通。先重读本机记录，无需重配。';
+  if (reason === '还没有保存连接地址，请用这台设备的新邀请更新' || reason === '保存的连接地址无法读取，请重新更新')
+    return '本机没有可用的原连接地址。可核对这台原设备的新邀请来更新地址，不重新配对。';
+  return '上次未核实这台设备的控制通道。先重读本机连接记录，不必重配，也不代表原工作已经停止。';
 };
 const ownerWindowEnded = (candidate: Data, now: number) => !!candidate.localOwnerWindow &&
   (candidate.localOwnerWindow === 'review_closed' || candidate.localOwnerWindow === 'completion_closed' || candidate.expiresAt <= now);
@@ -488,7 +497,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     : phonePeer && !desktopPeer && !identityOnlyHere && phoneWork.labels.size>0 && supported('deviceTaskScope.prepare')
       ? { kind: 'goal', label: '准备给这部手机', icon: IconAdd, open: prepareDeviceGoal }
     : !deviceChannelWasConnected(peer) && available(peer.actions?.connect) && supported('devices.reviewAction')
-      ? { kind: 'connect', label: '核对并连接', icon: IconDevices, open: () => actionReview('peer.connect', { deviceId: peer.deviceId }) }
+      ? { kind: 'connect', label: '核对并连接', icon: IconDevices, open: () => reviewPeerConnection(peer) }
     : identityOnlyHere ? (deviceChannelWasConnected(peer) && supported('devices.snapshot')
       ? { kind: 'capabilities', label: '向对端核对身份与回执', icon: IconLayers, open: readPeerCapabilities } : null)
     : desktopPeer ? { kind: 'desktop', label: '准备查看桌面', icon: IconMonitor, open: openDesktopPreparation }
@@ -504,6 +513,25 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const openPhoneSetup = (section: 'accessibility' | 'background' | 'notifications') => { if (busy) return; clearSensitive(true, form === 'invite'); void run('settings.openSystem', { section }).catch(async failure => { await invoke('devices.snapshot'); if (alive.current && document.visibilityState === 'visible') setError(failure instanceof Error ? failure.message : String(failure)); }); };
   const actionReview = (operation: string, extra: Data = {}) => { void invoke('devices.reviewAction', { operation, ...extra }, acceptReview, operation.startsWith('task.') ? 'control' : 'work'); };
+  const reviewPeerConnection = (target: Data) => {
+    if (busy || retired(target) || !available(target.actions?.connect) || !supported('devices.reviewAction')) return;
+    if (sourceFocus ? !pinnedConnection || target !== focusedPeer : target !== peer || selectedPeer.current !== target.deviceId) return;
+    const place = deviceReadingPlace(local, target);
+    if (!place) { setError('无法核对本机与原设备身份，没有尝试连接。'); return; }
+    setNotice('');
+    void invoke('devices.reviewAction', { operation: 'peer.connect', deviceId: target.deviceId }, (value, actual) => {
+      const original = deviceReview(value), read = original.view?.peer;
+      const matches = rows(actual?.peers).filter(row => row.deviceId === target.deviceId);
+      if (original.kind !== 'action' || original.view.operation !== 'peer.connect' || !read || retired(read) ||
+          matches.length !== 1 || retired(matches[0]) || !sameDeviceReadingPlace(place, actual?.local, read) ||
+          !sameDeviceReadingPlace(place, actual?.local, matches[0]) || read.authorizationEpoch !== target.authorizationEpoch ||
+          matches[0].authorizationEpoch !== target.authorizationEpoch) {
+        void run('devices.discard', { viewHandle: original.viewHandle }).catch(() => {});
+        throw new Error('未在本机核对到同一台原设备，没有尝试连接。请重读本机记录。');
+      }
+      acceptReview(value);
+    });
+  };
   const confirmReview = (extra: Data = {}) => {
     if(review?.kind==='goal'&&!originalDeviceInputReady(review.view)){setError('原目标与附带资料未能核对，请从本机接单记录重新打开。');return;}
     const original = review; if (!original || !ack || busy) return;
@@ -512,6 +540,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     void invoke('devices.confirm', { viewHandle: original.viewHandle, acknowledged: true, ...(original.kind === 'goal' ? { useForFutureGoals: future } : {}), ...extra }, (value, actual) => {
       if (value.nativeCallReturned !== true || value.kind !== original.kind) throw new Error('原设备操作尚未取得匹配回执，请刷新核对。');
       if (original.kind === 'pair') { reportPair(original.view, actual); return; }
+      if (original.kind === 'action' && original.view.operation === 'peer.connect') {
+        if (value.operation !== 'peer.connect') throw new Error('连接请求的本机回执未匹配，请仅重读本机连接记录。');
+        setNotice('已请求连接这台原设备，不代表控制通道已接通。请看本机通道检查时间和状态；本次未开始工作。');
+        return;
+      }
       if(original.kind==='goal'||original.kind==='action'&&original.view.operation==='task.cancelPending'){
         // A confirmed choice changed this local record. Invalidate the page; never infer a run or refetch a peer.
         setWaitingPhones(page=>!page?.resultOnly&&rows(page?.rows).some(r=>r.taskId===original.view.taskId)?null:page);
@@ -1084,19 +1117,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           {!snapshot || !pinnedReadReady ? <p>等待读取本机当前保存的伙伴身份。</p> : !focusedPeer ? <p role="status">{peers.some(row=>row.deviceId===sourceFocus.deviceId)
             ? '原伙伴已撤销，或者证书或实例已变化，没有打开现在的设备。'
             : snapshot.hasMorePeers?'原身份不在本次本机读取范围。没有改选其他伙伴。':'本机没有匹配这份工作的原伙伴。没有改选其他设备。'}</p>
-            : <><p>上次连接检查：{deviceConnectionLabel(focusedPeer)}</p>
-                {!deviceChannelWasConnected(focusedPeer) && <p>{focusedPeer.actions?.connect?.reason || '连接需要你单独核对；尚未联系对方。'}</p>}
+            : <><p>上次连接检查：{deviceConnectionLabel(focusedPeer)} · {time(focusedPeer.connection?.observedAt)}</p>
+                {!deviceChannelWasConnected(focusedPeer) && <p>{connectionRecoveryLine(focusedPeer)}</p>}
                 {deviceChannelWasConnected(focusedPeer) && <p>连接记录不代表现在可执行。回到这份原工作后再核对设备范围。</p>}
                 {!deviceChannelWasConnected(focusedPeer) && available(focusedPeer.actions?.connect) && supported('devices.reviewAction') &&
-                  <Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.reviewAction',{operation:'peer.connect',deviceId:sourceFocus.deviceId},value=>{
-                    const next=deviceReview(value), target=next.view?.peer;
-                    if(next.kind!=='action' || next.view?.operation!=='peer.connect' || !target || retired(target) ||
-                      target.deviceId!==sourceFocus.deviceId || target.instanceId!==sourceFocus.instanceId || target.certificateFingerprint!==sourceFocus.certificateFingerprint){
-                      if(next.viewHandle)void run('devices.discard',{viewHandle:next.viewHandle}).catch(()=>{});
-                      setError('核对期间原设备身份已变化，没有连接。');return;
-                    }
-                    acceptReview(value);
-                  }); }}>核对并连接这台原设备</Button>}</>}
+                  <Button variant="secondary" disabled={busy} onClick={() => reviewPeerConnection(focusedPeer)}>核对并连接这台原设备</Button>}</>}
           <Accordion><AccordionItem id="pinned-connection-identity" title="这份工作固定的身份"><p className="pw-source-copy">原设备 {sourceFocus.deviceId}<br/>原证书 {fingerprint(sourceFocus.certificateFingerprint)}</p></AccordionItem></Accordion>
           <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={refresh}>重读本机连接记录</Button>
             {onReturnToPartnerTask && <Button disabled={busy || !!review} onClick={onReturnToPartnerTask}>返回这份原工作</Button>}</div>
@@ -1319,7 +1344,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {peer.connection?.unconfirmedTransportWrite === true && <p className="pw-device-inline-notice">有发送结果未确认。请查看那次原操作的回执，连接状态不能证明对方已接单。</p>}
             {retired(peer) ? <p>{peer.revocation?.peerAcknowledged === true ? '本机信任已撤销，对端已回执。' : '本机信任已撤销或连接已被撤销，请核对原记录。'}</p>
               : peer.connection?.state === 'DEGRADED' ? <p>上次通道不稳定。打开本机记录不需要重新配对；读取对端最新结果需重新核对。</p>
-              : !deviceChannelWasConnected(peer) ? <p>未接通不等于工作停止。先查看原记录，需要对端时再核对连接。</p>
+              : !deviceChannelWasConnected(peer) ? <p>{connectionRecoveryLine(peer)}</p>
               : <p>当时通道已接通；画面、输入和本次执行范围另行核对。</p>}
             {!retired(peer) && windowsObservation && <p className="pw-field-hint">{windowsObservation}</p>}
             {!retired(peer) && <><dl className="pw-device-scope-directions">
@@ -1367,7 +1392,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {desktopPeer && <div><dt>桌面画面</dt><dd>需在桌面页单独连接，控制通道在线不代表能看到画面。</dd></div>}
             </dl>
               <div className="pw-form-actions">
-              {!retired(peer) && available(peer.actions?.connect) && <Button disabled={busy} onClick={() => actionReview('peer.connect', { deviceId: peer.deviceId })}>核对并连接</Button>}
+              {!retired(peer) && available(peer.actions?.connect) && supported('devices.reviewAction') && <Button disabled={busy} onClick={() => reviewPeerConnection(peer)}>核对并连接</Button>}
               {available(peer.actions?.disconnect) && <Button variant="ghost" disabled={busy} onClick={() => actionReview('peer.disconnect', { deviceId: peer.deviceId })}>停止主动连接</Button>}
               </div>
               <p>同一局域网：对端保持接收服务开启，使用它当前显示的数字地址与短期邀请。换网不创建新身份；用原设备的邀请更新地址后重新连接。</p>
@@ -1555,7 +1580,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 openModelSettingsFor(source);
               } else { closeReview(); openModels(); }
             }}>更换本机模型</Button>}{originalView.source === 'local_account' && <p role="alert">这个账号当前不支持跨设备目标，请先在模型设置选择已授权 API 模型。</p>}<CheckboxField isSelected={future} onChange={setFuture} isDisabled={busy}>以后同一配对授权、模型与范围内的目标自动处理</CheckboxField>{future && <p>未来策略：工具 {originalView.policyToolBudget} 次 · 模型 {originalView.policyModelBudget} 次 · 至 {time(originalView.policyExpiresAt)}。模型、配对代次或范围改变后重新审阅。</p>}</>}
-          {review.kind === 'action' && <><h3>{declining?'不接手这项工作':deviceOperationLabels[originalView.operation]}</h3>{originalView.peer && <><p>{name(originalView.peer)} · {originalView.peer.deviceId}</p><p className="pw-source-copy">{fingerprint(originalView.peer.certificateFingerprint)}</p></>}{originalView.taskId && <><p>{originalView.goal || originalView.pendingGoal?.goal}</p><p>原任务 {originalView.taskId}{originalView.runId ? ` · 执行 ${originalView.runId} · 代次 ${originalView.executorEpoch}` : ' · 从未启动的原目标'}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.resourceBinding && <ResourceScope resource={originalView.resourceBinding} />}</>}{originalView.lease && <p>{originalView.lease.serviceBase} · {originalView.lease.inviterDeviceId}</p>}{declining&&<p>来自 {sourceLabel(originalView.pendingGoal.callerDeviceId,rows(waitingPage?.rows).find(row=>row.taskId===originalView.taskId && row.operationId===originalView.pendingGoal.operationId && row.sourceDeviceId===originalView.pendingGoal.callerDeviceId && row.createdAt===originalView.pendingGoal.acceptedAt)?.sourceIdentity)} · 本机接纳于 {time(originalView.pendingGoal.acceptedAt)}</p>}<p>{declining?'确认后，本机会结束这份从未启动的原派单。不运行模型，不向发起设备发消息。':originalView.operation === 'peer.revoke' ? '本机撤销会使旧授权失效，对端是否收到撤销另看真实回执。已经发生的动作无法撤回。' : originalView.operation.startsWith('task.') ? '只控制这项原任务，不重新提交目标。暂停、继续与停止仍以执行端回执为准。' : '变更本机接收或连接不会把正在执行的任务标记为停止。'}</p></>}
+          {review.kind === 'action' && <><h3>{declining?'不接手这项工作':deviceOperationLabels[originalView.operation]}</h3>{originalView.peer && <><p>{name(originalView.peer)} · {originalView.peer.deviceId}</p><p className="pw-source-copy">{fingerprint(originalView.peer.certificateFingerprint)}</p></>}{originalView.taskId && <><p>{originalView.goal || originalView.pendingGoal?.goal}</p><p>原任务 {originalView.taskId}{originalView.runId ? ` · 执行 ${originalView.runId} · 代次 ${originalView.executorEpoch}` : ' · 从未启动的原目标'}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}{originalView.resourceBinding && <ResourceScope resource={originalView.resourceBinding} />}</>}{originalView.lease && <p>{originalView.lease.serviceBase} · {originalView.lease.inviterDeviceId}</p>}{declining&&<p>来自 {sourceLabel(originalView.pendingGoal.callerDeviceId,rows(waitingPage?.rows).find(row=>row.taskId===originalView.taskId && row.operationId===originalView.pendingGoal.operationId && row.sourceDeviceId===originalView.pendingGoal.callerDeviceId && row.createdAt===originalView.pendingGoal.acceptedAt)?.sourceIdentity)} · 本机接纳于 {time(originalView.pendingGoal.acceptedAt)}</p>}<p>{declining?'确认后，本机会结束这份从未启动的原派单。不运行模型，不向发起设备发消息。':originalView.operation === 'peer.revoke' ? '本机撤销会使旧授权失效，对端是否收到撤销另看真实回执。已经发生的动作无法撤回。' : originalView.operation.startsWith('task.') ? '只控制这项原任务，不重新提交目标。暂停、继续与停止仍以执行端回执为准。' : originalView.operation === 'peer.connect' ? '确认后才尝试连接这台原设备。请求返回不代表已接通，也不会开始工作。' : '变更本机接收或连接不会把正在执行的任务标记为停止。'}</p></>}
           {review.kind === 'connection' && <>{originalView.discoveredAddress && <p role="alert">此地址来自未认证的局域网广播。确认只更新本机连接地址并尝试原证书双向 TLS；不重新配对、不扩大权限，不代表地址已验证或设备在线。选错地址会连接失败，可用原设备邀请恢复。</p>}<p>更新原设备 {originalView.deviceId} 的连接地址。</p><p className="pw-source-copy">已配对证书完整指纹：{fingerprint(originalView.certificateFingerprint)}</p><ResourceScope resource={Object.fromEntries(Object.entries(originalView).filter(([key]) => ['host', 'port', 'controlPort', 'bulkPort', 'serviceBase', 'path', 'connectionKind', 'kind', 'expiresAt'].includes(key)))} /></>}
           {review.kind === 'relay' && <><p>{originalView.serviceBase} · 至 {time(originalView.expiresAt)}</p><p>只在内存中使用这份临时租约；不产生设备权限，双端身份仍要核对。</p><p>原邀请设备 {originalView.inviterDeviceId}</p></>}
           {review.kind === 'abandon' && <><p>只放弃本机这次待配对记录，对端可能已经保存配对。这里不会代替对端撤销。</p><p className="pw-source-copy">原设备指纹：{fingerprint(originalView.inviterFingerprint)}</p></>}

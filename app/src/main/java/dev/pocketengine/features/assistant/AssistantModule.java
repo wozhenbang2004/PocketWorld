@@ -338,7 +338,10 @@ public final class AssistantModule implements EngineModule {
                 return historyRepository.window(conversation,input.optString("cursor"),input.optInt("limit",80))
                         .put("organization",historyRepository.ownerOrganization("getOrganization",new JSONObject().put("conversationId",conversation)));
             }):findConversation(input.getString("conversationId"));
-            case "send":return nativeInputHost==null?send(input):sendNative(input);
+            case "send":
+                if(nativeInputHost==null&&Boolean.TRUE.equals(input.opt("mustMatchObservedForeground")))
+                    throw new IllegalStateException("原生对话接收边界不可用；不能按旧入口发送这条输入");
+                return nativeInputHost==null?send(input):sendNative(input);
             case "getSubmission":return submission(input.getString("clientMessageId"));
             case "cancel":{
                 String conversation=input.optString("conversationId");final Cancellation selected;
@@ -609,6 +612,11 @@ public final class AssistantModule implements EngineModule {
             var existing=liveTurns.get(requested);
             DevelopmentTurn retained=existing==null?developmentTurns.get(requested):null;
             boolean resuming=retained!=null,starting=existing==null&&!resuming;
+            boolean hasTurn=input.has("taskId")||input.has("runId")||input.has("epoch");
+            // The UI saw no foreground turn. Do not implicitly inherit one that
+            // appeared while the original draft and submission identity were saved.
+            if(Boolean.TRUE.equals(input.opt("mustMatchObservedForeground"))&&!hasTurn&&!starting)
+                throw new IllegalStateException("原对话已有回合；没有发送，请核对当前回合");
             if(displayWindow!=null){
                 if(!starting||!displayWindow.getAsBoolean()||!durable()||nativeInputHost==null||projectStart!=null)throw new SecurityException("原对话已变更或仍在处理工作，本次没有读取手机");
                 historyTasks.requireExecutionEnabled();
@@ -625,7 +633,7 @@ public final class AssistantModule implements EngineModule {
             final String safe=displayWindow!=null?text:redact(text,config);
             if(!starting&&(expectedTurn==null||requested.isEmpty()||!requested.equals(expectedTurn.getString("conversationId"))))
                 throw new SecurityException("输入必须属于所选原对话，不会挪给另一个任务");
-            if(starting&&(input.has("taskId")||input.has("runId")||input.has("epoch")))
+            if(starting&&hasTurn)
                 throw new IllegalStateException("原执行已结束，请先核对任务，不会用旧绑定新建任务");
             final RunControl live=starting?new RunControl():resuming?retained.control():existing.original().control;
             live.check();
@@ -637,7 +645,7 @@ public final class AssistantModule implements EngineModule {
             final JSONObject saved;
             try{
                 if(!starting){
-                    JSONObject submitted=resuming&&!input.has("taskId")&&!input.has("runId")&&!input.has("epoch")?retained.binding():input;
+                    JSONObject submitted=resuming&&!hasTurn?retained.binding():input;
                     expected.put("taskId",submitted.getString("taskId")).put("runId",submitted.getString("runId")).put("epoch",submitted.getInt("epoch"));
                     if(!expected.getString("taskId").equals(expectedTurn.getString("taskId"))||!expected.getString("runId").equals(expectedTurn.getString("runId"))||expected.getInt("epoch")!=expectedTurn.getInt("epoch"))
                         throw new SecurityException("原任务执行代次已变化，请刷新后确认");

@@ -1429,7 +1429,9 @@ export default function App(){
   const settled=registration.begin();if(!settled)return;
   if(route==='butler'){butlerSendConversation.current=String(state.conversationId||'');void navigate('chat')}
   setLocalStatus('');goToLatest();chatDraft.markSent();markMessageArrival();
-  void act('composer.send',{key:draftKey,epoch:draftEpoch,text,...(localDisplayReady?{primaryDisplayRevision:composer.revision}:{expectedDraftRevision:ordinaryDraftRevision})}).catch(error=>{
+  const displayedTurn=foregroundTurn?{taskId:foregroundTurn.taskId,runId:foregroundTurn.runId,epoch:foregroundTurn.epoch}:{};
+  void act('composer.send',{key:draftKey,epoch:draftEpoch,text,...(localDisplayReady?{primaryDisplayRevision:composer.revision}:
+   {expectedDraftRevision:ordinaryDraftRevision,expectedForegroundTurn:displayedTurn})}).catch(error=>{
    const now=bridge.getState().composer;if(now?.key===draftKey&&now?.epoch===draftEpoch)setLocalError(error instanceof Error?error.message:String(error));
   }).finally(settled);
  };
