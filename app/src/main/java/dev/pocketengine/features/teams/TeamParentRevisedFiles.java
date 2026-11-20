@@ -9,7 +9,7 @@ import org.json.JSONObject;
  * a grant, replace an approval or start/resume the previous integrator. */
 final class TeamParentRevisedFiles {
     private TeamParentRevisedFiles() {}
-    record Round(String operation,String request,String previousReview,String previousPlan,int affectedItems) {}
+    record Round(String operation,String request,String previousReview,String previousPlan,String previousIntegrationRun,int affectedItems) {}
     private static Round round(JSONObject parent,JSONObject run,JSONObject sql)throws Exception {
         return TeamParentRevisionOffer.local(run)?ownerRound(parent,run,sql):null;
     }
@@ -41,7 +41,7 @@ final class TeamParentRevisedFiles {
                 seen=true;affected++;
             }
         }
-        return target&&affected>0?new Round(proposal.getString("operationId"),request,review,hash,affected):null;
+        return target&&affected>0?new Round(proposal.getString("operationId"),request,review,hash,basis.optString("runId"),affected):null;
     }
     private static boolean frozenMatches(JSONObject sql,JSONObject plan)throws Exception{
         java.util.Map<String,JSONObject> refs=new java.util.HashMap<>();JSONArray items=sql.getJSONArray("items"),files=plan.getJSONArray("files");
@@ -69,6 +69,37 @@ final class TeamParentRevisedFiles {
         return outcome(run.getString("id"),r,"prior_write_before_draft_revision","这是修订前已写回的那一版；主人后来只批准了新草稿范围。这次没有读取旧文件正文，也没有证明新稿已写回。")
                 .put("planHash",r.previousPlan).put("reviewId",r.previousReview).put("historicalWriteAtDraftApproval",true)
                 .put("currentHeadsChecked",false).put("approvalTransfersToRevisedFiles",false);
+    }
+    static boolean hasIntegrationRevision(JSONObject run,JSONObject sql) {
+        return sql!=null&&sql.has("lastRevisionRequestId")&&TeamParentRevisionOffer.localFiles(run);
+    }
+    /** Model-facing read only. A V1 head may still be correct, but cannot settle
+     * an owner-confirmed V2 draft. Keep its real receipt and cursors as history. */
+    static JSONObject integrationForReport(JSONObject parent,JSONObject run,JSONObject sql,JSONObject decisions,JSONObject actual)throws Exception {
+        String team=run.getString("id"),hash=actual.optString("planHash");
+        JSONObject observation=new JSONObject().put("teamRunId",team).put("status","revised_integration_needs_verification")
+                .put("currentRevisionWritebackVerified",false).put("executionAuthorized",false).put("businessVerified",false)
+                .put("message","原分工已有修订，但尚不能核对这版的写回。请读原审阅，不把上版写回当成本版交付。");
+        Round r=ownerRound(parent,run,sql);
+        if(r==null)return observation;
+        JSONObject registered=registered(parent,run,sql,hash,decisions,actual);
+        if(registered!=null){
+            boolean written="completed".equals(actual.opt("status"))&&Boolean.TRUE.equals(actual.opt("currentFilesComplete"))
+                    &&Boolean.FALSE.equals(actual.opt("activeAttempt"))&&Boolean.FALSE.equals(actual.opt("hasUnresolved"));
+            return new JSONObject(actual.toString()).put("revisionDecision",registered).put("currentRevisionWritebackVerified",written)
+                    .put("workPlanRevision",sql.getInt("revision")).put("executionAuthorized",false);
+        }
+        observation.put("workPlanRevision",sql.getInt("revision")).put("draftRevisionOwnerConfirmed",true)
+                .put("priorWriteAtDraftApproval",true).put("previousPlanHash",r.previousPlan()).put("previousReviewId",r.previousReview());
+        if(!team.equals(actual.opt("teamRunId"))||!integrator(team).equals(actual.opt("taskId"))
+                ||!r.previousPlan().equals(hash)||!r.previousReview().equals(actual.opt("reviewId"))
+                ||!r.previousIntegrationRun().matches("[a-f0-9-]{36}")||!r.previousIntegrationRun().equals(actual.opt("runId")))return observation;
+        JSONObject history=new JSONObject(actual.toString()).put("scope","previous_written_plan_not_revised_draft")
+                .put("historical",true).put("currentRevisionWritebackVerified",false);
+        if(history.has("currentFilesComplete"))history.put("previousFilesStillMatch",history.remove("currentFilesComplete"));
+        if(history.has("currentVerifiedFiles"))history.put("previousFilesStillMatchingCount",history.remove("currentVerifiedFiles"));
+        return observation.put("status","previous_writeback_only").put("previousIntegration",history)
+                .put("message","下面只核对修订前的已写回版本。主人确认新草稿不等于本版已写回；请在原审阅核对作者交付、独审或本版批准。");
     }
     /** Only a private V2 grant on the same unique integrator, never the V1 receipt or an author status. */
     static JSONObject registered(JSONObject parent,JSONObject run,JSONObject sql,String expected,JSONObject approvals,JSONObject actual)throws Exception{

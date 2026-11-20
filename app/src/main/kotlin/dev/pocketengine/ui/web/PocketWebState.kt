@@ -282,7 +282,8 @@ internal object PocketWebState {
                     .put("status", state.chatReceipts[pending.clientId]?.opt("status") ?: JSONObject.NULL)
                     .put("receipt", publicValue(state.chatReceipts[pending.clientId]))
                     .put("canRetryLocallyUnsent", controller.canRetryLocallyUnsent(pending.clientId))
-                    .put("canReleasePreparedFirstChat", controller.canReleasePreparedFirstChat(pending.clientId)))
+                    .put("canReleasePreparedFirstChat", controller.canReleasePreparedFirstChat(pending.clientId))
+                    .put("canReadSavedFirstChatSource", controller.canReadSavedFirstChatSource(pending.clientId)))
             } })
         return JSONObject().put("state", data).put("composer", composer)
     }

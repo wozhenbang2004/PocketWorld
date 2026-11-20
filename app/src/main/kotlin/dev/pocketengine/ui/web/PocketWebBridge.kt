@@ -290,7 +290,7 @@ internal class PocketWebBridge(
             "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal", "conversation.saveFirstHostRequest", "conversation.selectSavedHost",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
-            "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst",
+            "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
@@ -1152,6 +1152,19 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebExperience.COMMANDS) {
                 requireSection("learning"); experience.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+            }
+            if (action == "composer.readSavedFirst") {
+                checkedPayload(args,setOf("clientMessageId","key","epoch","revision"))
+                val ticket=captureWindow();val document=documentId
+                fun current()=!closed && document!=null && documentId==document && acceptsWindow(ticket) &&
+                    section==null && taskViewId==null && !phoneComposer.intent && controller.conversationReader==null && controller.webPrivateOwnerVisible()
+                controller.readSavedFirstChatSource(requiredString(args,"clientMessageId"),requiredString(args,"key"),
+                    requiredInt(args,"epoch"),requiredLong(args,"revision"),::current){value,error->
+                    if(current())complete(id,value,error,retainValue=false,replayHint="请返回原输入重新核对保存记录")
+                    else complete(id,null,"原阅读窗口已关闭，没有打开其他内容。",retainValue=false)
+                    publishState()
+                }
+                return
             }
             if (action == "composer.releasePreparedFirst") {
                 checkedPayload(args,setOf("clientMessageId","key","epoch","revision"))

@@ -1053,6 +1053,87 @@ public final class AssistantModule implements EngineModule {
         JSONObject row=historyTasks.queuedOwnerInput(ack.getString("taskId"),conversation,message.getString("id"));String state=row.getString("queueState");
         if(!Set.of("materialized","withdrawn").contains(state))throw new IllegalStateException("这条输入仍待接手或正在处理，请在原任务的排队输入管理中编辑或撤回");
     }
+    /** Owner UI only. This is proof of one saved user row, not a TaskStore admission or a source grant. */
+    public static final class FirstChatSavedSource {
+        private final OwnerComposerState.Pending original;
+        private final String conversation, message, generation, bodyFingerprint;
+        private FirstChatSavedSource(OwnerComposerState.Pending original,String conversation,String message,String generation,String bodyFingerprint){
+            this.original=original;this.conversation=conversation;this.message=message;this.generation=generation;this.bodyFingerprint=bodyFingerprint;
+        }
+        private boolean same(FirstChatSavedSource actual){
+            return actual!=null&&original==actual.original&&conversation.equals(actual.conversation)&&message.equals(actual.message)
+                    &&generation.equals(actual.generation)&&bodyFingerprint.equals(actual.bodyFingerprint);
+        }
+    }
+    public record FirstChatLookup(JSONObject receipt, FirstChatSavedSource savedSource) { }
+    private record FirstChatSourceRead(FirstChatSavedSource proof,String text) { }
+    private void requireFirstChatLookup(OwnerComposerState.Pending original){
+        if(original==null||original.firstChatPhase!=OwnerComposerState.FirstChatPhase.FENCED||original.primaryDisplayOnly
+                ||!original.conversationId.isEmpty()||!original.draftKey.startsWith("new:")||!durable()||migrationInProgress)
+            throw new SecurityException("原首次输入不可核对，不能推断它是否已发出");
+    }
+    public FirstChatLookup lookupFirstChatSubmission(OwnerComposerState.Pending original)throws Exception{
+        requireFirstChatLookup(original);
+        return historyRepository.read(()->{
+            JSONObject owner=historyRepository.sourceByClient(original.clientId);
+            if(owner==null)throw new IllegalStateException("尚未查到这条原输入的回执，不能据此判断未发出");
+            JSONObject ack=owner.getJSONObject("submission");
+            if(owner.optBoolean("deleted")||owner.optBoolean("nativeProvenanceImported")||!"owner".equals(owner.opt("ownerId"))||
+                    !"private".equals(owner.opt("spaceId"))||!"user".equals(owner.opt("role"))||
+                    !original.clientId.equals(owner.opt("clientMessageId"))||!original.clientId.equals(ack.opt("clientMessageId"))||
+                    !owner.getString("conversationId").equals(ack.opt("conversationId"))||
+                    !owner.getString("sourceId").equals(ack.opt("messageId")))
+                throw new SecurityException("找到的回执不属于原输入");
+            FirstChatSavedSource proof=null;
+            if("unconfirmed".equals(ack.opt("status"))){
+                try{proof=checkedFirstChatSource(original,owner).proof();}
+                catch(InterruptedException interrupted){throw interrupted;}
+                catch(Exception unavailable){/* Receipt only: absent, retired or unreadable original bytes do not open a reader. */}
+            }
+            return new FirstChatLookup(copy(ack),proof);
+        });
+    }
+    public JSONObject readSavedFirstChatInput(OwnerComposerState.Pending original,FirstChatSavedSource expected)throws Exception{
+        requireFirstChatLookup(original);
+        if(expected==null||expected.original!=original)throw new SecurityException("不是原先核对的首条输入");
+        return historyRepository.read(()->{
+            FirstChatSourceRead read=checkedFirstChatSource(original,historyRepository.sourceByClient(original.clientId));
+            if(!expected.same(read.proof()))throw new SecurityException("原保存记录已更换或不可读取");
+            return new JSONObject().put("clientMessageId",original.clientId).put("draftRevision",original.draftRevision)
+                    .put("sourceRevision",1L).put("text",read.text()).put("admissionState","unconfirmed").put("executionAuthorized",false);
+        });
+    }
+    private FirstChatSourceRead checkedFirstChatSource(OwnerComposerState.Pending original,JSONObject owner)throws Exception{
+        if(owner==null||owner.optBoolean("deleted")||owner.optBoolean("nativeProvenanceImported")||owner.optBoolean("memoryContextRetired")
+                ||owner.optLong("memorySourceRetiredThrough")>=1||owner.has("ownerDisplayDraftProof")||
+                !"user".equals(owner.opt("role"))||!original.clientId.equals(owner.opt("clientMessageId")))
+            throw new SecurityException("原主人消息已删除、换版或不再可读");
+        SourceRef ref=SourceRef.fromJson(owner);
+        String conversation=owner.getString("conversationId"),request=owner.getString("requestFingerprint");
+        JSONObject originalAck=owner.getJSONObject("submission");
+        if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||ref.revision!=1L||
+                !request.matches("[a-f0-9]{64}")||!"unconfirmed".equals(originalAck.opt("status"))||
+                originalAck.opt("reconciliationRequired")!=Boolean.TRUE||originalAck.optBoolean("nativeLocalRead")||
+                !conversation.equals(originalAck.opt("conversationId"))||!ref.sourceId.equals(originalAck.opt("messageId"))||
+                !original.clientId.equals(originalAck.opt("clientMessageId"))||!original.mode.equals(originalAck.opt("mode")))
+            throw new SecurityException("原保存记录已变化，请核对最新接单回执");
+        JSONObject actual=historyRepository.message(conversation,ref.sourceId);
+        if(actual==null||actual.optBoolean("importAssignedIdentity")||!"user".equals(actual.opt("role"))||!ref.sourceId.equals(actual.opt("id"))||
+                actual.getLong("revision")!=ref.revision||!original.clientId.equals(actual.opt("clientMessageId"))||
+                !original.mode.equals(actual.opt("inputMode"))||!request.equals(actual.opt("requestFingerprint")))
+            throw new SecurityException("无法核对同一条已保存原话");
+        for(String key:new String[]{"attachments","ownerSourceRefs","ownerPreviewRefs","ownerObjectRefs"})
+            if(actual.has(key)&&(actual.optJSONArray(key)==null||actual.getJSONArray(key).length()!=0))
+                throw new SecurityException("这不是原普通纯文字输入");
+        String text=actual.getString("content");
+        if(text.isEmpty()||text.length()>12000||!StandardCharsets.UTF_8.newEncoder().canEncode(text))
+            throw new SecurityException("原正文超过单条读取范围，不显示替代文本");
+        JSONObject bytes=historyRepository.nativeMessageSource(ref);
+        String fingerprint="sha256:"+ConversationRepository.shaBytes(text.getBytes(StandardCharsets.UTF_8));
+        if(!conversation.equals(bytes.opt("sourceConversationId"))||!fingerprint.equals(bytes.opt("bodyFingerprint")))
+            throw new SecurityException("保存的原文字节未通过核对");
+        return new FirstChatSourceRead(new FirstChatSavedSource(original,conversation,ref.sourceId,bytes.getString("generation"),fingerprint),text);
+    }
     private JSONObject submission(String client)throws Exception{JSONObject found=findSubmission(client);if(found==null)throw new IllegalArgumentException("没有这条提交记录");return copy(found.getJSONObject("ack"));}
     private JSONObject findSubmission(String client)throws Exception{
         if(durable())return historyRepository.read(()->{JSONObject row=historyRepository.sourceByClient(client);return row==null?null:new JSONObject().put("conversationId",row.getString("conversationId")).put("requestFingerprint",row.getString("requestFingerprint")).put("ack",copy(row.getJSONObject("submission")));});

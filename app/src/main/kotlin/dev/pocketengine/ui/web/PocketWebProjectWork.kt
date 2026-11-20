@@ -192,8 +192,11 @@ internal class PocketWebProjectWork(
                 }
             }
             "projectWork.preflight" -> {
-                fields(args, "windowId", "profileId", "checkoutId", "runtimeId")
+                fields(args, "windowId", "profileId", "profileRevision", "checkoutId", "runtimeId")
                 val profileId = identity(args, "profileId"); val checkout = identity(args, "checkoutId"); val runtime = identity(args, "runtimeId")
+                val revision = args.opt("profileRevision")
+                require((revision is Int || revision is Long) && (revision as Number).toLong() > 0) { "请选择屏幕上那一版已保存配置" }
+                val wantedRevision = (revision as Number).toLong()
                 require(runtime in setOf("managed_process_v1", "termux")) { "请选择已有的本机运行位置" }
                 requireResolvedStart(selected.project)
                 check(!busy) { "请等待原项目读取完成" }; busy = true; reviews.clear()
@@ -201,13 +204,17 @@ internal class PocketWebProjectWork(
                 try { profiles.dispatch("profiles.read", JSONObject().put("id", profileId)) { read, readError ->
                     if (!current(selected)) return@dispatch
                     if (readError != null || read == null) { fail(readError); return@dispatch }
+                    val profile = read.optJSONObject("profile")
+                    if (profile == null || profile.opt("profileId") != profileId || profile.optLong("revision", -1) != wantedRevision) {
+                        fail("已保存配置不再是刚才选择的修订，原目标与副本未改。请重新读取并核对这份配置。"); return@dispatch
+                    }
                     try { profiles.dispatch("profiles.choices", JSONObject().put("projectId", selected.project).put("checkoutId", checkout).put("runtimeId", runtime)) choices@{ choices, choicesError ->
                         if (!current(selected)) return@choices
                         if (choicesError != null || choices == null) { fail(choicesError); return@choices }
                         try { profiles.dispatch("profiles.preflight", JSONObject().put("viewHandle", read.getString("viewHandle")).put("choicesHandle", choices.getString("choicesHandle"))) inspected@{ inspected, inspectError ->
                             if (!current(selected)) return@inspected
                             busy = false
-                            done(inspected?.let { response(selected, it).put("profile", read.getJSONObject("profile")) }, inspectError)
+                            done(inspected?.let { response(selected, it).put("profile", profile) }, inspectError)
                         } } catch (failure: Exception) { fail(failure.message) }
                     } } catch (failure: Exception) { fail(failure.message) }
                 } } catch (failure: Exception) { busy = false; throw failure }

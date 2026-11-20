@@ -41,7 +41,8 @@ public final class TeamParentHost {
         TaskStore.TeamParentStart approved=tasks.claimTeamParentStart(source,args.getString("planRef"),args.getString("planHash"));if(!approved.dispatch()){JSONObject receipt=approved.view();return receipt.has("teamRunId")?status(source,receipt.getString("teamRunId")).put("knownPlan",true).put("queryOnly",true):receipt;}
         JSONObject actual=coordinator.startParentPlan(approved,parentStartModel(approved,original),null,null);tasks.completeTeamParentStart(approved,actual);String originalTeam=actual.getString("id");original.onCancel(()->{try{cleanup.accept(()->{try{writes.cancel(originalTeam);coordinator.cancel(originalTeam);changed.accept(originalTeam);}catch(Exception ignored){}});}catch(RuntimeException queueUnavailable){/* Original task cancellation still revokes all child SQL/currentness gates; native stop remains queryable. */}});changed.accept(originalTeam);return status(source,actual.getString("id")).put("planRef",args.getString("planRef")).put("planHash",args.getString("planHash")).put("started",true).put("businessVerified",false);
     }
-    private JSONObject status(TaskStore.TeamParentOrigin source,String id)throws Exception {
+    private JSONObject status(TaskStore.TeamParentOrigin source,String id)throws Exception {return status(source,id,false);}
+    private JSONObject status(TaskStore.TeamParentOrigin source,String id,boolean reportRead)throws Exception {
         JSONObject task=tasks.teamParentAccess(source,id,false),run=coordinator.get(id),state=tasks.teamParentExecutionState(source,id),nativeState=coordinator.parentExecutorState(id);
         JSONObject finalWorkers=task.optJSONObject("teamWriteScope")==null?null:writes.finalWorkers(id);
         boolean released=state.getBoolean("resourcesReleased")&&nativeState.getBoolean("resourcesReleased")&&(finalWorkers==null||finalWorkers.getBoolean("resourcesReleased"));
@@ -64,8 +65,10 @@ public final class TeamParentHost {
             result.put("parentBudget",tasks.teamBudgetSnapshot(id)).put("researchReadViews",new JSONArray().put("research_summary").put("member_output")).put("outputRangeLimit",8000).put("researchOutputs",coordinator.parentResearchOutputIndex(id));return result;
         }
         JSONObject review=tasks.teamReviewState(id);if(review.optJSONObject("independentReview")!=null)result.put("independentReview",smallReview(review.getJSONObject("independentReview")));if(review.optJSONObject("approvedReview")!=null)result.put("approvedReview",smallReview(review.getJSONObject("approvedReview")));JSONObject integrator=integration(id);result.put("integration",integrator);
-        JSONObject work=task.optJSONObject("teamWorkPlan");
-        if(work!=null&&work.has("lastRevisionRequestId")&&TeamParentRevisionOffer.local(run)){
+        JSONObject work=(reportRead?tasks.teamParentAccess(source,id,false):task).optJSONObject("teamWorkPlan");
+        if(reportRead&&TeamParentRevisedFiles.hasIntegrationRevision(run,work)){
+            result.put("integration",TeamParentRevisedFiles.integrationForReport(source.view(),run,work,review,integrator));
+        }else if(work!=null&&work.has("lastRevisionRequestId")&&TeamParentRevisionOffer.local(run)){
             String recorded=integrator.optString("planHash");JSONObject round=TeamParentRevisedFiles.previous(source.view(),run,work,recorded);
             if(round==null)round=TeamParentRevisedFiles.registered(source.view(),run,work,recorded,review,integrator);
             if(round!=null)result.put("revisionDecision",round);
@@ -102,7 +105,7 @@ public final class TeamParentHost {
                     original.check();tasks.teamParentAccess(source,id,false);originalDelivery.report(out,writes.finalWorkers(id));
                 }
             }else switch(args.optString("view","status")){
-                case "status":case "members":out=status(source,id);break;
+                case "status":case "members":out=status(source,id,true);break;
                 case "events":out=coordinator.parentEvents(id,args.optLong("afterEvent",0),args.optInt("limit",16));break;
                 case "message_receipt":{
                     String messageId=args.getString("messageId");
@@ -148,6 +151,12 @@ public final class TeamParentHost {
                     out=integration(id);
                     if(out.has("progress")&&!out.optString("runId").isEmpty())out.put("fileOperationEvidence",tasks.teamParentFileOperationPage(source,args,out));
                     else if(args.has("fileCursor"))throw new SecurityException("所选原整合执行不存在，未返回其他版本的回执");
+                    JSONObject plan=tasks.teamParentAccess(source,id,false).optJSONObject("teamWorkPlan");
+                    if(plan!=null&&plan.has("lastRevisionRequestId")){
+                        JSONObject current=coordinator.retainedOwnerReading(id);
+                        if(TeamParentRevisedFiles.hasIntegrationRevision(current,plan))
+                            out=TeamParentRevisedFiles.integrationForReport(source.view(),current,plan,tasks.teamReviewState(id),out);
+                    }
                     break;
                 }
                 default:throw new IllegalArgumentException("请选择原团队状态、事件、补充回执、成果或审阅视图");

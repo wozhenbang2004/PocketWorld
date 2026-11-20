@@ -431,6 +431,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var ownerComposer: OwnerComposerState? = null
     private val restoredPreparedFirstChats = mutableSetOf<String>()
     private var releasingFirstChat: String? = null
+    private data class SavedFirstChatSource(
+        val original: OwnerComposerState.Pending,
+        val proof: dev.pocketengine.features.assistant.AssistantModule.FirstChatSavedSource,
+        val epoch: Int,
+        val historyRevision: Long
+    )
+    private var savedFirstChatSource by mutableStateOf<SavedFirstChatSource?>(null)
+    private val checkingFirstChat = mutableSetOf<String>()
     private var compatibilityChat: dev.pocketengine.features.assistant.CompatibilityChatHandoff.Review? = null
     var compatibilityChatRevision by mutableStateOf(0)
         private set
@@ -1639,6 +1647,62 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         main.post { if(!closed)state=state.copy(notice="原草稿的模型偏好未随对话迁移，下次普通发送前请核对："+message(failure)) }
     } }}
     private val checkingLocalDisplayInputs=mutableSetOf<String>()
+    private fun currentFirstChatSourceInput(original: OwnerComposerState.Pending): Boolean {
+        if(original.firstChatPhase!=OwnerComposerState.FirstChatPhase.FENCED || original.primaryDisplayOnly || !original.conversationId.isEmpty() ||
+            !webPrivateOwnerVisible() || hasChannelPhoneOrigin || state.conversationId!=null || state.chatSubmitting || conversationReader!=null)return false
+        val model=ownerComposer?:return false
+        return model.pending(original.clientId)===original && model.active().let { it.key==original.draftKey && it.revision==original.draftRevision }
+    }
+    private fun queryFirstChatSource(original: OwnerComposerState.Pending) {
+        val client=original.clientId
+        if(!checkingFirstChat.add(client))return
+        val epoch=chatViewEpoch
+        val historyRevision=conversationSourceRevision
+        val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule
+        io.execute {
+            val result=runCatching {
+                (assistant?:error("原私人消息存储尚未准备")).lookupFirstChatSubmission(original)
+            }
+            main.post {
+                checkingFirstChat.remove(client)
+                if(closed || ownerComposer?.pending(client)!==original)return@post
+                if(savedFirstChatSource?.original===original)savedFirstChatSource=null
+                fun atSource()=epoch==chatViewEpoch && currentFirstChatSourceInput(original)
+                result.fold({ found ->
+                    // Native accepted/rejected receipts still reconcile their original row
+                    // after navigation; only the new inline excerpt is editor-scoped.
+                    receiveChatAcknowledgement(found.receipt(),client,true)
+                    val proof=found.savedSource()
+                    if(proof!=null && historyRevision==conversationSourceRevision && atSource() &&
+                        state.chatReceipts[client]?.optString("status")=="unconfirmed")
+                        savedFirstChatSource=SavedFirstChatSource(original,proof,epoch,historyRevision)
+                    native("getFeatures")
+                },{ failure -> if(atSource())state=state.copy(notice=message(failure)) })
+            }
+        }
+    }
+    internal fun canReadSavedFirstChatSource(client:String): Boolean {
+        val source=savedFirstChatSource?:return false
+        return source.original.clientId==client && source.epoch==chatViewEpoch && source.historyRevision==conversationSourceRevision &&
+            state.chatReceipts[client]?.optString("status")=="unconfirmed" && currentFirstChatSourceInput(source.original)
+    }
+    internal fun readSavedFirstChatSource(client:String,key:String,epoch:Int,revision:Long,ownerWindow:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val source=savedFirstChatSource?:error("请先查询原输入回执")
+        fun current()=ownerWindow() && savedFirstChatSource===source && canReadSavedFirstChatSource(client) &&
+            epoch==source.epoch && key==source.original.draftKey && revision==source.original.draftRevision
+        check(current()) { "原输入或阅读窗口已变化，没有打开其他内容" }
+        val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule?:error("原私人消息存储尚未准备")
+        io.execute {
+            val result=runCatching { assistant.readSavedFirstChatInput(source.original,source.proof) }
+            main.post {
+                if(!current())done(null,"原话或窗口已变化，没有打开其他内容")
+                else result.fold({ done(it,null) },{ failure ->
+                    savedFirstChatSource=null
+                    val detail=message(failure);state=state.copy(notice=detail);done(null,detail)
+                })
+            }
+        }
+    }
     fun queryChatSubmission(client:String) {
         if(releasingFirstChat==client)return
         if(notSentChatReceipts.containsKey(client)){clearNotSentChat(client);return}
@@ -1674,6 +1738,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     },{failure->state=state.copy(error="原读数暂不能核对，草稿仍保留；可以稍后再查，没有重新读取："+message(failure))})
                 }
             }
+            return
+        }
+        if(original!=null && currentFirstChatSourceInput(original) && !canRetryLocallyUnsent(client)) {
+            queryFirstChatSource(original)
             return
         }
         if(client.isNotBlank())feature("assistant","getSubmission",JSONObject().put("clientMessageId",client))
@@ -1749,7 +1817,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 refreshCurrentConversationTurn()
                 state=state.copy(notice=if(receipt.optString("reason")=="capacity_reached")"原任务输入留存已满，本条确定未入队；草稿已保留，请先结束并核对原任务后明确重新发送" else "原任务已关闭输入，本条确定未入队；草稿已保留，请在原任务结束后明确重新发送")
             }catch(error:Exception){state=state.copy(notice=message(error))}
-        } else state=state.copy(notice="输入登记尚未确认；请查询原回执或核对任务，不要重复发送同一输入")
+        } else {
+            state=state.copy(notice="输入登记尚未确认；请查询原回执或核对任务，不要重复发送同一输入")
+            // A notice from send is not itself proof the row can still be read. Verify its
+            // original local source off the UI thread; never repeat the send.
+            if(!query && original!=null && receipt.optString("messageId").isNotEmpty() && receipt.optString("conversationId").isNotEmpty() &&
+                currentFirstChatSourceInput(original) && !canReadSavedFirstChatSource(client))queryFirstChatSource(original)
+        }
     }
 
     private var pluginCatalogPage: dev.pocketengine.features.NativePluginHost.Page? = null

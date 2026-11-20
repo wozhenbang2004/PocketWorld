@@ -1,4 +1,4 @@
-import {useRef,useState} from 'react';
+import {useEffect,useId,useRef,useState} from 'react';
 import {Accordion,AccordionItem,Button} from './forms-library';
 
 type Data=Record<string,any>;
@@ -28,17 +28,48 @@ export function conversationPending(composer:Data,receipts:Data,messages:readonl
 }
 
 type Action='query'|'retry'|'return'|'release-prepared';
-type Props={rows:PendingInput[];can:(action:string)=>boolean;submitting:boolean;ordinaryComposer:boolean;onAction:(action:Action,row:PendingInput)=>void};
-export function ConversationDelivery({rows,can,submitting,ordinaryComposer,onAction}:Props){
+type Props={rows:PendingInput[];can:(action:string)=>boolean;submitting:boolean;ordinaryComposer:boolean;readWindow:string;
+ onAction:(action:Action,row:PendingInput)=>void;onReadSavedFirst:(row:PendingInput)=>Promise<string>};
+
+function SavedFirstChatExcerpt({read}:{read:()=>Promise<string>}){
+ const region=useId();
+ const serial=useRef(0),inFlight=useRef(false);
+ const [body,setBody]=useState<string|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ useEffect(()=>{
+  const hide=()=>{if(document.hidden){serial.current++;inFlight.current=false;setBody(null);setError('');setBusy(false)}};
+  document.addEventListener('visibilitychange',hide);
+  return()=>{serial.current++;document.removeEventListener('visibilitychange',hide)};
+ },[]);
+ const toggle=async()=>{
+  if(document.hidden||inFlight.current)return;
+  if(body!==null){setBody(null);return}
+  const key=++serial.current;inFlight.current=true;setBusy(true);setError('');
+  try{const original=await read();if(serial.current===key&&!document.hidden)setBody(original)}
+  catch(failure){if(serial.current===key&&!document.hidden)setError(failure instanceof Error?failure.message:'没有读到原保存记录。')}
+  finally{if(serial.current===key){inFlight.current=false;setBusy(false)}}
+ };
+ return <div>
+  <Button variant="secondary" size="small" disabled={busy} aria-expanded={body!==null} aria-controls={region} onClick={()=>void toggle()}>
+   {busy?'正在读取原话…':body!==null?'收起原话':'查看已保存原话'}
+  </Button>
+  <div id={region}>
+   {error&&<p role="alert">{error}</p>}
+   {body!==null&&<p dir="auto" className="whitespace-pre-wrap break-words">{body}</p>}
+  </div>
+ </div>;
+}
+
+export function ConversationDelivery({rows,can,submitting,ordinaryComposer,readWindow,onAction,onReadSavedFirst}:Props){
  const current=rows.filter(row=>row.current),others=rows.filter(row=>!row.current);
  if(!rows.length)return null;
  const entry=(row:PendingInput,index:number)=>{
   const knownUnsent=row.canRetryLocallyUnsent===true;
   const canKeepDraft=ordinaryComposer&&row.current&&row.sameDraft&&row.canReleasePreparedFirstChat===true&&can('composer.releasePreparedFirst');
   const state=String(row.receipt.status||row.status||'');
+  const savedFirst=ordinaryComposer&&!knownUnsent&&row.current&&row.sameDraft&&state==='unconfirmed'&&row.canReadSavedFirstChatSource===true&&can('composer.readSavedFirst');
   const heading=knownUnsent||state==='not_sent'?'这条输入未发出':state==='rejected'?'这条输入未被接收':state==='withdrawn'?'这条输入已撤回':
-   ['accepted','queued','consumed'].includes(state)?'原消息已有回执':canKeepDraft?'原草稿待核对':'等待原发送回执';
-  const original=row.preview?('「'+row.preview+'」'):row.origin+(row.current&&current.length>1?' · 第 '+(index+1)+' 条':'');
+   ['accepted','queued','consumed'].includes(state)?'原消息已有回执':savedFirst?'原话已保存，任务受理待确认':canKeepDraft?'原草稿待核对':'等待原发送回执';
+  const original=row.preview&&!savedFirst?('「'+row.preview+'」'):row.origin+(row.current&&current.length>1?' · 第 '+(index+1)+' 条':'');
   const detail=label(row.receipt.message||row.receipt.reason);
   return <div key={row.clientMessageId} className="pw-pending-input">
    <strong role={row.current?'status':undefined}>{heading}</strong><small>{original}{detail?' · '+detail:''}</small>
@@ -48,6 +79,7 @@ export function ConversationDelivery({rows,can,submitting,ordinaryComposer,onAct
     {row.otherEditor&&can('composer.returnPending')&&<Button variant="ghost" size="small" disabled={submitting} onClick={()=>onAction('return',row)}>{row.work?'返回原工作补充':'返回原输入'}</Button>}
     {knownUnsent&&can('composer.retry')&&<Button variant="secondary" size="small" disabled={submitting} onClick={()=>onAction('retry',row)}>重新保存并发送</Button>}
    </div>
+   {savedFirst&&<SavedFirstChatExcerpt key={readWindow+':'+row.clientMessageId+':'+row.draftRevision} read={()=>onReadSavedFirst(row)}/>}
   </div>;
  };
  return <section className="pw-pending-inputs" aria-label="待确认的消息">
