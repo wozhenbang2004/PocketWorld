@@ -1059,7 +1059,11 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
         return resumeSelected(id,memberId,config,evidence,external,wake,false);
     }
     private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages)throws Exception{
+        return resumeSelected(id,memberId,config,evidence,external,wake,useQueuedMessages,false);
+    }
+    private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages,boolean retainedControlOnly)throws Exception{
         Run run=required(id);
+        if(retainedControlOnly&&(run.control==null||run.control.isCancelled()||run.control.isPaused()))throw new SecurityException("原团队控制已停下，未创建替代执行。");
         if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止，不能恢复派发");
         if(closed)throw new IllegalStateException("团队执行器已关闭");
         if(!useQueuedMessages&&run.phoneApproval!=null&&!run.children.isEmpty()&&phoneFactory!=null){
@@ -1097,7 +1101,11 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
             resetFrom(run,target,from);pauseMember(run,target);invalidateDependents(run,memberId,new java.util.HashSet<>());
             run.json.put("summaryStale",true);activity(run,"owner_mail_delivery","主人明确继续该成员以使用待处理补充与成员消息",memberId);
         }
-        if(wake==null&&(run.control==null||run.control.isCancelled())){run.control=new RunControl();run.generation++;run.json.put("generation",run.generation);}run.paused=false;run.config=config;run.evidenceFactory=evidence;run.externalFactory=external;
+        if(wake==null&&(run.control==null||run.control.isCancelled())){
+            if(retainedControlOnly)throw new SecurityException("原团队控制已停下，未创建替代执行。");
+            run.control=new RunControl();run.generation++;run.json.put("generation",run.generation);
+        }
+        run.paused=false;run.config=config;run.evidenceFactory=evidence;run.externalFactory=external;
         MemberWake memberWake=null;
         // Explicit continuation restores every unfinished read-only round, including
         // later stages marked interrupted on cold restore. Keep completed output and
@@ -1165,6 +1173,68 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         String text=input.getString("text");if(run.json.optString("status").equals("cancelled")||text.trim().isEmpty()||text.length()>4000||run.json.getJSONArray("inbox").length()>=20)throw new IllegalStateException("原团队已停止或补充消息无法排队");
         if(continuedScope!=null){JSONObject next=continuedScope.snapshot(),previous=run.json.getJSONObject("productionScope");for(String key:new String[]{"parentTaskId","parentRunId","targetProjectId","definitionHash","initialBudget"})if(!TeamWorkFiles.canonical(previous.get(key)).equals(TeamWorkFiles.canonical(next.get(key))))throw new SecurityException("原成果继续不能替换任务、项目、计划或预算");}
     }
+    @FunctionalInterface interface OriginalApiCurrent { boolean matches(ModelConfig saved)throws Exception; }
+
+    /** Only the private reviewed owner action may use this existing hot run. An
+     * inapplicable scope keeps the old path. A captured API lane that has changed
+     * is refused, never replaced with the conversation or global selection. */
+    synchronized JSONObject resumeReviewedOriginalMember(JSONObject input,RunControl.AuthorityCheck ownerCurrent,
+            OriginalApiCurrent current)throws Exception {
+        Run run=requireReviewedControl(input);String target=input.optString("memberId"),status=run.json.optString("status"),phase=run.json.optString("phase");
+        if(target.isEmpty()||researchFactory==null||budgetHost==null||!"collaborate".equals(run.json.opt("mode"))||!researchEnabled(run)
+                ||run.json.has("workPlan")||run.json.has("productionScope")||run.json.has("nativeWorkProfileModels")
+                ||!run.json.optString("discussionFormat","classic").equals("classic")
+                ||!(status.matches("failed|partial|interrupted")&&status.equals(phase)||status.equals("paused")&&phase.equals("waiting_member"))
+                ||run.originalConfig==null||run.control==null||run.control.isCancelled()||run.control.isPaused())return null;
+        if(run.executing||run.enqueued||run.paused||!run.children.isEmpty()||!run.researchTurns.isEmpty()||researchFactory.hasActiveWork(run.json.getString("id")))return null;
+        JSONObject slot=member(run,target);
+        if(!slot.optString("status").matches("failed|interrupted")||roster(run).length()<2)return null;
+        for(int i=0;i<roster(run).length();i++){
+            JSONObject item=roster(run).getJSONObject(i);boolean chosen=item==slot,unfinished=false;
+            if(item.optBoolean("exited")||item.optBoolean("paused")||!"model".equals(item.optString("runner","model"))
+                    ||!"phone".equals(item.optString("device","phone"))||!chosen&&!"completed".equals(item.opt("status")))return null;
+            for(int round=1;round<=plannedRounds(run);round++){
+                JSONObject step=TeamWorkPlan.state(item,round);String state=step.optString("status");
+                JSONObject saved=step.optJSONObject("researchTask");String child=step.optString("researchTaskId");
+                if(chosen&&(state.matches("failed|interrupted")||unfinished&&"queued".equals(state))){
+                    if("queued".equals(state)&&(saved!=null||!child.isEmpty()))return null;
+                    if(!"queued".equals(state)&&(saved!=null||!child.isEmpty())&&
+                            (!originalResearchStep(run,item,round,child,saved)||!saved.optString("status").matches("failed|interrupted")))return null;
+                    unfinished=true;continue;
+                }
+                if(unfinished||!"completed".equals(state)||!originalResearchStep(run,item,round,child,saved)
+                        ||!"completed".equals(saved.opt("status"))||saved.optJSONObject("outputReference")==null)return null;
+            }
+            if(chosen&&!unfinished)return null;
+        }
+        JSONObject leader=member(run,run.json.getString("leaderId"));
+        TeamMemberModels.Selection chosen=retainedMemberModel(run,slot),summarizer=retainedMemberModel(run,leader);
+        if(chosen==null||summarizer==null)return null; // no attempt to rebuild a missing private model from JSON
+        ModelConfig[] sources={run.originalConfig,run.originalConfig.forPurpose("SUMMARY"),
+                chosen.config.forPurpose("MEMBER"),chosen.config.forPurpose("MAIN"),
+                chosen.config.forPurpose("SUMMARY"),summarizer.config,summarizer.config.forPurpose("SUMMARY")};
+        for(ModelConfig source:sources)if(!TeamMemberModels.singleBoundApi(source))return null;
+        if(run.config!=run.originalConfig)throw new SecurityException("原团队模型已改变，没有换模型继续这名成员。");
+        for(ModelConfig source:sources)if(!current.matches(source))throw new SecurityException("这名成员或汇总的原模型连接已变化，没有改用默认模型。");
+        ownerCurrent.check();run.control.check();
+        // Reuse the original resume, same roster and budget. No new model, child
+        // grant, recovery policy or dispatch surface is created by this selection.
+        return resumeSelected(run.json.getString("id"),target,run.originalConfig,run.evidenceFactory,run.externalFactory,null,false,true);
+    }
+    private static boolean originalResearchStep(Run run,JSONObject member,int round,String child,JSONObject receipt)throws Exception {
+        return !child.isEmpty()&&receipt!=null&&child.equals(receipt.opt("taskId"))
+                &&run.json.getString("id").equals(receipt.opt("teamRunId"))&&member.getString("id").equals(receipt.opt("memberId"))
+                &&receipt.optInt("round",round)==round&&Boolean.FALSE.equals(receipt.opt("executionAuthorized"));
+    }
+    private static TeamMemberModels.Selection retainedMemberModel(Run run,JSONObject slot)throws Exception {
+        JSONObject pin=slot.optJSONObject("memberModelSelection");
+        int revision=slot.optInt("identityRevision",1);
+        TeamMemberModels.Selection selected=run.modelSelections.get(slot.getString("id")+":"+revision);
+        if(selected==null||pin==null||!"pocketworld.team-member-model.v1".equals(pin.opt("format"))||pin.optInt("identityRevision")!=revision
+                ||pin.optJSONObject("memberRoute")==null||pin.optJSONObject("summaryRoute")==null)return null;
+        TeamMemberModels.requireSame(selected,pin);return selected;
+    }
+
     /** Optional exact native review envelope for the new leaf; check and mutation share this monitor. */
     public synchronized JSONObject reviewedControl(String command,JSONObject input,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external)throws Exception {
         Run run=requireReviewedControl(input);Object revision=input.get("expectedRevision");String target=input.optString("memberId");
@@ -2101,7 +2171,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     private static String answer(JSONObject response,ModelConfig config)throws Exception{if(response.optJSONArray("tool_calls")!=null&&response.getJSONArray("tool_calls").length()>0)throw new IllegalArgumentException("团队总结不能继续执行工具");return TeamOutputText.received(redact(response.optString("content"),config),null);}
     private static String redact(String text,ModelConfig config){return config==null?text:config.redactSensitive(text);}
     @Override public synchronized void close(){closed=true;for(Run run:runs.values()){if(run.control!=null)run.control.cancel();for(RunControl child:run.children.values())child.cancel();}coordinator.shutdownNow();members.shutdownNow();}
-    private static final class Run{final TeamWorkSlots workSlots=new TeamWorkSlots();final TeamWorkItemDispatch workDispatch=new TeamWorkItemDispatch();volatile TeamPhoneHost.Approval phoneApproval;final JSONObject json;volatile RunControl control;volatile ModelConfig config;volatile EvidenceFactory evidenceFactory;volatile ExternalMemberFactory externalFactory;final Map<String,TeamMemberModels.Selection> modelSelections=new LinkedHashMap<>();final Map<String,RunControl> children=new LinkedHashMap<>();final Set<Turn> researchTurns=new java.util.LinkedHashSet<>();final Map<String,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission> researchWakes=new LinkedHashMap<>();final java.util.concurrent.ConcurrentHashMap<String,Integer> memberVersions=new java.util.concurrent.ConcurrentHashMap<>(),researchProducerVersions=new java.util.concurrent.ConcurrentHashMap<>();volatile int generation;volatile long nativeRevision,scheduleRevision;volatile boolean paused;boolean enqueued,executing,reschedule,phoneResumePending;final Map<String,MemberWake> pendingMemberWakes=new LinkedHashMap<>();Run(JSONObject json,RunControl control,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external){this.json=json;this.control=control;this.config=config;this.evidenceFactory=evidence;this.externalFactory=external;this.generation=json.optInt("generation");nativeRevision=json.optLong("revision");JSONArray members=json.optJSONArray("members");for(int i=0;members!=null&&i<members.length();i++){JSONObject member=members.optJSONObject(i);if(member!=null){memberVersions.put(member.optString("id"),member.optInt("identityRevision",1));researchProducerVersions.put(member.optString("id"),researchProducerIdentity(member));}}}}
+    private static final class Run{final TeamWorkSlots workSlots=new TeamWorkSlots();final TeamWorkItemDispatch workDispatch=new TeamWorkItemDispatch();volatile TeamPhoneHost.Approval phoneApproval;final JSONObject json;volatile RunControl control;final ModelConfig originalConfig;volatile ModelConfig config;volatile EvidenceFactory evidenceFactory;volatile ExternalMemberFactory externalFactory;final Map<String,TeamMemberModels.Selection> modelSelections=new LinkedHashMap<>();final Map<String,RunControl> children=new LinkedHashMap<>();final Set<Turn> researchTurns=new java.util.LinkedHashSet<>();final Map<String,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission> researchWakes=new LinkedHashMap<>();final java.util.concurrent.ConcurrentHashMap<String,Integer> memberVersions=new java.util.concurrent.ConcurrentHashMap<>(),researchProducerVersions=new java.util.concurrent.ConcurrentHashMap<>();volatile int generation;volatile long nativeRevision,scheduleRevision;volatile boolean paused;boolean enqueued,executing,reschedule,phoneResumePending;final Map<String,MemberWake> pendingMemberWakes=new LinkedHashMap<>();Run(JSONObject json,RunControl control,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external){this.json=json;this.control=control;this.originalConfig=config;this.config=config;this.evidenceFactory=evidence;this.externalFactory=external;this.generation=json.optInt("generation");nativeRevision=json.optLong("revision");JSONArray members=json.optJSONArray("members");for(int i=0;members!=null&&i<members.length();i++){JSONObject member=members.optJSONObject(i);if(member!=null){memberVersions.put(member.optString("id"),member.optInt("identityRevision",1));researchProducerVersions.put(member.optString("id"),researchProducerIdentity(member));}}}}
     private static final class Turn{final Run run;final String id=UUID.randomUUID().toString();final JSONArray peerIds=new JSONArray();boolean peerConsumed;volatile boolean active=true;final int index,round,runGeneration,memberGeneration,ownerGeneration,itemRevision;final String workItemId;final TeamWorkItemAddress workAddress;int requestOrdinal;volatile AssignmentCall assignmentCall;RunControl researchOwner;Runnable researchCancellation;final RunControl control;final String memberIdentity;Turn(Run run,int index,int round,int runGeneration,int memberGeneration,RunControl control)throws Exception{this(run,index,round,runGeneration,memberGeneration,control,null);}Turn(Run run,int index,int round,int runGeneration,int memberGeneration,RunControl control,JSONObject item)throws Exception{memberIdentity=memberSnapshot(roster(run).getJSONObject(index)).toString();this.run=run;this.index=index;this.round=round;this.runGeneration=runGeneration;this.memberGeneration=memberGeneration;this.control=control;workAddress=item==null?null:TeamWorkItemAddress.of(item);workItemId=item==null?"":item.optString("workItemId");ownerGeneration=item==null?0:item.optInt("ownerGeneration");itemRevision=item==null?0:item.optInt("itemRevision");}}
     private static final class ContextLimitException extends IllegalArgumentException{ContextLimitException(String message){super(message);}}
 }

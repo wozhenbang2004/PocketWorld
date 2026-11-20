@@ -3027,9 +3027,22 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             }
             public void cancel(RunControl control)throws Exception{cancelCapabilityAttempt(control);}
             public void resourceState(JSONObject binding,RunControl original,String state)throws Exception{tasks.recordAssistantResourceState(binding,original,state);pushTask(binding.getString("taskId"));}
-            public void settled(JSONObject turn,ModelConfig captured,RunControl original)throws Exception{String id=turn.getString("taskId");if(!original.matchesHostRun(id,turn.getString("runId"),turn.getInt("epoch")))throw new SecurityException("对话结算不是原执行");retainOwnerQuestionAfterSettlement(id,original,captured);pushTask(id);}
+            public void settled(JSONObject turn,ModelConfig captured,RunControl original)throws Exception{
+                String id=turn.getString("taskId"),run=turn.getString("runId");int epoch=turn.getInt("epoch");
+                if(!original.matchesHostRun(id,run,epoch))throw new SecurityException("对话结算不是原执行");
+                retainOwnerQuestionAfterSettlement(id,original,captured);pushTask(id);
+                publishSettledOwnerWorkSource(id,run,epoch,original);
+            }
             public boolean retainsDevelopment(RunControl control){RunControl.HostRunIdentity identity=control.hostRunIdentity();RetainedDevelopmentRun held=identity==null?null:retainedDevelopmentRuns.get(identity.taskId());return held!=null&&held.control==control&&held.lifecycle.yielded();}
         };
+    }
+    private void publishSettledOwnerWorkSource(String id,String run,int epoch,RunControl original){
+        TaskStore source=tasks;if(source==null)return;
+        try{synchronized(source){
+            if(source!=tasks||!businessReady())return;
+            JSONObject row=source.settledOwnerWorkSourceForUi(id,run,epoch,original);
+            if(row!=null)publish(json("type","task","task",row)); // Existing UI event only; pushTask also requeues delivery and notifications.
+        }}catch(Exception unavailable){if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();}
     }
     private static final class AssistantInputBinding {
         final String task,run,conversation;final int epoch;final RunControl control;final ModelConfig config;

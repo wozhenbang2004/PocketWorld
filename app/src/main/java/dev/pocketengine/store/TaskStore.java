@@ -2323,6 +2323,31 @@ public final class TaskStore {
         if(!task.has("ownerWorkTakeover"))return;JSONObject marker=ownerWorkTakeoverIdentity(task),work=required(marker.getString("workTaskId"));
         if(!task.optString("status").matches("preparing|running|queued|paused|pausing|stopping"))releaseOwnerWorkReportEscrow(work,"结果整理已结束，未使用预留已释放；真实调用与未知用量仍保留");else write(work);
     }
+    /** UI invalidation only, after the same native report attempt has durably
+     * settled. Never call the delivery pump, claim a receipt or return raw sources. */
+    public synchronized JSONObject settledOwnerWorkSourceForUi(String id,String run,int epoch,RunControl original)throws Exception {
+        if(db.inTransaction()||original==null||!original.matchesHostRun(id,run,epoch))return null;
+        JSONObject report=read(id);
+        if(report==null||!report.has("ownerWorkTakeover")||!run.equals(report.opt("runId"))||epoch!=report.optInt("coordinatorEpoch"))return null;
+        String status=report.optString("status");
+        if(!status.matches("completed|needs_confirmation|awaiting_user|failed|cancelled|interrupted|reconciling|paused"))return null;
+        try(Cursor row=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status=?",new String[]{id,run,Integer.toString(epoch),status})){
+            if(!row.moveToFirst())return null;
+        }
+        JSONObject marker=ownerWorkTakeoverIdentity(report);String workId=marker.getString("workTaskId");
+        JSONObject work=required(workId);
+        if(!OwnerWorkTask.isOwnerWork(work)||work.has("developmentContext")||work.has("ownerPhoneControl")||work.has("ownerDeviceWork"))return null;
+        OwnerWorkTask.require(work);
+        JSONObject entry=ownerWorkDeliveryById(work,marker.getString("deliveryId"));
+        if(!workId.equals(entry.opt("taskId"))||!work.getString("conversationId").equals(marker.opt("conversationId"))||
+                !ownerWorkGeneration().equals(marker.opt("generation"))||!ownerWorkLatestOrdinaryResult(work,entry)||!"delivered".equals(entry.opt("deliveryState")))return null;
+        if("consumed".equals(entry.opt("receiptState"))){
+            JSONObject selected=ownerWorkReportSelection(workId,work.getString("runId"),work.getInt("coordinatorEpoch"),entry.getString("consumedByMessageId"),true);
+            if(!entry.getString("deliveryId").equals(selected.opt("deliveryId"))||!id.equals(selected.opt("producerTaskId"))||
+                    !run.equals(selected.opt("producerRunId"))||epoch!=selected.optInt("producerEpoch"))return null;
+        }
+        return getForUi(workId,false);
+    }
     /** The event is SYSTEM data; only actual original USER messages retain owner identity. */
     public synchronized JSONArray ownerWorkTakeoverInitialMessages(String id)throws Exception {
         JSONObject task=required(id);requireOwnerWorkTakeoverCurrent(task);JSONObject marker=ownerWorkTakeoverIdentity(task),work=required(marker.getString("workTaskId"));

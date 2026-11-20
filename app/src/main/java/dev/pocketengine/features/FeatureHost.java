@@ -887,6 +887,15 @@ public final class FeatureHost implements AutoCloseable {
                         if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原主机审阅已离开，未发送原话");
                     });
                 }else if(ownerTeamDraft!=null)result=((dev.pocketengine.features.teams.TeamsModule)module).startOwnerDraft(input,ownerTeamDraft,originalOwnerCurrent);
+                else if(nativeOwnerAdmission&&reviewedTeamTask!=null&&"resume".equals(command)&&!input.optString("memberId").isEmpty()
+                        &&module instanceof dev.pocketengine.features.teams.TeamsModule team){
+                    final String selectedTeam=reviewedTeamTask;
+                    result=team.resumeReviewedOriginalMember(input,()->{
+                        if(!originalOwnerCurrent.getAsBoolean()||!selectedTeam.equals(tasks.requireReviewedTeamControl(input)))
+                            throw new SecurityException("原团队审阅或执行已变化，没有继续分工。");
+                    });
+                    if(result==null)result=module.handle(command,input);
+                }
                 else result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
                 if(result==null)result=new JSONObject();
                 if(tracked!=null){JSONObject receipt=new JSONObject(result.toString());if(feature.equals("browser")){if(!trackedRun.equals(result.optString("runId"))||!tracked.equals(result.optString("taskId"))||!result.optBoolean("active")||!resources.ownsBrowser(trackedRun))throw new SecurityException("浏览器没有返回本次执行的有效租约");tasks.requireExternalRun(tracked,trackedRun,feature,false);receipt.put("status","running");}updateTask(tracked,receipt);result.put("hostTaskId",tracked);}

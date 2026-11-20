@@ -61,6 +61,18 @@ public final class TeamMemberModels {
         if(previous!=null&&!dev.pocketengine.runtime.context.CompactionPlan.fingerprint(previous).equals(dev.pocketengine.runtime.context.CompactionPlan.fingerprint(pin)))throw new SecurityException("成员模型原连接、版本或摘要配置已变化；请在本轮成员设置明确重新选择，原预算未追加");
         return new Selection(memberConfig,pin);
     }
+    /** A saved single physical API receiver, not a later default, account refresh
+     * or group fallback. Read this captured plan without constructing a new one. */
+    static boolean singleBoundApi(ModelConfig source)throws Exception {
+        if(source==null||source.usesAccount()||source.usesBedrock()||source.capabilityBinding==null||source.model.isEmpty())return false;
+        ModelRoutePlan plan=source.routePlan;
+        if(plan==null)return true;
+        if(!"APP_OWNER".equals(plan.audience)||plan.groupRevision!=0||plan.maxAttempts!=1||plan.maxRouteSwitches!=0||plan.candidates.size()!=1)return false;
+        ModelRoutePlan.Candidate row=plan.candidates.get(0);ModelConfig receiver=row.config();
+        return receiver!=null&&row.exclusion().isEmpty()&&plan.dispatches(row)&&source.capabilityBinding.equals(receiver.capabilityBinding)
+                &&source.sameCredentials(receiver)&&ModelRoutePlan.configurationDigest(source).equals(ModelRoutePlan.configurationDigest(receiver));
+    }
+
     public static void requireSame(Selection selection,JSONObject stored)throws Exception {
         if(stored==null||!dev.pocketengine.runtime.context.CompactionPlan.fingerprint(selection.publicIdentity()).equals(dev.pocketengine.runtime.context.CompactionPlan.fingerprint(stored)))throw new SecurityException("原成员模型快照已换版");
     }
