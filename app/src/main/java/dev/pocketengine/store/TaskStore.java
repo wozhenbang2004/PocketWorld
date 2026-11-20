@@ -12496,7 +12496,9 @@ public final class TaskStore {
     }
     /** Presentation-only next step. Opening the original review cannot continue or approve it. */
     private JSONObject firstBuildAfterDependenciesForUi(JSONObject task,JSONObject context,JSONObject pin,JSONObject fact){
-        if(!"awaiting_user".equals(task.opt("status"))||task.optBoolean("cancelRequested")||task.optBoolean("hasUnresolvedOperations")||
+        String status=task.optString("status");
+        if(!("awaiting_user".equals(status)||"needs_confirmation".equals(status))||task.optBoolean("cancelRequested")||
+            !Boolean.FALSE.equals(task.opt("hasUnresolvedOperations"))||
             !OwnerDraftFirstBuild.existingCheckout(pin)||fact==null||!"dependency_exit".equals(fact.opt("kind"))||fact.optInt("value",-1)!=0)return null;
         try{
             OwnerDraftFirstBuild.requireContext(pin,context);
@@ -12510,8 +12512,8 @@ public final class TaskStore {
                 !("npm".equals(manager)?"package-lock.json":"pnpm-lock.yaml").equals(path)||!sha.matches("[a-f0-9]{64}"))return null;
             // Require the settled original run and a sole command action. A second
             // action, even if it did not dispatch, is not this first-build handoff.
-            try(Cursor original=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='awaiting_user'",
-                new String[]{id,run,Integer.toString(epoch)})){if(!original.moveToFirst())return null;}
+            try(Cursor original=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status=?",
+                new String[]{id,run,Integer.toString(epoch),status})){if(!original.moveToFirst())return null;}
             try(Cursor other=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND run_id=? AND tool='project_execute' AND operation_id<>? LIMIT 1",
                 new String[]{id,run,operation})){if(other.moveToFirst())return null;}
             return new JSONObject().put("format","pocketworld.owner-node-build-next.v1").put("taskId",id).put("runId",run).put("epoch",epoch)

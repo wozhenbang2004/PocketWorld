@@ -43,6 +43,20 @@ const available = (value: any) => value?.available === true;
 const unreadSource = (task: Data) => task.summaryOnly === true || task.raw?.contextAvailable === false || task.raw?.sourceCurrentReadRequired === true || task.raw?.taskProjection === 'source_unavailable';
 const retired = (peer: Data) => peer.revoked === true || peer.connection?.state === 'REVOKED';
 const peerPlatform = (peer: Data) => peer.windowsDesktop ? 'Windows' : peer.platform || '';
+type LastWindowsRead = { windowKey: string; receivedAt: number; metadata: Data };
+const originalHistoryKey = (review: Data) => JSON.stringify([review.viewHandle, review.view?.taskId, review.view?.operationId,
+  review.view?.targetDeviceId, review.view?.instanceId, review.view?.argumentsDigest]);
+function isWindowsRead(original: Data | null, peers: Data[], receipt: Data | null) {
+  const view = original?.view;
+  return original?.kind === 'history' && ['workspace.read', 'workspace.list'].includes(view?.directWorkspaceRead) && (
+    peers.some(item => item.deviceId === view.targetDeviceId && item.instanceId === view.instanceId && /windows/i.test(peerPlatform(item))) ||
+    receipt?.operationReceipt?.payload?.windowsReadReceipt?.profile === 'windows-workspace-read-receipt-v1');
+}
+function windowsReadMetadata(receipt: Data) {
+  const { readOnly, newRun, retrySubmitted, unknownRefunded, unknown, businessVerified } = receipt;
+  const { payload: _payload, ...metadata } = receipt.operationReceipt;
+  return { readOnly, newRun, retrySubmitted, unknownRefunded, unknown, businessVerified, operationReceipt: metadata };
+}
 const platformIcon = (peer: Data) => /android|ios|phone/i.test(peerPlatform(peer)) ? IconPhone : /windows|macos|linux|desktop/i.test(peerPlatform(peer)) ? IconMonitor : IconDevices;
 const fingerprint = (value: any) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value.match(/.{1,8}/g)?.join(' ') : '未取得完整指纹';
 const grantDraft = () => ({ optionId: '', toolBudget: '', modelBudget: '', durationMinutes: '15', historyDays: '7', historyReadMethods: [] as string[], additionalOriginOptionIds: [] as string[], forwardingOptionIds: [] as string[], forwardingToolBudget: '', forwardingModelBudget: '', wholeDisplayCapture: false });
@@ -149,6 +163,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [invitation, setInvitation] = useState<ShownPairingInvitation|null>(null), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
   const [workBusy, setWorkBusy] = useState(false), [controlBusy, setControlBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [taskDetails, setTaskDetails] = useState<Record<string, Data>>({}), [historyReceipt, setHistoryReceipt] = useState<Data | null>(null), [historyStopSubmitted, setHistoryStopSubmitted] = useState(false);
+  const [lastWindowsRead, setLastWindowsRead] = useState<LastWindowsRead | null>(null);
+  const [windowsReadFailure, setWindowsReadFailure] = useState<{ windowKey: string; message: string } | null>(null);
   const [firstPair,setFirstPair]=useState<{handle:string;picker:string;inviteId:string;deviceId:string;fingerprint:string;expiresAt:number;until:number}|null>(null);
   const [waitingPhones, setWaitingPhones] = useState<Data | null>(null);
   const [waitingBlock,setWaitingBlock]=useState<Data|null>(null);
@@ -187,10 +203,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const busy = workBusy || controlBusy;
   const alive = useRef(true), scope = useRef(new DeviceRequestScope()), handle = useRef(''), selectedPeer = useRef(peerId), resumed = useRef(state.webWorkspaceResumeRevision), nativeRevision = useRef(state.deviceWorkspaceRevision);
   const acceptSnapshot = (value: any) => { const actual = deviceSnapshot(value); setSnapshot(old => !old || actual.capturedAt >= old.capturedAt ? actual : old); };
-  const invoke = async (action: string, args: Data = {}, accept?: (value: Data, snapshot: Data | null, current: () => boolean) => void | Promise<void>, lane = 'work') => {
+  const invoke = async (action: string, args: Data = {}, accept?: (value: Data, snapshot: Data | null, current: () => boolean) => void | Promise<void>, lane = 'work', onFailure?: (message: string) => void) => {
     if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending(lane)) return;
     if (lane === 'control' && action !== 'devices.confirm') {
-      scope.current.invalidate(true); setWorkBusy(false); setReview(null); handle.current = ''; setInvitation(null); setForm(''); setRaw('');
+      scope.current.invalidate(true); setWorkBusy(false); setReview(null); setLastWindowsRead(null); setWindowsReadFailure(null); handle.current = ''; setInvitation(null); setForm(''); setRaw('');
     }
     const ticket = scope.current.begin(lane); if (!ticket) return;
     const current = () => alive.current && scope.current.owns(ticket) && document.visibilityState === 'visible';
@@ -210,7 +226,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       } else if (typeof response?.value?.viewHandle === 'string') {
         void run('devices.discard', { viewHandle: response.value.viewHandle }).catch(() => {});
       }
-    } catch (failure) { if (alive.current && scope.current.owns(ticket)) setError(failure instanceof Error ? failure.message : String(failure)); }
+    } catch (failure) {
+      if (alive.current && scope.current.owns(ticket)) {
+        const message = failure instanceof Error ? failure.message : String(failure);
+        if (onFailure && current()) onFailure(message); else setError(message);
+      }
+    }
     finally { if (scope.current.finish(ticket) && alive.current) setPending(false); }
   };
   // Supplying a deviceId asks that peer for fresh capabilities. Local reads must also work offline.
@@ -223,7 +244,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const closeReview = () => {
     const old = handle.current; handle.current = ''; scope.current.invalidate(document.visibilityState === 'visible');
-    setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
+    setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setLastWindowsRead(null); setWindowsReadFailure(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
     if (old) void run('devices.discard', { viewHandle: old }).catch(() => {});
   };
   const selectPeer = (next: string, from = snapshot) => {
@@ -244,14 +265,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     selectedPeer.current = next;
     setPeerId(next);
   };
-  const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
+  const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setLastWindowsRead(null); setWindowsReadFailure(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
     setLocalRead(undefined); setManualFocus(undefined);
     autoReadSource.current = ''; // Restored native windows never retain the previous local archive handle.
     placeRead.current = !peerPlace.current;
     setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');setClosedReceipt(null);closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     scope.current.invalidate(enabled); handle.current = ''; setReview(null); setAck(false); setFuture(false); setRaw(''); setInvitation(null);
-    setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
+    setForm(old => keepPairEntry && (old === 'add' || old === 'invite') ? old : ''); setAddress(''); setHost(''); setPort(''); setRecoveryAddresses([]); setHistoryReceipt(null); setLastWindowsRead(null); setWindowsReadFailure(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setTaskDetails({}); setSnapshot(null); setError(''); setNotice(''); setWorkBusy(false); setControlBusy(false);
     void run('devices.discard', {}).catch(() => {});
   };
   useEffect(() => { if (document.visibilityState === 'visible') { try { acceptSnapshot(data); } catch { /* A summary is not a native device snapshot. */ } } }, [data]);
@@ -779,16 +800,28 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     });
   };
   const acceptHistoryRead = (value: Data, original: Data) => {
-    const actual = deviceHistoryReceipt(value, original); setHistoryReceipt(actual.receipt); setHistoryStopSubmitted(actual.stopSubmitted); setAck(false);
+    const actual = deviceHistoryReceipt(value, original), receipt = actual.receipt;
+    setHistoryReceipt(receipt); setHistoryStopSubmitted(actual.stopSubmitted); setAck(false);
+    const operation = receipt.operationReceipt, view = original.view;
+    if (handle.current === original.viewHandle && receipt.managementOnly !== true && operation?.accepted === true &&
+      operation.messageType === 'OperationReceipt' && operation.operationId === view.operationId && operation.executorDeviceId === view.targetDeviceId &&
+      operation.instanceId === view.instanceId && operation.argumentsDigest === view.argumentsDigest && isWindowsRead(original, peers, receipt)) {
+      // Keep last-received facts in this exact window, never the earlier result payload.
+      setLastWindowsRead({ windowKey: originalHistoryKey(original), receivedAt: Date.now(), metadata: windowsReadMetadata(receipt) });
+    }
   };
   const queryHistory = (stop = false) => {
     const original = review; if (original?.kind !== 'history' || busy || stop && (original.view?.archiveReadOnly || !ack || historyStopSubmitted)) return;
     if (stop) setHistoryStopSubmitted(true);
+    const windowsReadKey = !stop && windowsWorkspaceHistory ? originalHistoryKey(original) : '';
+    if (windowsWorkspaceHistory) setWindowsReadFailure(null);
     setHistoryReceipt(null); // A disconnected re-read must not keep a prior Windows result on screen.
     setPhoneGoalResult(null); // Never leave a prior run's result beside a newly checked receipt.
     void invoke(stop ? 'devices.stopHistory' : 'devices.queryHistory', { viewHandle: original.viewHandle, ...(stop ? { acknowledged: true } : {}) }, value => {
       acceptHistoryRead(value, original);
-    });
+    }, 'work', windowsReadKey ? message => {
+      if (handle.current === original.viewHandle) setWindowsReadFailure({ windowKey: windowsReadKey, message });
+    } : undefined);
   };
   const phoneResultPath = review?.kind === 'history' ? historyReceipt?.localPhoneResultPath ?? review.view.localPhoneResultPath : undefined;
   const returnPhoneSource = () => {
@@ -829,13 +862,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const openRecovery = (original: Data, providing: boolean) => { setInviteId(original.inviteId); setHost(''); setPort(''); setAddress(''); if (providing) void invoke('devices.recoveryAddresses', {}, value => { setRecoveryAddresses(strings(value.addresses)); setForm('recoveryProvide'); }); else setForm('recoveryRead'); };
   const originalView = review?.view || {}, exactGrant = originalView.grantReview;
-  const directWorkspaceHistory = review?.kind === 'history' && ['workspace.read', 'workspace.list'].includes(originalView.directWorkspaceRead);
-  const historyPeer = directWorkspaceHistory ? peers.find(item => item.deviceId === originalView.targetDeviceId && item.instanceId === originalView.instanceId) : undefined;
-  const windowsWorkspaceHistory = directWorkspaceHistory && (
-    !!historyPeer && /windows/i.test(peerPlatform(historyPeer)) || historyReceipt?.operationReceipt?.payload?.windowsReadReceipt?.profile === 'windows-workspace-read-receipt-v1');
-  // Keep the original receipt metadata, but only the verified Windows view may present its payload.
-  const historyDetails = windowsWorkspaceHistory && historyReceipt?.operationReceipt
-    ? { ...historyReceipt, operationReceipt: { ...historyReceipt.operationReceipt, payload: undefined } } : historyReceipt;
+  const historyKey = review?.kind === 'history' ? originalHistoryKey(review) : '';
+  const lastReadHere = historyKey && lastWindowsRead?.windowKey === historyKey ? lastWindowsRead : null;
+  const previousWindowsRead = historyReceipt?.operationReceipt?.accepted === true ? null : lastReadHere;
+  // A queued local directory refresh must not erase this exact receipt query's failure.
+  const failureHere = historyKey && windowsReadFailure?.windowKey === historyKey ? windowsReadFailure.message : '';
+  const windowsWorkspaceHistory = review?.kind === 'history' && (!!lastReadHere || !!failureHere || isWindowsRead(review, peers, historyReceipt));
+  const reviewError = failureHere || error;
+  // Only the verified current Windows view may present the payload.
+  const historyDetails = windowsWorkspaceHistory && historyReceipt?.operationReceipt ? windowsReadMetadata(historyReceipt) : historyReceipt;
   const historicalCandidate=review?.kind==='result'&&originalView.canRecordDecision!==true;
   const declining=review?.kind==='action'&&originalView.pendingGoal?.runStarted===false&&originalView.pendingGoal?.localOnly===true;
   const pairings = rows(snapshot?.pendingPairings);
@@ -1582,7 +1617,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         review.view?.peer?.instanceId===sourceFocus.instanceId && review.view?.peer?.certificateFingerprint===sourceFocus.certificateFingerprint
       : review.kind==='history' && review.view?.taskId===sourceFocus.taskId && review.view?.targetDeviceId===sourceFocus.deviceId && review.view?.instanceId===sourceFocus.instanceId))} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '在这台手机接手原工作' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? (originalView.phoneGoalResult === true ? '这次手机目标与派发' : windowsWorkspaceHistory ? 'Windows 原读取结果' : '原设备操作回执') : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       {review && <div className="pw-device-review">
-        {error && <p role="alert">{error}</p>}
+        {reviewError && <p role="alert">{reviewError}</p>}
         {['pair', 'grant'].includes(review.kind) && !exactGrant ? <GrantSelection key={review.viewHandle} review={review} busy={busy} confirm={args => { void invoke('devices.reviewGrant', args, acceptReview); }} /> : <>
           {exactGrant && <><GrantScope scope={exactGrant} />{review.kind === 'pair' ? <><p className="pw-source-copy">发出邀请的设备：{originalView.inviterDeviceId}<br />完整指纹：{fingerprint(originalView.inviterFingerprint)}</p><p className="pw-source-copy">加入设备：{originalView.joinerDeviceId}<br />完整指纹：{fingerprint(originalView.joinerFingerprint)}</p><p>原邀请至 {time(originalView.expiresAt)}。两台设备均核对一致后才能完成配对。</p></> : <p className="pw-source-copy">已配对设备完整指纹：{fingerprint(originalView.certificateFingerprint)}</p>}</>}
           {review.kind === 'goal' && <><h3>{originalView.goal}</h3><p>本机模型 {originalView.model} · {originalView.provider} · {originalView.source === 'local_api' ? '本机 API 连接' : originalView.source === 'local_account' ? '本机账号' : originalView.source}</p><ResourceScope resource={originalView.resourceBinding || {}} /><p>本次上限：工具 {originalView.toolBudget} 次 · 模型 {originalView.modelBudget} 次 · 至 {time(originalView.deadline)}</p>{originalView.origin && <p>原发起设备 {originalView.origin.originDeviceId} · 请求设备 {originalView.origin.callerDeviceId}</p>}<ReceivedGoalInputReview view={originalView} />{openModels && <Button variant="secondary" disabled={busy} onClick={() => {
@@ -1624,8 +1659,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             {['original_run','need_dispatch_receipt'].includes(originalView.localPhoneResultPath) && phoneResultPath !== 'unverified_source'
               && <Button variant="ghost" disabled={busy || !supported('devices.openTask')} onClick={returnPhoneSource}>回到本机发起这件事的原工作</Button>}
           </section>}
-          {windowsWorkspaceHistory && <WindowsWorkspaceReadReceipt original={originalView} read={historyReceipt} busy={busy} failed={!!error}
+          {windowsWorkspaceHistory && <WindowsWorkspaceReadReceipt original={originalView} read={historyReceipt} busy={busy} failed={!!reviewError}
             onRead={supported('devices.queryHistory') ? () => { if (handle.current === review.viewHandle) queryHistory(); } : undefined} />}
+          {previousWindowsRead && <div>
+            <p role="status">上次收到原操作回执：{time(previousWindowsRead.receivedAt)}。{deviceHistoryLabel(previousWindowsRead.metadata, originalView)}不代表本次还能读取。</p>
+            <Accordion><AccordionItem id="previous-windows-read" title="上次原操作回执元信息"><pre className="pw-source-copy">{JSON.stringify(previousWindowsRead.metadata, null, 2)}</pre></AccordionItem></Accordion>
+          </div>}
           {review.kind === 'history' && originalView.canCheckLocalExportedFile === true && <OriginalLocalExportedFile
             key={review.viewHandle} handle={review.viewHandle} original={originalView} disabled={busy || !supported('devices.checkLocalExportedFile')}
             open={supported('devices.openCheckedLocalFile') ? ticket => void invoke('devices.openCheckedLocalFile', { viewHandle: review.viewHandle, fileReview: ticket }) : undefined}

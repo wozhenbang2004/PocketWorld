@@ -1,8 +1,9 @@
-import { Button, CheckboxField, IconButton } from './forms-library';
+import { useEffect, useMemo, useState } from 'react';
+import { Button, CheckboxField, IconButton, TextField } from './forms-library';
 import { Drawer } from './shell-library';
 import { PressButton, ProgressBar } from './library';
-import { IconAdd, IconClose, IconShieldCheck } from './icons';
-import { exactFileTarget, fileBytes, fileObject, fileRows, type FileJson } from './attachment-workspace';
+import { IconAdd, IconClose, IconSearch, IconShieldCheck } from './icons';
+import { exactFileKey, exactFileTarget, fileBytes, fileObject, fileRows, libraryFileOrigins, normalizedFileName, type FileJson } from './attachment-workspace';
 
 // Mirror the definite limits in AttachmentRequestProjection; final payload/budget stay native.
 const mib = 1024 * 1024;
@@ -46,10 +47,23 @@ type Props = {
 
 /** Keep fit guidance with the original picker. Native send still verifies source, model and scope. */
 export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, onClose, onImport, onToggle, original }: Props) {
-  const catalog = fileObject(inventory);
-  const files = fileRows(catalog.attachments).filter(row=>!original||row.id===original.fileId&&row.sha256===original.sha256);
+  const catalog = fileObject(inventory), focused = !!original;
+  const [query, setQuery] = useState('');
+  useEffect(() => { if (!open || focused) setQuery(''); }, [open, focused]);
+  const inventoryRows = useMemo(() => fileRows(catalog.attachments), [catalog.attachments]);
+  const files = original ? inventoryRows.filter(row => row.id === original.fileId && row.sha256 === original.sha256) : inventoryRows;
+  const needle = focused ? '' : normalizedFileName(query);
+  // The ordinary picker may use only its own already-projected metadata, not another workspace's task list.
+  const origins = useMemo(() => open && !focused ? libraryFileOrigins(inventoryRows.flatMap(file => {
+    const source = fileObject(file.source);
+    if (file.principalId !== 'owner' || file.spaceId !== 'private' || file.outputSourceRetired === true ||
+        Object.hasOwn(source, 'groupSpaceId')) return [];
+    const { id, sha256, name, mimeType, createdAt, availability } = file;
+    return [{ id, sha256, name, mimeType, createdAt, availability, sourceKind: source.kind, sourceTaskId: source.taskId }];
+  }), []) : undefined, [open, focused, inventoryRows]);
   const choices = fileRows(selected), model = fileObject(inputModel);
-  const rows = files.map(file => ({ file, use: fileUse(file, model) }));
+  const rows = files.filter(file => !needle || normalizedFileName(file.name).includes(needle))
+    .map(file => ({ file, use: fileUse(file, model) }));
   const incomplete = fileObject(catalog.indexDiagnostics).incomplete === true;
   return <Drawer.Root open={open} onOpenChange={next => { if (!next) onClose(); }} shouldScaleBackground={false}>
     <Drawer.Portal>
@@ -65,13 +79,17 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
         </header>
         <div className="pw-drawer-body">
           {incomplete && <p className="pw-error" role="alert">部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。</p>}
-          {!original && pagingDenied && !!onReviewPagingRule && rows.some(row => row.use.paged) &&
+          {!focused && (files.length > 0 || query !== '') && <div role="search" aria-label="在当前附件清单中查找">
+            <TextField label="文件名" leadingIcon={IconSearch} type="search" placeholder="查找当前清单" value={query}
+              onChange={value => setQuery(value.slice(0, 180))}/>
+          </div>}
+          {!original && pagingDenied && !!onReviewPagingRule && files.some(file => fileUse(file, model).paged) &&
             <div className="pw-form-actions"><Button variant="ghost" leadingIcon={IconShieldCheck}
               disabled={importing || openingPagingRule} onClick={onReviewPagingRule}>核对分段读取规则</Button></div>}
           <div className="pw-attachment-objects">
             {importing && <ProgressBar label="正在导入附件库" isIndeterminate showValueLabel={false} size="sm"/>}
             {rows.map(({ file, use: { reason, hint, paged } }, index) => {
-              const target = exactFileTarget(file);
+              const target = exactFileTarget(file), origin = origins?.get(exactFileKey(file));
               const chosen = choices.find(row => row.id === file.id);
               const selectedHere = !!target && chosen?.sha256 === target.sha256;
               const note = chosen && !selectedHere ? '草稿选的是另一版本，可回输入框移除。'
@@ -86,13 +104,16 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
                   <span className="pw-attachment-copy">
                     <b>{typeof file.name === 'string' && file.name ? file.name : '未命名附件'}</b>
                     {note ? <small>{note}</small> : typeof file.size === 'number' && <small>{fileBytes(file.size)}</small>}
+                    {origin && <small>{origin}</small>}
                   </span>
                 </CheckboxField>
               </div>;
             })}
           </div>
-          {!files.length && !importing && <div className="pw-empty-small">{original ? `「${original.name}」的原版本不再可选，没有改用其他文件。` : incomplete ? '暂未读到可选择的附件。' : '还没有附件，可以先导入。'}</div>}
-          {files.length > 0 && <p className="pw-muted">发送时才核对原文件与模型。图片提供原图，文档提供提取文字或引用。</p>}
+          {!rows.length && !importing && <div className="pw-empty-small" role={needle ? 'status' : undefined}>
+            {needle ? '当前已读取的附件没有匹配的文件名。' : original ? `「${original.name}」的原版本不再可选，没有改用其他文件。` : incomplete ? '暂未读到可选择的附件。' : '还没有附件，可以先导入。'}
+          </div>}
+          {rows.length > 0 && <p className="pw-muted">发送时才核对原文件与模型。图片提供原图，文档提供提取文字或引用。</p>}
         </div>
         <footer className="pw-drawer-actions">
           {onImport && <Button variant="secondary" leadingIcon={IconAdd} disabled={importing} onClick={onImport}>{importing ? '正在导入…' : '导入新附件'}</Button>}

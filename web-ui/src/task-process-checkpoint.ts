@@ -23,7 +23,8 @@ export function processCheckpoint(task: TaskHeader, events: TaskEventRecord[], o
   const currentOps = operations.filter(op => !!run && op.runId === run);
   const eventRecord = (rows: TaskEventRecord[], label: string): ProcessRecord | undefined => {
     const row = newest(rows, entry => entry.position, entry => entry.at);
-    return row && { section: 'events', id: row.id, runId: run, label, body: row.detail,
+    return row && { section: 'events', id: row.id, runId: run, label,
+      body: row.ownerGoalVerdict === undefined ? row.detail : row.stateLabel,
       locatable: row.hasRecordedId && currentEvents.filter(event => event.id === row.id).length === 1 };
   };
   const opRecord = (rows: TaskOperation[], label: string): ProcessRecord | undefined => {
@@ -50,6 +51,7 @@ export function processCheckpoint(task: TaskHeader, events: TaskEventRecord[], o
   }
   if (phoneStop) return {state:'这次手机执行已停止', note:'停止不会撤销已发生的动作。系统接纳请求、屏幕有变化，都不等于目标办成。',
     record:phoneStop.record, lines:phoneStop.lines};
+  const ownerReview = eventRecord(currentEvents.filter(event => event.ownerGoalVerdict !== undefined), '你的验收');
   const matchingEvent = (...states: string[]) => currentEvents.filter(event => states.includes(event.status));
   if (view.pendingApproval || ['waiting_approval','awaiting_approval','waiting_permission','awaiting_permission'].includes(status)) {
     const record = opRecord(currentOps.filter(op => presentOperation(op).status === 'needs_approval'), '本轮授权请求');
@@ -58,7 +60,7 @@ export function processCheckpoint(task: TaskHeader, events: TaskEventRecord[], o
   if (['awaiting_user','waiting_user','needs_confirmation'].includes(status)) {
     const confirm = status === 'needs_confirmation';
     return { state: confirm ? '结果等你确认' : '需要你处理', note: confirm ? '在概览核对结果，再决定是否接受。' : '回到概览查看待办事项。',
-      record: eventRecord(matchingEvent(status), '本轮待处理记录') };
+      record: ownerReview ?? eventRecord(matchingEvent(status), '本轮待处理记录') };
   }
   if (status === 'failed' || status === 'interrupted' || status === 'paused') {
     const failed = status === 'failed';
@@ -67,7 +69,7 @@ export function processCheckpoint(task: TaskHeader, events: TaskEventRecord[], o
     return { state: failed ? '这次执行未完成' : status === 'paused' ? '执行已暂停' : '执行已中断',
       note: record && (!summary || record.body === summary) ? '' : summary || '当前读到的记录里没有这次停下的具体原因。', record: record ?? recentRecord() };
   }
-  const recent = recentRecord();
+  const recent = ownerReview ?? recentRecord();
   if (view.handling?.needsAttention || view.handling?.waitingForButler || view.handling?.waitingForChildren)
     return { state: view.handling.handlingLabel, note: view.handling.reason || '', record: recent };
   if (status === 'queued') return { state: '已排队', note: '原工作已登记，还未开始执行。' };

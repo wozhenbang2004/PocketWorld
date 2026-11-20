@@ -9,8 +9,8 @@ type NextNodeBuild={taskId:string;runId:string;epoch:number;operationId:string;p
 /** Native getForUi readback of the only settled command in this original run. */
 export function originalNodeBuildAfterDependencies(task?:Data|null):NextNodeBuild|null{
   const raw=task?.raw,c=raw?.developmentContext,pin=c?.ownerDraftFirstBuild,r=raw?.originalFirstBuildNext;
-  const lock=pin?.lockedDependencies?.review;
-  if(!projectFeedbackKey(task)||task?.status!=='awaiting_user'||raw?.status!=='awaiting_user'||raw.cancelRequested===true||
+  const lock=pin?.lockedDependencies?.review,status=task?.status;
+  if(!task||!projectFeedbackKey(task)||(status!=='awaiting_user'&&status!=='needs_confirmation')||raw?.status!==status||raw.cancelRequested===true||
     raw.hasUnresolvedOperations!==false||pin?.existingCheckoutBuild!==true||!r||r.format!=='pocketworld.owner-node-build-next.v1'||
     r.dependencyExitCode!==0||r.buildStarted!==false||r.taskId!==task.id||r.runId!==raw.runId||r.epoch!==raw.coordinatorEpoch||
     !word(r.operationId)||r.projectId!==c.projectId||r.projectId!==pin.projectId||r.checkoutId!==c.checkoutId||r.checkoutId!==pin.checkoutId||

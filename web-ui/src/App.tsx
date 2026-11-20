@@ -2413,7 +2413,7 @@ export default function App(){
   const projectNote=projectFeedback[projectFeedbackKey(task)]||'';
   const nextBuildObserved=originalNodeBuildAfterDependencies(task);
   const buildNext=taskLayer==='overview'&&project&&!project.reason&&!reviewStale&&!review?.ownerQuestion&&
-   !approved.length&&!unresolved.length&&actionNames.includes('tasks.resume')&&review?.task?.id===task.id?
+   !approved.length&&!unresolved.length&&can('tasks.resume')&&actionNames.includes('tasks.resume')&&review?.task?.id===task.id?
    originalNodeBuildAfterDependencies(review.task):null;
   const prepareNextBuildNote=()=>{
    if(!buildNext||!review||projectBlocked||openedTaskId.current!==task.id||!currentReviewWindow(reviewWindow.current)||
@@ -2426,13 +2426,15 @@ export default function App(){
   };
   const projectControls=project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label="原项目续接范围">
    {review?.task&&!reviewStale&&<ContinuedProjectBinding key={review.reviewHandle} task={review.task} projects={projects} read={can('projectRuntime.read')?args=>bridge.command('projectRuntime.read',args):undefined}/>}
-   <p>{buildNext?'这轮依赖准备已退出 0，还没有构建。继续后先核对实际依赖；本机构建命令仍需你单独批准。':'继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。'}</p>
+   <p>{buildNext?'已核对同一副本的依赖准备命令退出 0，本轮还没有运行构建。继续后先核对实际依赖；本机构建命令仍需你单独批准。':'继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。'}</p>
    <p className="pw-muted">工具调用已用 {String(scope.toolsUsed??'未读取')} / 总上限 {String(scope.toolLimit??'未读取')}；模型调用已用 {String(scope.modelCallsUsed??'未读取')} / 总上限 {String(scope.modelCallLimit??'未读取')}。本次不增加额度，不延长截止时间。</p>
    <p className="pw-muted">{scope.deadlineAt===0?'沿用原任务未设置截止时间的范围，仍受剩余预算约束。':typeof scope.deadlineAt==='number'?`原截止时间：${new Date(scope.deadlineAt).toLocaleString('zh-CN')}。`:'原任务期限尚未读取。'}{scope.executionPhase==='planning'?' 原任务仍处于只读规划，继续不会批准具体执行。':''}</p>
    {project.reason&&<p role="status" className="pw-muted">{project.reason}</p>}
    <TextAreaField label={buildNext?'接下来核对什么':'本次修改要求'} value={projectNote} onChange={value=>putProjectFeedback(projectFeedbackKey(task),value)} placeholder={buildNext?'核对同一副本的实际依赖与构建命令':'看过原结果后，希望继续修改什么？'} hint={buildNext?(projectNote===''?'可自己填写。下面的动作只填写内容，不会继续或运行构建。':'先核对这里的内容，再明确继续。对话草稿不变。'):'必填，最多 8000 字。对话中的文字、引用和附件保持原样。'} isRequired maxLength={8000} showCount isDisabled={projectBlocked||!actionNames.includes('tasks.resume')}/>
    {buildNext&&projectNote===''&&<Button variant="secondary" size="small" disabled={projectBlocked} onClick={prepareNextBuildNote}>填写「核对本机构建」</Button>}
-   {actionNames.includes('tasks.resume')&&actionNames.includes('tasks.confirm')&&<Button variant="secondary" disabled={projectBlocked||!projectNote.trim()||projectNote.trim().length>8000} onClick={()=>reviewedAction('tasks.resume')}>按本次反馈继续项目任务</Button>}
+   {actionNames.includes('tasks.resume')&&actionNames.includes('tasks.confirm')&&<Button variant={buildNext?'primary':'secondary'} disabled={projectBlocked||!projectNote.trim()||projectNote.trim().length>8000} onClick={()=>reviewedAction('tasks.resume')}>
+     {buildNext&&(projectNote===''||projectNote===nodeBuildContinuationText(buildNext))?'继续核对本机构建':'按本次反馈继续项目任务'}
+   </Button>}
   </section>;
   const scopeEditor=<div className="pw-scope-editor">
    <section aria-label="原任务执行阶段"><h3>执行阶段</h3><p>{scope.executionPhase==='planning'?'只读规划：可读取资料并提交计划，具体执行须先确认准确版本。':'按原任务已有范围执行。'}</p>
@@ -2451,10 +2453,14 @@ export default function App(){
   const pausedSurface=task.status==='paused'?privatePhoneSurface(task,state.livePrivatePhones):null;
   const ordinaryResume=!project&&!review?.ownerQuestion&&!approved.length&&!unresolved.length&&actionNames.includes('tasks.resume')&&actionNames.every(action=>['tasks.resume','tasks.scope','tasks.plan.enter','tasks.deleteScreenshot'].includes(action));
   const resumeFeedback=<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['resume-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('resume-feedback'))}><AccordionItem id="resume-feedback" title={phoneInterrupted?'给新一轮的补充（可选）':'补充说明（可选）'} description={reviewNote?'已填写':undefined}><TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="需要调整的内容" isDisabled={protectedDisabled}/></AccordionItem></Accordion>;
-  const inspectResult=stage==='ended'||actionNames.includes('tasks.confirm');
+  // Exact dependency preparation is not a result to accept. In a dual-action
+  // review the original continuation stays first, while the goal footer is unchanged.
+  const inspectResult=stage==='ended'||(actionNames.includes('tasks.confirm')&&!buildNext);
   const decisionFirst=stage==='attention'&&!inspectResult;
   const overviewActive=taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview';
   const ordinaryWork=task.raw?.executionRole==='owner_work'&&!task.raw?.developmentContext&&!task.raw?.ownerPhoneControl&&!task.raw?.ownerDeviceWork;
+  const currentResultDecision=ordinaryWork&&overviewActive&&task.status==='needs_confirmation'&&!reviewStale&&
+   actionNames.includes('tasks.confirm')&&can('tasks.confirm')&&currentReviewWindow(reviewWindow.current);
   const requestWork=ordinaryWork?ownerWorkIdentity(task):null;
   const declinedTeam=overviewActive&&obj(snapshot?.view).taskId===task.id?originalDeclinedTeamStart(task):null;
   const teamDeclineSettlesReview=!!declinedTeam&&review?.task?.id===declinedTeam.identity.taskId&&
@@ -2529,7 +2535,7 @@ export default function App(){
        reviewed={!!review&&!reviewStale&&!readingReview} canStart={actionNames.includes('tasks.resume')} onHistory={can('history.read')?()=>showTaskLayer('process'):undefined}
        onReview={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {inspectResult?[evidence,decision,workFacts]:decisionFirst?[mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence]:[latestProgress,workFacts,evidence,decision]}
-     {taskLayer==='overview'&&ownerWorkActions(task)}
+     {taskLayer==='overview'&&ownerWorkActions(task,currentResultDecision)}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&workSupplementTarget?.taskId===task.id&&can('ownerWork.supplement.read')&&<OwnerWorkSupplement key={workIdentityKey(workSupplementTarget)} target={workSupplementTarget} task={task} can={can} registerBeforeLeave={registerWorkSupplementBeforeLeave} onClose={()=>setWorkSupplementTarget(null)} onSelectOriginal={identity=>void targetWork(task,identity)}/>}
@@ -2617,18 +2623,24 @@ export default function App(){
    </TabPanel>
   </Tabs>;
  };
- const ownerWorkActions=(task:Task)=>{
+ const ownerWorkActions=(task:Task,currentResultDecision:boolean)=>{
   const identity=ownerWorkIdentity(task);if(!identity)return null;
   const control=workControls[workIdentityKey(identity)],controls=obj(task.raw?.controls);
   const hasTeamDecision=controls.canContinue===true&&workWaitsForTeamDecision(task);
   const supplement=identity.epoch>0&&can('ownerWork.supplement.read'),continuing=!hasTeamDecision&&controls.canContinue===true&&can('ownerWork.control');
   const note=hasTeamDecision?null:controls.canContinue===true&&!can('ownerWork.control')?'这个窗口目前不能提交续接，仍可查看原工作。':ownerWorkContinuationNote(task);
   if(!supplement&&!continuing&&!note&&controls.resultCapacityState!=='full')return null;
-  return <section className="pw-owner-work-actions" aria-label="继续这件工作">
-   {note&&!control?.pending&&!control?.unknown&&!control?.usedForContinuation&&<p>{note}</p>}
+  const foldNewRound=continuing&&currentResultDecision;
+  const explanation=!control?.pending&&!control?.unknown&&!control?.usedForContinuation?note:null;
+  const newRound=continuing&&<Button variant="secondary" disabled={taskOpening||control?.pending||control?.unknown||control?.usedForContinuation} onClick={()=>controlWork(task,'continue')}>在原任务开新一轮</Button>;
+  return <section className="pw-owner-work-actions" aria-label={foldNewRound?'这件工作的其他操作':'继续这件工作'}>
+   {!foldNewRound&&explanation&&<p>{explanation}</p>}
    {!note&&controls.resultCapacityState==='full'&&<p role="status">这件事的结果留存已满，暂不能继续执行。已有结果未因容量限制而删除；能否查看仍取决于原任务来源是否可用。容量限制不代表正在执行的任务已经停止。</p>}
-   {continuing&&<Button variant="secondary" disabled={taskOpening||control?.pending||control?.unknown||control?.usedForContinuation} onClick={()=>controlWork(task,'continue')}>在原任务开新一轮</Button>}
+   {!foldNewRound&&newRound}
    {supplement&&<Button variant={continuing||hasTeamDecision?'ghost':'secondary'} disabled={taskOpening||!!state.chatSubmitting} onClick={()=>{void targetWork(task)}}>{controls.canInput===true?'补充这件工作':'查看补充草稿'}</Button>}
+   {foldNewRound&&<Accordion key={workIdentityKey(identity)} variant="divided" className="pw-compact-disclosures w-full"><AccordionItem title="更多操作">
+    {explanation&&<p className="pw-field-hint">{explanation}</p>}{newRound}
+   </AccordionItem></Accordion>}
   </section>;
  };
  const taskFooter=(task:Task)=>{
@@ -3308,6 +3320,10 @@ export default function App(){
    else if(kind==='project')void openSetup('tools');
   }:undefined}/>;
  const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}/>;
+ const latestSavedMessage=messages.at(-1),latestSavedWork=savedReplyDetails.at(-1);
+ const allowMessageTail=ready&&!desktopNavigation&&intent==='chat'&&!taskOpen&&!chatAttention&&!phoneActivity&&!!latestSavedMessage&&
+  !latestSavedWork?.phoneResult&&!latestSavedWork?.taskResult&&!latestSavedMessage.originalHostFinal&&!latestSavedMessage.attachments?.length&&
+  anchoredPreparations.size===0;
  const chatOpening=ready&&!messages.length&&!foregroundTurn;
  const readingChatOpening=chatOpening&&state.loadingFirstConversationMessages===true;
  const chatPage=<main className={`pw-chat-workspace${chatOpening&&!readingChatOpening?' pw-chat-empty':''}`}>
@@ -3429,7 +3445,7 @@ export default function App(){
 
    {state.conversationId&&<div hidden={preparationInline}>{preparationEntries(String(state.conversationId))}</div>}
    {preparationInline&&preparationInlineAnchor===undefined&&preparationDetail}
-   <ConversationWork pinnedTask={chatAttention&&conversationWork.find(task=>task.id===chatAttention.id)} onTeamDecision={can('teams.attention')&&can('teams.readAttention')?openConversationTeamDecision:undefined} identity={String(state.conversationId||'')} onEmptyFocus={()=>workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})} tasks={conversationWorkRows} canOpen={can('tasks.open')} onOpen={task=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}/>
+   <ConversationWork allowMessageTail={allowMessageTail} pinnedTask={chatAttention&&conversationWork.find(task=>task.id===chatAttention.id)} onTeamDecision={can('teams.attention')&&can('teams.readAttention')?openConversationTeamDecision:undefined} identity={String(state.conversationId||'')} onEmptyFocus={()=>workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})} tasks={conversationWorkRows} canOpen={can('tasks.open')} onOpen={task=>openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview')}/>
   </div></div>
   {composerRegion}</main>;
  const tasksPage=<WorkRecoveryDirectory directory={taskDirectory} live={tasks} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')} scroll={taskList} ready={ready} canOpen={can('tasks.open')} canReview={can('tasks.review')}

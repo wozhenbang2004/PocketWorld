@@ -12,7 +12,7 @@ import { workCollectionPresentation } from './work-collection';
 type Task = { id: string; goal: string; status: string; raw?: Record<string, any> };
 
 /** A compact continuation of the conversation; the existing task drawer owns its details. */
-export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus, onTeamDecision, pinnedTask }: { tasks: Task[]; onOpen: (task: Task) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void; onTeamDecision?:OpenTeamDecision; pinnedTask?:Task }) {
+export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus, onTeamDecision, pinnedTask, allowMessageTail }: { tasks: Task[]; onOpen: (task: Task) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void; onTeamDecision?:OpenTeamDecision; pinnedTask?:Task; allowMessageTail?:boolean }) {
   const [expanded, setExpanded] = useState(false);
   const root=useRef<HTMLElement>(null),focused=useRef<{node:HTMLElement;id:string;identity:string}|null>(null);
   const listId = useId();
@@ -36,12 +36,17 @@ export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyF
   if (!tasks.length && !pinned.length) return null;
   const work = tasks.map(task => {
     const { group, label: status, busy, actionLabel: action, handling } = workCollectionPresentation(task);
-    return { task, teams:decisionsFor(handling), progress: getRecentTaskProgress(task), attention: group === 'attention', status, busy, action };
+    const quietProgress=group==='running'&&['queued','preparing','running','verifying'].includes(task.status)&&
+      task.raw?.kind==='assistant'&&task.raw.executionRole==='owner_work'&&task.raw.origin==null&&task.raw.contextAvailable===true&&task.raw.cancelRequested!==true&&
+      handling?.state==='none'&&handling.conversationId===identity&&!handling.resultAvailable&&!handling.delivered&&
+      !handling.waitingForChildren&&!handling.teamsUnavailable&&handling.teams.length===0;
+    return { task, teams:decisionsFor(handling), progress: getRecentTaskProgress(task), attention: group === 'attention', status, busy, action, quietProgress };
   });
   // Decisions stay visible independently of the background-work disclosure.
   // The caller continues to own admission, settled filtering and task identity.
   const attention = work.filter(item => item.attention);
   const background = work.filter(item => !item.attention);
+  const quietTail=allowMessageTail&&expanded&&background.length>1&&!attention.length&&!pinned.length&&background.every(item=>item.quietProgress);
   const counts = new Map<string, number>();
   for (const item of background) counts.set(item.status, (counts.get(item.status) || 0) + 1);
   const summary = [...counts].map(([status, count]) => `${count} ${status}`).join(' · ');
@@ -59,7 +64,7 @@ export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyF
       {onTeamDecision && teams.map(team=><ConversationTeamDecisions key={team.teamRunId} team={team} distinguish={teams.length>1} onOpen={onTeamDecision}/>)}
     </li>;
   };
-  return <section ref={root} className="pw-conversation-work" aria-label="对话任务" onFocusCapture={event=>{const node=event.target as HTMLElement,id=node.closest<HTMLElement>('[data-work-task-id]')?.dataset.workTaskId||'';focused.current={node,id,identity}}} onBlurCapture={event=>{if(event.relatedTarget instanceof Node?!event.currentTarget.contains(event.relatedTarget):(event.target as HTMLElement).isConnected&&!(event.target as HTMLElement).closest('[inert]'))focused.current=null}}>
+  return <section ref={root} className="pw-conversation-work" aria-label="对话任务" data-quiet-reading-tail={quietTail||undefined} onFocusCapture={event=>{const node=event.target as HTMLElement,id=node.closest<HTMLElement>('[data-work-task-id]')?.dataset.workTaskId||'';focused.current={node,id,identity}}} onBlurCapture={event=>{if(event.relatedTarget instanceof Node?!event.currentTarget.contains(event.relatedTarget):(event.target as HTMLElement).isConnected&&!(event.target as HTMLElement).closest('[inert]'))focused.current=null}}>
     {onTeamDecision && pinned.map(team=><ConversationTeamDecisions key={team.teamRunId} team={team} distinguish onOpen={onTeamDecision}/>)}
     {attention.length > 0 && <ol className="pw-work-list pw-work-attention-list" aria-label="需要处理的工作">{attention.map(renderTask)}</ol>}
     {background.length === 1 && <ol className="pw-work-list" aria-label="后台工作">{background.map(renderTask)}</ol>}

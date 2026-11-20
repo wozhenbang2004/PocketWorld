@@ -129,8 +129,8 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
     events: eventPage || events.seedInvalid ? undefined : task.raw?.events,
     operations: operationPage || operations.seedInvalid ? [] : task.raw?.operations } });
   const visibleTask = projected(events.page, operations.page), latestTask = projected(events.latest, operations.latest);
-  const history = getTaskEventHistory(visibleTask), tools = getTaskOperations(visibleTask);
   const originalRead = active && inOriginalTask && canRead;
+  const history = getTaskEventHistory(visibleTask, originalRead), tools = getTaskOperations(visibleTask);
   const resources = originalRead ? phoneResourceHistory(latestTask,events.latest) : undefined;
   const shownResources = events.page===events.latest ? resources : originalRead ? phoneResourceHistory(visibleTask,events.page) : undefined;
   // Keep an original release entry readable when its native body carries no free-text message.
@@ -138,7 +138,7 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
     const fact=entry.isCurrentRun&&entry.bodyAvailable&&entry.hasRecordedId?shownResources.records.get(entry.id):undefined;
     return fact?{...entry,title:fact.label,detail:fact.body,fullDetail:undefined}:entry;
   });
-  const checkpoint = active && selectedTab === 'trace' ? processCheckpoint(latestTask, events.page === events.latest ? history.entries : getTaskEventHistory(latestTask).entries,
+  const checkpoint = active && selectedTab === 'trace' ? processCheckpoint(latestTask, events.page === events.latest ? history.entries : getTaskEventHistory(latestTask, originalRead).entries,
     operations.page === operations.latest ? tools : getTaskOperations(latestTask),
     inOriginalTask && canRead ? phoneStopReceipt(latestTask, events.latest, operations.latest) : undefined) : null;
   const locate = (record: ProcessRecord, releaseSource = false) => {
@@ -184,7 +184,14 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
       <TabPanel id="trace" shouldForceMount><TaskTrajectory task={task} currentCheckpoint={brief} active={active && selectedTab === 'trace'} canRead={canReadTrace} registerTransientBack={registerTransientBack}/></TabPanel>
       <TabPanel id="events" shouldForceMount><section className="pw-task-events" aria-label="任务记录">
       {history.partial && <p className="pw-muted pw-task-history-limit">当前为部分记录，完整过程尚未载入。</p>}
-      {history.entries.length ? <Accordion variant="divided" className="pw-task-event-list" aria-label="已读取任务记录" expandedKeys={expanded.scope === identity ? expanded.keys : []} onExpandedChange={keys => setExpanded({scope: identity, keys})}>{history.entries.map((event, index) => <AccordionItem key={event.id + ':' + index} id={recordKey(event.runId, event.id)} data-audit-key={recordKey(event.runId, event.id)} data-audit-section="events" className="pw-task-event" data-event-position={event.position} data-read-limited={event.readLimited || undefined} headingLevel={4} title={event.bodyAvailable && event.detail !== event.stateLabel ? event.detail : event.title} description={[event.title, event.stateLabel, time(event.at), event.runId && task.raw?.runId && !event.isCurrentRun ? '早先执行记录' : ''].filter(Boolean).join(' · ')}><p className="pw-task-event-copy" dir="auto">{expanded.scope === identity && expanded.keys.has(recordKey(event.runId, event.id)) ? event.fullDetail ?? event.detail : event.detail}</p></AccordionItem>)}</Accordion> : <p className="pw-muted">当前窗口没有可读取的任务记录。</p>}
+      {history.entries.length ? <Accordion variant="divided" className="pw-task-event-list" aria-label="已读取任务记录" expandedKeys={expanded.scope === identity ? expanded.keys : []} onExpandedChange={keys => setExpanded({scope: identity, keys})}>{history.entries.map((event, index) => {
+        const verdict = event.ownerGoalVerdict !== undefined;
+        return <AccordionItem key={event.id + ':' + index} id={recordKey(event.runId, event.id)} data-audit-key={recordKey(event.runId, event.id)} data-audit-section="events" className="pw-task-event" data-event-position={event.position} data-read-limited={event.readLimited || undefined} headingLevel={4}
+          title={verdict ? event.stateLabel : event.bodyAvailable && event.detail !== event.stateLabel ? event.detail : event.title}
+          description={[event.title, verdict ? '' : event.stateLabel, time(event.at), event.runId && task.raw?.runId && !event.isCurrentRun ? '早先执行记录' : ''].filter(Boolean).join(' · ')}>
+          <p className="pw-task-event-copy" dir="auto">{expanded.scope === identity && expanded.keys.has(recordKey(event.runId, event.id)) ? event.fullDetail ?? event.detail : event.detail}</p>
+        </AccordionItem>;
+      })}</Accordion> : <p className="pw-muted">当前窗口没有可读取的任务记录。</p>}
       {navigation(events, '任务记录')}
     </section></TabPanel>
       <TabPanel id="operations" shouldForceMount><section className="pw-task-operations" aria-label="工具记录">

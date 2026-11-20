@@ -5,6 +5,7 @@ import { captureReadingPlace, readingReturnDelta, type ReadingPlace } from './co
 type Message = { id?: string; role: string; at?: number; content: string };
 type Reading = { top: number; index: number; offset: number; anchor: string; observed: string; following: boolean; unread: boolean };
 type ContentMarker = { count: number; lastId: string; content: string | undefined; stream: string };
+type ReadingWindow = { key: string; draftKey: string; conversationId: string; ready: boolean; reading: Reading; marker: ContentMarker | null; followMessages: boolean };
 type NativeReading = { key?: string; epoch?: number; conversationId?: string; scrollIndex?: number; scrollOffset?: number; anchorMessage?: string; observedMessage?: string; newReplies?: boolean };
 type Options = {
   scroll: RefObject<HTMLDivElement | null>;
@@ -15,8 +16,33 @@ type Options = {
   streamMarker: string;
   paused: boolean;
 };
-const atEnd = (node: HTMLElement) => node.scrollHeight - node.clientHeight - node.scrollTop <= 4;
-const awayFromTail = (node: HTMLElement) => node.scrollHeight - node.clientHeight - node.scrollTop > Math.min(160, Math.max(72, node.clientHeight / 4));
+const pageTail = (node: HTMLElement) => node.scrollHeight - node.clientHeight;
+const atEnd = (node: HTMLElement) => pageTail(node) - node.scrollTop <= 4;
+const awayFromTail = (node: HTMLElement, end = pageTail(node)) => end - node.scrollTop > Math.min(160, Math.max(72, node.clientHeight / 4));
+/** The existing expanded progress group must be the only visible section after the actual messages. */
+function messageTail(node: HTMLElement, list: HTMLElement | null) {
+  if (!list?.lastElementChild || !node.contains(list)) return null;
+  let quietWork = false;
+  for (let section = list.nextElementSibling; section; section = section.nextElementSibling) {
+    if (section instanceof HTMLElement && section.hidden || !section.childElementCount && section.getBoundingClientRect().height === 0) continue;
+    if (quietWork || !section.hasAttribute('data-quiet-reading-tail')) return null;
+    quietWork = true;
+  }
+  if (!quietWork) return null;
+  const end = Math.max(0, node.scrollTop + list.getBoundingClientRect().bottom -
+    node.getBoundingClientRect().top - node.clientTop - node.clientHeight);
+  return end + 4 < pageTail(node) ? end : null;
+}
+function followedMessageTail(current: ReadingWindow, node: HTMLElement, list: HTMLElement | null) {
+  if (!current.followMessages) return null;
+  const end = messageTail(node, list);
+  if (end === null) {
+    // A decision, result or closed work group must not send the reader to a different tail.
+    current.followMessages = false;
+    current.reading.following = false;
+  }
+  return end;
+}
 const readingNotices = {
   '': '', loading: '正在读取对话，稍后可再试。',
   unanchored: '无法标记刚才的位置。可以只查看最新，或关闭提示留在这里。',
@@ -57,7 +83,7 @@ function readingRow(list: HTMLElement | null, viewportTop: number) {
  * The native reading anchor is also restored after asynchronous history arrives. */
 export function useConversationReading({ scroll, active, conversationId, composer, messages, streamMarker, paused }: Options) {
   const content = useRef<HTMLDivElement>(null), positions = useRef(new Map<string, Reading>());
-  const window = useRef<{ key: string; draftKey: string; conversationId: string; ready: boolean; reading: Reading; marker: ContentMarker | null } | null>(null);
+  const window = useRef<ReadingWindow | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messageList = useRef<HTMLDivElement>(null);
   const [hasNewReplies, setHasNewReplies] = useState(false);
@@ -80,7 +106,8 @@ export function useConversationReading({ scroll, active, conversationId, compose
     current.reading = { ...current.reading, top: node.scrollTop, index,
       offset: row ? Math.max(0, Math.round(viewportTop - row.getBoundingClientRect().top)) : 0,
       anchor: row?.dataset.messageId || '', observed: latest.current.lastId };
-    positions.current.set(current.key, { ...current.reading });
+    // Reopening uses the original anchor, not a remembered jump to the work list.
+    positions.current.set(current.key, { ...current.reading, following: current.reading.following && !current.followMessages });
   }, [scroll]);
 
   const persistReading = useCallback(() => {
@@ -101,8 +128,14 @@ export function useConversationReading({ scroll, active, conversationId, compose
   const saveReading = useCallback(() => {
     const current = window.current, node = scroll.current;
     if (!current?.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
-    current.reading.following = atEnd(node);
-    setAway(awayFromTail(node));
+    const end = followedMessageTail(current, node, messageList.current);
+    // The reading controls can resize the scroller after the click. A scroll
+    // event still at the position we set is not a manual move away from it.
+    if (end !== null && current.reading.following && Math.abs(node.scrollTop - current.reading.top) <= 1)
+      node.scrollTop = end;
+    current.followMessages = end !== null && Math.abs(end - node.scrollTop) <= 4;
+    current.reading.following = current.followMessages || atEnd(node);
+    setAway(awayFromTail(node, current.followMessages ? end ?? undefined : undefined));
     // A one-way choice only applies to the place that could not be captured.
     setReadingNotice(previous => previous === 'unanchored' ? '' : previous);
     if (current.reading.following && !latest.current.paused) {
@@ -113,19 +146,22 @@ export function useConversationReading({ scroll, active, conversationId, compose
     persistReading();
   }, [scroll, rememberChatPosition, persistReading]);
 
-  const goToLatest = useCallback(() => {
+  const goToLatest = useCallback((preferMessages = false) => {
     const current = window.current, node = scroll.current;
     if (!current) return;
+    const poised = current.ready && node?.isConnected && node.dataset.conversationId === current.conversationId;
+    const end = preferMessages && poised ? messageTail(node, messageList.current) : null;
+    current.followMessages = end !== null;
     current.reading.following = true;
     current.reading.unread = false;
     // Sending is an explicit return to the live tail, even while the original
     // conversation history is still loading or the composer is changing epoch.
-    positions.current.set(current.key, { ...current.reading });
+    positions.current.set(current.key, { ...current.reading, following: !current.followMessages });
     setHasNewReplies(false);
     setAway(false);
-    if (!current.ready || !node?.isConnected || node.dataset.conversationId !== current.conversationId) return;
+    if (!poised) return;
     // Streaming must not race a smooth scroll's intermediate scroll events.
-    node.scrollTop = node.scrollHeight;
+    node.scrollTop = end ?? node.scrollHeight;
     rememberChatPosition();
     persistReading();
   }, [scroll, rememberChatPosition, persistReading]);
@@ -149,7 +185,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
     // Another reply may arrive while the first visit still has a way back.
     // Keep that exact line instead of replacing it with a second bookmark.
     if (returnPoint || readingNotice === 'unanchored') {
-      setReadingNotice(''); goToLatest(); node.focus({ preventScroll: true }); return;
+      setReadingNotice(''); goToLatest(true); node.focus({ preventScroll: true }); return;
     }
     const bounds = node.getBoundingClientRect(), top = bounds.top + node.clientTop + readingTopInset(node);
     const row = readingRow(list, top), message = row ? messages[Number(row.dataset.messageIndex)] : undefined;
@@ -159,7 +195,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
       ? captureReadingPlace(row, message.content, top, bounds.top + node.clientTop + node.clientHeight) : null;
     if (!place) { setReadingNotice('unanchored'); return; }
     setReturnPoint(place); setReadingNotice('');
-    goToLatest(); node.focus({ preventScroll: true });
+    goToLatest(true); node.focus({ preventScroll: true });
   };
   const returnToPlace = () => {
     const win = readingWindow(); if (!win || !returnPoint) return;
@@ -173,6 +209,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
     const top = node.getBoundingClientRect().top + node.clientTop + readingTopInset(node);
     const target = readingReturnDelta(row, messages[index].content, top, returnPoint);
     const scrollTop = node.scrollTop + target.delta;
+    current.followMessages = false;
     current.reading.following = false;
     node.scrollTop = scrollTop;
     // Focus the article, not a task/permission button or the keyboard.
@@ -189,7 +226,10 @@ export function useConversationReading({ scroll, active, conversationId, compose
   };
 
   const stopFollowing = useCallback(() => {
-    if (window.current) window.current.reading.following = false;
+    if (window.current) {
+      window.current.followMessages = false;
+      window.current.reading.following = false;
+    }
   }, []);
 
   useLayoutEffect(() => {
@@ -201,7 +241,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
     const reading = saved ? { ...saved } : { top: 0, index: belongs ? Number(composer.scrollIndex || 0) : 0,
       offset: belongs ? Number(composer.scrollOffset || 0) : 0, anchor: belongs ? String(composer.anchorMessage || '') : '',
       observed: belongs ? String(composer.observedMessage || '') : '', following: !hasAnchor, unread: belongs && composer.newReplies === true };
-    window.current = { key, draftKey: String(composer.key || ''), conversationId, ready: false, reading, marker: null };
+    window.current = { key, draftKey: String(composer.key || ''), conversationId, ready: false, reading, marker: null, followMessages: false };
     setHasNewReplies(reading.unread);
     return () => { window.current = null; };
   }, [active, key, composer.key, composer.epoch, conversationId]);
@@ -213,9 +253,10 @@ export function useConversationReading({ scroll, active, conversationId, compose
     // Keep the original anchor until real history arrives, even after initialization.
     if (conversationId && messages.length === 0) { current.ready = false; return; }
     const marker: ContentMarker = { count: messages.length, lastId, content: lastContent, stream: streamMarker };
+    const end = followedMessageTail(current, node, messageList.current);
     if (!current.ready) {
       const reading = current.reading;
-      if (reading.following) node.scrollTop = node.scrollHeight;
+      if (reading.following) node.scrollTop = end ?? node.scrollHeight;
       else {
         const list = messageList.current, items = list?.children as HTMLCollectionOf<HTMLElement> | undefined;
         const count = list ? savedRowCount(list) : 0;
@@ -242,7 +283,7 @@ export function useConversationReading({ scroll, active, conversationId, compose
       before.content !== marker.content || before.stream !== marker.stream;
     current.marker = marker;
     if (current.reading.following && !paused) {
-      node.scrollTop = node.scrollHeight;
+      node.scrollTop = end ?? node.scrollHeight;
       current.reading.unread = false;
       setHasNewReplies(false);
       rememberChatPosition();
@@ -262,12 +303,13 @@ export function useConversationReading({ scroll, active, conversationId, compose
     const observer = new ResizeObserver(() => {
       const current = window.current;
       if (!current?.ready || !node.isConnected || node.dataset.conversationId !== current.conversationId) return;
+      const end = followedMessageTail(current, node, messageList.current);
       // This also covers images, Markdown layout and the input/keyboard resizing.
       if (current.reading.following && !latest.current.paused) {
-        node.scrollTop = node.scrollHeight;
+        node.scrollTop = end ?? node.scrollHeight;
         rememberChatPosition();
       }
-      setAway(awayFromTail(node));
+      setAway(awayFromTail(node, end ?? undefined));
     });
     observer.observe(node);
     observer.observe(body);

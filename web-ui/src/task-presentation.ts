@@ -62,6 +62,8 @@ export interface TaskEventRecord {
   detail: string;
   stateLabel: string;
   at?: number;
+  /** Exact, current native owner decision, not a machine verification status. */
+  ownerGoalVerdict?: boolean;
   /** The original, already-readable message when the row preview was shortened. */
   fullDetail?: string;
   bodyAvailable: boolean;
@@ -86,6 +88,7 @@ const text = (value: unknown): string => typeof value === 'string' ? value : '';
 const number = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 const rows = (value: unknown): Row[] => Array.isArray(value) ? value.map(row).filter((value): value is Row => value !== undefined) : [];
 const has = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);
+const positiveInt = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 type ToolOutcomeKind = 'success' | 'correctable_failure' | 'needs_user' | 'effect_unknown';
 function nativeOutcome(value: unknown): ToolOutcomeKind | 'invalid' | undefined {
   if (value === undefined) return undefined;
@@ -147,9 +150,36 @@ export function getTaskOperations(task: unknown): TaskOperation[] {
   return result;
 }
 
+/** Only the existing, complete native audit window can identify the owner's decision. */
+function currentOwnerGoalReview(header: Row, raw: Row, runId: string, page?: Row) {
+  const id = text(header.id), epoch = raw.coordinatorEpoch, revision = raw.resultRevision;
+  const receipt = row(raw.resultConfirmation), completed = receipt?.completed, digest = text(receipt?.resultReviewDigest);
+  if (!id || !runId || raw.id !== id || raw.actorId !== 'owner' || raw.spaceId !== 'private' ||
+      !['assistant', 'phone'].includes(text(raw.kind)) || raw.origin != null || raw.ownerDeviceWork != null || raw.ownerPhoneControl != null ||
+      raw.teamRunId != null || raw.parentTaskId != null || raw.memberId != null || raw.contextAvailable === false || raw.contextWithdrawn === true ||
+      raw.sourceCurrentReadRequired === true || raw.taskProjection !== 'detail_window' || raw.taskCoreReadLimited !== false || raw.auditBodyIncluded !== true ||
+      typeof completed !== 'boolean' || header.status !== (completed ? 'completed' : 'awaiting_user') || raw.status !== header.status ||
+      !positiveInt(epoch) || !positiveInt(revision) || receipt?.confirmedResultRevision !== revision || !/^[a-f0-9]{64}$/.test(digest) ||
+      !page || page.format !== 'pocketworld.task-audit-page.v1' || page.taskId !== id || page.section !== 'events' ||
+      page.executionAuthorized !== false || page.completeHistory !== true || page.hasMore !== false || page.readLimited !== false) return;
+  const entries = rows(page.entries);
+  if (entries.some(entry => entry.status !== 'available')) return;
+  const matching = entries.filter(entry => {
+    if (entry.type !== 'user_verification') return false;
+    const event = row(entry.event), position = entry.position;
+    return event?.type === 'user_verification' &&
+      (entry.taskId == null || entry.taskId === id) && (event.taskId == null || event.taskId === id) &&
+      positiveInt(position) && entry.eventKey === `task:${id}:event-order:${position}` && event.seq === position &&
+      event.runId === runId && event.coordinatorEpoch === epoch && (event.epoch == null || event.epoch === epoch) &&
+      event.memorySourceSnapshotForgotten !== true && event.completed === completed && event.resultReviewDigest === digest &&
+      positiveInt(event.resultRevision) && event.resultRevision < revision;
+  });
+  if (matching.length === 1) return {eventId: text(matching[0].eventKey), completed};
+}
+
 /** Original task events are an activity history, not generated execution steps. */
-export function getTaskEventHistory(task: unknown): TaskEventHistory {
-  const {raw, id, runId} = taskParts(task);
+export function getTaskEventHistory(task: unknown, originalOwnerWindow = false): TaskEventHistory {
+  const {header, raw, id, runId} = taskParts(task);
   const declaredPage = row(raw.historyEventPage);
   const page = pageFor(raw, 'historyEventPage', id, 'events');
   const coreReadLimited = raw.taskCoreReadLimited === true;
@@ -158,6 +188,7 @@ export function getTaskEventHistory(task: unknown): TaskEventHistory {
       completeHistory: false, partial: true, unavailableReason: 'foreign_page'};
   }
   const source = page ? 'page' : Array.isArray(raw.events) ? 'snapshot' : 'none';
+  const ownerReview = originalOwnerWindow ? currentOwnerGoalReview(header, raw, runId, page) : undefined;
   const titles: Record<string, string> = {model: '模型记录', tool: '工具调用', observation: '观察现场', verification: '结果核对', user_verification: '结果核对', run: '执行记录', result: '任务结果', owner_input: '收到补充', capability_changed: '能力变化', context_budget: '上下文整理', inference_receipt: '模型调用记录'};
   const labels: Record<string, string> = {running: '执行记录', completed: '已有该记录', failed: '该记录返回错误', unknown: '结果未核实', awaiting_user: '需要你处理', paused: '已暂停', cancelled: '已停止', canceled: '已停止', stopped: '已停止'};
   const entries: TaskEventRecord[] = [];
@@ -174,18 +205,21 @@ export function getTaskEventHistory(task: unknown): TaskEventHistory {
     const eventRun = event ? text(event.runId) : '';
     const type = event ? text(event.type) || (page ? text(entry.type) : '') : text(entry.type);
     const status = event ? text(event.status) : '';
-    const stateLabel = bodyAvailable ? labels[status] || '原记录' : '正文未载入';
     const message = event ? text(event.message) : '';
     const preview = excerpt(message, 360), shortened = message !== preview;
     // Snapshot fallback keys are only render keys and are never host event/action identities.
     const recordedId = page ? text(entry.eventKey) : text(event?.eventKey) || text(event?.id);
     const key = recordedId || (page ? `event:${id}:${position ?? index}` : `snapshot-event:${id}:${index}`);
+    const verdict = ownerReview?.eventId === recordedId ? ownerReview.completed : undefined;
+    const stateLabel = verdict !== undefined ? verdict ? '已确认达到目标' : '目标尚未达到'
+      : bodyAvailable ? labels[status] || '原记录' : '正文未载入';
     const epochMatches = (value: unknown) => value == null || value === raw.coordinatorEpoch;
     entries.push({id: key, hasRecordedId: !!recordedId, position, runId: eventRun,
       isCurrentRun: !!runId && eventRun === runId && epochMatches(event?.epoch) && epochMatches(event?.coordinatorEpoch),
-      type, status, title: titles[type] || '任务记录',
+      type, status, title: verdict !== undefined ? '你的验收' : titles[type] || '任务记录',
       detail: bodyAvailable ? preview || stateLabel : '此条记录正文尚未载入', stateLabel,
       at: event ? number(event.at) ?? number(event.timestamp) : undefined,
+      ...(verdict !== undefined ? {ownerGoalVerdict: verdict} : {}),
       ...(shortened ? {fullDetail: message} : {}), bodyAvailable, readLimited, partial: !bodyAvailable || shortened});
   });
   const hasMore = page?.hasMore === true;
