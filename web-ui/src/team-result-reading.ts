@@ -1,4 +1,5 @@
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
+import type { OwnerWorkTeam } from './owner-work-presentation';
 import { teamGoalTitle, teamStatusLabel } from './team-presentation';
 
 type Data = Record<string, any>;
@@ -29,9 +30,27 @@ export function teamResultReading(run: Data | null, messages: unknown, observed?
     (source ? source.content === raw && (source.generation == null || run?.generation == null || source.generation === run.generation)
       : run?.summaryProducer === 'host_model');
   const body = current ? raw : text(source?.content);
+  // A retained status string or a prior report still belongs in the history,
+  // but only this matched native transcript row can lead the original read.
+  const original = source && current && run?.phase === run?.status && run?.summaryProducer === 'host_model'
+    && Number.isSafeInteger(run.generation) && source.generation === run.generation && source.truncated !== true ? source : null;
+  const author = original?.memberId === '*' ? '协调助手'
+    : original?.memberSnapshot?.id && original.memberSnapshot.id === original.memberId ? text(original.memberSnapshot.name).trim() : '';
   return { body, previous: !!body && !current, messageId: text(source?.messageId),
-    statusNote: raw && raw !== body ? raw : '', excerpt: source?.truncated === true };
+    statusNote: raw && raw !== body ? raw : '', excerpt: source?.truncated === true, original: !!original, author };
 }
+
+/** Choose an entry, not a new work state. Call only on an explicit, exact run read. */
+export function teamRunEntrySection(reading: Data): 'progress' | 'result' {
+  const run = reading.run;
+  return (run?.mode === 'collaborate' || run?.mode === 'debate') && !run.workPlan && !run.productionScope &&
+    Array.isArray(reading.attention) && reading.attention.length === 0 && teamResultReading(run, reading.messages).original ? 'result' : 'progress';
+}
+
+// The parent TaskStore row may still require reconciliation even when the
+// coordinator saved a summary. Don't redirect its decision entry to reading.
+export const settledTeamResultEntry = (team: OwnerWorkTeam) => !team.active && !team.needsAttention && !team.cancelRequested &&
+  (team.status === 'completed' || team.status === 'partial');
 
 export type TeamFollowUp = { key: string; title: string; detail: string; locator: TeamAttentionLocator };
 const optional = ['identityRevision', 'workItemId', 'assignmentId', 'questionId', 'childKind', 'round', 'taskId'] as const;

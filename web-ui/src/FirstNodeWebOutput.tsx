@@ -11,7 +11,7 @@ type Position = {taskId: string; runId: string; epoch: number};
 type FileFact = {path: string; bytes: number; sha256: string};
 type Fact = Partial<Position> & {
   eligible: boolean; message?: string; state?: 'ready'|'review'|'saved'|'pending'; buildOperationId?: string;
-  packageOperationId?: string; reviewHandle?: string; manifestIdentity?: string; entryPath?: string;
+  packageOperationId?: string; reviewHandle?: string; manifestIdentity?: string; entryPath?: string; outputProfile?: string;
   archiveSha256?: string; archiveBytes?: number; files?: FileFact[];
 };
 const hash = /^[0-9a-f]{64}$/;
@@ -48,7 +48,9 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved}: {target
           !['ready','review','pending','saved'].includes(data.state||'')) throw Error('未核对到这一轮原网页成果。');
       if(command!==read && data.buildOperationId!==fact?.buildOperationId) throw Error('没有采用另一轮构建。');
       if(data.state==='review'&&(!data.reviewHandle||!data.manifestIdentity||!hash.test(data.manifestIdentity)||
-          !data.archiveSha256||!hash.test(data.archiveSha256)||!Array.isArray(data.files)||data.files.length!==4||
+          !data.archiveSha256||!hash.test(data.archiveSha256)||!Array.isArray(data.files)||
+          (data.outputProfile==='stock_web_v1'?data.files.length!==4:data.outputProfile!=='vite_fresh_dist_v1'||data.files.length<2||data.files.length>64)||
+          new Set(data.files.map(f=>f.path)).size!==data.files.length||!data.files.some(f=>f.path===data.entryPath)||
           !data.files.every(f=>f.path.startsWith('dist/')&&Number.isSafeInteger(f.bytes)&&f.bytes>0&&hash.test(f.sha256))))
         throw Error('完整网页清单未核对，未保存。');
       if(data.state==='saved'){
@@ -72,17 +74,17 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved}: {target
   return <section className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
     {fact?.eligible===false&&fact.message&&<p className="pw-reading-note">{fact.message}</p>}
-    {fact?.state==='ready'&&<><p className="pw-reading-note">核对这个内置静态网页的入口和资源，再决定是否保存。不重新构建。</p>
-      <Button size="small" variant="secondary" disabled={!!busy} onClick={()=>void call(review)}>{busy===review?'正在核对原网页…':'核对整站网页'}</Button></>}
-    {fact?.state==='review'&&<><p className="pw-reading-note">{fact.entryPath} 与同一副本的三项资源会一起固定在本机。不启动程序、导出或分享。</p>
-      <details><summary>核对完整清单与版本</summary><ul>{fact.files?.map(f=><li key={f.path}><span dir="auto">{f.path}</span> · {f.bytes} 字节 · {f.sha256.slice(0,12)}</li>)}</ul></details>
+    {fact?.state==='ready'&&<><p className="pw-reading-note">核对原构建退出时看到的网页文件，再决定是否保存。不重新构建。</p>
+      <Button size="small" variant="secondary" disabled={!!busy} onClick={()=>void call(review)}>{busy===review?'正在核对原网页…':'核对网页包'}</Button></>}
+    {fact?.state==='review'&&<><p className="pw-reading-note">{fact.entryPath} 与同一副本的其余 {(fact.files?.length ?? 1)-1} 项资源会一起固定在本机。不启动程序、导出或分享。</p>
+      <details><summary>核对文件清单与版本</summary><ul>{fact.files?.map(f=><li key={f.path}><span dir="auto">{f.path}</span> · {f.bytes} 字节 · {f.sha256.slice(0,12)}</li>)}</ul></details>
       <div className="pw-action-row">
-        <Button size="small" variant="primary" disabled={!!busy} onClick={()=>void call(save)}>{busy===save?'正在固定并回读…':'确认保存整站网页'}</Button>
+        <Button size="small" variant="primary" disabled={!!busy} onClick={()=>void call(save)}>{busy===save?'正在固定并回读…':'确认保存网页包'}</Button>
         <Button size="small" variant="ghost" disabled={!!busy} onClick={()=>void call(read)}>不保存</Button>
       </div></>}
     {fact?.state==='pending'&&<><p className="pw-reading-note" role="status">这一笔固定结果尚未核对。只查询原包，不会再存一份或重跑。</p>
       <Button size="small" variant="secondary" disabled={!!busy} onClick={()=>void call(read)}>核对原保存</Button></>}
-    {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">已保存这次成功构建后核对的固定网页包。打开时不重跑，也不会读取当前同名文件。</p>
+    {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">已经保留原构建退出时核对的网页文件。打开此固定版不联网、不重跑，也不会读取当前同名文件。</p>
       <Button size="small" variant="secondary" disabled={!!busy||!open} onClick={()=>{if(available()&&fact.packageOperationId)open?.({taskId:target.taskId,operationId:fact.packageOperationId})}}>打开固定网页</Button></>}
     {failure&&<><p className="pw-error" role="alert">{failure}</p><Button size="small" variant="ghost" disabled={!!busy} onClick={()=>void call(read)}>核对原结果</Button></>}
   </section>;

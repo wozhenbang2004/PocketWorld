@@ -69,6 +69,7 @@
 .pw-team-workspace.pw-depth-collaboration .pw-team-action-list .pw-collaboration-group-heading > h3 { color: var(--pw-warning); }
 .pw-team-workspace.pw-depth-collaboration .pw-team-question-row { justify-content: flex-start; padding: 10px 0; min-width: 0; border-radius: 0; text-align: start; }
 .pw-team-question-row > span { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; }
+.pw-team-research-delivery { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 8px; }
 .pw-team-attention-copy { display: grid; gap: 4px; flex: 1 1 auto; min-width: 0; }
 .pw-team-attention-copy > strong { font-size: 15px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
 .pw-team-attention-copy > small { color: var(--pw-copy); font-size: 12px; line-height: 1.6; }

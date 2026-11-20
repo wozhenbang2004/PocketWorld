@@ -185,6 +185,7 @@
   .pw-devices-reading[data-device-view="detail"]:has(> .pw-device-tasks) { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(260px,1fr); grid-auto-flow: row dense; gap: 24px; align-items: start; }
   .pw-devices-reading[data-device-view="detail"]:has(> .pw-device-tasks) > .pw-device-heading { grid-column: 1 / -1; margin-bottom: 0; }
   .pw-devices-reading[data-device-view="detail"] > :is(.pw-device-feedback, .pw-device-loading) { grid-column: 1 / -1; }
+  .pw-devices-reading[data-device-view="detail"] > .pw-device-peer-archive { grid-column: 1 / -1; margin: 0; }
   .pw-devices-reading[data-device-view="detail"]:has(> .pw-device-tasks) > .pw-device-connection { grid-column: 2; margin: 0; }
   .pw-devices-reading[data-device-view="detail"]:has(> .pw-device-tasks) > .pw-device-disclosures { grid-column: 2; margin: 0; }
   .pw-devices-reading[data-device-view="detail"]:has(> .pw-device-tasks) > .pw-device-tasks { grid-column: 1; grid-row: span 2; margin: 0; }

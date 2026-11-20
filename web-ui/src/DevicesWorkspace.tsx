@@ -133,7 +133,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [waitingPhones, setWaitingPhones] = useState<Data | null>(null);
   const [waitingBlock,setWaitingBlock]=useState<Data|null>(null);
   const [inputPick,setInputPick]=useState('');
-  const [phoneArchive, setPhoneArchive] = useState<Data | null>(null);
+  const [phoneArchive, setPhoneArchive] = useState<Data | null>(null), [expandedArchive, setExpandedArchive] = useState('');
   const [closedInbox,setClosedInbox]=useState<Data|null>(null),[closedDraft,setClosedDraft]=useState('');
   const [ownText,setOwnText]=useState<Data|null>(null),ownTextSequence=useRef(0);
   const closeOwnText=()=>{ownTextSequence.current++;setOwnText(null);};
@@ -608,7 +608,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (sourceWork) { void invoke('devices.openTask', args); return; }
     void invoke('devices.openHistory', args, value => {
       if (value.kind !== 'history' || value.view?.archiveReadOnly !== true || value.view.phoneGoalResult !== true || value.view.taskId !== row.taskId
-        || value.view.operationId !== row.operationId || value.view.targetDeviceId !== activeArchive.targetDeviceId) {
+        || value.view.operationId !== row.operationId || value.view.targetDeviceId !== activeArchive.targetDeviceId || value.view.instanceId !== activeArchive.instanceId) {
         if (typeof value.viewHandle === 'string') void run('devices.discard', { viewHandle: value.viewHandle }).catch(() => {});
         throw new Error('原手机或派发已变化，未打开其他结果。');
       }
@@ -807,6 +807,64 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           </div>}
         </section>
   ) : null;
+
+  const canReadSentArchive=(!desktopPeer || phonePeer) && supported('devices.readPhoneGoalArchive');
+  const canReadReceivedArchive=supported('devices.readReceivedPhoneGoals');
+  // A platform-less pairing after a cold/offline start must not require a
+  // remote describe to reach local work. Identified desktops keep their route.
+  const quickPhoneArchive=!!peer&&!retired(peer)&&!desktopPeer&&(canReadSentArchive||canReadReceivedArchive);
+  const archiveRows=rows(activeArchive?.rows);
+  const compactArchive=quickPhoneArchive&&activeArchive&&!activeArchive.canReadNewer&&!activeArchive.searchText&&
+    !activeArchive.needsAcceptanceProof&&expandedArchive!==activeArchive.archiveHandle;
+  const shownArchiveRows=compactArchive?archiveRows.slice(0,3):archiveRows;
+  const archiveSearch=activeArchive&&
+     <form className="pw-form-actions" onSubmit={e=>{e.preventDefault();if(!busy && archiveDraft.trim())readPhoneArchive(archiveSide,undefined,archiveDraft)}}>
+       <SearchField aria-label="查找已保存的原目标" placeholder="输入原目标里的词" value={archiveDraft} isDisabled={busy}
+         onChange={value=>setArchiveFind({key:findKey,text:Array.from(value).slice(0,64).join('')})} />
+       <Button type="submit" variant="secondary" disabled={busy||!archiveDraft.trim()}>查找</Button>
+       {activeArchive.searchText && <Button type="button" variant="ghost" disabled={busy} onClick={()=>readPhoneArchive(archiveSide)}>清除关键词</Button>}
+       {archiveSide==='sent' && <Button type="button" variant={activeArchive.needsAcceptanceProof?'secondary':'ghost'} aria-pressed={activeArchive.needsAcceptanceProof===true}
+         disabled={busy} onClick={()=>readPhoneArchive('sent',undefined,archiveDraft,!activeArchive.needsAcceptanceProof)}>只看缺接单回执</Button>}
+     </form>;
+  const archiveBody=<>
+    <div className="pw-form-actions" role="group" aria-label="读取方向">
+      {canReadSentArchive && <Button variant={(activeArchive ? archiveSide === 'sent' : quickPhoneArchive) ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'sent'}
+        disabled={busy} onClick={() => readPhoneArchive('sent',undefined,'',quickPhoneArchive?false:undefined)}>我交给它的</Button>}
+      {canReadReceivedArchive && <Button variant={activeArchive && archiveSide === 'received' ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'received'} disabled={busy} onClick={() => readPhoneArchive('received')}>{desktopPeer && !phonePeer ? '读取本机接纳的电脑派工' : '它交给我的'}</Button>}
+    </div>
+    {activeArchive && <>
+      {!quickPhoneArchive&&<p role="status">{archiveSide === 'received' ? '这里只列本机从这台伙伴当前身份收到的目标，不代表已同意开始。换证或换实例前的来单不混入；找回原工作不会重启。' : '这里只读本机留档。设备接收不是机主已读；过去登记过执行也不代表现在仍在运行或已经完成。'}</p>}
+      {!quickPhoneArchive&&archiveSearch}
+      {archiveSide==='sent' && activeArchive.oldTargetIdentityChanged===true && <p>这台设备曾更换配对身份。不能核对目标的旧派单不归入这里，仍可从当时的本机原任务查找。</p>}
+      {activeArchive.searchText && <p role="status">只在这部设备的{archiveSide==='received'?'本机已接收':'本机已发出'}原目标中查找「{activeArchive.searchText}」，不会查询对端或成果。</p>}
+      {activeArchive.needsAcceptanceProof && <p role="status">只列本机尚无可核对接单回执的派单。缺回执或过了原请求期限，都不代表对方没有收到或已经停下。</p>}
+      {!activeArchive.rows.length && <p>{activeArchive.needsAcceptanceProof ? activeArchive.hasMore?'这段没有符合筛选的派单，可以继续查更早的记录。':'这段没有符合筛选的派单。' : activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这一批本机记录里没有能核对的直接手机目标。'}</p>}
+      {shownArchiveRows.map(row => {
+        const localResult=archiveSide==='received'&&row.mayCheckLocalText===true&&supported('devices.readLocalReviewedPhoneGoal');
+        const sentResult=row.targetRunRecorded===true&&supported('devices.queryPhoneGoalResult');
+        return <div className="pw-device-history-entry" key={JSON.stringify([row.taskId, row.operationId])}>
+          <h4 dir="auto">{row.goal}</h4>{row.matchedLater===true && <p>关键词出现在原目标的后文。</p>}<p>{time(row.createdAt)} · {row.textOnly === true ? '仅文字，不使用屏幕' : row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
+          {archiveSide==='sent' && (!activeArchive.needsAcceptanceProof || row.sourceSendPhase) && <p>{archivedPhoneAcceptanceLine(row,time)}</p>}
+          {activeArchive.needsAcceptanceProof && row.requestDeadline>0 && row.requestDeadline<=8640000000000000 && <p>原请求期限：{time(row.requestDeadline)}</p>}
+          <div className="pw-form-actions">{archiveSide === 'received'
+            ? quickPhoneArchive&&localResult
+              ? <><Button variant="secondary" disabled={busy} onClick={()=>readOwnText(row,0,undefined,false)}>核对并打开本机原结果</Button>
+                  <Button variant="ghost" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => openArchivedGoal(row, false)}>定位同一原工作</Button></>
+              : <><Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => openArchivedGoal(row, false)}>找回本机接纳的原工作</Button>
+                  {localResult&&<Button variant="ghost" disabled={busy} onClick={()=>readOwnText(row)}>重看本机已核对原文</Button>}</>
+            : row.sourceSendPhase==='abandoned_before_write' ? <><Button variant="secondary" disabled={busy || !supported('devices.openTask')} onClick={()=>openArchivedGoal(row,true)}>回到本机原工作</Button>
+              <Button variant="ghost" disabled={busy || !supported('devices.openHistory')} onClick={()=>openArchivedGoal(row,false)}>查看这次本机派发详情</Button></>
+            : <><Button variant="secondary" disabled={busy || !supported('devices.openHistory')} onClick={() => openArchivedGoal(row, false)}>
+                {quickPhoneArchive&&sentResult?'打开原任务与结果':'核对这次原派发'}</Button>
+              <Button variant="ghost" disabled={busy || !supported('devices.openTask')} onClick={() => openArchivedGoal(row, true)}>打开本机原工作</Button></>}</div>
+        </div>;
+      })}
+      {quickPhoneArchive&&archiveSearch}
+      <div className="pw-form-actions">{shownArchiveRows.length<archiveRows.length&&<Button variant="ghost" disabled={busy}
+        onClick={()=>setExpandedArchive(activeArchive.archiveHandle)}>显示本页其他 {archiveRows.length-shownArchiveRows.length} 项</Button>}{activeArchive.canReadNewer && <Button variant="ghost" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'newer')}>较新记录</Button>}
+        {activeArchive.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'older')}>{activeArchive.searchText?'查更早的记录':'更早记录'}</Button>}</div>
+    </>}
+  </>;
   const localOngoing = snapshot?.lanDiscovery?.active === true || snapshot?.lanDiscovery?.stopPending === true;
   const showLocalTools = localExpanded || localOngoing;
 
@@ -1042,6 +1100,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         </>}
         {!sourceFocus && peerId && !peer && snapshot && <p className="pw-device-feedback" role="alert">这台设备不在当前读取页。保留原身份，请返回后刷新核对。</p>}
         {!sourceFocus && peer && <>
+          {quickPhoneArchive && <section className="pw-device-section pw-device-peer-archive" aria-label="这台设备的最近往来工作">
+            <header className="pw-device-section-heading"><div><h3>最近往来工作</h3>
+              <p>查看这台设备的本机留档，无需连接。对方的成果仍要从原派发单独读取。</p></div></header>
+            {archiveBody}
+          </section>}
           <section className="pw-device-connection pw-device-observation" aria-label="这台设备上次的连接检查">
             <MotionFeedback identity={JSON.stringify([peer.deviceId, peer.connection?.state, peer.revoked])} initial={false} className="pw-device-connection-heading" role="status">
               <PeerIcon size={20} aria-hidden/>
@@ -1068,42 +1131,10 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {deviceChannelWasConnected(peer) && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>核对这台手机的能力记录</Button>}
             </div>}
           </section>
-          {originalWork || <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p></section>}
+          {originalWork || (!quickPhoneArchive && <section className="pw-device-no-work"><h3>这台设备的工作</h3><p>本机暂未读到关联的原工作。</p></section>)}
           <Accordion className="pw-device-disclosures">
-            {((!desktopPeer || phonePeer) && supported('devices.readPhoneGoalArchive') || supported('devices.readReceivedPhoneGoals')) && <AccordionItem id="phone-goal-archive" title={desktopPeer && !phonePeer ? '这台电脑交给本机的工作' : '找回往来目标'} description="查本机留下的记录，无需对方在线" icon={IconClock}>
-              <div className="pw-form-actions" role="group" aria-label="读取方向">
-                {(!desktopPeer || phonePeer) && supported('devices.readPhoneGoalArchive') && <Button variant={activeArchive && archiveSide === 'sent' ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'sent'} disabled={busy} onClick={() => readPhoneArchive('sent')}>我交给它的</Button>}
-                {supported('devices.readReceivedPhoneGoals') && <Button variant={activeArchive && archiveSide === 'received' ? 'secondary' : 'ghost'} aria-pressed={!!activeArchive && archiveSide === 'received'} disabled={busy} onClick={() => readPhoneArchive('received')}>{desktopPeer && !phonePeer ? '读取本机接纳的电脑派工' : '它交给我的'}</Button>}
-              </div>
-              {activeArchive && <>
-                <p role="status">{archiveSide === 'received' ? '这里只列本机从这台伙伴当前身份收到的目标，不代表已同意开始。换证或换实例前的来单不混入；找回原工作不会重启。' : '这里只读本机留档。设备接收不是机主已读；过去登记过执行也不代表现在仍在运行或已经完成。'}</p>
-                <form className="pw-form-actions" onSubmit={e=>{e.preventDefault();if(!busy && archiveDraft.trim())readPhoneArchive(archiveSide,undefined,archiveDraft)}}>
-                  <SearchField aria-label="查找已保存的原目标" placeholder="输入原目标里的词" value={archiveDraft} isDisabled={busy}
-                    onChange={value=>setArchiveFind({key:findKey,text:Array.from(value).slice(0,64).join('')})} />
-                  <Button type="submit" variant="secondary" disabled={busy||!archiveDraft.trim()}>查找</Button>
-                  {activeArchive.searchText && <Button type="button" variant="ghost" disabled={busy} onClick={()=>readPhoneArchive(archiveSide)}>清除关键词</Button>}
-                  {archiveSide==='sent' && <Button type="button" variant={activeArchive.needsAcceptanceProof?'secondary':'ghost'} aria-pressed={activeArchive.needsAcceptanceProof===true}
-                    disabled={busy} onClick={()=>readPhoneArchive('sent',undefined,archiveDraft,!activeArchive.needsAcceptanceProof)}>只看缺接单回执</Button>}
-                </form>
-                {archiveSide==='sent' && activeArchive.oldTargetIdentityChanged===true && <p>这台设备曾更换配对身份。不能核对目标的旧派单不归入这里，仍可从当时的本机原任务查找。</p>}
-                {activeArchive.searchText && <p role="status">只在这部设备的{archiveSide==='received'?'本机已接收':'本机已发出'}原目标中查找「{activeArchive.searchText}」，不会查询对端或成果。</p>}
-                {activeArchive.needsAcceptanceProof && <p role="status">只列本机尚无可核对接单回执的派单。缺回执或过了原请求期限，都不代表对方没有收到或已经停下。</p>}
-                {!activeArchive.rows.length && <p>{activeArchive.needsAcceptanceProof ? activeArchive.hasMore?'这段没有符合筛选的派单，可以继续查更早的记录。':'这段没有符合筛选的派单。' : activeArchive.searchText ? activeArchive.hasMore ? '这段记录没有命中，可以继续查更早的记录。' : '这段可核对的记录没有命中。' : '这一批本机记录里没有能核对的直接手机目标。'}</p>}
-                {rows(activeArchive.rows).map(row => <div className="pw-device-history-entry" key={JSON.stringify([row.taskId, row.operationId])}>
-                  <h4 dir="auto">{row.goal}</h4>{row.matchedLater===true && <p>关键词出现在原目标的后文。</p>}<p>{time(row.createdAt)} · {row.textOnly === true ? '仅文字，不使用屏幕' : row.screenMode === 'background' ? '独立后台屏' : '主屏'}</p>
-                  {archiveSide==='sent' && (!activeArchive.needsAcceptanceProof || row.sourceSendPhase) && <p>{archivedPhoneAcceptanceLine(row,time)}</p>}
-                  {activeArchive.needsAcceptanceProof && row.requestDeadline>0 && row.requestDeadline<=8640000000000000 && <p>原请求期限：{time(row.requestDeadline)}</p>}
-                  <div className="pw-form-actions">{archiveSide === 'received'
-                    ? <><Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => openArchivedGoal(row, false)}>找回本机接纳的原工作</Button>
-                      {row.mayCheckLocalText===true&&supported('devices.readLocalReviewedPhoneGoal')&&<Button variant="ghost" disabled={busy} onClick={()=>readOwnText(row)}>重看本机已核对原文</Button>}</>
-                    : row.sourceSendPhase==='abandoned_before_write' ? <><Button variant="secondary" disabled={busy || !supported('devices.openTask')} onClick={()=>openArchivedGoal(row,true)}>回到本机原工作</Button>
-                      <Button variant="ghost" disabled={busy} onClick={()=>openArchivedGoal(row,false)}>查看这次本机派发详情</Button></>
-                    : <><Button variant="secondary" disabled={busy} onClick={() => openArchivedGoal(row, false)}>核对这次原派发</Button>
-                      <Button variant="ghost" disabled={busy || !supported('devices.openTask')} onClick={() => openArchivedGoal(row, true)}>打开本机原工作</Button></>}</div>
-                </div>)}
-                <div className="pw-form-actions">{activeArchive.canReadNewer && <Button variant="ghost" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'newer')}>较新记录</Button>}
-                  {activeArchive.hasMore && <Button variant="secondary" disabled={busy} onClick={() => readPhoneArchive(archiveSide, 'older')}>{activeArchive.searchText?'查更早的记录':'更早记录'}</Button>}</div>
-              </>}
+            {!quickPhoneArchive && (canReadSentArchive||canReadReceivedArchive) && <AccordionItem id="phone-goal-archive" title={desktopPeer && !phonePeer ? '这台电脑交给本机的工作' : '找回往来目标'} description="查本机留下的记录，无需对方在线" icon={IconClock}>
+              {archiveBody}
             </AccordionItem>}
             {!retired(peer) && (desktopPeer || phonePeer || supported('deviceTaskScope.prepare')) && <AccordionItem id="peer-work-options" title="新工作与手动查看" description="新目标要重新选择设备和范围，不沿用原工作的权限" icon={IconLayers}>
               {!deviceChannelWasConnected(peer) && <p>准备目标不代表对端已接收。实际执行仍需核对原设备连接和本次授权。</p>}

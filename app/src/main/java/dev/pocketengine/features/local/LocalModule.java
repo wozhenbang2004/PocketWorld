@@ -1191,10 +1191,11 @@ public final class LocalModule implements EngineModule {
         JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,"build"));
         OriginalManagedBuild build=new OriginalManagedBuild(plan,binding,id,runtime,RuntimeExecutionRef.fromHost(exact,binding));
         long pause=c.pauseRevision();OriginalNodeWebOutput.requireSameBuild(original,currentManagedBuildProof(build,c,pause,original));
-        String sourceEntry=OriginalNodeWebOutput.requireSupportedSource(export(id));OriginalNodeWebOutput.requireStockPaths(content(id));
+        var sourceShape=OriginalNodeWebOutput.requireSupportedSource(export(id));
+        OriginalNodeWebOutput.requireOutputPaths(content(id),sourceShape);
         var frozen=capturePackage(new JSONObject().put("checkoutId",id).put("expectedSourceDigest",plan.getString("sourceDigest"))
             .put("mode","web_output").put("entryPath",OriginalNodeWebOutput.ENTRY).put("includeGeneratedRoots",true));
-        var review=OriginalNodeWebOutput.review(original,frozen,sourceEntry);
+        var review=OriginalNodeWebOutput.review(original,frozen,sourceShape);
         OriginalNodeWebOutput.requireSameBuild(original,currentManagedBuildProof(build,c,pause,original));
         return new OriginalWebBytes(review,frozen);
     }

@@ -308,8 +308,10 @@ public final class ManagedProcessJobs implements AutoCloseable {
         return receipt;
     }
     private void execute(Job job,List<String> command,Map<String,String> environment,File directory,long timeoutMillis) {
-        String finalStatus="unknown";boolean groupAbsent=false;java.util.List<JSONObject> pendingInputs=new ArrayList<>();
+        String finalStatus="unknown";boolean groupAbsent=false,cleanDistAtLaunch=false;java.util.List<JSONObject> pendingInputs=new ArrayList<>();
         try {
+            try{cleanDistAtLaunch=dev.pocketengine.features.local.project.OriginalNodeWebOutput.observeCleanDistAtLaunch(job.invocation);}
+            catch(Exception unchecked){/* No evidence for a fresh Vite result; normal execution is unchanged. */}
             if(job.invocation.exact().getJSONObject("payload").has("devWatch")){
                 try{
                     ProjectDevSession session=ProjectDevSession.create(job.invocation);job.devSession=session;command=new ArrayList<>(command);command.add(session.markerArgument());
@@ -373,7 +375,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 JSONObject webOutputAtExit=null;
                 if(groupAbsent&&!job.cancel&&"completed".equals(finalStatus))try{
                     long sequence;synchronized(job){sequence=job.receipt.getLong("checkoutSequence");}
-                    webOutputAtExit=dev.pocketengine.features.local.project.OriginalNodeWebOutput.observeAtOriginalExit(job.invocation,sequence);
+                    webOutputAtExit=dev.pocketengine.features.local.project.OriginalNodeWebOutput.observeAtOriginalExit(job.invocation,sequence,cleanDistAtLaunch);
                 }catch(Exception unsupportedOrMissing){/* Success of the original process does not attest a complete Web artifact. */}
                 boolean markerClean=job.devSession==null||job.devSession.cleanupMarker();
                 // Ordinary jobs and preparation subprocesses require the same actual cleanup proof

@@ -16,7 +16,7 @@ type Section = 'identity' | 'communication' | 'behavior';
 type View = 'home' | Section | 'memories' | 'memory' | 'memory-new' | 'memory-settings' | 'memory-history';
 type Run = (action: string, args?: Record<string, unknown>) => Promise<any>;
 type LeaveGuard = (next: () => void) => boolean;
-export type PersonalTarget = { view: 'home' | 'memories' | 'memory-settings' } | { view: 'memory'; id: string; candidate: boolean };
+export type PersonalTarget = { view: 'home' | 'memories' | 'memory-settings' } | { view: 'memory'; id: string; candidate: boolean; expectedRevision?: number };
 export type PersonalProfile = {
   revision: number;
   nickname: string;
@@ -184,11 +184,12 @@ function Segmented({ label, value, options, disabled, onChange }: { label: strin
 }
 /** Personal views share the existing host-owned profile and memory records. */
 export function ProfileWorkspace({ state, supported, run, onBack, onSettings, registerBack, registerBeforeLeave, presentationKey, initialTarget, targetRequestKey, onOpenAdvancedMemory, onOpenCommitments, onOpenReminders }: Props) {
+  const directVersion = initialTarget?.view === 'memory' && initialTarget.expectedRevision !== undefined;
   const [profile, setProfile] = useState<PersonalProfile | null>(null);
   const [savedReceipt, setSavedReceipt] = useState<{section: Section; revision: number} | null>(null);
   const [memories, setMemories] = useState<Memories>(emptyMemories);
   const [memoryError, setMemoryError] = useState(''), [memoryAvailable, setMemoryAvailable] = useState(false);
-  const [loaded, setLoaded] = useState(false), [view, setView] = useState<View>('home');
+  const [loaded, setLoaded] = useState(false), [view, setView] = useState<View>(() => directVersion ? 'memory' : 'home');
   const [enteredProfile, setEnteredProfile] = useState(false), [entryAttempt, setEntryAttempt] = useState(0);
   const [editor, setEditor] = useState<Editor | null>(null), [selection, setSelection] = useState<MemorySelection | null>(null);
   const [review, setReview] = useState<MemoryReview | CreateTermReview | null>(null);
@@ -459,11 +460,12 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   };
   const guarded = (next: () => void) => { if (!beforeLeave(next)) next(); };
   const atDirectEntry = () => {
-    const target = directEntry.current?.target, here = current.current;
+    const target = directEntry.current?.target ?? (directVersion ? initialTarget : undefined), here = current.current;
     if (!target || target.view === 'home') return false;
     if (target.view !== 'memory') return here.view === target.view;
     // A completed review may already have returned to the saved list.
-    return here.view === 'memories' || here.view === 'memory' && here.selection?.id === target.id && here.selection.candidate === target.candidate;
+    return here.view === 'memories' || here.view === 'memory' && (here.selection
+      ? here.selection.id === target.id && here.selection.candidate === target.candidate : target.expectedRevision !== undefined);
   };
   const unresolvedDirectExit = () => atDirectEntry() && (current.current.memoryUnknown || current.current.feedback?.needsQuery || current.current.feedback?.value.status === 'unknown');
   const leaveToParent = () => {
@@ -569,14 +571,25 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     }
     return { value, row, handle: string(value.readHandle) };
   };
-  const openMemory = (row: Data, candidate: boolean) => {
+  const openMemory = (row: Data, candidate: boolean, expected?: {revision:number;conversation:string}) => {
     if (!string(row.id)) return;
+    const unavailable = '未能核对原回答选中的记忆版本，没有打开其他内容。请返回原回答。';
+    const sameConversation = () => !document.hidden && expected?.conversation === current.current.conversation;
     void action('正在读取记忆', async () => {
-      const result = await readMemory(row.id, candidate);
+      if (expected) {
+        clearSelection(); setEditor(null); go('memory');
+        if (candidate || !Number.isSafeInteger(expected.revision) || expected.revision < 1 || !expected.conversation || !sameConversation()) throw new Error(unavailable);
+      }
+      const result = await readMemory(row.id, candidate).catch(failure => { throw expected ? new Error(unavailable) : failure; });
       if (!alive.current) { closeHandle(result.handle); return; }
+      // The existing personal read can return the latest row or an inactive row.
+      // An answer link admits neither as a substitute for its current saved version.
+      if (expected && (result.row.revision !== expected.revision || result.row.active !== true || historicalMemory(result.row) || !sameConversation())) {
+        closeHandle(result.handle); throw new Error(unavailable);
+      }
       clearSelection(); readHandle.current = result.handle; returnMemory.current = row.id;
       memoryParent.current = current.current.view === 'home' ? 'home' : current.current.view === 'memory-history' ? 'memory-history' : 'memories';
-      const historical = !candidate && (historicalMemory(result.row) || memories.history.some(item => item.id === row.id) && !memories.current.some(item => item.id === row.id));
+      const historical = !expected && !candidate && (historicalMemory(result.row) || memories.history.some(item => item.id === row.id) && !memories.current.some(item => item.id === row.id));
       setSelection({ id: row.id, candidate, value: result.value, record: result.row, originalText: string(result.row.text), draft: string(result.row.text), historical });
       setEditor(null); go('memory');
     });
@@ -920,7 +933,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       }
     });
   };
-  const targetKey = initialTarget ? `${targetRequestKey || ''}:${initialTarget.view}:${initialTarget.view === 'memory' ? `${initialTarget.id}:${initialTarget.candidate}` : ''}` : '';
+  const targetKey = initialTarget ? `${targetRequestKey || ''}:${initialTarget.view}:${initialTarget.view === 'memory' ? `${initialTarget.id}:${initialTarget.candidate}:${initialTarget.expectedRevision ?? ''}` : ''}` : '';
   useEffect(() => {
     if (!initialTarget || !targetKey) return;
     if (targetArrival.current.key !== targetKey) targetArrival.current = { key: targetKey, conversation: current.current.conversation };
@@ -930,7 +943,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     guarded(() => {
       directEntry.current = target.view === 'home' ? null : { target, conversation };
       if (target.view === 'memory-settings') enterMemorySettings();
-      else if (target.view === 'memory') openMemory({ id: target.id }, target.candidate);
+      else if (target.view === 'memory') openMemory({ id: target.id }, target.candidate, target.expectedRevision === undefined ? undefined : { revision: target.expectedRevision, conversation });
       else { clearSelection(); setEditor(null); go(target.view); }
     });
   }, [targetKey, loaded, enteredProfile, pending]);
@@ -948,6 +961,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const feedbackVisible = !!feedback && !(view === 'memory' && feedback.operation === 'shorten' && selection?.id !== feedback.targetId) && (['memories', 'memory', 'memory-history'].includes(view) || view === 'memory-new' && (createUnknown || feedback.value.status === 'settings_required'));
   const preferenceSection = feedback && !feedback.needsQuery ? preferenceSectionOf(feedback.value) : null;
   const headingLabel = view === 'memory' && selection?.candidate ? '记忆建议' : view === 'memory' && selection?.historical ? '记忆详情' : labels[view];
+  const missingDirectVersion = directVersion && view === 'memory' && !selection;
   const headerSave = editor ? <Button className="pw-profile-save" size="small" disabled={locked || avatarPicking || !profileDirty(editor) || profileConflict || pendingSavedRead || !canSave} onClick={saveProfile}>{pending === '正在保存' ? '保存中' : '保存'}</Button>
     : view === 'memory-new' ? <Button className="pw-profile-save" size="small" disabled={locked || createUnknown || !newMemoryText.trim() || newMemoryExpiry === 'custom' && (!newMemoryCalendar || !validCalendarTime(newMemoryCalendar)) || settingsRequiredFor(feedback, 'create', undefined, newMemoryText.trim()) || !supported('profile.memory.createReview') || !supported('profile.memory.confirm')} onClick={saveNewMemory}>{pending === '正在保存记忆' ? '保存中' : newMemoryExpiry === 'custom' ? '核对' : '保存'}</Button>
       : view === 'memory' && selection && !selection.candidate && !selection.historical ? <Button className="pw-profile-save" size="small" disabled={locked || !memoryDirty(selection) || !selection.draft.trim() || memoryConflict || memoryUnknown || settingsRequiredFor(feedback, 'correct', selection.id, selection.draft.trim()) || !supported('profile.memory.confirm')} onClick={saveMemory}>{pending === '正在保存记忆' ? '保存中' : '保存'}</Button>
@@ -970,7 +984,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       <div className="pw-profile-content">
         {!canEnter && <div className="pw-profile-empty"><IconAccount aria-hidden="true" /><h2>个人资料暂不可用</h2><p>请更新应用后重新打开。</p></div>}
         {canEnter && !loaded && <div className="pw-profile-loading" role="status">{locked || !enteredProfile || !canRead ? '正在打开个人资料…' : '个人资料尚未读取。'}{!locked && <Button variant="ghost" leadingIcon={IconRefresh} onClick={refresh}>重新读取</Button>}</div>}
-        {error && <MotionFeedback identity={error} className="pw-profile-feedback is-error" role="alert"><p>{error}</p>{!locked && <Button variant="ghost" size="small" leadingIcon={IconRefresh} onClick={view === 'memory' ? reloadMemory : view === 'memory-settings' ? openMemorySettings : refresh}>读取最新{view === 'memory' ? '记忆' : view === 'memory-settings' ? '设置' : '资料'}</Button>}</MotionFeedback>}
+        {error && <MotionFeedback identity={error} className="pw-profile-feedback is-error" role="alert"><p>{error}</p>{!locked && !missingDirectVersion && <Button variant="ghost" size="small" leadingIcon={IconRefresh} onClick={view === 'memory' ? reloadMemory : view === 'memory-settings' ? openMemorySettings : refresh}>读取最新{view === 'memory' ? '记忆' : view === 'memory-settings' ? '设置' : '资料'}</Button>}</MotionFeedback>}
         {notice && <MotionFeedback identity={notice} className="pw-profile-feedback" role="status">{['已保存', '记忆已删除', '已记住', '已忽略', '当前内容已核对'].includes(notice) && <IconCheck size={15} aria-hidden="true" />}{notice}</MotionFeedback>}
         {feedbackVisible && feedback && <MotionFeedback identity={JSON.stringify([feedback.operation, feedback.targetId, feedback.value.status, feedback.needsQuery, feedback.value.undoAvailable])} className="pw-profile-feedback pw-profile-memory-feedback" role="status">
           <div className="pw-profile-receipt-heading">{!feedback.needsQuery && ['saved', 'reverted'].includes(feedback.value.status) && <IconCheck size={16} aria-hidden="true" />}<span>{feedbackLabel(feedback)}</span></div>

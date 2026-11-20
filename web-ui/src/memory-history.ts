@@ -1,4 +1,17 @@
+import type { ReplyContext } from './conversation-work';
+
 type Data = Record<string, any>;
+
+/** Shortcut only. The drawer still re-reads the exact native receipt on an explicit tap. */
+export function originalAnswerMemoryMessage(message: Data, reply: ReplyContext | null): string | null {
+  const ref = message.memoryReference;
+  if (message.role !== 'assistant' || message.sourceRevision !== 1 || typeof message.id !== 'string' || !message.id ||
+      !reply?.replyId || reply.deliveryId || !reply.replyToMessageIds.length || !ref || ref.ownerReadableMemoryProvided !== true ||
+      ref.ownerId !== 'owner' || ref.spaceId !== 'private' || ref.modelUseVerified !== false || ref.executionAuthorized !== false ||
+      ref.taskId !== reply.taskId || ref.runId !== reply.runId || ref.coordinatorEpoch !== reply.epoch || ref.answerId !== reply.replyId ||
+      typeof ref.requestId !== 'string' || !ref.requestId || typeof ref.receiptId !== 'string' || !ref.receiptId) return null;
+  return message.id;
+}
 
 /** Local presentation lifetime; native handles remain the authority for every read and write. */
 export class MemoryReadingWindow {

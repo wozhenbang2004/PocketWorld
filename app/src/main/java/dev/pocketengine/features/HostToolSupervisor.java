@@ -24,6 +24,7 @@ public final class HostToolSupervisor implements CapabilityPort {
     private final String taskId,runId;
     private final int epoch;
     private final boolean allowWrites;
+    private final boolean ordinaryPrivateChat;
     private final dev.pocketengine.features.controlplane.WorkProfileToolSelection workProfile;
     private final dev.pocketengine.features.memory.ToolOutputCapture.Factory outputCapture;
     private dev.pocketengine.features.memory.WorkingMemorySession working;
@@ -108,6 +109,7 @@ public final class HostToolSupervisor implements CapabilityPort {
         this.outputCapture=outputCapture;this.workProfile=workProfile;if(!catalogueOnly&&workProfile==null&&tasks.get(this.taskId,false).optJSONObject("workProfileRef")!=null)throw new SecurityException("此任务已冻结工作配置，必须接入原生准确选用；没有继承全局工具");
 
         JSONObject webTask=catalogueOnly?null:tasks.get(this.taskId,false);
+        ordinaryPrivateChat=OwnerWorkTask.isButlerSource(webTask)&&!webTask.has("ownerWorkTakeover")&&!webTask.has("ownerWorkPreparation");
         boolean webOwner=catalogueOnly||webTask!=null
                 &&"owner".equals(webTask.optString("actorId"))
                 &&"private".equals(webTask.optString("spaceId"))
@@ -462,8 +464,21 @@ public final class HostToolSupervisor implements CapabilityPort {
             var ref=new dev.pocketengine.features.memory.TaskMemoryUse.ReceiptRef(memoryTask,requestId,answerId);
             JSONObject proof=taskMemory.confirmTaskMemoryUse(privateScope(),memorySelection,ref,memoryFence);
             if(!"provided_to_request".equals(proof.optString("phase")))throw new IllegalStateException("原请求的记忆提供回执无法核对");
-            return ref.toJson().put("receiptId",receipt.getString("selectionId")).put("executionAuthorized",false).put("modelUseVerified",false);
+            JSONObject reference=ref.toJson().put("receiptId",receipt.getString("selectionId")).put("executionAuthorized",false).put("modelUseVerified",false);
+            // Some valid receipts attest an empty selection. Only the exact existing
+            // projection of an owner-readable record can light the ordinary reply shortcut.
+            if(ordinaryPrivateChat&&projectMemory==null&&device==null&&hasVisiblePersonalMemory(proof))reference.put("ownerReadableMemoryProvided",true);
+            return reference;
         });return device==null?memory:memory.put("deviceVisual",device);
+    }
+    private static boolean hasVisiblePersonalMemory(JSONObject proof){
+        JSONArray records=proof.optJSONArray("records");
+        for(int i=0;records!=null&&i<records.length();i++){
+            JSONObject row=records.optJSONObject(i);
+            if(row!=null&&"owner".equals(row.opt("ownerId"))&&"private".equals(row.opt("spaceId"))&&
+                    "current".equals(row.opt("status"))&&row.opt("text") instanceof String text&&!text.isBlank())return true;
+        }
+        return false;
     }
     @Override public void modelRequestAbandoned(String requestId)throws Exception{
         if(requestId.isEmpty())ownerWorkRequests.clear();else ownerWorkRequests.remove(requestId);

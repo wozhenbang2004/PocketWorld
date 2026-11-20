@@ -3,7 +3,9 @@ package dev.pocketengine.features.local.project;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.regex.Pattern;
 import java.util.Map;
 import java.util.Set;
@@ -23,7 +25,22 @@ public final class OriginalNodeWebOutput {
         "projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity","entryPath","manifestIdentity","archiveBytes","archiveSha256");
     private static final Pattern SCRIPT=Pattern.compile("app-[A-Z0-9]{8}\\.js"), STYLE=Pattern.compile("app-[A-Z0-9]{8}\\.css"),
         ICON=Pattern.compile("mark-[A-Z0-9]{8}\\.svg");
+    private static final String VITE="vite_fresh_dist_v1", STOCK="stock_web_v1";
+    private static final int VITE_FILES=64, VITE_BYTES=8*1024*1024;
+    private static final Pattern VITE_LEAF=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,159}");
+    private static final Pattern VITE_ENTRY=Pattern.compile(
+        "<script\\s+type=\"module\"(?:\\s+crossorigin(?:=\"\")?)?\\s+src=\"((?:/|\\./)assets/[A-Za-z0-9._-]+\\.m?js)\"\\s*>\\s*</script>");
+    private static final Pattern VITE_ASSET=Pattern.compile("\\b(?:src|href)\\s*=\\s*\"((?:/|\\./)(?:assets/)?[A-Za-z0-9._-]+)\"");
+    private static final Set<String> PUBLIC_MEDIA=Set.of("image/svg+xml","image/png","image/jpeg","image/webp","image/gif","image/x-icon",
+        "font/woff","font/woff2","font/ttf");
     private OriginalNodeWebOutput(){}
+
+    public static final class OutputSource {
+        private final String stockEntry;
+        private OutputSource(String stockEntry){this.stockEntry=stockEntry;}
+        private boolean vite(){return stockEntry==null;}
+        private String profile(){return vite()?VITE:STOCK;}
+    }
 
     public static final class Build {
         private final JSONObject plan,binding,facts,witness;
@@ -87,17 +104,34 @@ public final class OriginalNodeWebOutput {
         return result;
     }
     /** The stock build and lock cannot be substituted. A user can change the two plain heading slots. */
-    public static String requireSupportedSource(JSONObject checkout)throws Exception{
+    public static OutputSource requireSupportedSource(JSONObject checkout)throws Exception{
         Map<String,String> expected=template(),actual=ProjectSources.files(checkout);
         for(String path:Set.of("package.json","package-lock.json","tools/build.mjs"))
-            if(!expected.get(path).equals(actual.get(path)))throw new SecurityException("整站固定首版只认内置 Web 的原构建配置；其它项目仍可按原工作另存单文件");
+            if(!expected.get(path).equals(actual.get(path)))return requireViteSource(actual);
         String stock=expected.get("index.html"),html=actual.get("index.html");
         if(html==null||html.length()>stock.length()+320)throw new SecurityException("内置网页只支持更改标题文字，不更改页面入口或资源结构");
         String title=entryText(html,"title"),heading=entryText(html,"h1");
         if(!stock.replace("<title>我的小计划</title>","<title>"+title+"</title>")
                  .replace("<h1>我的小计划</h1>","<h1>"+heading+"</h1>").equals(html))
             throw new SecurityException("内置网页入口或资源结构已变；本次不标成固定整站");
-        return html;
+        return new OutputSource(html);
+    }
+
+    private static OutputSource requireViteSource(Map<String,String> files)throws Exception {
+        String manifest=files.get("package.json");
+        if(manifest==null||manifest.getBytes(StandardCharsets.UTF_8).length>65536||!files.containsKey("index.html"))
+            throw new SecurityException("没有可核对的单入口 Vite 项目");
+        JSONObject pkg=dev.pocketengine.features.plugins.mcp.McpJson.parse(manifest);
+        JSONObject scripts=pkg.optJSONObject("scripts");
+        boolean vite=false;
+        for(String field:Set.of("dependencies","devDependencies")){
+            JSONObject declared=pkg.optJSONObject(field);
+            vite|=declared!=null&&declared.opt("vite") instanceof String;
+        }
+        if(!vite||scripts==null||scripts.has("prebuild")||scripts.has("postbuild")||
+           !Set.of("vite build","tsc -b && vite build").contains(scripts.optString("build")))
+            throw new SecurityException("固定网页包只支持内置模板或声明了标准单入口 Vite build 的项目；其余仍可在原任务另存单文件");
+        return new OutputSource(null);
     }
     private static String entryText(String html,String tag){
         String begin="<"+tag+">",end="</"+tag+">";
@@ -136,24 +170,72 @@ public final class OriginalNodeWebOutput {
             if(count!=3)throw new SecurityException("原退出时未观测到内置静态 Web 的完整四项");
         }
     }
+    public static void requireOutputPaths(java.io.File root,OutputSource source)throws Exception{
+        if(!source.vite()){requireStockPaths(root);return;}
+        Path dist=root.toPath().resolve("dist"),assets=dist.resolve("assets");
+        if(!Files.isDirectory(dist,LinkOption.NOFOLLOW_LINKS)||!Files.isDirectory(assets,LinkOption.NOFOLLOW_LINKS))
+            throw new SecurityException("原构建没有可核对的 dist/assets，不采用当前其他目录");
+        int count=0;long bytes=0;
+        try(var top=Files.newDirectoryStream(dist);var leaves=Files.newDirectoryStream(assets)){
+            for(Path path:top){
+                if(path.equals(assets))continue;
+                bytes+=viteFile(path,true);
+                if(++count>VITE_FILES||bytes>VITE_BYTES)throw new SecurityException("原 Vite 网页包超过文件或字节上限");
+            }
+            for(Path path:leaves){
+                bytes+=viteFile(path,false);
+                if(++count>VITE_FILES||bytes>VITE_BYTES)throw new SecurityException("原 Vite 网页包超过文件或字节上限");
+            }
+        }
+    }
+    private static long viteFile(Path path,boolean top)throws Exception {
+        BasicFileAttributes info=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!info.isRegularFile()||info.size()<=0||info.size()>ProjectPackageArchive.MAX_FILE_BYTES||
+           ((Number)Files.getAttribute(path,"unix:nlink",LinkOption.NOFOLLOW_LINKS)).longValue()!=1||
+           !vitePath(path.getFileName().toString(),top))throw new SecurityException("原 Vite 输出含不能固定的文件类型、链接、目录或大小；未保存部分成果");
+        return info.size();
+    }
+    private static boolean vitePath(String leaf,boolean top){
+        if(!VITE_LEAF.matcher(leaf).matches())return false;
+        String mime=dev.pocketengine.features.local.preview.ProjectPreviewBundle.mime(leaf);
+        return PUBLIC_MEDIA.contains(mime)||(top?leaf.equals("index.html"):Set.of("text/javascript","text/css").contains(mime));
+    }
+    private static boolean isNodeBuild(JSONObject exact)throws Exception {
+        JSONObject payload=exact.getJSONObject("payload");
+        return "build".equals(exact.opt("intent"))&&"project.runtime.run".equals(exact.opt("command"))&&
+            Set.of("npm","pnpm").contains(payload.optString("executable"))&&
+            "[\"run\",\"build\"]".equals(ProjectSources.canonical(payload.optJSONArray("argv")));
+    }
+    private static boolean isOwnerCopy(JSONObject exact,JSONObject checkout)throws Exception{
+        JSONObject ownerCopy=checkout.optJSONObject(OwnerDraftWorkCopy.FIELD);
+        return ownerCopy!=null&&exact.getString("sourceDigest").equals(ownerCopy.opt("initialCopyDigest"))&&
+            exact.getString("checkoutId").equals(ownerCopy.opt("checkoutId"))&&exact.getString("projectId").equals(ownerCopy.opt("projectId"));
+    }
+
+    /** Optional observation before this exact owner build starts, never a gate or a deletion. */
+    public static boolean observeCleanDistAtLaunch(dev.pocketengine.features.local.runtime.RuntimeInvocation invocation)throws Exception{
+        JSONObject exact=invocation.exact();
+        if(!isNodeBuild(exact)||!isOwnerCopy(exact,invocation.sourceSnapshot().getJSONObject("checkout")))return false;
+        invocation.checkCurrent();
+        Path dist=invocation.workspace().resolve("dist",false).toPath();
+        try{Files.readAttributes(dist,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);return false;}
+        catch(NoSuchFileException absent){invocation.checkCurrent();return true;}
+    }
+
     /** A read-only native witness while this proven-success original checkout lease is still held.
      * This is metadata on the original runtime receipt, not a saved artifact. No late observation. */
-    public static JSONObject observeAtOriginalExit(dev.pocketengine.features.local.runtime.RuntimeInvocation invocation,long sequence)throws Exception{
-        JSONObject exact=invocation.exact(),payload=exact.getJSONObject("payload");
-        if(!"build".equals(exact.opt("intent"))||!"project.runtime.run".equals(exact.opt("command"))
-           ||!Set.of("npm","pnpm").contains(payload.optString("executable"))||
-           !"[\"run\",\"build\"]".equals(ProjectSources.canonical(payload.optJSONArray("argv")))||sequence<1)return null;
+    public static JSONObject observeAtOriginalExit(dev.pocketengine.features.local.runtime.RuntimeInvocation invocation,long sequence,boolean cleanDistAtLaunch)throws Exception{
+        JSONObject exact=invocation.exact();
+        if(!isNodeBuild(exact)||sequence<1)return null;
         invocation.checkCurrent();JSONObject snapshot=invocation.sourceSnapshot(),checkout=snapshot.getJSONObject("checkout");
-        JSONObject ownerCopy=checkout.optJSONObject(OwnerDraftWorkCopy.FIELD);
-        if(ownerCopy==null||!exact.getString("sourceDigest").equals(ownerCopy.opt("initialCopyDigest"))||
-           !exact.getString("checkoutId").equals(ownerCopy.opt("checkoutId"))||!exact.getString("projectId").equals(ownerCopy.opt("projectId")))
-            return null;
-        String sourceEntry=requireSupportedSource(snapshot);
-        var root=invocation.workspace();requireStockPaths(root.directory());root.verify(invocation);
+        if(!isOwnerCopy(exact,checkout))return null;
+        OutputSource source=requireSupportedSource(snapshot);
+        if(source.vite()&&!cleanDistAtLaunch)return null; // Unknown or old dist is never annexed to this result.
+        var root=invocation.workspace();requireOutputPaths(root.directory(),source);root.verify(invocation);
         JSONObject info=new JSONObject().put("projectId",exact.getString("projectId")).put("checkoutId",exact.getString("checkoutId"))
             .put("sourceDigest",exact.getString("sourceDigest")).put("name",checkout.getString("name"));
         var frozen=ProjectPackageArchive.capture(root.directory(),info,"web_output",ENTRY,true);
-        requireCompleteStockSite(frozen,sourceEntry);invocation.checkCurrent();requireStockPaths(root.directory());
+        requireOutputContents(frozen,source);invocation.checkCurrent();requireOutputPaths(root.directory(),source);
         var again=ProjectPackageArchive.capture(root.directory(),info,"web_output",ENTRY,true);
         if(!frozen.identity.equals(again.identity))throw new SecurityException("原退出的整站资源在观察中变化");
         root.verify(invocation);invocation.checkCurrent();
@@ -162,11 +244,14 @@ public final class OriginalNodeWebOutput {
             .put("taskId",binding.getString("taskId")).put("runId",binding.getString("runId"))
             .put("epoch",binding.getInt("coordinatorEpoch")).put("buildOperationId",binding.getString("operationId"));
         for(String k:ListKeys.SOURCE)stamp.put(k,exact.get(k));
+        if(source.vite())stamp.put("outputProfile",source.profile());
         return stamp;
     }
     private static void requireWitness(JSONObject facts,JSONObject witness)throws Exception{
-        if(witness==null||witness.length()!=WITNESS_KEYS.size()||!ENTRY.equals(witness.opt("entryPath")))
-            throw new SecurityException("这笔原构建没有在成功退出时留下完整网页原证据；不补读当前 dist");
+        if(witness==null||!ENTRY.equals(witness.opt("entryPath"))||
+           (witness.has("outputProfile")?witness.length()!=WITNESS_KEYS.size()+1||!VITE.equals(witness.opt("outputProfile")):
+            witness.length()!=WITNESS_KEYS.size()))
+            throw new SecurityException("这笔原构建没有在成功退出时留下可核对的网页原证据；不补读当前 dist");
         for(String key:WITNESS_KEYS)if(!witness.has(key))throw new SecurityException("原整站退出证据缺少字段");
         for(String key:Set.of("taskId","runId","epoch","buildOperationId","checkoutSequence",
             "projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity"))
@@ -183,6 +268,35 @@ public final class OriginalNodeWebOutput {
             bytes.getLong("archiveBytes")!=witness.optLong("archiveBytes",-1))
             throw new SecurityException("完整网页资源已不是原构建退出时观察的字节；未用当前同名文件替代");
     }
+
+    public static void requireOutputContents(ProjectPackageArchive.Frozen frozen,OutputSource source)throws Exception{
+        if(!source.vite()){requireCompleteStockSite(frozen,source.stockEntry);return;}
+        JSONObject manifest=frozen.manifest();JSONArray dirs=manifest.getJSONArray("directories"),files=manifest.getJSONArray("files");
+        if(!"web_output".equals(manifest.opt("mode"))||!ENTRY.equals(manifest.opt("entryPath"))||!"dist".equals(manifest.opt("previewRoot"))||
+            manifest.getJSONArray("omitted").length()!=0||dirs.length()!=2||!"dist".equals(dirs.opt(0))||!"dist/assets".equals(dirs.opt(1))||
+            files.length()<2||files.length()>VITE_FILES||manifest.getLong("bytes")>VITE_BYTES)
+            throw new SecurityException("原固定包不是这次核对的单入口 Vite 输出，未保存部分资源");
+        java.util.HashSet<String> paths=new java.util.HashSet<>();
+        for(int i=0;i<files.length();i++){
+            JSONObject file=files.getJSONObject(i);String path=file.getString("path");
+            boolean asset=path.startsWith("dist/assets/");
+            if(!path.startsWith("dist/")||!vitePath(path.substring(asset?12:5),!asset)||file.getLong("bytes")<=0||!paths.add(path))
+                throw new SecurityException("原固定包文件与已观察 Vite 目录不同");
+        }
+        byte[] entry=frozen.file(ENTRY);
+        if(entry.length>262144)throw new SecurityException("原网页入口过大，未保存");
+        String html=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(entry)).toString();
+        var module=VITE_ENTRY.matcher(html);
+        if(!module.find()||!paths.contains(viteRelative(module.group(1)))||module.find())
+            throw new SecurityException("原网页未引用一个实际同时固定的 Vite 模块入口");
+        var references=VITE_ASSET.matcher(html);
+        while(references.find()){
+            String path=viteRelative(references.group(1));
+            if((path.startsWith("dist/assets/")||PUBLIC_MEDIA.contains(dev.pocketengine.features.local.preview.ProjectPreviewBundle.mime(path)))&&
+               !paths.contains(path))throw new SecurityException("原网页引用的本地资源不在固定包中");
+        }
+    }
+    private static String viteRelative(String url){return "dist/"+url.substring(url.startsWith("./")?2:1);}
 
     /** The stock builder always emits one bundled script, stylesheet and icon, wired into the
      * source entry. Do not guess at general HTML/JS graphs or run a detector. */
@@ -222,12 +336,15 @@ public final class OriginalNodeWebOutput {
         /** Only metadata may cross the owner review window; no HTML/JS or runtime handle. */
         public JSONObject view()throws Exception{
             return ProjectSources.copy(pin).put("state","review").put("files",new JSONArray(files.getJSONArray("files").toString()))
-                .put("entryPath",ENTRY).put("bytes",pin.getLong("archiveBytes")).put("authorityAdded",false);
+                .put("entryPath",ENTRY).put("outputProfile",build.witness.optString("outputProfile",STOCK))
+                .put("bytes",pin.getLong("archiveBytes")).put("authorityAdded",false);
         }
         public JSONObject pin()throws Exception{return ProjectSources.copy(pin);}
     }
-    public static Review review(Build build,ProjectPackageArchive.Frozen frozen,String sourceEntry)throws Exception{
-        requireCompleteStockSite(frozen,sourceEntry);requireExitBytes(build.witness,frozen);
+    public static Review review(Build build,ProjectPackageArchive.Frozen frozen,OutputSource sourceShape)throws Exception{
+        if(!sourceShape.profile().equals(build.witness.optString("outputProfile",STOCK)))
+            throw new SecurityException("原构建见证与本次审阅的网页类型不同");
+        requireOutputContents(frozen,sourceShape);requireExitBytes(build.witness,frozen);
         JSONObject manifest=frozen.manifest(),selected=build.facts();
         JSONObject source=manifest.getJSONObject("source");
         for(String key:Set.of("projectId","checkoutId","sourceDigest"))if(!selected.getString(key).equals(source.opt(key)))

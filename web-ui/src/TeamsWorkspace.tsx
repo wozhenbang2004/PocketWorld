@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { IconAdd, IconArrowLeft, IconChevronRight, IconEdit, IconExternalLink, IconPause, IconPlay, IconRefresh, IconMore, IconStop } from './icons';
 import { Tabs, TabList, Tab, TabPanel, ContextMenuTrigger, ContextMenu, ContextMenuItem } from './shell-library';
@@ -26,7 +26,9 @@ import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelive
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { finalPackage, TeamFinalPackageReading } from './TeamFinalPackageReading';
 import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
-import { teamFollowUpFocus, teamFollowUps, teamResultReading, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
+import { settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
+import { ownerWorkPresentation } from './owner-work-presentation';
+import { ReadingContext } from './reading-context';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
 import {sameTeamPackage} from './team-delivered-package';
@@ -81,6 +83,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   onAskButler?: (request: TeamButlerRequest) => void;
   onOpenWork?: (link: TeamOwnerWorkLink, intent: 'overview' | 'supplement') => void;
 }) {
+  const openReading = useContext(ReadingContext);
   const formDraft = useFormDrafts(run, 'teams');
   const startDraft = useFormDrafts(run, 'teams');
   const messageDraft = useFormDrafts(run, 'teams');
@@ -252,7 +255,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const load = () => { void invoke('teams.snapshot', {}, value => { acceptCatalog(value); if (formDraft.requiresRecheck || startDraft.requiresRecheck || memberFormDraft.requiresRecheck) setDraftCatalogChecked(true); }); };
   useEffect(() => { if (formDraft.requiresRecheck || startDraft.requiresRecheck || memberFormDraft.requiresRecheck) setDraftCatalogChecked(false); }, [formDraft.requiresRecheck, startDraft.requiresRecheck, memberFormDraft.requiresRecheck]);
-  const readRun = (id: string) => { void invoke('teams.readRun', proposalRead(id), result => { if (result.reading?.run?.id !== id) throw new Error('原团队运行身份不匹配'); acceptReading(result.reading); }); };
+  const readRun = (id: string, fromDirectory = false) => { void invoke('teams.readRun', proposalRead(id), result => {
+    const next = result.reading;
+    if (next?.kind !== 'run' || !next.viewHandle || next.run?.id !== id) { release(next); throw new Error('原团队运行身份不匹配'); }
+    if (fromDirectory && teamRunEntrySection(next) === 'result') setRunSections(old => old[id] ? old : { ...old, [id]: 'result' });
+    acceptReading(next);
+  }); };
   const readDefinition = (id: string) => { void invoke('teams.readDefinition', { id }, value => { if (value.definition?.id !== id) throw new Error('团队配置身份不匹配，请刷新目录'); acceptReading(value); }); };
   useEffect(() => {
     const requestId = runFocus?.requestId, runId = runFocus?.runId;
@@ -261,7 +269,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const project=runFocus?.fromProject,from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined,pack=from&&'deliveredPackage' in from?from:undefined;
     void invoke('teams.readRun', { runId,...(proposal?{proposalOrigin:proposal}:{}) }, result => {
       const next=result.reading;
-      if (next?.run?.id !== runId||!next.viewHandle||project&&(from||project.teamRunId!==runId||!next.run.productionScope||!next.run.workPlan)) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
+      if (next?.kind!=='run'||next.run?.id !== runId||!next.viewHandle||project&&(from||project.teamRunId!==runId||!next.run.productionScope||!next.run.workPlan)) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
       if(from){
         const link=next.ownerWorkLink;
         if(!link||link.currentRun!==true||link.readOnly!==true||link.stopping!==false||link.taskId!==from.parentTaskId||link.runId!==from.parentRunId
@@ -276,7 +284,13 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       setWorkPackage(pack&&runFocus?.returnToWork?{view:next.viewHandle,returnToWork:runFocus.returnToWork}:null);
       const returned=project||files;
       setFileEntry(returned?{view:next.viewHandle,source:returned,requestId,returnToWork:runFocus?.returnToWork}:null);
-      setRunSections(old => ({ ...old, [runId]: from||project?'result':'progress' }));
+      const link = next.ownerWorkLink;
+      const originalWork = !from && !project && link?.readOnly === true && link.currentRun === true && link.stopping === false && link.teamRunId === runId;
+      const originalTeam = originalWork && ownerWorkPresentation(rows(bridge.getState().state.tasks).find(row => row.id === link.taskId))?.teams.find(row =>
+        row.teamRunId === runId && row.taskId === link.teamTaskId && row.parentRunId === link.runId &&
+        row.parentEpoch === link.epoch && row.conversationId === link.conversationId);
+      const entry = from || project ? 'result' : originalTeam && settledTeamResultEntry(originalTeam) ? teamRunEntrySection(next) : 'progress';
+      setRunSections(old => ({ ...old, [runId]: entry }));
       setComposeOpen(false);
       onRunFocusConsumed?.(requestId);
     }, failure => {onRunFocusConsumed?.(requestId);if(runFocus?.fromWork||runFocus?.fromProject)runFocus.returnToWork?.(failure instanceof Error?failure.message:'原文件或提案目录已变化。');});
@@ -661,6 +675,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     });
   };
   const deliveries=runSection==='result'?teamResearchDeliveries(current,messages):[];
+  const openMemberAnswer=(item:TeamResearchDelivery,trigger:HTMLButtonElement)=>{
+    const original=currentReading.current;
+    if(!openReading||!item.answer||!canRead||materialBusy||document.hidden||!ownsNativeWindow()||
+      original?.kind!=='run'||original.run?.id!==item.team||original.viewHandle!==reading?.viewHandle)return;
+    const same=teamResearchDeliveries(original.run,original.messages).find(row=>row.key===item.key&&row.answer?.key===item.answer?.key);
+    if(!same?.answer||same.answer.text!==item.answer.text){setNotice('这份成员答复已变化，没有打开其他阶段。');return;}
+    openReading({kind:'message',title:`${same.name} · ${same.answer.label}`,text:same.answer.text,returnFocus:trigger});
+  };
   const openMemberDelivery=(item:TeamResearchDelivery)=>{
     const original=currentReading.current;
     if(deliveryReturn.current||!canRead||materialBusy||!ownsNativeWindow()||original?.run?.id!==item.team)return;
@@ -772,7 +794,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     {tab === 'teams' && entries.length > 0 && <p className="pw-team-directory-caption">常用团队，随时交办。</p>}
     {entries.length > 0 ? <div className="pw-collaboration-directory">{directoryGroups.filter(group => group.entries.length > 0).map(group => <section className="pw-collaboration-group" key={group.id} aria-label={group.title}>
       {tab === 'runs' && <header className="pw-collaboration-group-heading"><h3>{group.title}</h3><span>{group.entries.length} 项已读取</span></header>}
-      <div className="pw-object-list" data-team-directory-kind={tab}>{group.entries.map(row => <Button key={row.id} data-team-list-id={row.id} data-motion-key={`directory:${row.id}`} variant="ghost" trailingIcon={IconChevronRight} className="pw-object-row pw-team-directory-row h-auto whitespace-normal" disabled={busy} onClick={() => { listSelection.current[tab] = row.id; if (tab === 'runs') readRun(row.id); else readDefinition(row.id); }}>
+      <div className="pw-object-list" data-team-directory-kind={tab}>{group.entries.map(row => <Button key={row.id} data-team-list-id={row.id} data-motion-key={`directory:${row.id}`} variant="ghost" trailingIcon={IconChevronRight} className="pw-object-row pw-team-directory-row h-auto whitespace-normal" disabled={busy} onClick={() => { listSelection.current[tab] = row.id; if (tab === 'runs') readRun(row.id, true); else readDefinition(row.id); }}>
         <span className="pw-object-row-copy"><span className="pw-object-row-title">{tab === 'runs' ? teamGoalTitle(row.goal, row.teamName || '这次协作') : row.name || '未命名编组'}</span>
           <small className="pw-team-directory-meta">{tab === 'runs' ? <><span className="pw-team-state" data-state={row.status}>{status(row.status)}</span>{row.teamName && <span>{row.teamName}</span>}{teamTimeLabel(row.updatedAt || row.createdAt) && <time>{teamTimeLabel(row.updatedAt || row.createdAt)}</time>}</> : `${rows(row.members).length} 名成员 · ${row.mode === 'produce' ? '项目文件协作' : row.mode === 'debate' ? '取证与讨论' : '共同工作'}`}</small>
           {tab === 'teams' && <span className="pw-team-roster-preview">{rows(row.members).slice(0, 4).map(member => <span key={member.id}><TeamMemberAvatar member={member} size={28} />{teamMemberLabel(member, rows(row.members))}</span>)}{rows(row.members).length > 4 && <span className="pw-team-roster-more">+{rows(row.members).length - 4} 人</span>}</span>}
@@ -899,7 +921,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                 release(value,'reviewHandle');throw new Error('原提案或工作项已变化，没有开始修订。');
               }reviewResult(value);
             });}}/>:undefined} frozenFiles={current.productionScope && (current.mode === 'produce' || current.workPlan) && (fileEntry&&fileEntry.view===reading?.viewHandle || current.status === 'awaiting_review' || hasFrozenRevision || workItems.some(item => rows(item.artifacts).length > 0) || members.some(member => rows(member.roundStates).some(phase => rows(phase.artifacts).length > 0))) && bridge.getState().capabilities.commands.includes('teams.readFrozenOutputs')
-            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} hasRevision={hasFrozenRevision} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy||!bridge.getState().capabilities.commands.includes('teams.openResearchTask')} open={openMemberDelivery}
+            ? <TeamFrozenFiles key={reading?.viewHandle || current.id} team={current.id} hasRevision={hasFrozenRevision} view={reading?.viewHandle || ''} entry={fileEntry&&fileEntry.view===reading?.viewHandle?fileEntry:undefined} run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy} rawAvailable={bridge.getState().capabilities.commands.includes('teams.openResearchTask')}
+            open={openMemberDelivery} openAnswer={openReading?openMemberAnswer:undefined}
             expanded={!!shownMemberSources[current.id]} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
             actions={{ items: followUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}

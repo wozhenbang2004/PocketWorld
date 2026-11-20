@@ -14,9 +14,12 @@ export function canCorrectProvided(receipt:Data|null,row:Data|null):boolean {
 }
 const closePin=(handle:string)=>{if(handle)void bridge.command('memoryHistory.close',{handle}).catch(()=>{})};
 
+export type AnswerMemoryCorrectionOutcome = {kind:'saved'; revision:number; feedback:string} |
+  {kind:'not_submitted'|'unconfirmed'; message:string};
+
 /** An owner's correction of one proven record, never a retry of the answer or a model mutation. */
-export function AnswerMemoryCorrection({receipt,row,backRef,onClose,onOutcome}:{receipt:Data;row:Data;
-  backRef:MutableRefObject<(()=>boolean)|null>;onClose:()=>void;onOutcome:(message:string)=>void}) {
+export function AnswerMemoryCorrection({receipt,row,backRef,onClose,onSaving,onOutcome}:{receipt:Data;row:Data;
+  backRef:MutableRefObject<(()=>boolean)|null>;onClose:()=>void;onSaving:()=>void;onOutcome:(outcome:AnswerMemoryCorrectionOutcome)=>void}) {
   const [draft,setDraft]=useState(String(row.text)),[review,setReview]=useState<Data|null>(null),[ack,setAck]=useState(false);
   const [busy,setBusy]=useState(false),[leaving,setLeaving]=useState(false);
   const live=useRef(true),pending=useRef(false),sent=useRef(false),pin=useRef('');
@@ -35,22 +38,22 @@ export function AnswerMemoryCorrection({receipt,row,backRef,onClose,onOutcome}:{
       if(!handle||value.operation!=='correct'||value.executionAuthorized!==false||value.before?.id!==row.id||value.before.revision!==row.revision||
         value.before.text!==row.text||!personal(value.before)||value.afterText!==text){closePin(handle);throw new Error('原记忆或核对范围已变化，没有提交纠正。')}
       pin.current=handle;setReview(value);setAck(false);
-    }catch{if(live.current)onOutcome('原回答或记忆未能核对，没有提交纠正。请查看重新读取的原回执。')}
+    }catch{if(live.current)onOutcome({kind:'not_submitted',message:'原回答或记忆未能核对，没有提交纠正。请重新核对原回执。'})}
     finally{pending.current=false;if(live.current)setBusy(false)}
   };
   const confirm=async()=>{
     const handle=pin.current;if(!handle||!review||review.reviewHandle!==handle||!ack||pending.current||sent.current)return;
-    pending.current=true;sent.current=true;pin.current='';setBusy(true);
+    pending.current=true;sent.current=true;pin.current='';setBusy(true);onSaving();
     try{
       const result=await bridge.command('taskMemory.confirm',{reviewHandle:handle}),record=result?.record;
-      if(!record||!personal(record)||record.id!==row.id||record.revision!==row.revision+1||record.text!==review.afterText||result.executionAuthorized!==false||
+      if(!record||!personal(record)||record.id!==row.id||!Number.isSafeInteger(record.revision)||record.revision!==row.revision+1||record.text!==review.afterText||result.executionAuthorized!==false||
         !keys.every(key=>result[key]===receipt[key])||typeof result.feedback!=='string'||!result.feedback)throw new Error('没有收到原纠正的完整回执');
-      onOutcome(result.feedback+' 原回答未改写。');
-    }catch{onOutcome('这次纠正的结果待核对。已重新读取原回答的提供回执，没有重发纠正。')}
+      if(live.current)onOutcome({kind:'saved',revision:record.revision,feedback:result.feedback});
+    }catch{if(live.current)onOutcome({kind:'unconfirmed',message:'未收到可确认的保存回执，没有重发。可在记忆管理查看目前保存的版本。'})}
     finally{pending.current=false;if(live.current)setBusy(false)}
   };
-  return <SettingsDialog isOpen onClose={back} title={leaving?'放弃未提交的改动？':review?'核对这次纠正':'纠正这条已保存记忆'} className="pw-memory-modal">
-    {leaving?<div className="pw-form-actions"><Button onClick={()=>setLeaving(false)}>继续编辑</Button><Button variant="ghost" onClick={onClose}>放弃并返回</Button></div>:
+  return <SettingsDialog isOpen onClose={back} title={sent.current?'正在确认保存':leaving?'放弃未提交的改动？':review?'核对这次纠正':'纠正这条已保存记忆'} className="pw-memory-modal">
+    {sent.current?<p className="pw-muted" role="status">正在等待这次保存回执，不会重发。</p>:leaving?<div className="pw-form-actions"><Button onClick={()=>setLeaving(false)}>继续编辑</Button><Button variant="ghost" onClick={onClose}>放弃并返回</Button></div>:
       <div className="pw-knowledge-review">{review?<><p>先前保存</p><p className="pw-reading-copy">{row.text}</p><p>改为</p><p className="pw-reading-copy">{review.afterText}</p>
         <p className="pw-muted">会更新保存的记忆，并清理旧版本的派生引用。原对话和这条回答不会被改写或重跑。</p>
         <CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对这次内容与影响</CheckboxField></>:

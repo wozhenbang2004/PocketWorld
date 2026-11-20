@@ -72,6 +72,7 @@ import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWo
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
 import {ProjectConventionProvided} from './ProjectConventionProvided';
 import {ProvidedMemories} from './ProvidedMemories';
+import {originalAnswerMemoryMessage} from './memory-history';
 import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {MessageOriginReader,type MessageOriginTarget} from './MessageOriginReader';
 import {PhoneReturnedReport,type PhoneReportTarget} from './PhoneReturnedReport';
@@ -822,7 +823,8 @@ export default function App(){
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
  const returnToTaskConversation=async(task:Task,associate=false,phoneRead?:PhoneConversationOrigin)=>{
   const conversationId=associate?privateTaskConversationId(task):originatingRequestConversation(task);
-  if(!conversationId||returningConversation||bridge.getState().state.chatSubmitting||!can('conversation.select'))return;
+  if(!conversationId||returningConversation||!can('conversation.select')||
+     (associate||phoneRead)&&bridge.getState().state.chatSubmitting)return;
   if(phoneRead&&(associate||phoneRead.taskId!==task.id||phoneRead.conversationId!==conversationId||!phoneSourceStillOpen(phoneRead))){
    setLocalError('原手机轮次或阅读窗口已变化，没有打开其他对话。');return
   }
@@ -836,7 +838,7 @@ export default function App(){
   try{
    if(taskOpen&&!await closeTask()||!current()||navigationWindow.current!==navigation)return;
    const entered=await navigate('chat',undefined,{taskClosed:true});
-   if(phoneRead&&!entered)return;
+   if(!entered)return;
    const destination=navigationWindow.current;
    const atDestination=()=>current()&&navigationWindow.current===destination;
    const waitForSnapshot=(matches:()=>boolean,failure:string)=>new Promise<boolean>((resolve,reject)=>{
@@ -851,18 +853,34 @@ export default function App(){
    if(!atDestination())return;
    const reader=bridge.getState().state.conversationReader;
    if(reader){
-    if(phoneRead)throw new Error('另一份历史阅读窗口已打开，未关闭它或改读其他回执。');
+    if(!associate&&!phoneRead&&reader.conversation===conversationId)return;
+    if(phoneRead||bridge.getState().state.chatSubmitting)throw new Error('另一份历史阅读窗口已打开，未关闭它或改读其他回执。');
     if(!can('conversation.reader.close'))throw new Error('请先关闭历史阅读窗口，再回到这件事的对话。');
     await act('conversation.reader.close',{window:reader.window,conversationId:reader.conversation});
     if(!await waitForSnapshot(()=>!bridge.getState().state.conversationReader,'历史阅读窗口尚未关闭，请关闭后再回到所属对话。'))return;
    }
    if(!atDestination())return;
-   if(bridge.getState().state.chatSubmitting)throw new Error('当前消息仍在提交，请稍后回到这件事的对话。');
-   if(bridge.getState().state.conversationId!==conversationId)await act('conversation.select',{id:conversationId});
-   // Selection can acknowledge before its snapshot, or open a history reader
-   // instead. Confirm both the identity and its editable conversation surface.
-   if(!await waitForSnapshot(()=>bridge.getState().state.conversationId===conversationId&&!bridge.getState().state.conversationReader,'尚未确认已回到所属对话，请从对话列表重新打开。'))return;
-   if(current()&&navigationWindow.current===destination&&bridge.getState().state.conversationId===conversationId){
+   const before=bridge.getState().state;
+   if(before.chatSubmitting&&(associate||phoneRead))throw new Error('当前消息仍在提交，请稍后回到这件事的对话。');
+   if(before.conversationId!==conversationId)await act('conversation.select',{id:conversationId});
+   else if(before.chatSubmitting){
+    if(!can('conversation.reader.open'))throw new Error('当前消息仍在提交，暂时不能打开原对话历史。');
+    await act('conversation.reader.open',{conversationId});
+   }
+   // Native may open a read-only history for an older conversation. That is
+   // already our successful destination, not a failed editor selection.
+   const arrived=()=>{
+    const state=bridge.getState().state, reader=state.conversationReader;
+    if(reader)return reader.conversation===conversationId?'history':null;
+    return !state.chatSubmitting&&state.conversationId===conversationId?'editor':null;
+   };
+   if(!await waitForSnapshot(()=>arrived()!==null,'尚未确认已回到所属对话，请从对话列表重新打开。'))return;
+   if(!atDestination())return;
+   if(arrived()==='history'){
+    if(associate) setLocalStatus('已打开原对话的历史。当前是只读历史，尚未关联到新输入。');
+    return;
+   }
+   if(arrived()==='editor'){
     if(phoneRead){
      const found=await locatePhoneReturn(phoneRead,()=>chatMessageList.current,atDestination,stopFollowing,saveReading);
      if(atDestination()&&found!=='left')setLocalStatus(found==='found'?'已定位第 '+phoneRead.epoch+' 轮的原回执。':found==='absent'?'已回到原私聊。当前消息窗口未找到这轮的唯一回执，不代表任务没有结果。':'已回到原私聊，未能定位原回执在页面中的位置。');
@@ -1194,21 +1212,28 @@ export default function App(){
   return stageButlerObject(reference,()=>stillOpen()&&!!currentFileDraft(target),true);
  };
  const showFileDraft=async(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>{
-  const documentEpoch=bridge.getDocumentEpoch();
+  const documentEpoch=bridge.getDocumentEpoch(),originalNavigation=navigationWindow.current;
   const stillAttached=()=>{
    if(bridge.getDocumentEpoch()!==documentEpoch)return false;
    const draft=currentFileDraft(target);
-   return asArray<Json>(draft?.objectRefs).some(ref=>ref.kind===reference.kind&&ref.id===reference.id&&ref.sha256===reference.sha256);
+   return !!draft&&Number.isSafeInteger(draft.revision)&&draft.revision>=target.revision&&
+    asArray<Json>(draft.objectRefs).some(ref=>ref.kind===reference.kind&&ref.id===reference.id&&ref.sha256===reference.sha256);
   };
   if(!stillAttached())throw new Error('原草稿中已找不到这份文件，请在原件中重新关联。');
   const native=bridge.getState().state;
   if(native.chatSubmitting||native.phoneSubmitting||phoneAction.current||phoneReviewPending)throw new Error('输入正在提交，文件仍留在原话题草稿。稍后再打开草稿。');
+  const destination=target.conversationId&&!native.conversationReader?'chat':'butler';
+  const stillLanding=()=>stillAttached()&&(destination!=='chat'||!bridge.getState().state.conversationReader);
+  const canReturn=()=>navigationWindow.current===originalNavigation&&stillLanding();
   await closeOriginal();
-  if(!stillAttached()||!await navigate('butler',undefined,{stillCurrent:stillAttached})||!stillAttached())return false;
+  if(!canReturn())return false;
+  if((route!=='chat'||destination!=='chat'||taskOpen)&&!await navigate(destination,undefined,{stillCurrent:canReturn}))return false;
+  const returnedNavigation=navigationWindow.current,atDraft=()=>navigationWindow.current===returnedNavigation&&stillLanding();
+  if(!atDraft())return false;
   if(intent!=='chat'&&!await changeIntent('chat'))return false;
-  if(!stillAttached())return false;
-  setLocalStatus('已关联到管家输入，可以继续提问。');
-  requestAnimationFrame(()=>{if(stillAttached())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
+  if(!atDraft())return false;
+  setLocalStatus('文件仍在这份草稿，可以继续编辑。');
+  requestAnimationFrame(()=>{if(atDraft())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
   return true;
  };
  const askButlerAbout=(reference:Json)=>{
@@ -1600,7 +1625,9 @@ export default function App(){
     typeof task.raw?.runId==='string'&&!!task.raw.runId&&Number.isSafeInteger(task.raw.coordinatorEpoch)&&task.raw.coordinatorEpoch>0&&
     can('conversation.select')&&can('composer.object.add')&&!state.chatSubmitting&&!returningConversation;
   const followOriginal=canFollowOriginal?()=>{if(openedTaskId.current===task.id&&!taskOpening)void returnToTaskConversation(task,true)}:undefined;
-  if(taskLayer==='homeReport')return <ButlerReturnedReport report={homeReport.current} task={task} active={taskOpen&&!taskOpening&&openedTaskId.current===task.id&&obj(snapshot?.view).taskId===task.id} onCopy={copyWithLocalFeedback} onOriginal={()=>showTaskLayer('overview')} onFollowUp={followOriginal}/>;
+  const canReadOriginal=originatingRequestConversation(task)&&can('conversation.select')&&!returningConversation;
+  if(taskLayer==='homeReport')return <ButlerReturnedReport report={homeReport.current} task={task} active={taskOpen&&!taskOpening&&openedTaskId.current===task.id&&obj(snapshot?.view).taskId===task.id} onCopy={copyWithLocalFeedback} onOriginal={()=>showTaskLayer('overview')} onFollowUp={followOriginal}
+   onConversation={canReadOriginal?()=>{if(openedTaskId.current===task.id&&!taskOpening)void returnToTaskConversation(task)}:undefined}/>;
   const progress=getRecentTaskProgress(task);
   const stage=workCollectionPresentation(task).group;
   const actionNames=asArray<{action:string;label:string}>(review?.actions).map(x=>x.action),approved=asArray<Json>(review?.approvals),unresolved=asArray<Json>(review?.unresolvedOperations);
@@ -2227,6 +2254,7 @@ export default function App(){
     const olderProjectDraft=originalProject?.originalTask&&originalProject.originalDraft&&can('projectDraft.readDifference')&&can('tasks.open')&&
       conversationNext(originalProject,can).action!=='draft'?{row:originalProject,target:originalProject.originalTask,draftId:originalProject.originalDraft.draftId}:undefined;
     const canQuote=intent==='chat'&&m.quoteAvailable&&can('messageQuote.open')&&can('messageQuote.stage')&&can('messageQuote.close');
+    const memoryShortcut=intent==='chat'&&row.lastOfRole&&!phoneResult&&!taskResult&&can('taskMemory.answer')?originalAnswerMemoryMessage(m,replyContext):null;
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
       actionElsewhere={!!linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')||!!chatAttention&&chatAttention.id===noteIdentity?.taskId}
@@ -2264,6 +2292,7 @@ export default function App(){
         {openingChatResultId===m.id?'正在读取成果…':earlierRun?'查看所属工作':returnedWork.status==='completed'?'查看成果':'查看这次工作'}
        </Button>}
       {m.role==='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)} onSpeak={can('speech.speak')&&m.id&&row.lastOfRole?playing=>run(playing?'speech.speak':'speech.stop',{messageId:m.id}):undefined} speaking={!!state.speaking}/>}
+      {memoryShortcut&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconMemory} aria-label="核对这条回答提供给模型的记忆" onClick={()=>setProvidedMemoryMessage(memoryShortcut)}>本次记忆</Button>}
       <PopoverTrigger isOpen={messageMenu===id} onOpenChange={value=>setMessageMenu(value?id:null)}>
        <IconButton icon={IconMore} size="small" aria-label="消息操作与来源"/>
        <Popover className="pw-message-popover" aria-label="消息操作与来源"><div className="pw-message-menu">
@@ -2284,7 +2313,7 @@ export default function App(){
         {canQuote&&<Button variant="ghost" leadingIcon={IconQuote} disabled={!draftKey||!!state.chatSubmitting} onClick={()=>{setMessageMenu(null);openQuote(m)}}>引用到草稿</Button>}
         {m.retainedSources&&can('sources.open')&&<Button variant="ghost" leadingIcon={IconLink} onClick={()=>{setMessageMenu(null);openSource(m)}}>回答来源</Button>}
         {m.projectConventionRecorded===true&&m.id&&can('conversation.projectConvention.read')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProjectConventionMessage(m.id!)}}>核对本次项目约定</Button>}
-        {m.memoryReference&&m.id&&can('taskMemory.answer')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProvidedMemoryMessage(m.id!)}}>本次提供的记忆</Button>}
+        {!memoryShortcut&&m.memoryReference&&m.id&&can('taskMemory.answer')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProvidedMemoryMessage(m.id!)}}>核对本次记忆</Button>}
         {m.memoryReference&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);openPersonalMemory({view:'memories'})}}>管理个人记忆</Button>}
         {m.role==='assistant'&&!phoneResult&&!taskResult&&m.taskId&&can('conversation.drafts')&&messageTaskAnchors.get(m.taskId)===index&&<ConversationDrafts key={m.taskId} taskId={m.taskId} reviewingMemory={memoryDraftTarget?.taskId===m.taskId} refreshRevision={Number(state.memoryRefreshRevision||0)} open={draft=>{setMessageMenu(null);openConversationDraft(draft)}}/>}
        </div></Popover>
@@ -2464,7 +2493,7 @@ export default function App(){
  {messageOriginTarget&&('phoneResult' in messageOriginTarget?<PhoneReturnedReport key={messageOriginTarget.phoneResult.deliveryId} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>:<MessageOriginReader key={`${messageOriginTarget.conversationId}:${messageOriginTarget.messageId}`} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>)}
  {messageQuoteTarget&&<MessageQuote key={`${messageQuoteTarget.key}:${messageQuoteTarget.epoch}:${messageQuoteTarget.messageId}`} target={messageQuoteTarget} onClose={()=>setMessageQuoteTarget(null)}/>}
  {projectConventionMessage&&<ProjectConventionProvided key={projectConventionMessage} messageId={projectConventionMessage} onClose={()=>setProjectConventionMessage(null)}/>}
- {providedMemoryMessage&&<ProvidedMemories key={providedMemoryMessage} messageId={providedMemoryMessage} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setProvidedMemoryMessage(null)} onManage={()=>{setProvidedMemoryMessage(null);void openPersonalMemory({view:'memories'})}} registerBack={registerProvidedMemoryBack}/>}
+ {providedMemoryMessage&&<ProvidedMemories key={providedMemoryMessage} messageId={providedMemoryMessage} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setProvidedMemoryMessage(null)} onManage={original=>{setProvidedMemoryMessage(null);openPersonalMemory(original?{view:'memory',id:original.id,candidate:false,expectedRevision:original.revision}:{view:'memories'})}} registerBack={registerProvidedMemoryBack}/>}
  {sourceSelection&&<AnswerSources key={sourceSelection.messageId||sourceSelection.taskId} target={sourceSelection} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setSourceSelection(null)}/>}
  <ReadingView documents={readingDocuments} onBack={closeReading}/>
  </div></Drawer.Root></ConversationModelPickerProvider></ReadingContext.Provider>;
