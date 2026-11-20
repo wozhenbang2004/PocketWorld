@@ -214,6 +214,12 @@ public final class RemoteOwnerWorkflows {
                 throw new SecurityException("原任务、工作目录或作业身份已变化，未改查其它任务");
             return source;
         }
+        public void retainOriginalAdmission(RemoteModule issuer,RemoteModule.OriginalLinuxAdmissionProof verified)throws Exception{
+            JSONObject original=require(issuer);
+            if(!original.getString("knownJobId").isEmpty())return;
+            host.tasks.retainOriginalLinuxHostAdmission(task,run,epoch,pin,this,verified,
+                    ()->owner!=null&&host.foregroundOwner==owner&&visible.getAsBoolean());
+        }
     }
     /** Native owner chooses one status read, not a live session or background window. */
     public JSONObject originalLinuxHostStatus(Object nativeOwner,String id,String run,int epoch,

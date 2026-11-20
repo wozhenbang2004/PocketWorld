@@ -59,7 +59,18 @@ public final class RemoteModule implements EngineModule {
         poller.scheduleWithFixedDelay(this::poll,2,2,TimeUnit.SECONDS);
     }
     @Override public String id(){return "remote";}
-    @Override public synchronized JSONObject snapshot()throws Exception {
+    @Override public JSONObject snapshot()throws Exception {
+        // Copy transport state first; never acquire TaskStore while holding the profile/transport monitor.
+        JSONObject state=ownerTransportSnapshot();
+        JSONArray visible=state.getJSONArray("operations");
+        for(int i=0;i<visible.length();i++){
+            JSONObject row=visible.getJSONObject(i);row.remove("originalAdmissionVerifiedLocally");
+            if(transportAwaitingConfirmation(row)&&locallyVerifiedOriginalAdmission(row))
+                row.put("originalAdmissionVerifiedLocally",true);
+        }
+        return state;
+    }
+    private synchronized JSONObject ownerTransportSnapshot()throws Exception {
         JSONArray listed=new JSONArray();for(int i=0;i<profiles.length();i++)listed.put(publicProfile(profiles.getJSONObject(i)));
         java.util.Map<String,JSONObject> now=new java.util.HashMap<>();
         for(int i=0;i<listed.length();i++){JSONObject p=listed.getJSONObject(i);now.put(p.getString("id"),p);}
@@ -67,6 +78,36 @@ public final class RemoteModule implements EngineModule {
         for(JSONObject job:recent.values())if(jobs.length()<30&&currentLocation(now.get(job.optString("profileId")),job))jobs.put(metadata(job));
         for(int i=0;i<operations.length();i++){JSONObject op=operations.getJSONObject(i);if(currentLocation(now.get(op.optString("profileId")),op))visibleOperations.put(new JSONObject(op.toString()));}
         return new JSONObject().put("profiles",listed).put("cloudWorkspace",cloudWorkspace.view(listed)).put("jobs",jobs).put("operations",visibleOperations).put("transport","companion_https").put("directSsh",false).put("configured",profiles.length()>0).put("operationReconciliation",true);
+    }
+    private static boolean transportAwaitingConfirmation(JSONObject row) {
+        return "unknown".equals(row.opt("status"))||"submitting".equals(row.opt("status"));
+    }
+    private boolean locallyVerifiedOriginalAdmission(JSONObject row) {
+        if(originalTasks==null||!"job_submit".equals(row.opt("kind"))||row.opt("originalHostStatusOnRequest")!=Boolean.TRUE)return false;
+        try{return originalTasks.originalLinuxAdmissionConfirmsTransport(row);}
+        catch(Exception unavailable){return false;}
+    }
+    private synchronized JSONObject unresolvedOwnerTransport(String profileId,String binding)throws Exception {
+        if(closed)throw new SecurityException("原主机连接已关闭");
+        JSONObject current=requireProfileBinding(profileId,binding);
+        JSONArray blocked=new JSONArray();
+        for(int i=0;i<operations.length();i++){
+            JSONObject row=operations.getJSONObject(i);
+            if(profileId.equals(row.opt("profileId"))&&transportAwaitingConfirmation(row)&&currentLocation(current,row))
+                blocked.put(new JSONObject(row.toString()));
+        }
+        return new JSONObject().put("operations",blocked);
+    }
+    /** The existing private submission guard, read locally on each review/confirmation. Never reconciles HTTP or a task. */
+    public void requireOwnerSubmissionClear(String profileId,String binding)throws Exception {
+        JSONObject selected=unresolvedOwnerTransport(profileId,binding);
+        JSONArray pending=selected.getJSONArray("operations");
+        for(int i=0;i<pending.length();i++)if(!locallyVerifiedOriginalAdmission(pending.getJSONObject(i)))
+            throw new SecurityException("请先核对这台电脑尚未确认的原提交");
+        // The profile or pending list could have changed while we were outside the transport monitor.
+        var current=unresolvedOwnerTransport(profileId,binding);
+        if(!dev.pocketengine.store.TaskStore.capabilityFingerprint(selected).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(current)))
+            throw new SecurityException("原提交记录已变化，请重新审阅这次独立工作");
     }
     private static boolean currentLocation(JSONObject profile,JSONObject original) {
         return profile!=null&&profile.optBoolean("hasToken")&&profile.optString("bindingHash").equals(original.opt("profileBinding"))
@@ -471,9 +512,26 @@ public final class RemoteModule implements EngineModule {
             }
         }
     }
+    /** A positive on-demand GET can repair an unrecorded reception, not prove process completion.
+     * No foreign receipt, guessed ID, run status, log or approval can construct this native proof. */
+    public static final class OriginalLinuxAdmissionProof {
+        private final dev.pocketengine.features.RemoteOwnerWorkflows.OriginalLinuxStatusRead source;
+        private final String identity;
+        private OriginalLinuxAdmissionProof(dev.pocketengine.features.RemoteOwnerWorkflows.OriginalLinuxStatusRead source,JSONObject actual)throws Exception{
+            this.source=source;
+            JSONObject minimal=new JSONObject();
+            for(String field:new String[]{"id","operationId","profileId","serviceBase","profileBinding","environmentId","worker","hostWorkspaceAnchor","workspaceIdentity"})
+                minimal.put(field,actual.get(field));
+            identity=minimal.toString();
+        }
+        public JSONObject require(dev.pocketengine.features.RemoteOwnerWorkflows.OriginalLinuxStatusRead original)throws Exception{
+            if(source!=original)throw new SecurityException("接单身份不属于这次原生主动查询");
+            return new JSONObject(identity);
+        }
+    }
     /** Exact one-shot native owner observation. No acceptReceipt(), watch, events, snapshots
      * or route through feature/model tools. Older Companion returns the full original job on
-     * this existing GET; only the small below projection leaves this method. */
+     * this existing GET; only checked status and, for a positive unknown ACK, original identity survive. */
     public JSONObject readOriginalLinuxHostStatus(dev.pocketengine.features.RemoteOwnerWorkflows.OriginalLinuxStatusRead receipt)throws Exception {
         JSONObject original=java.util.Objects.requireNonNull(receipt).require(this),host=original.getJSONObject("hostWorkspace");
         if(!dev.pocketengine.store.CloudWorkspaceJobs.valid(host)||!"codex_app_server".equals(host.opt("worker")))
@@ -505,6 +563,8 @@ public final class RemoteModule implements EngineModule {
         if(dev.pocketengine.store.CloudWorkspaceJobs.archived(actual))return out.put("stage","archived").put("jobId",job);
         if(actual.optBoolean("archived")||!java.util.Set.of("queued","running","stopping","awaiting_approval","awaiting_input","completed","failed","cancelled","interrupted","blocked","timed_out","unknown").contains(status))
             throw new SecurityException("未核对一个可识别的原状态");
+        if(expectedJob.isEmpty()&&actual.opt("readOnly")==Boolean.TRUE&&!"unknown".equals(status))
+            receipt.retainOriginalAdmission(this,new OriginalLinuxAdmissionProof(receipt,actual));
         return out.put("stage","observed").put("jobId",job).put("executorStatus",status);
     }
     private JSONObject reconcile(JSONObject input)throws Exception {
@@ -846,6 +906,13 @@ public final class RemoteModule implements EngineModule {
         if(originalOwnerFence==null||!HarnessCapabilityObservation.GEMINI_WORKER.equals(input.optString("worker")))throw new SecurityException("不是原私人Gemini首创派发");
         return submitJob(input,null,originalOwnerFence);
     }
+    /** An already registered exact original owner message and location, not a generic tool route. */
+    public JSONObject submitOriginalPrivateHostJob(JSONObject input,JSONObject location,AssignmentDispatch beforePost)throws Exception {
+        if(beforePost==null||location==null||!"codex_app_server".equals(input.opt("worker"))||input.opt("readOnly")!=Boolean.TRUE
+                ||input.has("threadId")||input.has("resumeJobId")||input.has("teamContext")||input.has("argv"))
+            throw new SecurityException("本机原话只接受这项已审阅的只读工作");
+        return submitJob(input,null,null,location,beforePost);
+    }
     /** Original SQL approval already consumed once; this method never retries a permission decision. */
     public JSONObject approveBackendJob(JSONObject input,AssignmentDispatch originalOwnerFence)throws Exception {
         if(originalOwnerFence==null)throw new SecurityException("缺少原生审批窗口");
@@ -860,6 +927,10 @@ public final class RemoteModule implements EngineModule {
     }
     private JSONObject submitJob(JSONObject input,AssignmentDispatch nativeGatewayFence)throws Exception {return submitJob(input,nativeGatewayFence,null);}
     private JSONObject submitJob(JSONObject input,AssignmentDispatch nativeGatewayFence,AssignmentDispatch backendFence)throws Exception {
+        return submitJob(input,nativeGatewayFence,backendFence,null,null);
+    }
+    private JSONObject submitJob(JSONObject input,AssignmentDispatch nativeGatewayFence,AssignmentDispatch backendFence,
+                                 JSONObject anchored,AssignmentDispatch beforeOriginalPost)throws Exception {
         if(nativeGatewayFence==null&&(input.has("harnessConfigOperationId")||input.has("harnessOwnerBinding")))throw new SecurityException("Harness覆盖只接受原生本轮claim，不从通用JSON恢复");
         JSONObject backend=null;
         if(HarnessCapabilityObservation.GEMINI_WORKER.equals(input.optString("worker"))){
@@ -906,6 +977,10 @@ public final class RemoteModule implements EngineModule {
                 if(input.has("_profileBinding"))details.put("profileBinding",required(input,"_profileBinding",64));
                 // Local observation only: not a renderer-supplied request field, capability or grant.
                 JSONObject observed=nativeGatewayFence==null&&!body.has("resumeJobId")?observedWorkspaceForOwner(input):null;
+                if(anchored!=null){
+                    requireExactOriginalWorkspace(input,anchored,observed);
+                    details.put("sourceServiceBase",anchored.getString("serviceBase"));
+                }
                 if(observed!=null){
                     details.put("hostWorkspace",observed);
                     if("codex_app_server".equals(body.opt("worker"))&&Boolean.TRUE.equals(body.opt("readOnly"))
@@ -930,7 +1005,10 @@ public final class RemoteModule implements EngineModule {
                     }
                 }
                 Reservation reserved=reserve(profileId,operation,"job_submit",body,details);
-                if(reserved.known)return reconcile(new JSONObject().put("profileId",profileId).put("operationId",operation));
+                if(reserved.known){
+                    if(anchored!=null)throw new SecurityException("原操作已登记，只能明确查询原件，不会重新派发");
+                    return reconcile(new JSONObject().put("profileId",profileId).put("operationId",operation));
+                }
                 JSONObject intent=reserved.intent;
                 JSONObject result;
                 try{
@@ -939,10 +1017,27 @@ public final class RemoteModule implements EngineModule {
                         synchronized(this){HarnessCapabilityObservation.requireSameBackendSelection(requireBackendProbe(input).observation.backendSelection(),backend);requireProfileRevision(profileId,reserved.target.profileBinding);}
                         // Exactly one SQL prepared->sending claim, after all native source checks.
                         backendFence.beforeDispatch();result=reserved.target.request("/v1/jobs",body,20);
+                    }else if(anchored!=null){
+                        try{
+                            dispatchGate.beforeDispatch("/v1/jobs");
+                            requireExactOriginalWorkspace(input,anchored,observedWorkspaceForOwner(input));
+                            beforeOriginalPost.beforeDispatch();
+                            requireExactOriginalWorkspace(input,anchored,observedWorkspaceForOwner(input));
+                        }catch(Exception unsent){
+                            intent.put("status","rejected").put("message","发送前核对未通过，未发送原话");recordOperation(intent);throw unsent;
+                        }
+                        result=reserved.target.request("/v1/jobs",body,20);
                     }else result=nativeGatewayFence==null?send(reserved.target,"/v1/jobs",body,20):assignmentSend(input,reserved.target,"/v1/jobs",body,nativeGatewayFence);
                 }
                 catch(RemoteTransport.HttpFailure rejected){
-                    if(rejected.status>=400&&rejected.status<500){intent.put("status","rejected").put("message",rejected.getMessage());recordOperation(intent);throw rejected;}
+                    if(rejected.status>=400&&rejected.status<500){
+                        if(anchored!=null){
+                            String message="所选主机未接受这笔交办；保留原操作，不自动重送";
+                            intent.put("status","rejected").put("message",message);recordOperation(intent);
+                            return new JSONObject().put("operationId",operation).put("profileId",profileId).put("status","failed").put("message",message);
+                        }
+                        intent.put("status","rejected").put("message",rejected.getMessage());recordOperation(intent);throw rejected;
+                    }
                     return unknownOperation(intent);
                 }
                 catch(java.io.IOException disconnected){return unknownOperation(intent);}
@@ -954,9 +1049,28 @@ public final class RemoteModule implements EngineModule {
                         ||body.has("resultSnapshotId")&&(!body.getString("resultSnapshotId").equals(result.optString("resultSnapshotId"))||!body.getString("resultSnapshotVersion").equals(result.optString("resultSnapshotVersion"))))return unknownOperation(intent);
                 result.put("profileId",profileId);
                 if(details.has("hostWorkspace")&&!matchesHostJob(details.getJSONObject("hostWorkspace"),result))return unknownOperation(intent);
+                if(anchored!=null){
+                    result=originalHostStartReceipt(result);
+                    if(result==null)return unknownOperation(intent);
+                }
                 intent.put("status","accepted").put("jobId",result.getString("id"));recordOperation(intent);
                 acceptReceipt(result);return result;
                 }
+    /** This POST can also return a completed raw job; until owner fetches the verified final item, keep only admission/status. */
+    private static JSONObject originalHostStartReceipt(JSONObject actual)throws Exception{
+        if(actual.opt("readOnly")!=Boolean.TRUE||!actual.optString("status").matches("queued|running|stopping|awaiting_approval|awaiting_input|completed|failed|cancelled|interrupted|blocked|timed_out"))return null;
+        JSONObject out=new JSONObject();
+        for(String key:new String[]{"id","operationId","profileId","serviceBase","profileBinding","environmentId","worker","hostWorkspaceAnchor","workspaceIdentity","status","readOnly"})
+            out.put(key,actual.get(key));
+        return out;
+    }
+    private void requireExactOriginalWorkspace(JSONObject input,JSONObject expected,JSONObject observed)throws Exception {
+        JSONObject profile=requireProfileBinding(input.getString("profileId"),input.getString("_profileBinding"));
+        if(observed==null||!dev.pocketengine.store.TaskStore.capabilityFingerprint(expected).equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(observed))
+                ||!profile.getString("serviceBase").equals(expected.getString("serviceBase"))
+                ||!"https".equalsIgnoreCase(RemoteTransport.validateBase(profile.getString("serviceBase")).getScheme()))
+            throw new SecurityException("原主机连接、目录或凭据已变化；未回退到其他主机");
+    }
     public interface AssignmentDispatch { void beforeDispatch()throws Exception; }
     /** Called only by the live external member driver after its original Turn bridge returns. */
     JSONObject answerTeamTool(JSONObject input)throws Exception {

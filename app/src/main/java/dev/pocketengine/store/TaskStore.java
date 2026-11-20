@@ -6707,6 +6707,14 @@ public final class TaskStore {
                 &&pinned.getString("profileBinding").equals(originalOperation.opt("profileBinding"))
                 &&(t.optString("externalId").isEmpty()||t.optString("externalId").equals(originalOperation.opt("jobId")));
     }
+    /** Read the one durable original job pin by its own task/operation ID. No task/status or transport journal writes. */
+    public synchronized boolean originalLinuxAdmissionConfirmsTransport(JSONObject operation)throws Exception {
+        if(operation==null||!(operation.opt("operationId") instanceof String id)||
+                !id.matches("[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}"))return false;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+" THEN document END FROM tasks WHERE task_id=?",new String[]{id})){
+            return row.moveToFirst()&&!row.isNull(0)&&CloudWorkspaceJobs.confirmsTransportAcceptance(operation,new JSONObject(row.getString(0)));
+        }
+    }
     /** Re-read the exact local owner-scope identity only. No watch, request, approval, save or new task. */
     public synchronized JSONObject originalLinuxHostStatusTarget(String id,String run,int epoch)throws Exception{
         JSONObject t=required(id);if(!CloudWorkspaceJobs.firstReadOnlyHostTask(t))throw new SecurityException("这不是已固定范围的 Linux 原只读工作");
@@ -6722,6 +6730,24 @@ public final class TaskStore {
             fixed.put("knownWorkspaceIdentity",accepted.getString("workspaceIdentity"));
         }
         return fixed;
+    }
+    /** Record only a real missing acceptance identity on the exact owner-requested first attempt. */
+    public synchronized void retainOriginalLinuxHostAdmission(String id,String run,int epoch,String expected,
+            dev.pocketengine.features.RemoteOwnerWorkflows.OriginalLinuxStatusRead source,
+            dev.pocketengine.features.remote.RemoteModule.OriginalLinuxAdmissionProof proof,
+            java.util.function.BooleanSupplier current)throws Exception{
+        if(!current.getAsBoolean())throw new SecurityException("原主机状态页已离开，未保存迟到身份");
+        JSONObject checked=proof.require(source);
+        db.beginTransaction();try{
+            JSONObject fixed=originalLinuxHostStatusTarget(id,run,epoch),t=required(id),host=fixed.getJSONObject("hostWorkspace");
+            if(!expected.equals(capabilityFingerprint(fixed))||!fixed.getString("knownJobId").isEmpty()||
+                    !CloudWorkspaceJobs.receipt(t,checked,host)||!current.getAsBoolean())
+                throw new SecurityException("原操作或机主窗口已变化；没有接入其他主机作业");
+            t.put("externalId",checked.getString("id")).put("externalOperationId",run);
+            CloudWorkspaceJobs.noteAdmission(t,checked,host);
+            write(t); // No status, run, operation, events, watcher or result body updates.
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
     }
     /** Read-only executor observation: the same original operation still exists after its detail retired. No run/approval/terminal state is manufactured. */
     public synchronized void noteCloudJobDetailRetired(String id,JSONObject source,JSONObject actual)throws Exception {

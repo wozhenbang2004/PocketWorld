@@ -96,13 +96,14 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
  };
  const openLinkedTask=async(message:Json,entry:'overview'|'process')=>{
   const original=live.current,input=message.role==='user';
-  const taskId=input?message.readerInputTaskId:message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId;
+  const hostTask=message.hostGoalTaskId;
+  const taskId=hostTask||(input?message.readerInputTaskId:message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId);
   if(!original||sending.current||!taskId||!can('tasks.open'))return;
   const origin={readerWindow:original.window,readerConversationId:original.conversation,readerMessageId:message.id};
   const sameWindow=()=>live.current?.window===origin.readerWindow&&live.current?.conversation===origin.readerConversationId;
   const checkInput=()=>{
    if(document.hidden||!sameWindow())return false;
-   if(!live.current?.messages?.some((row:Json)=>row.id===message.id&&row.role==='user'&&row.sourceRevision===message.sourceRevision&&row.readerInputTaskId===taskId))throw new Error('原消息已变化，请刷新这份历史后再查看。');
+   if(!live.current?.messages?.some((row:Json)=>row.id===message.id&&row.role==='user'&&row.sourceRevision===message.sourceRevision&&(hostTask?row.hostGoalTaskId:row.readerInputTaskId)===taskId))throw new Error('原消息已变化，请刷新这份历史后再查看。');
    return true;
   };
   sending.current=true;setPending(true);setError('');setInputNotice(input?{window:origin.readerWindow,messageId:message.id}:null);remember();
@@ -176,11 +177,12 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
     </div>}
     <div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
+     {message.firstHostRequestLocal&&!message.hostGoalTaskId&&<p className="pw-field-hint">仅保存到本机，未派发</p>}
      {message.originalHostFinal&&<OriginalPrivateHostAnswer result={message.originalHostFinal}/>}
      {hasPublicSources(message)&&can('sources.open')&&<Button variant="ghost" size="small" leadingIcon={IconLink}
       disabled={!page||page.window!==shown.window||pending||page.loading||!!page.error||page.limited}
       onClick={event=>openHistorySource(message,event.currentTarget)}>查看出处</Button>}
-     {message.role==='assistant'&&message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
+     {message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
      {phone&&can('tasks.open')&&<Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>所属工作的当前进展</Button>}
      {message.role==='assistant'&&!phone&&!message.hostGoalTaskId&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>

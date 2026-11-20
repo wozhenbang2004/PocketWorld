@@ -7,8 +7,15 @@ internal object PrivateHostReceipt {
     fun fromMessage(row: JSONObject,conversation: String): String? {
         val source=row.optJSONObject("privateHostReceipt") ?: return null
         val id=source.optString("taskId")
-        return id.takeIf { row.opt("role")=="assistant" && !row.optBoolean("importAssignedIdentity") && row.optLong("revision")>0 &&
+        return id.takeIf { (row.opt("role")=="assistant" || source.opt("version")==2 && isLocalFirstHost(row,conversation)) &&
+            !row.optBoolean("importAssignedIdentity") && row.optLong("revision")>0 &&
             source.opt("version") in setOf(1,2) && source.opt("conversationId")==conversation && id==row.opt("taskId") && id.matches(Regex("[a-f0-9-]{36}")) }
+    }
+    fun isLocalFirstHost(row:JSONObject,conversation:String):Boolean {
+        val anchor=row.optJSONObject("firstPrivateHostAnchor")?:return false
+        return row.opt("role")=="user"&&!row.optBoolean("importAssignedIdentity")&&row.optLong("revision")==1L&&
+            !row.has("submission")&&anchor.opt("format")=="pocketworld.first-private-host-anchor.v1"&&
+            anchor.opt("messageId")==row.opt("id")&&anchor.opt("conversationId")==conversation
     }
     internal data class FinalView(val text: String?)
     fun finalView(row: JSONObject,conversation: String): FinalView? {

@@ -4,7 +4,7 @@ import {IconBook,IconChevronDown,IconControls,IconServer,IconShieldCheck} from '
 
 type Intent='chat'|'background'|'main_screen';
 /** Existing BoardUI controls separate work scope from adding message content. */
-export function ComposerWorkOptions({intent,onIntent,open,onOpenChange,phoneAvailable,disabled,onPermissions,onMemory,memoryPaused,busy,sendMode,onSendMode,onCloudGoal}:{intent:Intent;onIntent:(intent:Intent)=>void;open:boolean;onOpenChange:(open:boolean)=>void;phoneAvailable:boolean;disabled:boolean;onPermissions:()=>void;onMemory?:()=>void;memoryPaused:boolean;busy:boolean;sendMode:string;onSendMode?:(mode:string)=>void;onCloudGoal?:()=>void}){
+export function ComposerWorkOptions({intent,onIntent,open,onOpenChange,phoneAvailable,disabled,onPermissions,onMemory,memoryPaused,busy,sendMode,onSendMode,onCloudGoal,cloudGoalLabel='带目标去我的主机'}:{intent:Intent;onIntent:(intent:Intent)=>void;open:boolean;onOpenChange:(open:boolean)=>void;phoneAvailable:boolean;disabled:boolean;onPermissions:()=>void;onMemory?:()=>void;memoryPaused:boolean;busy:boolean;sendMode:string;onSendMode?:(mode:string)=>void;onCloudGoal?:()=>void;cloudGoalLabel?:string}){
  const destination=intent==='chat'?'交给管家':intent==='background'?'手机后台独立屏':'手机主屏';
  const choose=(action:()=>void)=>{onOpenChange(false);action()};
  return <PopoverTrigger isOpen={open} onOpenChange={onOpenChange}>
@@ -13,7 +13,7 @@ export function ComposerWorkOptions({intent,onIntent,open,onOpenChange,phoneAvai
    <PopoverHeader title="工作设置"/>
    <section><RadioOptions label="执行位置" value={intent} options={[{id:'chat',label:'交给管家',disabled},{id:'background',label:'手机后台独立屏',description:'需要用屏时只用独立屏，准备不足也不会改用主屏。',disabled:!phoneAvailable||disabled},{id:'main_screen',label:'手机主屏操作',description:'需要用屏时会切换应用，占用你手中的屏幕。',disabled:!phoneAvailable||disabled}]} onChange={value=>{if(!disabled)choose(()=>onIntent(value as Intent))}}/><p>用于接下来发送的内容；正在执行的工作保持原位置。</p></section>
    <section className="pw-composer-work-settings">
-    {onCloudGoal&&<Button variant="ghost" leadingIcon={IconServer} disabled={disabled} onClick={()=>choose(onCloudGoal)}>带目标去我的主机</Button>}
+    {onCloudGoal&&<Button variant="ghost" leadingIcon={IconServer} disabled={disabled} onClick={()=>choose(onCloudGoal)}>{cloudGoalLabel}</Button>}
     {onMemory&&<Button variant="ghost" leadingIcon={IconBook} onClick={()=>choose(onMemory)}>{memoryPaused?'本对话的个人记忆 · 已暂停':'本对话的个人记忆'}</Button>}
     <Button variant="ghost" leadingIcon={IconShieldCheck} onClick={()=>choose(onPermissions)}>执行权限与范围</Button>
    </section>

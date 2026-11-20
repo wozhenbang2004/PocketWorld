@@ -284,7 +284,7 @@ internal class PocketWebBridge(
             "models.groups.snapshot", "models.conversation.snapshot", "models.conversation.close"
         )
         val commands: Set<String> = PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + PocketWebFirstNodeWebOutput.COMMANDS + linkedSetOf(
-            "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal",
+            "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal", "conversation.saveFirstHostRequest", "conversation.selectSavedHost",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending",
@@ -336,7 +336,7 @@ internal class PocketWebBridge(
         projectLivePreview = PocketWebProjectLivePreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
         remoteTasks.attachPreview(container)
     }
-    fun foreground(value: Boolean) { if (!value) { projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    fun foreground(value: Boolean) { if (!value) { connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
@@ -819,7 +819,7 @@ internal class PocketWebBridge(
                         reader.window == requiredLong(args, "readerWindow") && reader.conversation == requiredString(args, "readerConversationId")) { "原历史阅读窗口已变化，请重新打开" }
                     val row = reader.messages.firstOrNull { it.id == requiredString(args, "readerMessageId") }
                         ?: error("原消息已不在这份阅读窗口")
-                    if (row.role == "user") {
+                    if (row.role == "user" && row.hostGoalTaskId == null) {
                         val input = row.readerInputWork ?: error("这条原输入没有可核对的工作回执")
                         require(taskId == input.taskId && args.opt("requestNavigation") == false) { "工作不属于这条原输入" }
                         openOriginalTask(id, taskId, false, keepConversationReader = true, checkReaderInput = { task ->
@@ -1415,6 +1415,42 @@ internal class PocketWebBridge(
                 check(current()) { "请回到带出这项主机工作的原私人对话" }
                 openOriginalTask(id,task,false,sourceWindowCurrent=current,checkReaderInput={ check(current()); dev.pocketengine.ui.PrivateHostReceipt.verify(it,conversation,task) }); return
             }
+            if(action=="conversation.saveFirstHostRequest"){
+                require(args.keys().asSequence().toSet()==setOf("key","epoch","revision"))
+                requireComposer(args)
+                val ticket=captureWindow();val originalDocument=documentId
+                fun shown()=!closed&&originalDocument!=null&&documentId==originalDocument&&acceptsWindow(ticket)&&section==null&&taskViewId==null&&
+                    controller.state.filePath==null&&controller.webPrivateOwnerVisible()&&!phoneComposer.intent
+                require(shown()){"请在原私人文字输入框保存"}
+                controller.saveFirstHostRequest(requiredString(args,"key"),requiredLong(args,"revision"),requiredInt(args,"epoch"),::shown){
+                    result,error->complete(id,result,error,retainValue=false);publishState()
+                }
+                return
+            }
+            if(action=="conversation.selectSavedHost"){
+                require(args.keys().asSequence().toSet()==setOf("conversationId","messageId","revision","profileId","profileBinding"))
+                val conversation=requiredString(args,"conversationId");val message=requiredString(args,"messageId")
+                val revision=requiredLong(args,"revision");val profile=requiredString(args,"profileId");val binding=requiredString(args,"profileBinding")
+                require(profile.matches(Regex("[A-Za-z0-9_-]{1,80}"))&&binding.matches(Regex("[a-f0-9]{64}")))
+                val ticket=captureWindow();val document=documentId
+                fun sameSource()=!closed&&document!=null&&documentId==document&&taskViewId==null&&controller.state.filePath==null&&
+                    controller.webPrivateOwnerVisible()&&controller.state.conversationId==conversation&&controller.state.messages.any {
+                        it.id==message&&it.sourceRevision==revision&&it.firstHostRequestLocal&&it.hostGoalTaskId==null
+                    }
+                fun inChat()=sameSource()&&section==null&&acceptsWindow(ticket)&&!phoneComposer.intent
+                require(inChat()){ "请在本机保存的原话选择主机" }
+                controller.runPluginCatalogWork(Runnable {
+                    val selected=runCatching {
+                        connectionPages.hostGoalOrigins.captureSaved(conversation,message,revision,profile,binding,::inChat){
+                            sameSource()&&(section==null||section=="remote")
+                        }
+                    }
+                    main.post {
+                        if(!inChat())complete(id,null,"原话窗口已变化，未联系主机",retainValue=false)
+                        else selected.fold({complete(id,it,null,retainValue=false)},{complete(id,null,it.message?:"无法核对原话和所选主机",retainValue=false)})
+                    }
+                });return
+            }
             if (action == "conversation.captureHostGoal") {
                 check(section == null && taskViewId == null && controller.state.filePath == null && controller.webPrivateOwnerVisible()) { "请返回原私人对话的输入框" }
                 requireComposer(args)
@@ -1434,7 +1470,9 @@ internal class PocketWebBridge(
                     openOriginalTask(id, args.getString("taskId"), true, sourceWindowCurrent = { section == "ssh" && origin.current() }, checkReaderInput = { original -> origin.verify(original.raw) })
                     return
                 }
-                connectionPages.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+                connectionPages.dispatch(action, args) { result, error ->
+                    complete(id,result,error,retainValue=result?.opt("savedOriginalHostReview")!=true); publishState()
+                }; return
             }
             if (action in PocketWebData.COMMANDS) {
                 val domain = action.substringBefore('.')
@@ -2384,7 +2422,7 @@ internal class PocketWebBridge(
     }
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
-    private fun leaveConnection() { localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
+    private fun leaveConnection() { if(section=="remote")connectionPages.hostGoalOrigins.closeSaved(); localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null }
     /**
      * Navigation already disposes these workspace handles in leaveConnection().
      * React unmount cleanup may arrive after that transition. Acknowledge only

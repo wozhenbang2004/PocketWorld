@@ -16,6 +16,7 @@ import { RemoteInputFlow } from './RemoteTaskInputs';
 import { harnessOptions, harnessProbeReady, harnessSelection, harnessWorkerLabel, isConfiguredHarness } from './harness-capabilities';
 import { IconAdd, IconArrowLeft, IconArrowUp, IconChevronRight, IconFileText, IconFolder, IconHistory, IconMonitor, IconServer, IconShieldCheck, IconTerminal, IconTool } from './icons';
 import type {CloudGoal} from './cloud-goal';
+import {SavedHostWork} from './SavedHostWork';
 import './connection-workspace.css';
 
 type Data = Record<string, any>;
@@ -27,6 +28,8 @@ const text = (value: any) => typeof value === 'string' ? value : value == null ?
 const status = (value: any) => ({ completed: '已完成', failed: '未完成', running: '执行中', queued: '等待执行', unknown: '待核对', submitting: '提交结果待核对', awaiting_approval: '等待授权', awaiting_input: '等待补充', paused: '已暂停', interrupted: '已中断', stopped: '已停止', cancelled: '已取消', stopping: '正在停止' } as Data)[text(value)] || text(value);
 const originalJob = (job: Data) => ({ profileId: job.profileId, jobId: job.id, jobOperationId: job.operationId, serviceBase: job.serviceBase, _profileBinding: job.profileBinding });
 const binding = (profile: Data) => ({ profileId: profile.id, _profileBinding: profile.bindingHash });
+const awaitingAdmission = (operation: Data) =>
+  ['unknown', 'submitting'].includes(operation.status) && operation.originalAdmissionVerifiedLocally !== true;
 const connectionWindow = () => { const view = bridge.getState().view as Data | undefined; return JSON.stringify([view?.section, view?.taskId, view?.resumeRevision, bridge.getDocumentEpoch()]); };
 function Facts({ values }: { values: Array<[string, any]> }) { return <dl className="pw-facts">{values.filter(([, value]) => value !== undefined && value !== null && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{text(value)}</dd></div>)}</dl>; }
 function Receipt({ value, run }: { value: Data | null; run: Run }) {
@@ -86,7 +89,13 @@ const profileReadiness = (domain: 'remote' | 'ssh', profile: Data) => domain ===
   ? profile.hasToken ? '凭据已配置 · 能力待核对' : '待配置连接令牌'
   : !profile.credentialsConfigured ? '待配置凭据' : profile.hostKeyTrusted ? '已保存主机信任' : '待核对主机指纹';
 
-export default function ConnectionWorkspace({ cloudGoal, onCloudGoalUsed, domain, state, data, supported, run, registerTransientBack }: Props) {
+export default function ConnectionWorkspace(props:Props) {
+  const source=props.domain==='remote'?props.cloudGoal:undefined;
+  if(source?.savedTarget&&source.originHandle)return <SavedHostWork key={source.id} target={source.savedTarget} origin={source.originHandle}
+    profiles={props.data.profiles} supported={props.supported} run={props.run} registerTransientBack={props.registerTransientBack}/>;
+  return <ConnectionDirectory {...props}/>;
+}
+function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, supported, run, registerTransientBack }: Props) {
   const profiles = list(data.profiles), [editing, setEditing] = useState<Data | null>(null), [selected, setSelected] = useState<Data | null>(null), [removing, setRemoving] = useState<Data | null>(null);
   const editorTrigger = useRef<HTMLElement | null>(null);
   const workBack = useRef<(() => boolean) | null>(null), editorBack = useRef<(() => boolean) | null>(null);
@@ -101,7 +110,7 @@ export default function ConnectionWorkspace({ cloudGoal, onCloudGoalUsed, domain
   const showingJobs = journey.view === 'all-jobs' || journey.view.startsWith('jobs:');
   const stale = selected && !profiles.some(profile => profile.id === selected.id && profile.bindingHash === selected.bindingHash);
   const jobs = list(data.jobs).filter(job => journey.view === 'all-jobs' || job.profileId === selected?.id);
-  const unresolvedOperations = list(data.operations).filter(item => item.profileId === selected?.id && ['unknown', 'submitting'].includes(item.status));
+  const unresolvedOperations = list(data.operations).filter(item => item.profileId === selected?.id && awaitingAdmission(item));
   const goBack = () => {
     if (busy) return true;
     if (working && workBack.current?.()) return true;
@@ -298,7 +307,9 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
   const environment = environments?.find(item => item.id === environmentId), workers = list(environment?.workers).filter(item => typeof item.id === 'string' && item.id);
   const selectedWorker = workers.find(item => item.id === worker), configuredHarness = isConfiguredHarness(worker);
   const harnessReady = harnessProbeReady(probe, selectedWorker), modelOptions = harnessOptions(optionCatalog, 'models'), modeOptions = harnessOptions(optionCatalog, 'modes');
-  const unresolved = list(data.operations).filter(item => item.profileId === profile.id && ['unknown', 'submitting'].includes(item.status));
+  const ownOperations = list(data.operations).filter(item => item.profileId === profile.id && item.profileBinding === profile.bindingHash);
+  const unresolved = ownOperations.filter(awaitingAdmission);
+  const originalAdmission = !!operation && ownOperations.some(item => item.operationId === operation.operationId && item.originalAdmissionVerifiedLocally === true);
   const nativeTask = list(state.tasks).find(task => task.id === operation?.operationId), gemini = worker === 'gemini_acp';
   const locked = busy || !!operation || !!baseline || !!inputRequest || !active || !visible, geminiReady = currentGeminiProbe(probe, environment, model);
   const target = () => ({ ...binding(profile), environmentId, environmentBinding: environment?.bindingHash, worker, ...(model.trim() ? { model: model.trim() } : {}), ...(configuredHarness && modeId ? { modeId } : {}), ...(worker === 'codex_app_server' && effort.trim() ? { effort: effort.trim() } : {}) });
@@ -503,9 +514,13 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
     </section>}
     </div>
     {(error || draftError) && <p role="alert">{error || draftError}</p>}
-    {operation && <div className="pw-selected-object"><p role="status">{uncertain ? '这次原提交的结果待核对。草稿与原操作已保留，不会再次确认或重发。' : '已保留这次原操作。离开页面不会重提或停止电脑任务。'}</p><Facts values={[[ '原操作', operation.operationId ]]} />
+    {operation && <div className="pw-selected-object"><p role="status">{originalAdmission ? '已在本机核对到这次主机接单。成果仍以原工作为准。' : uncertain ? '这次原提交的结果待核对。草稿与原操作已保留，不会再次确认或重发。' : '已保留这次原操作。离开页面不会重提或停止电脑任务。'}</p><Facts values={[[ '原操作', operation.operationId ]]} />
       <Accordion><AccordionItem id="original-remote-work" title="保留的原工作草稿"><Facts values={[[ '原环境', operation.environmentId ], ['原执行器', operation.worker ], ['请求模型', operation.model || '执行端默认' ]]} /><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{operation.prompt || JSON.stringify(operation.argv)}</pre></AccordionItem></Accordion>
-      <Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: operation.operationId }).then(setReceipt).catch(() => {}); }}>查询原操作</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: operation.operationId }).catch(() => {}); }}>打开原任务 · 审批、成果与继续</Button>{nativeTask && ['completed', 'failed', 'cancelled'].includes(nativeTask.status) && list(data.operations).some(item => item.operationId === operation.operationId && ['settled', 'rejected'].includes(item.status)) && <Button variant="secondary" disabled={busy || !active} onClick={() => { setOperation(null); setUncertain(false); setReceipt(null); setGoal(''); setReturnOrigin(null); setFromComposer(false); setCarriedTextOnly(false); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); }}>已核对原任务，新建另一项工作</Button>}</div>}
+      {!originalAdmission && <Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: operation.operationId }).then(setReceipt).catch(() => {}); }}>查询原操作</Button>}
+      <Button variant="secondary" onClick={() => { void run('tasks.open', { id: operation.operationId }).catch(() => {}); }}>打开原任务 · 审批、成果与继续</Button>
+      {(originalAdmission && !unresolved.length || nativeTask && ['completed', 'failed', 'cancelled'].includes(nativeTask.status) &&
+        ownOperations.some(item => item.operationId === operation.operationId && ['settled', 'rejected'].includes(item.status))) &&
+        <Button variant="secondary" disabled={busy || !active} onClick={() => { setOperation(null); setUncertain(false); setReceipt(null); setGoal(''); setReturnOrigin(null); setFromComposer(false); setCarriedTextOnly(false); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); }}>新建另一项工作</Button>}</div>}
     <Receipt value={receipt} run={run} />
     {baseline && <RemoteProjectBaseline prepared={baseline} visible={visible && active} onClose={() => setBaseline(null)} onRegistered={captured => { draft.current = { ...draft.current, operation: captured, uncertain: true }; setOperation(captured); setUncertain(true); setReceipt(null); }} />}
     {inputRequest && <RemoteInputFlow prepared={inputRequest} visible={visible && active} close={() => setInputRequest(null)} onRegistered={captured => { draft.current = { ...draft.current, operation: captured, uncertain: true }; setOperation(captured); setUncertain(true); setReceipt(null); }} />}

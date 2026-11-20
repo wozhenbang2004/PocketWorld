@@ -138,6 +138,48 @@ public final class OwnerComposerState {
         for(Draft draft:drafts.values())if(draft.conversationId.isEmpty()&&!hasPending(draft.key)){activeKey=draft.key;revision=increment(revision);return draft;}
         makeRoom();activeKey="new:"+UUID.randomUUID();Draft draft=blank(activeKey,"");drafts.put(activeKey,draft);revision=increment(revision);return draft;
     }
+    /** A freshly selected editor, not a send receipt or an execution grant. */
+    public static final class FirstHostAnchor {
+        private final OwnerComposerState issuer;
+        private final Draft original;
+        public final String conversationId,messageId;
+        private FirstHostAnchor(OwnerComposerState issuer,Draft original){
+            this.issuer=issuer;this.original=original;
+            conversationId=firstHostId("conversation",original.key);
+            messageId=firstHostId("message",original.key);
+        }
+        private static String firstHostId(String kind,String key){
+            return UUID.nameUUIDFromBytes(("pocketworld:private-host-anchor:v1:"+kind+":"+key).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        }
+        Draft requireCurrent()throws Exception{
+            synchronized(issuer){
+                if(issuer.freshHostDraft(original.key,original.revision)!=original)throw new SecurityException("原未发草稿已变化");
+                return original;
+            }
+        }
+    }
+    private Draft freshHostDraft(String key,long expected)throws Exception {
+        Draft draft=require(key,expected);
+        if(!activeKey.equals(key)||!key.startsWith("new:")||!draft.conversationId.isEmpty()||hasPending(key)||!"queue".equals(draft.mode)
+                ||firstMessagePaused.contains(key)||oneMessageExcluded.contains(key)||firstTaskDefaultsLocked.contains(key)
+                ||blank(draft.text)||draft.text.length()>4000||draft.text.indexOf('\0')>=0||!draft.voiceText.isEmpty()
+                ||draft.attachments().length()!=0||draft.sourceRefs().length()!=0||draft.previewRefs().length()!=0||draft.objectRefs().length()!=0)
+            throw new SecurityException("只保存当前纯文字的新请求；含引用、指定范围或待核对输入的原草稿不变");
+        return draft;
+    }
+    public synchronized FirstHostAnchor reviewFirstHostAnchor(String key,long expected)throws Exception{
+        return new FirstHostAnchor(this,freshHostDraft(key,expected));
+    }
+    /** Switch only the matching editor after its exact words exist as a passive local message. */
+    public synchronized void adoptFirstHostAnchor(FirstHostAnchor anchor,String conversation)throws Exception{
+        if(anchor==null||anchor.issuer!=this||!anchor.conversationId.equals(conversation))throw new SecurityException("本机保存回执不是原草稿");
+        Draft old=anchor.requireCurrent();String target=conversationKey(conversation);
+        if(drafts.containsKey(target))throw new SecurityException("原对话另有编辑记录，未覆盖原草稿");
+        long nextVersion=increment(revision);
+        Draft moved=new Draft(target,conversation,increment(old.revision),"","queue",old.attachments(),
+                0,0,"","",false,"","",old.sourceRefs(),old.previewRefs(),old.objectRefs());
+        drafts.remove(old.key);drafts.put(target,moved);activeKey=target;revision=nextVersion;
+    }
     /** Explicitly return to an original pending editor, not whichever conversation is now visible. */
     public synchronized Draft selectPending(String client)throws Exception{
         Pending p=pending.get(client);if(p==null||!drafts.containsKey(p.draftKey))throw new IllegalArgumentException("原待核对输入不存在");

@@ -10,7 +10,7 @@ import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
  */
 import {lazy,Suspense,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {motion} from 'motion/react';
-import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconMonitor, IconMore, IconNewChat, IconNotification, IconPlay, IconQuote, IconRefresh, IconSearch, IconSettings, IconShieldCheck, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
+import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconMonitor, IconMore, IconNewChat, IconNotification, IconPlay, IconQuote, IconRefresh, IconSearch, IconServer, IconSettings, IconShieldCheck, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
 import {WorkspaceNavigator,type OwnerNavigationMemory} from './WorkspaceNavigator';
 
 import {bridge} from './bridge';
@@ -122,6 +122,7 @@ import {ConversationWork} from './ConversationWork';
 import {ButlerHome} from './ButlerHome';
 import {homeWorkIdentity} from './butler-work-entry';
 import type {CloudGoal} from './cloud-goal';
+import {SavedHostPicker,savedHostProfiles} from './SavedHostWork';
 import {OriginalPrivateHostAnswer} from './OriginalPrivateHostAnswer';
 import {ButlerReturnedReport,currentHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
 import type {TaskResultFile} from './TaskResultFiles';
@@ -157,7 +158,7 @@ const Secondary=lazy(()=>import('./Secondary'));
 
 type Json=Record<string,any>;
 type Task={id:string;goal:string;status:string;summary?:string;executionMode?:string;updatedAt?:number;raw?:Json;hostReceipt?:Json};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
@@ -290,6 +291,18 @@ export default function App(){
  const navigationWindow=useRef(0);const [navigationRevision,setNavigationRevision]=useState(0),[secondaryPage,setSecondaryPage]=useState('');
  const [sentPhoneFocus,setSentPhoneFocus]=useState<(SentPhoneGoalFocus&{navigation:number})|null>(null);
  const [cloudGoal,setCloudGoal]=useState<(CloudGoal&{navigation:number})|null>(null);
+ const [savedHostChoice,setSavedHostChoice]=useState<ChatWorkReturn|null>(null);
+ const savedHostSession=useRef<ChatWorkReturn|null>(null),savedHostFlight=useRef<ChatWorkReturn|null>(null);
+ const [savedHostBusy,setSavedHostBusy]=useState(false),[savedHostError,setSavedHostError]=useState('');
+ const closeSavedHost=useCallback(()=>{savedHostSession.current=null;savedHostFlight.current=null;setSavedHostChoice(null);setSavedHostBusy(false);setSavedHostError('');},[]);
+ useEffect(()=>{
+  if(savedHostChoice&&(route!=='chat'||savedHostChoice.conversation!==state.conversationId)){closeSavedHost();return;}
+  if(!savedHostChoice)return;
+  const background=()=>{if(document.hidden)closeSavedHost();};
+  document.addEventListener('visibilitychange',background);
+  window.addEventListener('pagehide',closeSavedHost);
+  return()=>{document.removeEventListener('visibilitychange',background);window.removeEventListener('pagehide',closeSavedHost);};
+ },[route,state.conversationId,savedHostChoice,closeSavedHost]);
  useEffect(()=>{if(route!=='remote')setCloudGoal(null)},[route]);
  const consumeCloudGoal=useCallback((id:string)=>setCloudGoal(old=>old?.id===id?null:old),[]);
  const [settingsRestore,setSettingsRestore]=useState<(SettingsDirectoryOrigin&{revision:number})>();
@@ -1964,12 +1977,69 @@ export default function App(){
  const modelSetupAction=can('setup.read')
   ? <Button variant="secondary" size="small" data-workspace-entry="connect-model" disabled={modelSetupOpening} onClick={()=>void openModelSetup()}>{modelSetupOpening?'正在读取接入状态…':'连接模型'}</Button>
   : <ConversationModelStartButton/>;
+ const chooseHostForSource=(m:Message,trigger:HTMLButtonElement)=>{
+  const node=scroll.current, article=trigger.closest<HTMLElement>('article[data-message-id]'), current=bridge.getState();
+  if(document.hidden||!article||!node||!current.state.conversationId||!m.id||m.sourceRevision!==1||!m.firstHostRequestLocal||m.hostGoalTaskId)return;
+  const selected:ChatWorkReturn={document:bridge.getDocumentEpoch(),conversation:current.state.conversationId,message:m.id,revision:1,
+    top:node.scrollTop,offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,trigger};
+  savedHostSession.current=selected;setSavedHostError('');setSavedHostChoice(selected);
+ };
+ const selectSavedHost=async(profile:ReturnType<typeof savedHostProfiles>[number])=>{
+  const selected=savedHostSession.current;
+  if(!selected||savedHostFlight.current)return;
+  const nav=navigationWindow.current;
+  const sameSource=()=>{
+    const live=bridge.getState();
+    return !document.hidden&&route==='chat'&&bridge.getDocumentEpoch()===selected.document&&live.state.conversationId===selected.conversation&&
+      asArray<Message>(live.state.messages).filter(m=>m.id===selected.message&&m.sourceRevision===selected.revision&&m.firstHostRequestLocal&&!m.hostGoalTaskId).length===1;
+  };
+  const current=()=>savedHostSession.current===selected&&navigationWindow.current===nav&&sameSource();
+  if(!current())return;
+  savedHostFlight.current=selected;setSavedHostBusy(true);setSavedHostError('');
+  try{
+    const reply=await bridge.command<Json>('conversation.selectSavedHost',{conversationId:selected.conversation,messageId:selected.message,
+      revision:selected.revision,profileId:profile.id,profileBinding:profile.bindingHash});
+    if(!current())return;
+    if(reply?.status!=='host_selected_local'||reply.networkUsed!==false||reply.executionAuthorized!==false||
+      reply.profileId!==profile.id||reply.profileBinding!==profile.bindingHash||typeof reply.originHandle!=='string')
+      throw new Error('没有核对到这条原话和所选主机，未发送。');
+    const origin={...captureNavigationOrigin(),focus:null,focusKey:undefined,chatWork:selected,label:'返回原话',
+      drawerChat:{id:selected.conversation,draftKey:String(bridge.getState().composer?.key||''),documentEpoch:selected.document}};
+    const opened=await openRelatedWorkspace('remote',origin,()=>{
+      if(savedHostSession.current===selected&&navigationWindow.current===nav+1&&sameSource()){
+        setCloudGoal({id:crypto.randomUUID(),text:'',carriesTextOnly:false,originHandle:reply.originHandle,
+          savedTarget:{profileId:profile.id,profileBinding:profile.bindingHash},navigation:navigationWindow.current});
+        closeSavedHost();
+      }
+    });
+    if(!opened&&current())setSavedHostError('没有打开原工作审阅；原话和草稿仍在手机。');
+  }catch(e){if(current())setSavedHostError(e instanceof Error?e.message:'没有核对到所选主机，未发送。');}
+  finally{if(savedHostFlight.current===selected){savedHostFlight.current=null;setSavedHostBusy(false);}}
+ };
  const prepareCloudGoal=async()=>{
   const goal=chatDraft.value.trim(), native=bridge.getState();
-  if(intent!=='chat'||document.hidden||!goal||goal.length>8000||!can('remote.reviewTask')||native.state.chatSubmitting||native.state.phoneSubmitting)return;
+  if(intent!=='chat'||document.hidden||!goal||goal.length>8000||native.state.chatSubmitting||native.state.phoneSubmitting)return;
   const original=native.composer, documentEpoch=bridge.getDocumentEpoch();
-  if(!native.state.conversationId){setLocalError('新对话暂不能保留原主机回执。目标还在这里，未联系主机。');return;}
   if(original?.ready!==true||typeof original.key!=='string'||!original.key)return;
+  if(!native.state.conversationId){
+    if(!can('conversation.saveFirstHostRequest'))return;
+    if(!Number.isSafeInteger(original.revision)||original.text!==chatDraft.value){
+      setLocalError('原文字尚未核对，草稿仍保留。');return;
+    }
+    const navigation=navigationWindow.current;
+    const visible=()=>!document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation;
+    try{
+      const kept=await bridge.command<Json>('conversation.saveFirstHostRequest',{key:original.key,epoch:original.epoch,revision:original.revision});
+      if(!visible())return;
+      if(kept?.status!=='saved_local'||kept.dispatched!==false||kept.networkUsed!==false||kept.executionAuthorized!==false)
+        throw new Error('本机保存尚未核对；原草稿保留。');
+      if(kept.selectedOriginal===true)setRoute('chat');
+      setLocalError('');
+      setLocalStatus(kept.selectedOriginal===true?'':'原请求已保存在本机，没有派发；当前草稿未切换。');
+    }catch(error){if(visible())setLocalError(error instanceof Error?error.message:'未核对到本机保存，原草稿保留。');}
+    return;
+  }
+  if(!can('remote.reviewTask'))return;
   const isCurrent=()=>{const next=bridge.getState().composer;return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&next?.key===original.key&&next?.epoch===original.epoch&&chatDraft.currentValue()===goal;};
   const carriesTextOnly=asArray<Json>(native.state.selectedChatAttachments).length>0||['sourceRefs','objectRefs','previewRefs'].some(key=>asArray<Json>(obj(original)[key]).length>0);
   const from=navigationWindow.current, origin=captureWorkspaceOrigin();
@@ -1988,14 +2058,15 @@ export default function App(){
    </div>}
    {route==='chat'&&<ConversationReadingNav {...readingNav}/>}
    {route==='chat'&&chatAttention&&<Button variant="ghost" className="pw-chat-attention" data-task-id={chatAttention.id} trailingIcon={IconChevronRight} aria-label={`${can('tasks.review')?taskActionLabel(chatAttention):'查看任务'}：${chatAttention.goal}`} disabled={taskOpening} onClick={()=>openTask(chatAttention.id,can('tasks.review')?'review':'overview')}><span className="pw-chat-attention-copy"><small>{can('tasks.review')?taskActionLabel(chatAttention):'查看任务'}</small><b>{chatAttention.goal}</b></span></Button>}
-   {route==='chat'&&ready&&messages.length>0&&!composerModelName&&!displayGate&&<div className="pw-butler-model-setup">{modelSetupAction}</div>}
+   {route==='chat'&&ready&&messages.some(m=>!m.firstHostRequestLocal)&&!composerModelName&&!displayGate&&<div className="pw-butler-model-setup">{modelSetupAction}</div>}
    {intent==='chat'&&<ComposerSourceReferences key={`${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.source.remove')}/>}
    {intent==='chat'&&<ComposerObjectReferences key={`objects:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.object.remove')}/>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
    <ChatComposer continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
      contextStatus={<>{(memoryPausedHere||newMemoryBlocked||singleLearningArmed||singleLearningBlocked)&&<Button variant="ghost" size="small" onClick={()=>setConversationMemoryOpen(true)}>{singleLearningBlocked?'核对本条记忆选择':newMemoryBlocked?'核对首条消息的记忆选择':memoryPausedHere?'个人记忆已暂停':'仅本条不自动整理'}</Button>}<IconChat size={15} aria-label="当前对话"/></>} controls={<ConversationModelPickerControls/>} status={inputLimitMessage||undefined} sendDisabled={keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked)||!!pendingOriginal} sendLabel={keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
     <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>{intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run('attachments.openPicker')}}>添加附件</Button>}{can('voice.start')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!state.phoneSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'})}}>{isListening?'结束听写':'语音输入'}</Button>}</Popover></PopoverTrigger>
-    <ComposerWorkOptions intent={intent} onIntent={changeIntent} open={workOptionsOpen} onOpenChange={setWorkOptionsOpen} phoneAvailable={can('phone.prepare')} disabled={!!state.chatSubmitting||!!state.phoneSubmitting||phoneReviewPending} onCloudGoal={intent==='chat'&&chatDraft.value.trim()&&chatDraft.value.trim().length<=8000&&can('remote.reviewTask')?prepareCloudGoal:undefined} onPermissions={()=>{permissionExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setPermissionOptionsOpen(true)}} onMemory={intent==='chat'&&canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} memoryPaused={memoryPausedHere} busy={!!state.chatBusy} sendMode={state.chatSendMode||'queue'} onSendMode={can('composer.mode')?mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode}):undefined}/>
+    <ComposerWorkOptions intent={intent} onIntent={changeIntent} open={workOptionsOpen} onOpenChange={setWorkOptionsOpen} phoneAvailable={can('phone.prepare')} disabled={!!state.chatSubmitting||!!state.phoneSubmitting||phoneReviewPending} cloudGoalLabel={state.conversationId?'带目标去我的主机':'保存到本机（不发送）'} onCloudGoal={intent==='chat'&&chatDraft.value.trim()&&chatDraft.value.length<=(state.conversationId?8000:4000)&&
+      (state.conversationId?can('remote.reviewTask'):can('conversation.saveFirstHostRequest'))?prepareCloudGoal:undefined} onPermissions={()=>{permissionExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setPermissionOptionsOpen(true)}} onMemory={intent==='chat'&&canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} memoryPaused={memoryPausedHere} busy={!!state.chatBusy} sendMode={state.chatSendMode||'queue'} onSendMode={can('composer.mode')?mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode}):undefined}/>
    </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?!draftKey:!can('phone.prepare')||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}/>
    {route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&
     stageExample&&<ConversationStarters onDraft={stageExample}/>}
@@ -2171,6 +2242,11 @@ export default function App(){
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><Button key={file.id||file.name} variant="secondary" size="small" leadingIcon={IconFile} disabled={!can('attachments.open')||!file.sha256||!!state.attachmentOpens?.[`${file.id}:${file.sha256}`]?.checking} onClick={()=>run('attachments.open',{messageId:m.id,id:file.id,sha256:file.sha256})}>{file.name||'原附件'}</Button>)}</div>}
      {m.originalHostFinal&&m.hostGoalTaskId&&m.id&&<OriginalPrivateHostAnswer result={m.originalHostFinal}
        read={can('conversation.readPrivateHostFinal')?()=>bridge.command('conversation.readPrivateHostFinal',{conversationId:state.conversationId,messageId:m.id,taskId:m.hostGoalTaskId}):undefined}/>}
+     {m.firstHostRequestLocal&&!m.hostGoalTaskId&&<div className="pw-message-footer">
+       <span className="pw-field-hint">仅保存到本机，未派发</span>
+       {m.id&&m.sourceRevision===1&&can('conversation.selectSavedHost')&&can('remote.reviewTask')&&
+         <Button variant="ghost" size="small" leadingIcon={IconServer} onClick={event=>chooseHostForSource(m,event.currentTarget)}>选择主机</Button>}
+     </div>}
      {m.submission&&<Receipt receipt={m.submission}/>}
      <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={continued}>
      {m.hostGoalTaskId&&m.id&&can('conversation.openHostGoal')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder} onClick={()=>{const task=m.hostGoalTaskId!,conversation=String(state.conversationId||''),documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
@@ -2362,6 +2438,8 @@ export default function App(){
    </form>
   </SettingsDialog>
  <Drawer.Root open={!!voiceReview} onOpenChange={open=>{if(!open)setVoiceReview(null)}} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-voice-description" inert={!voiceReview} onCloseAutoFocus={voiceExit.onCloseAutoFocus}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对听写文字</Drawer.Title><Drawer.Description id="pw-voice-description">采用后放入原输入，暂不发送</Drawer.Description></div><Drawer.Close asChild><IconButton icon={IconClose} aria-label="关闭听写核对"/></Drawer.Close></header><div className="pw-drawer-body"><TextAreaField label="原听写文字" value={voiceText} isReadOnly={!voiceReview} onChange={value=>{if(voiceReviewLive.current)setVoiceText(value)}}/></div><footer className="pw-drawer-actions"><Button variant="secondary" disabled={voicePending||!voiceReview} onClick={()=>submitVoiceReview('voice.discard')}>丢弃</Button><PressButton label="采用到原输入" disabled={voicePending||!voiceReview||!voiceText.trim()} onClick={()=>submitVoiceReview('voice.accept')}/></footer></Drawer.Content></Drawer.Portal></Drawer.Root>
+ <SavedHostPicker open={route==='chat'&&!!savedHostChoice&&savedHostChoice.conversation===state.conversationId}
+   profiles={savedHostProfiles(state.features?.remote?.profiles)} select={p=>void selectSavedHost(p)} close={closeSavedHost} busy={savedHostBusy} error={savedHostError}/>
  <Drawer.Root open={!!state.chatAttachmentPickerOpen} onOpenChange={open=>{if(!open&&can('attachments.closePicker'))run('attachments.closePicker')}} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-attachment-drawer" aria-describedby="pw-attachment-description"><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>选择附件</Drawer.Title><Drawer.Description id="pw-attachment-description">选择后随消息发送，最多 4 个</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭附件选择" onClick={()=>run('attachments.closePicker')}/></header><div className="pw-drawer-body">{!state.chatAttachmentModel?.supportsImageInput&&<p className="pw-muted">当前模型尚未配置图像输入，可选择受支持文档。</p>}{state.features?.attachments?.indexDiagnostics?.incomplete===true&&<p className="pw-error" role="alert">部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。</p>}<div className="pw-attachment-objects">{state.attachmentImporting&&<ProgressBar label="正在导入附件库" isIndeterminate showValueLabel={false} size="sm"/>}{asArray<Json>(state.features?.attachments?.attachments).map(file=>{const selected=asArray<Json>(state.selectedChatAttachments).some(f=>f.id===file.id);const image=String(file.mimeType||'').startsWith('image/');return <div className="pw-attachment-object" key={`${file.id}:${file.sha256}`}><CheckboxField isSelected={selected} isDisabled={!can('attachments.toggle')||(!selected&&image&&!state.chatAttachmentModel?.supportsImageInput)} onChange={()=>run('attachments.toggle',{id:file.id,sha256:file.sha256})}><span className="pw-attachment-copy"><b>{file.name||'未命名附件'}</b><small>{file.mimeType||'文件'} · {Number(file.size||0).toLocaleString()} bytes</small></span></CheckboxField></div>})}</div>{!asArray<Json>(state.features?.attachments?.attachments).length&&<div className="pw-empty-small">{state.features?.attachments?.indexDiagnostics?.incomplete===true?'暂未读到可选择的附件，请核对未确认的原件。':'还没有附件，可以先导入。'}</div>}<p className="pw-muted">图片 ≤ 4 MiB，文档 ≤ 20 MiB。</p></div><footer className="pw-drawer-actions">{can('attachments.pick')&&<Button variant="secondary" leadingIcon={IconAdd} disabled={!!state.attachmentImporting} onClick={()=>run('attachments.pick')}>{state.attachmentImporting?'正在导入…':'导入新附件'}</Button>}<span className="pw-grow"/><PressButton label="保留选择" onClick={()=>run('attachments.closePicker')}/></footer></Drawer.Content></Drawer.Portal></Drawer.Root>
  <Drawer.Root open={permissionOptionsOpen} onOpenChange={open=>{if(!open)closePermissionOptions()}} dismissible={!permissionPending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-permission-drawer" aria-describedby="pw-permission-description" onCloseAutoFocus={permissionExit.onCloseAutoFocus}>
   <div className="pw-drawer-handle"/>

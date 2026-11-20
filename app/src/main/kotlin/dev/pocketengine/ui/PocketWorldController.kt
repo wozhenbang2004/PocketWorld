@@ -3166,6 +3166,58 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         try{voiceInputModeChanged();model.selectConversation(id);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer();feature("assistant","get",JSONObject().put("conversationId",id))}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
+    @Volatile private var firstHostSave:Any?=null
+    /** An explicit local save, separate from both sendChat() and the device/host feature dispatchers. */
+    internal fun saveFirstHostRequest(key:String,revision:Long,epoch:Int,visible:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val model=ownerComposer ?: error("原私人草稿尚不可用")
+        val original=controllerFirstHostDraft(key,revision,epoch,visible,model)
+        val busy=Any();check(firstHostSave==null){"正在保存这条原交办"};firstHostSave=busy
+        val current=java.util.function.BooleanSupplier{
+            firstHostSave===busy&&visible()&&webPrivateOwnerVisible()&&ownerComposer===model&&
+                composerViewEpoch==epoch&&state.conversationId==null&&!state.chatSubmitting&&!state.chatBusy&&
+                composerDraft?.key==key&&composerDraft?.revision==revision
+        }
+        val unchanged="本机保存尚未核对；原草稿保留，没有联系主机或调用模型。"
+        // Save the untouched editor first through its existing durable file CAS. A failed
+        // or superseded snapshot must not create a private message or clear any input.
+        persistComposer(model) saveDraft@{ draftError ->
+            if(draftError!=null||!current.asBoolean){
+                if(firstHostSave===busy)firstHostSave=null
+                done(null,unchanged);return@saveDraft
+            }
+            try { runEcosystemControlWork(Runnable {
+                val saved=runCatching {
+                    check(current.asBoolean)
+                    val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error("原私人记录未就绪")
+                    assistant.saveFirstPrivateHostRequest(original,current)
+                }
+                main.post {
+                    val show=current.asBoolean
+                    if(firstHostSave===busy)firstHostSave=null
+                    val receipt=saved.getOrNull()
+                    if(receipt==null){done(null,unchanged);return@post}
+                    val id=receipt.optString("conversationId")
+                    if(receipt.opt("status")!="saved_local"||receipt.opt("dispatched")!=false||receipt.opt("executionAuthorized")!=false||
+                        receipt.opt("networkUsed")!=false||id!=original.conversationId||receipt.opt("messageId")!=original.messageId){
+                        done(null,unchanged);return@post
+                    }
+                    // A committed original remains read-only even if navigation or file persistence changed.
+                    if(show&&runCatching{model.adoptFirstHostAnchor(original,id)}.isSuccess){
+                        chatViewEpoch++;publishComposer(true)
+                        state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false)
+                        runCatching{feature("assistant","get",JSONObject().put("conversationId",id))}
+                        runCatching{persistComposer(model)}
+                        done(receipt.put("selectedOriginal",true),null)
+                    }else done(receipt.put("selectedOriginal",false),null)
+                }
+            }) }catch(failure:Exception){if(firstHostSave===busy)firstHostSave=null;done(null,unchanged)}
+        }
+    }
+    private fun controllerFirstHostDraft(key:String,revision:Long,epoch:Int,visible:()->Boolean,model:OwnerComposerState):OwnerComposerState.FirstHostAnchor{
+        check(visible()&&webPrivateOwnerVisible()&&state.conversationId==null&&epoch==composerViewEpoch&&
+            !hasChannelPhoneOrigin&&!state.chatSubmitting&&!state.chatBusy&&!state.phoneSubmitting&&state.selectedChatAttachments.isEmpty()){"请从当前未发的私人文字草稿保存"}
+        return model.reviewFirstHostAnchor(key,revision)
+    }
     internal fun refreshPrivateHostFinal(conversation:String) {
         if(!closed&&webPrivateOwnerVisible()&&state.conversationId==conversation)
             feature("assistant","get",JSONObject().put("conversationId",conversation))
@@ -5498,7 +5550,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         state = state.copy(conversations = parseConversations(state.feature("assistant").optJSONArray("conversations")))
                     }
                     // Only absent or valid empty reference arrays permit text-only staging; malformed or unknown payloads fail closed.
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), projectConventionRecorded = it.opt("projectConventionRecorded") == true, memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), originalHostFinal = PrivateHostReceipt.finalView(it,id), learningExcluded = originalLearningExcluded(it, id), defaultWritesBlocked = originalDefaultWritesBlocked(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), projectConventionRecorded = it.opt("projectConventionRecorded") == true, memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), originalHostFinal = PrivateHostReceipt.finalView(it,id), firstHostRequestLocal = PrivateHostReceipt.isLocalFirstHost(it,id), learningExcluded = originalLearningExcluded(it, id), defaultWritesBlocked = originalDefaultWritesBlocked(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }
