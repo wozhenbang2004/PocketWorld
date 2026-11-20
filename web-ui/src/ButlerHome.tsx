@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from './forms-library';
 import {bridge} from './bridge';
 import {reportedHomeWork,sameHomeReport,verifyHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
-import { IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconError, IconInfo, IconPauseCircle } from './icons';
+import { IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconError, IconInfo, IconPauseCircle, IconPhone } from './icons';
 import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { getRecentTaskProgress } from './task-presentation';
@@ -23,6 +23,8 @@ export type ButlerHomeProps = {
   ready: boolean;
   modelReady: boolean;
   localDisplayDraft?: boolean;
+  onTryLocal?: () => void;
+  stagingLocal?: boolean;
   modelSetup: ReactNode;
   composer: ReactNode;
   preparations?: (visible: ButlerHomeTask[]) => ReactNode;
@@ -54,7 +56,7 @@ function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresenta
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, localDisplayDraft=false, modelSetup, composer, preparations, phoneActivity, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, stagingLocal=false, modelSetup, composer, preparations, phoneActivity, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -201,7 +203,9 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, modelSe
       </Button>
     </li>;
   };
-  const modelConnection = ready && !modelReady && !localDisplayDraft && <div className="pw-butler-model-setup">{modelSetup}<p>草稿可以先写，连接后再发送。</p></div>;
+  const modelConnection = ready && !modelReady && !localDisplayDraft && !stagingLocal && <div className="pw-butler-model-setup">
+    {modelSetup}<p>{onTryLocal?'需要写作或研究时再连接。':'可以先写好草稿，连接后再发送。'}</p>
+  </div>;
 
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>
     <div ref={scroller} className="pw-butler-scroll" onScroll={event => { if (restored.current) reportScroll.current?.(event.currentTarget.scrollTop); }}>
@@ -209,6 +213,10 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, modelSe
         <section className="pw-butler-intake" aria-label="交办">
           <header className="pw-butler-welcome"><h2>想交给我什么事？</h2></header>
           {composer}
+          {(onTryLocal||stagingLocal)&&<div className="pw-butler-local-example">
+            <Button className="pw-butler-try" variant="ghost" leadingIcon={IconPhone} trailingIcon={IconChevronRight} disabled={stagingLocal} onClick={onTryLocal}>查这台手机的屏幕信息</Button>
+            <p role={stagingLocal?'status':undefined}>{stagingLocal?'正在填入问题…':'先填入问题，按发送才读取。不用连接模型。'}</p>
+          </div>}
           {modelConnection}
         </section>
         {(!ready || work.length > 0 || phoneActivity || moreWork || notice) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}

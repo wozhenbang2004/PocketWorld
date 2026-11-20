@@ -57,8 +57,15 @@ public final class ProjectOwnerWorkflows {
         if(!seed.projectId.equals(project)||!seed.checkoutId.equals(checkout))throw new SecurityException("原稿没有建立这个工作副本");
         JSONObject copy=local.findDraftWorkCopy(seed),plan=ProjectBuildPlan.create(local,new JSONObject().put("checkoutId",checkout).put("runtimeId","managed_process_v1")
             .put("intent","build").put("ecosystem","node").put("expectedSourceDigest",copy.getString("initialCopyDigest")));
-        JSONObject pin=OwnerDraftFirstBuild.pin(seed,copy,plan);OwnerDraftFirstBuild.requireTooling(pin,local.projectRuntimeForHost("managed_process_v1"));
-        return new JSONObject().put("pin",pin).put("scripts",OwnerDraftFirstBuild.scripts(local.handle("export",new JSONObject().put("checkoutId",checkout)),pin));
+        JSONObject pin=OwnerDraftFirstBuild.pin(seed,copy,plan),runtime=local.projectRuntimeForHost("managed_process_v1");
+        OwnerDraftFirstBuild.requireTooling(pin,runtime);
+        JSONObject snapshot=local.handle("export",new JSONObject().put("checkoutId",checkout)), scripts=OwnerDraftFirstBuild.scripts(snapshot,pin);
+        OwnerDraftFirstBuild.chooseDependencies(pin,snapshot,runtime);
+        JSONObject deps=OwnerDraftFirstBuild.dependencies(pin);
+        JSONObject result=new JSONObject().put("pin",pin).put("scripts",scripts).putOpt("dependencies",deps);
+        if(deps!=null)result.put("dependencyState",local.draftDependencyFilesReady(checkout,deps)?"current_packages_checked":"needs_lock_review")
+            .putOpt("previousVerification",tasks.classicFirstBuildForDraft(seed));
+        return result;
     }
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
     /** Native owner-read fence for the existing checkout, including an already captured path listing. */
@@ -203,9 +210,10 @@ public final class ProjectOwnerWorkflows {
         JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",project).put("checkoutId",checkout).put("runtime",runtime)
                 .put("initialSourceDigest",digest).put("clientMessageId",client).put("filesAreUntrusted",true).put("authorityAdded",false);
         if(ownerInput.has(OwnerDraftFirstBuild.FIELD)){
-            if(ownerStartFence.get()==null||ownerConvention.get()!=null||butlerPreparation.get()!=null||!OwnerDraftFirstBuild.GOAL.equals(goal)||
+            if(ownerStartFence.get()==null||ownerConvention.get()!=null||butlerPreparation.get()!=null||
                 ownerInput.has("draftOnly")||ownerInput.has(OwnerRevisionSource.FIELD))throw new SecurityException("首次构建必须由主人独立核对此副本，不能继承别的任务或项目约定");
             JSONObject pin=reviewFirstBuildForOwner(project,checkout).getJSONObject("pin");OwnerDraftFirstBuild.requireContext(pin,context);
+            if(!OwnerDraftFirstBuild.goal(pin).equals(goal))throw new SecurityException("这不是已审阅的本机独立构建目标");
             if(!ProjectSources.canonical(pin).equals(ProjectSources.canonical(ownerInput.getJSONObject(OwnerDraftFirstBuild.FIELD))))throw new SecurityException("原稿副本或构建条件在审阅后已变化，没有提交");
             context.put(OwnerDraftFirstBuild.FIELD,pin);
         }

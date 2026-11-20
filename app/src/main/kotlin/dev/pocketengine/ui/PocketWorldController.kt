@@ -3181,9 +3181,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             return false
         }
     }
+    /** First-use discovery only. Inspect policy and draft state, never the display. */
+    internal fun canOfferPrimaryDisplayExample(draft:OwnerComposerState.Draft):Boolean =
+        draft.text.isEmpty() && primaryDisplayWindowGate(draft) == "ready"
+
     /** A read-free projection of the exact native draft. "ready" never grants permission to sample. */
-    internal fun primaryDisplayDraftGate(draft:OwnerComposerState.Draft):String? {
-        if(dev.pocketengine.phone.reading.PrimaryDisplayQuestion.parse(draft.text)==null)return null
+    internal fun primaryDisplayDraftGate(draft:OwnerComposerState.Draft):String? =
+        if (dev.pocketengine.phone.reading.PrimaryDisplayQuestion.parse(draft.text)==null) null else primaryDisplayWindowGate(draft)
+
+    private fun primaryDisplayWindowGate(draft:OwnerComposerState.Draft):String? {
         if(draft.attachments().length()!=0||draft.sourceRefs().length()!=0||draft.previewRefs().length()!=0||draft.objectRefs().length()!=0||state.selectedChatAttachments.isNotEmpty())return null
         return when {
             !webPrivateOwnerVisible()||hasChannelPhoneOrigin||draft.key!=composerDraft?.key||draft.conversationId!=state.conversationId.orEmpty() -> "owner_unavailable"

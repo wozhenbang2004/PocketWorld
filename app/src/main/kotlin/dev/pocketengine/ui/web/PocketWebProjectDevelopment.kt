@@ -315,9 +315,9 @@ internal class PocketWebProjectDevelopment(
                     val preparation=host.reviewFirstBuildForOwner(original.project,checkout);val pin=preparation.getJSONObject("pin")
                     val actual=source(original,checkout);val selectedModel=model()
                     check(pin.getString("sourceDigest")==actual.getString("sourceDigest") && selectedModel.value().optBoolean("configured")) { "所选版本或默认模型未就绪，未开始。" }
-                    val goal=OwnerDraftFirstBuild.GOAL;val contract=ProjectOwnerWorkflows.deliveryContractForOwner(JSONObject().put("goal",goal))
+                    val goal=OwnerDraftFirstBuild.goal(pin);val contract=ProjectOwnerWorkflows.deliveryContractForOwner(JSONObject().put("goal",goal))
                     val input=JSONObject().put("projectId",original.project).put("checkoutId",checkout).put("runtime","managed_process_v1")
-                        .put("expectedSourceDigest",pin.getString("sourceDigest")).put("clientMessageId",OwnerDraftFirstBuild.client(pin.getString("workIdentity")))
+                        .put("expectedSourceDigest",pin.getString("sourceDigest")).put("clientMessageId",OwnerDraftFirstBuild.reviewedClient(pin))
                         .put("goal",goal).put(OwnerDraftFirstBuild.FIELD,pin)
                     copyDeliveryFields(contract,input)
                     check(current(original)) { "原项目窗口已关闭，没有准备新工作。" }
@@ -327,6 +327,8 @@ internal class PocketWebProjectDevelopment(
                         .put("checkoutId",checkout).put("goal",goal).put("deliveryContract",contract).put("source",actual).put("model",selectedModel.value())
                         .put("runtimeId","managed_process_v1").put("runtime","这台手机").put("expiresAt",System.currentTimeMillis()+120_000)
                         .put("commandsAuthorized",false).put("projectMemoryAuthorized",false).put("draftBuild",true).put("manager",pin.getString("manager")).put("scripts",preparation.getJSONObject("scripts"))
+                        .putOpt("lockedDependencies",preparation.optJSONObject("dependencies")).putOpt("dependencyState",preparation.opt("dependencyState"))
+                        .putOpt("previousVerification",preparation.optJSONObject("previousVerification"))
                 }
             }
             "projects.development.review" -> {

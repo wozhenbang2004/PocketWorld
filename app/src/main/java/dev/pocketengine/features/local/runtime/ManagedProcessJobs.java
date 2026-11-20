@@ -370,6 +370,11 @@ public final class ManagedProcessJobs implements AutoCloseable {
             // Process cancellation remains independent; it never needs this source-write lock.
             job.sourceWrites.writeLock().lock();
             try{
+                JSONObject webOutputAtExit=null;
+                if(groupAbsent&&!job.cancel&&"completed".equals(finalStatus))try{
+                    long sequence;synchronized(job){sequence=job.receipt.getLong("checkoutSequence");}
+                    webOutputAtExit=dev.pocketengine.features.local.project.OriginalNodeWebOutput.observeAtOriginalExit(job.invocation,sequence);
+                }catch(Exception unsupportedOrMissing){/* Success of the original process does not attest a complete Web artifact. */}
                 boolean markerClean=job.devSession==null||job.devSession.cleanupMarker();
                 // Ordinary jobs and preparation subprocesses require the same actual cleanup proof
                 // as PTY/pipe sessions before releasing their original environment lease.
@@ -377,7 +382,10 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 if(job.terminalInput!=null)try{pendingInputs=job.terminalInput.closeAndObserveNeverDequeued();}catch(Exception failed){synchronized(job){try{job.receipt.put("terminalInputCloseUnknown",true);}catch(Exception ignored){}}}
                 if(job.pipeInput!=null)job.pipeInput.close();
                 synchronized(job) {
-                    try {job.receipt.put("ownedWorkerLive",false).put("resourcesReleased",leaseClosed&&groupAbsent).put("status",leaseClosed?finalStatus:"unknown").put("finishedAt",System.currentTimeMillis());if(job.devSession!=null)job.receipt.put("devMarkerCacheCleanupComplete",markerClean);RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);}
+                    try {job.receipt.put("ownedWorkerLive",false).put("resourcesReleased",leaseClosed&&groupAbsent).put("status",leaseClosed?finalStatus:"unknown").put("finishedAt",System.currentTimeMillis());
+                        if(webOutputAtExit!=null&&leaseClosed&&groupAbsent&&!job.cancel)
+                            job.receipt.put(dev.pocketengine.features.local.project.OriginalNodeWebOutput.WITNESS,webOutputAtExit);
+                        if(job.devSession!=null)job.receipt.put("devMarkerCacheCleanupComplete",markerClean);RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);}
                     catch(Exception error) {try{job.receipt.put("receiptPersistence","failed");}catch(Exception ignored){}}
                 }
             }finally{job.sourceWrites.writeLock().unlock();}

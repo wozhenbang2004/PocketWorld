@@ -140,6 +140,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
     });
   };
   const acceptReview = (value: Data, draftBuild = false) => {
+    const lock = value.lockedDependencies;
+    if (lock && (!draftBuild || lock.manager !== value.manager || lock.registry !== 'https://registry.npmjs.org/' ||
+      lock.lockPath !== (lock.manager==='npm'?'package-lock.json':'pnpm-lock.yaml') ||
+      typeof lock.managerVersion!=='string' || !/^[a-f0-9]{64}$/.test(lock.lockSha256) ||
+      !['current_packages_checked','needs_lock_review'].includes(value.dependencyState) ||
+      !Number.isSafeInteger(lock.packages) || lock.packages<1)) throw new Error('没有取得这份副本的确切锁文件审阅，未开始。');
     if (draftBuild && (value.draftBuild !== true || !['npm','pnpm'].includes(value.manager) || typeof value.scripts?.build!=='string' || !value.scripts.build.trim() || draft.current.goal || deliveryFields.some(k => draft.current[k]))) throw new Error('已有输入或未核对真实构建命令，没有替换目标。');
     if (!draftBuild && value.draftBuild === true) throw new Error('请在独立副本中重新核对首次构建。');
     if (value.projectId !== projectId || value.checkoutId !== draft.current.checkoutId ||
@@ -371,8 +377,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
       closeHostDiff(); setFilesOpen(true);
     } : undefined}/>}
     {view && filesOpen && checkout && <ProjectCheckoutFiles key={`${view.viewHandle}|${checkout}`} projectId={projectId} checkoutId={checkout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined} onClose={closeFiles} registerBack={registerFilesBack} />}
-    <SettingsDialog isOpen={!!review} title="开始这个项目任务？" onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
-      {review.draftBuild === true ? <><strong>{review.manager} run build</strong><p>这是独立副本 package.json 声明的脚本，可能更改副本、运行其他脚本或联网。下一步把目标交给显示的模型，不会运行命令。模型可见此副本的文件名和版本，以及之后按需读取的构建日志和产物记录。你还需要在该任务里另行确认命令和要保留的生成文件。</p>
+    <SettingsDialog isOpen={!!review} title={review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对首次依赖准备':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
+      {review.draftBuild === true ? <><strong>{review.dependencyState==='needs_lock_review'?'还缺依赖，先审阅这份锁':review.manager+' run build'}</strong>
+        {review.lockedDependencies && <><p>{review.dependencyState==='current_packages_checked'?
+          '已核对这份相同副本中实际存在的关键包，不需要重复准备。构建是否成功仍以本次实际结果为准。':
+          '本机还缺所需包。下一步只审阅原锁与下载，不会开始构建。'}
+          {' '}{review.lockedDependencies.lockPath} 共 {review.lockedDependencies.packages} 个锁条目（含其他平台）。准备时只向 npm 官方注册表请求，不读取用户包管理配置或执行安装脚本。</p><details><summary>核对锁与本机工具</summary><dl className="pw-facts"><div><dt>工具</dt><dd>{review.manager} {review.lockedDependencies.managerVersion}</dd></div><div><dt>下载来源</dt><dd>{review.lockedDependencies.registry}</dd></div><div><dt>锁文件 SHA-256</dt><dd>{review.lockedDependencies.lockSha256}</dd></div></dl></details></>}
+        {review.previousVerification?.id && <p className="pw-field-hint">此副本已有一项不含锁准备的原构建。审阅这把锁会另开一项工作，旧任务和授权都保留。
+          {can('tasks.open')&&<Button variant="ghost" size="small" disabled={busy} onClick={()=>onOpenTask(review.previousVerification.id,review.checkoutId)}>查看原构建记录</Button>}</p>}
+        <p>下一步仅把目标交给显示的模型，{review.dependencyState==='needs_lock_review'?'缺失的依赖与之后的构建分别确认。':'构建仍要另行确认。'} 构建脚本可以更改此副本或联网。模型可见项目版本及之后明确获取的日志和成果记录；保留输出仍须另行确认。</p>
         <details><summary>查看这一版 package.json 的构建脚本</summary><dl className="pw-facts">{['prebuild','build','postbuild'].filter(k=>typeof review.scripts?.[k]==='string').map(k=><div key={k}><dt>{k}</dt><dd><code dir="ltr" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{review.scripts[k]}</code></dd></div>)}</dl></details></> : <p>{review.goal}</p>}
       {deliveryFields.some(key => review.deliveryContract?.[key]) && <dl className="pw-facts">
         {review.deliveryContract.constraints && <div><dt>{review.ownerPickedConventionRevision?'所选手写约定 · 修订 '+review.ownerPickedConventionRevision:'限制与约束'}</dt><dd>{review.deliveryContract.constraints}</dd></div>}
@@ -380,9 +393,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
         {review.deliveryContract.completionCriteria && <div><dt>怎样算完成</dt><dd>{review.deliveryContract.completionCriteria}</dd></div>}
       </dl>}
       <dl className="pw-facts"><div><dt>项目</dt><dd>{name}</dd></div><div><dt>私人副本</dt><dd>{review.checkoutId}</dd></div><div><dt>默认模型</dt><dd>{review.model?.label} · {review.model?.provider}</dd></div><div><dt>运行位置</dt><dd>{review.runtimeId === 'managed_process_v1' ? '这台手机 · 本机托管环境' : review.runtime}</dd></div><div><dt>源码版本</dt><dd>{review.source?.sourceDigest}</dd></div><CheckoutGuide source={review.source} projectId={projectId} checkoutId={review.checkoutId}/></dl>
-      <p>将目标交给默认模型，在新的项目任务中处理。不会批准任意命令、安装依赖、读取项目记忆或自动发布。具体文件修改、命令与成果采纳仍按原任务范围审阅。</p>
+      {review.draftBuild!==true&&<p>将目标交给默认模型，在新的项目任务中处理。不会批准任意命令、安装依赖、读取项目记忆或自动发布。具体文件修改、命令与成果采纳仍按原任务范围审阅。</p>}
       {expired && <p role="status">本次审阅已过期，还未启动。请返回重新核对。</p>}
-      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismiss}>返回修改</Button><Button disabled={busy || expired} onClick={start}>开始这个项目任务</Button></div>
+      <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismiss}>返回修改</Button><Button disabled={busy || expired} onClick={start}>{review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'继续审阅依赖':'继续审阅构建':'开始这个项目任务'}</Button></div>
     </div>}</SettingsDialog>
   </section>;
 }

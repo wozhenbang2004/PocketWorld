@@ -12,7 +12,7 @@ type Data = Record<string, any>;
 type Action = 'projects.preview.mode' | 'projects.preview.reload' | 'projects.preview.close' | 'projects.preview.return';
 type PackageExportTarget = Pick<PackagePreviewChoices, 'taskId' | 'operationId' | 'artifactId' | 'artifactSha256'>;
 type PackageExportState = PackageExportTarget & { kind: 'project_package_export'; requestId: string; projectId: string; status: string; message: string; exported: boolean; bytes?: number; targetReadback?: {protocol:string;status:string;provider:string;displayName?:string;bytes?:number;sha256?:string} };
-type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string) => void };
+type Options = { value: unknown; exportValue?: unknown; projectId: string; resumeRevision: number; active: boolean; blocked: boolean; can: (action: string) => boolean; onReturned: () => void; onPackageTask: (taskId: string, operationId?: string, originalChat?:boolean) => void };
 const exportPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing', 'exported', 'written_unverified', 'cancelled', 'rejected', 'unknown']);
 const exportPendingPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing']);
 const sameExportTarget = (value: PackageExportTarget | null, target: PackageExportTarget | null) => !!value && !!target &&
@@ -39,6 +39,7 @@ export function useProjectPreview(options: Options) {
   const [exportReceipt, setExportReceipt] = useState<PackageExportState | null>(null);
   const exportFlight = useRef<{ target: PackageExportTarget; previousRequestId: string } | null>(null);
   const [choices, setChoices] = useState<PackagePreviewChoices | null>(null), [selectedEntry, setSelectedEntry] = useState(''), [packageShowing, setPackageShowing] = useState(false);
+  const [fromOriginalChat,setFromOriginalChat]=useState(false);
   const generation = useRef(0), pending = useRef(false), optionsRef = useRef(options);
   optionsRef.current = options;
   const candidate = projectPreviewState(options.value);
@@ -68,7 +69,7 @@ export function useProjectPreview(options: Options) {
   useEffect(() => { if (!options.active || options.blocked && choices?.sourceMember) hide(); }, [options.active, options.blocked, choices?.sourceMember, hide]);
   useEffect(() => {
     generation.current++; pending.current = false; setBusy(''); setExpanded(false); setOpened(null); setError(''); setUnknown(false);
-    setChoices(null); setSelectedEntry(''); setPackageShowing(false);
+    setChoices(null); setSelectedEntry(''); setPackageShowing(false); setFromOriginalChat(false);
     exportFlight.current = null; setExportReceipt(null);
   }, [options.projectId]);
   useEffect(() => {
@@ -104,7 +105,7 @@ export function useProjectPreview(options: Options) {
     if (pending.current || !context.active || document.hidden) return;
     if (choices && !choices.sourceMember && exportState) { setExpanded(true); return; }
     if (exportBusy) return;
-    setChoices(null); setSelectedEntry(''); setPackageShowing(false);
+    setChoices(null); setSelectedEntry(''); setPackageShowing(false); setFromOriginalChat(false);
     // Returning to the existing view retains its native Document and staged refs.
     const retained = projectPreviewState(context.value);
     if (retained && retained.metadata.projectId === context.projectId) {
@@ -124,31 +125,38 @@ export function useProjectPreview(options: Options) {
     }).finally(() => { if (generation.current === request) { pending.current = false; setBusy(''); } });
   };
 
-  const showPackage = (original: PackagePreviewChoices) => {
+  const openPackageEntry = (originalChoices: PackagePreviewChoices, entry: string, originalChat?:()=>boolean) => {
     const context = optionsRef.current;
-    if (!context.active || context.blocked || document.hidden || original.projectId !== context.projectId) return false;
-    generation.current++; pending.current = false; setBusy(''); setError(''); setUnknown(false); setOpened(null);
-    setChoices(original); setSelectedEntry(original.mode === 'web_output' ? original.entryPath : ''); setPackageShowing(false); setExpanded(true);
-    return true;
-  };
-  const openPackage = () => {
-    const context = optionsRef.current;
-    if (!choices || !choices.entryChoices.includes(selectedEntry) || pending.current || exportBusy || unknown || !context.active || context.blocked || document.hidden || !context.can('projects.package.preview.open')) return;
-    // Exact reuse is allowed only after the owner selected this original operation and entry.
+    if (!originalChoices.entryChoices.includes(entry) || pending.current || exportBusy || (unknown&&!originalChat) || !context.active || context.blocked ||
+        document.hidden || originalChat?.()===false || !context.can('projects.package.preview.open')) return;
+    // Only the explicit original operation+entry may reuse this established native document.
     const retained = projectPreviewState(context.value);
-    if (packagePreviewMatches(retained, choices, selectedEntry)) { setOpened(retained); setPackageShowing(true); setError(''); return; }
+    if (packagePreviewMatches(retained, originalChoices, entry)) { setOpened(retained); setPackageShowing(true); setError(''); return; }
     const original = ticket(), request = ++generation.current;
     pending.current = true; setBusy('package.open'); setError('');
-    void bridge.command('projects.package.preview.open', { taskId: choices.taskId, operationId: choices.operationId, entryPath: selectedEntry }).then(value => {
-      if (!current(original, request)) return;
+    void bridge.command('projects.package.preview.open', { taskId: originalChoices.taskId, operationId: originalChoices.operationId, entryPath:entry }).then(value => {
+      if (!current(original, request) || originalChat?.()===false) return;
       const accepted = projectPreviewState(value);
-      if (!packagePreviewMatches(accepted, choices, selectedEntry)) throw new Error('固定包预览回执与所选原操作或入口不符，未打开另一版本。');
+      if (!packagePreviewMatches(accepted, originalChoices, entry)) throw new Error('固定包预览回执与所选原操作或入口不符，未打开另一版本。');
       setOpened(accepted); setPackageShowing(true);
     }).catch(failure => {
-      if (!current(original, request)) return;
+      if (!current(original, request) || originalChat?.()===false) return;
       setUnknown(failure?.code === 'outcome_unknown'); setError(failure instanceof Error ? failure.message : String(failure));
     }).finally(() => { if (generation.current === request) { pending.current = false; setBusy(''); } });
   };
+  const showPackage = (original: PackagePreviewChoices, originalChat?:()=>boolean) => {
+    const context = optionsRef.current;
+    if (!context.active || context.blocked || document.hidden || original.projectId !== context.projectId ||
+        originalChat && (original.mode!=='web_output'||!originalChat())) return false;
+    generation.current++; pending.current = false; setBusy(''); setError(''); setUnknown(false); setOpened(null);
+    setChoices(original); setSelectedEntry(original.mode === 'web_output' ? original.entryPath : ''); setPackageShowing(false); setExpanded(true);
+    setFromOriginalChat(!!originalChat);
+    // “打开固定网页” explicitly selects its single manifest entry; no build,
+    // chooser, composer change, second selection or generic project source.
+    if(originalChat)openPackageEntry(original, original.entryPath, originalChat);
+    return true;
+  };
+  const openPackage = () => { if(choices&&!fromOriginalChat)openPackageEntry(choices, selectedEntry); };
 
   const exportPackage = () => {
     const context = optionsRef.current, target = exportTarget;
@@ -214,11 +222,11 @@ export function useProjectPreview(options: Options) {
     }).finally(() => { if (generation.current === request) { pending.current = false; setBusy(''); } });
   };
   const returnToPackageTask = () => {
-    if (busy || exportBusy || optionsRef.current.blocked || !optionsRef.current.can('tasks.open')) return false;
+    if (busy || exportBusy || optionsRef.current.blocked || (!fromOriginalChat&&!optionsRef.current.can('tasks.open'))) return false;
     const taskId = choices?.taskId || view?.taskId;
     if (!taskId) return false;
     const operationId = choices?.operationId || view?.packageOperationId;
-    hide(); optionsRef.current.onPackageTask(taskId, operationId); return true;
+    hide(); optionsRef.current.onPackageTask(taskId, operationId,fromOriginalChat); return true;
   };
   const handleBack = () => {
     if (!expanded) return false;
@@ -231,7 +239,7 @@ export function useProjectPreview(options: Options) {
   };
   return { expanded, view, busy, error, unknown, open, hide, action, handleBack, showPackage, choices, selectedEntry, setSelectedEntry, openPackage,
     exportPackage, exportState, exportBusy, exportTarget, resumeRevision: options.resumeRevision,
-    returnToPackageTask, blocked: options.blocked, can: options.can };
+    returnToPackageTask, fromOriginalChat, blocked: options.blocked, can: options.can };
 }
 
 export function ProjectPreviewPane({ control, composer }: { control: ReturnType<typeof useProjectPreview>; composer: Data }) {
@@ -288,26 +296,26 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       target={{ ...choices, sourceMember: choices.sourceMember }} onReturn={control.returnToPackageTask} onDismiss={control.hide}/>
     : null;
   return <section className="pw-preview-pane" data-motion-native-surface="project-preview" aria-label="项目预览" aria-busy={working}>
-    <header className="pw-preview-heading"><div><h3>{choosing ? '固定项目包' : fixed ? '任务固定版本' : '已采集预览'}</h3><p>{choosing ? choices?.entryPath || '项目源码与资源' : view?.metadata.entryPath ? String(view.metadata.entryPath) : '原项目画面'}</p></div>{view?.selecting && <span className="pw-preview-selection-state">正在选择</span>}</header>
+    <header className="pw-preview-heading"><div><h3>{control.fromOriginalChat?'固定网页':choosing ? '固定项目包' : fixed ? '任务固定版本' : '已采集预览'}</h3><p>{choosing ? choices?.entryPath || '项目源码与资源' : view?.metadata.entryPath ? String(view.metadata.entryPath) : '原项目画面'}</p></div>{view?.selecting && <span className="pw-preview-selection-state">正在选择</span>}</header>
     {!choosing && <div className="pw-preview-actions">
-      <Button variant={view?.selecting ? 'primary' : 'secondary'} leadingIcon={IconCursor} size="small"
+      {!control.fromOriginalChat&&<Button variant={view?.selecting ? 'primary' : 'secondary'} leadingIcon={IconCursor} size="small"
         disabled={!view?.ready || !view.selectionAvailable && !view.selecting || working || unknown || blocked || !can('projects.preview.mode')} aria-pressed={view?.selecting === true}
-        onClick={() => control.action('projects.preview.mode', { enabled: !view?.selecting })}>{view?.selecting ? '退出选择' : '选择元素'}</Button>
+        onClick={() => control.action('projects.preview.mode', { enabled: !view?.selecting })}>{view?.selecting ? '退出选择' : '选择元素'}</Button>}
       {fixed && control.exportTarget && <Button variant="secondary" size="small" disabled={working || unknown || blocked || !can('projects.package.export')} onClick={control.exportPackage}>导出固定包</Button>}
       <span className="pw-grow"/>
       {view && !fixed && can('tasks.open') && <IconButton icon={IconHistory} aria-label="核对原任务" title="核对原任务" disabled={working} onClick={control.returnToPackageTask}/>}
       <IconButton icon={IconRefresh} aria-label="重新载入预览" title="重新载入会使旧元素引用失效" disabled={!view || working || unknown || !can('projects.preview.reload')} onClick={() => control.action('projects.preview.reload')}/>
-      <IconButton icon={IconClose} aria-label="关闭预览" title="关闭后需要重新选择元素" disabled={!view || working || unknown || !can('projects.preview.close')} onClick={() => control.action('projects.preview.close')}/>
+      {!control.fromOriginalChat&&<IconButton icon={IconClose} aria-label="关闭预览" title="关闭后需要重新选择元素" disabled={!view || working || unknown || !can('projects.preview.close')} onClick={() => control.action('projects.preview.close')}/>}
     </div>}
     <MotionFeedback identity={JSON.stringify([sessionId, view?.ready, view?.selecting, view?.selectionAvailable, problem, unknown, choosing])} initial={false} className="pw-preview-context">
-      <p className="pw-muted">{choosing ? '只打开这次任务保存的版本，不构建或启动任务。' : view?.selecting ? '点选元素加入原草稿，不会执行页面按钮。' : fixed ? '固定包不会随当前项目的修改而更新。' : '开启元素选择后，可把画面位置加入原草稿。'}</p>
+      <p className="pw-muted">{choosing ? '只打开这次任务保存的版本，不构建或启动任务。' : view?.selecting ? '点选元素加入原草稿，不会执行页面按钮。' : fixed || control.fromOriginalChat ? '这是当时保存的版本，不随项目后来修改而更新。' : '开启元素选择后，可把画面位置加入原草稿。'}</p>
 
       {view && !view.selectionAvailable && <p className="pw-muted" role="status">{view.selectionUnavailableReason || '暂未确认原来源仍可用于元素选择。'}{fixed ? ' 历史画面仍可查看，发送时还会重新核对来源。' : ''}</p>}
       {problem && <p className="pw-error" role="alert">{problem}</p>}
       {unknown && <p className="pw-muted">原操作结果待核对，没有重发。请返回后核对原预览与草稿。</p>}
       {busy === 'package.export' ? <p className="pw-muted" role="status">正在核对原固定包…</p> : control.exportState && <p className={['unknown', 'rejected', 'written_unverified'].includes(control.exportState.status) ? 'pw-error' : 'pw-muted'} role="status">{control.exportState.message}</p>}
     </MotionFeedback>
-    {choosing && choices ? <section className="pw-preview-entry" aria-label="固定包入口">
+    {choosing && choices && !control.fromOriginalChat ? <section className="pw-preview-entry" aria-label="固定包入口">
       {choices.mode === 'web_output' ? <div><p className="pw-field-hint">清单声明的 HTML 入口</p><p className="pw-preview-entry-path">{choices.entryPath}</p></div> : choices.entryChoices.length ?
         <SelectField label="固定包中的 HTML 入口" value={control.selectedEntry} onChange={control.setSelectedEntry} options={choices.entryChoices.map(path => ({ id: path, label: path }))} isDisabled={working || unknown || blocked} /> :
         <p className="pw-muted">这份固定包包含项目源码与资源，没有可视 HTML 入口。可以导出完整包，在你选择的位置保存。</p>}
@@ -322,14 +330,14 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
     </section> : <div ref={viewport} className="pw-preview-viewport" aria-label="原生隔离预览画面" data-preview-session={sessionId || undefined}>
       {!view?.ready && <div className="pw-preview-placeholder">{busy || view && !problem ? <><ProgressCircle isIndeterminate size="sm" aria-label="正在打开已采集预览"/><p>正在打开已采集预览…</p></> : <p>{problem ? '原文件和草稿仍保留。' : '当前项目没有可用的已采集预览。'}</p>}</div>}
     </div>}
-    {view && <MotionFeedback identity={`${sessionId}:${count}`} initial={false} className="pw-preview-draft-status" role="status">{count > 0 ? `草稿中有 ${count} 处元素引用，尚未发送` : '选择的元素会留在原对话草稿中'}</MotionFeedback>}
-    {view && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
+    {view && !control.fromOriginalChat && <MotionFeedback identity={`${sessionId}:${count}`} initial={false} className="pw-preview-draft-status" role="status">{count > 0 ? `草稿中有 ${count} 处元素引用，尚未发送` : '选择的元素会留在原对话草稿中'}</MotionFeedback>}
+    {view && !control.fromOriginalChat && <Accordion variant="divided"><AccordionItem id="opened-package-source" title="来源与原任务" headingLevel={4}>
         <dl className="pw-preview-source-details"><dt>原任务</dt><dd>{view.taskId}</dd><dt>项目</dt><dd>{String(view.metadata.projectId || '')}</dd>{fixed && <><dt>原操作</dt><dd>{view.packageOperationId}</dd><dt>固定版本</dt><dd>{String(view.metadata.artifactId || '')}</dd><dt>归档摘要</dt><dd>{String(view.metadata.artifactSha256 || '')}</dd></>}</dl>
       </AccordionItem></Accordion>}
     <footer className="pw-preview-footer">
-      {(choosing || fixed) && can('tasks.open') && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={working || blocked} onClick={control.returnToPackageTask}>返回原工作</Button>}
-      <Button variant="ghost" size="small" disabled={control.exportBusy} onClick={control.hide}>{choosing || fixed ? '留在项目' : '返回项目'}</Button>
-      {view && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
+      {(choosing || fixed) && (control.fromOriginalChat||can('tasks.open')) && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={working || blocked} onClick={control.returnToPackageTask}>{control.fromOriginalChat?'返回原话':'返回原工作'}</Button>}
+      {!control.fromOriginalChat&&<Button variant="ghost" size="small" disabled={control.exportBusy} onClick={control.hide}>{choosing || fixed ? '留在项目' : '返回项目'}</Button>}
+      {view && !control.fromOriginalChat && <Button variant="primary" size="small" disabled={working || unknown || !can('projects.preview.return')} onClick={() => control.action('projects.preview.return')}>返回原对话</Button>}
     </footer>
   </section>;
 }

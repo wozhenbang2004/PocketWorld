@@ -46,6 +46,14 @@ public final class WorkspaceModule implements EngineModule {
         return new JSONObject().put("registered",match!=null).put("expectedProjectId",expected)
             .put("reviewedNameCurrent",match!=null&&reviewedName.equals(match.optString("name")));
     }
+    /** One original draft's published project references only, never file contents or a tool. */
+    public org.json.JSONArray retainedDraftCopyReferencesForHost(String task,String draft)throws Exception{
+        return retainedDraftCopyReferencesForHost(task,draft,false);
+    }
+    public org.json.JSONArray retainedDraftCopyReferencesForHost(String task,String draft,boolean chatMetadataOnly)throws Exception{
+        if(nativeClosed)throw new IllegalStateException("原工作区已关闭");
+        return dev.pocketengine.features.local.project.OwnerDraftCopyPublication.retainedReferences(developmentRoot(),workspace.projects(),task,draft,chatMetadataOnly);
+    }
     /** Native callers retain their original TaskStore admission; these observations add no authority. */
     public VersionedWorkspace.FileSnapshot fileSnapshotForHost(String project,String path,int version)throws Exception{return workspace.snapshot(project,path,version);}
     public RemovedProjectFiles.Shelf removedFilesForOwner(String project,java.util.function.BooleanSupplier live)throws Exception{return workspace.removedFilesForOwner(project,live);}

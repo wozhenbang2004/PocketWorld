@@ -1,0 +1,268 @@
+package dev.pocketengine.features.local.project;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.util.regex.Pattern;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.UUID;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/** One owner-selected static deliverable. Not a model tool, build, device operation or preview grant. */
+public final class OriginalNodeWebOutput {
+    public static final String TOOL="owner_keep_first_node_web_output", ENTRY="dist/index.html";
+    public static final String PENDING="owner_web_output_pending";
+    public static final String WITNESS="firstNodeWebOutput";
+    private static final Set<String> BINDING=Set.of("taskId","runId","epoch","buildOperationId","buildReceiptIdentity",
+        "checkoutSequence","projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity","operationId");
+    private static final Set<String> WITNESS_KEYS=Set.of("taskId","runId","epoch","buildOperationId","checkoutSequence",
+        "projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity","entryPath","manifestIdentity","archiveBytes","archiveSha256");
+    private static final Pattern SCRIPT=Pattern.compile("app-[A-Z0-9]{8}\\.js"), STYLE=Pattern.compile("app-[A-Z0-9]{8}\\.css"),
+        ICON=Pattern.compile("mark-[A-Z0-9]{8}\\.svg");
+    private OriginalNodeWebOutput(){}
+
+    public static final class Build {
+        private final JSONObject plan,binding,facts,witness;
+        private Build(JSONObject plan, JSONObject binding, JSONObject facts,JSONObject witness)throws Exception{
+            this.plan=ProjectSources.copy(plan);this.binding=ProjectSources.copy(binding);
+            this.facts=ProjectSources.copy(facts);this.witness=ProjectSources.copy(witness);
+        }
+        public JSONObject plan()throws Exception{return ProjectSources.copy(plan);}
+        public JSONObject binding()throws Exception{return ProjectSources.copy(binding);}
+        public JSONObject facts()throws Exception{return ProjectSources.copy(facts);}
+        public String checkoutId(){return facts.optString("checkoutId");}
+        public String operationId(){return facts.optString("operationId");}
+    }
+    /** Internal original SQL row; a tool success string or an arbitrary artifact id is not a build. */
+    public static Build fromOriginalRow(JSONObject task,JSONObject pin,JSONObject row,boolean current)throws Exception{
+        JSONObject dc=task.getJSONObject("developmentContext");OwnerDraftFirstBuild.requireContext(pin,dc);
+        if(!"receipt".equals(row.opt("state"))||!"project_execute".equals(row.opt("tool")))throw new SecurityException("原构建还未到可确认回执");
+        JSONObject request=ProjectDevelopment.originalPollRequest(task,row),plan=request.getJSONObject("plan"),binding=request.getJSONObject("binding");
+        if(!"build".equals(request.opt("stepId"))||!"build".equals(plan.opt("intent")))throw new SecurityException("不是原 Node 构建；依赖或保存回执不能代替");
+        OwnerDraftFirstBuild.requirePlan(pin,plan,task.getString("id"));
+        if(current){
+            JSONObject outcome=OwnerDraftFirstBuild.outcomeFact(pin,task,row);
+            if(outcome==null||!"build_exit".equals(outcome.opt("kind"))||outcome.getInt("value")!=0)throw new SecurityException("不是这一轮实际成功的 Node 构建");
+        }
+        if(ProjectDevelopment.recordedReceipt(task,row)==null)throw new SecurityException("原构建没有原生结果");
+        JSONObject actual=row.getJSONObject("receipt").getJSONObject("executionReceipt");
+        JSONObject proof=ProjectManagedOutput.build(plan,binding,actual,actual.getLong("checkoutSequence"));
+        if(!Boolean.FALSE.equals(actual.opt("cancelRequested"))||!Boolean.FALSE.equals(actual.opt("timedOut")))
+            throw new SecurityException("原构建并非正常成功退出");
+        String taskId=task.getString("id"),run=binding.getString("runId"),op=binding.getString("operationId");
+        int epoch=binding.getInt("coordinatorEpoch");
+        if(!taskId.equals(binding.getString("taskId"))||!op.equals(row.getString("operationId"))||epoch<1)
+            throw new SecurityException("原构建的任务或轮次身份不同");
+        String ownerOp=UUID.nameUUIDFromBytes(ProjectSources.canonical(new JSONArray().put(TOOL).put(taskId).put(run).put(epoch).put(op))
+                .getBytes(StandardCharsets.UTF_8)).toString();
+        JSONObject facts=new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch).put("buildOperationId",op)
+            .put("buildReceiptIdentity",proof.getString("receiptIdentity")).put("checkoutSequence",proof.getLong("checkoutSequence"))
+            .put("operationId",ownerOp);
+        for(String key:ListKeys.SOURCE)facts.put(key,plan.get(key));
+        JSONObject witness=actual.optJSONObject(WITNESS);
+        requireWitness(facts,witness);
+        return new Build(plan,binding,facts,witness);
+    }
+    private static final class ListKeys {
+        static final String[] SOURCE={"projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity"};
+    }
+    public static void requireSameBuild(Build original,JSONObject proof)throws Exception{
+        JSONObject source=original.facts;
+        if(!source.getString("buildReceiptIdentity").equals(proof.opt("receiptIdentity"))||
+           source.getLong("checkoutSequence")!=proof.optLong("checkoutSequence",-1))throw new SecurityException("原构建已不是这个副本的最新已核对操作");
+    }
+
+    public static void requireSameWitness(Build original,JSONObject actual)throws Exception {
+        JSONObject seen=actual.optJSONObject(WITNESS);
+        if(seen==null||!ProjectSources.canonical(original.witness).equals(ProjectSources.canonical(seen)))
+            throw new SecurityException("原运行宿主的退出资源证据与原任务回执不同");
+    }
+    private static Map<String,String> template()throws Exception{
+        Map<String,String> result=new TreeMap<>();JSONArray files=ProjectTemplates.files("web");
+        for(int i=0;i<files.length();i++){JSONObject item=files.getJSONObject(i);result.put(item.getString("path"),item.getString("content"));}
+        return result;
+    }
+    /** The stock build and lock cannot be substituted. A user can change the two plain heading slots. */
+    public static String requireSupportedSource(JSONObject checkout)throws Exception{
+        Map<String,String> expected=template(),actual=ProjectSources.files(checkout);
+        for(String path:Set.of("package.json","package-lock.json","tools/build.mjs"))
+            if(!expected.get(path).equals(actual.get(path)))throw new SecurityException("整站固定首版只认内置 Web 的原构建配置；其它项目仍可按原工作另存单文件");
+        String stock=expected.get("index.html"),html=actual.get("index.html");
+        if(html==null||html.length()>stock.length()+320)throw new SecurityException("内置网页只支持更改标题文字，不更改页面入口或资源结构");
+        String title=entryText(html,"title"),heading=entryText(html,"h1");
+        if(!stock.replace("<title>我的小计划</title>","<title>"+title+"</title>")
+                 .replace("<h1>我的小计划</h1>","<h1>"+heading+"</h1>").equals(html))
+            throw new SecurityException("内置网页入口或资源结构已变；本次不标成固定整站");
+        return html;
+    }
+    private static String entryText(String html,String tag){
+        String begin="<"+tag+">",end="</"+tag+">";
+        int from=html.indexOf(begin),to=from<0?-1:html.indexOf(end,from+begin.length());
+        if(to<0)throw new SecurityException("无法核对内置网页入口的标题");
+        String text=html.substring(from+begin.length(),to);
+        if(text.trim().isEmpty()||text.codePointCount(0,text.length())>80)
+            throw new SecurityException("两个标题都只支持 1–80 字的纯文字");
+        for(int at=0;at<text.length();){
+            int c=text.codePointAt(at);at+=Character.charCount(c);
+            if(!Character.isLetterOrDigit(c)&&Character.getType(c)!=Character.NON_SPACING_MARK&&
+               " -_.·、！!？?：:；;，,。()（）「」『』".indexOf(c)<0)
+                throw new SecurityException("标题不解释额外标记，只能使用普通文字");
+        }
+        return text;
+    }
+    public static void requireStockPaths(java.io.File root)throws Exception{
+        Path dist=root.toPath().resolve("dist"), assets=dist.resolve("assets");
+        if(!Files.isDirectory(dist,LinkOption.NOFOLLOW_LINKS)||!Files.isDirectory(assets,LinkOption.NOFOLLOW_LINKS)||
+            !Files.isRegularFile(dist.resolve("index.html"),LinkOption.NOFOLLOW_LINKS))
+            throw new SecurityException("原静态输出必须是此副本内的普通目录和文件");
+        try(var paths=Files.newDirectoryStream(dist);var leaves=Files.newDirectoryStream(assets)){
+            int count=0;
+            for(Path path:paths){
+                if(++count>2||!Set.of("index.html","assets").contains(path.getFileName().toString()))
+                    throw new SecurityException("原退出时未观测到内置静态 Web 的固定输出根");
+            }
+            if(count!=2)throw new SecurityException("缺少内置静态 Web 的原入口或资源目录");
+            count=0;
+            for(Path path:leaves){
+                String name=path.getFileName().toString();
+                if(++count>3||!Files.isRegularFile(path,LinkOption.NOFOLLOW_LINKS)||
+                   !(SCRIPT.matcher(name).matches()||STYLE.matcher(name).matches()||ICON.matcher(name).matches()))
+                    throw new SecurityException("原输出资源含不受支持的类型或目录，不能作为固定整站");
+            }
+            if(count!=3)throw new SecurityException("原退出时未观测到内置静态 Web 的完整四项");
+        }
+    }
+    /** A read-only native witness while this proven-success original checkout lease is still held.
+     * This is metadata on the original runtime receipt, not a saved artifact. No late observation. */
+    public static JSONObject observeAtOriginalExit(dev.pocketengine.features.local.runtime.RuntimeInvocation invocation,long sequence)throws Exception{
+        JSONObject exact=invocation.exact(),payload=exact.getJSONObject("payload");
+        if(!"build".equals(exact.opt("intent"))||!"project.runtime.run".equals(exact.opt("command"))
+           ||!Set.of("npm","pnpm").contains(payload.optString("executable"))||
+           !"[\"run\",\"build\"]".equals(ProjectSources.canonical(payload.optJSONArray("argv")))||sequence<1)return null;
+        invocation.checkCurrent();JSONObject snapshot=invocation.sourceSnapshot(),checkout=snapshot.getJSONObject("checkout");
+        JSONObject ownerCopy=checkout.optJSONObject(OwnerDraftWorkCopy.FIELD);
+        if(ownerCopy==null||!exact.getString("sourceDigest").equals(ownerCopy.opt("initialCopyDigest"))||
+           !exact.getString("checkoutId").equals(ownerCopy.opt("checkoutId"))||!exact.getString("projectId").equals(ownerCopy.opt("projectId")))
+            return null;
+        String sourceEntry=requireSupportedSource(snapshot);
+        var root=invocation.workspace();requireStockPaths(root.directory());root.verify(invocation);
+        JSONObject info=new JSONObject().put("projectId",exact.getString("projectId")).put("checkoutId",exact.getString("checkoutId"))
+            .put("sourceDigest",exact.getString("sourceDigest")).put("name",checkout.getString("name"));
+        var frozen=ProjectPackageArchive.capture(root.directory(),info,"web_output",ENTRY,true);
+        requireCompleteStockSite(frozen,sourceEntry);invocation.checkCurrent();requireStockPaths(root.directory());
+        var again=ProjectPackageArchive.capture(root.directory(),info,"web_output",ENTRY,true);
+        if(!frozen.identity.equals(again.identity))throw new SecurityException("原退出的整站资源在观察中变化");
+        root.verify(invocation);invocation.checkCurrent();
+        JSONObject binding=invocation.binding(),stamp=ProjectPackageDelivery.archiveIdentity(frozen)
+            .put("manifestIdentity",frozen.identity).put("entryPath",ENTRY).put("checkoutSequence",sequence)
+            .put("taskId",binding.getString("taskId")).put("runId",binding.getString("runId"))
+            .put("epoch",binding.getInt("coordinatorEpoch")).put("buildOperationId",binding.getString("operationId"));
+        for(String k:ListKeys.SOURCE)stamp.put(k,exact.get(k));
+        return stamp;
+    }
+    private static void requireWitness(JSONObject facts,JSONObject witness)throws Exception{
+        if(witness==null||witness.length()!=WITNESS_KEYS.size()||!ENTRY.equals(witness.opt("entryPath")))
+            throw new SecurityException("这笔原构建没有在成功退出时留下完整网页原证据；不补读当前 dist");
+        for(String key:WITNESS_KEYS)if(!witness.has(key))throw new SecurityException("原整站退出证据缺少字段");
+        for(String key:Set.of("taskId","runId","epoch","buildOperationId","checkoutSequence",
+            "projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity"))
+            if(!ProjectSources.canonical(facts.get(key)).equals(ProjectSources.canonical(witness.opt(key))))
+                throw new SecurityException("网页的退出时证据属于另一轮、另一副本或原操作");
+        for(String k:Set.of("manifestIdentity","archiveSha256"))if(!witness.optString(k).matches("[a-f0-9]{64}"))
+            throw new SecurityException("原整站退出摘要不可核对");
+        if(witness.optLong("archiveBytes")<=0||witness.optLong("archiveBytes")>ProjectPackageArchive.MAX_ARCHIVE_BYTES)
+            throw new SecurityException("原整站退出大小不可核对");
+    }
+    public static void requireExitBytes(JSONObject witness,ProjectPackageArchive.Frozen frozen)throws Exception{
+        JSONObject bytes=ProjectPackageDelivery.archiveIdentity(frozen);
+        if(!frozen.identity.equals(witness.opt("manifestIdentity"))||!bytes.getString("archiveSha256").equals(witness.opt("archiveSha256"))||
+            bytes.getLong("archiveBytes")!=witness.optLong("archiveBytes",-1))
+            throw new SecurityException("完整网页资源已不是原构建退出时观察的字节；未用当前同名文件替代");
+    }
+
+    /** The stock builder always emits one bundled script, stylesheet and icon, wired into the
+     * source entry. Do not guess at general HTML/JS graphs or run a detector. */
+    public static void requireCompleteStockSite(ProjectPackageArchive.Frozen frozen,String sourceEntry)throws Exception{
+        JSONObject manifest=frozen.manifest();
+        if(!"web_output".equals(manifest.get("mode"))||!ENTRY.equals(manifest.get("entryPath"))||
+           !"dist".equals(manifest.get("previewRoot"))||manifest.getJSONArray("omitted").length()!=0)throw new SecurityException("请选择同一原副本的内置 Web 输出根");
+        var files=frozen.files();
+        if(files.size()!=4||!files.containsKey(ENTRY))throw new SecurityException("未找到该站点的完整 HTML、JS、CSS 与 SVG，未保存或标为可预览");
+        String js=null,css=null,svg=null;
+        for(String path:files.keySet()){
+            if(path.equals(ENTRY))continue;
+            if(!path.startsWith("dist/assets/"))throw new SecurityException("原网页资源不在预期目录，未保存");
+            if(SCRIPT.matcher(path.substring("dist/assets/".length())).matches()&&js==null)js=path;
+            else if(STYLE.matcher(path.substring("dist/assets/".length())).matches()&&css==null)css=path;
+            else if(ICON.matcher(path.substring("dist/assets/".length())).matches()&&svg==null)svg=path;
+            else throw new SecurityException("生成目录含其他资源或同种文件；无法证明这是内置单入口的完整版本，未保存");
+            if(files.get(path).length==0)throw new SecurityException("原网页资源为空，未保存");
+        }
+        if(js==null||css==null||svg==null)throw new SecurityException("原网页少了脚本、样式或图，未保存");
+        String html=sourceEntry.replace("./src/main.js","./"+js.substring(5))
+            .replace("./src/style.css","./"+css.substring(5)).replace("./assets/mark.svg","./"+svg.substring(5));
+        if(!java.util.Arrays.equals(html.getBytes(StandardCharsets.UTF_8),files.get(ENTRY)))
+            throw new SecurityException("HTML 的实际引用不是这份固定包里的三组字节，未保存");
+        // The bound preview does not provide network, dynamic resource loading or SSR.
+        String stylesheet=new String(files.get(css),StandardCharsets.UTF_8).toLowerCase(java.util.Locale.ROOT);
+        if(stylesheet.contains("url")||stylesheet.contains("@import")||stylesheet.contains("image-set")||stylesheet.contains("\\"))
+            throw new SecurityException("这份样式另引用了无法在本次核对的资源，先不标为完整网页");
+    }
+
+    public static final class Review {
+        public final Build build;private final JSONObject pin,files;
+        private Review(Build build, JSONObject pin, JSONArray files)throws Exception{
+            this.build=build;this.pin=ProjectSources.copy(pin);
+            this.files=new JSONObject().put("files",new JSONArray(files.toString()));
+        }
+        /** Only metadata may cross the owner review window; no HTML/JS or runtime handle. */
+        public JSONObject view()throws Exception{
+            return ProjectSources.copy(pin).put("state","review").put("files",new JSONArray(files.getJSONArray("files").toString()))
+                .put("entryPath",ENTRY).put("bytes",pin.getLong("archiveBytes")).put("authorityAdded",false);
+        }
+        public JSONObject pin()throws Exception{return ProjectSources.copy(pin);}
+    }
+    public static Review review(Build build,ProjectPackageArchive.Frozen frozen,String sourceEntry)throws Exception{
+        requireCompleteStockSite(frozen,sourceEntry);requireExitBytes(build.witness,frozen);
+        JSONObject manifest=frozen.manifest(),selected=build.facts();
+        JSONObject source=manifest.getJSONObject("source");
+        for(String key:Set.of("projectId","checkoutId","sourceDigest"))if(!selected.getString(key).equals(source.opt(key)))
+            throw new SecurityException("原构建和网页包不在同一副本版本");
+        JSONObject bytes=ProjectPackageDelivery.archiveIdentity(frozen);
+        selected.put("manifestIdentity",frozen.identity).put("archiveSha256",bytes.getString("archiveSha256")).put("archiveBytes",bytes.getLong("archiveBytes"));
+        return new Review(build,selected,manifest.getJSONArray("files"));
+    }
+    public static void requirePin(Build build,JSONObject pin)throws Exception{
+        JSONObject exact=build.facts();
+        if(pin.length()!=BINDING.size()+3)throw new SecurityException("原固定网页审阅信息无效");
+        for(String k:BINDING)if(!ProjectSources.canonical(exact.get(k)).equals(ProjectSources.canonical(pin.opt(k))))
+            throw new SecurityException("原构建/轮次/清单引用已经变化");
+        for(String k:Set.of("manifestIdentity","archiveSha256","archiveBytes"))
+            if(!ProjectSources.canonical(build.witness.get(k)).equals(ProjectSources.canonical(pin.opt(k))))
+                throw new SecurityException("待存网页不等于原构建退出时观察的固定字节");
+        for(String k:Set.of("manifestIdentity","archiveSha256"))if(!pin.getString(k).matches("[a-f0-9]{64}"))
+            throw new SecurityException("原固定网页摘要无法核对");
+        long n=pin.getLong("archiveBytes");if(n<=0||n>ProjectPackageArchive.MAX_ARCHIVE_BYTES)throw new SecurityException("原固定包字节数无效");
+    }
+
+    /** Mint only the existing package evidence format after the native original action is settled. */
+    public static JSONObject savedEvidence(Build build,JSONObject pin,JSONObject artifact)throws Exception{
+        requirePin(build,pin);String op=build.operationId(),action=ProjectPackageDelivery.actionId(op);
+        String id=UUID.nameUUIDFromBytes(("project-package:"+action).getBytes(StandardCharsets.UTF_8)).toString();
+        if(!id.equals(artifact.opt("id"))||!id.equals(artifact.opt("versionId"))||!action.equals(artifact.opt("ownerActionId"))||
+            !"project_bundle".equals(artifact.opt("kind"))||!"web_output".equals(artifact.opt("mode"))||
+            !Boolean.TRUE.equals(artifact.opt("persisted"))||"retired".equals(artifact.optString("availability"))||
+            pin.getLong("archiveBytes")!=artifact.getLong("sizeBytes")||!pin.getString("archiveSha256").equals(artifact.opt("sha256")))
+            throw new SecurityException("原固定网页成果没有同一份完整字节回执");
+        for(String k:Set.of("projectId","checkoutId","sourceDigest","manifestIdentity"))if(!pin.getString(k).equals(artifact.opt(k)))
+            throw new SecurityException("原固定网页成果不属于这次审阅");
+        return build.facts().put("format",ProjectPackageDelivery.EVIDENCE_FORMAT).put("coordinatorEpoch",pin.getInt("epoch"))
+            .put("manifestIdentity",pin.getString("manifestIdentity")).put("archiveSha256",pin.getString("archiveSha256"))
+            .put("archiveBytes",pin.getLong("archiveBytes")).put("packageArtifact",ProjectPackageDelivery.metadata(artifact))
+            .put("authorityAdded",false).put("buildOutputAttribution","selected_output_observed_after_build");
+    }
+}

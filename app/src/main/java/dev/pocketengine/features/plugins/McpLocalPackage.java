@@ -66,6 +66,10 @@ public final class McpLocalPackage {
                 .put("preparationTimeoutMillis",90000).put("dependencyWorkspace","same_original_job_visible_copy").put("dependencyCachesReused",false).put("diskQuotaEnforced",false).put("osSandbox",false).put("toolInvocationAuthorized",false);
         return new Proposal(plan,tools,facts.getJSONArray("files"),config.getJSONArray("argv"));
     }
+    /** Pure validation shared with the original project lock path; no plugin or tool is started. */
+    public static int verifiedPublicRegistryLock(String manager,String lock,int declared)throws Exception {
+        return switch(manager){case "npm"->npmLock(lock);case "pnpm"->pnpmLock(lock,declared);default->throw new IllegalArgumentException("锁未绑定已核对的包管理器");};
+    }
     private static int npmLock(String lock)throws Exception {
         JSONObject data=McpJson.parse(lock);if(data.optInt("lockfileVersion")!=3)throw new IllegalArgumentException("npm准备需要lockfileVersion 3");JSONObject packages=data.getJSONObject("packages");int count=0;
         for(var names=packages.keys();names.hasNext();){String name=names.next();JSONObject row=packages.getJSONObject(name);if(name.isEmpty())continue;

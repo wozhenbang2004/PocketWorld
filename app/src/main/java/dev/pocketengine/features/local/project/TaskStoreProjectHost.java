@@ -33,6 +33,10 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
     }
     @Override public void dispatch(JSONObject binding,JSONObject exact)throws Exception {
         JSONObject frozenBinding=new JSONObject(binding.toString()),frozenExact=new JSONObject(exact.toString());RunControl original=current(frozenBinding);JSONObject capability=local.projectCapabilityForHost(frozenExact);JSONObject nativeRow=tasks.projectOperationForHost(frozenBinding);if(nativeRow.getJSONObject("journalArguments").has("planRef")){JSONObject plan=nativeRow.getJSONObject("arguments").getJSONObject("plan");capability.put("nativeProjectPlan",new JSONObject().put("fullPlanStoredInOriginalTaskStore",true).put("planDigest",plan.getString("planDigest")).put("step",ProjectPlanRecords.reviewStep(ProjectBuildPlan.step(plan,nativeRow.getJSONObject("arguments").getString("stepId")))).put("executionAuthorized",false));}live(frozenBinding,frozenExact,original,capability);
+        JSONObject dependency=tasks.firstBuildDependencyForLaunch(frozenBinding,frozenExact,original);
+        if(dependency!=null)try{local.requireDraftDependencyFiles(frozenExact.getString("checkoutId"),dependency);}
+        catch(Exception unavailable){throw new ProjectDevelopment.NotDispatched(new JSONObject().put("status","not_dispatched").put("accepted",false)
+            .put("code","locked_node_dependency_files_unavailable").put("message",unavailable.getMessage()==null?"无法核对锁定包的本机安装文件，未运行构建。":unavailable.getMessage()));}
         JSONObject target=capability.getJSONObject("target");String runtime=capability.getString("runtime");boolean ready=runtime.equals("app_private_checkout")||runtime.equals("termux")&&target.optBoolean("installed")&&target.optBoolean("permissionGranted")&&target.optBoolean("enabled")||runtime.equals("managed_process_v1")&&(target.optBoolean("canExecute")||frozenExact.getString("command").equals("project.runtime.prepare")&&target.optBoolean("preparationAvailable"));
         if(!ready)throw new ProjectDevelopment.NotDispatched(new JSONObject().put("status","not_dispatched").put("accepted",false).put("code","runtime_unavailable").put("runtimeId",runtime).put("message","所选本机工具环境尚未准备完成；请在项目环境中核对实际缺少的工具，本步骤没有派发").put("businessVerified",false));
         if(frozenExact.getString("command").endsWith(".collect")){
@@ -54,7 +58,7 @@ public final class TaskStoreProjectHost implements ProjectDevelopment.HostPort {
             retained=true;JSONObject route=claimed.getJSONObject("projectExecution");live(frozenBinding,frozenExact,original,capability);
             JSONObject service=tasks.projectLiveEditService(frozenBinding,frozenExact);dev.pocketengine.features.local.runtime.RuntimeExecutionRef serviceRef=null;
             if(service!=null){JSONObject serviceArgs=service.getJSONObject("arguments"),servicePlan=ProjectBuildPlan.verified(serviceArgs.getJSONObject("plan"));serviceRef=dev.pocketengine.features.local.runtime.RuntimeExecutionRef.fromHost(ProjectDevelopment.exact(servicePlan,ProjectBuildPlan.step(servicePlan,serviceArgs.getString("stepId"))),service.getJSONObject("receipt").getJSONObject("projectExecution"));}
-            JSONObject receipt=local.executeProjectForHost(frozenExact,route,original,()->live(frozenBinding,frozenExact,original,capability),serviceRef);
+            JSONObject receipt=local.executeProjectForHost(frozenExact,route,original,()->live(frozenBinding,frozenExact,original,capability),serviceRef,dependency);
             tasks.recordProjectOperation(frozenBinding,frozenExact,receipt);retained=!(receipt.optBoolean("receiptReceived")&&receipt.optString("status").matches("completed|failed"));
         }finally{if(!retained)original.removeCancelAction(cancel);}
     }

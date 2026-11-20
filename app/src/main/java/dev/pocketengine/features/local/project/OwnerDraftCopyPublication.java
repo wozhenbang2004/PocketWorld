@@ -69,6 +69,31 @@ public final class OwnerDraftCopyPublication {
             visible.put(row);
         }return visible;
     }
+    /** Only today's registered projects (at most 20), not a scan of checkout bodies or draft history.
+     * Read the existing publication seal, both matching metadata records and no source-file bytes. */
+    public static org.json.JSONArray retainedReferences(File root,org.json.JSONArray projects,String task,String draft)throws Exception{
+        return retainedReferences(root,projects,task,draft,false);
+    }
+    public static org.json.JSONArray retainedReferences(File root,org.json.JSONArray projects,String task,String draft,boolean chatMetadataOnly)throws Exception{
+        org.json.JSONArray out=new org.json.JSONArray();
+        for(int n=0;n<projects.length();n++){
+            JSONObject row=projects.getJSONObject(n),registration=row.optJSONObject("sourceImport");
+            if(registration==null)continue;
+            String project=row.getString("id");
+            try{
+                JSONObject intent=read(file(root,project));if(intent==null)continue;
+                JSONObject ref=intent.getJSONObject("reference");
+                if(!task.equals(ref.opt("taskId"))||!draft.equals(ref.opt("draftId"))||!chatMetadataOnly&&draft.equals(ref.opt("revisionId"))||
+                   !project.equals(ref.opt("projectId"))||!intent.getString("action").equals(registration.opt("clientId"))||
+                   !intent.getString("packageSha256").equals(registration.opt("packageSha256"))||
+                   !Boolean.FALSE.equals(registration.opt("executionAuthorityRestored")))continue;
+                requirePresent(root,project,chatMetadataOnly);
+                if(present(OwnerDraftCopyShelf.location(root,project,true)))continue; // Incomplete/put-away is not available here.
+                out.put(new JSONObject(ref.toString()));
+            }catch(Exception unavailable){/* Not a verified, currently published working copy. */ }
+        }
+        return out;
+    }
     /** A catalog row alone is not a materialized workspace. Applies only when THIS project has a draft intent. */
     public static void requireRegisteredCopyPresent(File root,String project)throws Exception{requirePresent(root,project,false);}
     public static void requireOpenedForFormalChange(File root,String project)throws Exception{

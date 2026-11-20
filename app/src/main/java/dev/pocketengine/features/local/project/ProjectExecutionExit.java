@@ -34,8 +34,14 @@ public final class ProjectExecutionExit {
             .put("sourceDigest",ref.sourceDigest()).put("stepId",exact.getString("stepId")).put("kind",kind).put("value",value).put("nativeStatus",status);
         for(String key:new String[]{"timedOut","cancelRequested","resourcesReleased","processGroupAbsent"})if(job.opt(key) instanceof Boolean)out.put(key,job.getBoolean(key));
         // A cancellation, unknown resource state, or launch/signal observation alone is not a failed build to hand back.
-        return out.put("canPrepareBuildFeedback","build".equals(exact.opt("stepId"))&&"failed".equals(status)&&"exit_code".equals(kind)&&value>0
+        boolean knownFailure="failed".equals(status)&&"exit_code".equals(kind)&&value>0
             &&"pre_exec_manifest_verified".equals(job.opt("sourceCheckStatus"))&&Boolean.FALSE.equals(job.opt("cancelRequested"))&&Boolean.FALSE.equals(job.opt("timedOut"))
-            &&Boolean.TRUE.equals(job.opt("processGroupAbsent"))&&Boolean.TRUE.equals(job.opt("resourcesReleased")));
+            &&Boolean.TRUE.equals(job.opt("processGroupAbsent"))&&Boolean.TRUE.equals(job.opt("resourcesReleased"));
+        out.put("canPrepareBuildFeedback","build".equals(exact.opt("stepId"))&&knownFailure);
+        if(knownFailure&&OwnerDraftNodeDependencies.STEP.equals(exact.opt("stepId"))&&OwnerDraftNodeDependencies.exact(exact)){
+            String sha=exact.getJSONObject("payload").getJSONObject(OwnerDraftNodeDependencies.FIELD).getString("lockSha256");
+            if(sha.matches("[a-f0-9]{64}"))out.put("canPrepareDependencyFeedback",true).put("dependencyLockSha256",sha);
+        }
+        return out;
     }
 }

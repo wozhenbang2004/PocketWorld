@@ -7,6 +7,7 @@ import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.project.OwnerDraftWorkCopy
 import dev.pocketengine.store.TaskStore
 import java.util.UUID
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Only a currently shown, already persisted version. A repeat query cannot publish, open or run a project. */
@@ -14,9 +15,9 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
     private val work:(Runnable)->Unit,private val open:(JSONObject)->Unit) {
     companion object {
         const val FIND="projectDraft.findWorkCopy";const val REVIEW="projectDraft.reviewWorkCopy"
-        const val CREATE="projectDraft.createWorkCopy";const val OPEN="projectDraft.openWorkCopy"
+        const val CREATE="projectDraft.createWorkCopy";const val OPEN="projectDraft.openWorkCopy";const val OPEN_RETAINED="projectDraft.openRetainedWorkCopy"
         const val MOVE_REVIEW="projectDraft.reviewUnusedMove";const val MOVE="projectDraft.moveUnusedCopy"
-        val commands=setOf(FIND,REVIEW,CREATE,OPEN,MOVE_REVIEW,MOVE)
+        val commands=setOf(FIND,REVIEW,CREATE,OPEN,OPEN_RETAINED,MOVE_REVIEW,MOVE)
     }
     private val main=Handler(Looper.getMainLooper())
     private data class Offer(val id:String,val ref:List<String>,val review:OwnerDraftWorkCopy.Review,val shown:()->Boolean,val expiry:Long)
@@ -25,7 +26,7 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
     private var offer:Offer?=null
     @Volatile var busy=false;private set
     fun clear(){offer=null;move=null}
-    fun dispatch(action:String,args:JSONObject,shown:()->Boolean,done:(JSONObject?,String?)->Unit){
+    fun dispatch(action:String,args:JSONObject,shown:()->Boolean,retained:(()->JSONArray)?,done:(JSONObject?,String?)->Unit){
         val ref=listOf("taskId","draftId","revisionId","sha256").map(args::getString)
         require(ref.drop(1).all{it.matches(Regex("[a-f0-9]{64}"))})
         check(!busy&&shown()){"请先回到正在查看的这一份已保留稿。"}
@@ -40,14 +41,23 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
             val result=runCatching{
                 fun current(){check(shown()){"原稿窗口已离开，没有自动重交。"}}
                 fun source()=tasks().ownerDraftWorkCopySeed(ref[0],ref[1],ref[2],ref[3])
-                current();val seed=source();val host=local()
+                current()
+                if(action==OPEN_RETAINED){
+                    val matches=retained?.invoke() ?: error("请从原差异打开已建立的旧稿副本")
+                    check((0 until matches.length()).count { i -> matches.getJSONObject(i).let {
+                        it.opt("revisionId")==ref[2]&&it.opt("sha256")==ref[3]&&it.opt("workIdentity")==args.getString("workIdentity")
+                    } } == 1){"这份已存稿的副本已变化，未打开其他稿本。"}
+                }
+                val seed=source();val host=local()
+                if(action==OPEN_RETAINED)check(seed.identity==args.getString("workIdentity")){"不能核对同一份原生工作副本"}
                 val existing=host.findDraftWorkCopy(seed)
                 when {
                     action==FIND->existing.also { copy->
                         try { tasks().firstBuildForDraft(seed)?.let { copy.put("firstBuild",it) } }
                         catch(unavailable:Exception) { copy.put("firstBuildUnavailable",true) } // A missing optional child never hides the real working copy.
+                        if(retained!=null)try{copy.put("retainedWork",retained())}catch(unavailable:Exception){/* Preserve the directly selected draft. */}
                     }
-                    action==OPEN->host.openDraftWorkCopy(seed){current();check(source().identity==seed.identity)}
+                    action==OPEN||action==OPEN_RETAINED->host.openDraftWorkCopy(seed){current();check(source().identity==seed.identity)}
                     action==MOVE_REVIEW->{
                         val from=args.getString("fromState");check(existing.opt("status")==from&&existing.opt("recyclable")==true){"这份副本已投入工作或不在原位置，没有移动。"}
                         val m=Move(UUID.randomUUID().toString(),ref,from,shown,SystemClock.elapsedRealtime()+120_000L);nextMove=m
@@ -74,7 +84,7 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
                 else result.fold({r->
                     offer=next;move=nextMove
                     next?.id?.let{token->main.postDelayed({if(offer?.id==token)offer=null},120_000L)}
-                    if(action==OPEN)runCatching{open(r)}.fold({done(r,null)},{done(null,it.message?:"没有打开原副本")})
+                    if(action==OPEN||action==OPEN_RETAINED)runCatching{open(r)}.fold({done(r,null)},{done(null,it.message?:"没有打开原副本")})
                     else done(r,null)
                 },{done(null,it.message?:"暂不能核对这份副本；原工程和改稿均保留。")})
             }

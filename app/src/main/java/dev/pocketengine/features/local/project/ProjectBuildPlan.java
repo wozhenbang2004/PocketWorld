@@ -296,6 +296,21 @@ public final class ProjectBuildPlan {
         for(int i=0;i<steps.length();i++){JSONObject item=steps.getJSONObject(i);JSONObject payload=ProjectSources.copy(item.getJSONObject("payload")).put("projectPlan",ProjectSources.copy(clean)).put("projectStepId",item.getString("id"));item.put("hostAction",new JSONObject().put("feature","local").put("command",item.getString("localCommand")).put("payload",payload));}
         return core;
     }
+    /** Native-only factory for this independent draft journey. Not the generic unlocked dependency selector. */
+    public static JSONObject lockedNodeDependencies(JSONObject snapshot,String runtimeIdentity,JSONObject review)throws Exception{
+        JSONObject source=ProjectSources.describe(snapshot);
+        JSONObject payload=new JSONObject().put("checkoutId",source.getString("checkoutId")).put("expectedSourceDigest",source.getString("sourceDigest"))
+            .put("executable",review.getString("manager")).put("argv",OwnerDraftNodeDependencies.argv(review.getString("manager")))
+            .put(OwnerDraftNodeDependencies.FIELD,review);
+        JSONObject action=step(OwnerDraftNodeDependencies.STEP,"project.runtime.run",payload,"从官方注册表准备此副本的锁定依赖",true);
+        action.getJSONObject("effects").put("runtime","managed_process_v1");
+        OwnerDraftNodeDependencies.requireTypedStep(action,source,review);
+        return seal(new JSONObject().put("format","pocketworld.project-plan.v1").put("checkoutId",source.getString("checkoutId"))
+            .put("projectId",source.getString("projectId")).put("sourceDigest",source.getString("sourceDigest")).put("sourceManifest",source.getJSONArray("files"))
+            .put("runtimeId","managed_process_v1").put("runtimeIdentity",runtimeIdentity).put("intent","dependencies").put("ecosystem","locked_node_registry")
+            .put("steps",new JSONArray().put(action)).put("available",true).put("automaticChaining",false)
+            .put("warnings",new JSONArray().put("仅同一独立副本和锁定包；默认 HTTPS 注册表，不用用户配置、不运行生命周期脚本。npm ci 可能替换现有的 node_modules。退出 0 不是已构建，下一步另行批准。")));
+    }
     private static JSONObject step(String id,String command,JSONObject payload,String label,boolean network)throws Exception {
         return new JSONObject().put("id",id).put("stepId",id).put("localCommand",command).put("payload",payload).put("label",label).put("approvalRequired",true)
                 .put("effects",new JSONObject().put("writes",!command.equals("termux.probe")).put("networkMayBeUsed",network).put("scopeEnforced",false).put("runtime",command.equals("writeFile")?"app_private_checkout":"termux")).put("cancelReliable",false);
@@ -313,6 +328,12 @@ public final class ProjectBuildPlan {
         for(int i=0;i<steps.length();i++){JSONObject step=steps.getJSONObject(i);if(!"patchFiles".equals(step.optString("localCommand")))continue;JSONArray files=step.getJSONObject("payload").getJSONArray("files");for(int f=0;f<files.length();f++)if(ProjectExactPatch.encodedBytes(files.getJSONObject(f))){JSONObject file=files.getJSONObject(f);ProjectExactPatch.payloadBytes(file,false);if(ProjectByteCopy.matches(file))ProjectByteCopy.requirePlanSource(core,steps.getJSONObject(i),file);if(ProjectByteDelete.matches(file))ProjectByteDelete.requirePlanSource(core,step,file);}if(ProjectFileMove.any(files))ProjectFileMove.requireManifest(core,step,files);if(ProjectDirectoryCreate.any(files))ProjectDirectoryCreate.requirePlan(core,step,files);for(int f=0;f<files.length();f++)if("mkdir".equals(files.getJSONObject(f).optString("action"))&&!ProjectDirectoryCreate.matches(files.getJSONObject(f)))throw new SecurityException("目录动作缺少准确typed原pin");}
         if("freeze_package".equals(core.optString("intent")))verifyFreeze(core,steps);
         if("command".equals(core.optString("intent")))verifyCommand(core,steps);
+        if("locked_node_registry".equals(core.optString("ecosystem"))){
+            if(!"dependencies".equals(core.optString("intent"))||!"managed_process_v1".equals(core.opt("runtimeId"))||
+                steps.length()!=1||!Boolean.FALSE.equals(core.opt("automaticChaining")))throw new SecurityException("只能是本机一次独立的依赖准备");
+            JSONObject action=steps.getJSONObject(0);
+            OwnerDraftNodeDependencies.requireTypedStep(action,core,action.getJSONObject("payload").getJSONObject(OwnerDraftNodeDependencies.FIELD));
+        }
         if("managed_selected_output".equals(core.optString("ecosystem")))verifyManagedOutput(core,steps);
         if(ProjectGit.INTENT.equals(core.optString("intent")))ProjectGit.verify(core,steps);
         return core.put("planId",plan.getString("planId")).put("planDigest",plan.getString("planDigest"));

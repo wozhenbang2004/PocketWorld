@@ -13,38 +13,95 @@ import './butler-preparations.css';
 type Data = Record<string, any>;
 export type ButlerPreparationTarget = { sourceTaskId: string; proposalId: string; sourceConversationId: string };
 export type OriginalProjectDraft = { taskId:string; runId:string; epoch:number; draftId:string };
-export type ConversationPreparation = ButlerPreparationTarget & { sourceRunId: string; sourceEpoch: number; kind: 'phone' | 'project'; canPrepare: boolean; targetTaskId: string; originalDraft?:OriginalProjectDraft; visibleOwnerRequest?:{messageId:string;revision:number} };
-function originalProjectDraft(row:Data):OriginalProjectDraft|undefined{
-  const t=row.target;
-  if(row.kind!=='project'||t?.status!=='completed'||t.canOpenOriginalRun!==true||typeof t.taskId!=='string'||
-    typeof t.originalRunId!=='string'||!t.originalRunId||t.runId!==t.originalRunId||!Number.isSafeInteger(t.originalEpoch)||
-    t.originalEpoch<=0||t.epoch!==t.originalEpoch||typeof t.originalProjectDraftId!=='string'||!/^[a-f0-9]{64}$/.test(t.originalProjectDraftId))return;
-  return {taskId:t.taskId,runId:t.originalRunId,epoch:t.originalEpoch,draftId:t.originalProjectDraftId};
+type OriginalTask = { taskId:string; runId:string; epoch:number; status:string };
+type ChatBuild = OriginalTask & {ordinal:number; settledBuild?:true; decision?:'dependencies'|'build'|'collect'; approvalId?:string; packageOperationId?:string};
+export type ConversationPreparation = ButlerPreparationTarget & {
+  sourceRunId:string; sourceEpoch:number; kind:'phone'|'project'; canPrepare:boolean; targetTaskId:string; goal:string;
+  originalTask?:OriginalTask; originalDraft?:OriginalProjectDraft; chatBuild?:ChatBuild; visibleOwnerRequest?:{messageId:string;revision:number}
+};
+const identifier = (value:unknown): value is string => typeof value==='string' && !!value && value.length<=240;
+const positive = (value:unknown): value is number => Number.isSafeInteger(value) && Number(value)>0;
+const originalTask = (t:Data, original=true):OriginalTask|undefined=>
+  t && identifier(t.taskId) && identifier(t.runId) && positive(t.epoch) && typeof t.status==='string' &&
+  (!original || t.canOpenOriginalRun===true && t.originalRunId===t.runId && t.originalEpoch===t.epoch)
+    ? {taskId:t.taskId,runId:t.runId,epoch:t.epoch,status:t.status} : undefined;
+function originalProjectDraft(row:Data, task?:OriginalTask):OriginalProjectDraft|undefined{
+  const draftId=row.target?.originalProjectDraftId;
+  return row.kind==='project'&&task?.status==='completed'&&typeof draftId==='string'&&/^[a-f0-9]{64}$/.test(draftId)
+    ? {taskId:task.taskId,runId:task.runId,epoch:task.epoch,draftId} : undefined;
 }
 export const conversationPreparationKey = (row: ButlerPreparationTarget) => JSON.stringify([row.sourceConversationId,row.sourceTaskId,row.proposalId]);
-function conversationPreparation(row: Data): ConversationPreparation | null {
-  const id = (value: unknown): value is string => typeof value === 'string' && !!value && value.length <= 240;
-  if (!preparation(row) || !id(row.sourceConversationId) || !id(row.sourceTaskId) || !id(row.proposalId) ||
-      !id(row.sourceRunId) || !Number.isSafeInteger(row.sourceEpoch) || row.sourceEpoch < 1 || row.available !== true) return null;
-  const targetTaskId = id(row.target?.taskId) ? row.target.taskId : '';
+export function conversationPreparation(row: Data): ConversationPreparation | null {
+  if (!preparation(row) || !identifier(row.sourceConversationId) || !identifier(row.sourceTaskId) || !identifier(row.proposalId) ||
+      !identifier(row.sourceRunId) || !positive(row.sourceEpoch) || row.available !== true) return null;
+  const targetTaskId = identifier(row.target?.taskId) ? row.target.taskId : '';
   const canPrepare = row.state === 'proposed' && row.canPrepare === true && !targetTaskId;
   if (!canPrepare && !targetTaskId) return null;
+  const task=originalTask(row.target), draft=originalProjectDraft(row,task), build=row.chatOriginalBuild, child=originalTask(build,false);
+  const chatBuild:ChatBuild|undefined=draft&&child&&child.taskId!==draft.taskId&&build.draftTaskId===draft.taskId&&build.draftId===draft.draftId&&
+      build.draftRunId===draft.runId&&build.draftEpoch===draft.epoch&&build.executionAuthorized===false&&
+      Number.isInteger(build.ordinal)&&build.ordinal>=0&&build.ordinal<=8
+    ? {...child,ordinal:build.ordinal,...(build.settledBuild===true&&child.status==='completed'?{settledBuild:true}:{}),...(['dependencies','build','collect'].includes(build.decision)&&identifier(build.approvalId)?{decision:build.decision,approvalId:build.approvalId}:{}),
+      ...(identifier(build.packageOperationId)?{packageOperationId:build.packageOperationId}:{})}:undefined;
   return { sourceTaskId: row.sourceTaskId, proposalId: row.proposalId, sourceConversationId: row.sourceConversationId,
-    sourceRunId: row.sourceRunId, sourceEpoch: row.sourceEpoch, kind: row.kind, canPrepare, targetTaskId, originalDraft:originalProjectDraft(row),
-    ...(row.kind==='project'&&id(row.visibleOwnerRequest?.messageId)&&Number.isSafeInteger(row.visibleOwnerRequest.revision)&&row.visibleOwnerRequest.revision>0
+    sourceRunId: row.sourceRunId, sourceEpoch: row.sourceEpoch, kind: row.kind, canPrepare, targetTaskId, goal:text(row.goal),
+    originalTask:task, originalDraft:draft, chatBuild,
+    ...(row.kind==='project'&&identifier(row.visibleOwnerRequest?.messageId)&&positive(row.visibleOwnerRequest.revision)
       ? {visibleOwnerRequest:{messageId:row.visibleOwnerRequest.messageId,revision:row.visibleOwnerRequest.revision}} : {}) };
 }
-export function ConversationPreparationAction({ row, disabled, onOpen, onDraft }: {
-  row: ConversationPreparation; disabled: boolean; onOpen: (target: ButlerPreparationTarget, trigger: HTMLButtonElement) => void;
-  onDraft?: (target:OriginalProjectDraft) => void;
-}) {
-  const draft=onDraft&&row.originalDraft;
-  const label = draft ? '查看这次改稿' : row.targetTaskId ? '查看这次工作' : row.kind === 'project' ? '核对项目工作' : '核对手机工作';
-  return <Button className="pw-chat-preparation-action" variant="secondary" size="small"
-    leadingIcon={row.kind === 'phone' ? IconMonitor : IconFolder} trailingIcon={IconChevronRight}
-    disabled={disabled} onClick={event => draft?onDraft?.(draft):onOpen(row,event.currentTarget)}>
-    <span><strong>{label}</strong><small>{draft?'独立改稿，原文件未写回':row.targetTaskId ? '已关联原任务，可查进度与结果' : '管家已拟好，尚未开始'}</small></span>
-  </Button>;
+export type ConversationNext = {action:'prepare';label:string; hint?:string} |
+  {action:'task'|'draft'|'package';label:string; hint?:string; target:OriginalTask; draftId?:string; packageOperationId?:string; review?:boolean; approvalId?:string};
+const approvalStates=['waiting_approval','awaiting_approval','waiting_permission'];
+const questionStates=['awaiting_user','waiting_user'];
+const checkStates=['reconciling','reconciliation_required','unknown'];
+function taskNext(target:OriginalTask, canReview:boolean, build?:ChatBuild):ConversationNext {
+  if(canReview&&approvalStates.includes(target.status)){
+    const label=build?.decision==='dependencies'?'审阅依赖安装':build?.decision==='build'?'审阅本机网页构建':
+      build?.decision==='collect'?'审阅保存文件':'核对待确认的操作';
+    return {action:'task',target,label,review:true,approvalId:build?.approvalId};
+  }
+  if(canReview&&questionStates.includes(target.status))return {action:'task',target,label:build?'查看原构建需要什么':'查看这次工作需要什么',review:true};
+  if(canReview&&target.status==='needs_confirmation')return {action:'task',target,label:'核对这次结果',review:true};
+  if(checkStates.includes(target.status))return {action:'task',target,label:'核对原操作状态',review:canReview};
+  if(target.status==='failed')return {action:'task',target,label:build?'查看这次构建为何未完成':'查看这次工作为何未完成'};
+  return {action:'task',target,label:build?'查看这次构建':'查看这次工作'};
+}
+export function conversationNext(row:ConversationPreparation, can:(command:string)=>boolean):ConversationNext {
+  const task=row.originalTask, build=row.chatBuild;
+  if(row.kind==='project'&&task&&can('tasks.open')){
+    if(build&&can('butler.preparation.project.followup')){
+      // A current decision displaces an already usable result only when the
+      // exact next action is known. This is not a live progress dashboard.
+      if(build.decision||checkStates.includes(build.status))return taskNext(build,can('tasks.review'),build);
+      if(build.packageOperationId&&['projects.package.preview.inspect','projects.package.preview.open'].every(can))
+        return {action:'package',target:build,packageOperationId:build.packageOperationId,label:'打开固定网页',hint:build.ordinal?'第 '+build.ordinal+' 稿':undefined};
+      if(build.settledBuild||[...approvalStates,...questionStates,'needs_confirmation','failed'].includes(build.status))
+        return taskNext(build,can('tasks.review'),build);
+    }
+    if(row.originalDraft&&can('projectDraft.readDifference'))
+      return {action:'draft',target:task,draftId:row.originalDraft.draftId,label:'查看这次改稿'};
+    return taskNext(task,can('tasks.review'));
+  }
+  return {action:'prepare',label:row.targetTaskId?'核对这次工作':row.kind==='project'?'审阅项目交办':'核对手机工作',
+    ...(row.canPrepare?{hint:row.kind==='project'?'选好项目或已存稿后再开始':'管家已拟好，尚未开始'}:{})};
+}
+export function ConversationPreparationActions({rows,disabled,can,onOpen,onRead}:{
+  rows:ConversationPreparation[];disabled:boolean;can:(command:string)=>boolean;
+  onOpen:(target:ButlerPreparationTarget,trigger:HTMLButtonElement)=>void;
+  onRead:(row:ConversationPreparation,next:Exclude<ConversationNext,{action:'prepare'}>,trigger:HTMLButtonElement)=>void;
+}){
+  const action=(row:ConversationPreparation, named=false)=>{
+    const next=conversationNext(row,can);
+    return <Button key={conversationPreparationKey(row)} className="pw-chat-preparation-action" variant="secondary" size="small"
+      leadingIcon={row.kind==='phone'?IconMonitor:IconFolder} trailingIcon={IconChevronRight} disabled={disabled}
+      onClick={event=>next.action==='prepare'?onOpen(row,event.currentTarget):onRead(row,next,event.currentTarget)}>
+      <span><strong>{next.label}</strong>{named&&row.goal?<small dir="auto">{row.goal}</small>:next.hint?<small>{next.hint}</small>:null}</span>
+    </Button>;
+  };
+  return rows.length===1?<div className="pw-chat-preparation-actions">{action(rows[0])}</div>:
+    <Accordion className="pw-chat-preparation-choices" isDisabled={disabled}><AccordionItem title="查看这条消息的交办">
+      <div className="pw-chat-preparation-actions">{rows.map(row=>action(row,true))}</div>
+    </AccordionItem></Accordion>;
 }
 type Shared = { can: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any> };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value.filter(row => row && typeof row === 'object' && !Array.isArray(row)) : [];

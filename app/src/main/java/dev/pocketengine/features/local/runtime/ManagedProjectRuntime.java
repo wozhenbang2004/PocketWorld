@@ -222,6 +222,9 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         if(NativePipeAdmission.exact(invocation.exact())!=(pipeAdmission!=null))throw new SecurityException("runtime_pipe_native_admission_required");
         boolean passedToJobs=false;try{
         requireProvider(invocation.executionRef());invocation.checkCurrent();
+        JSONObject exact=invocation.exact();
+        if(dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.exact(exact))
+            dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.requireLaunch(exact,invocation.sourceSnapshot(),describe(),invocation.workspace());
         if(dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact()))dev.pocketengine.features.skills.ManagedSkillBackend.requireProgram(invocation.exact());
         if(dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())){if(nativeImportLease==null||invocation.executionRef().phase()!=RuntimeExecutionRef.Phase.COMMAND)throw new SecurityException("缺少原Git导入的固定命令租约");dev.pocketengine.features.local.project.ProjectGitImport.requireProgram(invocation.exact());}
         if(androidRuntime!=null){passedToJobs=true;return dispatchAndroid(invocation,nativeImportLease,pipeAdmission);}
@@ -257,6 +260,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         environment.put("LANG","C.UTF-8");environment.put("POCKETWORLD_ENVIRONMENT_IDENTITY",selected.identity);
         File gitPool=workspace.privateGitPoolForHost();if(gitPool!=null)environment.put(dev.pocketengine.features.local.project.ProjectGitIsolation.ENV,gitPool.getCanonicalPath());
         if(commandSpec!=null){JSONObject ordinary=commandSpec.getJSONObject("environment");for(java.util.Iterator<String> keys=ordinary.keys();keys.hasNext();){String name=keys.next();environment.put(name,ordinary.getString(name));}if("pty".equals(commandSpec.getString("terminalMode")))environment.put("TERM","xterm-256color");}
+        if(invocation.ownerLockedBuild()||dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.exact(invocation.exact()))environment.putAll(dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.nativeEnvironment());
         long timeout=payload.optLong("timeoutMillis",300000);
         if(timeout<1 || timeout>86400000)throw new IllegalArgumentException("runtime_timeout_invalid");
         AutoCloseable lease=nativeImportLease==null?environments.acquire(selected):nativeImportLease;
@@ -291,6 +295,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             String relative=payload.optString("workingDirectory",".");cwd=workspace.resolve(relative,false);
             timeout=payload.optLong("timeoutMillis",300000);if(timeout<1||timeout>86400000)throw new IllegalArgumentException("runtime_timeout_invalid");
             Map<String,String> ordinary=new LinkedHashMap<>();if(commandSpec!=null){JSONObject requested=commandSpec.getJSONObject("environment");for(java.util.Iterator<String> keys=requested.keys();keys.hasNext();){String name=keys.next();ordinary.put(name,requested.getString(name));}if("pty".equals(commandSpec.getString("terminalMode")))ordinary.put("TERM","xterm-256color");}
+            if(invocation.ownerLockedBuild()||dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.exact(invocation.exact()))ordinary.putAll(dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.nativeEnvironment());
             command=profile.command(workspace,relative,guest,ordinary);environment=profile.hostEnvironment(identity());lease=nativeImportLease==null?profile.acquire():nativeImportLease;
         }
         passedToJobs=true;return pipeAdmission==null?jobs.start(invocation,command,environment,cwd,timeout,lease):jobs.startPipes(invocation,command,environment,cwd,timeout,lease,pipeAdmission);

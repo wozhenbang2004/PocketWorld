@@ -22,11 +22,15 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
  const executionMatches=executionOriginal.planRevision===capability.planRevision&&executionOriginal.planArtifactRef===capability.planArtifactRef&&executionOriginal.planHash===capability.planHash&&executionOriginal.scopeRevision===capability.scopeRevision;
  useEffect(()=>setScopeReviewed(false),[id,executionOriginal.planRevision,executionOriginal.planArtifactRef,executionOriginal.planHash,executionOriginal.scopeRevision]);
  const reviewedBuild=object(approval.firstBuildReview),hasBuild=approval.firstBuildReview!=null;
+ const dependencies=reviewedBuild.action==='dependencies',lock=object(reviewedBuild.lock);
+ const validDependencies=dependencies&&['npm','pnpm'].includes(lock.manager)&&lock.manager===reviewedBuild.manager&&
+   typeof lock.managerVersion==='string'&&lock.registry==='https://registry.npmjs.org/'&&/^[a-f0-9]{64}$/.test(lock.lockSha256)&&
+   Number.isSafeInteger(lock.packages)&&lock.packages>0&&Array.isArray(reviewedBuild.argv)&&reviewedBuild.argv.every((a:unknown)=>typeof a==='string');
  const goodEpoch=(v:unknown)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0,positiveId=(v:unknown)=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(v);
  const buildValid=!hasBuild||view.firstBuildVerified===true&&approval.tool==='project_execute'&&positiveId(reviewedBuild.taskId)&&reviewedBuild.actionRunId===approval.runId&&
    positiveId(reviewedBuild.actionOperationId)&&goodEpoch(reviewedBuild.actionEpoch)&&reviewedBuild.checkoutId===capability.checkoutId&&
    reviewedBuild.sourceDigest===capability.sourceDigest&&(
-     reviewedBuild.action==='build'&&['npm','pnpm'].includes(reviewedBuild.manager)||reviewedBuild.action==='collect'&&positiveId(reviewedBuild.buildRunId)&&
+     validDependencies||reviewedBuild.action==='build'&&['npm','pnpm'].includes(reviewedBuild.manager)||reviewedBuild.action==='collect'&&positiveId(reviewedBuild.buildRunId)&&
      positiveId(reviewedBuild.buildOperationId)&&reviewedBuild.buildOperationId!==reviewedBuild.actionOperationId&&goodEpoch(reviewedBuild.buildEpoch)&&
      typeof reviewedBuild.path==='string'&&Number.isSafeInteger(reviewedBuild.bytes)&&reviewedBuild.bytes>=0&&/^[a-f0-9]{64}$/.test(reviewedBuild.sha256));
  const canApprove=buildValid&&view.canApprove===true&&planMatches&&(!execution||executionMatches)&&(!(team||live||execution)||scopeReviewed);
@@ -40,9 +44,10 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
    {approval.reason&&<p className="pw-decision-context">{String(approval.reason)}</p>}
    {approval.description&&<p className="pw-decision-context">{String(approval.description)}</p>}
   </header>
-  {hasBuild&&(buildValid?<section className="pw-decision-section"><h5>{reviewedBuild.action==='build'?reviewedBuild.manager+' run build':'保留 '+reviewedBuild.path+' · '+reviewedBuild.bytes+' 字节'}</h5>
-    {reviewedBuild.action==='collect'?<><p>选自第 {reviewedBuild.buildEpoch} 轮原构建后观察到的文件。现在第 {reviewedBuild.actionEpoch} 轮申请保存所选版本，不重新构建；确认不等于文件已保存。实际保存轮次以任务文件回执为准。</p><p>核对文件：{reviewedBuild.sha256}</p></>:<p>只批准在这份独立副本上运行这次命令。脚本可能联网、执行其他脚本或改动该副本，不包含收件许可。</p>}
-    <details><summary>核对副本与原操作编号</summary><p>副本：{reviewedBuild.checkoutId} · 版本：{reviewedBuild.sourceDigest}</p>{reviewedBuild.action==='collect'&&<p>源构建：{reviewedBuild.buildRunId} / {reviewedBuild.buildOperationId}</p>}<p>{reviewedBuild.action==='collect'?'本次收件提案':'本次构建提案'}：{reviewedBuild.actionRunId} / {reviewedBuild.actionOperationId}</p></details>
+  {hasBuild&&(buildValid?<section className="pw-decision-section"><h5>{dependencies?'准备锁定依赖':reviewedBuild.action==='build'?reviewedBuild.manager+' run build':'保留 '+reviewedBuild.path+' · '+reviewedBuild.bytes+' 字节'}</h5>
+    {dependencies?<><p>{lock.lockPath} · {lock.manager} {lock.managerVersion} · {lock.packages} 个锁条目</p><p>仅从 {lock.registry} 准备此副本。不会运行安装脚本；{reviewedBuild.manager==='npm'?'npm ci 可能替换当前副本的 node_modules。':'不覆盖这份锁。'} 本次不批准构建。</p>
+      <details><summary>核对确切命令和锁指纹</summary><p><code dir="ltr">{lock.manager} {reviewedBuild.argv.join(' ')}</code></p><p>SHA-256：{lock.lockSha256}</p></details></>:reviewedBuild.action==='collect'?<><p>选自第 {reviewedBuild.buildEpoch} 轮原构建后观察到的文件。现在第 {reviewedBuild.actionEpoch} 轮申请保存所选版本，不重新构建；确认不等于文件已保存。实际保存轮次以任务文件回执为准。</p><p>核对文件：{reviewedBuild.sha256}</p></>:<p>只批准在这份独立副本上运行这次命令。脚本可能联网、执行其他脚本或改动该副本，不包含收件许可。</p>}
+    <details><summary>核对副本与原操作编号</summary><p>副本：{reviewedBuild.checkoutId} · 版本：{reviewedBuild.sourceDigest}</p>{reviewedBuild.action==='collect'&&<p>源构建：{reviewedBuild.buildRunId} / {reviewedBuild.buildOperationId}</p>}<p>{dependencies?'本次依赖准备提案':reviewedBuild.action==='collect'?'本次收件提案':'本次构建提案'}：{reviewedBuild.actionRunId} / {reviewedBuild.actionOperationId}</p></details>
   </section>:<p role="status">未取得这次确切构建或收件的身份，不能批准。请回原任务核对。</p>)}
   {originalFile&&<TeamApprovalFileComparison key={originalFile.proof} source={originalFile} disabled={disabled}/>}
   {(view.semanticDescription||view.programRisk)&&<div className="pw-decision-notice">
@@ -130,7 +135,7 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
    {(team||live||execution)&&view.canApprove===true&&(!execution||executionMatches)&&<CheckboxField className="pw-decision-reviewed" isSelected={scopeReviewed} onChange={setScopeReviewed} isDisabled={disabled}>
     {execution?`我已核对计划版本 ${String(executionOriginal.planRevision)} 的完整步骤和原任务范围`:team?'我已核对原成员、依赖、文件基线、范围与累计预算':'我已核对原文件范围，并允许这些源码后续修改在本轮服务中执行'}
    </CheckboxField>}
-   <div className="pw-decision-actions"><PressButton label={execution?'确认这版计划，在原范围内继续':team?'批准此计划与可见预算':live?'允许启动与限定热改':view.programRisk?'允许运行本机程序':'允许这次操作'} disabled={disabled||!id||!canApprove} onClick={()=>decide(true)}/><Button variant="secondary" disabled={disabled||!id} onClick={()=>decide(false)}>拒绝</Button></div>
+   <div className="pw-decision-actions"><PressButton label={execution?'确认这版计划，在原范围内继续':team?'批准此计划与可见预算':live?'允许启动与限定热改':view.programRisk?'允许运行本机程序':dependencies?'批准此锁的依赖下载':'允许这次操作'} disabled={disabled||!id||!canApprove} onClick={()=>decide(true)}/><Button variant="secondary" disabled={disabled||!id} onClick={()=>decide(false)}>拒绝</Button></div>
   </footer>
  </section>;
 }

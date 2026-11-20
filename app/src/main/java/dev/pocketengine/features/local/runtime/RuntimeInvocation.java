@@ -12,6 +12,7 @@ public final class RuntimeInvocation {
     private final ProjectRuntime.LiveGate gate;
     private final long pauseRevision;
     private final RuntimeWorkspace workspace;
+    private final boolean ownerLockedBuild;
 
     public RuntimeInvocation(JSONObject exact,JSONObject nativeBinding,JSONObject frozenSourceSnapshot,
             RunControl original,ProjectRuntime.LiveGate liveGate) throws Exception {
@@ -19,6 +20,13 @@ public final class RuntimeInvocation {
     }
     public RuntimeInvocation(JSONObject exact,JSONObject nativeBinding,JSONObject frozenSourceSnapshot,
             RunControl original,ProjectRuntime.LiveGate liveGate,RuntimeWorkspace workspace) throws Exception {
+        this(exact,nativeBinding,frozenSourceSnapshot,original,liveGate,workspace,false);
+    }
+    public RuntimeInvocation(JSONObject exact,JSONObject nativeBinding,JSONObject frozenSourceSnapshot,
+            RunControl original,ProjectRuntime.LiveGate liveGate,RuntimeWorkspace workspace,boolean ownerLockedBuild)throws Exception{
+        if(ownerLockedBuild&&(!"build".equals(exact.opt("stepId"))||!"project.runtime.run".equals(exact.opt("command"))||
+            !"managed_process_v1".equals(exact.opt("runtimeId"))))throw new SecurityException("runtime_owner_locked_build_scope_mismatch");
+        this.ownerLockedBuild=ownerLockedBuild;
         reference=RuntimeExecutionRef.fromHost(exact,nativeBinding);
         source=ProjectSources.copy(frozenSourceSnapshot);
         JSONObject actual=ProjectSources.describe(source);
@@ -33,6 +41,7 @@ public final class RuntimeInvocation {
     public JSONObject binding() throws Exception { return reference.binding(); }
     public JSONObject sourceSnapshot() throws Exception { return ProjectSources.copy(source); }
     public RunControl originalControl() { return original; }
+    boolean ownerLockedBuild(){return ownerLockedBuild;}
     public RuntimeWorkspace workspace() {
         if(workspace==null)throw new SecurityException("runtime_native_active_workspace_required");
         return workspace;

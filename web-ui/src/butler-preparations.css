@@ -92,3 +92,7 @@
 .pw-chat-preparation-action > span > span { display: grid; flex: 1; gap: 2px; min-width: 0; }
 .pw-chat-preparation-action strong { font-weight: 600; color: var(--pw-ink); }
 .pw-chat-preparation-action small { color: var(--pw-copy); font: 400 12px/1.4 var(--pw-font); }
+
+.pw-chat-preparation-choices { min-width: 0; max-width: 100%; margin-block: var(--pw-gap-related); }
+.pw-chat-preparation-actions .pw-chat-preparation-action strong { overflow-wrap: anywhere; }
+.pw-chat-preparation-action small { overflow-wrap: anywhere; }

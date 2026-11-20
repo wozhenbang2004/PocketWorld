@@ -7,13 +7,13 @@ type Options = {
   navigation: () => number;
   supported: (command: string) => boolean;
   leaveTask: (stillCurrent: () => boolean) => Promise<boolean>;
-  show: (choices: PackagePreviewChoices) => boolean;
+  show: (choices:PackagePreviewChoices, originalChat?:()=>boolean) => boolean;
   error: (message: string) => void;
 };
 type Handoff = {
   target: PackagePreviewTarget; epoch: number; resume: number; navigation: number; projectId: string;
   phase: 'leaving' | 'waiting' | 'inspecting' | 'selecting' | 'presenting';
-  choices?: PackagePreviewChoices; timer?: number; shown: () => void;
+  choices?: PackagePreviewChoices; timer?: number; shown: () => void; originalChat?:()=>boolean;
 };
 const nativeView = () => bridge.getState().view as { taskId?: string | null; section?: string | null; resumeRevision?: number } | undefined;
 
@@ -25,7 +25,7 @@ export function useProjectPackageHandoff(options: Options) {
   const active = useRef<Handoff | null>(null);
   const [opening, setOpening] = useState(false), [, wake] = useState(0);
   const sameDocument = (r: Handoff) => active.current === r && !document.hidden &&
-    bridge.getDocumentEpoch() === r.epoch && Number(nativeView()?.resumeRevision || 0) === r.resume;
+    bridge.getDocumentEpoch() === r.epoch && Number(nativeView()?.resumeRevision || 0) === r.resume && r.originalChat?.() !== false;
   const finish = (r: Handoff, message?: string) => {
     if (active.current !== r) return;
     if (r.timer !== undefined) window.clearTimeout(r.timer);
@@ -44,18 +44,20 @@ export function useProjectPackageHandoff(options: Options) {
       matchesProject(o.projectId) && matchesProject(String(state.projectId || '')) &&
       (!nativeView()?.taskId && nativeView()?.section == null);
   };
-  const open = (target: PackagePreviewTarget, shown: () => void) => {
+  const open = (target: PackagePreviewTarget, shown: () => void, originalChat?:()=>boolean) => {
     const o = latest.current, view = nativeView();
-    if (active.current || document.hidden || !view || view.taskId !== target.taskId || view.section != null ||
-        !['tasks.close', 'projects.package.preview.inspect', 'projects.package.preview.open'].every(o.supported)) return;
+    if (active.current || document.hidden || !view || view.section != null ||
+        (originalChat ? o.route!=='chat' || !!view.taskId || !originalChat() : view.taskId !== target.taskId) ||
+        !['tasks.close', 'projects.package.preview.inspect', 'projects.package.preview.open'].every(o.supported)) return false;
     const r: Handoff = { target, epoch: bridge.getDocumentEpoch(), resume: Number(view.resumeRevision || 0),
-      navigation: o.navigation(), projectId: o.projectId, phase: 'leaving', shown };
+      navigation: o.navigation(), projectId: o.projectId, phase: 'leaving', shown, originalChat };
     active.current = r; setOpening(true);
     void o.leaveTask(() => sameDocument(r) && latest.current.navigation() === r.navigation && (!nativeView()?.taskId || nativeView()?.taskId === r.target.taskId)).then(closed => {
       if (!sameDocument(r)) { finish(r); return; }
       if (!closed || latest.current.navigation() !== r.navigation + 1) { finish(r); return; }
       r.phase = 'waiting'; timely(r, '尚未确认原工作窗口已关闭，未读取另一份成果。'); wake(n => n + 1);
     }).catch(error => finish(r, sameDocument(r) ? String(error instanceof Error ? error.message : error) : undefined));
+    return true;
   };
 
   // Snapshot publication also wakes this hook. A receipt is not a guarantee
@@ -80,7 +82,7 @@ export function useProjectPackageHandoff(options: Options) {
         const result = await bridge.command('projects.package.preview.inspect', { taskId: r.target.taskId, operationId: r.target.operationId });
         if (!onDestination(r)) { finish(r); return; }
         const choices = packagePreviewChoices(result, r.target);
-        if (!choices) throw new Error('固定包与所选原工作操作不符，没有打开其他版本。');
+        if (!choices || r.originalChat&&choices.mode!=='web_output') throw new Error('固定包与所选原工作操作不符，没有打开其他版本。');
         r.choices = choices;
         const state = bridge.getState().state;
         if (state.projectId !== choices.projectId || state.filePath) {
@@ -93,7 +95,7 @@ export function useProjectPackageHandoff(options: Options) {
     } else if (r.phase === 'presenting' && r.choices) {
       const state = bridge.getState().state, id = r.choices.projectId;
       if (o.projectId !== id || state.projectId !== id || state.filePath || !Array.isArray(state.projects) || !state.projects.some(p => p?.id === id)) return;
-      if (o.show(r.choices)) { r.shown(); finish(r); }
+      if (o.show(r.choices,r.originalChat)) { r.shown(); finish(r); }
     }
   });
   return { opening, open };

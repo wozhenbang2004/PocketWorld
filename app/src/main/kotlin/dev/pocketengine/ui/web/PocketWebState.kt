@@ -261,6 +261,7 @@ internal object PocketWebState {
         val composer = JSONObject().put("ready", draft != null).put("key", draft?.key ?: "")
             .put("epoch", controller.composerViewEpoch).put("revision", draft?.revision ?: 0L)
             .put("text", draft?.text ?: "").put("mode", draft?.mode ?: state.chatSendMode)
+            .put("canOfferPrimaryDisplayExample", draft?.let(controller::canOfferPrimaryDisplayExample) == true)
             .put("primaryDisplayGate",draft?.takeIf { controller.webPrivateOwnerVisible() }?.let(controller::primaryDisplayDraftGate) ?: JSONObject.NULL)
             .put("conversationId", draft?.conversationId ?: "").put("saving", controller.composerSaving)
             .put("firstMessageMemory", draft?.let { controller.firstMessageMemoryState(it.key) } ?: JSONObject.NULL)

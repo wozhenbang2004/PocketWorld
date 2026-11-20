@@ -10,6 +10,7 @@ import { OwnerWorkReport } from './OwnerWorkReport';
 import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
+import { FirstNodeWebOutput, firstNodeWebOwnerWindow } from './FirstNodeWebOutput';
 import { ProjectDraftDifference } from './ProjectDraftDifference';
 import type { OriginalProjectDraft } from './ButlerPreparations';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
@@ -42,13 +43,14 @@ const packageReadWindow = () => {
 
 /** This page holds only original-operation display metadata. Progress pushes
  * never rescan the plans; each additional history page is an explicit read. */
-function useProjectPackages(task: unknown, active: boolean, identity: string) {
+function useProjectPackages(task: unknown, active: boolean, identity: string, firstWebTaskId?: string) {
   const target = projectPackageTaskIdentity(task), taskId = target?.taskId || '';
   const record = task as { status?: string; raw?: { runId?: string; coordinatorEpoch?: number } } | null;
   const settled = ['needs_confirmation', 'completed', 'paused', 'interrupted', 'failed', 'stopped', 'cancelled', 'canceled'].includes(record?.status || '');
   const scope = JSON.stringify([identity, taskId, target?.projectId, target?.checkoutId, record?.raw?.runId, record?.raw?.coordinatorEpoch, settled]);
   const [supported, setSupported] = useState(packageReadSupported);
   const [retained, setRetained] = useState<PackageRead | null>(null);
+  const [firstWebWindow, setFirstWebWindow] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const saved = useRef<PackageRead | null>(null), alive = useRef(false), pending = useRef(false), generation = useRef(0);
   const current = useRef({ scope, enabled: false }); current.current = { scope, enabled: active && supported && !!target };
@@ -78,6 +80,16 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
       if (request === generation.current) { pending.current = false; if (alive.current) setBusy(false); }
     }
   }, [scope, taskId]);
+  const refreshAfterFirstWebSave = useCallback((operationId: string, sha256: string) => {
+    if (!alive.current || !current.current.enabled || current.current.scope !== scope || document.hidden || !packageWindowOwns(taskId) ||
+        saved.current?.items.some(item => {
+          const row = item as {operationId?: string; archiveSha256?: string} | null;
+          return row?.operationId === operationId && row.archiveSha256 === sha256;
+        })) return;
+    // Only the new card's verified original receipt can supersede a pre-save read.
+    ++generation.current; pending.current = false; saved.current = null; setRetained(null);
+    void read();
+  }, [scope, taskId, read]);
   useEffect(() => {
     alive.current = true; setBusy(false); setError('');
     let windowIdentity = packageReadWindow();
@@ -86,19 +98,24 @@ function useProjectPackages(task: unknown, active: boolean, identity: string) {
     // tasks.open may acknowledge before the new native owner window is published.
     // Wait for that exact task; the subscription below resumes this read when it arrives.
     if (active && supported && packageWindowOwns(taskId)) void read();
+    const syncFirstWebWindow = () => setFirstWebWindow(firstWebTaskId ? firstNodeWebOwnerWindow(firstWebTaskId) : '');
     const inspect = () => {
+      syncFirstWebWindow();
       setSupported(packageReadSupported());
       const next = packageReadWindow();
       if (next === windowIdentity) return;
       windowIdentity = next; invalidate();
       if (!document.hidden && current.current.enabled) void read();
     };
-    const visibility = () => { invalidate(); if (!document.hidden && current.current.enabled) void read(); };
+    const visibility = () => { syncFirstWebWindow(); invalidate(); if (!document.hidden && current.current.enabled) void read(); };
+    const hide = () => { setFirstWebWindow(''); invalidate(); };
     const unsubscribe = bridge.subscribe(inspect);
-    document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', invalidate);
-    return () => { alive.current = false; generation.current++; pending.current = false; unsubscribe(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', invalidate); };
-  }, [active, supported, scope, taskId, read]);
-  return { eligible: !!target, supported, waiting: active && supported && !!target && !packageWindowOwns(taskId), page: retained?.identity === scope ? retained : null, busy, error, read };
+    syncFirstWebWindow();
+    document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide);
+    return () => { alive.current = false; generation.current++; pending.current = false; unsubscribe(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
+  }, [active, supported, scope, taskId, firstWebTaskId, read]);
+  return { eligible: !!target, supported, waiting: active && supported && !!target && !packageWindowOwns(taskId), page: retained?.identity === scope ? retained : null,
+    busy, error, read, firstWebWindow, refreshAfterFirstWebSave };
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
@@ -127,7 +144,12 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   };
 }) {
   const [clock, setClock] = useState(Date.now);
-  const packageRead = useProjectPackages(task, active, readIdentity);
+  const record = task && typeof task === 'object' ? task as Record<string, any> : {};
+  const status = typeof record.status === 'string' && record.status ? record.status : record.raw?.status;
+  const firstWeb = active && status==='completed' && record.raw?.developmentContext?.ownerDraftFirstBuild &&
+    typeof record.id==='string' && typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
+    ? {taskId:record.id,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
+  const packageRead = useProjectPackages(task, active, readIdentity, firstWeb?.taskId);
   const outcome = getTaskOutcome(task, messages, Math.max(clock, Date.now()), packageRead.page ?? undefined);
   const [selectedPackage, selectPackage] = useState(''), packageButton = useRef<HTMLButtonElement | null>(null);
   const packageKey = (item: typeof outcome.projectPackages[number]) => JSON.stringify([readIdentity, item.taskId, item.operationId, item.archiveSha256]);
@@ -144,8 +166,6 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   }, [screenshot?.imageId, screenshot?.expiresAt, clock]);
   const imageLabel = screenshot?.currentRun ? '本轮结果截图' : '任务保留的较早截图';
   const work = ownerWorkPresentation(task);
-  const record = task && typeof task === 'object' ? task as Record<string, any> : {};
-  const status = typeof record.status === 'string' && record.status ? record.status : record.raw?.status;
   const reconciliation = taskNeedsReconciliation(task);
   // The store can reconcile an attempted stop after the runner emits its result.
   // Keep the authoritative state separate from the output and saved files.
@@ -200,6 +220,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     </div>}
     {active && onReadPhoneConversation && <PhoneTaskConversationReturn task={record} onRead={onReadPhoneConversation}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
+    {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}`} ownerWindow={packageRead.firstWebWindow}
+      target={firstWeb} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
     {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>

@@ -29,9 +29,22 @@ final class PrivateProjectDraftRevisions {
     static JSONObject next(JSONObject previous,String text)throws Exception{
         int ordinal=previous.getInt("ordinal")+1;if(ordinal>LIMIT)throw new IllegalStateException("这份原稿已保留八个后续版本，没有替换旧稿");
         byte[] payload=bytes(text);String sha=ProjectSources.sha256(payload);if(sha.equals(previous.getString("sha256")))throw new IllegalArgumentException("没有文字变化，未另存重复草稿");
-        JSONObject id=new JSONObject().put("format","pocketworld.private-project-owner-draft.v1").put("draftId",previous.getString("draftId")).put("taskId",previous.getString("taskId"))
-            .put("path",previous.getString("path")).put("parentId",previous.getString("revisionId")).put("ordinal",ordinal).put("bytes",payload.length).put("sha256",sha);
+        JSONObject id=identity(previous.getString("taskId"),previous.getString("draftId"),previous.getString("path"),previous.getString("revisionId"),ordinal,payload.length,sha);
         return id.put("revisionId",ProjectSources.digest(id)).put("text",text).put("sourceChanged",false).put("executionAuthorized",false);
+    }
+    private static JSONObject identity(String task,String draft,String path,String parent,int ordinal,int size,String sha)throws Exception{
+        return new JSONObject().put("format","pocketworld.private-project-owner-draft.v1").put("draftId",draft).put("taskId",task)
+            .put("path",path).put("parentId",parent).put("ordinal",ordinal).put("bytes",size).put("sha256",sha);
+    }
+    /** The original revision ID commits its exact hash and length. Confirm the published copy
+     * against that persisted locator, without selecting the revision's text column. */
+    static void requireRetainedCopy(SQLiteDatabase db,String task,String draft,String path,JSONObject ref)throws Exception{
+        String revision=ref.getString("revisionId"),sha=ref.getString("sha256");
+        int ordinal=TaskExecutionScope.exactInt(ref,"ordinal",1,LIMIT),size=TaskExecutionScope.exactInt(ref,"bytes",0,MAX_BYTES);
+        if(!revision.matches("[a-f0-9]{64}")||revision.equals(draft)||!sha.matches("[a-f0-9]{64}"))throw changed();
+        try(Cursor r=db.rawQuery("SELECT parent_id,ordinal FROM private_project_owner_draft_revisions WHERE task_id=? AND revision_id=?",new String[]{task,revision})){
+            if(!r.moveToFirst()||r.getInt(1)!=ordinal||!revision.equals(ProjectSources.digest(identity(task,draft,path,r.getString(0),ordinal,size,sha)))||r.moveToNext())throw changed();
+        }
     }
     private static void schema(SQLiteDatabase db){
         db.execSQL("CREATE TABLE IF NOT EXISTS private_project_owner_draft_revisions(task_id TEXT NOT NULL,ordinal INTEGER NOT NULL,revision_id TEXT NOT NULL,parent_id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(task_id,ordinal),UNIQUE(task_id,revision_id),UNIQUE(task_id,parent_id))");

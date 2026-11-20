@@ -11,10 +11,19 @@ public final class OwnerDraftFirstBuild {
     public static final String FIELD="ownerDraftFirstBuild";
     public static final Set<String> TOOLS=Set.of("project_inspect","project_plan","project_execute","project_status","project_log","project_collect_plan","project_generated_artifact");
     public static final String GOAL="验证我打开的这份独立改稿副本。先按同一版 package.json 准备 Node 构建（project_plan，intent=build、ecosystem=node），让我另行确认具体命令。不要安装依赖、启动服务、改写源码或发布。失败时保留原退出和日志；若原构建成功，再查看 build 或 dist，将我另行确认的文件交回这个任务。";
+    private static final String LOCKED_GOAL="在我选定的独立改稿副本中验证同版 Node 构建。已有原生核对的关键包就直接申请构建，缺依赖才按这一把锁申请准备。两项分别等待我的批准；准备失败停在本任务。只选实际构建之后观察到的 build 或 dist 文件，保留另行确认。不改原件、不开服务、不发布或切到云端。";
+    public static String goal(JSONObject pin){return dependencies(pin)==null?GOAL:LOCKED_GOAL;}
     private OwnerDraftFirstBuild(){}
     public static String client(String identity){
         if(identity==null||!identity.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("没有同一份改稿副本");
         return UUID.nameUUIDFromBytes(("private-draft-first-build-v1:"+identity).getBytes(StandardCharsets.UTF_8)).toString();
+    }
+    public static String lockedClient(String identity){
+        if(identity==null||!identity.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("没有同一份改稿副本");
+        return UUID.nameUUIDFromBytes(("private-draft-locked-node-v1:"+identity).getBytes(StandardCharsets.UTF_8)).toString();
+    }
+    public static String reviewedClient(JSONObject pin)throws Exception{
+        return dependencies(pin)==null?client(pin.getString("workIdentity")):lockedClient(pin.getString("workIdentity"));
     }
     public static JSONObject pin(OwnerDraftWorkCopy.Seed seed,JSONObject copy,JSONObject issued)throws Exception{
         if(!Boolean.TRUE.equals(copy.opt("found"))||!"ready".equals(copy.opt("status"))||!Boolean.FALSE.equals(copy.opt("recyclable"))||
@@ -35,6 +44,19 @@ public final class OwnerDraftFirstBuild {
             .put("sourceDigest",plan.getString("sourceDigest")).put("runtimeIdentity",plan.getString("runtimeIdentity"))
             .put("planDigest",plan.getString("planDigest")).put("manager",manager);
     }
+    public static final String DEPENDENCIES="lockedDependencies";
+    public static JSONObject chooseDependencies(JSONObject pin,JSONObject snapshot,JSONObject runtime)throws Exception{
+        JSONObject review=OwnerDraftNodeDependencies.review(snapshot,pin.getString("manager"),runtime);
+        if(review!=null)pin.put(DEPENDENCIES,new JSONObject().put("review",review).put("planDigest",
+            ProjectBuildPlan.lockedNodeDependencies(snapshot,pin.getString("runtimeIdentity"),review).getString("planDigest")));
+        return pin;
+    }
+    public static JSONObject dependencies(JSONObject pin){JSONObject lock=pin.optJSONObject(DEPENDENCIES);return lock==null?null:lock.optJSONObject("review");}
+    /** Prepared receipts are evidence in their own scope; current files must always be rechecked. */
+    public static boolean allowsBuildWithCurrentPackages(JSONObject observation){
+        return observation==null||"dependency_exit".equals(observation.opt("kind"))&&Integer.valueOf(0).equals(observation.opt("value"));
+    }
+
     public static JSONArray catalog(JSONArray visible)throws Exception{
         JSONArray only=new JSONArray();for(int i=0;i<visible.length();i++){JSONObject f=visible.getJSONObject(i);if(TOOLS.contains(f.getJSONObject("function").getString("name")))only.put(f);}return only;
     }
@@ -45,6 +67,10 @@ public final class OwnerDraftFirstBuild {
         JSONObject view=new JSONObject().put("action","build").put("manager",pin.getString("manager")).put("projectId",pin.getString("projectId"))
             .put("checkoutId",pin.getString("checkoutId")).put("sourceDigest",pin.getString("sourceDigest")).put("taskId",operation.getString("taskId"))
             .put("actionRunId",operation.getString("runId")).put("actionEpoch",operation.getInt("coordinatorEpoch")).put("actionOperationId",operation.getString("operationId"));
+        if("dependencies".equals(plan.opt("intent"))){
+            JSONObject step=ProjectBuildPlan.step(plan,OwnerDraftNodeDependencies.STEP);
+            return view.put("action","dependencies").put("lock",dependencies(pin)).put("argv",step.getJSONObject("payload").getJSONArray("argv"));
+        }
         if("collect".equals(plan.opt("intent"))){
             JSONObject choice=ProjectManagedOutput.verified(plan.getJSONArray("steps").getJSONObject(0).getJSONObject("payload").getJSONObject("artifactSelection")),origin=choice.getJSONObject("buildBinding");
             JSONObject proved=choice.getJSONObject("buildReceipt").getJSONObject("binding");
@@ -77,6 +103,13 @@ public final class OwnerDraftFirstBuild {
                 !view.getString("sourceDigest").matches("[a-f0-9]{64}"))return false;
             String operation=ProjectBuildPlan.identity(view.getString("actionOperationId"));
             if("build".equals(view.opt("action")))return "project.runtime.run".equals(cap.opt("command"))&&Set.of("npm","pnpm").contains(view.getString("manager"));
+            if("dependencies".equals(view.opt("action"))){
+                JSONObject lock=view.getJSONObject("lock");String manager=lock.getString("manager");
+                return "project.runtime.run".equals(cap.opt("command"))&&manager.equals(view.opt("manager"))&&
+                    OwnerDraftNodeDependencies.REGISTRY.equals(lock.opt("registry"))&&Set.of("npm","pnpm").contains(manager)&&
+                    lock.getString("lockSha256").matches("[a-f0-9]{64}")&&lock.getInt("packages")>0&&
+                    ProjectSources.canonical(OwnerDraftNodeDependencies.argv(manager)).equals(ProjectSources.canonical(view.getJSONArray("argv")));
+            }
             return "collect".equals(view.opt("action"))&&ProjectManagedOutput.COMMAND.equals(cap.opt("command"))&&
                 !operation.equals(ProjectBuildPlan.identity(view.getString("buildOperationId")))&&!ProjectBuildPlan.identity(view.getString("buildRunId")).isBlank()&&
                 view.getInt("buildEpoch")>0&&view.getInt("buildEpoch")<=epoch&&view.getLong("bytes")>=0&&view.getString("sha256").matches("[a-f0-9]{64}")&&
@@ -122,9 +155,11 @@ public final class OwnerDraftFirstBuild {
         return view;
     }
     public static void requireContext(JSONObject pin,JSONObject context)throws Exception{
-        if(pin.length()!=7||!"managed_process_v1".equals(context.opt("runtime"))||context.has("draftOnly")||context.has(OwnerRevisionSource.FIELD)||
+        JSONObject lock=pin.optJSONObject(DEPENDENCIES);
+        if(pin.length()!=(lock==null?7:8)||pin.has(DEPENDENCIES)&&(lock==null||lock.length()!=2||!lock.getString("planDigest").matches("[a-f0-9]{64}")||
+            !pin.getString("manager").equals(lock.getJSONObject("review").opt("manager")))||!"managed_process_v1".equals(context.opt("runtime"))||context.has("draftOnly")||context.has(OwnerRevisionSource.FIELD)||
             !pin.getString("projectId").equals(context.opt("projectId"))||!pin.getString("checkoutId").equals(context.opt("checkoutId"))||
-            !pin.getString("sourceDigest").equals(context.opt("initialSourceDigest"))||!client(pin.getString("workIdentity")).equals(context.opt("clientMessageId"))||
+            !pin.getString("sourceDigest").equals(context.opt("initialSourceDigest"))||!reviewedClient(pin).equals(context.opt("clientMessageId"))||
             !Set.of("npm","pnpm").contains(pin.getString("manager"))||!pin.getString("planDigest").matches("[a-f0-9]{64}")||pin.getString("runtimeIdentity").isBlank())
             throw new SecurityException("不是原稿所选独立工程的首次构建交办");
     }
@@ -134,6 +169,18 @@ public final class OwnerDraftFirstBuild {
         if(!task.getString("id").equals(binding.opt("taskId"))||!task.getString("runId").equals(binding.opt("runId"))||
             task.getInt("coordinatorEpoch")!=binding.optInt("coordinatorEpoch",-1)||!row.getString("operationId").equals(binding.opt("operationId")))return null;
         requirePlan(pin,plan,task.getString("id"));
+        return readFact(pin,task,row,request);
+    }
+    /** Carries only actual same-task receipts; an earlier dependency receipt is evidence, never approval. */
+    public static JSONObject priorDependencyFact(JSONObject pin,JSONObject task,JSONObject row,JSONObject binding)throws Exception{
+        JSONObject request=ProjectDevelopment.originalPollRequest(task,row),plan=request.getJSONObject("plan");
+        requireSourceBinding(request.getJSONObject("binding"),binding);
+        if(!"dependencies".equals(plan.opt("intent")))return null;
+        requirePlan(pin,plan,task.getString("id"));
+        return readFact(pin,task,row,request);
+    }
+    private static JSONObject readFact(JSONObject pin,JSONObject task,JSONObject row,JSONObject request)throws Exception{
+        JSONObject plan=request.getJSONObject("plan"),binding=request.getJSONObject("binding");
         if(ProjectDevelopment.recordedReceipt(task,row)==null)return null;
         JSONObject raw=row.getJSONObject("receipt").getJSONObject("executionReceipt");
         JSONObject exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,request.getString("stepId")));
@@ -146,17 +193,21 @@ public final class OwnerDraftFirstBuild {
             !Boolean.TRUE.equals(raw.opt("resourcesReleased"))||!Boolean.TRUE.equals(raw.opt("processGroupAbsent"))||
             !Boolean.FALSE.equals(raw.opt("timedOut"))||!Boolean.FALSE.equals(raw.opt("cancelRequested")))return null;
         int code=exit.getInt("value");if(code==0&&!"completed".equals(raw.opt("status"))||code!=0&&!"failed".equals(raw.opt("status")))return null;
+        if("dependencies".equals(plan.opt("intent")))return new JSONObject().put("kind","dependency_exit").put("value",code)
+            .put("actionRunId",binding.getString("runId")).put("actionEpoch",binding.getInt("coordinatorEpoch")).put("actionOperationId",binding.getString("operationId"));
         return reviewOperation(pin,plan,binding).put("kind","build_exit").put("value",code);
     }
     public static dev.pocketengine.core.RunOutcome settle(dev.pocketengine.core.RunOutcome original,JSONObject fact)throws Exception{
         if(!"completed".equals(original.status))return original;
         boolean file=fact!=null&&"saved_file".equals(fact.opt("kind")),exit=fact!=null&&"build_exit".equals(fact.opt("kind"));
         boolean ok=file||exit&&fact.getInt("value")==0;
-        String text=file?"本任务第 "+fact.getInt("actionEpoch")+" 轮已保留 "+fact.getString("path")+"（"+fact.getLong("bytes")+" 字节）。它是在第 "+fact.getInt("buildEpoch")+" 轮原构建后观察并选取的文件，不证明由本轮或该次构建新生成。可以在任务文件里查看。":
+        boolean dependency=fact!=null&&"dependency_exit".equals(fact.opt("kind"));
+        String text=dependency?fact.getInt("value")==0?"本机依赖准备命令已退出 0。还要核对实际包并另行批准构建；当前没有构建结果。":
+            "本机依赖准备失败，退出码 "+fact.getInt("value")+"。请查看本任务的原日志；需要再试也须核对并确认同一锁。没有构建。":file?"本任务第 "+fact.getInt("actionEpoch")+" 轮已保留 "+fact.getString("path")+"（"+fact.getLong("bytes")+" 字节）。它是在第 "+fact.getInt("buildEpoch")+" 轮原构建后观察并选取的文件，不证明由本轮或该次构建新生成。可以在任务文件里查看。":
             exit?"独立副本的本机构建命令退出码为 "+fact.getInt("value")+(ok?"。退出成功不等于已经保留生成文件；可在本任务继续核对输出。":"。请查看这次执行的日志，在原任务决定下一步；没有自动安装或重跑。"):
             "这次没有核对到原构建的完整退出或已保留文件，不能凭文字答复算作完成。请回本任务查看待批准的命令或已发生的执行，不要重复提交。";
         JSONObject evidence=new JSONObject(original.evidence.toString()).put("modelSummary",text);
-        if(fact!=null)evidence.put("firstBuildObservation",fact);return new dev.pocketengine.core.RunOutcome(ok?"completed":"failed",text,evidence);
+        if(fact!=null)evidence.put("firstBuildObservation",fact);return new dev.pocketengine.core.RunOutcome(ok?"completed":dependency&&fact.getInt("value")==0?"awaiting_user":"failed",text,evidence);
     }
     /** Check again before native I/O. A generated-file save must trace to this task's actual build, not merely the same filename. */
     public static void requirePlan(JSONObject pin,JSONObject issued,String task)throws Exception{
@@ -165,6 +216,8 @@ public final class OwnerDraftFirstBuild {
             !pin.getString("sourceDigest").equals(p.opt("sourceDigest"))||!pin.getString("runtimeIdentity").equals(p.opt("runtimeIdentity"))||
             !"managed_process_v1".equals(p.opt("runtimeId")))throw new SecurityException("首次构建不能更换工程、版本或运行环境");
         if("build".equals(p.opt("intent"))&&pin.getString("planDigest").equals(p.opt("planDigest")))return;
+        JSONObject lock=pin.optJSONObject(DEPENDENCIES);
+        if(lock!=null&&"dependencies".equals(p.opt("intent"))&&"locked_node_registry".equals(p.opt("ecosystem"))&&lock.getString("planDigest").equals(p.opt("planDigest")))return;
         if("collect".equals(p.opt("intent"))&&"managed_selected_output".equals(p.opt("ecosystem"))){
             JSONObject choice=ProjectManagedOutput.verified(p.getJSONArray("steps").getJSONObject(0).getJSONObject("payload").getJSONObject("artifactSelection"));
             outputPath(choice.getString("path"));

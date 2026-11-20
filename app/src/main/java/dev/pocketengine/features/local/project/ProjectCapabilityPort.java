@@ -68,7 +68,8 @@ public final class ProjectCapabilityPort implements CapabilityPort {
         if(firstBuild!=null){
             OwnerDraftFirstBuild.requireTooling(firstBuild,runtimeFacts);
             schemas.keySet().retainAll(OwnerDraftFirstBuild.TOOLS);
-            schemas.put("project_plan",draftSchema(props("intent",new JSONObject().put("type","string").put("enum",new JSONArray().put("build")),
+            JSONArray intents=new JSONArray().put("build");if(OwnerDraftFirstBuild.dependencies(firstBuild)!=null)intents.put("dependencies");
+            schemas.put("project_plan",draftSchema(props("intent",new JSONObject().put("type","string").put("enum",intents),
                 "ecosystem",new JSONObject().put("type","string").put("enum",new JSONArray().put("node"))),"intent"));
             if(!schemas.containsKey(TaskStoreProjectHost.TOOL))throw new SecurityException("原任务没有逐项命令审阅接口，未另行授予");
             schemas.put(TaskStoreProjectHost.TOOL,draftSchema(props("planRef",text(80),"planDigest",text(64),"stepId",text(40)),"planRef","planDigest","stepId"));
@@ -102,7 +103,7 @@ public final class ProjectCapabilityPort implements CapabilityPort {
     private String toolDescription(String name){
         if(firstBuild!=null)return switch(name){
             case "project_inspect" -> "读取所选独立副本的构建身份，以及本轮可重新核对的原批准方案引用；不读其他工程或规则。";
-            case "project_plan" -> "仅为同一版副本登记 Node build 的原生方案，返回 planRef / planDigest / stepId。不是命令许可。";
+            case "project_plan" -> "只登记原生 Node build 或明确列出的锁定 dependencies；各自返回 planRef / planDigest / stepId。先核向用户申请锁定准备、其实际退出与包，再申请构建；登记不是许可。";
             case "project_execute" -> "仅按当前原生引用申请该次构建或选定文件保存。不得传 inline 方案；等机主批准。";
             case "project_collect_plan" -> "按本任务原成功构建 executionId 列 build/dist 或为其中选定一份文件登记保留方案，不证明文件由该构建生成。";
             default -> description(name);
@@ -289,7 +290,24 @@ public final class ProjectCapabilityPort implements CapabilityPort {
                         result=tasks.savePrivateProjectEditDraft(binding.taskId,binding.runId,binding.epoch,original,draft);nativeSuccessCode="project_edit_draft_saved";break;
                     }JSONObject plan;
                     if(firstBuild!=null)nativeInput.put("expectedSourceDigest",firstBuild.getString("sourceDigest")).put("ecosystem","node");
-                    if(args.getString("intent").equals("revert_operation")){JSONObject evidence=tasks.projectRevertEvidence(binding.taskId,binding.runId,binding.epoch,original,ProjectBuildPlan.identity(args.getString("revertOperationId")));plan=ProjectBuildPlan.revert(local,nativeInput,evidence.getJSONObject("plan"),evidence.getJSONObject("receipt"),evidence.getString("operationId"));}
+                    if(firstBuild!=null&&"build".equals(args.opt("intent"))&&OwnerDraftFirstBuild.dependencies(firstBuild)!=null){
+                        try{
+                            JSONObject prior=tasks.firstBuildDependencyObservation(binding.taskId,binding.runId,binding.epoch,original);
+                            if(!OwnerDraftFirstBuild.allowsBuildWithCurrentPackages(prior))throw new IllegalStateException("本任务的原锁准备未成功确认，不能靠遗留包申请构建。");
+                            local.requireDraftDependencyFiles(checkout,OwnerDraftFirstBuild.dependencies(firstBuild));
+                        }catch(Exception unavailable){throw new IllegalStateException(unavailable.getMessage()==null?"无法核对同一锁的实际包，未申请构建。":unavailable.getMessage());}
+                    }
+                    if(firstBuild!=null&&"dependencies".equals(args.opt("intent"))){
+                        JSONObject snapshot=local.handle("export",new JSONObject().put("checkoutId",checkout));
+                        JSONObject checked=OwnerDraftNodeDependencies.review(snapshot,firstBuild.getString("manager"),local.projectRuntimeForHost(runtimeId));
+                        if(checked==null||!ProjectSources.canonical(checked).equals(ProjectSources.canonical(OwnerDraftFirstBuild.dependencies(firstBuild))))
+                            throw new SecurityException("这不是用户审阅的本机同一把依赖锁，未准备。");
+                        JSONObject prior=tasks.firstBuildDependencyObservation(binding.taskId,binding.runId,binding.epoch,original);
+                        if(prior!=null&&"dependency_unresolved".equals(prior.opt("kind")))throw new IllegalStateException("请先核对原准备的未决回执，不重新申请下载。");
+                        if(OwnerDraftFirstBuild.allowsBuildWithCurrentPackages(prior)&&local.draftDependencyFilesReady(checkout,checked))
+                            throw new IllegalStateException("已核对这个副本的实际关键包；无须重复准备，下一步是单独核对构建。");
+                        plan=ProjectBuildPlan.lockedNodeDependencies(snapshot,firstBuild.getString("runtimeIdentity"),checked);
+                    }else if(args.getString("intent").equals("revert_operation")){JSONObject evidence=tasks.projectRevertEvidence(binding.taskId,binding.runId,binding.epoch,original,ProjectBuildPlan.identity(args.getString("revertOperationId")));plan=ProjectBuildPlan.revert(local,nativeInput,evidence.getJSONObject("plan"),evidence.getJSONObject("receipt"),evidence.getString("operationId"));}
                     else plan=ProjectBuildPlan.verified(local.handle("project.plan",nativeInput));
                     if(firstBuild!=null)OwnerDraftFirstBuild.requirePlan(firstBuild,plan,binding.taskId);
                     result=tasks.recordProjectPlan(binding.taskId,binding.runId,binding.epoch,original,plan);
@@ -506,10 +524,15 @@ public final class ProjectCapabilityPort implements CapabilityPort {
             OwnerDraftFirstBuild.requirePlan(firstBuild,tasks.projectArguments(binding.taskId,binding.runId,binding.epoch,ref).getJSONObject("plan"),binding.taskId);
             refs.put(ref);
         }
+        JSONObject deps=OwnerDraftFirstBuild.dependencies(firstBuild),observation=deps==null?null:tasks.firstBuildDependencyObservation(binding.taskId,binding.runId,binding.epoch,original);
+        JSONObject dependencyView=deps==null?null:ProjectSources.copy(deps);if(dependencyView!=null)dependencyView.remove("direct");
         return new JSONObject().put("projectId",binding.projectId).put("checkoutId",checkout).put("runtimeId",runtimeId)
+            .putOpt("lockedDependencies",dependencyView).putOpt("dependencyObservation",observation)
+            .put("dependencyDecision",deps==null?"不需要依赖准备":!OwnerDraftFirstBuild.allowsBuildWithCurrentPackages(observation)?
+                "先处理原准备失败/未决，不能使用可能遗留的文件":"先由原生核对当前关键包；缺失才提出锁准备，不能因有目录或退出0直接判已构建。")
             .put("approvedPlanProposals",refs).put("approvedRefUse","有本轮明确批准的原生引用时只取这个引用，不重新造方案，派发仍须当前授权。")
             .put("runtimeIdentity",firstBuild.getString("runtimeIdentity")).put("sourceDigest",firstBuild.getString("sourceDigest"))
-            .put("command",firstBuild.getString("manager")+" run build").put("workflow",OwnerDraftFirstBuild.GOAL).put("commandsAuthorized",false);
+            .put("command",firstBuild.getString("manager")+" run build").put("workflow",OwnerDraftFirstBuild.goal(firstBuild)).put("commandsAuthorized",false);
     }
     private JSONObject projectReference()throws Exception {
         check("project_inspect",original);

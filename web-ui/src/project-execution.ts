@@ -1,6 +1,19 @@
 export type ProjectExecutionData = Record<string, any>;
-export type ProjectExecutionRow = ProjectExecutionData & { operationId: string; interactive: boolean; routeKind: 'managed'|'termux' };
+export type ProjectExecutionRow = ProjectExecutionData & { operationId: string; interactive: boolean; routeKind: 'managed'|'termux'; failureStage?:'dependencies'|'build' };
 const object = (value: any): ProjectExecutionData => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+const operationId = (value: unknown): value is string => typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
+
+/** Native detail locator only. Even if its operation is outside this history page,
+ * the observation host rechecks the original task, execution and runtime receipt. */
+export function originalFirstBuildFailure(task: ProjectExecutionData): ProjectExecutionRow | undefined {
+  const raw=object(task.raw),fact=object(raw.originalFirstBuildFailure);
+  if(raw.taskProjection!=='detail_window'||raw.actorId!=='owner'||raw.spaceId!=='private'||raw.origin||
+    !raw.developmentContext?.ownerDraftFirstBuild||raw.id!==task.id||fact.taskId!==task.id||
+    !operationId(fact.actionRunId)||fact.actionRunId!==raw.runId||!Number.isSafeInteger(fact.actionEpoch)||fact.actionEpoch<1||fact.actionEpoch!==raw.coordinatorEpoch||
+    !operationId(fact.actionOperationId)||!Number.isInteger(fact.value)||fact.value<1||fact.value>255||
+    !['dependency_exit','build_exit'].includes(fact.kind))return undefined;
+  return {operationId:fact.actionOperationId,runId:fact.actionRunId,interactive:false,routeKind:'managed',failureStage:fact.kind==='dependency_exit'?'dependencies':'build'};
+}
 
 /** A locator for the original native journal. This projection grants no input or stop authority. */
 export function projectExecutionRows(task: ProjectExecutionData, operation?: ProjectExecutionData): ProjectExecutionRow[] {
@@ -8,8 +21,9 @@ export function projectExecutionRows(task: ProjectExecutionData, operation?: Pro
   if (raw.actorId !== 'owner' || raw.spaceId !== 'private' || raw.origin || !raw.developmentContext && !raw.ownerLocalTerminal) return [];
   const source: ProjectExecutionData[] = operation ? [operation] : Array.isArray(raw.operations) ? raw.operations : [];
   return source.flatMap(row=>{
-    if(row.tool!=='project_execute'||typeof row.operationId!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(row.operationId))return [];
+    if(row.tool!=='project_execute'||!operationId(row.operationId))return [];
     const receipt=object(row.receipt),route=object(receipt.projectExecution),context=object(raw.developmentContext);
+    if(row.state==='receipt'&&receipt.status==='not_dispatched'&&receipt.accepted===false&&!Object.prototype.hasOwnProperty.call(receipt,'projectExecution'))return [];
     const command=route.authority==='native_host_operation'&&route.taskId===task.id&&route.runId===row.runId&&route.operationId===row.operationId?route.command:undefined;
     // A fixed package, probe or edit is still in process history, but is not a terminal command.
     if(typeof command==='string'&&!['project.runtime.run','termux.run'].includes(command))return [];

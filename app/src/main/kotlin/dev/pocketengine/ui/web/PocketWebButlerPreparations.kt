@@ -4,8 +4,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.EngineApplication
+import dev.pocketengine.features.workspace.WorkspaceModule
 import dev.pocketengine.store.TaskStore
 import dev.pocketengine.ui.PocketWorldController
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
@@ -38,7 +40,29 @@ internal class PocketWebButlerPreparations(
         val COMMANDS = setOf("butler.capabilities", "butler.preparations.list", "butler.preparation.read",
             "butler.preparation.phone.review", "butler.preparation.phone.settings", "butler.preparation.phone.start", "butler.preparation.project.choices",
             "butler.preparation.project.prepare", "butler.preparation.project.queryCopy", "butler.preparation.project.review", "butler.preparation.project.savedRevisions",
-            "butler.preparation.project.start", "butler.preparation.draft", "butler.preparation.query", "butler.preparation.dismiss", "butler.preparation.close")
+            "butler.preparation.project.start", "butler.preparation.project.followup", "butler.preparation.draft", "butler.preparation.query", "butler.preparation.dismiss", "butler.preparation.close")
+    }
+    // No draft bodies, file metadata list, output bytes or fresh commands leave this lane.
+    private fun published(row:JSONObject):JSONArray {
+        val target=row.optJSONObject("target") ?: return JSONArray()
+        val draft=target.optString("originalProjectDraftId")
+        if(!draft.matches(Regex("[a-f0-9]{64}")))return JSONArray()
+        val workspace=host.features.module("workspace") as? WorkspaceModule ?: return JSONArray()
+        return workspace.retainedDraftCopyReferencesForHost(target.getString("taskId"),draft,true)
+    }
+    private fun visibleRequests(conversation:String):Map<String,Long> {
+        val visible=mutableMapOf<String,Long>()
+        if(conversation.isEmpty()||controller.state.conversationId!=conversation)return visible
+        for(message in controller.state.messages){
+            val id=message.id ?: continue
+            if(message.role!="user")continue
+            val locator=message.ownerOriginalLocator
+            if(visible.containsKey(id)||locator?.optString("kind")!="owner_native_original"||
+                locator.optString("conversationId")!=conversation||locator.optString("recordId")!=id||
+                message.sourceRevision<=0||locator.optLong("recordVersion",-1)!=message.sourceRevision)visible[id]=-1
+            else visible[id]=message.sourceRevision
+        }
+        return visible
     }
     fun clear() { generation++; workSequence++; page = null; phone = null; project = null; busy = false }
     private fun current(original: Page) = page === original && generation == original.generation && ownerCurrent() &&
@@ -157,21 +181,40 @@ internal class PocketWebButlerPreparations(
             val conversation = if (args.has("conversationId")) text(args, "conversationId", blank = true) else ""
             val cursor = if (args.has("cursor")) text(args, "cursor", 4096, true) else ""
             val limit = if (args.has("limit")) args.getInt("limit") else 12; require(limit in 1..20)
-            // The Web caller cannot choose IDs to probe. Use only current, uniquely visible
-            // native USER locators. A quote, import, old page or similarly worded row is not one.
-            val visible = mutableMapOf<String, Long>()
-            if (plainChat && conversation.isNotEmpty() && controller.state.conversationId == conversation) {
-                for (message in controller.state.messages) {
-                    val messageId = message.id ?: continue
-                    if (message.role != "user") continue
-                    val locator = message.ownerOriginalLocator
-                    if (visible.containsKey(messageId) || locator?.optString("kind") != "owner_native_original" ||
-                        locator.optString("conversationId") != conversation || locator.optString("recordId") != messageId ||
-                        message.sourceRevision <= 0 || locator.optLong("recordVersion", -1) != message.sourceRevision) visible[messageId] = -1
-                    else visible[messageId] = message.sourceRevision
+            // IDs come from the current, native private chat, never a model or JS list.
+            val visible = if(plainChat)visibleRequests(conversation) else emptyMap()
+            work(null, done) {
+                val page=host.tasks.ownerWorkPreparations(conversation,cursor,limit,visible)
+                val entries=page.getJSONArray("entries")
+                for(i in 0 until entries.length()){
+                    val row=entries.getJSONObject(i);val source=row.optJSONObject("visibleOwnerRequest") ?: continue
+                    try {
+                        val candidates=published(row)
+                        if(candidates.length()==0)continue
+                        val current=host.tasks.originalChatProjectWork(row.getString("sourceTaskId"),row.getString("proposalId"),
+                            conversation,source.getString("messageId"),source.getLong("revision"),candidates)
+                        row.putOpt("chatOriginalBuild",current.optJSONObject("chatOriginalBuild"))
+                    }catch(failure:Exception){if(Thread.currentThread().isInterrupted)throw failure}
                 }
-            }
-            work(null, done) { host.tasks.ownerWorkPreparations(conversation, cursor, limit, visible) }; return
+                page
+            }; return
+        }
+        if(action=="butler.preparation.project.followup"){
+            fields(args,"sourceTaskId","proposalId","conversationId","messageId","revision")
+            val conversation=text(args,"conversationId");val message=text(args,"messageId")
+            val revision=args.opt("revision")
+            require(plainChat&&(revision is Int||revision is Long)){"请从原私人消息打开这份工作"}
+            val version=(revision as Number).toLong()
+            check(version>0&&visibleRequests(conversation)[message]==version){"请回到这条原话重新打开原工作"}
+            val task=text(args,"sourceTaskId");val proposal=text(args,"proposalId")
+            work(null,{ result,error->
+                if(visibleRequests(conversation)[message]!=version)done(null,"已离开原话，没有打开其他工作")
+                else done(result,error)
+            }){
+                val exact=host.tasks.originalChatProjectWork(task,proposal,conversation,message,version,JSONArray())
+                val candidates=published(exact)
+                host.tasks.originalChatProjectWork(task,proposal,conversation,message,version,candidates)
+            }; return
         }
         if (action == "butler.preparation.read") {
             fields(args, "sourceTaskId", "proposalId"); check(!busy)

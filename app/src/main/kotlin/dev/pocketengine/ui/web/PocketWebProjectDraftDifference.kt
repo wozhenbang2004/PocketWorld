@@ -7,6 +7,7 @@ import android.content.Context
 import dev.pocketengine.store.TaskStore
 import dev.pocketengine.ui.PrivateProjectDraftDownload
 import java.util.UUID
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Original private comparison plus optional owner-authored texts; no project writer or model handle. */
@@ -20,7 +21,7 @@ internal class PocketWebProjectDraftDifference(private val context:Context,priva
         const val OFFER="projectDraft.reviewFileCopy";const val SAVE="projectDraft.saveFileCopy"
         val COMMANDS=setOf(READ,EDIT,KEEP,CLOSE,OFFER,SAVE)+PocketWebDraftWorkCopy.commands
     }
-    private data class Source(val task:String,val root:String,val window:PocketWebWindowTicket,val read:Long)
+    private data class Source(val task:String,val root:String,val run:String,val epoch:Int,val path:String,val window:PocketWebWindowTicket,val read:Long)
     private data class Editor(val source:Source,val id:String,val parent:String)
     private data class CopyReview(val source:Source,val editor:Editor?,val token:String,val version:PrivateProjectDraftDownload.Version,val expires:Long)
     private var copyReview:CopyReview?=null
@@ -35,7 +36,7 @@ internal class PocketWebProjectDraftDifference(private val context:Context,priva
     private fun fields(args:JSONObject,vararg names:String)=require(args.keys().asSequence().toSet()==names.toSet()&&names.all{args.opt(it) is String})
     fun dispatch(action:String,args:JSONObject,done:(JSONObject?,String?)->Unit){
         val exact=action==READ&&args.has("draftId")
-        when(action){PocketWebDraftWorkCopy.MOVE_REVIEW->fields(args,"taskId","draftId","revisionId","sha256","fromState");PocketWebDraftWorkCopy.MOVE->fields(args,"taskId","draftId","revisionId","sha256","fromState","reviewHandle");PocketWebDraftWorkCopy.FIND,PocketWebDraftWorkCopy.REVIEW,PocketWebDraftWorkCopy.OPEN->fields(args,"taskId","draftId","revisionId","sha256");PocketWebDraftWorkCopy.CREATE->fields(args,"taskId","draftId","revisionId","sha256","reviewHandle");READ->if(exact)fields(args,"taskId","draftId","runId","epoch") else fields(args,"taskId");EDIT->fields(args,"taskId","draftId");KEEP->fields(args,"taskId","draftId","editHandle","parentId","text");CLOSE->fields(args,"taskId","editHandle");OFFER->fields(args,"taskId","draftId","revisionId","sha256");SAVE->fields(args,"taskId","draftId","revisionId","sha256","reviewHandle");else->error("未知原稿操作")}
+        when(action){PocketWebDraftWorkCopy.OPEN_RETAINED->fields(args,"taskId","draftId","revisionId","sha256","workIdentity");PocketWebDraftWorkCopy.MOVE_REVIEW->fields(args,"taskId","draftId","revisionId","sha256","fromState");PocketWebDraftWorkCopy.MOVE->fields(args,"taskId","draftId","revisionId","sha256","fromState","reviewHandle");PocketWebDraftWorkCopy.FIND,PocketWebDraftWorkCopy.REVIEW,PocketWebDraftWorkCopy.OPEN->fields(args,"taskId","draftId","revisionId","sha256");PocketWebDraftWorkCopy.CREATE->fields(args,"taskId","draftId","revisionId","sha256","reviewHandle");READ->if(exact)fields(args,"taskId","draftId","runId","epoch") else fields(args,"taskId");EDIT->fields(args,"taskId","draftId");KEEP->fields(args,"taskId","draftId","editHandle","parentId","text");CLOSE->fields(args,"taskId","editHandle");OFFER->fields(args,"taskId","draftId","revisionId","sha256");SAVE->fields(args,"taskId","draftId","revisionId","sha256","reviewHandle");else->error("未知原稿操作")}
         val bound=if(exact) Triple(args.getString("draftId"),args.getString("runId"),args.getString("epoch").toIntOrNull()).also{
             require(it.first.matches(Regex("[a-f0-9]{64}"))&&it.second.isNotBlank()&&it.second.length<=240&&(it.third ?: 0)>0)
         } else null
@@ -54,15 +55,23 @@ internal class PocketWebProjectDraftDifference(private val context:Context,priva
                     receipt
                 }
                 main.post{if(turn!=generation||!current(task,window))done(null,"原私人任务已离开，没有保留差异正文")
-                    else result.fold({if(it.opt("available")==true)source=Source(task,it.getString("draftId"),window,turn);done(it,null)},{done(null,it.message?:"这一次交办的原稿暂不可读")})}
+                    else result.fold({if(it.opt("available")==true)source=Source(task,it.getString("draftId"),it.getString("runId"),it.getInt("epoch"),it.getString("path"),window,turn);done(it,null)},{done(null,it.message?:"这一次交办的原稿暂不可读")})}
             });return
         }
         val seen=source;check(seen!=null&&seen.task==task&&seen.window==window&&seen.read==generation){"请先重新打开这份实际差异"}
         if(action in PocketWebDraftWorkCopy.commands){
             check(!copying&&args.getString("draftId")==seen.root)
             val revision=args.getString("revisionId");val held=editor
-            workCopy.dispatch(action,args,{source===seen&&generation==seen.read&&editor===held&&current(task,window)&&
-                (revision==seen.root||held!=null&&held.source===seen&&held.parent==revision)},done);return
+            val prior=action==PocketWebDraftWorkCopy.OPEN_RETAINED
+            if(prior)check(held==null&&revision!=seen.root&&args.getString("workIdentity").matches(Regex("[a-f0-9]{64}")))
+            fun shown()=source===seen&&generation==seen.read&&editor===held&&current(task,window)&&
+                (prior&&held==null||revision==seen.root||held!=null&&held.source===seen&&held.parent==revision)
+            val retained: (()->JSONArray)? = if(prior||action==PocketWebDraftWorkCopy.FIND&&revision==seen.root&&held==null) { {
+                check(shown())
+                val registered=local().retainedDraftCopyReferencesForOwner(task,seen.root)
+                tasks().retainedDraftWorkForOwner(task,seen.root,seen.run,seen.epoch,seen.path,registered).also{check(shown())}
+            } } else null
+            workCopy.dispatch(action,args,::shown,retained,done);return
         }
         if(action==OFFER||action==SAVE){fileCopy(action,args,seen,done);return}
         val previous=editor

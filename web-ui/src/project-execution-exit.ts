@@ -1,13 +1,14 @@
 import {privateProjectTask} from './task-continuation';
 type Data=Record<string,any>;
 export type ExecutionExit={format:string;taskId:string;runId:string;epoch:number;executionId:string;projectId:string;checkoutId:string;planDigest:string;sourceDigest:string;
-  stepId:string;kind:'exit_code'|'signal'|'no_child';value:number;nativeStatus:string;canPrepareBuildFeedback:boolean;timedOut?:boolean;cancelRequested?:boolean;resourcesReleased?:boolean;processGroupAbsent?:boolean};
+  stepId:string;kind:'exit_code'|'signal'|'no_child';value:number;nativeStatus:string;canPrepareBuildFeedback:boolean;canPrepareDependencyFeedback?:boolean;dependencyLockSha256?:string;timedOut?:boolean;cancelRequested?:boolean;resourcesReleased?:boolean;processGroupAbsent?:boolean};
 const sha=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const word=(v:unknown)=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(v);
 export function originalExecutionExit(raw:unknown,metadata:Data,status:unknown):ExecutionExit|null{
   const r=raw as ExecutionExit|undefined;if(!r||r.format!=='pocketworld.owner-managed-exit.v1'||r.nativeStatus!==status||
     !['exit_code','signal','no_child'].includes(r.kind)||!Number.isSafeInteger(r.value)||r.value<(r.kind==='exit_code'?0:1)||r.value>(r.kind==='signal'?127:r.kind==='exit_code'?255:2147483647)||
     !sha(r.planDigest)||!sha(r.sourceDigest)||!word(r.stepId)||!Number.isSafeInteger(r.epoch)||r.epoch<1||typeof r.canPrepareBuildFeedback!=='boolean'||
+    (r.canPrepareDependencyFeedback!=null||r.dependencyLockSha256!=null) && (r.canPrepareDependencyFeedback!==true||r.stepId!=='dependencies'||!sha(r.dependencyLockSha256)) ||
     !(['taskId','runId','executionId','projectId','checkoutId'] as const).every(k=>word(r[k])&&r[k]===metadata[k])||r.epoch!==metadata.epoch||r.planDigest!==metadata.planDigest)return null;
   return r;
 }
@@ -23,7 +24,13 @@ export function failedBuildFeedback(task:Data,r:ExecutionExit):string|null{
   const raw=task.raw,c=raw?.developmentContext;
   if(!projectFeedbackKey(task)||task.id!==r.taskId||raw.runId!==r.runId||raw.coordinatorEpoch!==r.epoch||c.projectId!==r.projectId||c.checkoutId!==r.checkoutId||
     !['paused','interrupted','awaiting_user','needs_confirmation','failed','completed'].includes(task.status)||raw.cancelRequested===true||
-    !r.canPrepareBuildFeedback||r.stepId!=='build'||r.nativeStatus!=='failed'||r.kind!=='exit_code'||r.value<=0||r.resourcesReleased!==true||
+    r.nativeStatus!=='failed'||r.kind!=='exit_code'||r.value<=0||r.resourcesReleased!==true||
     r.processGroupAbsent!==true||r.cancelRequested!==false||r.timedOut!==false)return null;
+  if(r.stepId==='dependencies'&&r.canPrepareDependencyFeedback===true&&sha(r.dependencyLockSha256)){
+    const pinned=c.ownerDraftFirstBuild?.lockedDependencies;
+    if(pinned?.planDigest!==r.planDigest||pinned?.review?.lockSha256!==r.dependencyLockSha256)return null;
+    return `请在同一副本查看原依赖准备日志：操作 ${r.executionId}，退出码 ${r.value}。只核对原锁 SHA-256 ${r.dependencyLockSha256}，若需重新下载请再次向我申请，不改锁、不换环境、不自动构建。日志正文未附。`;
+  }
+  if(r.stepId!=='build'||!r.canPrepareBuildFeedback)return null;
   return `请先核对这份本机副本的构建失败：原操作 ${r.executionId}，实际退出码 ${r.value}。当时的源码清单 SHA-256：${r.sourceDigest}。日志正文未附；请在原任务已有范围内定位问题并提出修正，不自动重跑或扩大授权。`;
 }
