@@ -27,6 +27,62 @@ export function conversationPending(composer:Data,receipts:Data,messages:readonl
  });
 }
 
+type SavedDelivery = {status:'accepted'|'queued'|'consumed';messageId:string;epoch:number};
+const deliveryText:Record<SavedDelivery['status'],{label:string;detail:string}>={
+ accepted:{label:'已接收',detail:'原工作已接收这条输入，不表示已经开始处理。'},
+ queued:{label:'已入队',detail:'原记录确认这条输入已入队，尚未核对是否采用。'},
+ consumed:{label:'已被原工作采用',detail:'原记录确认这条输入已被采用，不表示工作已经完成。'},
+};
+const recordId=(value:unknown):value is string=>typeof value==='string'&&value.trim().length>0&&value.length<=240;
+function durableDelivery(receipt:Data|undefined,message:Data,conversation:string):SavedDelivery|null{
+ const status=receipt?.status,revision=message.sourceRevision;
+ if(!receipt||!['accepted','queued','consumed'].includes(status)||receipt.notAdmitted===true||
+  receipt.reconciliationRequired===true||receipt.queueState==='withdrawn'||receipt.messageId!==message.id||receipt.conversationId!==conversation||
+  !recordId(receipt.clientMessageId)||status==='consumed'&&!recordId(receipt.replyMessageId)||!recordId(receipt.taskId)||!recordId(receipt.runId)||!Number.isSafeInteger(receipt.epoch)||receipt.epoch<1||
+  (message.taskId!=null&&message.taskId!==receipt.taskId)||
+  (receipt.ownerMessageRevision===undefined?revision!==1:receipt.ownerMessageRevision!==revision))return null;
+ return {status,messageId:message.id,epoch:receipt.epoch};
+}
+
+/** Source is the saved owner message, never the bridge command ACK. A newer
+ * contradictory receipt must not turn an unresolved input into a success label. */
+export function savedConversationDelivery(message:Data,conversation:string,observed:Data):SavedDelivery|null{
+ if(message.role!=='user'||!recordId(message.id)||!recordId(conversation)||!Number.isSafeInteger(message.sourceRevision)||message.sourceRevision<1)return null;
+ const original=message.submission,base=durableDelivery(original,message,conversation);
+ if(!base)return null;
+ const latest=Object.hasOwn(observed,original.clientMessageId)?observed[original.clientMessageId]:null;
+ if(!latest)return base;
+ if(latest.clientMessageId!==original.clientMessageId)return null;
+ const older=Number.isSafeInteger(latest.ownerMessageRevision)&&latest.ownerMessageRevision>0&&latest.ownerMessageRevision<message.sourceRevision&&
+   latest.messageId===message.id&&latest.conversationId===conversation;
+ if(older)return base;
+ const current=durableDelivery(latest,message,conversation);
+ if(!current||latest.taskId!==original.taskId||latest.runId!==original.runId||latest.epoch!==original.epoch)return null;
+ return current.status==='consumed'?current:base;
+}
+
+export function SavedConversationDelivery({receipt,details=false}:{receipt:SavedDelivery;details?:boolean}){
+ const copy=deliveryText[receipt.status];
+ if(!details)return <small className="pw-field-hint" role="status">{copy.label}</small>;
+ return <section className="pw-input-receipt" aria-label="这条消息的发送回执">
+  <strong>发送回执：{copy.label}</strong><p>{copy.detail}</p>
+  <small className="pw-field-hint">原消息 {receipt.messageId} · 执行第 {receipt.epoch} 轮</small>
+ </section>;
+}
+
+/** Local storage and send admission are separate facts. No editor operation here. */
+export function ConversationDraftStatus({composer,conversation,text,attachments}:{composer:Data;conversation:string;text:string;attachments:number}){
+ if(composer.ready!==true||!recordId(composer.key)||composer.key.startsWith('work:')||composer.conversationId!==conversation||
+   typeof composer.text!=='string'||!Number.isSafeInteger(composer.revision)||composer.revision<0)return null;
+ const count=(value:unknown)=>Array.isArray(value)?value.length:0;
+ const quotes=count(composer.sourceRefs),objects=count(composer.objectRefs),previewRefs=count(composer.previewRefs);
+ if(!text&&!composer.text&&!attachments&&!quotes&&!objects&&!previewRefs)return null;
+ if(composer.text!==text)return <p className="pw-field-hint">屏幕上的文字尚未与这份本机草稿核对一致。</p>;
+ if(composer.saving!==false)return <p className="pw-field-hint">这份草稿的本机保存待确认。</p>;
+ const extras=[attachments&&`${attachments} 份附件`,quotes&&`${quotes} 条原文引用`,objects&&`${objects} 个关联对象`,previewRefs&&`${previewRefs} 个预览引用`].filter(Boolean);
+ return <p className="pw-field-hint">草稿已保存在本机{extras.length?` · ${extras.join('、')}`:''}</p>;
+}
+
 type Action='query'|'retry'|'return'|'release-prepared';
 type Props={rows:PendingInput[];can:(action:string)=>boolean;submitting:boolean;ordinaryComposer:boolean;readWindow:string;
  onAction:(action:Action,row:PendingInput)=>void;onReadSavedFirst:(row:PendingInput)=>Promise<string>};

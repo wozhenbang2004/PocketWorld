@@ -18,14 +18,15 @@ export type ProjectPreviewState = {
 export type PreviewWindow = { projectId: string; documentEpoch: number; resumeRevision: number };
 export type PreviewRect = { x: number; y: number; width: number; height: number };
 export type SourceMember = { path: string; fileSha256: string; bytes: number; artifactId: string; artifactSha256: string; projectId: string; checkoutId: string };
-export type PackagePreviewTarget = { taskId: string; operationId: string; sourceMember?: SourceMember };
+export type SavedWebBuildOrigin = { runId: string; epoch: number; buildOperationId: string };
+type SavedBuildWebPick = SavedWebBuildOrigin & { projectId: string; checkoutId: string; sourceDigest: string; artifactId: string; artifactSha256: string };
+export type PackagePreviewTarget = { taskId: string; operationId: string; sourceMember?: SourceMember; savedBuildWeb?: SavedBuildWebPick };
 export type ProjectPackageOutcome = PackagePreviewTarget & {
   runId: string; epoch: number; projectId: string; checkoutId: string; sourceDigest: string;
   artifactId: string; archiveSha256: string; archiveBytes: number; manifestIdentity: string;
   name: string; mode: 'web_output' | 'source_project'; entryPath: string;
   currentRun: boolean; fileCount?: number; omittedCount?: number; createdAt?: number;
 };
-export type SavedWebBuildOrigin = { runId: string; epoch: number; buildOperationId: string };
 export type PackagePreviewChoices = PackagePreviewTarget & {
   kind: 'package_preview_choices'; conversationId: string; projectId: string; checkoutId: string; sourceDigest: string;
   artifactId: string; artifactSha256: string; mode: 'web_output' | 'source_project';
@@ -84,16 +85,46 @@ export function projectPackageOutcome(taskValue: unknown, value: unknown): Proje
       (artifact.mode !== 'web_output' && artifact.mode !== 'source_project') || typeof artifact.entryPath !== 'string' ||
       (artifact.mode === 'web_output' ? !entry(artifact.entryPath) : artifact.entryPath !== '' && !entry(artifact.entryPath))) return null;
   const count = (value: unknown): number | undefined => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+  const savedBuildWeb = artifact.mode === 'web_output' && artifact.entryPath === 'dist/index.html' &&
+      source.buildOutputAttribution === 'selected_output_observed_after_build' && sha256(source.buildReceiptIdentity) &&
+      identifier(source.buildOperationId) && source.buildOperationId !== source.operationId
+    ? { projectId: target.projectId, checkoutId: target.checkoutId, sourceDigest: source.sourceDigest, artifactId: artifact.id,
+        artifactSha256: source.archiveSha256, runId: source.runId, epoch: Number(source.coordinatorEpoch), buildOperationId: source.buildOperationId }
+    : undefined;
   return { ...target, operationId: source.operationId, runId: source.runId, epoch: Number(source.coordinatorEpoch),
     sourceDigest: source.sourceDigest, artifactId: artifact.id, archiveSha256: source.archiveSha256, archiveBytes: Number(source.archiveBytes),
     manifestIdentity: source.manifestIdentity, name: typeof artifact.name === 'string' && artifact.name ? artifact.name : '项目固定包',
     mode: artifact.mode, entryPath: artifact.entryPath, currentRun: source.runId === raw.runId && source.coordinatorEpoch === raw.coordinatorEpoch,
-    fileCount: count(artifact.fileCount), omittedCount: count(artifact.omittedCount), createdAt: count(artifact.createdAt) };
+    fileCount: count(artifact.fileCount), omittedCount: count(artifact.omittedCount), createdAt: count(artifact.createdAt), savedBuildWeb };
+}
+
+/** The private work audit can point at a settled owner save. Native inspect
+ * must still reread the original build, archive and chosen entry. */
+function savedBuildWebAuditTarget(task: unknown, operation: Record<string, unknown>): PackagePreviewTarget | null {
+  const owner = projectPackageTaskIdentity(task), pin = record(operation.arguments), artifact = record(operation.receipt);
+  if (!owner || operation.bodyAvailable !== true || operation.requiresReconciliation === true ||
+      !uuid(operation.operationId) || !identifier(operation.runId) || pin.operationId !== operation.operationId ||
+      pin.taskId !== owner.taskId || pin.runId !== operation.runId || pin.projectId !== owner.projectId ||
+      pin.checkoutId !== owner.checkoutId || !Number.isSafeInteger(pin.epoch) || Number(pin.epoch) < 1 ||
+      !identifier(pin.buildOperationId) || pin.buildOperationId === operation.operationId ||
+      !sha256(pin.buildReceiptIdentity) || !sha256(pin.planDigest) || !sha256(pin.sourceDigest) || !sha256(pin.archiveSha256) ||
+      !sha256(pin.manifestIdentity) || !Number.isSafeInteger(pin.archiveBytes) || Number(pin.archiveBytes) <= 0 ||
+      artifact.kind !== 'project_bundle' || artifact.persisted !== true || artifact.mode !== 'web_output' ||
+      artifact.entryPath !== 'dist/index.html' || !uuid(artifact.id) || artifact.id !== artifact.versionId ||
+      artifact.projectId !== owner.projectId || artifact.checkoutId !== owner.checkoutId || artifact.sourceDigest !== pin.sourceDigest ||
+      artifact.sha256 !== pin.archiveSha256 || artifact.sizeBytes !== pin.archiveBytes || artifact.manifestIdentity !== pin.manifestIdentity)
+    return null;
+  return { taskId: owner.taskId, operationId: operation.operationId, savedBuildWeb: { projectId: owner.projectId, checkoutId: owner.checkoutId,
+    sourceDigest: pin.sourceDigest, artifactId: artifact.id, artifactSha256: pin.archiveSha256, runId: operation.runId,
+    epoch: Number(pin.epoch), buildOperationId: pin.buildOperationId } };
 }
 
 /** A display candidate from the original bounded operation, never artifact authority. */
 export function packageOperationTarget(taskValue: unknown, operationValue: unknown): PackagePreviewTarget | null {
   const task = record(taskValue), raw = record(task.raw), development = record(raw.developmentContext), operation = record(operationValue);
+  if (operation.tool === 'owner_keep_first_node_web_output' && operation.state === 'receipt' && operation.readLimited !== true) {
+    return savedBuildWebAuditTarget(taskValue, operation);
+  }
   if (!identifier(task.id) || raw.kind !== 'assistant' || raw.actorId !== 'owner' || raw.spaceId !== 'private' || raw.origin != null ||
       !identifier(development.projectId) || !identifier(development.checkoutId) || operation.tool !== 'project_execute' || operation.state !== 'receipt' ||
       operation.readLimited === true || operation.bodyAvailable === false || !identifier(operation.operationId) || !identifier(operation.runId)) return null;
@@ -128,6 +159,11 @@ export function packagePreviewChoices(value: unknown, expected: PackagePreviewTa
         build.buildOperationId === expected.operationId) return null;
     originalBuild = { runId: build.runId, epoch: Number(build.epoch), buildOperationId: build.buildOperationId };
   }
+  const saved = expected.savedBuildWeb;
+  if (saved && (source.mode !== 'web_output' || source.entryPath !== 'dist/index.html' || source.projectId !== saved.projectId ||
+      source.checkoutId !== saved.checkoutId || source.sourceDigest !== saved.sourceDigest || source.artifactId !== saved.artifactId ||
+      source.artifactSha256 !== saved.artifactSha256 || originalBuild && (originalBuild.runId !== saved.runId ||
+        originalBuild.epoch !== saved.epoch || originalBuild.buildOperationId !== saved.buildOperationId))) return null;
   return { kind: 'package_preview_choices', ...expected, conversationId: source.conversationId, projectId: source.projectId, checkoutId: source.checkoutId, sourceDigest: source.sourceDigest,
     artifactId: source.artifactId, artifactSha256: source.artifactSha256, mode: source.mode as PackagePreviewChoices['mode'],
     entryPath: source.entryPath, entryChoices: [...source.entryChoices], ...(originalBuild ? {originalBuild} : {}) };

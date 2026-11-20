@@ -21,7 +21,7 @@ import './connection-workspace.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
-type Props = { cloudGoal?: CloudGoal; onCloudGoalUsed?: (id:string)=>void; domain: 'remote' | 'ssh'; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void };
+type Props = { cloudGoal?: CloudGoal; onCloudGoalUsed?: (id:string)=>void; onReturnSavedHost?:()=>void; domain: 'remote' | 'ssh'; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void };
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const list = (value: any): Data[] => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const text = (value: any) => typeof value === 'string' ? value : value == null ? '' : String(value);
@@ -92,7 +92,7 @@ const profileReadiness = (domain: 'remote' | 'ssh', profile: Data) => domain ===
 export default function ConnectionWorkspace(props:Props) {
   const source=props.domain==='remote'?props.cloudGoal:undefined;
   if(source?.savedTarget&&source.originHandle)return <SavedHostWork key={source.id} target={source.savedTarget} origin={source.originHandle}
-    profiles={props.data.profiles} supported={props.supported} run={props.run} registerTransientBack={props.registerTransientBack}/>;
+    profiles={props.data.profiles} supported={props.supported} run={props.run} registerTransientBack={props.registerTransientBack} onReturn={props.onReturnSavedHost}/>;
   return <ConnectionDirectory {...props}/>;
 }
 function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, supported, run, registerTransientBack }: Props) {

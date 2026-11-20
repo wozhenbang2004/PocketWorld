@@ -1425,7 +1425,7 @@ function DomainPage({ reviewedSkill, sentPhoneFocus, deviceReading, onReturnToPa
   const title = SECONDARY_DOMAINS.find(x => x.id === domain)?.title || '连接与能力';
   if (domain === 'accounts') return <AccountsWorkspace state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'devices') return <DevicesWorkspace key={sentPhoneFocus?JSON.stringify([sentPhoneFocus.purpose||'dispatch',sentPhoneFocus.taskId,sentPhoneFocus.deviceId,sentPhoneFocus.instanceId,sentPhoneFocus.certificateFingerprint]):deviceReading?.entry || 'devices'} reading={deviceReading} sourceFocus={sentPhoneFocus} onReturnToPartnerTask={onReturnToPartnerTask} modelReturn={sentPhoneFocus?.purpose==='partner_connection'?undefined:receivedPhoneReturn} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} openModels={onOpenModels} />;
-  if (domain === 'remote' || domain === 'ssh') return <ConnectionWorkspace cloudGoal={domain==='remote'?cloudGoal:undefined} onCloudGoalUsed={onCloudGoalUsed} domain={domain} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
+  if (domain === 'remote' || domain === 'ssh') return <ConnectionWorkspace cloudGoal={domain==='remote'?cloudGoal:undefined} onCloudGoalUsed={onCloudGoalUsed} onReturnSavedHost={onReturnToPartnerTask} domain={domain} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
   if (domain === 'memory' || domain === 'memoryReview') return <MemoryWorkspace onOpenProjectDraft={onOpenProjectDraft} registerBeforeLeave={registerFormBeforeLeave} domain={domain} run={run} registerTransientBack={registerTransientBack} initialCandidate={candidateTarget} alreadyShownError={alreadyShownError} />;
   if (domain === 'learning') return <LearningWorkspace state={state} data={data} run={run} registerTransientBack={registerTransientBack} onReviewCandidate={onReviewCandidate} />;
   if (domain === 'automation') return <ReminderWorkspace registerBeforeLeave={registerFormBeforeLeave} state={state} data={data} supported={supported} run={run} registerTransientBack={registerTransientBack} />;
@@ -1847,6 +1847,7 @@ export default function Secondary({ reviewedSkill, onChoosePhonePlace, sentPhone
   const isPhonePage = page === 'phone' || page.startsWith('phone:');
   const phoneView = page.startsWith('phone:') ? page.slice('phone:'.length) : phonePresentation.current;
   const workspace = workspaceForRoute(page);
+  const savedHostPreparation=page==='remote'&&!!cloudGoal?.savedTarget&&!!cloudGoal.originHandle;
   const domain = SECONDARY_DOMAINS.find(x => x.id === page);
   // Usage keeps its own route and Back stack; its budgets and diagnostics belong to the native models section.
   const hostSection = page === 'usage' ? 'models' : page === 'proxy' ? 'proxy' : isModelPage ? entryChanged ? 'models' : modelHostSection : domain?.id;
@@ -1885,7 +1886,7 @@ export default function Secondary({ reviewedSkill, onChoosePhonePlace, sentPhone
   const editConnection = modelView.id ? connection : modelConnectionRows(data).find(row => recordId(row) === text(object(data.connections).selectedConnectionId));
   const modelDraftKey = modelView.kind + ':' + (modelView.kind === 'add' ? 'new' : recordId(editConnection || {}));
   const phoneTitle = ({ appearance: '外观与字体', speech: '语音与朗读', execution: '系统权限', observation: '观察与隐私', browser: '浏览器' } as Data)[phoneView];
-  const pageTitle = page === 'capabilities' ? '能力与工具' : workspace?.key === 'tools' && domain ? domain.title : isAIPage ? 'AI 接入'
+  const pageTitle = savedHostPreparation ? '在所选主机准备原话' : page === 'capabilities' ? '能力与工具' : workspace?.key === 'tools' && domain ? domain.title : isAIPage ? 'AI 接入'
     : workspace?.title || settingsGroup?.title || (page === 'settings' || page === 'connections' ? '设置' : isPhonePage ? phoneTitle || '手机能力' : page === 'background' ? '后台运行' : page === 'history' ? '任务历史' : page === 'usage' ? '用量统计' : page === 'archives' ? '备份与迁移' : page === 'storage' ? '项目存储' : page === 'web-search' ? '联网搜索' : domain?.title || 'PocketWorld');
   const viewKey = page + (isModelPage ? ':' + modelView.kind + ':' + (modelView.id || '') : '');
   useLayoutEffect(() => {
@@ -1976,7 +1977,7 @@ export default function Secondary({ reviewedSkill, onChoosePhonePlace, sentPhone
     </div>;
   return <section className="pw-secondary pw-secondary-refactor" data-secondary-page={page} data-workspace={workspace?.key} aria-label={pageTitle}>
     <header className="pw-secondary-header"><IconButton icon={IconArrowLeft} aria-label={isModelPage && hostSection === 'proxy' ? '返回 AI 接入' : isModelPage && modelView.kind !== 'list' ? modelBackLabel : backToReceivedPhone ? '返回这次设备派工' : reviewedSkill && page === 'skills' ? '返回原回答' : '返回'} title={backToReceivedPhone ? '返回这次设备派工' : returnLabel} onClick={back} /><div><h1>{pageTitle}</h1>{backToReceivedPhone && <p className="pw-workspace-origin">返回原派工后，再审阅是否开始。</p>}{originGoal && !backToReceivedPhone && <p className="pw-workspace-origin" title={originGoal}>当前工作：{originGoal}</p>}</div>{!workspace && !settingsGroup && !['settings', 'connections', 'history', 'usage'].includes(page) && !(isAIPage && hostSection !== 'models') && <IconButton icon={IconRefresh} aria-label="刷新当前状态" title="刷新当前状态" disabled={!supported(refreshAction)} onClick={() => { void run(refreshAction, {}).catch(() => {}); }} />}{navigationTrigger}</header>
-    {workspace && workspace.key !== 'tools' ? <Tabs className="pw-workspace-navigation" selectedKey={workspacePageForRoute(page)} onSelectionChange={key => switchWorkspacePage(String(key))}>
+    {workspace && workspace.key !== 'tools' && !savedHostPreparation ? <Tabs className="pw-workspace-navigation" selectedKey={workspacePageForRoute(page)} onSelectionChange={key => switchWorkspacePage(String(key))}>
       <TabList aria-label={workspace.title + '工作区'}>{workspace.pages.map(item => <Tab key={item.route} id={item.route}>{item.title}</Tab>)}</TabList>
       <TabPanel id={workspacePageForRoute(page) || workspace.route} className="pw-workspace-panel">{content}</TabPanel>
     </Tabs> : content}

@@ -7,7 +7,7 @@ type Options = {
   navigation: () => number;
   supported: (command: string) => boolean;
   leaveTask: (stillCurrent: () => boolean) => Promise<boolean>;
-  show: (choices:PackagePreviewChoices, originalChat?:()=>boolean) => boolean;
+  show: (choices:PackagePreviewChoices, originalChat?:()=>boolean, explicitWebPick?:()=>boolean) => boolean;
   error: (message: string) => void;
 };
 type Handoff = {
@@ -95,7 +95,16 @@ export function useProjectPackageHandoff(options: Options) {
     } else if (r.phase === 'presenting' && r.choices) {
       const state = bridge.getState().state, id = r.choices.projectId;
       if (o.projectId !== id || state.projectId !== id || state.filePath || !Array.isArray(state.projects) || !state.projects.some(p => p?.id === id)) return;
-      if (o.show(r.choices,r.originalChat)) { r.shown(); finish(r); }
+      // An explicit click on an exact saved result can open its single entry.
+      // The guard outlives this handoff while the native renderer is opening.
+      // If original build proof is unavailable, retain the regular archive review.
+      const exactWebWindow = r.target.savedBuildWeb && r.choices.originalBuild ? () => {
+        const now = latest.current, native = bridge.getState();
+        return !document.hidden && bridge.getDocumentEpoch() === r.epoch && Number(nativeView()?.resumeRevision || 0) === r.resume &&
+          now.navigation() === r.navigation + 1 && now.navigationRevision === r.navigation + 1 && now.route === 'projects' && !now.blocked &&
+          now.projectId === id && native.state.projectId === id && !native.state.filePath && !nativeView()?.taskId && nativeView()?.section == null;
+      } : undefined;
+      if (o.show(r.choices,r.originalChat,exactWebWindow)) { r.shown(); finish(r); }
     }
   });
   return { opening, open };

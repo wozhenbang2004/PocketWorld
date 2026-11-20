@@ -3,6 +3,7 @@ import {Accordion,AccordionItem,Button,CheckboxField} from './forms-library';
 import {PressButton} from './library';
 import {originalTeamApprovalFile,TeamApprovalFileComparison} from './TeamApprovalFileComparison';
 import {ownerWorkIdentity} from './conversation-work';
+import {missingOneTimeTeamReview,teamPlannedModel} from './team-preparation';
 import './task-decisions.css';
 
 type Json=Record<string,any>;
@@ -41,6 +42,7 @@ function originalModelTeamStart(capability:Json,args:Json,oneTime:boolean){
    rounds===2?'成员按分工协作两轮，然后汇总。':''): '',members:members.map((member,index)=>({
   id:member.id as string,name:name(member,index),role:member.role as string,assignment:nonEmptyText(member.assignment)?member.assignment as string:'',
   leads:member.id===definition.leaderId,
+  model:teamPlannedModel(member,oneTime?'沿用原工作主模型（这份分工未列型号）':'编组未指定型号，沿用本次工作模型设置'),
   dependencies:(member.dependsOn||[]).map((id:string)=>{const i=members.findIndex(row=>row.id===id);return name(members[i],i);}) as string[],
  }))};
 }
@@ -52,6 +54,7 @@ function TeamStartRoster({roster}:{roster:ModelTeamRoster}) {
   <div className="pw-decision-work-heading"><h6><bdi>{member.name}</bdi></h6>{member.leads&&<span>计划负责汇总</span>}</div>
   <p className="pw-approval-copy" dir="auto">{member.assignment||member.role}</p>
   {member.assignment&&member.assignment.trim()!==member.role.trim()&&<p className="pw-approval-copy" dir="auto">职责：{member.role}</p>}
+  <p className="pw-decision-meta">计划模型：<bdi>{member.model}</bdi></p>
   {member.dependencies.length>0&&<p className="pw-decision-meta">先等 <bdi>{member.dependencies.join('、')}</bdi> 的产出</p>}
  </li>)}</ol>{roster.steps&&<p>{roster.steps}</p>}</>;
 }
@@ -138,9 +141,11 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
   {argumentFacts.length>0&&<dl className="pw-decision-facts" aria-label="本次操作内容">
    {argumentFacts.map(([key,value])=><div key={key}><dt>{labels[key]}</dt><dd className="pw-approval-copy">{String(value)}</dd></div>)}
   </dl>}
-  {oneTimeStart&&!plannedTeam&&<p role="alert">尚未核对到这次拟定的完整分工，不能批准。请重新打开原待审事项，或拒绝这次申请。</p>}
+  {oneTimeStart&&!plannedTeam&&<div className="pw-decision-notice" role="alert"><h5>原分工暂不可审阅</h5>
+   <p>{missingOneTimeTeamReview(object(capability.teamDefinition),args)}请重新打开原待审事项，或拒绝这次申请。这里不会另起分工。</p></div>}
   {plannedTeam&&<section className="pw-decision-section" aria-label="这次申请的成员与分工">
-   <h5>这次由谁负责</h5>
+   <h5>这次由谁负责 · {plannedTeam.members.length} 名成员</h5>
+   <p className="pw-decision-meta">{view.canApprove===true&&!disabled?'已读到原分工，等待你作决定。':'原分工可查看，目前不能提交决定。'}计划模型不代表成员已接单或已执行。</p>
    <TeamStartRoster roster={plannedTeam}/>
    <p className="pw-decision-boundary">{plannedTeam.oneTime?'只批准这次模型分工。不保存为编组，不授予文件写入或设备操作。':'只批准这次分工，不修改已保存的编组。'}</p>
   </section>}

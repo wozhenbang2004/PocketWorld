@@ -151,11 +151,12 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const record = task && typeof task === 'object' ? task as Record<string, any> : {};
   const status = typeof record.status === 'string' && record.status ? record.status : record.raw?.status;
   const buildScope = record.raw?.developmentContext?.ownerDraftFirstBuild;
+  const buildOwner = buildScope && projectPackageTaskIdentity(task);
   const reconciliation = taskNeedsReconciliation(task);
   const checkBuildAfterFailure = status==='failed' && buildScope?.existingCheckoutBuild===true && !reconciliation && !record.raw?.cancelRequested;
-  const firstWeb = active && (status==='completed' || checkBuildAfterFailure) && buildScope &&
-    typeof record.id==='string' && typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
-    ? {taskId:record.id,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
+  const firstWeb = active && (status==='completed' || checkBuildAfterFailure) && buildOwner &&
+    typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
+    ? {...buildOwner,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
   const packageRead = useProjectPackages(task, active, readIdentity, firstWeb?.taskId);
   const outcome = getTaskOutcome(task, messages, Math.max(clock, Date.now()), packageRead.page ?? undefined);
   const [selectedPackage, selectPackage] = useState(''), packageButton = useRef<HTMLButtonElement | null>(null);
@@ -228,23 +229,21 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}:${status}`} ownerWindow={packageRead.firstWebWindow}
       target={firstWeb} checkBuildAfterFailure={checkBuildAfterFailure} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}
-      listedSavedVersion={(taskId, operationId, sha256)=>packageRead.eligible && !!onOpenProjectPackage &&
-        outcome.projectPackages.some(item=>item.mode==='web_output'&&item.taskId===taskId&&item.operationId===operationId&&item.archiveSha256===sha256)}/>}
-    {active && onContinueBuildCopy && <div className="pw-form-actions">
-      <Button variant="secondary" onClick={onContinueBuildCopy}>继续编辑构建所用的副本</Button>
-    </div>}
-    {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
+      listedSavedVersion={({taskId, operationId, savedBuildWeb:saved})=>packageRead.eligible && !!onOpenProjectPackage &&
+        outcome.projectPackages.some(item=>item.savedBuildWeb?.buildOperationId===saved.buildOperationId&&item.taskId===taskId&&
+          item.operationId===operationId&&item.archiveSha256===saved.artifactSha256&&item.artifactId===saved.artifactId&&
+          item.runId===saved.runId&&item.epoch===saved.epoch&&item.projectId===saved.projectId&&item.checkoutId===saved.checkoutId&&item.sourceDigest===saved.sourceDigest)}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>
       {outcome.projectPackages.length > 0 && <div hidden={!!readingPackage}>
         <p className="pw-reading-note">这些版本已由原保存操作生成。任务完成、生成成果、发出与发布各有自己的回执；打开时会核对原文件。</p>
         <div className="pw-outcome-files">{outcome.projectPackages.map(item => <Button key={item.operationId} data-motion-key={`package:${item.operationId}:${item.archiveSha256}`}
           variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight} disabled={!active || !inWorkReader(item) && !onOpenProjectPackage}
-          onClick={event => { if (inWorkReader(item)) { packageButton.current = event.currentTarget; selectPackage(packageKey(item)); } else onOpenProjectPackage?.({ taskId: item.taskId, operationId: item.operationId }); }}>
+          onClick={event => { if (inWorkReader(item)) { packageButton.current = event.currentTarget; selectPackage(packageKey(item)); } else onOpenProjectPackage?.({ taskId: item.taskId, operationId: item.operationId, savedBuildWeb: item.savedBuildWeb }); }}>
           <span className="pw-outcome-file-copy"><span>{item.name}</span>
             <small>{item.currentRun ? '本轮生成' : '较早执行生成'} · {item.mode === 'web_output' ? '网页成果' : '源码项目包'}{item.fileCount === undefined ? '' : ` · ${item.fileCount} 个文件`} · {item.archiveBytes.toLocaleString()} 字节</small>
             {item.omittedCount !== undefined && item.omittedCount > 0 && <small>保存时有 {item.omittedCount} 项未收入包内，具体范围保留在原清单。</small>}
-            <small>{inWorkReader(item) ? '查看包内文件' : onOpenProjectPackage ? '查看固定版本' : '当前无法打开原固定版本'}</small>
+            <small>{inWorkReader(item) ? '查看包内文件' : !onOpenProjectPackage ? '当前无法打开原固定版本' : item.savedBuildWeb ? '打开这版固定网页' : '查看固定版本'}</small>
           </span>
         </Button>)}</div>
       </div>}
@@ -265,6 +264,10 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
         <Button variant="ghost" disabled={packageRead.busy || packageRead.waiting} onClick={() => void packageRead.read()}>重新读取固定成果</Button>
       </div>}
     </section>}
+    {active && onContinueBuildCopy && <div className="pw-form-actions">
+      <Button variant="secondary" onClick={onContinueBuildCopy}>继续编辑构建所用的副本</Button>
+    </div>}
+    {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {report && <OwnerWorkReport key={JSON.stringify(report)} target={report} active={active} supported={canReadReport} identity={readIdentity} onCopy={onCopy} />}
     {executionResult && (report || deferExecutionDetails ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始记录"><AccordionItem id="execution-result" title="查看执行原始记录">{executionResult}</AccordionItem></Accordion> : executionResult)}
 

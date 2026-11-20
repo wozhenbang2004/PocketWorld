@@ -1,13 +1,13 @@
 import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
-import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconClose, IconExternalLink, IconFileAdd, IconFolder, IconInfo, IconMore, IconRefresh, IconShare, IconUpload } from './icons';
+import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconClose, IconExternalLink, IconFileAdd, IconFolder, IconInfo, IconMore, IconRefresh, IconSearch, IconShare, IconUpload } from './icons';
 import {bridge} from './bridge';
-import {Accordion,AccordionItem,Button,IconButton,TextField} from './forms-library';
+import {Accordion,AccordionItem,Button,IconButton,SelectField,TextField} from './forms-library';
 import {Drawer,ContextMenuTrigger,ContextMenu,ContextMenuItem} from './shell-library';
 import {AttachmentOriginalReader,DocumentProjection,FileDetails} from './AttachmentOriginalReader';
 import {AttachmentDocumentEditor,AttachmentProcessingEditor,AttachmentVersionContinuation} from './AttachmentDocumentEditor';
 import {OriginalImageComparison} from './workspace-library/OriginalImageComparison';
 import {AttachmentFileCollection} from './workspace-library/AttachmentFileCollection';
-import {attachmentActionPayload,attachmentDocumentKey,attachmentFrame,exactFileTarget,fileBytes,fileObject as obj,fileRows as rows,fileRunProvenance,type AttachmentFrame,type FileJson as Json} from './attachment-workspace';
+import {attachmentActionPayload,attachmentDocumentKey,attachmentFileFormat,attachmentFrame,exactFileTarget,fileBytes,fileObject as obj,fileRows as rows,fileRunProvenance,type AttachmentFrame,type FileJson as Json} from './attachment-workspace';
 import './attachment-workspace.css';
 import './attachment-page.css';
 
@@ -26,6 +26,9 @@ type Props={
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
 const exactFileKey=(file:Json)=>{const pin=exactFileTarget(file);return pin?JSON.stringify([pin.fileId,pin.sha256]):''};
+const catalogFormats=[{id:'all',label:'全部类型'},{id:'document',label:'文档'},{id:'table',label:'表格'},
+ {id:'text',label:'文本'},{id:'media',label:'图片和音视频'},{id:'other',label:'其他文件'}];
+const normalName=(name:unknown)=>typeof name==='string'?name.normalize('NFKC').trim().toLowerCase():'';
 const importMessages:Record<string,string>={
  selecting:'等待系统文件选择。确认前还没有导入。',
  selection_unconfirmed:'无法确认系统选择器是否打开。请在原选择器完成或取消，不会自动重开。',
@@ -47,6 +50,7 @@ function draftContainsFile(target:FileDraftTarget,file:{fileId:string;sha256:str
 const fileOrigins:Record<string,string>={
  created_text:'生成的文本',created_document:'生成的文档',document_extract:'文档摘录',generated_media:'生成的媒体',
  device_received_file:'来自这次原设备工作',derived_media:'原件加工成果',managed_build_output:'构建产物',remote_result_snapshot:'已保存的远端成果',
+ document_source:'文档编辑源，不是已生成的文档',
 };
 const editableDocumentMimes=new Set([
  'application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -63,12 +67,13 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  // Keep the same editor mounted while native window authority is temporarily revoked.
  const view=incoming.open&&!incoming.ready&&retained.current?{...retained.current,ready:false}:incoming,file=obj(view.file),snapshot=obj(view.snapshot);
  const [error,setError]=useState(''),[pending,setPending]=useState(0),[page,setPage]=useState('1');
+ const [catalogFilter,setCatalogFilter]=useState<{scope:string;name:string;format:string}|null>(null);
  const [draftHandoff,setDraftHandoff]=useState<DraftHandoff|null>(null);
  const draftFlight=useRef<DraftHandoff|null>(null);
  const reportFlight=useRef(false);
  const attachmentFlight=useRef(false);
  const [previewContinuation,setPreviewContinuation]=useState('');
- useEffect(()=>{if(!view.open)setPreviewContinuation('')},[view.open]);
+ useEffect(()=>{if(!view.open){setPreviewContinuation('');setCatalogFilter(null)}},[view.open]);
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
  const continuationHeading=useRef<HTMLDivElement>(null);
  const hasOriginal=Object.keys(obj(view.originalFile)).length>0;
@@ -350,6 +355,14 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const media=catalogUnread||view.choosingSource?[]:rows(snapshot.media).length?rows(snapshot.media):snapshot.kind==='group_media_result'?[{...snapshot,operationId:snapshot.sourceOperationId,status:snapshot.mediaState}]:[];
  const allSources=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts);
  const privateLibrary=privateFiles&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
+ // One view of the native catalog: no content search, new index, or changes to which originals can open.
+ const filterable=privateLibrary||privateFiles&&!!view.taskId&&!scopedResultOnly&&!view.choosingSource&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
+ const fileFilter=filterable&&catalogFilter?.scope===listScope?catalogFilter:null;
+ const nameFilter=fileFilter?.name||'',formatFilter=fileFilter?.format||'all',needle=normalName(nameFilter);
+ const filterActive=!!needle||formatFilter!=='all';
+ const matchesFile=(row:Json)=>(!needle||normalName(row.name).includes(needle))&&
+  (formatFilter==='all'||attachmentFileFormat(row.mimeType,row.name).category===formatFilter);
+ const updateFilter=(name:string,format:string)=>setCatalogFilter({scope:listScope,name,format});
  const libraryImport=privateLibrary?obj(view.libraryImport):{},registration=obj(libraryImport.registration);
  const importPhase=typeof libraryImport.phase==='string'?libraryImport.phase:'';
  const selectionPending=['selecting','selection_unconfirmed','registering'].includes(importPhase);
@@ -374,7 +387,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   editableSources.push(record);return false;
  });
  const fileCount=allSources.length+savedFiles.length,hasLibraryFiles=fileCount>0;
- const runFiles=privateFiles&&resultFilesOnly?savedFiles.flatMap(row=>{
+ const listedOutputs=savedFiles.filter(matchesFile),listedSources=sourceFiles.filter(matchesFile),listedRecent=recentSources.filter(matchesFile),listedEditable=editableSources.filter(matchesFile);
+ const matchingCount=listedOutputs.length+listedSources.length+listedRecent.length+listedEditable.length;
+ const runFiles=privateFiles&&resultFilesOnly?listedOutputs.flatMap(row=>{
   const target=exactFileTarget(row);
   return row.runProvenance==='current'&&row.availability==='available'&&target?[{target,name:String(row.name||'原件')}]:[];
  }):[];
@@ -389,11 +404,11 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const catalogIncomplete=privateFiles&&!catalogUnread&&(resultFilesOnly?snapshot.resultFilesReadLimited===true:snapshot.indexDiagnostics?.incomplete===true);
  const catalogUnconfirmed=catalogIncomplete||catalogUnread;
  const refreshList=()=>run(view.choosingSource?'chooseSource':'refresh');
- const sourcesList=fileList(view.choosingSource?'可用文件':'来源文件',sourceFiles,opensSource);
- const recentSourcesList=fileList('本次已登记的文件',recentSources,opensSource);
- const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存成果',savedFiles,privateLibrary||resultFilesOnly);
- const editableSourceList=editableSources.length>0&&<Accordion className="pw-attachment-tools"><AccordionItem id="library-editable-sources" title={`文档编辑源 · ${editableSources.length} 项`}>
-  {fileList('已关联成品的编辑源',editableSources)}
+ const sourcesList=fileList(view.choosingSource?'可用文件':'来源文件',listedSources,opensSource);
+ const recentSourcesList=fileList('本次已登记的文件',listedRecent,opensSource);
+ const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存的文件成果',listedOutputs,privateLibrary||resultFilesOnly);
+ const editableSourceList=listedEditable.length>0&&<Accordion className="pw-attachment-tools"><AccordionItem id="library-editable-sources" title={`文档编辑源 · ${listedEditable.length} 项`}>
+  {fileList('已关联成品的编辑源',listedEditable)}
  </AccordionItem></Accordion>;
  const libraryActions=privateFiles&&!resultFilesOnly&&<div className="pw-action-row pw-file-library-actions"><Button variant={hasLibraryFiles?'secondary':'primary'} leadingIcon={IconUpload} disabled={busy||selectionPending||state.attachmentImporting===true} onClick={()=>run('import')}>导入文件</Button><Button variant="ghost" leadingIcon={IconFileAdd} disabled={busy||selectionPending||!!view.pendingDocumentTask} onClick={()=>run('newDocument')}>创建文档</Button>{view.taskId&&!view.choosingSource&&<Button variant="ghost" disabled={busy} onClick={()=>run('chooseSource')}>从附件库关联</Button>}</div>;
  return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{if(returningToSearch.current)event.preventDefault();onReturnFocus?.(event)}} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description">
@@ -431,15 +446,20 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {!scopedResultOnly&&<Accordion className="pw-attachment-tools"><AccordionItem id="read-source" title="读取文字与表格" description="保留页码、位置与识别说明"><section>{file.mimeType==='application/pdf'&&<TextField label="从第几页开始" value={page} onChange={setPage}/>}<div className="pw-action-row"><Button variant="secondary" disabled={busy||!/^\d+$/.test(page)||Number(page)<1} onClick={()=>run('read',{unit:Number(page),chunk:0})}>读取文字与表格</Button>{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>本机识别图片文字</Button>}</div></section></AccordionItem></Accordion>}
  {!scopedResultOnly&&privateFiles&&(String(file.mimeType).startsWith('image/')||['video/mp4','audio/mp4'].includes(file.mimeType))&&<Accordion className="pw-attachment-tools"><AccordionItem id="continue-source" title="图像与媒体处理" description="裁剪、转换或对照原版本"><section><div className="pw-action-row">{(String(file.mimeType).startsWith('image/')||['video/mp4','audio/mp4'].includes(file.mimeType))&&<Button variant="secondary" disabled={busy||!!view.pendingProcessingTask} onClick={()=>run('openProcessing')}>{String(file.mimeType).startsWith('image/')?'裁剪、缩放或转换原图':'剪辑原媒体片段'}</Button>}{String(file.mimeType).startsWith('image/')&&(file.parentArtifact||file.source?.parentArtifact)&&<Button variant="ghost" disabled={busy} onClick={()=>run('compareParent')}>对照父原图</Button>}</div></section></AccordionItem></Accordion>}<FileDetails value={file} title="来源与文件版本"/></section>:<>
  <section className="pw-file-library" aria-label={view.choosingSource?'选择来源文件':'文件集合'}>
- <header className="pw-file-library-header"><span className="pw-attachment-library-scope">{view.choosingSource?'选择来源':resultFilesOnly?'本轮成果':view.taskId?'当前任务':'私人文件库'}{hasLibraryFiles&&` · 当前列出 ${fileCount} 项`}</span>{!busy&&(catalogUnconfirmed||error||view.error)?<Button variant="ghost" leadingIcon={IconRefresh} onClick={refreshList}>重新读取文件</Button>:<IconButton icon={IconRefresh} aria-label="重新读取文件" title="重新读取文件" disabled={busy} onClick={refreshList}/>}</header>
+ <header className="pw-file-library-header"><span className="pw-attachment-library-scope">{view.choosingSource?'选择来源':resultFilesOnly?'本轮文件':view.taskId?'原工作文件':'私人文件库'}{hasLibraryFiles&&(filterActive?` · ${matchingCount} 项匹配`:` · 当前列出 ${fileCount} 项`)}</span>{!busy&&(catalogUnconfirmed||error||view.error)?<Button variant="ghost" leadingIcon={IconRefresh} onClick={refreshList}>重新读取文件</Button>:<IconButton icon={IconRefresh} aria-label="重新读取文件" title="重新读取文件" disabled={busy} onClick={refreshList}/>}</header>
  {!busy&&catalogIncomplete&&<p className="pw-muted" role="status">{resultFilesOnly?(hasLibraryFiles?'本轮文件尚未核全。可以先打开已确认属于本轮的文件。':'本轮文件尚未核全，暂未核到可列出的原件。'):(hasLibraryFiles?'文件清单未读全，已列出的可用版本仍可打开。':'文件清单未读全，目前无法确认有哪些文件。')}</p>}
  {!busy&&catalogUnread&&!catalogIncomplete&&!error&&!view.error&&<p className="pw-muted" role="status">文件清单尚未读取。</p>}
  {privateLibrary&&<>
   {(!catalogUnconfirmed||hasLibraryFiles)&&libraryActions}
   {importMessage&&<p role="status" className="pw-field-hint">{importMessage}
    {confirmedImport&&registeredCount>recentSources.length&&!busy&&' 当前清单未列齐这批已登记文件，可重新读取，不必再导入。'}</p>}
-  {recentSourcesList}
  </>}
+ {filterable&&(hasLibraryFiles||filterActive)&&<div role="search" aria-label="查找当前清单中的文件" className="pw-file-search">
+  <TextField label="文件名" placeholder="在当前清单查找" leadingIcon={IconSearch} value={nameFilter} onChange={name=>updateFilter(name.slice(0,180),formatFilter)}/>
+  <SelectField label="文件类别" compactValue options={catalogFormats} value={formatFilter} onChange={format=>updateFilter(nameFilter,format)}/>
+ </div>}
+ {filterActive&&!busy&&<div className="pw-action-row"><p className="pw-muted" role="status">{matchingCount?`已读取的文件中有 ${matchingCount} 项匹配。`:'当前已读取的文件没有匹配项。'}{catalogIncomplete&&' 文件清单尚未读全。'}</p><Button variant="ghost" onClick={()=>updateFilter('','all')}>清除筛选</Button></div>}
+ {privateLibrary&&recentSourcesList}
  {hasLibraryFiles?privateLibrary?<>{outputsList}{sourcesList}{editableSourceList}</>:view.taskId&&!view.choosingSource?<>{outputsList}{sourcesList}{libraryActions}</>:<>{libraryActions}{sourcesList}{outputsList}</>
  :!busy&&!catalogUnconfirmed&&!error&&!view.error?<div className="pw-file-library-empty"><IconFolder size={28} aria-hidden="true"/><h2>{view.choosingSource?'还没有可关联的文件':resultFilesOnly?'本轮暂无可读取的文件':view.taskId?'这个任务还没有文件':'资料库还没有文件'}</h2><p>{view.choosingSource?'导入文件后，就可以把它关联到当前任务。':view.taskId?resultFilesOnly?(scopedResultOnly?'没有用其他轮次或同名文件替代。':'本轮文件将在这里显示，也可回原工作核对已保存的文件。'):'任务中使用的文件和生成的成果会出现在这里。':'从手机选择文件。支持的 PDF、Word（.docx）、Excel（.xlsx）和文本可在本机查看，不用模型。'}</p>{!privateLibrary&&libraryActions}</div>:!privateLibrary&&!catalogUnconfirmed&&libraryActions}
  {privateFiles&&!view.taskId&&!catalogUnread&&rows(snapshot.documentActions?.actions).length>0&&<details><summary>文档生成记录</summary>{rows(snapshot.documentActions.actions).map(action=><div className="pw-file-action-record" key={action.taskId}><div><strong>{action.name||'文档'} · {String(action.format||'').toUpperCase()}</strong><small>{action.status}</small></div><Button variant="ghost" disabled={busy} onClick={()=>run('openDocumentAction',{taskId:action.taskId})}>打开原记录</Button></div>)}{snapshot.documentActions.hasMore&&<Button variant="ghost" disabled={busy} onClick={()=>run('olderDocumentActions')}>读取更早记录</Button>}<FileDetails value={snapshot.documentActions.gaps} title="未完整核对的记录"/></details>}

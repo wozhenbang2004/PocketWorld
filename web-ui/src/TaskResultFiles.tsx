@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, useSyncExternalStore, type MouseEvent } from 'react';
-import { fileBytes, fileRunProvenance } from './attachment-workspace';
+import { attachmentFileFormat, fileBytes, fileRunProvenance } from './attachment-workspace';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
@@ -81,7 +81,8 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   const hasSources = !!(sources.length || current?.sourceUnavailable || current?.hasRequestAttachments);
   if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error) return null;
   const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
-      const metadata = input ? fileBytes(file.size) : `${fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录'} · ${fileBytes(file.size)}`;
+      const format = attachmentFileFormat(file.mimeType,file.name).label;
+      const metadata = [format, input ? '' : fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录', fileBytes(file.size)].filter(Boolean).join(' · ');
       return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
       aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}${!input && file.hasSavedSupplement === true ? '，有补充草稿' : ''}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
         <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}{!input && file.hasSavedSupplement === true && ' · 有补充草稿'}</small></span>
@@ -95,7 +96,7 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
       : <p className="pw-reading-note">交办消息含有附件，可回原话题查看。</p>)}
   </>;
   return <section className="pw-outcome-deliverables" aria-labelledby={heading} aria-busy={busy || undefined}>
-    <div className="pw-reading-section-heading"><h4 id={heading}>{outputs.length ? '已保存的文件' : hasSources ? '来源文件' : '工作文件'}</h4></div>
+    <div className="pw-reading-section-heading"><h4 id={heading}>{outputs.length ? '已保存的文件成果' : hasSources ? '来源文件' : '工作文件'}</h4></div>
     {busy && <p className="pw-reading-note" role="status">正在读取工作文件…</p>}
     {current?.error && <p className="pw-reading-note pw-error" role="alert">{current.error}</p>}
     {outputs.length > 0 && fileList(outputs, false)}

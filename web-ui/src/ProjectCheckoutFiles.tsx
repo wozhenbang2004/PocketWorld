@@ -15,14 +15,25 @@ type SavedEdit = { id: string; filesHandle: string; path: string; beforeHash: st
 type EditorPosition = { start: number; end: number; scrollTop: number; scrollLeft: number };
 // A UI bookmark, not a reusable native save handle or a copy of the file.
 export type CheckoutSavedPosition = { projectId: string; checkoutId: string; path: string; savedHash: string; caret?: EditorPosition };
-type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; currentOnly?: boolean };
+export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
+type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; currentOnly?: boolean; entry?: CheckoutWebEntry };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
-  resumeSaved?: CheckoutSavedPosition; onClose: (saved?: CheckoutSavedPosition) => void; registerBack: (handler: (() => boolean) | null) => void };
+  resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry;
+  onClose: (saved?: CheckoutSavedPosition) => void; registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
 const windowKey = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const fileHash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+export function checkoutWebEntry(source:Data|null,projectId:string,checkoutId:string):CheckoutWebEntry|null {
+  const pin=source?.firstImportedWebFile,root=source?.retainedArchiveRoot?.directory??'';
+  if(!pin||source?.projectId!==projectId||source.checkoutId!==checkoutId||pin.projectId!==projectId||pin.checkoutId!==checkoutId||
+    !fileHash(pin.sourceDigest)||source.sourceDigest!==pin.sourceDigest||!fileHash(pin.sha256)||typeof root!=='string'||
+    root==='.'||root==='..'||/[\/\\\u0000-\u001f\u007f]/.test(root)||pin.root!==root||typeof pin.path!=='string'||pin.path.length>240)return null;
+  const prefix=root?root+'/':'';
+  return pin.path===prefix+'index.html'||pin.path===prefix+'package.json'?
+    {projectId,checkoutId,sourceDigest:pin.sourceDigest,root,path:pin.path,sha256:pin.sha256}:null;
+}
 const textareaText = (value: string) => value.replace(/\r\n?/g, '\n');
 function observedSave(submitted: Data, response: Data): SavedEdit | null {
   const proof = response.savedEdit, actual = response.latest;
@@ -42,9 +53,10 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack, sourceMember, hostFile, resumeSaved }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, registerBack, sourceMember, hostFile, resumeSaved, firstEntry }: Props) {
   const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
+  const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
   const [listing, setListing] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [text, setText] = useState('');
   const [finding,setFinding]=useState(false),[finder,setFinder]=useState<'path'|'text'|'git'>('path');
   const [gitView,setGitView]=useState<CheckoutGitView|null>(null);
@@ -99,21 +111,23 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     setListing(previous => ({ ...value, files: more ? [...rows(previous?.files), ...rows(value.files)] : rows(value.files) }));
     setListingStale(false);
   });
-  const readFile = (path: string, { gitStatusOperation, saved, position, currentOnly }: FileRead = {}) => {
+  const readFile = (path: string, { gitStatusOperation, saved, position, currentOnly, entry:sourceEntry }: FileRead = {}) => {
     if (sourceMember || hostFile) {
       if (path !== (sourceMember || hostFile)!.path || entered.current || edits.current) return;
       setReviewed(false); currentFile.current = null; setFile(null);
     }
     return invoke('read', { path, ...(gitStatusOperation?{gitStatusOperation}:{}), ...(saved?{savedEditId:saved.id}:{}) }, value => {
-      if ((sourceMember || hostFile || gitStatusOperation || saved || position || currentOnly) && (value.path !== path || value.latest?.deleted !== false ||
+      if ((sourceMember || hostFile || gitStatusOperation || saved || position || currentOnly || sourceEntry) && (value.path !== path || value.latest?.deleted !== false ||
           !fileHash(value.latest?.expectedHash) || typeof value.latest.content !== 'string'))
         throw new Error('没有取得原副本这个文件的当前内容，未打开替代文件。');
       if (saved && (value.savedEditId !== saved.id || value.latest.expectedHash !== saved.savedHash || value.latest.content !== saved.after))
         throw new Error('未核对到这次保存的原文件内容，未打开其他版本。');
-      if ((position || currentOnly) && (value.latest.projectId !== projectId || value.latest.checkoutId !== checkoutId || value.latest.path !== path))
+      if ((position || currentOnly || sourceEntry) && (value.latest.projectId !== projectId || value.latest.checkoutId !== checkoutId || value.latest.path !== path))
         throw new Error('读取内容不属于这份副本的这个路径。');
       if (position && value.latest.expectedHash !== position.savedHash)
         throw new Error('此路径当前字节不再是上次保存的版本，没有切换到其他版本。');
+      if(sourceEntry && value.latest.expectedHash!==sourceEntry.sha256)
+        throw new Error('该入口文件已变化。请返回原项目重新核对，没有打开其他文件。');
       setChoice(null); setAdoption(null); apply(value); setTreeOpen(false);
       const sequence = generation.current, caret = position?.caret;
       requestAnimationFrame(() => {
@@ -139,11 +153,15 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       if (pin && (value.executionAuthorized !== false || !value.savedMember || !Object.entries(pin).every(([k, v]) => v === value.savedMember[k]) ||
           value.savedMember.projectId !== projectId || value.savedMember.checkoutId !== checkoutId || value.savedMember.bytes !== sourceMember!.bytes ||
           typeof value.savedMember.text !== 'string' || new TextEncoder().encode(value.savedMember.text).length !== sourceMember!.bytes)) throw new Error('原任务保存的文件与所选副本不符。');
+      if(entry && (value.readOnly!==true||value.sourceDigest!==entry.sourceDigest)){
+        void latest.current.run(command+'close',{viewHandle,filesHandle:value.filesHandle}).catch(()=>{});
+        throw new Error('副本或入口已变化。请回项目重新核对，未读取替代文件。');
+      }
       handle.current = value.filesHandle; setListing(value);
     });
-    const target = pin || hostFile || resume;
+    const target = pin || hostFile || resume || entry;
     if (result && target && handle.current === result.filesHandle && live(generation.current))
-      await readFile(target.path, { position: resume });
+      await readFile(target.path, { position: resume, entry });
   };
   const edit = (value: string) => {
     const original = currentFile.current;
@@ -245,7 +263,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     <p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : hostFile ? '这是刚核对的手机副本。已有草稿会单独提示；保存只修改手机文件，采纳到本机正式项目仍须另行审阅，不会连回或改写主机。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small>
     {error && <p role="alert">{error}</p>}
-    {!listing ? <Button variant="secondary" disabled={busy} onClick={() => void openFiles()}>{busy ? '正在核对原副本…' : '重新读取副本文件'}</Button> : <>
+    {!listing ? <Button variant="secondary" disabled={busy} onClick={() => { if(entry&&error)close();else void openFiles(); }}>
+      {busy?'正在核对原副本…':entry&&error?'返回项目重新核对入口':'重新读取副本文件'}
+    </Button> : <>
       {resume && !file && !busy && <div className="pw-form-actions">
         <Button variant="secondary" disabled={locked} onClick={()=>void readFile(resume.path,{position:resume})}>重新核对原保存版本</Button>
         <Button variant="ghost" disabled={locked} onClick={()=>void readFile(resume.path,{currentOnly:true})}>读取这一路径的当前内容</Button>

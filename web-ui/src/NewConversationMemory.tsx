@@ -39,6 +39,7 @@ export function NewConversationMemory({ composer, allowSingle, isOpen, onClose, 
   };
   const busy=writing||mode?.saving===true||one?.saving===true||one?.pending===true;
   return <SettingsDialog isOpen={isOpen} title="新对话的个人记忆" onClose={()=>{if(!started.current)onClose();}}>
+    <p className="pw-muted">这里只显示草稿设置，不是已选记忆。发送后若回答有「本次记忆」，可在那里核对实际提供的条目。</p>
     {one&&<StretchSwitch label="只让第一条不参与自动整理" checked={one.excluded===true} busy={writing||one.saving} disabled={busy}
       description={one.protectDefaults===true?'原话仍保留。关闭此项也会撤销下方的原任务写入限制。':'原话仍保留，但不能作为自动整理的来源。已有偏好仍按原规则使用；原输入受理后，这个单条选择就用完。'} onChange={v=>{void save('excluded',v);}}/>}
     {one?.excluded===true&&typeof one.protectDefaults==='boolean'&&<StretchSwitch label="这项委托不能改默认偏好" checked={one.protectDefaults} busy={writing||one.saving} disabled={busy}

@@ -20,7 +20,8 @@ export function OwnerWorkTeams({ teams, onOpen }: { teams: OwnerWorkTeam[]; onOp
       const status = primaryPackage ? '完整项目包已保存' : stopping ? '停止状态待核对' : team.needsAttention ? '有问题需要处理' : teamStatusLabel(team.status);
       const detail = primaryPackage ? `查看固定版本 · ${team.deliveredPackage!.fileCount} 个文件` : lookForResults ? '查看分工与成果' : [phase,
         typeof team.memberCount === 'number' && team.memberCount > 0
-          ? typeof team.completedMemberCount === 'number' ? `本阶段 ${team.completedMemberCount}/${team.memberCount} 名成员已返回` : `${team.memberCount} 名成员`
+          ? typeof team.completedMemberCount === 'number' && team.completedMemberCount <= team.memberCount
+            ? `在队成员：${team.completedMemberCount}/${team.memberCount} 已记为完成` : `${team.memberCount} 名在队成员`
           : '',
       ].filter(Boolean).join(' · ');
       return <li key={team.teamRunId}>

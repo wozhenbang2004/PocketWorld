@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {Accordion,AccordionItem,Button,RadioOptions,TextField} from './forms-library';
+import {IconExternalLink} from './icons';
 import {MarkdownBody} from './library';
 import {bridge} from './bridge';
 import {documentTable,fileObject as obj,fileRows as rows,type FileJson as Json} from './attachment-workspace';
@@ -58,6 +59,8 @@ function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReader
  const read=(args:Json)=>void invoke('read',args);
  const retry=()=>void invoke(failedRead?.command||'load',failedRead?.args);
  const encodingChoice=recoveryEncoding||String(actual.encoding||'UTF-8');
+ const systemReaderAction=(label:string,variant:'secondary'|'ghost')=>!retired&&recovery?.onOpenInReader&&
+  <Button variant={variant} leadingIcon={IconExternalLink} disabled={recovery.busy||busy||source.busy} onClick={recovery.onOpenInReader}>{label}</Button>;
  return <section className="pw-original-file" aria-label={`原件：${source.name}`}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
  {!retired&&(busy||source.busy)&&<p role="status">正在读取原件…</p>}
@@ -70,8 +73,8 @@ function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReader
    <Button variant="secondary" disabled={busy||source.busy} onClick={()=>{setFound(null);read({encoding:encodingChoice,offset:0})}}>用此编码从头读取</Button>
   </div>}
  </section>}
- {(unavailable||failed&&failedRead?.command!=='find')&&!source.sourceUnavailable&&recovery?.onOpenInReader&&
-  <div className="pw-action-row"><Button variant="secondary" disabled={recovery.busy||busy||source.busy} onClick={recovery.onOpenInReader}>用其他应用打开</Button></div>}
+ {(unavailable||failed&&failedRead?.command!=='find')&&!retired&&recovery?.onOpenInReader&&
+  <div className="pw-action-row">{systemReaderAction('用其他应用打开原件','secondary')}</div>}
  {imageTools&&<div className="pw-action-row">
   {type==='pdf'&&<><Button variant="ghost" disabled={busy||page<=1} onClick={()=>read({page:page-1})}>上一页</Button><span>{page} / {pages} 页</span><Button variant="ghost" disabled={busy||page>=pages} onClick={()=>read({page:page+1})}>下一页</Button></>}
   <Button variant="ghost" aria-expanded={toolsVisible} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'阅读工具'}</Button>
@@ -87,7 +90,13 @@ function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReader
  {found&&<div className="pw-action-row">{rows(found.matches).map((hit,i)=><Button key={i} variant="ghost" disabled={busy} onClick={()=>read(type==='pdf'?{page:hit.page}:{offset:hit.offset,encoding:actual.encoding})}>{type==='pdf'?`第 ${hit.page} 页`:`位置 ${Number(hit.offset)+1}`}</Button>)}{found[type==='pdf'?'nextPage':'nextOffset']!=null&&<Button variant="secondary" disabled={busy} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:found[type==='pdf'?'nextPage':'nextOffset']})}>继续后续范围</Button>}{!rows(found.matches).length&&<p>当前查找范围内没有匹配文字。</p>}{found.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}</div>}</AccordionItem></Accordion>}
  {ready&&(type==='image'||type==='pdf')&&<><div hidden={!toolsVisible} className="pw-action-row pw-original-zoom pw-material-navigation" role="group" aria-label="原件显示比例"><Button variant="ghost" disabled={zoom<=1} onClick={()=>setZoom(x=>Math.max(1,x/1.5))}>缩小</Button><Button variant="ghost" onClick={()=>{setZoom(1);setTurn(0)}}>适合页面 · {Math.round(zoom*100)}%</Button><Button variant="ghost" disabled={zoom>=8} onClick={()=>setZoom(x=>Math.min(8,x*1.5))}>放大</Button>{type==='image'&&<Button variant="ghost" onClick={()=>setTurn(x=>(x+90)%360)}>旋转查看</Button>}</div>{type==='image'&&<p className="pw-muted">原尺寸 {actual.width} × {actual.height}{actual.sampled?' · 显示时已采样，导出保留完整原图':''}</p>}<div className="pw-original-raster"><img key={`${source.id}:${page}`} src={`${source.url}${type==='pdf'?`?page=${page}`:''}`} style={{width:`${zoom*100}%`,transform:`rotate(${turn}deg)`}} alt={type==='pdf'?`原 PDF 第 ${page} 页`:'选定的固定原图'} onError={()=>setError('原件显示已关闭或未完成，请返回后重新打开')}/></div></>}
  {ready&&(type==='video'||type==='audio')&&<OriginalMediaPlayer key={`${windowId}:${source.id}`} url={source.url} kind={type} name={String(source.name||'媒体原件')} onError={()=>setError('此设备未能播放这份原媒体。')} />}
- {ready&&type==='office'&&<><div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div><p className="pw-muted">当前显示文字与表格结构，字体、分页和图表应在原件中核对。</p><DocumentProjection value={actual}/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}</>}
+ {ready&&type==='office'&&<>
+  <div className="pw-action-row"><p className="pw-muted">本机只显示文字和表格结构，不还原完整排版和图表。</p>
+   {systemReaderAction('用其他应用核对原件','ghost')}
+  </div>
+  <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>
+  <DocumentProjection value={actual}/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
+ </>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">
   <RadioOptions label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);setFound(null);read({encoding,offset:0})}}/>
   {isMarkdown&&<Button variant="ghost" onClick={()=>setMarkdown(value=>!value)}>{markdown?'显示原文':'显示 Markdown'}</Button>}

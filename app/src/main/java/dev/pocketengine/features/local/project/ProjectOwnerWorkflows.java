@@ -45,7 +45,16 @@ public final class ProjectOwnerWorkflows {
         JSONObject wrapper=ProjectAndroidPreflight.ownerWrapper(snapshot,source);
         if(!project.equals(source.getString("projectId"))||!checkout.equals(source.getString("checkoutId")))throw new SecurityException("原项目副本已变化");
         if(observeTooling){
-            source.putOpt("retainedArchiveRoot",ProjectArchiveRoot.checkout(snapshot.getJSONObject("checkout"),source.getJSONArray("files")));
+            JSONObject metadata=snapshot.getJSONObject("checkout"),archiveRoot=ProjectArchiveRoot.checkout(metadata,source.getJSONArray("files"));
+            source.putOpt("retainedArchiveRoot",archiveRoot);
+            JSONObject origin=metadata.optJSONObject("sourceImport");
+            if(origin!=null&&"new_project".equals(origin.opt("mode"))&&Boolean.FALSE.equals(origin.opt("executionAuthorityRestored"))&&
+                ("external_zip".equals(origin.opt("sourceKind"))||"saf_tree".equals(origin.opt("sourceKind")))){
+                String root=archiveRoot==null?"":archiveRoot.getString("directory");
+                JSONObject entry=ProjectArchiveRoot.firstWebFile(snapshot.getJSONArray("files"),root);
+                if(entry!=null)source.put("firstImportedWebFile",entry.put("projectId",project).put("checkoutId",checkout)
+                    .put("sourceDigest",source.getString("sourceDigest")));
+            }
             try{source.put("checkoutTooling",ProjectCheckoutTooling.describe(snapshot,source,local.projectRuntimeForHost("managed_process_v1")).put("androidClues",wrapper!=null));}
             catch(Exception unavailable){/* Optional observation must not block reading/editing a verified checkout. */}
             JSONObject copy=snapshot.getJSONObject("checkout").optJSONObject(OwnerDraftWorkCopy.FIELD);

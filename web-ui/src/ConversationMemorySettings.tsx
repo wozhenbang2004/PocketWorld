@@ -65,6 +65,7 @@ export function ConversationMemorySettings({conversationId,controls,composer,isO
   const canShelf=!!single&&!!composer&&Number.isSafeInteger(composer.epoch)&&['list','read','remove','close'].every(name=>bridge.getState().capabilities.commands.includes('messageShelf.'+name));
   if(isOpen&&shelf===shelfVisit&&canShelf&&composer)return <ConversationReferenceShelf key={conversationId+':'+composer.epoch} conversationId={conversationId} draftKey={composer.key} epoch={composer.epoch} onClose={()=>setShelf(null)} onReturnDraft={()=>{setShelf(null);close();}}/>;
   return <SettingsDialog isOpen={isOpen} title="本对话的个人记忆" onClose={close}>
+    <p className="pw-muted">这里只显示对话设置，不是这次请求的已选记忆。对应回答若有「本次记忆」，可在那里核对实际提供的条目。</p>
     {pending&&!controls&&<ShimmerText>正在读取此对话设置…</ShimmerText>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
     {controls&&<StretchSwitch label="允许此对话参考我的资料、偏好和记忆" description="关闭后，此对话不引用个人资料与记忆，也不自动整理记忆候选。开启只解除本对话的暂停，不改变总设置。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save('enabled',enabled);}}/>}

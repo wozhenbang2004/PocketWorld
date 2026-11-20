@@ -21,6 +21,43 @@ export function fileBytes(value: unknown): string {
   const count = typeof value === 'number' && Number.isFinite(value) ? value : 0;
   return count >= 1048576 ? `${(count / 1048576).toFixed(1)} MiB` : count >= 1024 ? `${(count / 1024).toFixed(1)} KiB` : `${count} bytes`;
 }
+export type AttachmentFileCategory = 'document' | 'table' | 'text' | 'media' | 'other';
+const fileFormats: Record<string, { category: AttachmentFileCategory; label: string }> = {
+  'application/pdf': {category:'document',label:'PDF'},
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': {category:'document',label:'Word 文档'},
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': {category:'document',label:'PowerPoint'},
+  'application/msword': {category:'document',label:'旧版 Word'},
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {category:'table',label:'Excel 表格'},
+  'application/vnd.ms-excel': {category:'table',label:'旧版 Excel'},
+  'text/csv': {category:'table',label:'CSV 表格'},
+  'text/tab-separated-values': {category:'table',label:'TSV 表格'},
+  'text/plain': {category:'text',label:'文本'},
+  'text/markdown': {category:'text',label:'Markdown 文本'},
+  'application/json': {category:'text',label:'JSON 文本'},
+  'application/zip': {category:'other',label:'ZIP 压缩包'},
+};
+const genericExtensions: Record<string,string> = {
+  pdf:'application/pdf', doc:'application/msword', xls:'application/vnd.ms-excel',
+  docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  txt:'text/plain', md:'text/markdown', json:'application/json', csv:'text/csv', tsv:'text/tab-separated-values', zip:'application/zip',
+};
+/** Catalog description only. Actual viewer support and exact bytes are checked on open. */
+export function attachmentFileFormat(mimeType: unknown, name?: unknown): { category: AttachmentFileCategory; label: string } {
+  let mime = typeof mimeType === 'string' ? mimeType.split(';', 1)[0].trim().toLowerCase() : '';
+  if ((!mime || mime === 'application/octet-stream') && typeof name === 'string') {
+    const ext = name.match(/\.([a-z0-9]+)$/i)?.[1].toLowerCase() || '';
+    if (Object.hasOwn(genericExtensions, ext)) mime = genericExtensions[ext];
+  }
+  if (Object.hasOwn(fileFormats, mime)) return fileFormats[mime];
+  if (mime.startsWith('text/') || mime === 'application/xml' || mime.endsWith('+json') || mime.endsWith('+xml'))
+    return {category:'text',label:'文本'};
+  if (mime.startsWith('image/')) return {category:'media',label:'图片'};
+  if (mime.startsWith('video/')) return {category:'media',label:'视频'};
+  if (mime.startsWith('audio/')) return {category:'media',label:'音频'};
+  return {category:'other',label:'文件'};
+}
 export function fileRunProvenance(value: unknown, evidence?: unknown): string {
   if (evidence === 'original_device_file_receive') return value === 'current' ? '本轮接收自原设备' : value === 'earlier' ? '较早轮次接收自原设备' : '';
   switch (value) {

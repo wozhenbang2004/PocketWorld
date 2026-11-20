@@ -54,6 +54,17 @@ export function teamRunEntrySection(reading: Data): 'progress' | 'result' {
 export const settledTeamResultEntry = (team: OwnerWorkTeam) => !team.active && !team.needsAttention && !team.cancelRequested &&
   (team.status === 'completed' || team.status === 'partial');
 
+/** A finished ordinary result that TaskStore matched to the original chat
+ * delivery, even when its parent is outside the recent task list. Entry only. */
+export function ownerPublishedOrdinaryTeamResult(reading: Data): boolean {
+  const run = reading.run, link = reading.ownerWorkLink;
+  return reading.kind === 'run' && !!text(reading.viewHandle) && run?.mode === 'collaborate' && run.status === 'completed' &&
+    link?.savedResultForDraft === true && link.readOnly === true && link.currentRun === true && link.stopping === false &&
+    !!text(run.id).trim() && link.teamRunId === run.id && !!text(reading.taskId).trim() && reading.taskId === link.teamTaskId &&
+    !!text(link.taskId).trim() && !!text(link.runId).trim() && !!text(link.conversationId).trim() &&
+    Number.isSafeInteger(link.epoch) && link.epoch > 0;
+}
+
 export type TeamFollowUp = { key: string; title: string; detail: string; status: string; locator: TeamAttentionLocator };
 const optional = ['identityRevision', 'workItemId', 'assignmentId', 'questionId', 'childKind', 'round', 'taskId'] as const;
 export function originalAttentionLocator(row: Data): TeamAttentionLocator | null {
@@ -86,8 +97,48 @@ export function teamFollowUps(run: Data | null, attention: unknown): TeamFollowU
   return result.sort((a, b) => Number(!!b.locator.questionId) - Number(!!a.locator.questionId));
 }
 
+type TeamPhaseBlocker = { memberId: string; round: number; sameMember: boolean; detail: string };
+type TeamMemberProgressFact = { key: string; title: string; state: string; blockers?: TeamPhaseBlocker[] };
+
+/** The coordinator's stop request is distinct from exiting or proving a
+ * child/external effect has finished. Don't apply a retired pause record. */
+export function teamMemberStopRequested(member: Data): boolean {
+  return member.status === 'cancelled' && member.parentPause?.permanent === true &&
+    Number.isSafeInteger(member.generation) && member.generation >= 0 && member.parentPause.memberGeneration === member.generation;
+}
+
+/** Read the exact blockers persisted by executeRound. Do not derive a new
+ * dispatch decision from the configured dependencies or from another round. */
+function ordinaryPhaseBlockers(run: Data, member: Data, phase: Data, state: string): TeamPhaseBlocker[] {
+  if (run.mode !== 'collaborate' || run.productionScope || run.workPlan || run.status === 'cancelled' ||
+      run.researchExecutionFormat !== 'pocketworld.team-research-agent.v1' || (member.runner || 'model') !== 'model' ||
+      member.exited || member.status === 'cancelled' || member.paused || !['waiting_dependency','blocked_dependency'].includes(state) ||
+      phase.status !== state || !roundId(phase.round) || !Array.isArray(phase.blockedBy) ||
+      !phase.blockedBy.length || phase.blockedBy.length > 4 || new Set(phase.blockedBy).size !== phase.blockedBy.length) return [];
+  const roster = rows(run.members), result: TeamPhaseBlocker[] = [];
+  for (const id of phase.blockedBy) {
+    if (!text(id).trim()) return [];
+    const sameMember = id === member.id, round = sameMember ? phase.round - 1 : phase.round;
+    if (!roundId(round) || !sameMember && (!Array.isArray(member.dependsOn) || !member.dependsOn.includes(id))) return [];
+    const sources = roster.filter(slot => slot?.id === id);
+    if (sources.length !== 1) return [];
+    const source = sources[0], stages = rows(source.roundStates).filter(candidate => candidate?.round === round);
+    if (stages.length !== 1 || !text(stages[0].status)) return [];
+    const upstream = stages[0], status = upstream.status;
+    const detail = status === 'completed' ? '前置已记为完成，是否解除待核对'
+      : source.exited === true || status === 'exited' ? '已退出'
+      : teamMemberStopRequested(source) ? '已请求停止'
+      : source.status === 'cancelled' || status === 'cancelled' ? '已停止'
+      : source.paused === true ? '成员已暂停'
+      : status === 'running' && (!activeProgress(run.status) || !Number.isSafeInteger(upstream.generation) || upstream.generation !== source.generation)
+        ? '原进展待核对' : teamStatusLabel(status);
+    result.push({ memberId: id, round, sameMember, detail });
+  }
+  return result;
+}
+
 /** Exact progress from the open team's existing roster, plan and decisions. */
-export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollowUp[], readRetained = false) {
+export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollowUp[], readRetained = false): TeamMemberProgressFact[] {
   const active = activeProgress(run.status);
   const readStopped = readRetained && !run.workPlan && !run.productionScope && ['collaborate','debate'].includes(run.mode);
   const showStages = active || run.status === 'completed' || run.status === 'partial' ||
@@ -120,11 +171,13 @@ export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollo
   }
   const phases = rows(member.roundStates);
   return phases.filter(phase => roundId(phase?.round) && phases.filter(row => row?.round === phase.round).length === 1)
-    .sort((a, b) => a.round - b.round).map(phase => ({
-      key: String(phase.round), title: '第 ' + phase.round + ' 阶段', state: state(phase, locator => !locator.workItemId &&
+    .sort((a, b) => a.round - b.round).map(phase => {
+      const visibleState = state(phase, locator => !locator.workItemId &&
         (locator.round != null ? locator.round === phase.round :
-          member.round === phase.round && (!locator.assignmentId || locator.assignmentId === member.assignmentTask?.assignmentId))),
-    }));
+          member.round === phase.round && (!locator.assignmentId || locator.assignmentId === member.assignmentTask?.assignmentId)));
+      const blockers = ordinaryPhaseBlockers(run, member, phase, visibleState);
+      return { key: String(phase.round), title: '第 ' + phase.round + ' 阶段', state: visibleState, ...(blockers.length ? { blockers } : {}) };
+    });
 }
 
 const stoppedMemberStage = (value: unknown) => value === 'failed' || value === 'interrupted';

@@ -5,7 +5,7 @@ import {hostWorkspaceAnchor} from './CloudWorkspaceChoice';
 import {IconChevronRight,IconFolder,IconHistory,IconServer} from './icons';
 import {usePocketSnapshot} from './usePocketSnapshot';
 import {originalSeenHostEnd} from './original-seen-host-end';
-import type {CloudGoal} from './cloud-goal';
+import {exactSavedHostMessage,type CloudGoal} from './cloud-goal';
 import './connection-workspace.css';
 
 type Data=Record<string,any>;
@@ -32,7 +32,7 @@ const unambiguousHosts=(profiles:Profile[])=>{
   const key=(p:Profile)=>JSON.stringify([label(p.name,'主机').trim(),p.serviceBase]);
   return profiles.filter(p=>profiles.filter(other=>key(other)===key(p)).length===1);
 };
-const selectedHost=(value:unknown,target:Target)=>unambiguousHosts(savedHostProfiles(value))
+export const currentSavedHostProfile=(value:unknown,target:Pick<Target,'profileId'|'profileBinding'>)=>unambiguousHosts(savedHostProfiles(value))
   .find(p=>p.id===target.profileId&&p.bindingHash===target.profileBinding);
 
 function HostRow({title,detail,icon:Icon,onOpen,disabled}:{
@@ -95,26 +95,30 @@ export function SavedHostPicker({open,profiles,select,configure,close,busy,error
 }
 
 /** An isolated editor for this saved message, not the ordinary host draft. */
-export function SavedHostWork({origin,target,profiles,run,supported,registerTransientBack}:{
+export function SavedHostWork({origin,target,profiles,run,supported,registerTransientBack,onReturn}:{
   origin:string;target:Target;profiles:unknown;run:(command:string,args?:Data)=>Promise<any>;supported:(command:string)=>boolean;
-  registerTransientBack:(handler:(()=>boolean)|null)=>void;
+  registerTransientBack:(handler:(()=>boolean)|null)=>void;onReturn?:()=>void;
 }){
   const snapshot=usePocketSnapshot();
-  const profile=selectedHost(profiles,target);
+  const profile=currentSavedHostProfile(profiles,target);
   const choice={profileId:target.profileId,bindingHash:target.profileBinding};
   const [catalog,setCatalog]=useState<Workspace[]|null>(null),[review,setReview]=useState<Review|null>(null);
   const [submission,setSubmission]=useState<Submission|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const gate=useRef(0),live=useRef(true),pending=useRef(false),selectedProfile=useRef(profile);
+  const retired=useRef(false),[windowRetired,setWindowRetired]=useState(false);
   selectedProfile.current=profile;
-  const nativeHost=()=>selectedHost(bridge.getState().state.features?.remote?.profiles,target);
+  const nativeHost=(current=bridge.getState())=>currentSavedHostProfile(current.state.features?.remote?.profiles,target);
+  const sourceCurrent=(current=bridge.getState())=>bridge.getDocumentEpoch()===target.source.document&&
+    Number((current.view as Data|undefined)?.resumeRevision||0)===target.resumeRevision&&current.state.conversationId===target.source.conversation&&
+    !current.state.conversationReader&&!!exactSavedHostMessage(rows(current.state.messages),target.source);
   const nativeWindow=()=> {
-    const view=bridge.getState().view as Data|undefined;
-    const here=nativeHost();
-    return view?.section==='remote'&&!view.taskId&&!document.hidden&&!!here&&here.serviceBase===selectedProfile.current?.serviceBase;
+    const current=bridge.getState(),view=current.view as Data|undefined,here=nativeHost(current);
+    return !retired.current&&view?.section==='remote'&&!view.taskId&&!document.hidden&&sourceCurrent(current)&&
+      !!here&&here.serviceBase===selectedProfile.current?.serviceBase;
   };
   const stateKey=()=> {
     const view=bridge.getState().view as Data|undefined;
-    return JSON.stringify([bridge.getDocumentEpoch(),view?.section,view?.taskId,view?.resumeRevision,nativeHost()?.serviceBase]);
+    return JSON.stringify([bridge.getDocumentEpoch(),view?.section,view?.taskId,view?.resumeRevision,nativeHost()?.serviceBase,sourceCurrent()]);
   };
   useEffect(()=>{
     live.current=true;
@@ -123,12 +127,18 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
       gate.current++;pending.current=false;setBusy(false);setReview(null);setCatalog(null);
       setSubmission(old=>old?.waiting?{...old,waiting:false}:old);
     };
-    const change=()=>{const next=stateKey();if(next!==scope){scope=next;invalidate();}};
-    const background=()=>{if(document.hidden)invalidate();};
+    // The native host retires this saved origin when Android backgrounds it.
+    // An empty catalog after resume cannot make the old origin usable again.
+    const retire=()=>{if(retired.current)return;retired.current=true;setWindowRetired(true);invalidate();};
+    const inHostWindow=()=>{const view=bridge.getState().view as Data|undefined;return view?.section==='remote'&&!view.taskId;};
+    let entered=inHostWindow();
+    const change=()=>{const inHost=inHostWindow();if(entered&&!inHost){retire();return;}entered||=inHost;
+      const next=stateKey();if(next!==scope){scope=next;invalidate();}};
+    const background=()=>{if(document.hidden)retire();};
     const unsubscribe=bridge.subscribe(change);
     document.addEventListener('visibilitychange',background);
-    window.addEventListener('pagehide',invalidate);
-    return ()=>{live.current=false;gate.current++;unsubscribe();document.removeEventListener('visibilitychange',background);window.removeEventListener('pagehide',invalidate);};
+    window.addEventListener('pagehide',retire);
+    return ()=>{live.current=false;gate.current++;unsubscribe();document.removeEventListener('visibilitychange',background);window.removeEventListener('pagehide',retire);};
   },[]);
   const dismiss=()=>{
     const checked=review;
@@ -186,12 +196,16 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
   });
   const originals=profile?originalHostWork(snapshot.state.tasks,profile):[];
   const shown=submission?originals.find(row=>row.id===submission.operationId):originals[0];
+  const held=windowRetired||!sourceCurrent(snapshot)||!profile;
+  const canPrepare=nativeWindow();
   const canReview=supported('remote.probeWorker')&&supported('remote.reviewTask')&&supported('remote.confirmTask');
   return <section className="pw-connection-workspace" aria-label="所选主机的原话交办">
     <header className="pw-connection-detail-heading"><div><h2>{label(profile?.name,'原选择的主机')}</h2>{profile&&<p className="pw-connection-address"><bdi>{profile.serviceBase}</bdi></p>}</div></header>
-    {!profile?<p role="status">无法再区分或核对这台主机。请回原话重新选择，不会换到另一台主机。</p>:submission?
-      <p role="status">{submission.waiting?'正在核对这次交办的回执。':shown?'这次交办已在手机登记。可返回原话打开原工作。':'暂未核对到这次交办的确切记录。回原话查看，不要重复提交。'}</p>:<>
-      {!catalog?<><p>先读所选主机开放的工作区，不发送原话。</p>
+    {submission?<p role="status">{submission.waiting?'正在核对这次交办的回执。':shown?'这次交办已在手机登记。可返回原话打开原工作。':'暂未核对到这次交办的确切记录。回原话查看，不要重复提交。'}</p>:
+      held?<><p role="status">{!profile?'选定的主机不能再核对。':'原准备窗口或原话已变化。'}不会再次联系主机，也不会改在手机上执行。</p>
+        {onReturn&&<Button variant="secondary" onClick={onReturn}>返回原话核对</Button>}</>:
+      !canPrepare?<p role="status">原准备窗口尚未核对。核对前不会读取主机。</p>:<>
+      {!catalog?<><p>原话留在手机。点此只读取所选主机开放的工作区，这一步不发送原话。</p>
         <Button disabled={busy||!supported('remote.environments')} onClick={read}>读取可用工作区</Button></>:
         catalog.length?<div className="pw-connection-directory-group">
           <header><h3>选择工作区</h3></header>
@@ -200,13 +214,13 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
             detail={e.label===e.id?'核对并审阅':e.id+' · 核对并审阅'} disabled={busy||!!review||!canReview} onOpen={()=>prepare(e)}/>)}</div>
         </div>:<p role="status">没有核对到适用的工作区。原话还在手机，未派发。</p>}
     </>}
-    {shown&&profile&&!submission?.waiting&&<section className="pw-connection-detail-section" aria-label={submission?'这次原工作':'本机最近的原工作'}>
+    {shown&&profile&&!submission?.waiting&&(!held||submission)&&<section className="pw-connection-detail-section" aria-label={submission?'这次原工作':'本机最近的原工作'}>
       <h3>{submission?'这次原工作':'这台主机的最近工作'}</h3>
       <div className="pw-connection-summary"><span className="pw-connection-summary-icon"><IconHistory size={19} aria-hidden /></span>
         <div><p><strong><bdi>{shown.label}</bdi></strong></p><p>{shown.detail} 仅显示手机留存的回执。</p></div></div>
     </section>}
-    {error&&<p role="alert">{error}</p>}
-    <SettingsDialog isOpen={!!review&&!!profile} title="只把这条原话发给所选主机？" closeLabel="返回工作区" onClose={dismiss}>
+    {error&&!held&&<p role="alert">{error}</p>}
+    <SettingsDialog isOpen={!!review&&!!profile&&canPrepare} title="只把这条原话发给所选主机？" closeLabel="返回工作区" onClose={dismiss}>
       <p><strong>{label(profile?.name,'所选主机')}</strong><br/><bdi>{profile?.serviceBase}</bdi><br/>
         工作区：<bdi>{review?.workspace.label}</bdi>{review&&review.workspace.label!==review.workspace.id&&<>（<bdi>{review.workspace.id}</bdi>）</>}</p>
       <pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{review?.prompt}</pre>

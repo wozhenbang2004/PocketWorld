@@ -3,7 +3,7 @@ import {bridge} from './bridge';
 import {Button, SettingsDialog, StretchSwitch, TextField} from './forms-library';
 import './project-git-intake.css';
 
-type Source = {retainedArchiveRoot?:{directory:string;descriptor:string};id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
+type Source = {retainedArchiveRoot?:{directory:string;descriptor:string};strippedArchiveRoot?:string;firstWebFile?:string;id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
 type Intake = {window:string;busy:boolean;picking:boolean;notice?:string;error?:string;suggestedSkip?:string;staged?:Source;saved:Source[];
   reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string};
 const prefix='projects.localSource.', number=(n:number)=>new Intl.NumberFormat('zh-CN').format(n);
@@ -41,7 +41,7 @@ function SourcePanel({state}:{state:Intake}){
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('query',{actionId:state.pendingId})}>核对原结果</Button>
         {state.mayRetry&&<Button variant="secondary" disabled={busy} onClick={()=>void act('retry',{actionId:state.pendingId})}>沿同一方案重试</Button>}
         {state.mayRelease&&<Button variant="ghost" disabled={busy} onClick={()=>void act('releaseMissing',{actionId:state.pendingId})}>放下这次创建定位</Button>}</div></>
-      :state.project&&state.checkout?<><h3>{state.name} · 本机私人项目</h3><p>新工作副本已登记。打开后可以编辑文件，或再交给本机 Agent；没有启动任务。</p>
+      :state.project&&state.checkout?<><h3>{state.name} · 本机私人项目</h3><p>新工作副本已登记。打开后，在「工作 → 编辑副本或交办工作」核对这份副本的入口，再编辑文件。没有启动任务。</p>
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('openProject',{project:state.project,checkout:state.checkout})}>打开这个项目</Button>
           <Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>导入另一份源码</Button></div></>
       :source?<><h3>{state.reviewId?'核对新项目':'已固定本次源码'}</h3>
@@ -49,10 +49,15 @@ function SourcePanel({state}:{state:Intake}){
         {source.kind==='host_saved_snapshot'&&<p>只包含在原任务中选定的 UTF-8 文件，不是整份主机仓库，也没有授予运行权限。</p>}
         {source.excludedDirectory&&<p>按你的选择跳过目录 <bdi>{source.excludedDirectory}/</bdi>。其中的文件没有读取，也不会进入新项目。</p>}
         {source.fixedPackage&&<p>已核对包内文件，按原相对路径放进新项目，不带外层 project/。{source.fixedPackage.omitted>0&&`原包另有 ${number(source.fixedPackage.omitted)} 项未收录。`}不会恢复旧任务、工具环境或执行权限。</p>}
-        {root&&<><p>工程配置位于 <bdi>{root.descriptor}</bdi>。当前会保留外层 <bdi>{root.directory}/</bdi>。</p>
+        {root&&<><p>工程入口或配置位于 <bdi>{root.descriptor}</bdi>。</p>
           {!state.reviewId&&!discard&&<div className="pw-action-row"><Button variant="secondary" disabled={busy}
             onClick={()=>void act('zip',{stripRoot:true})}>重新选择 ZIP 并去掉外层目录</Button></div>}</>}
         <dl><div><dt>来源</dt><dd dir="auto">{source.label} · {sourceKind(source)}</dd></div>
+          {source.kind==='saf_tree'&&<div><dt>项目根</dt><dd>所选文件夹的顶层。</dd></div>}
+          {source.kind==='external_zip'&&!source.fixedPackage&&<div><dt>项目根</dt><dd>{source.strippedArchiveRoot?
+            <>已核对去掉 ZIP 唯一外层 <bdi>{source.strippedArchiveRoot}/</bdi>，其中的文件将放在项目顶层。</>:
+            <>ZIP 的顶层，保留原相对路径。{root&&<>外层 <bdi>{root.directory}/</bdi> 仍会保留。</>}</>}</dd></div>}
+          {source.firstWebFile&&<div><dt>可先编辑</dt><dd dir="auto">{source.firstWebFile}</dd></div>}
           {state.reviewId&&<div><dt>去向</dt><dd dir="auto">此手机 · 新私人项目「{state.reviewName}」</dd></div>}
           <div><dt>已选范围</dt><dd>{number(source.files)} 个文件 · {number(source.bytes)} 字节{source.omitted>0&&` · 跳过 ${number(source.omitted)} 项`}</dd></div></dl>
         <details><summary>查看已选文件与固定版本</summary>

@@ -154,6 +154,9 @@
 .pw-team-workspace.pw-depth-collaboration .pw-team-definition > .pw-team-definition-settings { grid-column: auto; grid-row: auto; }
 .pw-team-handoff { display: grid; justify-items: start; gap: 12px; min-width: 0; }
 .pw-team-handoff > p { max-width: 60ch; color: var(--pw-copy); font-size: 13px; }
+.pw-team-template-preparation { display: grid; gap: 4px; min-width: 0; }
+.pw-team-template-preparation h3 { color: var(--pw-ink); font-size: 15px; font-weight: 600; }
+.pw-team-template-preparation p { color: var(--pw-copy); font-size: 13px; line-height: 1.6; }
 .pw-team-saved-goal { width: 100%; }
 .pw-team-workspace.pw-depth-collaboration .pw-team-definition .pw-team-definition-member-list { display: flex; gap: 0; padding: 4px 16px; border-radius: 18px; background: var(--pw-surface); }
 .pw-team-workspace.pw-depth-collaboration .pw-team-definition-member-list > * { border: 0; }

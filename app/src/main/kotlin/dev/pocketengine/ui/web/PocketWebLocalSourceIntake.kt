@@ -32,11 +32,17 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
     private fun stageRow(row: JSONObject?, preview: Boolean = false): JSONObject? {
         val evidence = evidence(row) ?: return null
         val actual = row ?: return null
+        val manifest = actual.optJSONObject("manifest")?.takeIf { preview }
         val zipRoot = if (preview && evidence.opt("sourceKind") == "external_zip" &&
             evidence.opt("ordinaryZipIsPocketWorldPackage") == false &&
             evidence.optJSONObject("original")?.opt("singleRootStripped") == "") {
-            actual.optJSONObject("manifest")?.let { runCatching { ProjectArchiveRoot.staged(it) }.getOrNull() }
+            manifest?.let { runCatching { ProjectArchiveRoot.staged(it) }.getOrNull() }
         } else null
+        val strippedRoot = evidence.optJSONObject("original")?.optString("singleRootStripped")?.takeIf {
+            preview && evidence.opt("sourceKind") == "external_zip" && it.isNotBlank() && it.length <= 240 }
+        val firstFile = manifest?.optJSONArray("files")?.takeIf { evidence.optString("sourceKind") in setOf("external_zip","saf_tree") }?.let {
+            runCatching { ProjectArchiveRoot.firstWebFile(it,zipRoot?.optString("directory").orEmpty())?.getString("path") }.getOrNull()
+        }
         val fixed = evidence.optJSONObject("original")?.takeIf { evidence.optString("sourceKind") == "external_zip" &&
             evidence.optBoolean("ordinaryZipIsPocketWorldPackage") && it.optString("fixedPackageManifestIdentity").matches(Regex("[a-f0-9]{64}")) &&
             it.optString("originalArchiveSha256").matches(Regex("[a-f0-9]{64}")) && it.optInt("fixedPackageOmitted", -1) in 0..2000 }
@@ -53,6 +59,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
                 ?: taskPackage?.let{JSONObject().put("manifest",it.getString("manifestIdentity")).put("archive",it.getString("archiveSha256")).put("omitted",evidence.getInt("omittedCount"))})
             .put("hostVersion", evidence.optJSONObject("original")?.optString("snapshotVersion")?.takeIf { evidence.optString("sourceKind") == "host_saved_snapshot" })
             .put("retainedArchiveRoot", zipRoot)
+            .put("strippedArchiveRoot", strippedRoot).put("firstWebFile", firstFile)
             .put("bytes", evidence.optLong("expandedBytes")).put("omitted", evidence.optInt("omittedCount"))
             .put("paths", JSONArray().apply { if (preview) actual.optJSONObject("manifest")?.optJSONArray("files")?.let { rows ->
                 for (i in 0 until minOf(rows.length(), 6)) rows.optJSONObject(i)?.optString("path")?.take(260)?.let { put(it) }

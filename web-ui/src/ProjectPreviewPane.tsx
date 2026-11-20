@@ -319,9 +319,9 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       target={{ ...choices, sourceMember: choices.sourceMember }} onReturn={control.returnToPackageTask} onDismiss={control.hide}/>
     : null;
   return <section className="pw-preview-pane" data-motion-native-surface="project-preview" aria-label="项目预览" aria-busy={working}>
-    <header className="pw-preview-heading"><div><h3>{choices?.mode==='web_output'?'固定网页':choosing ? '固定项目包' : fixed ? '任务固定版本' : '已采集预览'}</h3><p>{choosing ? choices?.entryPath || '项目源码与资源' : view?.metadata.entryPath ? String(view.metadata.entryPath) : '原项目画面'}</p>
+    <header className="pw-preview-heading"><div><h3>{choices?.mode==='web_output'?'固定网页':choosing ? '固定项目包' : fixed ? '任务固定版本' : view?'已采集预览':working?'正在核对原预览':'没有打开预览'}</h3><p>{choosing ? choices?.entryPath || '项目源码与资源' : view?.metadata.entryPath ? String(view.metadata.entryPath) : view?'原项目画面':'查看原任务已经登记的画面'}</p>
       {typeof copy==='string'&&typeof source==='string'&&<small className="pw-field-hint">来源副本 <code>{copy.slice(0,8)}</code> · 源码 <code>{source.slice(0,10)}</code></small>}</div>{view?.selecting && <span className="pw-preview-selection-state">正在选择</span>}</header>
-    {!choosing && <div className="pw-preview-actions">
+    {!choosing && view && <div className="pw-preview-actions">
       {!control.fromOriginalChat&&<Button variant={view?.selecting ? 'primary' : 'secondary'} leadingIcon={IconCursor} size="small"
         disabled={!view?.ready || !view.selectionAvailable && !view.selecting || working || unknown || blocked || !can('projects.preview.mode')} aria-pressed={view?.selecting === true}
         onClick={() => control.action('projects.preview.mode', { enabled: !view?.selecting })}>{view?.selecting ? '退出选择' : '选择元素'}</Button>}
@@ -332,7 +332,9 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       {!control.fromOriginalChat&&<IconButton icon={IconClose} aria-label="关闭预览" title="关闭后需要重新选择元素" disabled={!view || working || unknown || !can('projects.preview.close')} onClick={() => control.action('projects.preview.close')}/>}
     </div>}
     <MotionFeedback identity={JSON.stringify([sessionId, view?.ready, view?.selecting, view?.selectionAvailable, problem, unknown, choosing])} initial={false} className="pw-preview-context">
-      <p className="pw-muted">{choosing ? '只打开这次任务保存的版本，不构建或启动任务。' : view?.selecting ? '点选元素加入原草稿，不会执行页面按钮。' : fixed || control.fromOriginalChat ? '这是当时保存的版本，不随项目后来修改而更新。' : '开启元素选择后，可把画面位置加入原草稿。'}</p>
+      <p className="pw-muted">{choosing ? choices.savedBuildWeb&&!choices.originalBuild ?
+        '暂未取得这版网页的原副本证据。可以另行打开所选固定归档，不会改用当前源码或另一份结果。' :
+        '只打开这次任务保存的版本，不构建或启动任务。' : view?.selecting ? '点选元素加入原草稿，不会执行页面按钮。' : fixed || control.fromOriginalChat ? '这是当时保存的版本，不随项目后来修改而更新。' : view ? '开启元素选择后，可把画面位置加入原草稿。' : '导入源码不会生成预览。项目工作中的「已保存的构建网页」可选择要打开的原版本。'}</p>
 
       {view && !view.selectionAvailable && <p className="pw-muted" role="status">{view.selectionUnavailableReason || '暂未确认原来源仍可用于元素选择。'}{fixed ? ' 历史画面仍可查看，发送时还会重新核对来源。' : ''}</p>}
       {problem && <p className="pw-error" role="alert">{problem}</p>}
