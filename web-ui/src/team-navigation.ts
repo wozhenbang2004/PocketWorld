@@ -10,7 +10,11 @@ export type TeamOwnerWorkLink = {
   goal: string;
   currentRun: boolean;
   readOnly: true;
+  teamRunId?: string;
+  stopping?: boolean;
+  savedResultForDraft?: true;
 };
+export type TeamOwnerWorkIntent = 'overview' | 'supplement' | 'followUp';
 
 export type TeamButlerRequest = {
   teamId?: string;

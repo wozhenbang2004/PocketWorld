@@ -41,9 +41,7 @@ public final class OwnerDraftNodeDependencies {
         if(declared==0)return null;
         if(required.isEmpty())throw new IllegalArgumentException("这里只准备明确必需的直接依赖；仅可选包或 peer 依赖时不猜测，未下载。");
         if(declared>128)throw new IllegalArgumentException("这份项目的直接依赖超过本次受审准备上限");
-        for(String key:Set.of("workspaces","pnpm","overrides","resolutions","config","bundledDependencies","bundleDependencies","devEngines"))
-            if(pkg.has(key))throw new IllegalArgumentException("此流程不读取运行工具的项目级自定义配置或工作区；没有安装："+key);
-        for(String path:CONFIG)if(files.containsKey(path))throw configuration();
+        requirePlainProject(pkg,files.keySet());
         String lockPath="npm".equals(manager)?"package-lock.json":"pnpm-lock.yaml",other="npm".equals(manager)?"pnpm-lock.yaml":"package-lock.json";
         String body=files.get(lockPath);
         if(body==null||files.containsKey(other)||bytes(body)>524288)
@@ -73,6 +71,11 @@ public final class OwnerDraftNodeDependencies {
         return new JSONObject().put("manager",manager).put("managerVersion",version).put("registry",REGISTRY)
             .put("lockPath",lockPath).put("lockSha256",hash(body)).put("manifestSha256",hash(manifest))
             .put("packages",count).put("direct",direct).put("platformPackage",platformPackage);
+    }
+    static void requirePlainProject(JSONObject pkg,Set<String> paths)throws Exception{
+        for(String key:Set.of("workspaces","pnpm","overrides","resolutions","config","bundledDependencies","bundleDependencies","devEngines"))
+            if(pkg.has(key))throw new IllegalArgumentException("此流程不读取运行工具的项目级自定义配置或工作区；没有运行："+key);
+        for(String path:CONFIG)if(paths.contains(path))throw configuration();
     }
     private static TreeSet<String> dependencyNames(JSONObject packageRow,String kind)throws Exception{
         TreeSet<String> names=new TreeSet<>();if(!packageRow.has(kind))return names;

@@ -2526,6 +2526,9 @@ public final class TaskStore {
                 new String[]{id,mark.getString("operationId")})){return op.moveToFirst()&&"receipt".equals(op.getString(0))&&!op.moveToNext()?mark:null;}
     }
     public synchronized JSONObject ownerWorkLinkForTeam(String teamRunId)throws Exception {
+        return ownerWorkLinkForTeam(teamRunId,-1,-1);
+    }
+    public synchronized JSONObject ownerWorkLinkForTeam(String teamRunId,int resultGeneration,long resultRevision)throws Exception {
         if(teamRunId==null||teamRunId.isEmpty()||teamRunId.length()>240)return null;
         String id=externalTask("teams",teamRunId);if(id==null)id=operationTask("teams",teamRunId);if(id==null)return null;
         JSONObject team=read(id);if(team==null)return null;requirePrivateOwner(team);
@@ -2542,7 +2545,42 @@ public final class TaskStore {
                 .put("teamTaskId",team.getString("id")).put("teamRunId",teamRunId)
                 .put("stopping",work.optBoolean("cancelRequested")||team.optBoolean("cancelRequested")||work.optString("status").matches("cancelled|canceled|stopped")||team.optString("executionStatus").matches("cancelled|cancel|taken_over|takeover|stopping"));
         if(current){link.put("goal",work.optString("goal"));if(!link.getBoolean("stopping")){JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)link.put("fileReview",marker);JSONObject file=ownerWorkOriginalFileDecision(work,team);if(file!=null)link.put("pendingFileOperation",file);JSONObject pack=ownerWorkTeamPackageMark(team);if(pack!=null)link.put("deliveredPackage",pack);}}
+        JSONObject mirror=team.optJSONObject("evidence");
+        if(current&&!link.getBoolean("stopping")&&resultGeneration>=0&&resultRevision>0&&mirror!=null
+                &&resultGeneration==mirror.optInt("generation",-1)&&resultRevision==mirror.optLong("revision",-1)){
+            try{
+                if(ownerWorkSavedTeamResultForDraft(work,team,run,epoch))link.put("savedResultForDraft",true);
+            }catch(Exception unavailable){
+                // An unavailable follow-up source must not retire the original Team reading.
+                if(Thread.currentThread().isInterrupted()||unavailable instanceof InterruptedException)throw unavailable;
+            }
+        }
         return link;
+    }
+    /** A draft affordance only: the latest ordinary publication of this parent round
+     * must still retain the exact child result. No text or authority crosses this link. */
+    private boolean ownerWorkSavedTeamResultForDraft(JSONObject work,JSONObject team,String run,int epoch)throws Exception {
+        if(!"completed".equals(work.opt("status"))||!"completed".equals(team.opt("executionStatus"))
+                ||!ownerWorkReportSettledTask(work)||!ownerWorkReportSettledTask(team))return false;
+        JSONArray deliveries=OwnerWorkTask.require(work).getJSONArray("deliveries");
+        for(int i=deliveries.length()-1;i>=0;i--){
+            JSONObject entry=deliveries.getJSONObject(i);
+            if(!run.equals(entry.opt("runId"))||epoch!=entry.optInt("epoch")||ownerWorkCapacityNotice(entry))continue;
+            if(!work.getString("id").equals(entry.opt("taskId"))||!work.getString("conversationId").equals(entry.opt("conversationId"))
+                    ||!"delivered".equals(entry.opt("deliveryState"))||entry.optString("messageId").isEmpty())return false;
+            JSONArray sources=entry.optJSONArray("relatedResultSources");int matches=0;
+            for(int j=0;sources!=null&&j<sources.length();j++){
+                JSONObject source=sources.getJSONObject(j);
+                if(!"teams".equals(source.opt("feature"))||!work.getString("id").equals(source.opt("parentTaskId"))||!run.equals(source.opt("parentRunId")))continue;
+                // The existing draft locator names the parent round, not a
+                // choice between several teams within the very same round.
+                if(!team.getString("id").equals(source.opt("childTaskId"))||!team.getString("runId").equals(source.opt("childRunId"))
+                        ||team.getInt("coordinatorEpoch")!=source.optInt("childEpoch"))return false;
+                matches++;
+            }
+            return matches==1&&ownerWorkRelatedReady(work,entry)&&ownerWorkResultAvailable(work,entry);
+        }
+        return false;
     }
     /** The current work's own teams, read from TaskStore receipts. Historical
      * parent runs stay reachable from their original team record, never retargeted. */
@@ -12233,25 +12271,31 @@ public final class TaskStore {
     public synchronized JSONObject editedBuildForDraftCopy(String identity,String project,String checkout,String expectedSource)throws Exception{
         return exactDraftBuild(identity,project,checkout,dev.pocketengine.features.local.project.OwnerDraftFirstBuild.editedClient(identity,expectedSource),false,expectedSource);
     }
+    public synchronized JSONObject existingNodeBuildForOwner(String project,String checkout,String expectedSource)throws Exception{
+        return exactDraftBuild(null,project,checkout,dev.pocketengine.features.local.project.OwnerDraftFirstBuild.existingClient(project,checkout,expectedSource),false,expectedSource);
+    }
     private JSONObject exactFirstBuildForDraft(String identity,String project,String checkout,boolean locked)throws Exception{
         String client=locked?dev.pocketengine.features.local.project.OwnerDraftFirstBuild.lockedClient(identity):dev.pocketengine.features.local.project.OwnerDraftFirstBuild.client(identity);
         return exactDraftBuild(identity,project,checkout,client,locked,null);
     }
-    private JSONObject exactDraftBuild(String identity,String project,String checkout,String client,boolean locked,String editedSource)throws Exception{
+    private JSONObject exactDraftBuild(String identity,String project,String checkout,String client,boolean locked,String expectedSource)throws Exception{
         JSONObject msg=conversationRepository.read(()->conversationRepository.sourceByClient(client));
         if(msg==null||msg.optBoolean("deleted")||!"private".equals(msg.opt("spaceId"))||!"owner".equals(msg.opt("ownerId")))return null;
         JSONObject ack=msg.optJSONObject("submission");if(ack==null||!client.equals(ack.opt("clientMessageId"))||ack.optString("taskId").isBlank())return null;
         JSONObject task=required(ack.getString("taskId"));requirePrivateOwner(task);JSONObject dc=task.optJSONObject("developmentContext"),pin=dc==null?null:dc.optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
-        if(pin==null||!identity.equals(pin.opt("workIdentity"))||!project.equals(pin.opt("projectId"))||!checkout.equals(pin.opt("checkoutId"))||
+        if(pin==null||!project.equals(pin.opt("projectId"))||!checkout.equals(pin.opt("checkoutId"))||
             !"assistant".equals(task.opt("kind"))||!task.isNull("origin")||!msg.getString("conversationId").equals(task.opt("conversationId")))return null;
-        boolean edited=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.edited(pin),
+        boolean existing=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.existingCheckout(pin),
+            edited=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.edited(pin),
             usesLock=dev.pocketengine.features.local.project.OwnerDraftFirstBuild.dependencies(pin)!=null;
-        if(editedSource==null?edited||usesLock!=locked:!edited||!editedSource.equals(pin.opt("sourceDigest")))return null;
+        if((identity==null)!=existing||!existing&&!identity.equals(pin.opt("workIdentity")))return null;
+        if(expectedSource==null?edited||existing||usesLock!=locked:!existing&&!edited||!expectedSource.equals(pin.opt("sourceDigest")))return null;
         dev.pocketengine.features.local.project.OwnerDraftFirstBuild.requireContext(pin,dc);
         if(!client.equals(dc.opt("clientMessageId")))return null;
         JSONObject result=new JSONObject().put("id",task.getString("id")).put("runId",task.getString("runId")).put("epoch",task.getInt("coordinatorEpoch"))
             .put("status",task.getString("status")).put("workIdentity",identity).put("lockedDependencies",usesLock);
-        if(edited)return result.put("projectId",project).put("checkoutId",checkout).put("editedSourceDigest",editedSource);
+        if(edited||existing)return result.put("projectId",project).put("checkoutId",checkout)
+            .put(existing?"sourceDigest":"editedSourceDigest",expectedSource);
         result.putOpt("observed",currentFirstBuildFact(task,pin));
         try{result.putOpt("fixedWebOutput",originalFixedWebLocator(task));}
         catch(Exception unavailable){/* Optional evidence cannot hide the original work copy. */}

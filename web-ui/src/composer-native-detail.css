@@ -3,6 +3,8 @@
 .pw-context-meter-detail { display: grid; gap: 20px; min-width: 0; color: var(--pw-copy); font: 400 13px/21px var(--pw-font); }
 .pw-settings-dialog.pw-context-dialog { width: min(100%, 440px); }
 .pw-context-meter-source { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--pw-muted); }
+.pw-composer-host .pw-composer-memory-status.button-press-motion { min-height: 44px; height: auto; max-width: 100%; padding: 8px 10px; color: var(--pw-muted); font: 400 .75rem/1.5 var(--pw-font); white-space: normal; text-align: start; }
+.pw-composer-host .pw-composer-memory-status.button-press-motion > span { min-width: 0; flex-shrink: 1; padding: 0; }
 .pw-context-draft { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; padding-block: 0 16px; border-bottom: 1px solid var(--pw-hairline); }
 .pw-context-draft > span { display: grid; gap: 2px; color: var(--pw-copy); font-size: 13px; }
 .pw-context-draft small { display: block; color: var(--pw-muted); font: 400 11px/18px var(--pw-font); }

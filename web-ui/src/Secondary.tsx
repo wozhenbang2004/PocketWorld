@@ -28,7 +28,7 @@ import {LocalWorkspace,type LocalWorkspaceDraft} from './LocalWorkspace';
 import {MemoryWorkspace} from './MemoryWorkspace';
 import {LearningWorkspace, type LearningCandidateTarget} from './LearningWorkspace';
 import {TeamsWorkspace} from './TeamsWorkspace';
-import type { TeamButlerRequest, TeamOwnerWorkLink, TeamRunFocus } from './team-navigation';
+import type { TeamButlerRequest, TeamOwnerWorkIntent, TeamOwnerWorkLink, TeamRunFocus } from './team-navigation';
 import {GroupsWorkspace} from './GroupsWorkspace';
 import {MediaWorkspace} from './MediaWorkspace';
 import {RealtimeWorkspace} from './RealtimeWorkspace';
@@ -71,7 +71,7 @@ import { ACCOUNT_RECEIPT_ACTIONS, accountActionReceipt, accountLoginArguments, a
 type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
-type TeamNavigationProps = { teamRunFocus?: TeamRunFocus; onTeamRunFocusConsumed?: (requestId: string) => void; onAskButlerForTeam?: (request: TeamButlerRequest) => void; onOpenTeamOwnerWork?: (link: TeamOwnerWorkLink, intent: 'overview' | 'supplement') => void };
+type TeamNavigationProps = { teamRunFocus?: TeamRunFocus; onTeamRunFocusConsumed?: (requestId: string) => void; onAskButlerForTeam?: (request: TeamButlerRequest) => void; onOpenTeamOwnerWork?: (link: TeamOwnerWorkLink, intent: TeamOwnerWorkIntent) => void };
 type PhoneNavigationProps = { onChoosePhonePlace?: () => void; sentPhoneFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void };
 type Props = PhoneNavigationProps & TeamNavigationProps & { cloudGoal?: CloudGoal; onCloudGoalUsed?: (id:string)=>void; capabilityMemory?: CapabilityWorkspaceMemory; onStartCapability?: (purpose: CapabilityPurpose) => void; teamAttentionFocus?: Data; onTeamAttentionConsumed?:(requestId:string)=>void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void; route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability, origin?: SettingsDirectoryOrigin) => void; settingsRestore?: SettingsDirectoryOrigin; onReturnToSetup?: () => void; onOpenProjectDraft?: OpenProjectDraft; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
 type Run = (action: string, args?: Data) => Promise<any>;

@@ -51,7 +51,7 @@ public final class AttachmentOutcomeHost {
                 if(task!=null){
                     String artifactRun=result.optString("sourceTaskRunId"),currentRun=task.optString("runId");
                     if(kind.equals("remote_result_snapshot")){
-                        // Book metadata alone does not establish a capture run. Keep the all-or-nothing original-result reader unchanged.
+                        // Book metadata alone does not establish a capture run; leave it unrecorded without its own proof.
                         result.remove("sourceTaskRunId");result.put("runProvenance","unrecorded");
                         JSONObject proof=captured.forFile(meta);if(proof!=null)for(String k:new String[]{"sourceTaskRunId","sourceCoordinatorEpoch","sourceRunEvidence","runProvenance"})result.put(k,proof.get(k));
                     }else result.put("runProvenance",artifactRun.isBlank()?"unrecorded":artifactRun.equals(currentRun)?"current":"earlier");

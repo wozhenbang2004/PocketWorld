@@ -163,9 +163,10 @@ internal class PocketWebWorkSearch(
         requireVisibleTask()
         val snapshot = host.ownerOutcomeSnapshot(taskId, control)
         check(snapshot.getString("taskId") == taskId) { "原工作成果身份不符" }
-        val artifacts = if (conversationResult != null)
+        val runFiles = if (conversationResult != null)
             AttachmentResultRun(taskId, conversationResult.runId, conversationResult.epoch).files(snapshot)
-        else snapshot.getJSONArray("artifacts").objects()
+        else null
+        val artifacts = runFiles?.entries ?: snapshot.getJSONArray("artifacts").objects()
         val available = artifacts.filter { it.optString("sourceTaskId") == taskId && it.optString("availability") == "available" }
             .sortedBy { it.optString("runProvenance") != "current" }
         val limit = 8
@@ -173,8 +174,9 @@ internal class PocketWebWorkSearch(
             .put("name", file.getString("name")).put("mimeType", file.getString("mimeType")).put("size", file.getLong("size"))
         val files = JSONArray()
         available.take(limit).forEach { file -> files.put(fileHeader(file).put("runProvenance", file.optString("runProvenance", "unrecorded"))) }
-        val page = JSONObject().put("taskId", taskId).put("files", files).put("readLimited",
-            snapshot.getJSONObject("indexDiagnostics").getBoolean("incomplete") || artifacts.size != available.size || available.size > limit)
+        val readLimited = runFiles?.readLimited ?: snapshot.getJSONObject("indexDiagnostics").getBoolean("incomplete")
+        val page = JSONObject().put("taskId", taskId).put("files", files)
+            .put("readLimited", readLimited || artifacts.size != available.size || available.size > limit)
         val current = requireVisibleTask()
         if (conversationResult == null) {
             // Only the original private work can offer inputs. A chat completion receipt

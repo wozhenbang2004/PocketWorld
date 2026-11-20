@@ -45,7 +45,7 @@ import {Drawer,PopoverTrigger,Popover,PopoverHeader,TreeView,FilesBrowser,Tabs,T
 import {SecondaryRouteBoundary,SecondaryRoutePending} from './SecondaryRouteBoundary';
 import type {SettingsDirectoryOrigin} from './SettingsDirectory';
 import ProfileWorkspace,{type PersonalTarget} from './ProfileWorkspace';
-import {ConversationMemorySettings} from './ConversationMemorySettings';
+import {ConversationMemorySettings,type ConversationMemoryControls} from './ConversationMemorySettings';
 import {NewConversationMemory} from './NewConversationMemory';
 import DeveloperDiagnosticsWorkspace from './DeveloperDiagnosticsWorkspace';
 import {SetupWorkspace,type SetupDestination,type SetupView} from './SetupWorkspace';
@@ -110,7 +110,7 @@ import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
 import {sameTeamPackage} from './team-delivered-package';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
-import {teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
+import {teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
 import {TaskApproval} from './TaskApproval';
 import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,privateProjectTask,projectContinuation,type ContinuationSubmission} from './task-continuation';
 import {TaskInference} from './TaskInference';
@@ -215,7 +215,7 @@ export default function App(){
  const [skillDraftTarget,setSkillDraftTarget]=useState<ConversationDraftTarget|null>(null);
  const [memoryDraftTarget,setMemoryDraftTarget]=useState<ConversationDraftTarget|null>(null);
  const [personalTarget,setPersonalTarget]=useState<PersonalTarget>({view:'home'}),[personalTargetKey,setPersonalTargetKey]=useState(0);
- const [conversationMemoryOpen,setConversationMemoryOpen]=useState(false),[conversationMemoryMode,setConversationMemoryMode]=useState<{conversationId:string;enabled:boolean}|null>(null);
+ const [conversationMemoryOpen,setConversationMemoryOpen]=useState(false),[conversationMemoryControls,setConversationMemoryControls]=useState<ConversationMemoryControls|null>(null);
  const conversationMemoryBack=useRef<(()=>boolean)|null>(null);
  const registerConversationMemoryBack=useCallback((handler:(()=>boolean)|null)=>{conversationMemoryBack.current=handler},[]);
  const [routeReferenceTarget,setRouteReferenceTarget]=useState<RouteReferenceTarget|null>(null);
@@ -226,7 +226,9 @@ export default function App(){
  const [route,setRoute]=useState('butler'),[workOpen,setWorkOpen]=useState(false),[commandOpen,setCommandOpen]=useState(false),[taskId,setTaskId]=useState<string|null>(null),[taskOpen,setTaskOpen]=useState(false),[filter,setFilter]=useState('all'),[taskQuery,setTaskQuery]=useState('');
  const isChatSurface=route==='chat'||route==='butler';
  const butlerScrollTop=useRef(0),butlerSendConversation=useRef<string|null>(null);
- useEffect(()=>{setConversationMemoryOpen(false);setConversationMemoryMode(null)},[route,state.conversationId]);
+ useEffect(()=>setConversationMemoryOpen(false),[route,state.conversationId]);
+ const conversationMemoryReadable=isChatSurface&&!!state.conversationId&&can('profile.conversation.read');
+ useEffect(()=>setConversationMemoryControls(null),[conversationMemoryReadable,state.conversationId]);
  const secondaryBeforeLeave=useRef<PermissionLeaveGuard|null>(null);
  const registerSecondaryBeforeLeave=useCallback((guard:PermissionLeaveGuard|null)=>{secondaryBeforeLeave.current=guard},[]);
  const profileBeforeLeave=useRef<((next:()=>void)=>boolean)|null>(null);
@@ -515,11 +517,16 @@ export default function App(){
  const draftKey=String(composer.key||'');const draftEpoch=Number(composer.epoch||0);
  const newMemoryScope=!state.conversationId&&draftKey.startsWith('new:')&&typeof composer.firstMessageMemory?.paused==='boolean'&&can('composer.firstMemory.save');
  const newMemoryBlocked=newMemoryScope&&(composer.firstMessageMemory.saving||composer.firstMessageMemory.confirmed!==true);
- const memoryPausedHere=newMemoryScope?composer.firstMessageMemory.confirmed===true&&composer.firstMessageMemory.paused:!!conversationMemoryMode&&conversationMemoryMode.conversationId===state.conversationId&&!conversationMemoryMode.enabled;
+ // The original conversation's settings are not a global permission or a record of what a reply used.
+ const memoryControls=conversationMemoryReadable&&conversationMemoryControls?.conversationId===state.conversationId?conversationMemoryControls:null;
+ const memoryPausedHere=newMemoryScope?composer.firstMessageMemory.confirmed===true&&composer.firstMessageMemory.paused:memoryControls?.enabled===false;
  const singleLearningScope=intent==='chat'&&((newMemoryScope&&composer.conversationId==='')|| (!!state.conversationId&&composer.conversationId===state.conversationId))&&can('composer.oneLearning.save')&&typeof composer.oneMessageLearning?.excluded==='boolean';
  const singleLearningArmed=singleLearningScope&&composer.oneMessageLearning.excluded===true;
  const singleLearningBlocked=singleLearningScope&&(composer.oneMessageLearning.saving||composer.oneMessageLearning.confirmed!==true||singleLearningArmed&&composer.oneMessageLearning.pending===true);
- const canEditMemoryHere=!!(state.conversationId&&can('profile.conversation.read'))||newMemoryScope;
+ const canEditMemoryHere=conversationMemoryReadable||newMemoryScope;
+ const memoryStatus=intent!=='chat'||!canEditMemoryHere?'':singleLearningBlocked?'核对本条记忆选择':newMemoryBlocked?'核对首条消息的记忆选择':
+   memoryPausedHere?(newMemoryScope?'新对话将暂停个人记忆':'本对话已暂停个人记忆'):
+   memoryControls?.excludeNewInputs===true?'本对话不自动整理新原话':singleLearningArmed?'仅本条不自动整理':'';
  const pendingInputs=conversationPending(composer,obj(state.chatReceipts),messages,String(state.conversationId||''),conversations,text);
  const pendingOriginal=intent==='chat'&&pendingInputs.find(row=>row.sameDraft&&(can('composer.query')||row.canRetryLocallyUnsent===true&&can('composer.retry')));
  const pendingHere=pendingInputs.some(row=>row.current);
@@ -822,24 +829,25 @@ export default function App(){
  },[invalidateContinuation]);
  const backFromTask=useCallback(()=>{if(taskMenuOpen){setTaskMenuOpen(false);return}if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.())return;if(taskLayer==='scope'){showTaskLayer('goal');return}const origin=taskReconciliationOrigin.current;if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}void closeTask().then(closed=>{if(closed&&searchReturn)showWorkSearch()})},[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,searchReturn,showWorkSearch]);
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
- const returnToTaskConversation=async(task:Task,associate=false,phoneRead?:PhoneConversationOrigin)=>{
-  const conversationId=associate?privateTaskConversationId(task):originatingRequestConversation(task);
+ const returnToOriginalTaskConversation=async(taskId:string,conversationId:string,work?:Pick<WorkIdentity,'runId'|'epoch'>,phoneRead?:PhoneConversationOrigin,fromTeam=false)=>{
+  const associate=!!work;
   if(!conversationId||returningConversation||!can('conversation.select')||
      (associate||phoneRead)&&bridge.getState().state.chatSubmitting)return;
-  if(phoneRead&&(associate||phoneRead.taskId!==task.id||phoneRead.conversationId!==conversationId||!phoneSourceStillOpen(phoneRead))){
+  if(phoneRead&&(associate||phoneRead.taskId!==taskId||phoneRead.conversationId!==conversationId||!phoneSourceStillOpen(phoneRead))){
    setLocalError('原手机轮次或阅读窗口已变化，没有打开其他对话。');return
   }
   const request=++conversationReturnRequest.current,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
-  setReturningConversation(task.id);
+  setReturningConversation(taskId);
   // Closing a task over a secondary workspace legitimately advances the host's
   // resume revision. Guard navigation by this request/document and visibility;
   // a background transition cancels the request above, rather than blocking
   // the host's normal task-close restoration.
   const current=()=>request===conversationReturnRequest.current&&documentEpoch===bridge.getDocumentEpoch()&&!document.hidden;
   try{
-   if(taskOpen&&!await closeTask()||!current()||navigationWindow.current!==navigation)return;
-   const entered=await navigate('chat',undefined,{taskClosed:true});
-   if(!entered)return;
+   if(!fromTeam){
+    if(taskOpen&&!await closeTask()||!current()||navigationWindow.current!==navigation)return;
+    if(!await navigate('chat',undefined,{taskClosed:true}))return;
+   }
    const destination=navigationWindow.current;
    const atDestination=()=>current()&&navigationWindow.current===destination;
    const waitForSnapshot=(matches:()=>boolean,failure:string)=>new Promise<boolean>((resolve,reject)=>{
@@ -871,8 +879,9 @@ export default function App(){
    // Native may open a read-only history for an older conversation. That is
    // already our successful destination, not a failed editor selection.
    const arrived=()=>{
-    const state=bridge.getState().state, reader=state.conversationReader;
+    const latest=bridge.getState(),state=latest.state,reader=state.conversationReader;
     if(reader)return reader.conversation===conversationId?'history':null;
+    if(fromTeam&&(obj(latest.view).section||obj(latest.view).taskId||obj(latest.composer).conversationId!==conversationId))return null;
     return !state.chatSubmitting&&state.conversationId===conversationId?'editor':null;
    };
    if(!await waitForSnapshot(()=>arrived()!==null,'尚未确认已回到所属对话，请从对话列表重新打开。'))return;
@@ -881,21 +890,36 @@ export default function App(){
     if(associate) setLocalStatus('已打开原对话的历史。当前是只读历史，尚未关联到新输入。');
     return;
    }
-   if(arrived()==='editor'){
+   const inEditor=()=>atDestination()&&arrived()==='editor';
+   if(inEditor()){
     if(phoneRead){
      const found=await locatePhoneReturn(phoneRead,()=>chatMessageList.current,atDestination,stopFollowing,saveReading);
      if(atDestination()&&found!=='left')setLocalStatus(found==='found'?'已定位第 '+phoneRead.epoch+' 轮的原回执。':found==='absent'?'已回到原私聊。当前消息窗口未找到这轮的唯一回执，不代表任务没有结果。':'已回到原私聊，未能定位原回执在页面中的位置。');
      return
     }
-    if(!await changeIntent('chat')||!atDestination())return;
-    if(associate){
-      if(!await stageButlerObject({kind:'work',id:task.id,runId:task.raw?.runId,epoch:task.raw?.coordinatorEpoch},atDestination))return;
-      if(atDestination())setLocalStatus('已关联这次工作。追问写在原对话草稿里，尚未发送。');
+    if(fromTeam&&bridge.getState().state.chatBusy){
+      setLocalStatus('已回到原对话。当前消息还在处理，这次成果没有关联到输入。');return;
+    }
+    if(!await changeIntent('chat')||!inEditor())return;
+    if(work){
+      const draftCurrent=()=>inEditor()&&(!fromTeam||!bridge.getState().state.chatBusy);
+      if(fromTeam&&asArray<Json>(obj(bridge.getState().composer).objectRefs).some(ref=>
+       ref.kind==='work'&&ref.id===taskId&&(ref.runId!==work.runId||ref.epoch!==work.epoch))){
+       setLocalError('这份草稿已关联这件工作的另一轮，本次没有替换。');return;
+      }
+      if(!await stageButlerObject({kind:'work',id:taskId,runId:work.runId,epoch:work.epoch},draftCurrent))return;
+      if(draftCurrent())setLocalStatus(fromTeam?'已关联原工作。可以写下下一件事，尚未发送。':'已关联这次工作。追问写在原对话草稿里，尚未发送。');
     }
     requestAnimationFrame(()=>{if(current()&&navigationWindow.current===destination&&bridge.getState().state.conversationId===conversationId&&!bridge.getState().state.conversationReader)workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea')?.focus({preventScroll:true})});
    }
-  }catch(error){if(current()&&navigationWindow.current===navigation+1)setLocalError(error instanceof Error?error.message:String(error))}
+  }catch(error){if(current()&&navigationWindow.current===navigation+(fromTeam?0:1))setLocalError(error instanceof Error?error.message:String(error))}
   finally{if(conversationReturnRequest.current===request)setReturningConversation('')}
+ };
+ const returnToTaskConversation=async(task:Task,associate=false,phoneRead?:PhoneConversationOrigin)=>{
+  const conversation=associate?privateTaskConversationId(task):originatingRequestConversation(task);
+  if(!conversation)return;
+  const work=associate?{runId:task.raw?.runId,epoch:task.raw?.coordinatorEpoch}:undefined;
+  await returnToOriginalTaskConversation(task.id,conversation,work,phoneRead);
  };
  const openTaskProject=async(task:Task)=>{
   const projectId=task.raw?.developmentContext?.projectId;
@@ -1327,7 +1351,22 @@ export default function App(){
    }
    void openRelatedWorkspace('teams',undefined,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:team.teamRunId});});
  };
- const openTeamOwnerWork=(link:TeamOwnerWorkLink,intent:'overview'|'supplement')=>{
+ const openTeamOwnerWork=(link:TeamOwnerWorkLink,intent:TeamOwnerWorkIntent)=>{
+   if(intent==='followUp'){
+     if(link.readOnly!==true||link.currentRun!==true||link.stopping!==false||link.savedResultForDraft!==true||!link.taskId||!link.runId||
+       !link.teamRunId||!link.conversationId||!Number.isSafeInteger(link.epoch)||link.epoch<1||!can('conversation.select')||!can('composer.object.add'))return;
+     const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch(),resume=Number(obj(bridge.getState().view).resumeRevision||0);
+     const fromOriginalTeam=()=>{
+       const live=bridge.getState(),view=obj(live.view);
+       return navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden&&
+         view.section==='teams'&&!view.taskId&&Number(view.resumeRevision||0)===resume&&!live.state.chatSubmitting;
+     };
+     // Secondary's retained forms guard calls back after their draft writes.
+     // Continue only from the actual navigation callback, not its scheduled return.
+     void navigate('chat',()=>{void returnToOriginalTaskConversation(link.taskId,link.conversationId,{runId:link.runId,epoch:link.epoch},undefined,true)},
+       {taskClosed:true,stillCurrent:fromOriginalTeam});
+     return;
+   }
    if(!can('tasks.open')||link.readOnly!==true||!link.taskId||!link.runId||!Number.isSafeInteger(link.epoch)||link.epoch<1)return;
    if(intent==='supplement'&&(!link.currentRun||!can('ownerWork.supplement.read'))){setLocalError('这份协作属于较早的执行，请先查看原工作当前状态。');return;}
    const open=()=>{
@@ -2051,13 +2090,18 @@ export default function App(){
   finally{if(savedHostFlight.current===selected){savedHostFlight.current=null;setSavedHostBusy(false);}}
  };
  const prepareCloudGoal=async()=>{
-  const goal=chatDraft.value.trim(), native=bridge.getState();
+  const visibleText=chatDraft.currentValue(), goal=visibleText.trim(), native=bridge.getState();
   if(intent!=='chat'||document.hidden||!goal||goal.length>8000||native.state.chatSubmitting||native.state.phoneSubmitting)return;
   const original=native.composer, documentEpoch=bridge.getDocumentEpoch();
   if(original?.ready!==true||typeof original.key!=='string'||!original.key)return;
+  // Keep the full editor value as the identity. Native reviews only the
+  // normalized goal, but a pasted trailing newline is not a different draft.
+  if(original.text!==visibleText){
+    setLocalError('这段草稿还在保存，等一下再带到主机。没有发送任何内容。');return;
+  }
   if(!native.state.conversationId){
     if(!can('conversation.saveFirstHostRequest'))return;
-    if(!Number.isSafeInteger(original.revision)||original.text!==chatDraft.value){
+    if(!Number.isSafeInteger(original.revision)){
       setLocalError('原文字尚未核对，草稿仍保留。');return;
     }
     const navigation=navigationWindow.current;
@@ -2074,11 +2118,15 @@ export default function App(){
     return;
   }
   if(!can('remote.reviewTask'))return;
-  const isCurrent=()=>{const next=bridge.getState().composer;return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&next?.key===original.key&&next?.epoch===original.epoch&&chatDraft.currentValue()===goal;};
+  const isCurrent=()=>{const current=bridge.getState(), next=current.composer;
+    return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&current.state.conversationId===native.state.conversationId&&
+      next?.key===original.key&&next?.epoch===original.epoch&&next?.revision===original.revision&&
+      next?.text===visibleText&&chatDraft.currentValue()===visibleText;};
   const carriesTextOnly=asArray<Json>(native.state.selectedChatAttachments).length>0||['sourceRefs','objectRefs','previewRefs'].some(key=>asArray<Json>(obj(original)[key]).length>0);
   const from=navigationWindow.current, origin=captureWorkspaceOrigin();
   const source=can('conversation.captureHostGoal')?await bridge.command<Json>('conversation.captureHostGoal',{key:original.key,epoch:original.epoch,goal}).catch(()=>null):null;
-  if(from!==navigationWindow.current||!isCurrent())return;
+  if(from!==navigationWindow.current||document.hidden||bridge.getDocumentEpoch()!==documentEpoch)return;
+  if(!isCurrent()){setLocalError('草稿已改动，保留你的新文字。请从原对话重新带到主机。');return;}
   const originHandle=source?.linked===true&&source.executionAuthorized===false&&source.networkUsed===false&&typeof source.originHandle==='string'&&/^[a-f0-9-]{36}$/.test(source.originHandle)?source.originHandle:undefined;
   if(!originHandle){setLocalError('还不能固定这条原话，未联系主机。请从原私人对话再试。');return;}
   void openRelatedWorkspace('remote',origin,()=>{if(isCurrent())setCloudGoal({id:crypto.randomUUID(),text:goal,carriesTextOnly,originHandle,navigation:navigationWindow.current});});
@@ -2097,11 +2145,13 @@ export default function App(){
    {intent==='chat'&&<ComposerObjectReferences key={`objects:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.object.remove')}/>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
    <ChatComposer continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
-     contextStatus={<>{(memoryPausedHere||newMemoryBlocked||singleLearningArmed||singleLearningBlocked)&&<Button variant="ghost" size="small" onClick={()=>setConversationMemoryOpen(true)}>{singleLearningBlocked?'核对本条记忆选择':newMemoryBlocked?'核对首条消息的记忆选择':memoryPausedHere?'个人记忆已暂停':'仅本条不自动整理'}</Button>}<IconChat size={15} aria-label="当前对话"/></>} controls={<ConversationModelPickerControls/>} status={inputLimitMessage||undefined} sendDisabled={keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked)||!!pendingOriginal} sendLabel={keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
+     contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={<ConversationModelPickerControls/>} status={inputLimitMessage||undefined} sendDisabled={keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked)||!!pendingOriginal} sendLabel={keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
     <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>{intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run('attachments.openPicker')}}>添加附件</Button>}{can('voice.start')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!state.phoneSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'})}}>{isListening?'结束听写':'语音输入'}</Button>}</Popover></PopoverTrigger>
     <ComposerWorkOptions intent={intent} onIntent={changeIntent} open={workOptionsOpen} onOpenChange={setWorkOptionsOpen} phoneAvailable={can('phone.prepare')} disabled={!!state.chatSubmitting||!!state.phoneSubmitting||phoneReviewPending} cloudGoalLabel={state.conversationId?'带目标去我的主机':'保存到本机（不发送）'} onCloudGoal={intent==='chat'&&chatDraft.value.trim()&&chatDraft.value.length<=(state.conversationId?8000:4000)&&
       (state.conversationId?can('remote.reviewTask'):can('conversation.saveFirstHostRequest'))?prepareCloudGoal:undefined} onPermissions={()=>{permissionExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setPermissionOptionsOpen(true)}} onMemory={intent==='chat'&&canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} memoryPaused={memoryPausedHere} busy={!!state.chatBusy} sendMode={state.chatSendMode||'queue'} onSendMode={can('composer.mode')?mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode}):undefined}/>
-   </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?!draftKey:!can('phone.prepare')||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}/>
+   </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?!draftKey:!can('phone.prepare')||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
+     {memoryStatus&&<Button variant="ghost" size="small" className="pw-composer-memory-status" trailingIcon={IconChevronRight} aria-haspopup="dialog" onClick={()=>setConversationMemoryOpen(true)}>{memoryStatus}</Button>}
+   </ChatComposer>
    {route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&
     stageExample&&<ConversationStarters onDraft={stageExample}/>}
    {intent!=='chat'&&['elsewhere','changed','unverified'].includes(phoneDraft.sourceState)&&<p className="pw-field-hint" role="status">{phoneDraft.sourceState==='elsewhere'?'手机草稿仍留在原私人对话，这里不会显示或提交它。':phoneDraft.sourceState==='changed'?'原消息已换版或不是最新交代。草稿已保留。要改用最新交代，请在那条消息的操作里选择「保留手机草稿，关联这条原话」。':'这份保留草稿缺少可核对的原消息。原文字还在，可在最新主人消息的操作里重新指定来源，或清空后另写。'}</p>}
@@ -2494,7 +2544,7 @@ export default function App(){
  {skillDraftTarget&&<SkillDraftReview key={`${skillDraftTarget.runId}:${skillDraftTarget.operationId}`} target={skillDraftTarget} onClose={()=>setSkillDraftTarget(null)}/>}
  {!preparationInline&&preparationDetail}
  {isChatSurface&&newMemoryScope&&<NewConversationMemory key={draftKey+':'+draftEpoch} composer={composer} allowSingle={singleLearningScope} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} registerBack={registerConversationMemoryBack}/>}
- {isChatSurface&&state.conversationId&&can('profile.conversation.read')&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} composer={singleLearningScope?composer:undefined} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryMode} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}/>}
+ {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}/>}
  {memoryDraftTarget&&<MemoryDraftReview key={`${memoryDraftTarget.runId}:${memoryDraftTarget.operationId}`} target={memoryDraftTarget} onOpenMemory={target=>{setMemoryDraftTarget(null);openPersonalMemory({view:'memory',...target})}} onClose={()=>setMemoryDraftTarget(null)}/>}
  {state.quickPanelVoice&&<QuickPanelVoiceDraft key={state.quickPanelVoice.handoffId} handoff={state.quickPanelVoice} input={obj(state.voiceInput)} run={act}/>}
  {showPhoneNotice&&phoneNotification&&<PhoneNotificationReturn key={phoneNotification.token} notice={phoneNotification} busy={phoneNotification.checking}

@@ -4,32 +4,32 @@ import {ShimmerText} from './library';
 import {bridge} from './bridge';
 import {ConversationReferenceShelf} from './ConversationReferenceShelf';
 
-type Controls={conversationId:string;enabled:boolean;excludeNewInputs?:boolean;revision:number};
-function controlsOf(value:unknown,conversationId:string):Controls {
-  const row=value as Partial<Controls>;
+export type ConversationMemoryControls={conversationId:string;enabled:boolean;excludeNewInputs?:boolean;revision:number};
+function controlsOf(value:unknown,conversationId:string):ConversationMemoryControls {
+  const row=value as Partial<ConversationMemoryControls>;
   if(!row||row.conversationId!==conversationId||typeof row.enabled!=='boolean'||('excludeNewInputs'in row&&typeof row.excludeNewInputs!=='boolean')||!Number.isSafeInteger(row.revision)||Number(row.revision)<0)throw new Error('没有收到此对话的真实记忆设置，请重新读取。');
-  return row as Controls;
+  return row as ConversationMemoryControls;
 }
 
 /** Independent, owner-reviewed choices on the same original header. This sheet owns no saved mode. */
-export function ConversationMemorySettings({conversationId,composer,isOpen,onClose,onChanged,onManage,registerBack}:{
-  conversationId:string;composer?:Record<string,any>;isOpen:boolean;onClose:()=>void;onChanged:(value:Controls)=>void;onManage:()=>void;
+export function ConversationMemorySettings({conversationId,controls,composer,isOpen,onClose,onChanged,onManage,registerBack}:{
+  conversationId:string;controls:ConversationMemoryControls|null;composer?:Record<string,any>;isOpen:boolean;
+  onClose:()=>void;onChanged:(value:ConversationMemoryControls|null)=>void;onManage:()=>void;
   registerBack:(handler:(()=>boolean)|null)=>void;
 }) {
-  const [controls,setControls]=useState<Controls|null>(null),[pending,setPending]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+  const [pending,setPending]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [shelf,setShelf]=useState<string|null>(null);
   const shelfVisit=JSON.stringify([conversationId,composer?.key,composer?.epoch,bridge.getDocumentEpoch()]);
   const request=useRef(0),alive=useRef(true),writing=useRef(false);
-  const changed=useRef(onChanged);changed.current=onChanged;
   const load=useCallback(async()=>{
     if(!conversationId||writing.current)return;
-    const serial=++request.current;setPending(true);setError('');
-    try {const result=controlsOf(await bridge.command('profile.conversation.read',{conversationId}),conversationId);if(alive.current&&serial===request.current){setControls(result);changed.current(result);}}
-    catch(failure){if(alive.current&&serial===request.current){setControls(null);setError(failure instanceof Error?failure.message:String(failure));}}
+    const serial=++request.current;setPending(true);setError('');setNotice('');
+    try {const result=controlsOf(await bridge.command('profile.conversation.read',{conversationId}),conversationId);if(alive.current&&serial===request.current)onChanged(result);}
+    catch(failure){if(alive.current&&serial===request.current){onChanged(null);setError(failure instanceof Error?failure.message:String(failure));}}
     finally{if(alive.current&&serial===request.current)setPending(false);}
-  },[conversationId]);
+  },[conversationId,onChanged]);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;request.current++;};},[]);
-  useEffect(()=>{setControls(null);setNotice('');if(conversationId)void load();},[conversationId,load]);
+  useEffect(()=>{void load();},[load]);
   useEffect(()=>{if(isOpen)void load();},[isOpen,load]);
   const close=useCallback(()=>{if(!writing.current)onClose();},[onClose]);
   useEffect(()=>{if(!isOpen)setShelf(null);},[isOpen,conversationId]);
@@ -43,9 +43,9 @@ export function ConversationMemorySettings({conversationId,composer,isOpen,onClo
       const result=controlsOf(receipt,conversationId);
       const other=field==='enabled'?'excludeNewInputs':'enabled';
       if(result.revision!==controls.revision+1||result[field]!==value||result[other]!==controls[other])throw new Error('设置版本已变化，请读取当前状态。');
-      if(alive.current&&serial===request.current){setControls(result);changed.current(result);setNotice(field==='enabled'?(value?'本对话已开启个人记忆。':'本对话已关闭个人记忆。下一次模型请求会核对新设置。'):
+      if(alive.current&&serial===request.current){onChanged(result);setNotice(field==='enabled'?(value?'已解除本对话的暂停，未改变总设置或新原话的选择。':'已暂停本对话的个人记忆。'):
         value?'从现在起，本对话新发的原话不会作为自动整理来源。':'新原话回到原有整理规则。以前已排除的原话仍然排除。');}
-    }catch(failure){if(alive.current&&serial===request.current){setControls(null);setError(failure instanceof Error?failure.message:String(failure));}}
+    }catch(failure){if(alive.current&&serial===request.current){onChanged(null);setError(failure instanceof Error?failure.message:String(failure));}}
     finally{writing.current=false;if(alive.current&&serial===request.current)setPending(false);}
   };
   const single=composer?.conversationId===conversationId&&composer.key==='conversation:'+conversationId?composer.oneMessageLearning:null;
@@ -67,7 +67,7 @@ export function ConversationMemorySettings({conversationId,composer,isOpen,onClo
   return <SettingsDialog isOpen={isOpen} title="本对话的个人记忆" onClose={close}>
     {pending&&!controls&&<ShimmerText>正在读取此对话设置…</ShimmerText>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
-    {controls&&<StretchSwitch label="使用我的资料、偏好和记忆" description="关闭后，此对话不引用个人资料与记忆，也不自动整理记忆候选。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save('enabled',enabled);}}/>}
+    {controls&&<StretchSwitch label="允许此对话参考我的资料、偏好和记忆" description="关闭后，此对话不引用个人资料与记忆，也不自动整理记忆候选。开启只解除本对话的暂停，不改变总设置。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save('enabled',enabled);}}/>}
     <p className="pw-muted">关闭后，后续请求不再带上过去查询或修改默认偏好时读到的设置值。你自己写的消息仍会保留，也仍可用于对话。已经发出的请求不能撤回。明确选用的项目资料保持原范围。</p>
     {typeof controls?.excludeNewInputs==='boolean'&&<StretchSwitch label="从现在起，新原话不参与自动整理" description={controls.enabled?
       '适合临时项目：仍可按原规则参考已有偏好，但此对话之后发的原话不用于后台提炼或记忆建议。关闭不会补整理，既有记忆和手动设置不变。':

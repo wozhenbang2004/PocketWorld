@@ -6,13 +6,18 @@ import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** One reviewed source version of an opened independent edition. This witness is not an approval. */
+/** One owner-reviewed private checkout version. This witness is not an approval. */
 public final class OwnerDraftFirstBuild {
     public static final String FIELD="ownerDraftFirstBuild";
     public static final Set<String> TOOLS=Set.of("project_inspect","project_plan","project_execute","project_status","project_log","project_collect_plan","project_generated_artifact");
     public static final String GOAL="验证我打开的这份独立改稿副本。先按同一版 package.json 准备 Node 构建（project_plan，intent=build、ecosystem=node），让我另行确认具体命令。不要安装依赖、启动服务、改写源码或发布。失败时保留原退出和日志；若原构建成功，再查看 build 或 dist，将我另行确认的文件交回这个任务。";
     private static final String LOCKED_GOAL="在我选定的独立改稿副本中验证同版 Node 构建。已有原生核对的关键包就直接申请构建，缺依赖才按这一把锁申请准备。两项分别等待我的批准；准备失败停在本任务。只选实际构建之后观察到的 build 或 dist 文件，保留另行确认。不改原件、不开服务、不发布或切到云端。";
-    public static String goal(JSONObject pin){return dependencies(pin)==null?GOAL:LOCKED_GOAL;}
+    public static String goal(JSONObject pin){
+        if(existingCheckout(pin))return "核对所选私人工作副本的本机 Node 构建。"+
+            (dependencies(pin)==null?"只申请这一版 package.json 的构建，不安装依赖。":"已有核对的关键包则直接申请构建；缺包只按这份锁申请，依赖准备和构建分别批准。")+
+            "命令等待本人确认，不改写源码、不启动服务、不发布、不切云端。保留这次实际退出和日志；只把另行确认的原构建后文件交回这项任务。";
+        return dependencies(pin)==null?GOAL:LOCKED_GOAL;
+    }
     private OwnerDraftFirstBuild(){}
     public static String client(String identity){
         if(identity==null||!identity.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("没有同一份改稿副本");
@@ -22,8 +27,14 @@ public final class OwnerDraftFirstBuild {
         if(identity==null||!identity.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("没有同一份改稿副本");
         return UUID.nameUUIDFromBytes(("private-draft-locked-node-v1:"+identity).getBytes(StandardCharsets.UTF_8)).toString();
     }
-    private static final String EDITED_BASE="copiedSourceDigest";
+    private static final String EDITED_BASE="copiedSourceDigest", EXISTING_CHECKOUT="existingCheckoutBuild";
     public static boolean edited(JSONObject pin){return pin.has(EDITED_BASE);}
+    public static boolean existingCheckout(JSONObject pin){return Boolean.TRUE.equals(pin.opt(EXISTING_CHECKOUT));}
+    public static String existingClient(String project,String checkout,String digest){
+        if(!hash(digest))throw new IllegalArgumentException("无法核对这版私人副本");
+        return UUID.nameUUIDFromBytes(("private-existing-node-build-v1:"+ProjectBuildPlan.identity(project)+":"+
+            ProjectBuildPlan.identity(checkout)+":"+digest).getBytes(StandardCharsets.UTF_8)).toString();
+    }
     public static String editedClient(String identity,String digest){
         if(!hash(identity)||!hash(digest))throw new IllegalArgumentException("无法核对这版工作副本");
         return UUID.nameUUIDFromBytes(("private-draft-edited-node-v1:"+identity+":"+digest).getBytes(StandardCharsets.UTF_8)).toString();
@@ -38,6 +49,7 @@ public final class OwnerDraftFirstBuild {
         return ProjectSources.digest(new JSONObject().put("clientMessageId",editedClient(work,source)).put(EDITED_BASE,copied));
     }
     public static String reviewedClient(JSONObject pin)throws Exception{
+        if(existingCheckout(pin))return existingClient(pin.getString("projectId"),pin.getString("checkoutId"),pin.getString("sourceDigest"));
         String identity=pin.getString("workIdentity");
         return edited(pin)?editedClient(identity,pin.getString("sourceDigest")):dependencies(pin)==null?client(identity):lockedClient(identity);
     }
@@ -45,12 +57,21 @@ public final class OwnerDraftFirstBuild {
         if(!Boolean.TRUE.equals(copy.opt("found"))||!"ready".equals(copy.opt("status"))||!Boolean.FALSE.equals(copy.opt("recyclable"))||
             !seed.identity.equals(copy.opt("workIdentity"))||!seed.projectId.equals(copy.opt("projectId"))||
             !seed.checkoutId.equals(copy.opt("checkoutId")))throw new SecurityException("请先打开这份原稿的实际独立副本。");
-        JSONObject plan=ProjectBuildPlan.verified(issued);JSONArray steps=plan.getJSONArray("steps");
-        String copied=copy.getString("initialCopyDigest"),source=plan.getString("sourceDigest");
-        if(!seed.projectId.equals(plan.opt("projectId"))||!seed.checkoutId.equals(plan.opt("checkoutId"))||!hash(copied)||!hash(source))
-            throw new SecurityException("无法核对独立副本的原稿或当前源码版本，未审阅构建。");
+        JSONObject pin=buildPin(seed.projectId,seed.checkoutId,issued).put("workIdentity",seed.identity);
+        String copied=copy.getString("initialCopyDigest"),source=pin.getString("sourceDigest");
+        if(!hash(copied))throw new SecurityException("无法核对独立副本的原稿，未审阅构建。");
         if(copied.equals(source)&&!"selected_version".equals(copy.opt("currentFileState")))
             throw new SecurityException("当前文件未核对为最初复制的版本，请重新读取副本。");
+        return copied.equals(source)?pin:pin.put(EDITED_BASE,copied);
+    }
+    static JSONObject existingPin(String project,String checkout,JSONObject issued)throws Exception{
+        return buildPin(project,checkout,issued).put(EXISTING_CHECKOUT,true);
+    }
+    private static JSONObject buildPin(String project,String checkout,JSONObject issued)throws Exception{
+        JSONObject plan=ProjectBuildPlan.verified(issued);JSONArray steps=plan.getJSONArray("steps");
+        String source=plan.getString("sourceDigest");
+        if(!project.equals(plan.opt("projectId"))||!checkout.equals(plan.opt("checkoutId"))||!hash(source))
+            throw new SecurityException("无法核对当前源码版本和原工作副本，未审阅构建。");
         if(!"managed_process_v1".equals(plan.opt("runtimeId"))||plan.optString("runtimeIdentity").isBlank()||
             !"build".equals(plan.opt("intent"))||!"node".equals(plan.opt("ecosystem"))||steps.length()!=1||plan.opt("automaticChaining")!=Boolean.FALSE)
             throw new SecurityException("没有这份工程单独的本机构建步骤。");
@@ -59,11 +80,8 @@ public final class OwnerDraftFirstBuild {
             !Boolean.TRUE.equals(step.opt("approvalRequired"))||argv==null||argv.length()!=2||!"run".equals(argv.opt(0))||!"build".equals(argv.opt(1)))
             throw new IllegalStateException("所选工程没有声明可用的 Node build 脚本；语法检查不等于构建。");
         if(!plan.optBoolean("available"))throw new IllegalStateException("这台手机尚未确认可用的 "+manager+" 运行环境；没有启动、下载或改用云端。");
-        JSONObject pin=new JSONObject().put("workIdentity",seed.identity).put("projectId",seed.projectId).put("checkoutId",seed.checkoutId)
-            .put("sourceDigest",source).put("runtimeIdentity",plan.getString("runtimeIdentity"))
-            .put("planDigest",plan.getString("planDigest")).put("manager",manager);
-        // The frozen draft remains the origin, not the build input once this copy has been edited.
-        return copied.equals(source)?pin:pin.put(EDITED_BASE,copied);
+        return new JSONObject().put("projectId",project).put("checkoutId",checkout).put("sourceDigest",source)
+            .put("runtimeIdentity",plan.getString("runtimeIdentity")).put("planDigest",plan.getString("planDigest")).put("manager",manager);
     }
     public static final String DEPENDENCIES="lockedDependencies";
     public static JSONObject chooseDependencies(JSONObject pin,JSONObject snapshot,JSONObject runtime)throws Exception{
@@ -160,12 +178,48 @@ public final class OwnerDraftFirstBuild {
         if(!node||!manager)throw new IllegalStateException("这台手机尚未同时核实 Node 和项目的包管理器；没有安装依赖或切换运行位置。");
         if(!actual.optBoolean("managedOutputCollectionAvailable"))throw new IllegalStateException("本机尚无原构建结果的收件能力，不能开始这条验证与交付流程。");
     }
+    /** Read-only eligibility from the saved source, not an approval or a runtime check. */
+    static String existingBuildState(JSONObject snapshot){
+        try{
+            var files=ProjectSources.files(snapshot);JSONObject pkg=ordinaryPackage(files);
+            Set<String> paths=sourcePaths(snapshot);
+            Object manager=pkg.opt("packageManager");
+            if(manager!=null&&!(manager instanceof String))return "";
+            if(!Set.of("npm","pnpm").contains(ProjectCheckoutTooling.manager(paths,pkg.optString("packageManager"))))return "";
+            scriptFields(pkg);
+            try{OwnerDraftNodeDependencies.requirePlainProject(pkg,paths);}
+            catch(SecurityException config){
+                return paths.contains("pnpm-workspace.yaml")?"workspaces":paths.contains(".npmrc")?"npmrc":"manager_configuration";
+            }
+            catch(IllegalArgumentException config){return pkg.has("workspaces")?"workspaces":"manifest_configuration";}
+            return "available";
+        }catch(Exception unavailable){return "";}
+    }
+    static void requireExistingConfiguration(JSONObject snapshot)throws Exception{
+        var files=ProjectSources.files(snapshot);
+        OwnerDraftNodeDependencies.requirePlainProject(ordinaryPackage(files),sourcePaths(snapshot));
+    }
+    /** ProjectSources.files already validated the snapshot; binary members count as present, too. */
+    private static Set<String> sourcePaths(JSONObject snapshot)throws Exception{
+        Set<String> paths=new java.util.HashSet<>();JSONArray rows=snapshot.getJSONArray("files");
+        for(int i=0;i<rows.length();i++)paths.add(rows.getJSONObject(i).getString("path"));
+        return paths;
+    }
+    private static JSONObject ordinaryPackage(java.util.Map<String,String> files)throws Exception{
+        String raw=files.get("package.json");
+        if(raw==null||raw.getBytes(StandardCharsets.UTF_8).length>65536)
+            throw new IllegalArgumentException("需要可核对的根 package.json（不超过 64 KiB）");
+        return dev.pocketengine.features.plugins.mcp.McpJson.parse(raw);
+    }
     /** Only these inert manifest declarations reach the private review, never as authority or instructions. */
     public static JSONObject scripts(JSONObject snapshot,JSONObject pin)throws Exception{
         JSONObject version=ProjectSources.describe(snapshot);
         for(String k:new String[]{"projectId","checkoutId","sourceDigest"})if(!pin.getString(k).equals(version.opt(k)))throw new SecurityException("读取期间副本已变化，没有展示另一版脚本");
-        String raw=ProjectSources.files(snapshot).get("package.json");
-        JSONObject scripts=raw==null?null:new JSONObject(raw).optJSONObject("scripts"),view=new JSONObject();
+        var files=ProjectSources.files(snapshot);String raw=files.get("package.json");
+        return scriptFields(existingCheckout(pin)?ordinaryPackage(files):raw==null?null:new JSONObject(raw));
+    }
+    private static JSONObject scriptFields(JSONObject pkg)throws Exception{
+        JSONObject scripts=pkg==null?null:pkg.optJSONObject("scripts"),view=new JSONObject();
         if(scripts==null||!(scripts.opt("build") instanceof String build)||build.isBlank())throw new IllegalStateException("package.json 没有非空的 build 脚本；没有当成可用构建。");
         for(String k:new String[]{"prebuild","build","postbuild"})if(scripts.has(k)){
             Object value=scripts.opt(k);
@@ -177,14 +231,16 @@ public final class OwnerDraftFirstBuild {
     }
     public static void requireContext(JSONObject pin,JSONObject context)throws Exception{
         JSONObject lock=pin.optJSONObject(DEPENDENCIES);
+        boolean existing=existingCheckout(pin);
         if(pin.length()!=(lock==null?7:8)+(edited(pin)?1:0)||
+            (pin.has(EXISTING_CHECKOUT)&&!existing)||(existing?(pin.has("workIdentity")||edited(pin)):!hash(pin.optString("workIdentity")))||
             edited(pin)&&(!hash(pin.optString(EDITED_BASE))||pin.optString(EDITED_BASE).equals(pin.opt("sourceDigest")))||
             pin.has(DEPENDENCIES)&&(lock==null||lock.length()!=2||!lock.getString("planDigest").matches("[a-f0-9]{64}")||
             !pin.getString("manager").equals(lock.getJSONObject("review").opt("manager")))||!"managed_process_v1".equals(context.opt("runtime"))||context.has("draftOnly")||context.has(OwnerRevisionSource.FIELD)||
             !pin.getString("projectId").equals(context.opt("projectId"))||!pin.getString("checkoutId").equals(context.opt("checkoutId"))||
             !pin.getString("sourceDigest").equals(context.opt("initialSourceDigest"))||!reviewedClient(pin).equals(context.opt("clientMessageId"))||
             !Set.of("npm","pnpm").contains(pin.getString("manager"))||!pin.getString("planDigest").matches("[a-f0-9]{64}")||pin.getString("runtimeIdentity").isBlank())
-            throw new SecurityException("不是机主审阅的这版独立副本构建交办");
+            throw new SecurityException("不是机主审阅的这版私人副本构建交办");
     }
     /** Only the original host-enveloped operation may produce a public scalar fact; no output bodies here. */
     public static JSONObject outcomeFact(JSONObject pin,JSONObject task,JSONObject row)throws Exception{

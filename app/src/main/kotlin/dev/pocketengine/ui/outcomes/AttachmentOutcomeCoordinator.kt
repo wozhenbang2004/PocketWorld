@@ -21,16 +21,32 @@ import org.json.JSONObject
 import java.util.concurrent.Executor
 
 internal data class AttachmentResultRun(val taskId: String, val runId: String, val epoch: Int) {
-    fun files(snapshot: JSONObject): List<JSONObject> {
+    data class Files(val entries: List<JSONObject>, val readLimited: Boolean)
+
+    fun files(snapshot: JSONObject): Files {
         check(snapshot.optString("taskId") == taskId && snapshot.optString("taskRunId") == runId &&
             snapshot.optInt("coordinatorEpoch") == epoch) { "原任务状态已变化，请打开当前工作核对成果" }
-        val files = snapshot.getJSONArray("artifacts").objects()
-        // An incomplete inventory or a file without a recorded run can only be reviewed in the original work.
-        check(!snapshot.getJSONObject("indexDiagnostics").getBoolean("incomplete") &&
-            files.all { it.optString("sourceTaskId") == taskId && it.optString("runProvenance") in setOf("current", "earlier") }) {
-            "部分文件的生成轮次无法完整核对，请在原工作查看全部保留文件。"
+        val artifacts = snapshot.getJSONArray("artifacts")
+        val files = artifacts.objects()
+        var limited = snapshot.optJSONObject("indexDiagnostics")?.opt("incomplete") != false || files.size != artifacts.length()
+        val exact = files.filter { file ->
+            val sourceRun = file.opt("sourceTaskRunId") as? String ?: ""
+            val epochMatches = when (val sourceEpoch = file.opt("sourceCoordinatorEpoch")) {
+                null -> true // Ordinary local outputs store the original run ID; remote capture can also prove the epoch.
+                is Int -> sourceEpoch == epoch
+                is Long -> sourceEpoch == epoch.toLong()
+                else -> false
+            }
+            val sameTask = file.optString("sourceTaskId") == taskId
+            when {
+                sameTask && file.optString("runProvenance") == "earlier" && sourceRun.isNotBlank() &&
+                    (sourceRun != runId || !epochMatches) -> false
+                sameTask && file.optString("runProvenance") == "current" && sourceRun == runId && epochMatches &&
+                    file.optString("availability") == "available" -> true
+                else -> { limited = true; false }
+            }
         }
-        return files.filter { it.optString("runProvenance") == "current" }
+        return Files(exact, limited)
     }
 }
 
@@ -129,8 +145,9 @@ internal class AttachmentOutcomeCoordinator(
             val actual=app.ownerOutcomeSnapshot(task,control)
             val files=if(resultRun!=null){
                 val fromRun=resultRun.files(actual)
-                actual.put("artifacts",JSONArray(fromRun)).put("sources",JSONArray()).put("media",JSONArray())
-                fromRun
+                actual.put("artifacts",JSONArray(fromRun.entries)).put("sources",JSONArray()).put("media",JSONArray())
+                    .put("resultFilesReadLimited",fromRun.readLimited)
+                fromRun.entries
             }else actual.optJSONArray("sources").objects()+actual.optJSONArray("artifacts").objects()
             val file=pin?.let{selected->files.firstOrNull{it.optString("id")==selected.optString("id")&&it.optString("sha256")==selected.optString("sha256")&&it.optString("availability")=="available"}?:throw IllegalStateException("原文件版本当前不可读，请回原任务核对")}
             if(showOriginal&&file!=null)original=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),control)

@@ -18,9 +18,10 @@ export function TeamFollowUps({ items, disabled, read, expanded = true, toggle }
   </section>;
 }
 
-export function TeamResultHandoff({ result, actions, sources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview }: {
+export function TeamResultHandoff({ result, actions, sources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview, nextRequest }: {
   result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; frozenFiles?:ReactNode; finalPackageReader?:ReactNode; revisionOffers?:ReactNode; stopped: boolean;
   openMembers: () => void; openMessage: (id: string) => void; openOriginalReview?: () => void;
+  nextRequest?: { open: () => void; disabled: boolean };
 }) {
   const summary = result.body ? <><AIAnswer text={result.body}/>
     {result.excerpt && <p className="pw-field-hint">这里只保留了原汇总的节选。</p>}
@@ -38,6 +39,8 @@ export function TeamResultHandoff({ result, actions, sources, frozenFiles, final
     {openOriginalReview && <Button variant="secondary" size="small" disabled={actions.disabled} trailingIcon={IconChevronRight}
       onClick={openOriginalReview}>查看待审阅的原协作任务</Button>}
     {result.original && summary}
+    {result.original && nextRequest && <Button variant="secondary" trailingIcon={IconChevronRight} disabled={actions.disabled || nextRequest.disabled}
+      onClick={nextRequest.open}>在原对话写后续要求</Button>}
     {sources}
     {result.statusNote && <div className="pw-team-result-caption"><strong>原协作记录</strong><p dir="auto" style={{ whiteSpace: 'pre-wrap' }}>{result.statusNote}</p></div>}
     {result.previous && <p className="pw-team-result-caption">这是当时保存的汇总，不代表当前进展或授权。</p>}

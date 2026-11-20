@@ -28,10 +28,21 @@ const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const unresolved = (value: Data | null) => !!value && ['pending', 'unknown', 'unconfirmed'].includes(value.status);
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : String(failure);
-function editedBuildFor(source: Data | null, project: string, checkout: string): Data | null {
-  const build = source?.editedDraftBuild;
-  return source?.editedDraftCopy === true && /^[a-f0-9]{64}$/.test(source.sourceDigest) &&
-    build?.editedSourceDigest === source.sourceDigest && build?.projectId === project && build?.checkoutId === checkout &&
+const scopedBuildReceipt = (receipt: Data) => receipt.versionedBuildSourceDigest || receipt.editedBuildSourceDigest;
+function existingBuildBlocked(value: unknown): string {
+  switch(value){
+    case 'workspaces': return '这个副本使用工作区，本机快捷构建目前只支持单个 Node 项目。';
+    case 'npmrc': return '这个副本有 .npmrc，本机快捷构建不会沿用该配置。';
+    case 'manager_configuration': return '这个副本有当前快捷构建不支持的包管理器配置。';
+    case 'manifest_configuration': return 'package.json 有当前快捷构建不支持的项目级配置。';
+    default: return '';
+  }
+}
+function versionBuildFor(source: Data | null, project: string, checkout: string): Data | null {
+  const existing = source?.existingNodeBuild === true;
+  const build = existing ? source?.existingNodeBuildTask : source?.editedDraftBuild;
+  return source && (existing || source.editedDraftCopy === true) && /^[a-f0-9]{64}$/.test(source.sourceDigest) &&
+    (existing ? build?.sourceDigest : build?.editedSourceDigest) === source.sourceDigest && build?.projectId === project && build?.checkoutId === checkout &&
     typeof build?.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(build.id) &&
     typeof build.runId === 'string' && !!build.runId && Number.isSafeInteger(build.epoch) && build.epoch > 0 ? build : null;
 }
@@ -87,7 +98,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
       throw new Error('原工作身份尚未返回，请查询原输入。');
     setSubmission(receipt); clearSubmittedDraft(receipt);
     if (receipt.status === 'accepted' && (submission?.status !== 'accepted' || submission.taskId !== receipt.taskId)) {
-      if (receipt.editedBuildSourceDigest) sourceAttempt.current = '';
+      if (scopedBuildReceipt(receipt)) sourceAttempt.current = '';
       onTaskRegistered();
     }
   };
@@ -158,7 +169,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
       !Number.isSafeInteger(lock.packages) || lock.packages<1)) throw new Error('没有取得这份副本的确切锁文件审阅，未开始。');
     if (draftBuild && (value.draftBuild !== true || !['npm','pnpm'].includes(value.manager) || typeof value.scripts?.build!=='string' || !value.scripts.build.trim() || draft.current.goal || deliveryFields.some(k => draft.current[k]))) throw new Error('已有输入或未核对真实构建命令，没有替换目标。');
     if (!draftBuild && value.draftBuild === true) throw new Error('请在独立副本中重新核对构建。');
-    if (draftBuild && value.editedCopy !== (source?.editedDraftCopy === true)) throw new Error('构建不属于当前看到的副本版本，请重新读取。');
+    if (draftBuild && (value.editedCopy !== (source?.editedDraftCopy === true) || value.existingCopy !== (source?.existingNodeBuild === true)))
+      throw new Error('构建不属于当前看到的副本版本，请重新读取。');
     if (value.projectId !== projectId || value.checkoutId !== draft.current.checkoutId ||
         value.source?.projectId !== projectId || value.source?.checkoutId !== value.checkoutId || value.runtimeId != null && value.runtimeId !== 'managed_process_v1' ||
         typeof value.goal !== 'string' || !value.goal.trim() || !draftBuild && value.goal.trim() !== draft.current.goal.trim() ||
@@ -312,13 +324,16 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
     void invoke('projects.development.start', { viewHandle: handle.current, reviewHandle: selected.reviewHandle }, receipt => applySubmission(receipt, marker));
   };
   const androidWrapper = source?.projectId === projectId && source.checkoutId === checkout && source.androidGradleWrapper?.sourceDigest === source.sourceDigest ? source.androidGradleWrapper : null;
-  const editedBuild = editedBuildFor(source, projectId, checkout);
-  const editedLookupUnavailable = source?.editedDraftCopy === true && (source.editedDraftBuildUnavailable === true || source.editedDraftBuild && !editedBuild);
-  const openEditedBuild = () => void invoke('projects.development.inspect', {viewHandle:handle.current, checkoutId:checkout}, fresh => {
-    const current = editedBuildFor(fresh, projectId, checkout);
+  const versionBuild = versionBuildFor(source, projectId, checkout);
+  const nodeBlocked = source?.projectId===projectId && source?.checkoutId===checkout ? existingBuildBlocked(source.existingNodeBuildBlocked) : '';
+  const buildLookupUnavailable = source?.existingNodeBuild === true ?
+    source.existingNodeBuildUnavailable === true || source.existingNodeBuildTask && !versionBuild :
+    source?.editedDraftCopy === true && (source.editedDraftBuildUnavailable === true || source.editedDraftBuild && !versionBuild);
+  const openVersionBuild = () => void invoke('projects.development.inspect', {viewHandle:handle.current, checkoutId:checkout}, fresh => {
+    const current = versionBuildFor(fresh, projectId, checkout);
     if (fresh.projectId === projectId && fresh.checkoutId === checkout) setSource(fresh);
-    if (!editedBuild || !current || current.editedSourceDigest !== editedBuild.editedSourceDigest || current.id !== editedBuild.id ||
-        current.runId !== editedBuild.runId || current.epoch !== editedBuild.epoch)
+    if (!versionBuild || !current || fresh.sourceDigest !== source?.sourceDigest || fresh.existingNodeBuild !== source?.existingNodeBuild ||
+        current.id !== versionBuild.id || current.runId !== versionBuild.runId || current.epoch !== versionBuild.epoch)
       throw new Error('副本版本或原任务已变化。没有打开另一版，请按更新后的记录选择。');
     onOpenTask(current.id, checkout);
   });
@@ -332,9 +347,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
     {!view ? <Button variant="secondary" disabled={busy || !readable} onClick={() => void read()}> {busy ? '正在读取原项目…' : '读取项目开发条件'} </Button> : <>
       {view.draftRecoveryRequired && <p className="pw-local-inline-notice" role="alert">{view.draftRecoveryMessage} 仍可查看下方原任务、文件和工具状态。请保留应用数据，从诊断记录定位草稿存储问题后恢复，不要清空数据或重复提交目标。</p>}
       {submission && <div className="pw-local-inline-notice" role="status"><p>{submission.message || (pending ? '原项目输入仍待核对。' : submission.status === 'accepted' ? '项目任务已保存。' : '上次输入没有启动。')}</p>
-        {submission.status === 'accepted' && !submission.editedBuildSourceDigest && <p>继续同一件事时，请打开原任务补充，不必重新开始。</p>}
+        {submission.status === 'accepted' && !scopedBuildReceipt(submission) && <p>继续同一件事时，请打开原任务补充，不必重新开始。</p>}
         {submission.error && <p>{submission.error}</p>}<div className="pw-form-actions">
-          {submission.taskId && submission.taskId!==editedBuild?.id && <Button variant="secondary" disabled={busy || filesOpen || !can('tasks.open')} data-project-receipt-task={submission.taskId} onClick={() => onOpenTask(submission.taskId, submission.checkoutId)}>{submission.editedBuildSourceDigest?'查看上次交办的构建':'查看原任务与结果'}</Button>}
+          {submission.taskId && submission.taskId!==versionBuild?.id && <Button variant="secondary" disabled={busy || filesOpen || !can('tasks.open')} data-project-receipt-task={submission.taskId} onClick={() => onOpenTask(submission.taskId, submission.checkoutId)}>{scopedBuildReceipt(submission)?'查看上次交办的构建':'查看原任务与结果'}</Button>}
           {pending && <Button variant="secondary" disabled={busy || filesOpen} onClick={() => void invoke('projects.development.query', { viewHandle: handle.current }, receipt => applySubmission(receipt, submission))}>查询原输入</Button>}
         </div></div>}
       {sourceConflict&&view.draft?.ownerPickedConvention&&<div className="pw-local-inline-notice"><p>原草稿现在有另一次选择，本页还留着你的输入。两份都没有被自动覆盖。</p>
@@ -375,12 +390,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
       {(view.draft?.copyRequestId || copyResult) && <div><Button variant="ghost" disabled={busy || !!review || filesOpen} onClick={() => void copy(true)}>查询原副本准备</Button>
         {copyResult?.partial && <div role="status"><p>原副本准备中断，部分文件已保留，不会覆盖。可在手动终端显式准备另一份完整副本，再返回选择；已有部分不会自动删除。</p><Button variant="secondary" disabled={busy || filesOpen} onClick={onOpenTerminal}>打开副本准备入口</Button></div>}
         {copyResult && !copyResult.found && !copyResult.partial && <p role="status">未发现这次准备的副本；显式准备仍使用同一请求，不会换一个身份重建。</p>}</div>}
-      {available.some(row => row.checkoutId === checkout && row.draftWorkingCopy === true) && can('projects.development.reviewDraftBuild') &&
-        (editedBuild ? <Button variant="secondary" disabled={disabled || !can('tasks.open') || !can('projects.development.inspect')}
-          onClick={openEditedBuild}>查看这一版构建与结果</Button> : editedLookupUnavailable ?
+      {nodeBlocked && can('projects.development.reviewDraftBuild') && <p className="pw-field-hint" role="status">{nodeBlocked} 你仍可浏览和编辑这个副本。</p>}
+      {available.some(row => row.checkoutId === checkout && (row.draftWorkingCopy === true || source?.existingNodeBuild === true)) && can('projects.development.reviewDraftBuild') &&
+        (versionBuild ? <Button variant="secondary" disabled={disabled || !can('tasks.open') || !can('projects.development.inspect')}
+          onClick={openVersionBuild}>查看这一版构建与结果</Button> : buildLookupUnavailable ?
           <p role="status" className="pw-field-hint">这一版的构建记录暂未核对，请重新读取项目条件，不重复交办。</p> :
           <Button variant="secondary" disabled={disabled || !!goal || deliveryFields.some(k=>!!requirements[k]) || !source || view.model?.configured !== true}
-            onClick={()=>void invoke('projects.development.reviewDraftBuild',{viewHandle:handle.current,checkoutId:checkout},v=>acceptReview(v,true))}>{source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
+            onClick={()=>void invoke('projects.development.reviewDraftBuild',{viewHandle:handle.current,checkoutId:checkout},v=>acceptReview(v,true))}>{source?.existingNodeBuild===true?'审阅这个副本的 Node 构建':source?.editedDraftCopy===true?'审阅当前编辑版的 Node 构建':'验证这份改稿的 Node 构建'}</Button>)}
       <div className="pw-form-actions"><Button disabled={disabled || !goal.trim() || !checkout || !source || view.model?.configured !== true} onClick={() => void invoke('projects.development.review', { viewHandle: handle.current, checkoutId: checkout, goal, ...requirements }, acceptReview)}>核对并开始</Button>
         <Button variant="ghost" disabled={busy || pending || !!review || filesOpen} onClick={() => void read()}>重新读取项目条件</Button>
         {checkout && !source && <Button variant="ghost" disabled={disabled} onClick={() => { sourceAttempt.current = ''; setView(previous => previous ? { ...previous } : previous); }}>重新读取副本版本</Button>}
@@ -401,8 +417,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, pro
       closeHostDiff(); setFilesOpen(true);
     } : undefined}/>}
     {view && filesOpen && checkout && <ProjectCheckoutFiles key={`${view.viewHandle}|${checkout}`} projectId={projectId} checkoutId={checkout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined} onClose={closeFiles} registerBack={registerFilesBack} />}
-    <SettingsDialog isOpen={!!review} title={review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
+    <SettingsDialog isOpen={!!review} title={review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={dismiss} closeLabel="返回修改目标">{review && <div className="pw-local-review">
       {review.draftBuild === true ? <><strong>{review.dependencyState==='needs_lock_review'?'还缺依赖，先审阅这份锁':review.manager+' run build'}</strong>
+        {review.existingCopy && <p className="pw-field-hint">只核对这个私人副本已保存的源码。未保存草稿不会加入构建；成果仍在这项任务内另行确认。</p>}
         {review.editedCopy && <p className="pw-field-hint">本次只构建这个副本当前保存的源码。原稿、旧构建和已保留的成品不变；旧输出不算本次新成果。</p>}
         {review.lockedDependencies && <><p>{review.dependencyState==='current_packages_checked'?
           '已核对这份相同副本中实际存在的关键包，不需要重复准备。构建是否成功仍以本次实际结果为准。':

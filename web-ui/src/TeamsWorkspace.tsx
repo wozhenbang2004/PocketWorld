@@ -33,7 +33,7 @@ import { ReadingContext } from './reading-context';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
 import {sameTeamPackage} from './team-delivered-package';
-import {sameTeamFiles,sameTeamProposal,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource} from './team-navigation';
+import {sameTeamFiles,sameTeamProposal,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource} from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
@@ -82,7 +82,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   onAttentionConsumed?: (requestId: string) => void;
   runFocus?: TeamRunFocus | null; onRunFocusConsumed?: (requestId: string) => void;
   onAskButler?: (request: TeamButlerRequest) => void;
-  onOpenWork?: (link: TeamOwnerWorkLink, intent: 'overview' | 'supplement') => void;
+  onOpenWork?: (link: TeamOwnerWorkLink, intent: TeamOwnerWorkIntent) => void;
 }) {
   const openReading = useContext(ReadingContext);
   const formDraft = useFormDrafts(run, 'teams');
@@ -673,6 +673,35 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   ]), { active: workspaceActive && catalogReady && (!reading || !!reading.viewHandle) && !editor && !memberDraft && !review && !phoneSelection });
   const teamResult = teamResultReading(current, messages, deliveryWorkers?.originalFileObservation);
   const followUps = teamFollowUps(current, reading?.attention);
+  const canSupplementParent = ownerWorkLink?.currentRun && ownerWorkLink.stopping !== true &&
+    (!teamHasEnded(current?.status) || current?.status === 'completed' && rows(state.tasks).some(task =>
+      task.id === ownerWorkLink.taskId && task.raw?.runId === ownerWorkLink.runId && task.raw?.coordinatorEpoch === ownerWorkLink.epoch &&
+      task.raw?.conversationId === ownerWorkLink.conversationId && task.raw?.controls?.canInput === true));
+  const canPrepareFollowUp = !!onOpenWork && ownerWorkLink?.savedResultForDraft === true && ownerWorkLink.currentRun === true &&
+    ownerWorkLink.stopping === false && ownerWorkLink.teamRunId === current?.id && current?.status === 'completed' &&
+    teamResult.original && Array.isArray(reading?.attention) && reading.attention.length === 0 &&
+    ['conversation.select', 'composer.object.add'].every(command => bridge.getState().capabilities.commands.includes(command));
+  const prepareFollowUp = () => {
+    const original = currentReading.current, link = ownerWorkLink;
+    if (!canPrepareFollowUp || !canRead || materialBusy || !link || !original?.viewHandle || !onOpenWork) return;
+    leaveWithDrafts(() => {
+      if (currentReading.current?.viewHandle !== original.viewHandle || !ownsNativeWindow() || document.hidden) return;
+      void invoke('teams.readRun', { runId: link.teamRunId }, value => {
+        const fresh = value.reading, next = fresh?.ownerWorkLink;
+        const result = teamResultReading(fresh?.run, fresh?.messages);
+        const same = fresh?.kind === 'run' && fresh.viewHandle && fresh.run?.id === link.teamRunId &&
+          fresh.run.generation === original.run.generation && fresh.run.status === 'completed' && result.original &&
+          result.messageId === teamResult.messageId && result.body === teamResult.body && Array.isArray(fresh.attention) && fresh.attention.length === 0 &&
+          next?.savedResultForDraft === true && next.readOnly === true && next.currentRun === true && next.stopping === false &&
+          next.teamRunId === link.teamRunId && next.taskId === link.taskId && next.runId === link.runId &&
+          next.epoch === link.epoch && next.conversationId === link.conversationId;
+        if (fresh?.kind === 'run' && fresh.viewHandle && fresh.run?.id === link.teamRunId) acceptReading(fresh);
+        else release(fresh);
+        if (!same) throw new Error('这次协作的原成果已变化，没有关联到草稿。');
+        onOpenWork(next, 'followUp');
+      });
+    });
+  };
   const resultOrigin = (key = '') => current ? { runId: String(current.id), key, scroll: root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0 } : null;
   resultBack.current = () => {
     if (!resultSource || resultSource.runId !== current?.id || !workspaceActive || !ownsNativeWindow()) return false;
@@ -887,7 +916,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       {changed && <p className="pw-team-reading-notice" role="status">正在更新进展，阅读位置与未发送内容保留。</p>}
       {workspaceActive && !busy && !reading?.viewHandle && <p className="pw-team-reading-notice" role="status">请刷新记录后继续操作，未发送内容保留。</p>}
       <div className="pw-team-run-controls">
-        <div className="pw-team-work-actions">{ownerWorkLink && onOpenWork ? <><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openOwnerWork('overview')}>查看原工作</Button>{ownerWorkLink.currentRun && <Button variant="secondary" disabled={busy || materialBusy || changed || !reading?.viewHandle} onClick={() => openOwnerWork('supplement')}>补充要求</Button>}</> : <span className="pw-team-history-label">保留原目标与执行记录</span>}</div>
+        <div className="pw-team-work-actions">{ownerWorkLink && onOpenWork ? <><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openOwnerWork('overview')}>查看原工作</Button>{canSupplementParent &&
+          <Button variant="secondary" disabled={!canRead || materialBusy} onClick={() => openOwnerWork('supplement')}>补充要求</Button>}</> : <span className="pw-team-history-label">保留原目标与执行记录</span>}</div>
         <div className="pw-team-current-actions">
           {!hasWorkPlan && (teamCanResume(current.status) || current.phase === 'intervention' || current.phase === 'awaiting_member' && currentMembers.length > 0) && <Button leadingIcon={IconPlay} disabled={!canMutate} onClick={() => control('resume')}>继续协作</Button>}
           {current.status !== 'cancelled' && <ContextMenuTrigger key={current.id}>{({ open }) => <><IconButton icon={IconMore} aria-label="暂停或停止协作" disabled={!canControl} onClick={event => open(event.currentTarget)} /><ContextMenu aria-label="本次协作操作" onAction={key => { if (key === 'pause' && canControl) control('pause'); if (key === 'stop' && canControl) reviewResult({ operation: 'cancel', viewHandle: reading!.viewHandle, runId: current.id }); }}>{teamCanPause(current.status) && <ContextMenuItem id="pause" icon={IconPause}>暂停协作</ContextMenuItem>}<ContextMenuItem id="stop" icon={IconStop}>停止这次协作</ContextMenuItem></ContextMenu></>}</ContextMenuTrigger>}
@@ -968,6 +998,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
               ? <TeamFinalPackageReading key={reading.viewHandle+':'+teamPackage.operationId} item={teamPackage} handle={reading.viewHandle} fromWork={focusedPackage?()=>leaveWithDrafts(focusedPackage.returnToWork):undefined} disabled={!canRead||materialBusy} exportState={state.teamFinalPackageExport===undefined?reading.finalPackageExport:state.teamFinalPackageExport}
                   live={()=>ownsNativeWindow()&&currentReading.current?.viewHandle===reading.viewHandle&&currentReading.current?.run?.id===teamPackage.teamRunId}/> : undefined}
             openOriginalReview={current.status === 'awaiting_review' && (!focusedPackage||followUps.length>0||rows(reading?.revisionOffers).length>0) && reading?.taskId ? openAwaitingReview : undefined}
+            nextRequest={canPrepareFollowUp ? { open: prepareFollowUp, disabled: !!state.chatSubmitting } : undefined}
             openMembers={() => { setResultSource(resultOrigin('members')); jumpToRunSection('members'); }}
             openMessage={id => { setResultSource(resultOrigin('summary-original')); focusMessage(id); }}/>
         </TabPanel>
@@ -1028,7 +1059,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         <SelectField label="原消息用途" value={mode} options={[{ id: 'discussion', label: '讨论补充' }, { id: 'queue', label: '补充下一工作点' }, { id: 'feedback', label: '调整要求' }]} onChange={changeMessageMode} isDisabled={busy || !!uncertain} />
         <SelectField label="草稿引用的原消息" value={replyId} options={[{ id: '', label: '未引用消息' }, ...messages.map(message => ({ id: message.messageId, label: `${teamMessageAuthor(message, members)} · ${teamGoalTitle(message.content, '原消息')}` }))]} onChange={value => messageDraft.guard(() => { const original = messages.find(message => message.messageId === value); setReplyId(value); if (original?.kind === 'assignment_question') { setRecipient(original.memberId); setMode('discussion'); } })} isDisabled={busy || !!uncertain} />
         <p className="pw-field-hint">旧草稿保留供核对。新的要求在原工作里交给管家，原问题仍在这里逐条回答。</p>
-        {ownerWorkLink?.currentRun && onOpenWork && <Button variant="secondary" disabled={busy || materialBusy || messageDraft.requiresRecheck || !!uncertain} onClick={() => openOwnerWork('supplement')}>回原工作补充</Button>}
+        {canSupplementParent && onOpenWork && <Button variant="secondary" disabled={busy || materialBusy || messageDraft.requiresRecheck || !!uncertain} onClick={() => openOwnerWork('supplement')}>回原工作补充</Button>}
       </>}
       {!replyCanReceive && <p className="pw-team-reading-notice" role="status">这条原问题已不再等待回答，已有草稿保留供核对。</p>}
       {current.status === 'cancelled' && <p className="pw-team-reading-notice" role="status">协作已停止后续派发，消息与未发送草稿可继续查看。</p>}

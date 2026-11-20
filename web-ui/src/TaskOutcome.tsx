@@ -149,7 +149,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const [clock, setClock] = useState(Date.now);
   const record = task && typeof task === 'object' ? task as Record<string, any> : {};
   const status = typeof record.status === 'string' && record.status ? record.status : record.raw?.status;
-  const firstWeb = active && status==='completed' && record.raw?.developmentContext?.ownerDraftFirstBuild &&
+  const buildScope = record.raw?.developmentContext?.ownerDraftFirstBuild;
+  const firstWeb = active && status==='completed' && buildScope && buildScope.existingCheckoutBuild!==true &&
     typeof record.id==='string' && typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
     ? {taskId:record.id,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
   const packageRead = useProjectPackages(task, active, readIdentity, firstWeb?.taskId);

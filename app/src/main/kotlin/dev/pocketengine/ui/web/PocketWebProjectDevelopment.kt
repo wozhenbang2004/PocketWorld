@@ -312,11 +312,12 @@ internal class PocketWebProjectDevelopment(
                 untouched();review=null
                 working(original,done){
                     val host=controller.projectDevelopmentForWeb()
-                    val preparation=host.reviewFirstBuildForOwner(original.project,checkout);val pin=preparation.getJSONObject("pin")
-                    val actual=source(original,checkout);val selectedModel=model();val edited=OwnerDraftFirstBuild.edited(pin)
+                    val preparation=host.reviewNodeBuildForOwner(original.project,checkout);val pin=preparation.getJSONObject("pin")
+                    val actual=source(original,checkout);val selectedModel=model();val edited=OwnerDraftFirstBuild.edited(pin);val existing=OwnerDraftFirstBuild.existingCheckout(pin)
                     check(pin.getString("sourceDigest")==actual.getString("sourceDigest") && edited==actual.optBoolean("editedDraftCopy") &&
-                        selectedModel.value().optBoolean("configured")) { "所选版本或默认模型未就绪，未开始。" }
-                    check(!edited || !actual.has("editedDraftBuild") && !actual.optBoolean("editedDraftBuildUnavailable")) {
+                        existing==actual.optBoolean("existingNodeBuild") && selectedModel.value().optBoolean("configured")) { "所选版本或默认模型未就绪，未开始。" }
+                    check((!edited || !actual.has("editedDraftBuild") && !actual.optBoolean("editedDraftBuildUnavailable")) &&
+                        (!existing || !actual.has("existingNodeBuildTask") && !actual.optBoolean("existingNodeBuildUnavailable"))) {
                         "这版已有构建或原记录待核对；请回项目打开这一版的原任务，不重复交办。"
                     }
                     val goal=OwnerDraftFirstBuild.goal(pin);val contract=ProjectOwnerWorkflows.deliveryContractForOwner(JSONObject().put("goal",goal))
@@ -330,7 +331,7 @@ internal class PocketWebProjectDevelopment(
                     JSONObject().put("reviewHandle",selected.handle).put("requestId",input.getString("clientMessageId")).put("projectId",original.project)
                         .put("checkoutId",checkout).put("goal",goal).put("deliveryContract",contract).put("source",actual).put("model",selectedModel.value())
                         .put("runtimeId","managed_process_v1").put("runtime","这台手机").put("expiresAt",System.currentTimeMillis()+120_000)
-                        .put("commandsAuthorized",false).put("projectMemoryAuthorized",false).put("draftBuild",true).put("editedCopy",edited)
+                        .put("commandsAuthorized",false).put("projectMemoryAuthorized",false).put("draftBuild",true).put("editedCopy",edited).put("existingCopy",existing)
                         .put("manager",pin.getString("manager")).put("scripts",preparation.getJSONObject("scripts"))
                         .putOpt("lockedDependencies",preparation.optJSONObject("dependencies")).putOpt("dependencyState",preparation.opt("dependencyState"))
                         .putOpt("previousVerification",preparation.optJSONObject("previousVerification"))
@@ -384,8 +385,10 @@ internal class PocketWebProjectDevelopment(
                     .put("clientMessageId", input.getString("clientMessageId")).put("goal", input.getString("goal")).put("status", "pending")
                     .also { value->selected.picked.submissionSeal?.let { value.put(ProjectConventionDraft.SUBMISSION_SEAL,it) } }
                 copyDeliveryFields(input, marker)
-                if(input.has(OwnerDraftFirstBuild.FIELD)&&OwnerDraftFirstBuild.edited(input.getJSONObject(OwnerDraftFirstBuild.FIELD)))
-                    marker.put("editedBuildSourceDigest",input.getString("expectedSourceDigest"))
+                input.optJSONObject(OwnerDraftFirstBuild.FIELD)?.let { scoped ->
+                    if(OwnerDraftFirstBuild.edited(scoped)||OwnerDraftFirstBuild.existingCheckout(scoped))
+                        marker.put("versionedBuildSourceDigest",input.getString("expectedSourceDigest"))
+                }
                 try {
                     // Persist the original query identity before any action can
                     // reach Assistant; a killed Activity cannot turn unknown
