@@ -537,14 +537,19 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebWorkSearch.COMMANDS) {
+                fun ownsSavedBuildShelf()=section==null&&taskViewId==null&&controller.webPrivateOwnerVisible()&&
+                    controller.state.projectId==args.opt("projectId")&&controller.state.filePath==null
+                if(action==PocketWebWorkSearch.SAVED_BUILD_WEB)require(ownsSavedBuildShelf()){ "请从该私人项目工作台查看已保存网页" }
                 val conversationResult = if (action == "tasks.resultFiles") visibleChatTaskResult(args) else null
                 if (action in setOf("ownerWork.report.read", "tasks.projectPackages", TaskProjectPackageFiles.COMMAND, "tasks.resultFiles") && conversationResult == null) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
                 workSearch.dispatch(action, args, conversationResult) { result, error ->
                     if (conversationResult != null && runCatching { visibleChatTaskResult(args) }.getOrNull() != conversationResult)
                         complete(id, null, "原对话消息已变化，请重新打开成果")
+                    else if(action==PocketWebWorkSearch.SAVED_BUILD_WEB&&!ownsSavedBuildShelf())
+                        complete(id,null,"原项目窗口已变化，没有返回旧清单",retainValue=false)
                     else if (action == TaskProjectPackageFiles.COMMAND && (section != null || taskViewId != args.optString("taskId") || !controller.webPrivateOwnerVisible()))
                         complete(id, null, "原工作已关闭，没有带出包内文件", retainValue = false)
-                    else complete(id, result, error, retainValue = action != "tasks.resultFiles" && action != TaskProjectPackageFiles.COMMAND)
+                    else complete(id, result, error, retainValue = action !in setOf("tasks.resultFiles", TaskProjectPackageFiles.COMMAND, PocketWebWorkSearch.SAVED_BUILD_WEB))
                 }
                 return
             }
@@ -713,13 +718,21 @@ internal class PocketWebBridge(
                     return
                 }
                 val conversationResult = if (action == "attachmentWorkspace.open") visibleChatTaskResult(args) else null
+                val readerCurrent: (() -> Boolean)? = if (conversationResult != null && args.has("resultReaderWindow")) {
+                    val ticket = captureWindow()
+                    val current: () -> Boolean = { !closed && acceptsWindow(ticket) && runCatching { visibleChatTaskResult(args) }.getOrNull() == conversationResult }
+                    current
+                } else null
                 if (action == "attachmentWorkspace.open" && args.optBoolean("openOriginal") && conversationResult == null) {
                     require(section == null && taskViewId == requiredString(args, "taskId")) { "请从原工作打开这份成果" }
                 }
                 val attachmentArgs = if (conversationResult == null) args else JSONObject(args.toString()).apply {
-                    remove("resultMessageId"); remove("conversationId")
+                    remove("resultMessageId"); remove("conversationId"); remove("resultReaderWindow"); remove("resultSourceRevision")
                 }
-                attachmentPages.dispatch(action, attachmentArgs, conversationResult) { result, error -> complete(id, result, error); publishState() }; return
+                val historyScoped = readerCurrent != null || attachmentPages.hasHistoryResult
+                attachmentPages.dispatch(action, attachmentArgs, conversationResult, readerCurrent) { result, error ->
+                    complete(id, result, error, retainValue = !historyScoped); publishState()
+                }; return
             }
             if (action == "conversation.projectConvention.read") {
                 require(args.length()==1 && args.opt("messageId") is String)
@@ -2447,16 +2460,28 @@ internal class PocketWebBridge(
         return row.attachments.singleOrNull { it.id == source.getString("id") && it.sha256 == source.getString("sha256") }
     }
     private fun visibleChatTaskResult(args: JSONObject): UiTaskResult? {
-        if (!args.has("resultMessageId") && !args.has("conversationId")) return null
+        val history = args.has("resultReaderWindow")
+        require(history == args.has("resultSourceRevision")) { "原历史窗口和原消息版本须一起核对" }
+        if (!args.has("resultMessageId") && !args.has("conversationId") && !history) return null
         val taskId = requiredString(args, "taskId")
         val conversation = requiredString(args, "conversationId")
         val messageId = requiredString(args, "resultMessageId")
-        require(section == null && taskViewId == null && controller.webPrivateOwnerVisible() &&
-            controller.state.conversationId == conversation) { "请回到这条结果所在的原对话" }
-        val message = controller.state.messages.singleOrNull { it.id == messageId && it.role == "assistant" }
+        require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到这条结果所在的原对话" }
+        val reader = controller.conversationReader
+        val rows = if (history) {
+            require(reader != null && reader.window == requiredLong(args, "resultReaderWindow") && reader.conversation == conversation &&
+                reader.initialized && !reader.loading && reader.error == null && !reader.limited && controller.canReadConversationWindow(reader)) { "原历史阅读窗口已变化，请重新查看这条回复" }
+            reader.messages
+        } else {
+            require(reader == null && controller.state.conversationId == conversation) { "请回到这条结果所在的原对话" }
+            controller.state.messages
+        }
+        val message = rows.singleOrNull { it.id == messageId && it.role == "assistant" }
             ?: error("原对话中未找到这条已保存的结果")
         val result = message.taskResult ?: error("原消息没有这件工作的完成回执")
         require(message.taskId == taskId && result.taskId == taskId && result.status == "completed" && result.noticeKind == null) { "原消息没有这件工作的完成回执" }
+        if (history) require(result.kind == "owner_work" && message.sourceRevision > 0 &&
+            message.sourceRevision == requiredLong(args, "resultSourceRevision")) { "原历史消息或其成果版本已变化" }
         return result
     }
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")

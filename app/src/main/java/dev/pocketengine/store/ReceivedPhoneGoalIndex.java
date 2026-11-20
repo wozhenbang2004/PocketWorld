@@ -158,10 +158,13 @@ final class ReceivedPhoneGoalIndex {
                         try{withdrawnAt=ReceivedPhoneWithdrawal.recordedAt(db,task,wire,origin,mode);}
                         catch(IllegalStateException|SecurityException|JSONException unavailable){limited++;continue;}
                     }
+                    // The same already-started row stays findable when the original Runner
+                    // freezes a reviewable result. The result proof is checked below, not inferred here.
+                    boolean startedAwaitingReview=started&&"needs_confirmation".equals(header.opt("status"));
                     JSONObject startedRun=null;
                     if(started){
                         String phase=header.optString("status"),run=header.optString("runId");int epoch=header.optInt("coordinatorEpoch",-1);
-                        if(!OPEN_PHASES.contains(phase)
+                        if(!(OPEN_PHASES.contains(phase)||startedAwaitingReview)
                                 ||run.isEmpty()||epoch<=0||!(header.opt("cancelRequested") instanceof Boolean))continue;
                         try(Cursor original=db.rawQuery("SELECT status,created_at FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{task,run,Integer.toString(epoch)})){
                             if(!original.moveToFirst()||original.getLong(1)<=0){limited++;continue;}
@@ -198,7 +201,7 @@ final class ReceivedPhoneGoalIndex {
                         catch(IllegalStateException|SecurityException|JSONException unavailable){limited++;continue;}
                     }
                     JSONObject review=null;String candidateState="";
-                    if(results){
+                    if(results||startedAwaitingReview){
                         String phase=header.optString("status");
                         if(!"needs_confirmation".equals(phase)&&!DETACHED_CANDIDATES.contains(phase))continue;
                         if(!(header.opt("cancelRequested") instanceof Boolean)||"needs_confirmation".equals(phase)&&header.optBoolean("cancelRequested"))continue;

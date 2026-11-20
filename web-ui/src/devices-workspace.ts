@@ -133,8 +133,10 @@ export function waitingPhoneGoalPage(value: unknown, local: DeviceData, search='
         : value.failedOnly===true
         ? r.waitingState==='failed_run' && identity(r.runId) && positiveInteger(r.epoch) && positiveInteger(r.registeredAt) && positiveInteger(r.stateRecordedAt) && r.stateRecordedAt>=r.registeredAt
         : value.startedOnly===true
-        ? r.waitingState==='original_run' && identity(r.runId) && positiveInteger(r.epoch) && startedPhases.has(r.taskState)
-          &&(startedPhases.has(r.runState)||r.runState==='needs_confirmation')&&positiveInteger(r.registeredAt)&&typeof r.stopRequested==='boolean'
+        ? r.waitingState==='original_run' && identity(r.runId) && positiveInteger(r.epoch) && positiveInteger(r.registeredAt)&&typeof r.stopRequested==='boolean'
+          && (r.taskState==='needs_confirmation'
+            ? positiveInteger(r.reviewRecordedAt) && r.stopRequested===false && ['running','interrupted','needs_confirmation'].includes(r.runState)
+            : startedPhases.has(r.taskState) && (startedPhases.has(r.runState)||r.runState==='needs_confirmation') && r.reviewRecordedAt===undefined)
         : value.resultOnly === true
         ? r.waitingState === 'result_review' && positiveInteger(r.reviewRecordedAt) && (r.candidateState===undefined || ['interrupted','failed','cancelled'].includes(r.candidateState)) : ['not_started','interrupted_before_start'].includes(r.waitingState) && (r.pickupRetained===undefined||typeof r.pickupRetained==='boolean') && (r.pickupBy===undefined||positiveInteger(r.pickupBy))) && identity(r.goal) && positiveInteger(r.createdAt) && (['main_screen','background'].includes(r.screenMode) || r.textOnly === true && r.screenMode === 'capabilities'))
     || new Set(value.rows.map((row: DeviceData) => JSON.stringify([row.taskId,row.operationId]))).size !== value.rows.length) throw new Error('这批待接手记录无法与本机原身份核对。');

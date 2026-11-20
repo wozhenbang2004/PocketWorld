@@ -225,7 +225,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active && onReadPhoneConversation && <PhoneTaskConversationReturn task={record} onRead={onReadPhoneConversation}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}`} ownerWindow={packageRead.firstWebWindow}
-      target={firstWeb} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}/>}
+      target={firstWeb} hideIneligible={buildScope.existingCheckoutBuild===true} open={onOpenProjectPackage} onSaved={packageRead.refreshAfterFirstWebSave}
+      listedSavedVersion={(taskId, operationId, sha256)=>packageRead.eligible && !!onOpenProjectPackage &&
+        outcome.projectPackages.some(item=>item.mode==='web_output'&&item.taskId===taskId&&item.operationId===operationId&&item.archiveSha256===sha256)}/>}
     {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {packageRead.eligible && <section className="pw-outcome-deliverables" aria-label="项目固定成果" aria-busy={packageRead.busy || undefined}>
       <div className="pw-reading-section-heading"><h4>项目固定成果</h4>{outcome.projectPackages.length > 0 && <span>{outcome.projectPackages.length} 个已读取版本</span>}</div>

@@ -13481,6 +13481,56 @@ public final class TaskStore {
             }
         }finally{if(owns)db.endTransaction();}
     }
+    /** Read the settled B4 web saves already in the original ledger; do not read ZIP bytes or stage anything. */
+    public synchronized JSONObject savedBuildWebForOwner(String project,String checkout,String cursor,RunControl control)throws Exception {
+        dev.pocketengine.features.local.project.ProjectBuildPlan.identity(project);
+        dev.pocketengine.features.local.project.ProjectBuildPlan.identity(checkout);
+        if(cursor==null||cursor.length()>2048)throw new IllegalArgumentException("固定网页读取位置无效");
+        control.check();String scope=capabilityFingerprint(new JSONObject().put("kind","existing_fixed_build_web").put("projectId",project).put("checkoutId",checkout));
+        boolean owns=!db.inTransaction();if(owns)db.beginTransaction();try{
+            long high,before=0;
+            if(cursor.isEmpty()){
+                try(Cursor top=db.rawQuery("SELECT coalesce(max(rowid),0) FROM operations",null)){top.moveToFirst();high=top.getLong(0);}
+            }else{
+                JSONObject p;
+                try{p=new JSONObject(new String(java.util.Base64.getUrlDecoder().decode(cursor),StandardCharsets.UTF_8));}
+                catch(Exception invalid){throw new IllegalArgumentException("固定网页读取位置不可解析");}
+                if(p.length()!=4||TaskExecutionScope.exactLong(p,"version",1,1)!=1||!scope.equals(p.getString("scope")))
+                    throw new SecurityException("读取位置不属于所选的原副本");
+                high=TaskExecutionScope.exactLong(p,"highWater",1,Long.MAX_VALUE);
+                before=TaskExecutionScope.exactLong(p,"before",1,high);
+            }
+            // These JSON text selectors only bound native receipt candidates. Exact matching, owner
+            // privacy, original-run identity and real saved receipt are checked before projection.
+            String sql="SELECT rowid,task_id,operation_id FROM operations WHERE tool=? AND state='receipt' AND receipt IS NOT NULL AND rowid<=? AND (?='0' OR rowid<?) AND instr(arguments,?)>0 AND instr(arguments,?)>0 ORDER BY rowid DESC LIMIT 17";
+            String[] args={OriginalNodeWebOutput.TOOL,Long.toString(high),Long.toString(before),Long.toString(before),
+                "\"projectId\":"+JSONObject.quote(project),"\"checkoutId\":"+JSONObject.quote(checkout)};
+            JSONArray items=new JSONArray();boolean more=false,limited=false;int scanned=0;long next=0;
+            try(Cursor rows=db.rawQuery(sql,args)){
+                while(rows.moveToNext()){
+                    control.check();if(scanned>=16||items.length()>=8){more=true;break;}
+                    scanned++;next=rows.getLong(0);String taskId=rows.getString(1),operation=rows.getString(2);
+                    try{
+                        JSONObject task=firstWebTask(taskId),e=firstWebPackageEvidenceForOwner(task,operation);
+                        if(e==null||!taskId.equals(e.opt("taskId"))||!operation.equals(e.opt("operationId"))||
+                            !project.equals(e.opt("projectId"))||!checkout.equals(e.opt("checkoutId")))continue;
+                        JSONObject artifact=e.getJSONObject("packageArtifact");
+                        if(!"web_output".equals(artifact.opt("mode"))||!OriginalNodeWebOutput.ENTRY.equals(artifact.opt("entryPath")))continue;
+                        items.put(new JSONObject().put("taskId",taskId).put("operationId",operation).put("runId",e.getString("runId"))
+                            .put("epoch",e.getInt("coordinatorEpoch")).put("projectId",project).put("checkoutId",checkout)
+                            .put("sourceDigest",e.getString("sourceDigest")).put("artifactId",artifact.getString("id"))
+                            .put("archiveSha256",e.getString("archiveSha256")).put("archiveBytes",e.getLong("archiveBytes"))
+                            .put("createdAt",artifact.getLong("createdAt")).put("versionSequence",artifact.getInt("versionSequence"))
+                            .put("entryPath",OriginalNodeWebOutput.ENTRY));
+                    }catch(Exception unreadable){control.check();if(Thread.currentThread().isInterrupted())throw unreadable;limited=true;}
+                }
+            }
+            String continuation=more?java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(new JSONObject().put("version",1)
+                .put("scope",scope).put("highWater",high).put("before",next).toString().getBytes(StandardCharsets.UTF_8)):"";
+            control.check();if(owns)db.setTransactionSuccessful();
+            return new JSONObject().put("items",items).put("hasMore",more).put("nextCursor",continuation).put("readLimited",limited);
+        }finally{if(owns)db.endTransaction();}
+    }
     /** Explicit owner result-page read. The original operations/plans are the only catalog;
      * a bounded SQL text prefilter selects candidates, never proves that a package exists. */
     public synchronized JSONObject projectPackagesForOwner(String id,String cursor,RunControl control)throws Exception {

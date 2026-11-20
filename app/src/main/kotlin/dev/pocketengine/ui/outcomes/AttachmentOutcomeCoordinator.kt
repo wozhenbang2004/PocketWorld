@@ -265,12 +265,19 @@ internal class AttachmentOutcomeCoordinator(
     fun openOriginalFile(){
         if(state.busy)return;val selectedTeam=state.team;val selectedGroup=state.group;val selectedFile=state.file;val task=state.taskId
         if(selectedTeam==null&&selectedFile==null)return
+        val resultRun=state.resultRun?.takeIf{it.taskId==task}
         var source:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
         work(onSuccess={source?.let{state=state.copy(originalFile=it)}}){c,w->
             source=when{
                 selectedTeam!=null->requireTeamHost().originalFile(selectedTeam,c)
                 selectedGroup!=null->app.groupOriginalFilePreview(selectedGroup,w?:error("请回原群成果重新打开"),c)
-                else->app.attachmentOutcomes.originalFile(task,selectedFile!!.getString("id"),selectedFile.getString("sha256"),c)
+                else->{
+                    // Returning to file details retains the exact chat result, not a general library selection.
+                    if(resultRun!=null)requireConversationResult(resultRun,c)
+                    val original=app.attachmentOutcomes.originalFile(task,selectedFile!!.getString("id"),selectedFile.getString("sha256"),c)
+                    if(resultRun!=null)requireConversationResult(resultRun,c)
+                    original
+                }
             };JSONObject() to null
         }
     }

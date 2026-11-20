@@ -144,16 +144,17 @@ export function useProjectPreview(options: Options) {
       setUnknown(failure?.code === 'outcome_unknown'); setError(failure instanceof Error ? failure.message : String(failure));
     }).finally(() => { if (generation.current === request) { pending.current = false; setBusy(''); } });
   };
-  const showPackage = (original: PackagePreviewChoices, originalChat?:()=>boolean) => {
+  const showPackage = (original: PackagePreviewChoices, originalChat?:()=>boolean, explicitWebPick?:()=>boolean) => {
     const context = optionsRef.current;
+    const selectedWeb=originalChat??explicitWebPick;
     if (!context.active || context.blocked || document.hidden || original.projectId !== context.projectId ||
-        originalChat && (original.mode!=='web_output'||!originalChat())) return false;
+        selectedWeb && (original.mode!=='web_output'||!selectedWeb())) return false;
     generation.current++; pending.current = false; setBusy(''); setError(''); setUnknown(false); setOpened(null);
     setChoices(original); setSelectedEntry(original.mode === 'web_output' ? original.entryPath : ''); setPackageShowing(false); setExpanded(true);
     setFromOriginalChat(!!originalChat);
     // “打开固定网页” explicitly selects its single manifest entry; no build,
     // chooser, composer change, second selection or generic project source.
-    if(originalChat)openPackageEntry(original, original.entryPath, originalChat);
+    if(selectedWeb)openPackageEntry(original, original.entryPath, selectedWeb);
     return true;
   };
   const openPackage = () => { if(choices&&!fromOriginalChat)openPackageEntry(choices, selectedEntry); };

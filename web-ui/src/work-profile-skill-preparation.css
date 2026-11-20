@@ -1,0 +1,4 @@
+.pw-profile-skill-preparation { min-width: 0; overflow-wrap: anywhere; }
+.pw-profile-skill-preparation p { margin: 0 0 5px; color: var(--pw-copy); }
+.pw-profile-skill-preparation ul { margin: 6px 0 0; padding-inline-start: 1.1em; }
+.pw-profile-skill-preparation ul ul { margin-bottom: 6px; }

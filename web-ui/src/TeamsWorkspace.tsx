@@ -27,7 +27,7 @@ import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelive
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { finalPackage, TeamFinalPackageReading } from './TeamFinalPackageReading';
 import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
-import { settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
+import { settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamMemberProgress, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { ownerWorkPresentation } from './owner-work-presentation';
 import { ReadingContext } from './reading-context';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
@@ -973,19 +973,27 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         <header className="pw-team-members-heading"><h3 className="pw-team-section-title">成员 <span>{currentMembers.length} 名参与{members.length > currentMembers.length ? ` · ${members.length - currentMembers.length} 名已退出` : ''}</span></h3></header>
         <div className="pw-team-member-board">
           {members.map(member => {
-            const model = memberModelLabel(member), activeItems = workItems.filter(item => item.memberId === member.id && item.status === 'running');
-            const latestRound = rows(member.roundStates).find(round => round.round === current.round) || rows(member.roundStates).at(-1), memberTaskId = member.phoneTask?.taskId || (!hasWorkPlan ? member.assignmentTask?.taskId : undefined);
+            const model = memberModelLabel(member), progress = teamMemberProgress(current, member, followUps);
+            const memberRound = hasWorkPlan ? undefined : rows(member.roundStates).find(round => round.round === member.round && round.generation === member.generation);
+            const memberTaskId = member.phoneTask?.taskId || (!hasWorkPlan ? member.assignmentTask?.taskId : undefined);
             const outputMessage = [...messages].reverse().find(message => message.memberId === member.id && ['answer', 'work_item_completed'].includes(message.kind) && message.content === member.text);
             const outputIdentity = outputMessage ? teamMessageIdentity(outputMessage, members) : null;
             const researchRecords = current.researchExecutionFormat ? teamResearchRecords(current.id, member) : [];
-            const assignment = activeItems.length ? `正在做：${activeItems.map(item => label(item.title)).filter(Boolean).join('、')}` : label(member.assignment || member.role);
+            const assignment = !hasWorkPlan || !progress.length ? label(member.assignment || member.role) : '';
+            const memberState = member.exited ? 'exited' : member.status;
+            const showMemberState = !progress.length || member.exited || memberState === 'paused' ||
+              teamNeedsAttention(memberState) && !progress.some(fact => fact.state === memberState);
             const expanded = (expandedMembers[current.id] || []).includes(member.id);
             return <article key={member.id} className="pw-team-member pw-team-member-card" data-team-member-id={member.id} data-motion-key={`member:${member.id}`}>
-              <header className="pw-team-progress-member-heading"><TeamMemberIdentity member={member} name={name(member.id)} detail={member.id === current.leaderId ? teamRoleLabel(current) : undefined} size={40} /><span className="pw-team-state" data-state={member.exited ? 'exited' : member.status}>{member.exited ? '已退出' : status(member.status)}</span></header>
+              <header className="pw-team-progress-member-heading"><TeamMemberIdentity member={member} name={name(member.id)} detail={member.id === current.leaderId ? teamRoleLabel(current) : undefined} size={40} />{showMemberState && <span className="pw-team-state" data-state={memberState}>{status(memberState)}</span>}</header>
               {assignment && <p className="pw-team-current-work">{assignment}</p>}
-              {latestRound?.message && <p className="pw-team-member-receipt">{latestRound.message}</p>}
-              {latestRound?.nativeErrorMessage && <p className="pw-team-member-error">{latestRound.nativeErrorMessage}</p>}
-              {member.text && <p className="pw-team-output-preview">{String(member.text).slice(0, 240)}{String(member.text).length > 240 ? '…' : ''}</p>}
+              {progress.length > 0 && <ul className="pw-team-progress-facts" role="list" aria-label={hasWorkPlan ? '本次分工' : '本次阶段'}>
+                {progress.map(fact => <li key={fact.key}><span dir="auto">{fact.title}</span><span className="pw-team-state" data-state={fact.state}>
+                  {fact.state === 'completed' ? '已完成' : fact.state === 'preparing' ? '正在准备' : status(fact.state)}</span></li>)}
+              </ul>}
+              {memberRound?.message && <p className="pw-team-member-receipt">{memberRound.message}</p>}
+              {memberRound?.nativeErrorMessage && <p className="pw-team-member-error">{memberRound.nativeErrorMessage}</p>}
+              {!progress.length && member.text && <p className="pw-team-output-preview">{String(member.text).slice(0, 240)}{String(member.text).length > 240 ? '…' : ''}</p>}
               {!hasWorkPlan && !member.exited && pendingCount(member) > 0 && <p className="pw-team-member-pending">{pendingCount(member)} 条消息待处理</p>}
               <div className="pw-team-member-primary-actions"><Button variant="ghost" onClick={() => { chooseMemberFilter(member.id); jumpToRunSection('messages'); }}>沟通</Button>{memberTaskId && <Button variant="ghost" trailingIcon={IconExternalLink} data-team-source-task={memberTaskId} onClick={() => openRelatedTask(memberTaskId)}>打开任务</Button>}<Button variant="secondary" aria-expanded={expanded} aria-controls={`team-member-detail-${member.id}`} onClick={() => setExpandedMembers(old => ({ ...old, [current.id]: expanded ? (old[current.id] || []).filter(id => id !== member.id) : [...(old[current.id] || []), member.id] }))}>{expanded ? '收起详情' : '产出与管理'}</Button></div>
               <div id={`team-member-detail-${member.id}`} hidden={!expanded}>

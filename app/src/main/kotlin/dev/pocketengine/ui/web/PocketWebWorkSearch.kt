@@ -23,7 +23,10 @@ internal class PocketWebWorkSearch(
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val rememberTasks: (JSONObject) -> Unit
 ) {
-    companion object { val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read", "tasks.projectPackages", TaskProjectPackageFiles.COMMAND, "tasks.resultFiles", "composer.object.add", "composer.object.remove") }
+    companion object {
+        const val SAVED_BUILD_WEB = "projects.savedBuildWeb.read"
+        val COMMANDS = setOf("work.search", "work.search.read", "work.tasks.list", "work.capabilities", "webSearch.usage", "ownerWork.report.read", "tasks.projectPackages", TaskProjectPackageFiles.COMMAND, "tasks.resultFiles", "composer.object.add", "composer.object.remove", SAVED_BUILD_WEB)
+    }
     private val main = Handler(Looper.getMainLooper())
     private val host get() = controller.nativeButlerHost()
     private val pending = mutableSetOf<RunControl>()
@@ -59,6 +62,16 @@ internal class PocketWebWorkSearch(
                                 val task = args.opt("taskId") as? String ?: error("原项目任务身份缺失")
                                 val cursor = args.opt("cursor") as? String ?: error("原成果读取位置缺失")
                                 host.tasks.projectPackagesForOwner(task, cursor, control)
+                            }
+                            SAVED_BUILD_WEB -> {
+                                fields(args, setOf("projectId", "checkoutId", "cursor"))
+                                require(args.keys().asSequence().toSet()==setOf("projectId", "checkoutId", "cursor"))
+                                val project=args.opt("projectId") as? String ?: error("请选择原项目")
+                                val checkout=args.opt("checkoutId") as? String ?: error("原副本范围无效")
+                                val cursor=args.opt("cursor") as? String ?: error("原网页读取位置无效")
+                                require(project.isNotBlank()&&project.length<=80&&checkout.length<=80&&cursor.length<=2048)
+                                check(controller.state.projectId==project&&controller.state.filePath==null) { "当前不在该项目工作台" }
+                                controller.projectDevelopmentForWeb().savedBuildWebForOwner(project,checkout,cursor,control)
                             }
                             TaskProjectPackageFiles.COMMAND -> TaskProjectPackageFiles.read(host, args, control)
                             "tasks.resultFiles" -> resultFiles(args, conversationResult, control)
@@ -147,7 +160,7 @@ internal class PocketWebWorkSearch(
     }
 
     private fun resultFiles(args: JSONObject, conversationResult: UiTaskResult?, control: RunControl): JSONObject {
-        fields(args, if (conversationResult == null) setOf("taskId") else setOf("taskId", "conversationId", "resultMessageId"))
+        fields(args, if (conversationResult == null) setOf("taskId") else setOf("taskId", "conversationId", "resultMessageId", "resultReaderWindow", "resultSourceRevision"))
         val taskId = args.opt("taskId") as? String ?: error("原工作身份缺失")
         require(taskId.isNotBlank() && taskId.length <= 240 && taskId == taskId.trim() && '\u0000' !in taskId) { "原工作身份无效" }
         fun requireVisibleTask(): JSONObject {
@@ -157,7 +170,7 @@ internal class PocketWebWorkSearch(
                 task.optString("kind") != "inference" && task.optJSONObject("origin")?.optString("kind") != "group" &&
                 task.optString("taskProjection") != "source_unavailable" && task.optBoolean("contextAvailable", true)) { "原工作来源已不可读取" }
             if (conversationResult != null) check(conversationResult.taskId == taskId && task.optString("runId") == conversationResult.runId &&
-                task.optInt("coordinatorEpoch") == conversationResult.epoch && task.optString("status") == "completed") { "原任务状态已变化，请打开当前工作核对成果" }
+                task.optInt("coordinatorEpoch") == conversationResult.epoch && task.optString("status") == "completed") { "原任务轮次或状态已变化，没有用其他轮次的文件替代" }
             return task
         }
         requireVisibleTask()

@@ -25,8 +25,9 @@ export function firstNodeWebOwnerWindow(taskId: string): string {
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
-export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible}: {target: Position; ownerWindow: string; hideIneligible?: boolean; open?: (p: PackagePreviewTarget)=>void;
-  onSaved: (operationId: string, sha256: string) => void}) {
+export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, listedSavedVersion}: {target: Position; ownerWindow: string; hideIneligible?: boolean; open?: (p: PackagePreviewTarget)=>void;
+  onSaved: (operationId: string, sha256: string) => void;
+  listedSavedVersion?: (taskId: string, operationId: string, sha256: string) => boolean}) {
   const [fact, setFact] = useState<Fact|null>(null);
   const [busy, setBusy] = useState('');
   const [failure, setFailure] = useState('');
@@ -71,6 +72,8 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     // The shared owner-window projection can arrive after the navigation acknowledgement.
   },[target.taskId,target.runId,target.epoch,ownerWindow]);
   if(!available()||(!fact&&!failure)||hideIneligible&&fact?.eligible===false&&!failure)return null;
+  const listed = fact?.state==='saved' && !!fact.packageOperationId && !!fact.archiveSha256 &&
+    listedSavedVersion?.(target.taskId, fact.packageOperationId, fact.archiveSha256)===true;
   return <section className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
     {fact?.eligible===false&&fact.message&&<p className="pw-reading-note">{fact.message}</p>}
@@ -84,8 +87,8 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
       </div></>}
     {fact?.state==='pending'&&<><p className="pw-reading-note" role="status">这一笔固定结果尚未核对。只查询原包，不会再存一份或重跑。</p>
       <Button size="small" variant="secondary" disabled={!!busy} onClick={()=>void call(read)}>核对原保存</Button></>}
-    {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">已经保留原构建退出时核对的网页文件。打开此固定版不联网、不重跑，也不会读取当前同名文件。</p>
-      <Button size="small" variant="secondary" disabled={!!busy||!open} onClick={()=>{if(available()&&fact.packageOperationId)open?.({taskId:target.taskId,operationId:fact.packageOperationId})}}>打开固定网页</Button></>}
+    {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">{listed?'已保存，在下方「项目固定成果」打开这次网页。':'已经保留原构建退出时核对的网页文件。打开此固定版不联网、不重跑，也不会读取当前同名文件。'}</p>
+      {!listed&&<Button size="small" variant="secondary" disabled={!!busy||!open} onClick={()=>{if(available()&&fact.packageOperationId)open?.({taskId:target.taskId,operationId:fact.packageOperationId})}}>打开固定网页</Button>}</>}
     {failure&&<><p className="pw-error" role="alert">{failure}</p><Button size="small" variant="ghost" disabled={!!busy} onClick={()=>void call(read)}>核对原结果</Button></>}
   </section>;
 }

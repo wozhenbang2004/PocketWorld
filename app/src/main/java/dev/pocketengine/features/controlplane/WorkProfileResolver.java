@@ -44,12 +44,20 @@ public final class WorkProfileResolver {
         private final WorkProfile definition;
         private final Sources sources;
         private final String json;
+        private final String skillPreparation;
         private final Map<String, ModelConfig> models;
-        private Resolution(WorkProfile definition, Sources sources, JSONObject data, Map<String, ModelConfig> models) throws Exception {
+        private Resolution(WorkProfile definition, Sources sources, JSONObject data, Map<String, ModelConfig> models, JSONArray skillPreparation) throws Exception {
             this.definition = definition; this.sources = sources; this.models = Map.copyOf(models);
             data.put("resolutionDigest", WorkProfile.fingerprint(data)); json = data.toString();
+            this.skillPreparation=skillPreparation.toString();
         }
         public JSONObject view() throws Exception { return new JSONObject(json); }
+        /** Same native check, deliberately outside the frozen execution snapshot and its digest. */
+        JSONObject ownerSkillPreparation()throws Exception {
+            return new JSONObject().put("format","pocketworld.profile-skill-preparation.v1").put("profileId",definition.id)
+                    .put("profileRevision",definition.revision).put("resolutionDigest",view().getString("resolutionDigest"))
+                    .put("items",new JSONArray(skillPreparation)).put("configurationOnly",true).put("executionAuthorized",false);
+        }
         public WorkProfile profile() { return definition; }
         public Map<String, ModelConfig> models() { return models; }
         public void requireReady() throws Exception { if (!view().getBoolean("ready")) throw new SecurityException("work_profile_requires_review"); }
@@ -132,6 +140,7 @@ public final class WorkProfileResolver {
         Set<String> availableCapabilities=sources.hostCapabilities();
         Set<String> selectedPluginCapabilities = new java.util.HashSet<>();JSONArray pluginRefs=definition.getJSONArray("pluginRefs");for(int i=0;i<pluginRefs.length();i++){JSONObject plugin=pluginRefs.getJSONObject(i);JSONArray tools=plugin.getJSONArray("tools");for(int n=0;n<tools.length();n++)selectedPluginCapabilities.add("plugin:"+plugin.getString("id")+":"+tools.getString(n));}
         Map<String, ModelConfig> models = new LinkedHashMap<>(); Map<String,JSONArray> dependencyDetails=new LinkedHashMap<>();
+        Map<String,JSONObject> skillPreparation=new LinkedHashMap<>();
         JSONObject policies = definition.getJSONObject("modelPolicies");
         for (String purpose : WorkProfile.keys(policies)) {
             JSONObject requested = policies.getJSONObject(purpose); observation.check();
@@ -160,9 +169,15 @@ public final class WorkProfileResolver {
             JSONArray selected = definition.getJSONArray(section);
             for (int i = 0; i < selected.length(); i++) {
                 JSONObject ref = selected.getJSONObject(i); String id = ref.getString("id"), kind=section.equals("instructionRefs")?"instruction":"skill";
+                JSONObject shown=new JSONObject().put("id",id).put("kind",kind).put("revision",ref.getInt("revision"));
+                skillPreparation.put(kind+":"+id,shown);
                 rows.put(inspect(kind, id, ref, observation,
                         () -> sources.skill(id, observation), actual -> {
                             exact(actual, ref, "id", "revision", "digest");
+                            if(actual.opt("name") instanceof String name&&!name.isBlank()&&name.length()<=160)shown.put("name",name);
+                            JSONObject sourcePolicy=actual.optJSONObject("sourcePolicy");
+                            if(sourcePolicy!=null&&Set.of("PROJECT","USER","BUNDLED").contains(sourcePolicy.optString("layer")))
+                                shown.put("layer",sourcePolicy.getString("layer"));
                             if (!actual.optBoolean("contentVerified") || !actual.optBoolean("active") || !"active".equals(actual.optString("status"))) throw new Missing("skill_not_active");
                             JSONArray required = actual.getJSONArray("requiredCapabilities"), details=new JSONArray();String missing=null;
                             for(int n=0;n<required.length();n++){
@@ -171,7 +186,7 @@ public final class WorkProfileResolver {
                                 if(missing==null&&dev.pocketengine.features.skills.SkillManifest.isPluginFunctionAlias(capability))missing="unsupported_reference";
                                 else if(missing==null&&!available)missing="host_capability_missing";else if(missing==null&&!selectedTool)missing="required_plugin_not_selected";
                             }
-                            if(details.length()>0)dependencyDetails.put(kind+":"+id,details);
+                            shown.put("dependencies",details);if(details.length()>0)dependencyDetails.put(kind+":"+id,details);
                             if(missing!=null)throw new Missing(missing);
                             return pick(actual, "id", "revision", "digest", "executionGeneration", "expiresAt", "skillScopeFingerprint");
                         }));
@@ -242,13 +257,17 @@ public final class WorkProfileResolver {
         // Diagnostics are not run authority. Keep ready snapshots byte-compatible with
         // existing frozen selections, including their optional omissions.
         if(!ready)for(int i=0;i<rows.length();i++){JSONObject item=rows.getJSONObject(i);JSONArray details=dependencyDetails.get(item.getString("kind")+":"+item.getString("id"));if(details!=null)item.put("dependencies",details);}
+        for(int i=0;i<rows.length();i++){
+            JSONObject item=rows.getJSONObject(i),shown=skillPreparation.get(item.getString("kind")+":"+item.getString("id"));
+            if(shown!=null)shown.put("included",item.getBoolean("included")).put("optional",item.getBoolean("optional")).put("status",item.getString("status"));
+        }
         observation.check();
         JSONObject result = new JSONObject().put("format", "pocketworld.resolved-work-profile.v1").put("profileId", profile.id).put("profileRevision", profile.revision)
                 .put("profileDigest", profile.digest()).put("items", rows).put("modelPolicies", capturedModels).put("resourcePreferences", definition.getJSONObject("resourcePreferences"))
                 .put("ready", ready).put("sourceChecksOnly", true).put("configurationApplied", false).put("runtimeVerified", false).put("optionalOmissions", omitted).put("executionAuthorized", false).put("permissionsChanged", false).put("executed", false);
         if(skillScope!=null)result.put("skillScope",new JSONObject(skillScope.toString())).put("skillScopeFingerprint",dev.pocketengine.features.skills.SkillSourcePolicy.scopeFingerprint(skillScope));
         requireStoredSkillScope(result,sources,observation);
-        return new Resolution(profile, sources, result, models);
+        return new Resolution(profile, sources, result, models,new JSONArray(skillPreparation.values()));
     }
     private static JSONObject dependency(String capability,boolean available,boolean selected,Sources sources,RunControl observation)throws Exception {
         JSONObject result=new JSONObject().put("capability",capability).put("available",available).put("selected",selected);

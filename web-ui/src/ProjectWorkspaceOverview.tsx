@@ -29,14 +29,14 @@ export type ProjectWorkspaceOverviewProps = {
   onOpenTerminal: () => void;
   onAskButler?: () => void;
   startContent?: ReactNode;
+  savedWebContent?: ReactNode;
 };
 
 export type ProjectWorkEntry = WorkEntry | 'outcomes';
 export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionFilter; expanded: boolean; selected: string; selectedEntry?: ProjectWorkEntry };
 
-/** A project groups original work. The directory's native association is not a
- * file lookup: saved versions and attachments are read only inside that work. */
-export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, startContent }: ProjectWorkspaceOverviewProps) {
+/** Project work directory; saved Web versions separately use exact original B4 receipts. */
+export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
   const visit = (task: ProjectWorkspaceTask, entry: ProjectWorkEntry) => {
@@ -76,6 +76,7 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
     </header>
     <div className="pw-project-overview-layout">
       <div className="pw-project-overview-work">
+        {savedWebContent}
         <section className="pw-project-work-tools" aria-label="查找这个项目的工作">
           <SearchField value={view.query} onChange={query => onViewChange({ query, selected: '', expanded: false })} isDisabled={!directoryAvailable}
             maxLength={500} aria-label="搜索这个项目保存的工作" placeholder="搜索项目工作目标或摘要…" clearLabel="清空项目工作搜索" />

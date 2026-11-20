@@ -537,6 +537,7 @@ public final class NativeWorkProfileHost {
         private Review(Page page, long generation, WorkProfileResolver.Resolution resolution, CurrentDefinition currentDefinition) throws Exception { this(page,generation,resolution,currentDefinition,null); }
         private Review(Page page,long generation,WorkProfileResolver.Resolution resolution,CurrentDefinition currentDefinition,TaskReview taskReview)throws Exception { this.page=page;this.generation=generation;this.resolution=resolution;this.currentDefinition=currentDefinition;this.taskReview=taskReview;digest=resolution.view().getString("resolutionDigest"); }
         public JSONObject view() throws Exception { return resolution.view(); }
+        public JSONObject ownerSkillPreparation()throws Exception{return resolution.ownerSkillPreparation();}
     }
     /** Transient exact model configs stay in memory; public snapshot contains no key, secret, or grant. */
     public static final class Selection {

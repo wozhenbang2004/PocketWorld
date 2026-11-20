@@ -3,6 +3,7 @@ import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, CheckboxField, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import { IconAdd, IconArrowLeft, IconCheckCircle, IconChevronRight, IconClock, IconFileSettings, IconFolder, IconPlay, IconRefresh } from './icons';
 import { profileRows, profileStartReceipt, type ProfileData as Data } from './profile-contract';
+import { isProfileSkill, WorkProfileSkillPreparation } from './WorkProfileSkillPreparation';
 import './project-work-start.css';
 
 type Operation = {
@@ -217,7 +218,7 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
   const locked = busy || loading || !snapshot || !!operation;
   const ready = !locked && !!profile && profile.restoredPendingReview !== true && !!checkout && !!runtime && !!draft.goal.trim() && draft.goal.trim().length <= 4000 && !draft.goal.includes('\u0000');
-  const failedSources = profileRows(inspection?.items).filter(item => item.included !== true);
+  const failedSources = profileRows(inspection?.items).filter(item => item.included !== true && !isProfileSkill(item));
   const referenceName = (id: string, rows: Data[], key: string) => rows.find(row => row[key] === id)?.name || id;
 
   return <section hidden={!active} className="pw-project-start" aria-label="使用工作配置开始项目工作">
@@ -241,7 +242,8 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
         {(!runtimes.length || needsLocalTools) && <p className="pw-project-start-status">{needsLocalTools ? '本机开发工具尚未就绪，需要运行命令时可以先准备。' : '还没有可选运行位置。'}{onPrepareTools && <Button variant="ghost" size="small" disabled={busy} data-workspace-entry="project-work-tools" onClick={onPrepareTools}>准备运行环境</Button>}</p>}
       </>}
       {inspection && inspection.runnable !== true && <div className="pw-project-start-issues" role="status"><strong>还有几项需要准备</strong>
-        {failedSources.length > 0 ? <ul>{failedSources.map((item, index) => <li key={`${item.kind}:${item.id}:${index}`}>{kindLabel(item.kind, item.id)} · {item.optional ? '本次可省略' : '暂不可用'}</li>)}</ul> : <p>请核对工作配置中的主任务与摘要模型，以及这次工作的执行范围。</p>}
+        {failedSources.length > 0 ? <ul>{failedSources.map((item, index) => <li key={`${item.kind}:${item.id}:${index}`}>{kindLabel(item.kind, item.id)} · {item.optional ? '本次可省略' : '暂不可用'}</li>)}</ul> : !profileRows(inspection.items).some(item => item.included !== true && isProfileSkill(item)) && <p>请核对工作配置中的主任务与摘要模型，以及这次工作的执行范围。</p>}
+        <WorkProfileSkillPreparation preflight={inspection}/>
         <div className="pw-project-start-actions">{onPrepareModel && <Button variant="ghost" disabled={busy} data-workspace-entry="project-work-models" onClick={onPrepareModel}>连接模型</Button>}<Button variant="ghost" disabled={busy} data-workspace-entry="project-work-profiles" onClick={onConfigure}>调整工作配置</Button></div>
       </div>}
       <div className="pw-project-start-footer"><Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="重新读取工作准备" title="重新读取工作准备" disabled={busy} onClick={restartWindow}/><span/>
@@ -265,6 +267,7 @@ export function ProjectWorkStart({ project, draft, onChange, initiallyOpen, acti
     <SettingsDialog isOpen={!!review} title="开始这次项目工作" closeLabel="返回项目目标" onClose={() => { if (!pending.current) restartWindow(); }}>
       {review && <div className="pw-project-start-review"><p className="pw-project-review-goal" dir="auto">{review.goal}</p>
         <dl><div><dt>项目</dt><dd>{project.name}</dd></div><div><dt>工作配置</dt><dd>{review.definition?.name || '已保存配置'}</dd></div><div><dt>工作副本</dt><dd>{referenceName(review.project?.checkoutId, checkouts, 'id')}</dd></div><div><dt>运行位置</dt><dd>{referenceName(review.project?.runtime, runtimes, 'runtimeId')}</dd></div></dl>
+        <WorkProfileSkillPreparation preflight={review.preflight}/>
         <p className="pw-project-start-caption">按以上范围创建一项新任务，执行中的授权与预算沿用原规则。</p>
         <CheckboxField isSelected={acknowledged} isDisabled={busy} onChange={setAcknowledged}>确认目标、配置与工作副本</CheckboxField>
         {error && <p className="pw-project-start-error" role="alert">{error}</p>}

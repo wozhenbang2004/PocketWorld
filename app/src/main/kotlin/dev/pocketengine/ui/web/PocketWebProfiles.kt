@@ -212,6 +212,7 @@ internal class PocketWebProfiles(private val controller: PocketWorldController, 
                     synchronized(lock) { inspected = Inspected(handle, native, observation, expected.toString(), args.getString("choicesHandle"), project, SystemClock.elapsedRealtime() + 120_000) }
                     public(actual).put("preflightHandle", handle).put("profileId", expected.getString("profileId")).put("revision", expected.getLong("revision"))
                         .put("project", project?.view()?.let(::public) ?: JSONObject.NULL).put("runnable", WorkProfileDrafts.runnable(actual, project != null))
+                        .put("skillPreparation", public(native.ownerSkillPreparation()))
                         .put("startsTask", false).put("readOnly", true)
                 }
             }
@@ -224,7 +225,7 @@ internal class PocketWebProfiles(private val controller: PocketWorldController, 
                 work {
                     original.control.checkpoint(); currentRecord(owner, JSONObject(original.definition)); original.project?.checkCurrent()
                     val shown = review("start", JSONObject(original.definition), JSONObject(original.definition))
-                        .put("goal", goal).put("preflight", public(original.review.view()))
+                        .put("goal", goal).put("preflight", public(original.review.view()).put("skillPreparation", public(original.review.ownerSkillPreparation())))
                         .put("project", original.project?.view()?.let(::public) ?: JSONObject.NULL).put("startsTask", true)
                     synchronized(lock) {
                         check(inspected === original) { "原预检已被更换" }

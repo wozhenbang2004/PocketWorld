@@ -1,6 +1,6 @@
 import {OriginalPrivateHostAnswer} from './OriginalPrivateHostAnswer';
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import { IconClose, IconLink, IconRefresh, IconTool } from './icons';
+import { IconClose, IconFolder, IconLink, IconRefresh, IconTool } from './icons';
 import {Accordion,AccordionItem,Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
 import {bridge} from './bridge';
@@ -13,6 +13,7 @@ import {messagePhoneResult} from './phone-start';
 import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {MessageAttachment} from './MessageAttachment';
 import {RegisteredQuoteTrail,sameQuoteVisit,type HistoryQuoteVisit} from './RegisteredQuoteTrail';
+import {messageTaskResult,type TaskResult} from './conversation-work';
 import './conversation-history-window.css';
 
 type Json=Record<string,any>;
@@ -26,10 +27,12 @@ function sameHistoricalAnswer(page:Json|null,target:HistoricalAnswerSource){
   Array.isArray(page.messages)&&page.messages.filter((row:Json)=>row.id===target.messageId&&row.sourceRevision===target.readerSourceRevision&&hasPublicSources(row)).length===1;
 }
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
-type Props={page:Json|null;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void};
+export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number};
+type Props={page:Json|null;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
+ onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,registerBack,onCopy,onOpenTask}:Props){
+export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,registerBack,onCopy,onOpenTask,onOpenResultFiles}:Props){
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const scroll=useRef<HTMLDivElement>(null),live=useRef(page);live.current=page;
  const restored=useRef<number|null>(null),position=useRef<Position>({index:0,offset:0,anchor:''});
@@ -60,6 +63,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
  useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setHistorySource(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
 
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
+ const [resultNotice,setResultNotice]=useState<{window:number;messageId:string;revision:number;error?:string}|null>(null);
  const returnToInput=useRef<(ConversationHistoryTaskOrigin&{taskId:string;revision:number})|null>(null);
  const rows:Json[]=Array.isArray(shown.messages)?shown.messages:[];
  const marker=rows.map(row=>`${row.id}:${row.sourceRevision||0}`).join('|');
@@ -145,6 +149,21 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
   if(!button||button.disabled)return false;
   button.focus({preventScroll:true});return true;
  };
+ const openHistoryResultFiles=async(message:Json,result:TaskResult,trigger:HTMLButtonElement)=>{
+  const original=live.current;
+  if(!original||sending.current||!onOpenResultFiles)return;
+  const current=()=>{
+   const next=live.current;
+   return !document.hidden&&next?.window===original.window&&next?.conversation===original.conversation&&!next?.loading&&!next?.error&&!next?.limited&&
+    next?.messages?.some((row:Json)=>row.id===message.id&&row.sourceRevision===message.sourceRevision);
+  };
+  if(!current())return;
+  const notice={window:original.window,messageId:message.id,revision:message.sourceRevision};
+  sending.current=true;setPending(true);setResultNotice(notice);remember();persist();
+  try{await onOpenResultFiles(message.id,result,trigger,{window:original.window,conversationId:original.conversation,sourceRevision:message.sourceRevision})}
+  catch(failure){if(current())setResultNotice({...notice,error:failure instanceof Error?failure.message:'本次原文件暂不可读取。'})}
+  finally{sending.current=false;setPending(false);setResultNotice(value=>value===notice?null:value)}
+ };
  const back=()=>{if(shownSource){setHistorySource(null);return true}if(reuse){setReuse(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!live.current)return false;if(!sending.current)void invoke('conversation.reader.close');return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
@@ -167,6 +186,8 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
    {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
    {rows.map((message,index)=>{const phone=message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
+    const result=messageTaskResult(message),fileResult=onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
+    const readingFiles=resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
     return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
     {phone&&message.id?<PhoneMessageReturn result={phone} conversation={shown.conversation} reader={shown.window} messageId={message.id} revision={message.sourceRevision}
       body={message.content} locked={!page||page.window!==shown.window||page.loading||!!page.error||page.limited||pending}
@@ -199,6 +220,8 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
       onClick={event=>openHistorySource(message,event.currentTarget)}>查看出处</Button>}
      {message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
+     {fileResult&&<Button variant="ghost" size="small" leadingIcon={IconFolder} disabled={!page||pending||page.loading||page.error||page.limited}
+      aria-busy={!!readingFiles&&!readingFiles.error||undefined} onClick={event=>void openHistoryResultFiles(message,fileResult,event.currentTarget)}>{readingFiles&&!readingFiles.error?'正在读取本次文件…':'查看本次文件'}</Button>}
      {phone&&can('tasks.open')&&<Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>所属工作的当前进展</Button>}
      {message.role==='assistant'&&!phone&&!message.hostGoalTaskId&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
       <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{message.phoneResult?'所属工作':'任务详情'}</Button>
@@ -206,6 +229,7 @@ export function ConversationHistoryWindow({page,activeDraft,submitting,can,act,r
      </>}
     </div>
     {inputNotice?.error&&inputNotice.window===shown.window&&inputNotice.messageId===message.id&&<p className="pw-input-work-error" role="status">{inputNotice.error}</p>}
+    {readingFiles?.error&&<p className="pw-input-work-error" role="status">{readingFiles.error}</p>}
    </article>})}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">这份对话没有可读取的消息。</p>}
   </div>

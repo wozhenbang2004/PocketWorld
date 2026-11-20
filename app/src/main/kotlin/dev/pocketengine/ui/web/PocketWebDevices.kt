@@ -235,12 +235,17 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     }
     fun receivedTaskForReturn(args:JSONObject):String = if(args.has("closedHandle"))screenReturn(args).origin.task else receivedEntry(args).task
     fun checkReceivedTaskForReturn(args:JSONObject,raw:JSONObject):JSONObject {
-        if(!args.has("closedHandle"))return checkedReceivedSource(receivedEntry(args),raw)
+        if(!args.has("closedHandle")){
+            val source=receivedEntry(args)
+            // From the started directory the read-only navigation stays on the same run,
+            // even if its candidate was decided after this snapshot. Opening the candidate is stricter.
+            return checkedReceivedSource(source,raw,checkReview=source.activeRun.isEmpty())
+        }
         val chosen=screenReturn(args)
         dev.pocketengine.store.ReceivedScreenGoalDecision.requireSame(raw,chosen.proof)
         return checkedReceivedSource(chosen.origin,raw).put("screenDecision",true).put("confirmed",chosen.proof.getBoolean("confirmed"))
     }
-    private fun checkedReceivedSource(source:ReceiptOrigin,raw:JSONObject):JSONObject{
+    private fun checkedReceivedSource(source:ReceiptOrigin,raw:JSONObject,checkReview:Boolean=true):JSONObject{
         val origin=raw.optJSONObject("origin") ?: error("原接纳来源未能核对")
         require(raw.opt("id")==source.task && raw.opt("deviceExecutionKind")=="GOAL" && DeviceProtocol.receivedPhoneScopeMode(raw)==source.mode
             && raw.opt("actorId")=="paired_device:${source.source}" && raw.opt("spaceId")=="device:${source.source}"
@@ -248,7 +253,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             && DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin))==source.digest) { "本机原接纳任务身份已变化，未打开或恢复执行" }
         if(source.activeRun.isNotEmpty())require(raw.opt("runId")==source.activeRun && raw.optInt("coordinatorEpoch",-1)==source.activeEpoch) { "本机原执行已换代，未打开另一轮或重新接手" }
         if(source.failed)require(source.activeRun.isNotEmpty() && raw.opt("status")=="failed"){"原任务已不处于这次失败状态，没有打开其他执行"}
-        if(source.reviewRun.isNotEmpty()){
+        if(checkReview&&source.reviewRun.isNotEmpty()){
             val result=raw.optJSONObject("deviceGoalResult") ?: error("原成果不再可审阅，请重新读取")
             require(raw.opt("status")==source.candidateState.ifEmpty { "needs_confirmation" } && raw.opt("runId")==source.reviewRun && raw.optInt("coordinatorEpoch",-1)==source.reviewEpoch
                 && result.opt("status")=="needs_confirmation" && result.opt("closed")==false && result.opt("nativeRunnerExited")==true && result.opt("nativeDispatchClosed")==true
@@ -329,8 +334,9 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val rows=page.getJSONArray("rows").objects();require(rows.size<=(if(declined||withdrawn)6 else 24))
         // A closed decision has NO actionable or navigable task entries. Its handle only moves the page.
         val keys=if(declined||withdrawn)emptyMap() else rows.associate { val task=it.getString("taskId");val op=it.getString("operationId")
+            val reviewSlot=results||started&&it.getJSONObject("startedRun").opt("taskState")=="needs_confirmation"
             (task to op) to ReceiptOrigin(task,op,it.getString("sourceDeviceId"),id,instance,it.getString("originDigest"),it.getString("screenMode"),
-                if(results)it.getString("reviewRun") else "", if(results)it.getInt("reviewEpoch") else 0, if(results)it.getLong("reviewRecordedAt") else 0,
+                if(reviewSlot)it.getString("reviewRun") else "", if(reviewSlot)it.getInt("reviewEpoch") else 0, if(reviewSlot)it.getLong("reviewRecordedAt") else 0,
                 if(failed||started)it.getJSONObject(if(failed)"failedRun" else "startedRun").getString("runId") else "",if(failed||started)it.getJSONObject(if(failed)"failedRun" else "startedRun").getInt("epoch") else 0,failed,if(results)it.optString("candidateState") else "") }
         require(declined||withdrawn||keys.size==rows.size)
         val next=if(page.getBoolean("hasMore")) page.getString("lastParent") to page.getString("lastOperation") else null
@@ -350,7 +356,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             if(declined)item.put("declinedAt",row.getLong("declinedAt")).put("notDispatched",true)
             if(failed){val run=row.getJSONObject("failedRun");for(key in listOf("runId","epoch","registeredAt","stateRecordedAt"))item.put(key,run.get(key))}
             if(started){val run=row.getJSONObject("startedRun");for(key in listOf("runId","epoch","taskState","runState","registeredAt","stopRequested"))item.put(key,run.get(key))}
-            if(results){
+            if(results||started&&row.getJSONObject("startedRun").opt("taskState")=="needs_confirmation"){
                 item.put("reviewRecordedAt",row.getLong("reviewRecordedAt"))
                 if(row.has("candidateState")){
                     val state=row.getString("candidateState");require(state in setOf("interrupted","failed","cancelled"))
@@ -935,14 +941,19 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                         }
                     }
                     "devices.reviewResult" -> {
-                        val source=if(args.has("waitingHandle"))receivedEntry(args).also { require(it.reviewRun.isNotEmpty()) } else null
+                        val source=if(args.has("waitingHandle"))receivedEntry(args).also {
+                            require(it.reviewRun.isNotEmpty())
+                            checkedReceivedSource(it,controller.readOriginalDeviceTask(it.task))
+                        } else null
                         val id=source?.task ?: run { fields(args,"taskId");taskId() }
                         val native=original.reviewResult(id);val view=native.view()
-                        if(source!=null)require(view.opt("taskId")==id && view.opt("runId")==source.reviewRun &&
-                            view.optInt("executorEpoch",-1)==source.reviewEpoch && view.optLong("recordedAt")==source.reviewRecordedAt &&
-                            view.opt("closed")==false && view.opt("nativeRunnerExited")==true && view.opt("nativeDispatchClosed")==true &&
-                            (source.candidateState.isEmpty() || view.opt("canRecordDecision")==false)
-                        ) { "原结果的执行或审阅状态已改变；未打开下一轮或别的成果" }
+                        if(source!=null&&!(view.opt("taskId")==id && view.opt("runId")==source.reviewRun &&
+                                view.optInt("executorEpoch",-1)==source.reviewEpoch && view.optLong("recordedAt")==source.reviewRecordedAt &&
+                                view.opt("closed")==false && view.opt("nativeRunnerExited")==true && view.opt("nativeDispatchClosed")==true &&
+                                view.opt("canRecordDecision")==source.candidateState.isEmpty())) {
+                            original.discardReview()
+                            error("原结果的执行或审阅状态已改变；未打开下一轮或别的成果")
+                        }
                         store("result",native,view,original,epoch)
                     }
                     "devices.reviewApproval" -> { fields(args, "taskId", "approvalId"); val native = original.reviewApproval(taskId(), text(args, "approvalId")); store("approval", native, native.view(), original, epoch) }

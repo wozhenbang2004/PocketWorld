@@ -101,6 +101,30 @@ public final class ProjectOwnerWorkflows {
         return result;
     }
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
+    /** Project-level saved result shelf, separate from a work draft and from current runtime/tooling. */
+    public JSONObject savedBuildWebForOwner(String project,String checkout,String cursor,RunControl control)throws Exception{
+        control.check();JSONArray originals=inspectForOwner(project,false).getJSONArray("checkouts"),copies=new JSONArray();
+        if(originals.length()>128)throw new IllegalStateException("此项目的私人副本超过本页可核对范围");
+        boolean found=false;
+        for(int i=0;i<originals.length();i++){
+            JSONObject copy=originals.getJSONObject(i);String id=copy.getString("checkoutId");
+            if(id.equals(checkout))found=true;
+            copies.put(new JSONObject().put("id",id).put("name",copy.optString("name")).put("createdAt",copy.optLong("createdAt")));
+        }
+        if(checkout.isEmpty()){
+            if(!cursor.isEmpty())throw new SecurityException("请保留分页所属的原副本");
+            if(copies.length()==1)checkout=copies.getJSONObject(0).getString("id");
+        }else if(!found)throw new SecurityException("所选的原私人副本已不可用，不改读其他副本");
+        JSONObject page;
+        if(checkout.isEmpty())page=new JSONObject().put("items",new JSONArray()).put("hasMore",false).put("nextCursor","").put("readLimited",false);
+        else{
+            requireOrdinaryFileOwner(project,checkout);page=tasks.savedBuildWebForOwner(project,checkout,cursor,control);
+            requireOrdinaryFileOwner(project,checkout);
+        }
+        control.check();return page.put("format","pocketworld.saved-build-web.v1").put("projectId",project).put("checkoutId",checkout)
+            .put("checkouts",copies).put("bodyRead",false).put("currentArtifactAvailabilityVerified",false)
+            .put("readOnly",true).put("executionAuthorized",false);
+    }
     /** Native owner-read fence for the existing checkout, including an already captured path listing. */
     public void requireOrdinaryFileOwner(String project,String checkout)throws Exception {
         ProjectBuildPlan.identity(project);ProjectBuildPlan.identity(checkout);JSONObject row=local.projectCheckoutForHost(checkout);
