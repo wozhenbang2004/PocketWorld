@@ -90,6 +90,24 @@ internal object PocketWebProjectContinuation {
                 it.opt("draftId") == raw.opt("projectEditDraftId") &&
                 it.opt("projectId") == context.opt("projectId") && it.opt("checkoutId") == context.opt("checkoutId")
         }
+        val pin = context.optJSONObject("ownerDraftFirstBuild")
+        val heldDependency = raw.optJSONObject("originalFirstBuildContinuationHold")?.takeIf {
+            val epoch = exactPositive(it.opt("epoch"))
+            val source = it.opt("sourceDigest") as? String
+            val project = it.opt("projectId") as? String
+            val checkout = it.opt("checkoutId") as? String
+            val operation = it.opt("operationId") as? String
+            task.status == "awaiting_user" && raw.opt("status") == task.status && raw.opt("cancelRequested") == false &&
+                raw.opt("taskProjection") == "detail_window" && raw.opt("taskCoreReadLimited") == false &&
+                raw.opt("hasUnresolvedOperations") == false && !raw.has("originalFirstBuildNext") &&
+                context.opt("runtime") == "managed_process_v1" && pin?.opt("existingCheckoutBuild") == true &&
+                it.opt("format") == "pocketworld.owner-node-build-continuation-hold.v1" && it.opt("reason") == "missing_original_end_witness" &&
+                it.opt("taskId") == task.id && it.opt("runId") == raw.opt("runId") && epoch != null && epoch == exactPositive(raw.opt("coordinatorEpoch")) &&
+                !project.isNullOrBlank() && project == context.opt("projectId") && project == pin?.opt("projectId") &&
+                !checkout.isNullOrBlank() && checkout == context.opt("checkoutId") && checkout == pin?.opt("checkoutId") &&
+                source?.matches(Regex("[a-f0-9]{64}")) == true && source == context.opt("initialSourceDigest") && source == pin?.opt("sourceDigest") &&
+                operation?.matches(Regex("[A-Za-z0-9_-]{1,80}")) == true && it.opt("dependencyExitCode") == 0 && it.opt("buildStarted") == false
+        }
         val reason = when {
             dedicated.any(raw::has) || isDeviceWorkspaceTask(task) || MediaOwnerUi.isTask(raw) ||
                 raw.optString("feature") == "attachments" && raw.optString("command") in setOf("createDocument", "transformImage", "trimMedia") -> "这项专用任务须回原入口处理，不能在此续接。"
@@ -99,6 +117,7 @@ internal object PocketWebProjectContinuation {
             raw.optString("executionMode") != "capabilities" -> "这不是原私人项目能力任务，请回原入口核对。"
             PocketWebOwnerQuestions.blocksGenericResume(raw) -> "请先回答原任务的问题，再核对是否继续。"
             raw.optJSONArray("approvals").objects().any { it.optString("state", it.optString("status")) == "pending" } || unresolvedOperations(task).isNotEmpty() -> "请先处理原任务的审批或未决操作；草稿仍保留。"
+            heldDependency != null -> "原依赖准备已有退出回执，但原执行记录不足以继续这一轮。不会重新准备依赖或构建。"
             fixedDraft != null -> {
                 view.put("fixedDraft", fixedDraft)
                 "这项工作已保存固定改稿。可编辑另存，或回原对话交代新的修改目标；不会另起一轮替换原稿。"

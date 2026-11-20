@@ -31,7 +31,7 @@ import type {CapabilityWorkspaceMemory} from './CapabilitiesWorkspace';
 import {usePocketAppearance} from './usePocketAppearance';
 import {useClosingSnapshot,useMessageArrivals,useReviewFocus,useSurfaceEnter} from './library/surface-motion';
 import {chatCancelIdentity,chatCancelKey,chatStopObservation,sameChatCancelIdentity,type ChatStopRecord} from './chat-cancel';
-import {presentOperation,getRecentTaskProgress,taskNeedsReconciliation,observedLateProjectDependency,getLoadedFixedDraftGoalDecision} from './task-presentation';
+import {presentOperation,getRecentTaskProgress,taskNeedsReconciliation,observedLateProjectDependency,observedProjectDependencyHold,getLoadedFixedDraftGoalDecision} from './task-presentation';
 import {TaskHistory} from './TaskHistory';
 import {composerHasPayload} from './composer-send-policy';
 import {composerPermissionView} from './composer-permissions';
@@ -2575,13 +2575,20 @@ export default function App(){
   const current=originalNodeBuildAfterDependencies(task),shown=originalNodeBuildAfterDependencies(review.task);
   return current&&shown&&JSON.stringify(current)===JSON.stringify(shown)?current:null;
  };
- const lateDependencyForOverview=(task:Task)=>{
+ const originalTaskOverview=(task:Task)=>{
   const nativeView=obj(bridge.getState().view);
-  if(taskLayer!=='overview'||!taskOpen||taskOpening||document.hidden||openedTaskId.current!==task.id||nativeView.taskId!==task.id||nativeView.section!=null)return false;
+  return taskLayer==='overview'&&taskOpen&&!taskOpening&&!document.hidden&&openedTaskId.current===task.id&&nativeView.taskId===task.id&&nativeView.section==null;
+ };
+ const lateDependencyForOverview=(task:Task)=>{
+  if(!originalTaskOverview(task))return false;
   const current=observedLateProjectDependency(task);
   return !!current&&(!review||reviewStale||
     currentReviewWindow(reviewWindow.current)&&JSON.stringify(originalNodeBuildAfterDependencies(review.task))===JSON.stringify(current));
  };
+ const heldDependencyForOverview=(task:Task)=>originalTaskOverview(task)?observedProjectDependencyHold(task):'';
+ const exactDependencyHoldReview=(heldBuildKey:string)=>!!heldBuildKey&&!reviewStale&&!!projectContinuation(review)?.reason&&
+  currentReviewWindow(reviewWindow.current)&&!asArray<{action:string}>(review?.actions).some(action=>action.action==='tasks.resume')&&
+  observedProjectDependencyHold(review?.task)===heldBuildKey;
  const prepareNextBuildNote=(task:Task,buildNext:NonNullable<ReturnType<typeof originalNodeBuildAfterDependencies>>)=>{
   if(!review||reviewStale||reviewPending||reviewSubmitted||taskOpening||openedTaskId.current!==task.id||
     !currentReviewWindow(reviewWindow.current)||continuationBlocks(continuationsRef.current[task.id]))return;
@@ -2645,7 +2652,18 @@ export default function App(){
   const nextBuildObserved=originalNodeBuildAfterDependencies(task);
   const buildNext=reviewedBuildAfterDependencies(task,project,actionNames);
   const lateDependencyObserved=lateDependencyForOverview(task);
-  const projectControls=fixedDraftOptions||(project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label="原项目续接范围">
+  const heldBuildKey=heldDependencyForOverview(task);
+  const legacyBuildHold=exactDependencyHoldReview(heldBuildKey);
+  const viewHeldBuild=()=>{
+   const live=bridge.getState(),view=obj(live.view),current=asArray<Task>(live.state.tasks).find(row=>row.id===task.id);
+   if(!legacyBuildHold||!can('history.read')||view.taskId!==task.id||view.section!=null||!currentReviewWindow(reviewWindow.current)||
+      observedProjectDependencyHold(current)!==heldBuildKey)return;
+   showTaskLayer('process');
+  };
+  const projectControls=fixedDraftOptions||(legacyBuildHold&&project? <>
+   <p role="status">{project.reason}</p>
+   {can('history.read')&&<Button variant="secondary" onClick={viewHeldBuild}>查看原执行记录</Button>}
+  </>:project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label="原项目续接范围">
    {review?.task&&!reviewStale&&<ContinuedProjectBinding key={review.reviewHandle} task={review.task} projects={projects} read={can('projectRuntime.read')?args=>bridge.command('projectRuntime.read',args):undefined}/>}
    <p>{buildNext?.receiptWasLate&&lateDependencyObserved?'继续后先核对实际依赖。本机构建命令仍需你单独批准。':buildNext?'已核对同一副本的依赖准备命令退出 0，本轮还没有运行构建。继续后先核对实际依赖；本机构建命令仍需你单独批准。':'继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。'}</p>
    <p className="pw-muted">工具调用已用 {String(scope.toolsUsed??'未读取')} / 总上限 {String(scope.toolLimit??'未读取')}；模型调用已用 {String(scope.modelCallsUsed??'未读取')} / 总上限 {String(scope.modelCallLimit??'未读取')}。本次不增加额度，不延长截止时间。</p>
@@ -2730,7 +2748,7 @@ export default function App(){
   </section>;
   const originalEvidence=<TaskOutcome key="task-evidence" registerProjectDraftBeforeLeave={registerProjectDraftBeforeLeave} projectDraftSourceRetired={task.raw?.contextAvailable===false||task.raw?.contextWithdrawn===true||task.raw?.sourceCurrentReadRequired===true||task.raw?.taskProjection==='source_unavailable'} task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
    active={overviewActive} focusedOriginalDraft={focusedOriginalDraft?.taskId===task.id?focusedOriginalDraft:undefined} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
-   draftGoalDecision={draftAcceptanceSaved?settledOriginalDraft:durableDraftDecision} lateDependencyObserved={lateDependencyObserved}
+   draftGoalDecision={draftAcceptanceSaved?settledOriginalDraft:durableDraftDecision} lateDependencyObserved={lateDependencyObserved} reviewedDependencyHoldKey={legacyBuildHold?heldBuildKey:undefined}
    draftReview={inlineDraftDecision?{original:inlineDraftDecision,render:readback=><section className="pw-form-flow" aria-label="验收本轮原改稿">
     <div className="pw-section-heading"><h4>验收本轮原改稿</h4>{refreshControl}</div>{resultFeedback}
     <div className="pw-action-row">{taskResultDecision(task,protectedDisabled,false,readback)}</div>
@@ -2769,7 +2787,7 @@ export default function App(){
   const reviewTools=(!fixedDraft||draftReviewReady)&&!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
     <div className="pw-section-heading pw-task-review-tools">{pendingNodeCommand?
       <Button disabled={questionPending} onClick={readPendingNodeCommand}>{pendingNodeCommand.action==='dependencies'?'核对本次依赖准备':'核对本机构建命令'}</Button>:
-      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':observedDraft?'核对原改稿的可用操作':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!lateDependencyObserved&&!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
+      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{heldBuildKey?'读取原执行状态':draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':observedDraft?'核对原改稿的可用操作':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!heldBuildKey&&!lateDependencyObserved&&!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
   const reviewStatus=<>
     {readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}
     {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
@@ -2784,7 +2802,7 @@ export default function App(){
       {reviewTools&&(foldAcceptedDraftReview?<Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="accepted-draft-options" title="更多操作">{reviewTools}</AccordionItem></Accordion>:reviewTools)}
       {!inlineDraftDecision&&(!actionNames.includes('tasks.confirm')||reviewStale)&&fixedDraftOptions}
       {review&&!reviewStale&&phoneUnknown.length>0&&<PhoneOriginalActionReview key={review.reviewHandle} taskId={task.id} rows={phoneUnknown} more={task.raw?.privatePhoneUnconfirmed?.hasMore===true} disabled={protectedDisabled} allowRecord={actionNames.includes('tasks.resolve')} submit={args=>reviewedAction('tasks.resolve',args)}/>}
-      {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(inlineDraftDecision?draftOtherOperations:fixedDraft&&!actionNames.includes('tasks.confirm')?null:ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={originalDraftReview?'验收本轮原独立改稿':project?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={refreshControl}><div className="pw-protected-actions">{originalDraftReview?<p className="pw-field-hint">这里只验收本轮的原固定稿，不会将你另存的改稿当作本次结果。</p>:projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion}/>}{resultFeedback}{draftOtherOperations}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
+      {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(inlineDraftDecision?draftOtherOperations:fixedDraft&&!actionNames.includes('tasks.confirm')?null:ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={originalDraftReview?'验收本轮原独立改稿':legacyBuildHold?'原执行记录':project?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={legacyBuildHold?undefined:refreshControl}><div className="pw-protected-actions">{originalDraftReview?<p className="pw-field-hint">这里只验收本轮的原固定稿，不会将你另存的改稿当作本次结果。</p>:projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion}/>}{resultFeedback}{draftOtherOperations}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
       {declinedTeam&&<DeclinedTeamStart key={declinedTeam.id} decision={declinedTeam}/>}
      </div>;
   return <Tabs className="pw-work-object-tabs" selectedKey={taskLayer==='scope'?'goal':taskLayer} onSelectionChange={key=>showTaskLayer(String(key) as TaskLayer)}>
@@ -2937,6 +2955,7 @@ export default function App(){
  const selectedWorkPresentation=selectedTask?workCollectionPresentation(selectedTask):null;
  const selectedTaskUnavailable=taskOpening||!selectedTask||openedTaskId.current!==selectedTask.id;
  const settledDependencyInOverview=selectedTask&&selectedWorkPresentation?.reconciliation&&lateDependencyForOverview(selectedTask);
+ const heldDependencyInOverview=selectedTask&&selectedWorkPresentation?.reconciliation&&exactDependencyHoldReview(heldDependencyForOverview(selectedTask));
  const stopSelectedTask=()=>{
   if(!selectedTask||selectedTaskUnavailable||!selectedTaskStop||selectedWorkControl?.pending||selectedWorkControl?.unknown||selectedWorkControl?.usedForContinuation||selectedTask.status==='stopping')return;
   if(selectedPhoneStop)triggerPhoneControl('phone.stop',selectedPhoneStop,selectedLocalPhone);
@@ -4032,7 +4051,7 @@ export default function App(){
     {selectedLocalPhone&&!selectedPhoneSurface&&selectedTask&&!terminal(selectedTask)&&<p className="pw-field-hint">原记录计划使用{(selectedTask.executionMode||selectedTask.raw?.executionMode)==='main_screen'?'主屏':'独立屏'}，当前未核实这次执行的手机连接。</p>}
     {selectedTask&&selectedWorkPresentation&&<div className="pw-task-header-status" data-task-status={selectedWorkPresentation.completed?'completed':selectedWorkPresentation.group==='attention'?'attention':selectedWorkPresentation.group==='running'?'running':selectedTask.status}>
      {selectedWorkPresentation.busy?<ProgressCircle aria-label={selectedWorkPresentation.label} isIndeterminate size="sm"/>:<span className="pw-task-state-dot" aria-hidden="true"/>}
-     <span>{settledDependencyInOverview?'需要你处理':selectedWorkPresentation.label}</span>
+     <span>{heldDependencyInOverview?'原执行不可续接':settledDependencyInOverview?'需要你处理':selectedWorkPresentation.label}</span>
     </div>}
    </div>
    {taskLayer!=='homeReport'&&<div className="pw-task-header-actions">

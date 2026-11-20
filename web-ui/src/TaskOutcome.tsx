@@ -2,7 +2,7 @@ import { AIAnswer } from './library';
 import { Button, Accordion, AccordionItem } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 import { getTaskOutcome } from './task-outcome';
-import { observedLateProjectDependency, taskNeedsReconciliation, type FixedDraftGoalDecision } from './task-presentation';
+import { observedLateProjectDependency, observedProjectDependencyHold, taskNeedsReconciliation, type FixedDraftGoalDecision } from './task-presentation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCollectionMotion, MotionFeedback } from './library/journey-motion';
 import { ownerWorkPresentation } from './owner-work-presentation';
@@ -135,7 +135,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -146,6 +146,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   registerProjectDraftBeforeLeave?: (guard:()=>boolean)=>()=>void;
   projectDraftSourceRetired?: boolean;
   lateDependencyObserved?: boolean;
+  reviewedDependencyHoldKey?: string;
   readIdentity: string;
   showEmptyResult: boolean;
   deferExecutionDetails: boolean;
@@ -172,7 +173,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const buildOwner = buildScope && projectPackageTaskIdentity(task);
   const reconciliation = taskNeedsReconciliation(task);
   const recoveredDependency = active && lateDependencyObserved && !document.hidden && packageWindowOwns(record.id) && !!observedLateProjectDependency(task);
-  const showReconciliation = reconciliation && !recoveredDependency;
+  const heldDependency = active && !!reviewedDependencyHoldKey && !document.hidden && packageWindowOwns(record.id) &&
+    observedProjectDependencyHold(task) === reviewedDependencyHoldKey;
+  const showReconciliation = reconciliation && !recoveredDependency && !heldDependency;
   const ordinaryBuild = buildScope?.existingCheckoutBuild===true && !record.raw?.cancelRequested;
   const checkBuildAfterFailure = status==='failed' && ordinaryBuild && !reconciliation;
   // The original archive's own pending journal may look unresolved to the generic timeline.

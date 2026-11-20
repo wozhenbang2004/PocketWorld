@@ -25,6 +25,20 @@ export function originalNodeBuildAfterDependencies(task?:Data|null):NextNodeBuil
     sourceDigest:r.sourceDigest,manager:r.manager,lockPath:r.lockPath,lockSha256:r.lockSha256,
     ...(r.receiptWasLate===true?{receiptWasLate:true as const}:{})};
 }
+/** Read-only identity of a legacy original execution that cannot be continued. */
+export function originalNodeBuildHoldKey(task?:Data|null):string{
+  const raw=task?.raw,c=raw?.developmentContext,pin=c?.ownerDraftFirstBuild,r=raw?.originalFirstBuildContinuationHold;
+  const owner=projectFeedbackKey(task);
+  if(!owner||!word(task?.id)||task?.status!=='awaiting_user'||raw.status!==task.status||raw.cancelRequested!==false||
+    raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||raw.hasUnresolvedOperations!==false||raw.historyHasUnconfirmedOperations!==false||
+    raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||raw.originalFirstBuildNext!=null||
+    c.format!=='pocketworld.development-context.v1'||c.runtime!=='managed_process_v1'||c.draftOnly===true||pin?.existingCheckoutBuild!==true||
+    r?.format!=='pocketworld.owner-node-build-continuation-hold.v1'||r.reason!=='missing_original_end_witness'||
+    r.dependencyExitCode!==0||r.buildStarted!==false||r.taskId!==task.id||r.runId!==raw.runId||r.epoch!==raw.coordinatorEpoch||
+    !word(r.operationId)||r.projectId!==c.projectId||r.projectId!==pin.projectId||r.checkoutId!==c.checkoutId||r.checkoutId!==pin.checkoutId||
+    !sha(r.sourceDigest)||r.sourceDigest!==pin.sourceDigest||r.sourceDigest!==c.initialSourceDigest)return '';
+  return JSON.stringify([owner,r.operationId,r.sourceDigest]);
+}
 export function nodeBuildContinuationText(next:NextNodeBuild):string{
   return `请按原来的 ${next.lockPath} 核对同一副本中的实际依赖。若已就绪，请只提出这版源码的 ${next.manager} run build 供我另行批准。不改源码或锁，不自动下载、构建或启动服务。`;
 }

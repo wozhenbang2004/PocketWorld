@@ -3,7 +3,7 @@
  * A bounded record is never an execution authority or proof that a goal succeeded.
  * That SQL projection has no execution duration; createdAt is registration time.
  */
-import { originalNodeBuildAfterDependencies } from './project-execution-exit';
+import { originalNodeBuildAfterDependencies, originalNodeBuildHoldKey } from './project-execution-exit';
 
 type Row = Record<string, unknown>;
 
@@ -304,11 +304,17 @@ export function observedLateProjectDependency(task: unknown) {
   return receipt?.receiptWasLate===true&&!reconciliationNeeded(task,true)?receipt:null;
 }
 
-function reconciliationNeeded(task: unknown, lateDependency: boolean): boolean {
+/** An exact historical hold has a known command receipt, not a new permission. */
+export function observedProjectDependencyHold(task: unknown): string {
+  const key=originalNodeBuildHoldKey(taskParts(task).header);
+  return key&&!reconciliationNeeded(task,true)?key:'';
+}
+
+function reconciliationNeeded(task: unknown, hasDependencyReceipt: boolean): boolean {
   const {header, raw, runId} = taskParts(task);
   const state = text(header.status) || text(raw.status);
   const operations = getTaskOperations(task);
-  if (['reconciling', 'reconciliation_required', 'unknown'].includes(state) || (!lateDependency && row(raw.evidence)?.requiresReconciliation === true) ||
+  if (['reconciling', 'reconciliation_required', 'unknown'].includes(state) || (!hasDependencyReceipt && row(raw.evidence)?.requiresReconciliation === true) ||
       operations.some(op => presentOperation(op).status === 'unknown' && (op.bodyAvailable || op.state.includes('unknown') || op.requiresReconciliation))) return true;
   const unconfirmed = typeof raw.historyHasUnconfirmedOperations === 'boolean' ? raw.historyHasUnconfirmedOperations : raw.hasUnresolvedOperations === true;
   const active = ['preparing', 'running', 'verifying', 'pausing', 'stopping', 'cancelling'].includes(state);

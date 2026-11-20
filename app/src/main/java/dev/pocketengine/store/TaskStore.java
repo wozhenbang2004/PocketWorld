@@ -12564,12 +12564,15 @@ public final class TaskStore {
             }
             if(!"awaiting_user".equals(status)||!"reconciling".equals(runStatus))return null;
             boolean owns=!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
+            ManagedDependencyHandoff handoff;
             try{
                 JSONObject current=developmentContinuationTask(task,false);
-                JSONObject recovered=current.getLong("updatedAt")==task.getLong("updatedAt")?recoveredManagedDependencyNext(current):null;
+                handoff=current.getLong("updatedAt")==task.getLong("updatedAt")?readManagedDependencyHandoff(current,true):null;
                 if(owns)db.setTransactionSuccessful();
-                return recovered;
             }finally{if(owns)db.endTransaction();}
+            if(handoff==null)return null;
+            task.putOpt(MANAGED_DEPENDENCY_HOLD,handoff.hold());
+            return handoff.next();
         }catch(Exception unverified){return null;}
     }
     private static JSONObject firstBuildDependencyNext(JSONObject task,JSONObject context,JSONObject pin,JSONObject fact)throws Exception {
@@ -12589,7 +12592,9 @@ public final class TaskStore {
             .put("dependencyExitCode",0).put("buildStarted",false);
     }
     private static final String MANAGED_DEPENDENCY_WAIT="managedDependencyReceiptPending";
+    private static final String MANAGED_DEPENDENCY_HOLD="originalFirstBuildContinuationHold";
     private record OriginalManagedDependency(JSONObject pin,JSONObject row,JSONObject envelope){}
+    private record ManagedDependencyHandoff(JSONObject next,JSONObject hold){}
     /** Same transaction, same prepared native plan and already-consumed original owner decision. */
     private OriginalManagedDependency soleOriginalManagedDependency(JSONObject task)throws Exception {
         JSONObject context=task.optJSONObject("developmentContext"),scope=task.optJSONObject("executionScope");
@@ -12642,8 +12647,12 @@ public final class TaskStore {
             return new JSONObject().put("operationId",operation).put("scopeRevision",task.getJSONObject("executionScope").getLong("revision"));
         }catch(Exception unverified){return null;}
     }
-    /** SQL-only reconciliation proof. The old run remains reconciling in historical diagnostics. */
     private JSONObject recoveredManagedDependencyNext(JSONObject task)throws Exception {
+        ManagedDependencyHandoff handoff=readManagedDependencyHandoff(task,false);
+        return handoff==null?null:handoff.next();
+    }
+    /** SQL-only readback. The separate hold is never returned through the admission path. */
+    private ManagedDependencyHandoff readManagedDependencyHandoff(JSONObject task,boolean includeHold)throws Exception {
         if(!db.inTransaction()||!"awaiting_user".equals(task.opt("status"))||hasUnresolved(task.getString("id")))return null;
         String id=task.getString("id"),run=task.getString("runId"),epoch=Integer.toString(task.getInt("coordinatorEpoch"));
         JSONObject mailbox=task.optJSONObject("ownerInputMailbox");
@@ -12658,13 +12667,17 @@ public final class TaskStore {
         try(Cursor row=db.rawQuery("SELECT CASE WHEN body_bytes BETWEEN 1 AND 65536 AND body_bytes=length(CAST(event_json AS BLOB)) THEN event_json END FROM task_events WHERE task_id=? AND event_type='result' ORDER BY event_order DESC LIMIT 1",new String[]{id})){
             if(!row.moveToFirst()||row.isNull(0))return null;end=new JSONObject(row.getString(0));
         }
-        JSONObject wait=end.optJSONObject(MANAGED_DEPENDENCY_WAIT);
-        if(wait==null||!"result".equals(end.opt("type"))||!"reconciling".equals(end.opt("status"))||
+        if(!"result".equals(end.opt("type"))||!"reconciling".equals(end.opt("status"))||
             !id.equals(end.opt("taskId"))||!run.equals(end.opt("runId"))||task.getInt("coordinatorEpoch")!=end.optInt("coordinatorEpoch")||
-            end.optLong("timestamp")<=0||end.optLong("at")<=0||wait.getLong("scopeRevision")!=task.getJSONObject("executionScope").getLong("revision"))return null;
+            end.optLong("timestamp")<=0||end.optLong("at")<=0)return null;
+        boolean missingWitness=!end.has(MANAGED_DEPENDENCY_WAIT);
+        JSONObject wait=end.optJSONObject(MANAGED_DEPENDENCY_WAIT);
+        if(missingWitness&&!includeHold||!missingWitness&&(wait==null||
+            wait.getLong("scopeRevision")!=task.getJSONObject("executionScope").getLong("revision")))return null;
         executionScopeCurrent(task,run,grant(run));
         OriginalManagedDependency dependency=soleOriginalManagedDependency(task);
-        if(dependency==null||!"receipt".equals(dependency.row().opt("state"))||!wait.getString("operationId").equals(dependency.row().opt("operationId"))||
+        if(dependency==null||!"receipt".equals(dependency.row().opt("state"))||
+            (!missingWitness&&!wait.getString("operationId").equals(dependency.row().opt("operationId")))||
             !"completed".equals(dependency.envelope().opt("status"))||!"project_process_receipt".equals(dependency.envelope().opt("code"))||
             !Boolean.TRUE.equals(dependency.envelope().opt("accepted")))return null;
         JSONObject backend=dependency.envelope().getJSONObject("executionReceipt");
@@ -12672,7 +12685,13 @@ public final class TaskStore {
             !Boolean.FALSE.equals(backend.opt("ownedWorkerLive"))||!backend.isNull("receiptPersistence"))return null;
         JSONObject fact=OwnerDraftFirstBuild.outcomeFact(dependency.pin(),task,dependency.row());
         JSONObject next=firstBuildDependencyNext(task,task.getJSONObject("developmentContext"),dependency.pin(),fact);
-        return next==null?null:next.put("receiptWasLate",true);
+        if(next==null)return null;
+        if(!missingWitness)return new ManagedDependencyHandoff(next.put("receiptWasLate",true),null);
+        JSONObject hold=new JSONObject().put("format","pocketworld.owner-node-build-continuation-hold.v1")
+            .put("reason","missing_original_end_witness");
+        for(String key:new String[]{"taskId","runId","epoch","operationId","projectId","checkoutId","sourceDigest","dependencyExitCode","buildStarted"})
+            hold.put(key,next.get(key));
+        return new ManagedDependencyHandoff(null,hold);
     }
     private JSONObject lastFirstBuildDependency(JSONObject task,JSONObject pin)throws Exception{
         var owner=pin.optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.DEPENDENCIES);
@@ -18001,6 +18020,7 @@ public final class TaskStore {
         if(!limited&&!result.getBoolean("hasUnresolvedOperations"))result.putOpt("originalFixedDraftFollowup",fixedDraftFollowup(result,false));
         JSONObject development=result.optJSONObject("developmentContext"),first=development==null?null:development.optJSONObject(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
         result.remove("originalFirstBuildNext");
+        result.remove(MANAGED_DEPENDENCY_HOLD);
         if(!limited&&first!=null&&"assistant".equals(result.opt("kind"))&&"owner".equals(result.opt("actorId"))&&"private".equals(result.opt("spaceId"))&&result.isNull("origin")){
             JSONObject observed=currentFirstBuildFact(result,first,true);
             if(failedFirstBuildExit(observed))result.put("originalFirstBuildFailure",new JSONObject().put("kind",observed.get("kind")).put("value",observed.get("value"))
