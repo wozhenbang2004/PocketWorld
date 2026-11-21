@@ -1,5 +1,5 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import {Accordion,AccordionItem,Button,IconButton,RadioOptions,TextField} from './forms-library';
+import {Accordion,AccordionItem,Button,IconButton,RadioOptions,SelectField,TextField} from './forms-library';
 import {IconChevronLeft,IconChevronRight,IconExternalLink} from './icons';
 import {MarkdownBody} from './library';
 import {bridge} from './bridge';
@@ -146,6 +146,19 @@ function previousWorksheetRange(value:Json){
     !Number.isSafeInteger(value.chunk)||first?.unit!==value.unit||first.chunk!==value.chunk||previous.unit!==value.unit||
     !Number.isSafeInteger(previous.chunk)||previous.chunk<0||previous.chunk>=value.chunk)return;
  return {unit:previous.unit,chunk:previous.chunk};
+}
+function worksheetChoices(value:Json):{id:string;unit:number;label:string;description?:string}[]{
+ const total=value.totalUnits,sheets=rows(value.worksheets);
+ if(value.format!=='xlsx'||!['ok','partial'].includes(value.status)||!Number.isSafeInteger(total)||total<2||total>64||
+    !Number.isSafeInteger(value.unit)||value.unit<1||value.unit>total||!Number.isSafeInteger(value.chunk)||value.chunk<0||
+    sheets.length<2||sheets.length>total||
+    sheets.some(({unit,name},index)=>!Number.isSafeInteger(unit)||unit<1||unit>total||index>0&&unit<=sheets[index-1].unit||
+     typeof name!=='string'||!name.trim()||name.length>128||/[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/u.test(name)))return [];
+ const counts=new Map<string,number>();
+ for(const {name} of sheets){const key=name.trim().toLowerCase();counts.set(key,(counts.get(key)||0)+1)}
+ return sheets.map(({unit,name})=>(counts.get(name.trim().toLowerCase())||0)>1
+  ?{id:String(unit),unit,label:`${name} · 第 ${unit} 张`}
+  :{id:String(unit),unit,label:name,description:`第 ${unit} 张`});
 }
 
 export function AttachmentOriginalReader(props:OriginalReaderProps) {
@@ -301,6 +314,9 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   }
  },[showingPdfPageText,pdfShown,windowId,source.id,source.identity,source.sha256]);
  const previousWorksheet=ready&&type==='office'&&source.sourceUnavailable===false?previousWorksheetRange(actual):undefined;
+ const worksheets=ready&&type==='office'&&source.sourceUnavailable===false&&actual.format==='xlsx'&&actual.totalUnits===details.totalUnits
+  ?worksheetChoices(details):[];
+ const canChooseWorksheet=!readerBusy&&actual.unit===details.unit&&actual.chunk===details.chunk;
  const shownText=ready&&!readerBusy&&!failed&&type==='text'&&source.sourceUnavailable===false&&typeof actual.content==='string'&&!!actual.content&&
   textEncodings.some(row=>row.id===actual.encoding)&&Number.isSafeInteger(actual.offset)&&actual.offset>=0;
  const textRange={windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,encoding:actual.encoding,offset:actual.offset};
@@ -503,7 +519,14 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    {previousWorksheet&&<Button variant="ghost" disabled={readerBusy} onClick={()=>read(previousWorksheet)}>读取本表上一段</Button>}
    {systemReaderAction('用其他应用核对原件','ghost')}
   </div>
-  <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>
+  {!!worksheets.length&&<SelectField label="工作表" placeholder="选择可见工作表"
+   value={worksheets.some(sheet=>sheet.unit===actual.unit)?String(actual.unit):''} options={worksheets}
+   isDisabled={!canChooseWorksheet} onChange={id=>{
+    const sheet=worksheets.find(choice=>choice.id===id);
+    if(sheet&&sheet.unit!==actual.unit&&canChooseWorksheet&&!document.hidden)read({unit:sheet.unit,chunk:0});
+   }}/>}
+  {(!worksheets.length||worksheets.length<actual.totalUnits)&&
+   <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>}
   <DocumentProjection value={actual} orderedOriginalWord/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
  </>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">

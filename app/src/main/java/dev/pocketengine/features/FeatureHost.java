@@ -4,6 +4,7 @@ import dev.pocketengine.core.EventSink;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.ExecutionResources;
 import dev.pocketengine.features.assistant.AssistantModule;
+import dev.pocketengine.features.local.runtime.OwnerPythonRun;
 import dev.pocketengine.features.teams.TeamCoordinator;
 import dev.pocketengine.store.TaskStore;
 import java.util.UUID;
@@ -365,6 +366,10 @@ public final class FeatureHost implements AutoCloseable {
                 confirmed.startApproved(claim,original,()->tasks.requireOwnerPythonCurrent(claim,original));
             }catch(Exception uncertain){
                 synchronized(tasks){
+                    if(uncertain instanceof OwnerPythonRun.StageNotStarted proof){
+                        try{tasks.recordOwnerPythonStageNotStarted(claim,proof);}
+                        catch(Exception unconfirmed){/* Preserve the ordinary unknown barrier unless the exact journal actually settled. */}
+                    }
                     if(tasks.hasUnresolved(id))tasks.status(id,"reconciling","原脚本结果仍待核对；没有再次运行。");
                 }
             }
@@ -377,12 +382,16 @@ public final class FeatureHost implements AutoCloseable {
         if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local)||!window.getAsBoolean())
             throw new IllegalStateException("原本机脚本工作未打开");
         var original=tasks.ownerPythonOriginalForOwner(id,run,epoch,operation);
+        JSONObject result=tasks.ownerPythonStatusForOwner(original);
+        if("not_started".equals(result.opt("state"))){
+            if(!window.getAsBoolean())throw new SecurityException("原脚本工作窗口已关闭");
+            return result; // positive pre-provider proof: there is no native job or output to look up
+        }
         RunControl read=new RunControl();read.bindHostRun(id,run,epoch);
         read.setAuthorityCheck(()->{
             if(!window.getAsBoolean())throw new SecurityException("原脚本工作窗口已关闭");
             tasks.ownerPythonStatusForOwner(original);
         });
-        JSONObject result=tasks.ownerPythonStatusForOwner(original);
         if(!"settled".equals(result.opt("state"))){
             dev.pocketengine.features.local.runtime.OwnerPythonRun.Retained retained;
             try{retained=local.ownerPythonRuntime().retainedOwnerPython(original,read,window);}

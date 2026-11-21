@@ -14778,6 +14778,7 @@ public final class TaskStore {
     }
 
     /** This type can only be obtained from the exact persisted, consumed owner approval. */
+    private static final String OWNER_PYTHON_NOT_STARTED="ownerPythonScriptNotStarted";
     public static final class OwnerPythonOriginal {
         private final JSONObject scope,row,plan,route;
         private final String runStatus;
@@ -14829,8 +14830,7 @@ public final class TaskStore {
                 route.put(key,exact.get(key));
             ContentValues operation=new ContentValues();operation.put("operation_id",id);operation.put("task_id",id);operation.put("run_id",id);
             operation.put("tool","project_execute");operation.put("arguments",args.toString());operation.put("state","unknown");operation.put("created_at",now);
-            operation.put("receipt",new JSONObject().put("status","unknown").put("code","project_pending").put("accepted",JSONObject.NULL)
-                    .put("projectExecution",route).put("executionStatus","dispatching").put("businessVerified",false).put("replayAllowed",false).toString());
+            operation.put("receipt",ownerPythonPendingReceipt(route).toString());
             db.insertOrThrow("operations",null,operation);ProjectPlanRecords.pin(db,id,args);
             appendEvent(required(id),new JSONObject().put("type","operation_intent").put("tool","project_execute").put("operationId",id)
                     .put("runId",id).put("nativeOwnerPythonScript",true).put("modelDispatched",false));
@@ -14907,6 +14907,44 @@ public final class TaskStore {
                 throw new SecurityException("原脚本唯一运行、操作或批准已变化");
         }
     }
+    private static JSONObject ownerPythonPendingReceipt(JSONObject route)throws Exception{
+        return new JSONObject().put("status","unknown").put("code","project_pending").put("accepted",JSONObject.NULL)
+                .put("projectExecution",route).put("executionStatus","dispatching").put("businessVerified",false).put("replayAllowed",false);
+    }
+    private static JSONObject ownerPythonStageRejectionReceipt(JSONObject route)throws Exception{
+        return new JSONObject().put("status","not_dispatched").put("code","project_python_stage_not_started").put("accepted",false)
+                .put("projectExecution",route).put("providerInvoked",false).put("businessVerified",false).put("replayAllowed",false);
+    }
+    private static JSONObject ownerPythonStageRejectionView(JSONObject scope)throws Exception{
+        JSONObject result=new JSONObject().put("format","pocketworld.owner-python-script-not-started.v1")
+                .put("reason","stage_preparation_failed").put("providerInvoked",false).put("replayAllowed",false);
+        for(String key:new String[]{"taskId","runId","operationId","epoch","projectId","checkoutId","path","scriptInputDigest","planDigest"})
+            result.put(key,scope.get(key));
+        return result.put("scriptSha256",scope.getString("sha256"));
+    }
+    /** Only the actual native staging failure can close the one unchanged bare claim without a provider receipt. */
+    public synchronized void recordOwnerPythonStageNotStarted(OwnerPythonOriginal approved,OwnerPythonRun.StageNotStarted proof)throws Exception{
+        if(proof==null||!proof.matches(approved))throw new SecurityException("未启动证明不属于这次原脚本批准");
+        String id=approved.id();
+        db.beginTransaction();try{
+            JSONObject task=required(id);OwnerPythonOriginal original=ownerPythonOriginal(task,id,id,1);
+            if(!canonical(approved.route).equals(canonical(original.route))||!canonical(approved.plan).equals(canonical(original.plan))||
+                    !"running".equals(original.runStatus)||!"running".equals(task.opt("status"))||task.optBoolean("cancelRequested")||
+                    task.has(OwnerPythonRun.EXIT)||task.has(OWNER_PYTHON_NOT_STARTED)||hasUnresolvedExcept(id,id)||
+                    !"unknown".equals(original.row.opt("state"))||
+                    !canonical(ownerPythonPendingReceipt(original.route)).equals(canonical(original.row.getJSONObject("receipt"))))
+                throw new SecurityException("原脚本状态已变化，未登记未启动证明");
+            ContentValues values=new ContentValues();values.put("state","receipt");
+            values.put("receipt",ownerPythonStageRejectionReceipt(original.route).toString());
+            if(db.update("operations",values,"task_id=? AND run_id=? AND operation_id=? AND tool='project_execute' AND state='unknown'",new String[]{id,id,id})!=1)
+                throw new SecurityException("原脚本回执已变化");
+            task.put(OWNER_PYTHON_NOT_STARTED,ownerPythonStageRejectionView(original.scope));write(task);
+            endAttempt(id,id,"failed","没有启动 Python。未能准备这份脚本的运行副本。",new JSONObject()
+                    .put("nativeOwnerPythonScript",true).put("operationId",id).put("providerInvoked",false)
+                    .put("modelDispatched",false).put("businessVerified",false));
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
     /** Only native callback or explicit same-Work read of the one durably released backend receipt. */
     public synchronized boolean recordOwnerPythonBackendReceipt(JSONObject binding,JSONObject backend,java.util.function.BooleanSupplier current)throws Exception{
         String id=binding.getString("taskId");
@@ -14942,6 +14980,14 @@ public final class TaskStore {
         JSONObject reply=new JSONObject(actual.scope.toString()).put("scriptSha256",actual.scope.getString("sha256"))
                 .put("status",task.getString("status")).put("state","pending");
         JSONObject envelope=actual.row.getJSONObject("receipt"),recorded=task.optJSONObject(OwnerPythonRun.EXIT),body=envelope.optJSONObject("executionReceipt");
+        if(task.has(OWNER_PYTHON_NOT_STARTED)){
+            JSONObject notStarted=ownerPythonStageRejectionView(actual.scope),saved=task.optJSONObject(OWNER_PYTHON_NOT_STARTED);
+            if(saved==null||!canonical(notStarted).equals(canonical(saved))||task.has(OwnerPythonRun.EXIT)||hasUnresolved(id)||
+                    !"receipt".equals(actual.row.opt("state"))||!"failed".equals(actual.runStatus)||!"failed".equals(task.opt("status"))||
+                    !canonical(ownerPythonStageRejectionReceipt(actual.route)).equals(canonical(envelope)))
+                throw new SecurityException("原脚本未启动回执不一致");
+            return reply.put("state","not_started").put("notStarted",notStarted);
+        }
         if(!"receipt".equals(actual.row.opt("state"))||body==null||recorded==null||hasUnresolved(id))return reply;
         JSONObject exit=OwnerPythonRun.verifiedNativeExit(actual.plan,actual.route,body);
         if(exit==null||!canonical(exit).equals(canonical(recorded))||!actual.runStatus.equals(exit.opt("nativeStatus"))||
@@ -14952,7 +14998,8 @@ public final class TaskStore {
     }
     public synchronized ProjectFileSavePosition ownerPythonEditorPositionForOwner(String id)throws Exception{
         JSONObject settled=ownerPythonStatusForOwner(ownerPythonOriginalForOwner(id,id,1,id));
-        if(!"settled".equals(settled.opt("state")))throw new SecurityException("原脚本执行还未核对结束，没有打开其他文件");
+        if(!"settled".equals(settled.opt("state"))&&!"not_started".equals(settled.opt("state")))
+            throw new SecurityException("原脚本执行还未核对结束，没有打开其他文件");
         return new ProjectFileSavePosition(settled.getString("projectId"),settled.getString("checkoutId"),
                 settled.getString("path"),settled.getString("sha256"));
     }

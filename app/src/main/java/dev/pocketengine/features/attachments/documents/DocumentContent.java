@@ -44,6 +44,11 @@ public final class DocumentContent {
             this.locator=Collections.unmodifiableMap(new LinkedHashMap<>(locator));
         }
     }
+    public static final class Worksheet {
+        public final int unit;
+        public final String name;
+        private Worksheet(int unit,String name) { this.unit=unit; this.name=name; }
+    }
     public static final class Result {
         public final String format, status, coverage;
         public final List<Chunk> chunks;
@@ -51,27 +56,32 @@ public final class DocumentContent {
         public final int totalUnits, nextUnit, nextChunk;
         /** Same-worksheet start of the preceding natural range, or -1 when it was not proven. */
         public final int previousWorksheetChunk;
+        /** Bounded visible worksheet names in original order, only for the original reader. */
+        public final List<Worksheet> worksheets;
         public final boolean truncated;
         Result(String format,String status,String coverage,List<Chunk> chunks,List<String> warnings,
                 int totalUnits,int nextUnit,int nextChunk) {
-            this(format,status,coverage,chunks,warnings,totalUnits,nextUnit,nextChunk,-1);
+            this(format,status,coverage,chunks,warnings,totalUnits,nextUnit,nextChunk,-1,Collections.emptyList());
         }
         private Result(String format,String status,String coverage,List<Chunk> chunks,List<String> warnings,
-                int totalUnits,int nextUnit,int nextChunk,int previousWorksheetChunk) {
+                int totalUnits,int nextUnit,int nextChunk,int previousWorksheetChunk,List<Worksheet> worksheets) {
             this.format=format; this.status=status; this.coverage=coverage;
             this.chunks=Collections.unmodifiableList(new ArrayList<>(chunks));
             this.warnings=Collections.unmodifiableList(new ArrayList<>(warnings));
             this.totalUnits=totalUnits; this.nextUnit=nextUnit; this.nextChunk=nextChunk;
             this.previousWorksheetChunk=previousWorksheetChunk;
+            this.worksheets=worksheets.isEmpty()?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(worksheets));
             this.truncated=nextUnit>0;
         }
     }
     static final class Collector {
+        private static final int MAX_WORKSHEET_CHOICES=64;
         final Request request;
         final List<Chunk> chunks=new ArrayList<>();
         final List<String> warnings=new ArrayList<>();
         int chars,totalUnits,nextUnit,nextChunk,lastUnit,unitChunk;
         private WorksheetRange precedingWorksheetRange;
+        private final List<Worksheet> worksheets=new ArrayList<>();
         Collector(Request request) { this.request=request; }
         void trackPreviousWorksheetRange() {
             if(request.worksheetNavigation&&request.maxUnits==1&&request.startChunk>0)precedingWorksheetRange=new WorksheetRange();
@@ -89,6 +99,17 @@ public final class DocumentContent {
             }
         }
         void unit(int unit) { totalUnits=Math.max(totalUnits,unit); }
+        void worksheet(int unit,String name,String state) {
+            if(!request.worksheetNavigation||request.maxUnits!=1||unit>MAX_WORKSHEET_CHOICES||
+                    (state!=null&&!"visible".equals(state))||name==null||name.length()>128)return;
+            boolean visible=false;
+            for(int i=0;i<name.length();i++){
+                char ch=name.charAt(i);
+                if(Character.isISOControl(ch)||(ch>=0x2028&&ch<=0x202e)||(ch>=0x2066&&ch<=0x2069))return;
+                if(!Character.isWhitespace(ch)&&!Character.isSpaceChar(ch)&&Character.getType(ch)!=Character.FORMAT)visible=true;
+            }
+            if(visible)worksheets.add(new Worksheet(unit,name));
+        }
         void warning(String warning) {
             if(warning==null)return;
             warning=warning.substring(0,Math.min(300,warning.length()));
@@ -120,7 +141,8 @@ public final class DocumentContent {
             if("ok".equals(status)&&chunks.isEmpty()&&request.startUnit>totalUnits)status="empty_range";
             int previous="xlsx".equals(format)&&precedingWorksheetRange!=null&&!chunks.isEmpty()&&
                     chunks.get(0).unit==request.startUnit&&chunks.get(0).chunk==request.startChunk?precedingWorksheetRange.previous:-1;
-            return new Result(format,status,coverage,chunks,warnings,totalUnits,nextUnit,nextChunk,previous);
+            return new Result(format,status,coverage,chunks,warnings,totalUnits,nextUnit,nextChunk,previous,
+                    "xlsx".equals(format)&&totalUnits<=MAX_WORKSHEET_CHOICES?worksheets:Collections.emptyList());
         }
     }
     public static Map<String,String> location(String... fields) {

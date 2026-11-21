@@ -204,7 +204,7 @@ internal class PocketWebPhoneComposer(
         })
     }
 
-    private val preflight = PrivatePhoneStartConditions(controller)
+    private val preflight = PrivatePhoneStartConditions(controller, taskChannelSettings = true)
     private fun readConditions(mode: String) = preflight.read(mode)
     private fun readCapacity(mode: String) = preflight.capacity(mode)
 

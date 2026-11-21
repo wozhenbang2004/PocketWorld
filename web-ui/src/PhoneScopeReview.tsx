@@ -8,7 +8,7 @@ import './phone-scope-review.css';
 type Remedy='notifications'|'accessibility';
 type Condition={state:'ready'|'blocked'|'unknown';message?:string;settings?:Remedy|ReviewedPlace};
 // Older or partially delivered private reviews have no reliable slot evidence.
-export type PhoneConditions={notification:Condition;screen:Condition;capacity?:Pick<Condition,'state'|'message'>};
+export type PhoneConditions={notification:Condition&{settingsDetail?:'phone_task_channel'};screen:Condition;capacity?:Pick<Condition,'state'|'message'>};
 export type PhoneReviewDisplay={
   goal:string;mode:string;toolLimit:number;modelCallLimit:number;scopeMinutes:number;
   ownerPickedMessage?:boolean;message?:string;conversationId?:string;conversationTitle?:string;modelName?:string;screenDisclosure?:string;
@@ -106,6 +106,7 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
   const decision=pending?{title:'正在等待回执',detail:'暂不能确认这一步的结果，请勿重复提交。'}:privateDecision(conditions,expired,planned);
   const target=issue?.state==='blocked'&&!expired?issue.settings:undefined;
   const system=target==='notifications'||planned&&target==='accessibility'?target:undefined;
+  const taskChannel=shown.mode==='main_screen'&&system==='notifications'&&notification?.settingsDetail==='phone_task_channel';
   const screenTarget=screen?.state==='blocked'&&!expired?screen.settings:undefined;
   const place=shown.mode==='background'&&(screenTarget==='background_setup'||screenTarget==='main_screen_choice')?screenTarget:undefined;
   return <div className="pw-phone-scope-review"><PermissionReview {...controls} title={decision.title} context={planned?'计划使用'+planned:undefined}
@@ -119,7 +120,7 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
       {retry&&<div className="pw-phone-review-remedies">
         {system&&onSettings&&<Button variant={canSubmit?'secondary':'primary'} disabled={!live||pending}
           onClick={()=>{if(!handle||!current())return;invalidate(handle);onSettings(handle,system)}}>
-          {system==='notifications'?'查看任务通知设置':'查看无障碍设置'}
+          {taskChannel?'查看「手机任务」通知类别':system==='notifications'?'查看任务通知设置':'查看无障碍设置'}
         </Button>}
         {place&&onPlace&&<Button variant="secondary" disabled={!live||pending} onClick={()=>{
           if(!handle||!current())return;onPlace(handle,place);
@@ -127,6 +128,7 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
         {onCheck&&<Button variant={!system&&!place&&(expired||!canSubmit)?'primary':'ghost'} disabled={!live||pending}
           onClick={()=>{if(handle&&!pending&&!document.hidden){invalidate(handle);onCheck(handle)}}}>重新核对</Button>}
       </div>}
+      {taskChannel&&onSettings&&<p className="pw-field-hint">若只打开应用通知设置，请在其中选择「手机任务」。返回后重新核对原目标。</p>}
       {place&&onPlace&&<p className="pw-field-hint">{place==='background_setup'?'在准备页选「后台独立屏 → 连接与检查」。回来后再核对原目标，不会自动连接或提交。':'主屏会占用手中的屏幕。只有你在原草稿选择后才会更换位置；仍需重新核对。'}</p>}
     </div>
     <PrivateReviewDetails shown={shown} live={live}/>

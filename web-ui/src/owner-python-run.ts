@@ -19,7 +19,7 @@ type PythonSource = SavedPython & {requestId: string; bytes: number; runtimeIden
 export type PythonReview = PythonSource & {reviewHandle: string};
 export type OriginalPythonRun = PythonSource & {taskId: string; runId: string; operationId: string; epoch: 1; scriptInputDigest: string; planDigest: string};
 export type PythonExit = {exitKind: 'exit_code' | 'signal' | 'no_child'; value: number; timedOut: boolean; cancelRequested: boolean};
-export type PythonRead = {state: 'pending'} | {state: 'settled'; exit: PythonExit; output?: {stdout: string; stderr: string; truncated: boolean}};
+export type PythonRead = {state: 'pending' | 'not_started'} | {state: 'settled'; exit: PythonExit; output?: {stdout: string; stderr: string; truncated: boolean}};
 
 const sameSource = (a: SavedPython, b: SavedPython) =>
   a.projectId === b.projectId && a.checkoutId === b.checkoutId && a.path === b.path && a.sha256 === b.sha256;
@@ -73,10 +73,19 @@ export function originalPythonExit(value: unknown, original: OriginalPythonRun):
   return {exitKind, value: number, timedOut, cancelRequested};
 }
 
+export function originalPythonNotStarted(value: unknown, original: OriginalPythonRun): boolean {
+  const row = record(value);
+  return !!row && row.format === 'pocketworld.owner-python-script-not-started.v1' && exactRun(row, original) &&
+    row.planDigest === original.planDigest && row.reason === 'stage_preparation_failed' &&
+    row.providerInvoked === false && row.replayAllowed === false;
+}
+
 export function pythonReadResult(value: unknown, original: OriginalPythonRun): PythonRead | undefined {
   const row = record(value);
   if (!row || !exactRun(row, original)) return undefined;
   if (row.state === 'pending') return {state: 'pending'};
+  if (row.state === 'not_started') return row.status === 'failed' &&
+    originalPythonNotStarted(row.notStarted, original) ? {state: 'not_started'} : undefined;
   if (row.state !== 'settled') return undefined;
   const exit = originalPythonExit(row.exit, original);
   if (!exit) return undefined;

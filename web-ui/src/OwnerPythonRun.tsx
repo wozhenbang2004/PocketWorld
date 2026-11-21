@@ -11,8 +11,8 @@ const endText = (exit: PythonExit) => {
   return exit.value === 0 ? '脚本运行完成' : `脚本退出（退出码 ${exit.value}）`;
 };
 
-export function OwnerPythonRun({work, released, canRead, live, reopen}: {
-  work: OriginalPythonRun; released?: PythonExit; canRead: boolean;
+export function OwnerPythonRun({work, released, notStarted, canRead, live, reopen}: {
+  work: OriginalPythonRun; released?: PythonExit; notStarted: boolean; canRead: boolean;
   live: () => boolean; reopen?: () => void;
 }) {
   const [read, setRead] = useState<PythonRead>(), [pending, setPending] = useState(false), [error, setError] = useState('');
@@ -37,21 +37,23 @@ export function OwnerPythonRun({work, released, canRead, live, reopen}: {
     }
   };
   const exit = released ?? (read?.state==='settled'?read.exit:undefined);
-  const output = read?.state==='settled'?read.output:undefined;
+  const preparationFailed = notStarted || read?.state==='not_started';
+  const output = !preparationFailed && read?.state==='settled'?read.output:undefined;
   return <section className="pw-task-overview pw-task-review" aria-label="本机 Python 运行">
     <div className="pw-work-current-progress">
       <h3><bdi>{work.path}</bdi></h3>
-      <p>在这部手机运行 · 保存版本 <code>{work.sha256.slice(0,8)}</code></p>
-      <strong role="status">{exit?endText(exit):'尚未核对到本次运行结束'}</strong>
+      <p>{preparationFailed?'这部手机':'在这部手机运行'} · 保存版本 <code>{work.sha256.slice(0,8)}</code></p>
+      <strong role="status">{preparationFailed?'没有启动 Python':exit?endText(exit):'尚未核对到本次运行结束'}</strong>
+      {preparationFailed && <p>未能准备这份脚本的运行副本。原脚本没有被这次操作改写。</p>}
     </div>
     <div className="pw-action-row">
-      {canRead && <Button variant={output?'secondary':undefined} disabled={pending} onClick={()=>void readOutput()}>
+      {canRead && !preparationFailed && <Button variant={output?'secondary':undefined} disabled={pending} onClick={()=>void readOutput()}>
         {pending?'正在读取…':exit?'读取本次输出':'查看运行进度'}
       </Button>}
       {reopen && <Button variant="secondary" disabled={pending} onClick={()=>{if(current.current())reopen()}}>返回原脚本</Button>}
     </div>
     {error && <p role="alert">{error}</p>}
-    {read?.state==='settled' && !output && <p role="status">已核对结束状态。当前没有可读取的原输出。</p>}
+    {!preparationFailed && read?.state==='settled' && !output && <p role="status">已核对结束状态。当前没有可读取的原输出。</p>}
     {output && <div className="pw-work-current-progress">
       <h4>程序输出</h4>
       {output.stdout?<pre className="pw-checkout-review-diff" aria-label="程序输出">{output.stdout}</pre>:<p>没有程序输出。</p>}

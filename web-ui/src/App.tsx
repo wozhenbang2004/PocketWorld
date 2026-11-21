@@ -81,7 +81,7 @@ import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
 import {bareManagedNodeCheck,currentManagedNodeOperation,originalDirectViteEditorReturn,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
 import { OwnerPythonRun } from './OwnerPythonRun';
-import { originalPythonExit, originalPythonRun, ownerPythonRead, samePythonRun, savedPythonPath, type OriginalPythonRun } from './owner-python-run';
+import { originalPythonExit, originalPythonNotStarted, originalPythonRun, ownerPythonRead, samePythonRun, savedPythonPath, type OriginalPythonRun } from './owner-python-run';
 import {failedBuildFeedback,nodeBuildContinuationText,originalNodeBuildAfterDependencies,projectFeedbackKey,type ExecutionExit} from './project-execution-exit';
 import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWorkspace';
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
@@ -2190,7 +2190,8 @@ export default function App(){
   return raw?.actorId==='owner' && raw.spaceId==='private' && raw.contextAvailable!==false &&
     raw.contextWithdrawn!==true && raw.sourceCurrentReadRequired!==true && raw.runId===work.runId &&
     raw.coordinatorEpoch===work.epoch && samePythonRun(work,originalPythonRun(raw.ownerPythonScriptRun)) &&
-    !!originalPythonExit(raw.ownerPythonScriptExit,work) && asArray<Project>(owner.projects).filter(row=>row.id===work.projectId).length===1;
+    (!!originalPythonExit(raw.ownerPythonScriptExit,work) ||
+      rows[0]?.status==='failed' && raw.hasUnresolvedOperations===false && originalPythonNotStarted(raw.ownerPythonScriptNotStarted,work)) && asArray<Project>(owner.projects).filter(row=>row.id===work.projectId).length===1;
  };
  const currentViteEditorVisit=(target:ProjectBuildCopy,live:ReturnType<typeof bridge.getState>)=>{
   const desired=target.editorResume,owner=live.state,view=obj(live.view);
@@ -4401,9 +4402,11 @@ export default function App(){
       raw.runId===work.runId && raw.coordinatorEpoch===work.epoch && samePythonRun(work,originalPythonRun(raw.ownerPythonScriptRun));
    };
    const exit=originalPythonExit(task.raw.ownerPythonScriptExit,work);
+   const notStarted=task.status==='failed' && task.raw.hasUnresolvedOperations===false &&
+    originalPythonNotStarted(task.raw.ownerPythonScriptNotStarted,work);
    return <OwnerPythonRun key={JSON.stringify([work.taskId,work.runId,work.operationId,visit,viewRevision])}
-    work={work} released={exit} canRead={can(ownerPythonRead)} live={live}
-    reopen={exit&&currentPythonEditorVisit(work,bridge.getState())?()=>void openOriginalBuildCopy({
+    work={work} released={exit} notStarted={notStarted} canRead={can(ownerPythonRead)} live={live}
+    reopen={(exit||notStarted)&&currentPythonEditorVisit(work,bridge.getState())?()=>void openOriginalBuildCopy({
       taskId:work.taskId,runId:work.runId,epoch:work.epoch,projectId:work.projectId,checkoutId:work.checkoutId,
       sourceDigest:work.sha256,pythonEditor:work,
     }):undefined}/>;

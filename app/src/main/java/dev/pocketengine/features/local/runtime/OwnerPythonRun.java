@@ -178,9 +178,10 @@ public final class OwnerPythonRun {
             }
         }
         /** Only called from the native consumed-approval path for this exact owner Work. */
-        private RuntimeReceipt startApproved(JSONObject nativeRoute, RunControl original,
+        private RuntimeReceipt startApproved(TaskStore.OwnerPythonOriginal claim, RunControl original,
                                      ProjectRuntime.LiveGate approvedOriginalWork) throws Exception {
             requireCurrent();
+            JSONObject nativeRoute = claim.route();
             Original run = original(plan, nativeRoute);
             run.ref.checkControl(original);
             approvedOriginalWork.check();
@@ -191,7 +192,14 @@ public final class OwnerPythonRun {
             Stage stage = null;
             boolean passed = false;
             try {
-                stage = runtime.materializeOwnerPython(source.id, source.path, source.sha256, owned);
+                try {
+                    stage = runtime.materializeOwnerPython(source.id, source.path, source.sha256, owned);
+                } catch (Exception failed) {
+                    if (failed instanceof InterruptedException || Thread.currentThread().isInterrupted()) throw failed;
+                    // This one-use buffer has already been taken. Materialization cannot call the provider.
+                    // Do not convert any later exception, missing receipt, or cleanup state to this fact.
+                    throw new StageNotStarted(claim);
+                }
                 RuntimeWorkspace physical = new RuntimeWorkspace(stage.directory(), source.project, source.executionCheckout());
                 RuntimeInvocation invocation = new RuntimeInvocation(run.exact, nativeRoute, source.snapshot(owned),
                         original, approvedOriginalWork, physical);
@@ -207,6 +215,13 @@ public final class OwnerPythonRun {
         @Override public synchronized void close() {
             if (bytes != null) { Arrays.fill(bytes, (byte) 0); bytes = null; }
         }
+    }
+
+    /** Only the synchronous native single-script staging branch can produce this proof. */
+    public static final class StageNotStarted extends Exception {
+        private final TaskStore.OwnerPythonOriginal approved;
+        private StageNotStarted(TaskStore.OwnerPythonOriginal approved) { this.approved = approved; }
+        public boolean matches(TaskStore.OwnerPythonOriginal candidate) { return approved == candidate; }
     }
 
     public static final class Confirmed implements AutoCloseable {
@@ -237,7 +252,7 @@ public final class OwnerPythonRun {
                 if (!entered || !review.source.id.equals(claim.id()))
                     throw new SecurityException("没有这次脚本的原准入");
             }
-            return review.startApproved(claim.route(), original, live);
+            return review.startApproved(claim, original, live);
         }
         @Override public void close() { review.close(); }
     }
