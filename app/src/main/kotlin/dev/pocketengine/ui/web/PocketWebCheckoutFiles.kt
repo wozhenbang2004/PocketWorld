@@ -255,7 +255,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         val result = controller.projectDevelopmentForWeb().importFileForOwner(original.project, original.checkout, entry.file.draft.path, entry.review) {
                             current(original) && original.opened === entry.file && entry.expires > SystemClock.elapsedRealtime() && synchronized(store) { requireDraft(entry.file); entry.file.draft.revision == entry.revision && !entry.file.draft.dirty() }
                         }
-                        entry.file.formal = ProjectAdoptedFormalFile.receipt(result, original.project, original.checkout, entry.file.draft.path)
+                        entry.file.formal = ProjectAdoptedFormalFile.receipt(result, original.project, original.checkout, entry.file.draft.path, ordinaryEditor = original.sourcePath == null)
                         info(original, entry.file, true).also { reply ->
                             reply.remove("projectVersionWritten")
                             if (result.opt("projectVersionCommitted") is Boolean) reply.put("projectVersionWritten", result.getBoolean("projectVersionCommitted"))

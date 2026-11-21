@@ -5044,15 +5044,27 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         // open its result, and only while its original owner window is still current.
         projectCreationNavigation = ProjectCreationNavigation(requestId, window)
     }
+    private var openedCommittedCheckoutFile: Pair<Long, ProjectAdoptedFormalFile.Loaded>? = null
     /** From the original private checkout only. No path-based latest read, external open or save. */
     internal fun showAdoptedFormalFile(loaded: ProjectAdoptedFormalFile.Loaded) {
         val pin = loaded.pin
         check(!closed && webPrivateOwnerVisible() && state.projectId == pin.project && state.filePath == null &&
             !state.fileSaving && loaded.stillCurrent()) { "原正式版本或项目窗口已变化，未切换文件或覆盖现有编辑" }
         invalidateFileRequests()
+        openedCommittedCheckoutFile = loaded.takeIf { it.committedFromOrdinaryCopy }?.let { formalFileWindowEpoch() to it }
         state = state.copy(fileObservation = null, revisionObservation = null, heldFormalDraft = null, filePath = pin.path, fileContent = loaded.content, fileBaseline = loaded.content, fileVersion = pin.version,
             fileLoading = false, fileSaving = false, fileReady = true, fileError = null, fileHistory = emptyList(), revisionContent = null,
             revisionNumber = null, revisionLoading = false, lastSavedVersion = null, workspaceArtifactEditorOrigin = null)
+    }
+    /** This known loaded result is for comparison, never a general fileObservation or staging gate. */
+    internal fun adoptedFormalComparisonForWeb():JSONObject? {
+        val (epoch,loaded)=openedCommittedCheckoutFile?:return null
+        val pin=loaded.pin;val current=state
+        if(epoch!=formalFileWindowEpoch()||!webPrivateOwnerVisible()||conversationReader!=null||current.workspaceArtifactEditorOrigin!=null||
+            !current.fileReady||current.fileLoading||current.fileSaving||
+            current.projectId!=pin.project||current.filePath!=pin.path||current.fileVersion!=pin.version||
+            current.fileBaseline!=loaded.content||current.fileContent!=loaded.content||!loaded.stillCurrent())return null
+        return loaded.comparisonPosition()
     }
     fun openFile(path: String) {
         val project = state.projectId ?: return
@@ -5106,7 +5118,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val content = state.revisionContent ?: error("没有读到原历史文字，当前草稿未替换")
         state = state.copy(fileContent = content, lastSavedVersion = null, notice = "历史内容已放入编辑区，保存后才会创建新版本")
     }
-    private fun invalidateFileRequests() { fileRequestId = null; historyRequestId = null; revisionRequestId = null; exactArtifactContinuation = null; artifactContinuationGeneration++ }
+    private fun invalidateFileRequests() { fileRequestId = null; historyRequestId = null; revisionRequestId = null; exactArtifactContinuation = null; openedCommittedCheckoutFile = null; artifactContinuationGeneration++ }
     fun saveFile() {
         val project = state.projectId ?: return
         val path = state.filePath ?: return

@@ -12,7 +12,8 @@ import java.util.UUID
  * It cannot authorize a version write, execute a file or replace an existing editor. */
 internal class ProjectAdoptedFormalFile private constructor(
     val project:String, val checkout:String, val path:String, val version:Int,
-    val revision:String, val sha:String, val bytes:Long, private val evidence:String
+    val revision:String, val sha:String, val bytes:Long, private val evidence:String,
+    private val ordinaryCommit:Boolean=false
 ) {
     val handle=UUID.randomUUID().toString()
     fun position():JSONObject=JSONObject().put("handle",handle).put("projectId",project).put("checkoutId",checkout)
@@ -23,6 +24,11 @@ internal class ProjectAdoptedFormalFile private constructor(
     class Loaded internal constructor(val pin:ProjectAdoptedFormalFile,val content:String,private val workspace:WorkspaceModule) {
         // Main-thread guard: commits, catalog removal and controller close invalidate this no-IO native head.
         fun stillCurrent()=pin.same(workspace.currentFileHeadForHost(pin.project,pin.path))
+        val committedFromOrdinaryCopy get()=pin.ordinaryCommit
+        fun comparisonPosition():JSONObject? = pin.takeIf { it.ordinaryCommit }?.position()?.also {
+            it.remove("handle") // Presentation only; do not carry the checkout editor's open ticket.
+            it.put("projectVersionCommitted",true)
+        }
     }
     fun read(ws:WorkspaceModule):Loaded {
         check(same(ws.refreshFileHeadForHost(project,path))) { "正式文件已经变化或不可核对；仍保留副本，未代开最新版本" }
@@ -45,13 +51,14 @@ internal class ProjectAdoptedFormalFile private constructor(
             row.optString("checkoutId")==checkout && row.optString("path")==path
         private fun length(bytes:Long)=bytes in 0L..262144L
 
-        fun receipt(row:JSONObject,project:String,checkout:String,path:String):ProjectAdoptedFormalFile? {
+        fun receipt(row:JSONObject,project:String,checkout:String,path:String,ordinaryEditor:Boolean):ProjectAdoptedFormalFile? {
             if(row.optString("format")!=ProjectTextImport.RECEIPT || !source(row,project,checkout,path) || row.opt("deleted")!=false ||
                 row.optString("kind")!="text" || row.optInt("version")<1 || !id.matches(row.optString("revisionId")) ||
                 !digest.matches(row.optString("sha256")) || row.optString("importedHash")!=row.optString("sha256") || !length(row.optLong("sizeBytes",-1)))return null
-            if(row.opt("projectVersionCommitted")==true && row.opt("alreadyMatchingVersionObserved")==false ||
+            val committed=row.opt("projectVersionCommitted")==true && row.opt("alreadyMatchingVersionObserved")==false
+            if(committed ||
                 row.opt("projectVersionCommitted")==false && row.opt("alreadyMatchingVersionObserved")==true)
-                return ProjectAdoptedFormalFile(project,checkout,path,row.getInt("version"),row.getString("revisionId"),row.getString("sha256"),row.getLong("sizeBytes"),"import_receipt")
+                return ProjectAdoptedFormalFile(project,checkout,path,row.getInt("version"),row.getString("revisionId"),row.getString("sha256"),row.getLong("sizeBytes"),"import_receipt",committed&&ordinaryEditor)
             return null
         }
         // A closed/recreated checkout window has no old admission. Only a new equality comparison

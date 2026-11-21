@@ -600,11 +600,38 @@ internal class AttachmentOutcomeCoordinator(
         val file=state.file?:return false;val read=state.document?:return false
         return state.group==null&&read.optString("attachmentId")==file.optString("id")&&read.optString("sha256")==file.optString("sha256")&&read.optString("readReceiptId").isNotBlank()&&read.optJSONArray("chunks")?.length()?.let{it>0}==true
     }
+    private fun listedWorkPdf(snapshot:JSONObject,file:JSONObject):Boolean =
+        snapshot.optJSONArray("sources").objects().singleOrNull{it.opt("id")==file.opt("id")}?.let{
+            it.opt("sha256")==file.opt("sha256")&&it.opt("role")=="source"&&it.opt("availability")=="available"&&
+                it.opt("mimeType")=="application/pdf"&&it.opt("sourceKind")=="content_uri"&&it.isNull("sourceTaskId")&&
+                it.optLong("size",-1)>0&&it.optLong("size",-1)==file.optLong("size",-2)
+        }==true
     fun saveReadAsFile(){
-        if(state.busy||!canSaveRead())return;val task=state.taskId;val file=state.file?:return;val receipt=state.document?.getString("readReceiptId")?:return
+        if(state.busy||!canSaveRead())return;val task=state.taskId;val file=state.file?:return;val read=state.document?:return
+        val receipt=read.getString("readReceiptId")
+        val pdfWork=state.snapshot?.takeIf{task!=null&&it.opt("taskId")==task&&it.opt("taskStatus")=="completed"&&
+            it.optString("taskRunId").isNotBlank()&&it.optInt("coordinatorEpoch")>0&&
+            state.resultRun==null&&state.team==null&&!state.deviceOriginalOnly&&!state.choosingSource&&!state.restoredWorkReturn&&
+            state.originalFile==null&&state.documentOpen&&file.opt("role")=="source"&&file.opt("mimeType")=="application/pdf"&&
+            read.opt("readContext")=="native_owner_preview"&&read.opt("taskId")==task&&read.opt("format")=="pdf"&&
+            read.opt("coverage")=="pdf_text_layer"&&listedWorkPdf(it,file)}
         work(replaceDocumentWithFile=true){c,_->
             val saved=app.attachmentOutcomes.saveOwnerDocumentExtract(task,file.getString("id"),file.getString("sha256"),receipt,c)
-            val snapshot=app.ownerOutcomeSnapshot(task,c);val selected=snapshot.optJSONArray("artifacts").objects().firstOrNull{it.optString("id")==saved.getString("id")&&it.optString("sha256")==saved.getString("sha256")}?:throw IllegalStateException("摘录文件已保存，请刷新原任务成果核对；没有再次生成")
+            val snapshot=app.ownerOutcomeSnapshot(task,c);val artifacts=snapshot.optJSONArray("artifacts").objects()
+            val selected=artifacts.firstOrNull{it.optString("id")==saved.getString("id")&&it.optString("sha256")==saved.getString("sha256")}?:throw IllegalStateException("摘录文件已保存，请刷新原任务成果核对；没有再次生成")
+            val source=saved.optJSONObject("source")
+            val samePdfSave=pdfWork!=null&&source!=null&&snapshot.opt("taskId")==task&&snapshot.opt("taskStatus")=="completed"&&
+                snapshot.opt("taskRunId")==pdfWork.opt("taskRunId")&&snapshot.opt("coordinatorEpoch")==pdfWork.opt("coordinatorEpoch")&&
+                saved.opt("principalId")=="owner"&&saved.opt("spaceId")=="private"&&saved.opt("mimeType")=="text/plain"&&
+                !saved.optBoolean("outputSourceRetired")&&
+                source.opt("kind")=="document_extract"&&source.opt("taskId")==task&&source.opt("readReceiptId")==receipt&&
+                source.opt("sourceAttachmentId")==file.opt("id")&&source.opt("sourceSha256")==file.opt("sha256")&&
+                source.opt("coverage")=="pdf_text_layer"&&source.isNull("runId")&&source.isNull("operationId")&&
+                !source.has("archiveEvidence")&&selected.opt("id")!=file.opt("id")&&selected.opt("role")=="result"&&
+                selected.opt("availability")=="available"&&selected.opt("runProvenance")=="unrecorded"&&
+                artifacts.count{it.opt("id")==selected.opt("id")}==1&&listedWorkPdf(snapshot,file)
+            // A presentation receipt for this one save; never part of a stored file, picker pin or normal file list.
+            if(samePdfSave)snapshot.put("savedPdfExcerptHere",JSONObject().put("id",selected.opt("id")).put("sha256",selected.opt("sha256")))
             snapshot.put("outcomeNotice","已将当前已读范围保存为文字成果，可以打开或导出；原文件保留，后续内容仍需另行读取") to selected
         }
     }

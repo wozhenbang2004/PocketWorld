@@ -30,6 +30,20 @@ function observedEarlierText(state: Data, path: string, head: number, selected: 
   return { project: state.projectId, revision: source.revisionId, sha: source.sha256, bytes: source.bytes, text };
 }
 
+function observedAdoptionText(state: Data, path: string, version: number) {
+  const source = state.adoptedFormalComparison;
+  // This pin accompanies the already loaded formal bytes, not the old
+  // checkout draft, a known latest project row, or authority to edit again.
+  return source?.projectVersionCommitted === true && source.evidence === 'import_receipt' &&
+    state.fileReady === true && !state.fileLoading && !state.fileSaving && source.projectId === state.projectId &&
+    state.filePath === path && source.path === path && source.version === version && state.fileVersion === version &&
+    typeof source.checkoutId === 'string' && /^[a-f0-9-]{36}$/.test(source.checkoutId) &&
+    typeof source.revisionId === 'string' && /^[a-f0-9-]{36}$/.test(source.revisionId) &&
+    typeof source.sha256 === 'string' && /^[a-f0-9]{64}$/.test(source.sha256) &&
+    Number.isSafeInteger(source.bytes) && source.bytes >= 0 && source.bytes <= 262144 &&
+    typeof state.fileBaseline === 'string' && state.fileContent === state.fileBaseline ? state.fileBaseline as string : undefined;
+}
+
 export function ProjectFileEditor({ path, version, draft, state, conflict, mode, setMode, can, edit, save, readHistory, readRevision, retry, copy, copyRevision, adoption, registerBack }: Props) {
   const [selected, setSelected] = useState<number | null>(null), [reviewing, setReviewing] = useState(false);
   const root = useRef<HTMLElement>(null);
@@ -45,6 +59,8 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   const history = Array.isArray(state.fileHistory) ? state.fileHistory : [];
   const selectedReady = selected !== null && state.revisionNumber === selected && typeof state.revisionContent === 'string' && state.revisionObservation?.representation === 'text' && state.revisionObservation?.version === selected && !state.revisionLoading;
   const locked = !!state.fileSaving || adoption.pending;
+  const adoptedText = conflict && draft?.dirty === true && draft.text !== draft.baseline && draft.version > 0 && draft.version < version
+    ? observedAdoptionText(state, path, version) : undefined;
   const earlierText = mode === 'history' && selected !== null && !reviewing && can('projects.revision') &&
     typeof navigator.clipboard?.writeText === 'function' ? observedEarlierText(state, path, version, selected) : undefined;
   const shownDocument = bridge.getDocumentEpoch(), shownView = bridge.getState().view as Data | undefined;
@@ -73,7 +89,7 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   useCollectionMotion(root, surfaceIdentity, JSON.stringify(history.map((item: Data) => [item.version, item.at])), { active: !!state.fileReady && !state.fileLoading && Array.isArray(state.fileHistory) && mode === 'history' && selected === null, enter: false });
   const switchMode = (value: FileLayer) => { if (locked) return; setReviewing(false); setMode(value); if (value === 'history') readHistory(); };
   return <section ref={root} className="pw-file-editor pw-file-workspace pw-project-file-editor" aria-label="文件工作区" aria-busy={!!state.fileLoading || locked}>
-    <header className="pw-file-heading"><div><h2 className="pw-file-name">{path.split('/').at(-1)}</h2><p className="pw-file-path">{path.includes('/')?path.slice(0,path.lastIndexOf('/')):'项目根目录'}</p><p>{state.fileReady || version>0 ? '版本 '+(state.fileReady ? draft?.version ?? version : version) : '版本尚未核对'}<span className={draft?.dirty ? 'pw-file-dirty' : ''}>{draft?.dirty ? ' · 有保留的修改' : state.fileReady ? ' · 当前文件' : ' · 只读'}</span></p></div>{draft?.dirty && <span className="pw-file-state-dot" aria-hidden="true"/>}</header>
+    <header className="pw-file-heading"><div><h2 className="pw-file-name">{path.split('/').at(-1)}</h2><p className="pw-file-path">{path.includes('/')?path.slice(0,path.lastIndexOf('/')):'项目根目录'}</p><p>{adoptedText !== undefined ? '正式版本 '+version : state.fileReady || version>0 ? '版本 '+(state.fileReady ? draft?.version ?? version : version) : '版本尚未核对'}<span className={draft?.dirty ? 'pw-file-dirty' : ''}>{draft?.dirty ? ' · 有保留的修改' : state.fileReady ? ' · 当前文件' : ' · 只读'}</span></p></div>{draft?.dirty && <span className="pw-file-state-dot" aria-hidden="true"/>}</header>
     {!state.fileLoading && can('projects.keptDrafts.forFile') && <ProjectKeptFileDrafts state={state} draft={draft} edit={edit} disabled={!!state.fileSaving || adoption.pending}/>}
     {state.fileLoading ? <div className="pw-loading-file" aria-busy="true"><ShimmerText>正在读取文件</ShimmerText><Skeleton width="85%" height={13}/><Skeleton width="65%" height={13}/><Skeleton width="94%" height={13}/></div> : state.fileReady && draft ? <>
       {state.heldFormalDraft && <RetainedFormalDraft state={state}/>}
@@ -81,13 +97,20 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
       {state.fileReady && !state.fileSaving && version>0 && can('projects.fileExport.review') && <ProjectFormalFileDelivery
       key={String(state.projectId)+':'+path+':'+version} projectId={state.projectId} projectName={state.projects?.find((row:Data)=>row.id===state.projectId)?.name||'当前项目'}
       path={path} version={version} dirty={draft?.dirty===true}/>}
-    {conflict && <div className="pw-file-notice" role="alert"><p>原文件版本已变化。当前草稿仍保留，请比较后再决定。</p><Button variant="ghost" leadingIcon={IconCopy} onClick={copy}>复制保留的草稿</Button></div>}
+    {conflict && <div className="pw-file-notice" role="alert">
+      <p>{adoptedText !== undefined ? `已核对采纳后的正式 v${version}。基于 v${draft.version} 的草稿仍保留。` : '原文件版本已变化。当前草稿仍保留，请比较后再决定。'}</p>
+      <Button variant="ghost" leadingIcon={IconCopy} onClick={copy}>复制保留的草稿</Button>
+    </div>}
       {state.fileError && <MotionFeedback identity={state.fileError} className="pw-error" role="alert">{state.fileError}</MotionFeedback>}
       {adoption.message && <MotionFeedback identity={adoption.message} className={adoption.unknown ? 'pw-error' : 'pw-muted'} role={adoption.unknown ? 'alert' : 'status'}>{adoption.message}</MotionFeedback>}
       <Tabs selectedKey={mode} onSelectionChange={key => switchMode(key as FileLayer)} className="pw-file-tabs">
-        <TabList aria-label="文件工作方式"><Tab id="edit" isDisabled={locked}>编辑</Tab><Tab id="diff" isDisabled={locked}>比较修改</Tab><Tab id="history" isDisabled={locked || !can('projects.history')}>版本记录</Tab></TabList>
+        <TabList aria-label="文件工作方式"><Tab id="edit" isDisabled={locked}>编辑</Tab><Tab id="diff" isDisabled={locked}>{adoptedText !== undefined ? '与正式版本比较' : '比较修改'}</Tab><Tab id="history" isDisabled={locked || !can('projects.history')}>版本记录</Tab></TabList>
         <TabPanel id="edit"><TextAreaField label="文件内容" value={draft.text} onChange={edit} isReadOnly={locked} className="pw-code-editor"/></TabPanel>
-        <TabPanel id="diff"><InlineDiff before={draft.baseline} after={draft.text} versionLabel={`原版本 ${draft.version}`} onCancel={() => setMode('edit')} pending={locked}/></TabPanel>
+        <TabPanel id="diff">{adoptedText === undefined
+          ? <InlineDiff before={draft.baseline} after={draft.text} versionLabel={`原版本 ${draft.version}`} onCancel={() => setMode('edit')} pending={locked}/>
+          : adoptedText === draft.text ? <><p role="status">正式 v{version} 与保留草稿的文字相同，草稿没有被替换。</p><pre className="pw-file-revision-content">{adoptedText}</pre></>
+            : <InlineDiff before={adoptedText} after={draft.text} versionLabel="只读比较" beforeLabel={`已采纳的正式 v${version}`}
+              afterLabel={`保留草稿（基于 v${draft.version}）`} readOnly/>}</TabPanel>
         <TabPanel id="history" className="pw-file-history-panel">
           {selected === null ? <><FormalHistoryComparison version={state.fileVersion} rows={history} project={state.projectId} path={path}/><div className="pw-file-subheading"><p>已保存的版本</p><Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={locked} onClick={readHistory}>重新读取</Button></div><div ref={historyScroll} className="pw-file-version-list" onScroll={event => { historyTop.current = event.currentTarget.scrollTop; }}>{history.map((item: Data) => <Button key={item.version} data-revision={item.version} data-motion-key={`revision:${item.version}`} variant="ghost" className="pw-file-version-row" disabled={locked || !can('projects.revision')} onClick={() => { lastRevision.current = item.version; setSelected(item.version); readRevision(item.version); }}><span className="pw-version-number">版本 {item.version}</span><small>{typeof item.at === 'number' && item.at > 0 ? new Date(item.at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '保存时间未提供'}</small></Button>)}</div>{!history.length && <p className="pw-empty-small">尚未读到这个文件的版本记录。可重新读取原文件历史。</p>}</> : <section className="pw-file-revision">
             <div className="pw-file-subheading"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={adoption.pending} onClick={() => { setReviewing(false); setSelected(null); }}>版本记录</Button><span>版本 {selected}</span>{earlierText && <Button variant="ghost" size="small" leadingIcon={IconCopy} disabled={locked} onClick={event => copyEarlier(event.currentTarget)}>复制此版正文</Button>}</div>

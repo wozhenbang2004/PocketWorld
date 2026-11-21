@@ -131,10 +131,12 @@ function documentSourceKey(record:Json,source:Json=record){
  const file=exactFileTarget(source),scope=[record.sourceTaskId,record.sourceTaskRunId,record.sourceOperationId];
  return file&&scope.every(key=>typeof key==='string'&&key)?JSON.stringify([...scope,file.fileId,file.sha256]):'';
 }
-function libraryExcerptPdf(view:Json){
+function excerptPdfSource(view:Json,taskId?:string){
  const catalog=obj(view.snapshot),file=obj(view.file),excerpt=exactFileTarget(file);
- if(!attachmentFrame(view)||view.open!==true||view.taskId!=null||catalog.taskId!==''||
-    view.group!==false||view.team!==false||view.deviceOriginalOnly!==false||view.fromWorkResult!==false||
+ if(!attachmentFrame(view)||view.open!==true||catalog.taskId!==(taskId??'')||
+    (taskId?view.taskId!==taskId||file.sourceTaskId!==taskId||file.runProvenance!=='unrecorded':
+     view.taskId!=null||view.fromWorkResult!==false)||
+    view.group!==false||view.team!==false||view.deviceOriginalOnly!==false||
     view.historyResultOnly!==false||view.reportResultOnly!==false||view.resultFilesOnly!==false||view.choosingSource!==false||
     view.originalFile!=null||view.documentOpen!==false||view.documentDraft!=null||view.processingOpen!==false||view.comparison!=null||
     !excerpt||file.role!=='result'||file.availability!=='available'||file.sourceKind!=='document_extract'||file.mimeType!=='text/plain')return;
@@ -142,7 +144,7 @@ function libraryExcerptPdf(view:Json){
  const copies=rows(catalog.artifacts).filter(row=>row?.id===excerpt.fileId);
  const record=copies[0];
  if(copies.length!==1||record.sha256!==excerpt.sha256||record.role!=='result'||record.availability!=='available'||
-    record.sourceKind!=='document_extract'||record.mimeType!=='text/plain'||record.sourceTaskId!=null||
+    record.sourceKind!=='document_extract'||record.mimeType!=='text/plain'||(taskId?record.sourceTaskId!==taskId:record.sourceTaskId!=null)||
     record.sourceTaskRunId!=null||record.sourceOperationId!=null||typeof record.sourceAttachmentId!=='string'||
     record.sourceAttachmentId===excerpt.fileId||record.sourceAttachmentId!==file.sourceAttachmentId||
     record.sourceSha256!==file.sourceSha256)return;
@@ -152,6 +154,22 @@ function libraryExcerptPdf(view:Json){
     source.sourceKind!=='content_uri'||source.sourceTaskId!=null||source.sha256!==record.sourceSha256)return;
  const target=exactFileTarget(source);
  return target?{excerpt,target}:undefined;
+}
+function justSavedWorkPdfSource(native:ReturnType<typeof bridge.getState>,view:Json,taskId?:string){
+ const current=obj(native.view),catalog=obj(view.snapshot),file=obj(view.file),receipt=obj(catalog.savedPdfExcerptHere);
+ if(!taskId||current.section!==null||current.taskId!==taskId||native.state.chatAttachmentPickerOpen!==false||
+    native.state.conversationReader||view.restoredWorkReturn!==false||catalog.taskStatus!=='completed'||
+    !exactFileTarget(receipt)||receipt.id!==file.id||receipt.sha256!==file.sha256)return;
+ const work=rows(native.state.tasks).filter(row=>row?.id===taskId),original=obj(work[0]?.raw);
+ if(work.length!==1||original.id!==taskId||original.actorId!=='owner'||original.spaceId!=='private'||original.kind!=='assistant'||
+    original.status!=='completed'||original.taskProjection!=='detail_window'||original.taskCoreReadLimited!==false||original.auditBodyIncluded!==true||
+    original.contextAvailable===false||original.executionRole==='owner_work'&&original.contextAvailable!==true||
+    original.contextWithdrawn===true||original.sourceCurrentReadRequired===true||
+    original.origin!=null||original.parentTaskId!=null||original.teamRunId!=null||original.memberId!=null||original.developmentContext!=null||
+    original.ownerDeviceWork!=null||original.ownerPhoneControl!=null||original.directWorkspace!=null||original.directPhone!=null||
+    typeof original.runId!=='string'||!original.runId||original.runId!==catalog.taskRunId||
+    !Number.isSafeInteger(original.coordinatorEpoch)||original.coordinatorEpoch<1||original.coordinatorEpoch!==catalog.coordinatorEpoch)return;
+ return excerptPdfSource(view,taskId);
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
 export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,canChooseStandaloneDocument,readWorkTextVisit}:Props) {
@@ -556,16 +574,21 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const media=catalogUnread||view.choosingSource?[]:rows(snapshot.media).length?rows(snapshot.media):snapshot.kind==='group_media_result'?[{...snapshot,operationId:snapshot.sourceOperationId,status:snapshot.mediaState}]:[];
  const allSources=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts);
  const privateLibrary=privateFiles&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
- const libraryView=obj(bridge.getState().view);
+ const currentNative=bridge.getState(),libraryView=obj(currentNative.view);
+ const justSavedWorkPdf=!onReturnToSearch&&!catalogUnread&&mode==='detail'?justSavedWorkPdfSource(currentNative,view,openTaskId):undefined;
  const excerptPdf=privateLibrary&&!catalogUnread&&mode==='detail'&&libraryView.section===null&&libraryView.taskId===null&&
-  state.chatAttachmentPickerOpen===false?libraryExcerptPdf(view):undefined;
+  state.chatAttachmentPickerOpen===false?excerptPdfSource(view):justSavedWorkPdf;
  const excerptDocument=bridge.getDocumentEpoch();
  const openExcerptSource=()=>{
   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),nativeView=obj(native.view);
   if(!excerptPdf||busy||draftBusy||document.hidden||bridge.getDocumentEpoch()!==excerptDocument||nativeView.section!==null||
-     nativeView.taskId!==null||native.state.chatAttachmentPickerOpen!==false||live.windowId!==view.windowId||
+     native.state.chatAttachmentPickerOpen!==false||live.windowId!==view.windowId||
      live.busy!==false||live.exportPending!==false)return;
-  const fresh=libraryExcerptPdf(live),frame=attachmentFrame(live);
+  const currentCatalog=obj(live.snapshot);
+  if(justSavedWorkPdf?currentCatalog.taskRunId!==snapshot.taskRunId||currentCatalog.coordinatorEpoch!==snapshot.coordinatorEpoch:
+     nativeView.taskId!==null)return;
+  const fresh=justSavedWorkPdf?justSavedWorkPdfSource(native,live,openTaskId):excerptPdfSource(live);
+  const frame=attachmentFrame(live);
   if(!fresh||!frame||fresh.excerpt.fileId!==excerptPdf.excerpt.fileId||fresh.excerpt.sha256!==excerptPdf.excerpt.sha256||
      fresh.target.fileId!==excerptPdf.target.fileId||fresh.target.sha256!==excerptPdf.target.sha256)return;
   // This is the same file-details selection as a source row; no document range or original body is requested.
@@ -682,7 +705,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {!scopedResultOnly&&exportAction}
   {canEditDocument&&editDocument('ghost')}
   {excerptPdf&&<Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
-   onClick={openExcerptSource}>查看来源 PDF 信息</Button>}
+   onClick={openExcerptSource}>{justSavedWorkPdf?'返回这份 PDF 的文件信息':'查看来源 PDF 信息'}</Button>}
   {mode==='detail'&&view.ready===true&&privateFiles&&!onReturnToSearch&&typeof view.libraryDocumentActionId==='string'&&
    view.libraryDocumentActionId===file.sourceTaskId&&<Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
     onClick={()=>run('openDocumentAction',{taskId:view.libraryDocumentActionId})}>查看原生成记录</Button>}

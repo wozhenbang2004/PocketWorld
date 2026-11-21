@@ -557,6 +557,9 @@ internal class PocketWebBridge(
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
             projection = PocketWebState.snapshot(controller, ::canReadProjectGoal)
+            if(section==null&&taskViewId==null) controller.adoptedFormalComparisonForWeb()?.let {
+                projection?.getJSONObject("state")?.put("adoptedFormalComparison",it)
+            }
             retainedDraftCopyOpenForWeb()?.let { projection?.getJSONObject("state")?.put("openedRetainedDraftCopy", it) }
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("localSourceIntake", localSourceIntake.snapshot() ?: JSONObject.NULL)
