@@ -66,7 +66,7 @@ def choices_for(description, peer, caller, now):
 
 class PhoneWorkEntry:
     def __init__(self, manager):
-        self.receipts = ResultView(manager)  # Original read-only implementation; not given a send callback.
+        self.receipts = ResultView(manager, owner_stop=True)  # Only this explicitly started native entry may offer stop.
         self.end, self.active = self.receipts.end, self.receipts.active
         self.presenting, self.past = threading.Lock(), None
 

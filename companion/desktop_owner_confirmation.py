@@ -57,6 +57,11 @@ def confirm_local_phone_goal(summary):
                     button="确认发送这一次", warning="只把核对过的文字交给这台手机；可能由手机机主已选的模型服务处理。不代替机主确认，不共享电脑项目或屏幕。\r\n")
 
 
+def confirm_local_phone_stop(summary):
+    return _confirm(summary, purpose="original_phone_stop", title="PocketWorld · 请求停止这项手机工作",
+                    button="确认请求一次", warning="只请求停止下面这次原执行。已发生的操作不会撤回，收到请求不等于手机已停止。\r\n")
+
+
 def confirm_local_pairing_recovery(summary, *, anchor=None):
     return _confirm(summary, purpose="device_pairing_recovery", anchor=anchor, title="PocketWorld · 仅恢复原已提交配对回执", button="开放30秒原回执只读通道",
                     warning="此操作仅让原已核验的同一设备取回原不可变回执，不重新配对、续期、加额度或启动业务。\r\n撤销、换代、scope变更或到期后不能借恢复重新授权。\r\n")

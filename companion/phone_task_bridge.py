@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import copy
+from dataclasses import dataclass
 import hashlib
 import json
 import uuid
@@ -20,12 +21,23 @@ PROTOCOL = "pocketworld.phone-task-dispatch.v1"
 SETTLED = {"succeeded", "failed", "cancelled", "interrupted", "expired"}
 WAITING = {"waiting_approval", "waiting_dependency"}
 CONTROL_METHODS = {"task.acquireControl", "task.answerQuestion", "task.steer", "task.requestResume"}
+_OWNER_STOP = "pocketworld.windows-owner-phone-stop.v1"
+_OWNER_STOPPABLE = {"running", "waiting_approval", "waiting_dependency", "waiting_resource", "paused"}
 
 
 class PhoneTaskError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
         self.status = status
+
+
+@dataclass(frozen=True)
+class _OwnerPhoneStop:
+    peer: tuple
+    row: tuple
+    stop_id: str
+    task_id: str
+    run_id: str
 
 
 class PhoneTaskRouter:
@@ -139,6 +151,154 @@ class PhoneTaskRouter:
         value = self._invoke("status", {"peerDeviceId":peer_id,"operationId":operation_id}, held)
         return value, held.get("current")
 
+    def _owner_stop_source(self, peer, row):
+        fingerprint, original = self._row(row[1])
+        known = self.service.receiver.trust.peer(peer[0])
+        sent = original.get("dispatchAudience", {})
+        caller = self.service.identity.device_id
+        if (not known or known["revoked"] or (known["fingerprint"], known["instanceId"], known["authorizationEpoch"]) != peer[1:]
+                or fingerprint != row[2] or original.get("operationId") != row[1] or original.get("kind") != "task.submitGoal"
+                or original.get("peerDeviceId") != peer[0] or original.get("instanceId") != peer[2]
+                or original.get("resourceBinding") != {"screenMode": "capabilities"} or original.get("originalTextReturn") != wire.TEXT_RETURN
+                or sent.get("originDeviceId") != caller or sent.get("callerDeviceId") != caller
+                or sent.get("targetDeviceId") != peer[0] or sent.get("instanceId") != peer[2]
+                or not wire.DIGEST.fullmatch(original.get("argumentsDigest", ""))):
+            raise PhoneTaskError("Not the original native text-only phone work", 409)
+        # One local ID for this exact original, distinct from the dispatch. Cold
+        # recovery stays a primary-key lookup in the existing operation ledger.
+        stop_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{_OWNER_STOP}/{row[1]}/{original['argumentsDigest']}"))
+        if stop_id == row[1]:
+            raise PhoneTaskError("Original cancellation needs its own identity", 409)
+        return original, stop_id
+
+    def _owner_stop_route(self, original, peer):
+        connection, actual, route = self._route(peer[0], original["grantId"])
+        grant = route.grant
+        if (actual.certificate_fingerprint != peer[1] or route.target_instance_id != peer[2]
+                or route.authorization_epoch != original["dispatchAudience"]["authorizationEpoch"]
+                or "operation.cancel" not in grant["capabilities"]
+                or not any(wire.resource_equal(original["resourceBinding"], r) for r in grant["resources"])):
+            raise PhoneTaskError("No current original signed stop scope", 403)
+        return connection, actual, route
+
+    def _prior_phone_stop(self, original):
+        # A preexisting stop from any local surface blocks a new send for this
+        # same dispatch, even when that older record cannot prove a receipt.
+        with self.manager.lock:
+            return self.manager.ledger.execute("""SELECT 1 FROM
+                (SELECT CASE WHEN json_valid(details) THEN details END AS doc FROM operations WHERE details IS NOT NULL)
+                WHERE json_extract(doc,'$.protocol')=? AND json_extract(doc,'$.kind')='operation.cancel'
+                AND json_extract(doc,'$.peerDeviceId')=? AND json_extract(doc,'$.targetOperationId')=? LIMIT 1""",
+                (PROTOCOL, original["peerDeviceId"], original["operationId"])).fetchone() is not None
+
+    def review_owner_phone_stop(self, peer, row, shown, current):
+        """Only from the native owner's fresh, explicit original dispatch read."""
+        try:
+            if (not current() or shown.get("accepted") is not True or shown.get("operationId") != row[1]
+                    or shown.get("peerDeviceId") != peer[0] or shown.get("instanceId") != peer[2]
+                    or type(shown.get("executorEpoch")) is not int or shown["executorEpoch"] != 1
+                    or shown.get("state") not in _OWNER_STOPPABLE): return None
+            original, stop_id = self._owner_stop_source(peer, row)
+            if self._prior_phone_stop(original): return None
+            self._owner_stop_route(original, peer)
+            return _OwnerPhoneStop(peer, row, stop_id, wire.identifier(shown["taskId"]), wire.identifier(shown["runId"])) if current() else None
+        except Exception:
+            return None  # An unverified or history-only grant is not a stop offer.
+
+    def _owner_stop_record(self, peer, row):
+        original, stop_id = self._owner_stop_source(peer, row)
+        try:
+            fingerprint, value = self._row(stop_id)
+        except PhoneTaskError as error:
+            if error.status == 404: return None
+            raise
+        scope = value.get("controlScope", {})
+        semantic = {"operationId": stop_id, "targetOperationId": row[1], "peerDeviceId": peer[0]}
+        sent = value.get("dispatchAudience", {})
+        source = original["dispatchAudience"]
+        if (fingerprint != hashlib.sha256(wire.canonical_bytes(semantic)).hexdigest()
+                or value.get("operationId") != stop_id or value.get("targetOperationId") != row[1] or value.get("kind") != "operation.cancel"
+                or value.get("peerDeviceId") != peer[0] or value.get("instanceId") != peer[2]
+                or value.get("grantId") != original["grantId"] or not wire.resource_equal(value["resourceBinding"], original["resourceBinding"])
+                or any(sent.get(key) != source.get(key) for key in ("originDeviceId", "callerDeviceId", "targetDeviceId", "instanceId", "authorizationEpoch", "grantId"))
+                or scope.get("format") != _OWNER_STOP or scope.get("sourceFingerprint") != row[2]
+                or scope.get("targetOperationId") != row[1] or scope.get("targetArgumentsDigest") != original["argumentsDigest"]
+                or type(scope.get("executorEpoch")) is not int or scope["executorEpoch"] != 1):
+            raise PhoneTaskError("Not this original owner stop record", 409)
+        wire.identifier(scope["taskId"]); wire.identifier(scope["runId"])
+        return value
+
+    def owner_phone_stop_recorded(self, peer, row):
+        try: return self._owner_stop_record(peer, row) is not None
+        except Exception: return False
+
+    def request_owner_phone_stop(self, review, current):
+        if not isinstance(review, _OwnerPhoneStop) or not current():
+            raise PhoneTaskError("Original owner stop review retired", 409)
+        return self._on_phone_loop(self._request_owner_phone_stop(review, current))
+
+    async def _request_owner_phone_stop(self, review, current):
+        from phone_task_outcome import original_dispatch_only
+        original, stop_id = self._owner_stop_source(review.peer, review.row)
+        if stop_id != review.stop_id or self._prior_phone_stop(original):
+            return {"state":"already_recorded"}, None
+        # User confirmed a particular first run, not permission to stop a later
+        # one. Recheck exactly its own dispatch (no task body, polling or rerun).
+        held = {"onlyDispatch": True, "window": current}
+        receipt = await self._read(original, "operation.get", review.row[1], local_task_read=held)
+        original, stop_id = self._owner_stop_source(review.peer, review.row)
+        shown = original_dispatch_only(original, receipt, self.service.identity.device_id)
+        if ((shown.get("taskId"), shown.get("runId"), shown.get("executorEpoch")) != (review.task_id, review.run_id, 1)
+                or shown.get("accepted") is not True or not current() or not held["current"]()):
+            raise PhoneTaskError("The reviewed first phone run changed", 409)
+        if shown["state"] in {"succeeded", "failed", "cancelled"}:
+            return {"state":"already_ended"}, held["current"]
+        if shown["state"] not in _OWNER_STOPPABLE:
+            raise PhoneTaskError("Original phone execution is not available to stop", 409)
+        connection, peer, route = self._owner_stop_route(original, review.peer)
+        ticket = route.operation_cancel(self.service.identity, original["operationId"], original["argumentsDigest"], stop_id,
+                                        original["resourceBinding"], self.manager.now())
+        if self._prior_phone_stop(original):
+            return {"state":"already_recorded"}, held["current"]
+        semantic = {"operationId":stop_id,"targetOperationId":original["operationId"],"peerDeviceId":peer.device_id}
+        scope = {"format":_OWNER_STOP,"sourceFingerprint":review.row[2],"taskId":review.task_id,"runId":review.run_id,"executorEpoch":1}
+        result = await self._mutation(stop_id, semantic, connection, peer, ticket, ticket.envelope, original,
+                                      owner_stop_scope=scope, visible=lambda: current() and held["current"]())
+        def receipt_current():
+            if self.closed or self.service.closed or self.connections.get(connection) is not peer: return False
+            route.require_target_peer(peer, self.manager.now())
+            return True
+        if not current() or not receipt_current(): raise PhoneTaskError("Original owner stop window retired", 409)
+        return self._owner_stop_view(result), receipt_current
+
+    def read_owner_phone_stop(self, peer, row, current):
+        if not current(): raise PhoneTaskError("Original owner stop window retired", 409)
+        return self._on_phone_loop(self._read_owner_phone_stop(peer, row, current))
+
+    async def _read_owner_phone_stop(self, peer, row, current):
+        value = self._owner_stop_record(peer, row)
+        if value is None: raise PhoneTaskError("No original owner stop record", 404)
+        held = {"onlyDispatch": True, "window": current}
+        receipt = await self._read(value, "operation.get", value["operationId"], local_task_read=held)
+        current_value = self._owner_stop_record(peer, row)
+        if (not current() or not held["current"]() or current_value is None or current_value["operationId"] != value["operationId"]
+                or current_value["argumentsDigest"] != value["argumentsDigest"] or current_value["controlScope"] != value["controlScope"]):
+            raise PhoneTaskError("Original owner stop receipt source changed", 409)
+        self._remember_receipt(current_value, receipt)  # Read-only projection; no second operation, no fresh task.get.
+        return self._owner_stop_view(current_value), held["current"]
+
+    @staticmethod
+    def _owner_stop_view(value):
+        if value.get("accepted") is True and value.get("effectState") == "reported":
+            facts = value.get("cancellation", {})
+            if facts.get("stopped") is True:
+                return {"state": "ended", "requested": facts.get("requested") is True}
+            if facts.get("requested") is True:
+                return {"state": "requested"}
+        if value.get("status") == "rejected" and value.get("effectState") == "not_dispatched":
+            return {"state":"not_dispatched"}
+        return {"state":"unknown"}
+
     def read_for_local_receipt(self, peer_id, operation_id):
         """In-process Windows owner UI only. The local scope fence is not serializable,
         not an RPC field, not a lease and never returned to phone/Web/MCP clients."""
@@ -161,7 +321,12 @@ class PhoneTaskRouter:
         if retained is not None: kwargs["local_task_read"] = retained
         if owner_goal_fence is not None: kwargs["owner_goal_fence"] = owner_goal_fence
         if owner_text_channel is not None: kwargs["owner_text_channel"] = owner_text_channel
-        work = self.execute(action, copy.deepcopy(params), **kwargs)
+        return self._on_phone_loop(self.execute(action, copy.deepcopy(params), **kwargs))
+
+    def _on_phone_loop(self, work):
+        if self.closed or self.service.loop is None or self.service.closed:
+            work.close()
+            raise PhoneTaskError("Enable the existing paired device service first", 503)
         future = asyncio.run_coroutine_threadsafe(work, self.service.loop)
         try:
             return future.result(timeout=58)
@@ -260,7 +425,7 @@ class PhoneTaskRouter:
             local_task_read["current"] = still_current
         return response["result"]
 
-    async def _mutation(self, operation_id, semantic, connection, peer, ticket, envelope, original=None):
+    async def _mutation(self, operation_id, semantic, connection, peer, ticket, envelope, original=None, *, owner_stop_scope=None, visible=None):
         fingerprint = hashlib.sha256(wire.canonical_bytes(semantic)).hexdigest()
         value = dict(protocol=PROTOCOL, operationId=operation_id, peerDeviceId=peer.device_id,
                      grantId=envelope.get("grantId"), resourceBinding=envelope.get("resourceBinding"),
@@ -282,9 +447,12 @@ class PhoneTaskRouter:
         elif envelope.method == "operation.cancel":
             value["controlScope"] = {"targetOperationId": envelope.arguments["operationId"],
                                      "targetArgumentsDigest": envelope.arguments["argumentsDigest"]}
+            if owner_stop_scope is not None: value["controlScope"].update(owner_stop_scope)
         allocation = envelope.get("budget", {}).get("allocationId") or envelope.arguments.get("allocationId")
         if allocation:
             value["allocationId"] = allocation
+        if visible is not None and not visible():
+            raise PhoneTaskError("Original owner stop window retired before preparation", 409)
         with self.manager.lock:
             previous = self.manager.ledger.execute("SELECT fingerprint,details FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
             if previous:
@@ -296,7 +464,8 @@ class PhoneTaskRouter:
                                         (operation_id, fingerprint, "phone:" + operation_id, value["status"], value["updatedAt"], json.dumps(value)))
             self.manager.ledger.commit()  # Durable identity precedes the first possible control write.
         try:
-            response = await self._exchange(connection, peer, ticket, envelope)
+            response = (await self._exchange(connection, peer, ticket, envelope, visible=visible) if visible is not None
+                        else await self._exchange(connection, peer, ticket, envelope))
             if response["messageType"] == "DeviceError":
                 value.update(status="rejected" if response["error"]["effectState"] == "not_dispatched" else "unknown",
                              effectState=response["error"]["effectState"], accepted=False)
@@ -373,6 +542,16 @@ class PhoneTaskRouter:
         updates = {}
         if receipt.get("operationId") != value["operationId"] or receipt.get("argumentsDigest") not in (None, value["argumentsDigest"]):
             raise PhoneTaskError("Original operation receipt changed", 502)
+        scope = value.get("controlScope", {})
+        if value.get("kind") == "operation.cancel" and scope.get("format") == _OWNER_STOP:
+            facts = receipt.get("cancellation")
+            if (receipt.get("accepted") is not True or receipt.get("effectState") != "reported"
+                    or receipt.get("argumentsDigest") != value["argumentsDigest"] or receipt.get("executorDeviceId") != value["peerDeviceId"]
+                    or receipt.get("instanceId") != value["instanceId"] or receipt.get("localTaskId") != scope["taskId"]
+                    or receipt.get("runId") != scope["runId"] or receipt.get("executorEpoch") != scope["executorEpoch"]
+                    or receipt.get("audience", {}).get("taskId") != scope["taskId"] or not isinstance(facts, dict)
+                    or receipt.get("status") != ("succeeded" if facts.get("stopped") is True else "cancel_requested")):
+                raise PhoneTaskError("No matching original owner stop receipt", 502)
         if receipt.get("accepted"):
             audience = receipt["audience"]
             for key, expected in value.get("dispatchAudience", {}).items():

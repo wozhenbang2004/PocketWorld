@@ -1,4 +1,4 @@
-"""Opt-in, in-process, read-only Windows owner view of this PC's original phone work."""
+"""Opt-in Windows owner receipts; stopping is exclusive to the original handoff entry."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,6 +7,7 @@ import time
 import unicodedata
 
 import desktop_received_commands as received
+from desktop_owner_confirmation import confirm_local_phone_stop, confirmation_record
 from desktop_owner_entry import _dialog
 from desktop_sessions import WindowsDesktopHealth
 from device_protocol import TEXT_RETURN
@@ -67,13 +68,14 @@ def _parts(value):
 
 
 class ResultView:
-    def __init__(self, manager):
+    def __init__(self, manager, *, owner_stop=False):
         self.manager = manager
         self.service = manager.device_companion
         self.router = self.service.phone_tasks
         self.end = threading.Event()
         self.presenting, self.reading = threading.Lock(), threading.Lock()
         self.receiver = self.service.receiver
+        self.owner_stop = owner_stop
 
     def active(self):
         return not (self.end.is_set() or self.manager.closed or self.service.closed or self.router.closed) and self.manager.device_companion is self.service
@@ -133,13 +135,81 @@ class ResultView:
     def choose_outgoing(self, peer, row, *, back_to_peer=False):
         current=lambda: self._source_current(peer,row)
         while current():
+            recovery = self.owner_stop and self.router.owner_phone_stop_recorded(peer, row)
             choice=self._dialog("核对这笔原派单", f"发起：这台 Windows · 原派单 …{row[1][-16:]}\n指定执行：手机 …{peer[0][-12:]}\n是否已接收或开始，以原回执为准。选择之前不联系手机。",
-                               [("dispatch","只查派单\n核对对方是否保存这笔原工作，不读取目标成果。"),
+                               ([("stop_receipt", "核对这次停止请求\n只读原回执，不再发停止请求。")] if recovery else [])
+                               + [("dispatch","只查派单\n核对对方是否保存这笔原工作，不读取目标成果。"),
                                 ("result","查看原执行进展和成果\n另需有效的任务读取授权和同一次原执行。")]
                                + ([_BACK_TO_PEER] if back_to_peer else []),current)
+            if choice == "stop_receipt" and recovery and current():
+                self._read_owner_stop(peer, row, current)
+                continue
             if choice not in {"dispatch","result"} or not current(): return
             if self._read(peer,row,dispatch_only=choice=="dispatch",back_to_peer=back_to_peer) != _BACK_TO_ORIGINAL[0]: return
             # Reopen only this local choice. A new remote read needs another explicit click.
+
+    def _show_owner_stop(self, result, current):
+        state = result.get("state")
+        heading, body = {
+            "already_ended": ("手机报告原执行已结束", "这次没有发送停止请求。"),
+            "already_recorded": ("这笔工作已有停止记录", "没有再次发送。若从这里发出过请求，可在原派单核对这次停止请求。"),
+            "not_dispatched": ("停止请求未派发", "原手机没有执行这次停止请求。没有重发。"),
+            "requested": ("已收到停止请求", "手机已接收；尚未确认原执行结束。可回原派单核对这次停止请求。"),
+            "ended": ("手机已核实原执行结束", "手机确认已收到停止请求；回执不判断原工作因何结束。"),
+        }.get(state, ("停止结果待核对", "没有收到足以核实停止结果的原回执。若本机已留存请求，可回原派单核对；不会重发。"))
+        if state == "ended" and result.get("requested") is not True:
+            body = "原执行已结束，回执未确认曾请求停止。"
+        self._dialog(heading, body, [_BACK_TO_ORIGINAL], current)
+
+    def _read_owner_stop(self, peer, row, current):
+        if not self.reading.acquire(blocking=False):
+            self._dialog("上一笔核对仍在返回", "稍后再查这次原停止请求。", [], current); return
+        visible = lambda: current() and WindowsDesktopHealth().probe(session_only=True).get("available") is True
+        try:
+            self._owner_stop_exchange(lambda live: self.router.read_owner_phone_stop(peer, row, live), visible,
+                                      "正在核对原停止请求", "只查这次原回执，不发送停止请求。")
+        finally:
+            self.reading.release()
+
+    def _request_owner_stop(self, review, visible):
+        if not self.reading.acquire(blocking=False):
+            self._dialog("上一笔核对仍在返回", "没有发出停止请求。", [], visible); return
+        try:
+            summary = (f"原手机：{review.peer[0]}\n实例：{review.peer[2]}\n原派单：{review.row[1]}\n"
+                       f"手机任务：{review.task_id}\n首次执行：{review.run_id}\n停止请求编号：{review.stop_id}")
+            if not visible(): return
+            try:
+                proof = confirm_local_phone_stop(summary)
+                confirmation_record(proof, purpose="original_phone_stop", summary=summary)
+            except Exception:
+                return  # Closing the original confirmation window sends nothing.
+            self._owner_stop_exchange(lambda live: self.router.request_owner_phone_stop(review,
+                                      lambda: live() and 0 <= self.manager.now() - proof.confirmed_at < 30000), visible,
+                                      "正在请求原手机停止", "关闭可离开等待；如果请求已经发出，不会撤回或补发。")
+        finally:
+            self.reading.release()
+
+    def _owner_stop_exchange(self, action, visible, heading, hint):
+        done, retired, outcome = threading.Event(), threading.Event(), {}
+        def live(): return not retired.is_set() and visible()
+        def perform():
+            try: outcome["receipt"] = action(live)
+            except Exception: pass  # No reply to this window is not proof of no effect.
+            finally: done.set()
+        threading.Thread(target=perform, name="owner-original-phone-stop", daemon=True).start()
+        try:
+            if not done.wait(0.1):
+                completed = False
+                def finish_wait():
+                    nonlocal completed
+                    completed = done.is_set()
+                    return completed or not live()
+                _dialog(heading, hint, [], retire=finish_wait)
+                if not completed: return
+            result, guard = outcome.get("receipt", ({"state":"unknown"}, None))
+        finally:
+            retired.set()
+        self._show_owner_stop(result, lambda: visible() and (guard is None or guard()))
 
     def _read(self, peer, row, *, dispatch_only=False, back_to_peer=False):
         back = [_BACK_TO_ORIGINAL] + ([_BACK_TO_PEER] if back_to_peer else [])
@@ -201,12 +271,20 @@ class ResultView:
             parts = ["这次只核实了原任务状态，没有读到机主确认的成果。"]
         index = 0
         def valid(): return self._source_current(peer, row) and guard()
+        # phoneGoalOutcome exists only after the native accepted audience and
+        # receiver run were matched by original_phone_goal, not from local history.
+        stop = self.router.review_owner_phone_stop(peer, row, {**outcome, "accepted":True, "state":task.get("state")}, valid) if self.owner_stop else None
         while self.active():
             choices = ([("prev", "上一段")] if index else []) + ([("next", "下一段")] if index + 1 < len(parts) else []) + [("identity", "查看原操作和运行编号")] + back
+            if stop is not None: choices.insert(0, ("stop_review", "请求停止这项手机工作\n核对同一次原执行，再由你确认。"))
             number = f" · {index+1}/{len(parts)}" if len(parts) > 1 else ""
             selected = self._dialog(title + number, body + parts[index] + "\n\n仅在本次原读取的短时范围内显示。", choices, valid)
             if selected == "prev": index -= 1
             elif selected == "next": index += 1
+            elif selected == "stop_review" and stop is not None:
+                try: self._request_owner_stop(stop, visible)
+                finally: closed.set()
+                return _BACK_TO_ORIGINAL[0]
             elif selected == "identity":
                 if self._dialog("同一笔原派单", identity, [("back","返回这份原回执")], valid) != "back": return
             else: return selected
