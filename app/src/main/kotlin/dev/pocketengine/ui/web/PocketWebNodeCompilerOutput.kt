@@ -16,12 +16,14 @@ internal class PocketWebNodeCompilerOutput(
     private val work: (Runnable) -> Unit,
     private val capture: () -> PocketWebWindowTicket,
     private val accepts: (PocketWebWindowTicket) -> Boolean,
+    private val checkReceipt: (String, String, Int, String, () -> Boolean) -> JSONObject,
     private val selected: () -> String?
 ) {
     companion object {
         private const val REVIEW = "projects.nodeCompilerOutput.review"
         private const val SAVE = "projects.nodeCompilerOutput.save"
-        val COMMANDS = setOf(REVIEW, SAVE)
+        private const val CHECK_RECEIPT = "projects.nodeBuild.checkReceipt"
+        val COMMANDS = setOf(REVIEW, SAVE, CHECK_RECEIPT)
     }
     private data class Original(val task: String, val run: String, val epoch: Int, val build: String)
     private data class Offer(val original: Original, val pin: JSONObject, val window: PocketWebWindowTicket,
@@ -35,6 +37,7 @@ internal class PocketWebNodeCompilerOutput(
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         require(action in COMMANDS)
         val saving = action == SAVE
+        val checking = action == CHECK_RECEIPT
         val keys = setOf("taskId", "runId", "epoch", "buildOperationId") + if (saving) setOf("reviewHandle") else emptySet()
         require(args.keys().asSequence().toSet() == keys && keys.filter { it != "epoch" }.all { args.opt(it) is String })
         val epoch = args.get("epoch")
@@ -42,6 +45,7 @@ internal class PocketWebNodeCompilerOutput(
         val original = Original(args.getString("taskId"), args.getString("runId"), args.getInt("epoch"), args.getString("buildOperationId"))
         require(original.task.matches(Regex("[a-f0-9-]{36}")) && original.run.matches(Regex("[a-f0-9-]{36}")) &&
             original.build.matches(Regex("[A-Za-z0-9_-]{1,80}")) && original.epoch > 0 && original.epoch.toLong() == (epoch as Number).toLong())
+        if (checking) require(original.task == original.run && original.task == original.build && original.epoch == 1)
         val window = capture()
         fun visible() = accepts(window) && selected() == original.task
         check(visible() && active == null) { "请回正在查看的这次原构建" }
@@ -58,6 +62,7 @@ internal class PocketWebNodeCompilerOutput(
                 var next: Offer? = null
                 val result = runCatching {
                     requireCurrent()
+                    if (checking) return@runCatching checkReceipt(original.task, original.run, original.epoch, original.build, ::current)
                     val store = tasks()
                     val build = store.nodeCompilerBuildForOwner(original.task, original.run, original.epoch, original.build)
                     val delivery = build.delivery()
@@ -95,12 +100,14 @@ internal class PocketWebNodeCompilerOutput(
                 }
                 main.post {
                     if (active === control) active = null
-                    if (!visible() || control.isCancelled) done(null, "已离开原构建。回来只能核对同一原保存，不会重新执行。")
+                    if (!visible() || control.isCancelled) done(null, if (checking) "已离开原构建，没有返回其他执行结果。"
+                        else "已离开原构建。回来只能核对同一原保存，不会重新执行。")
                     else result.fold({ reply ->
                         offer = next
                         next?.let { token -> main.postDelayed({ if (offer === token) offer = null }, 120_000L) }
                         done(reply, null)
-                    }, { failure -> done(null, failure.message ?: "未核对到这份原输出，没有换成其他文件") })
+                    }, { failure -> done(null, if (checking) "未能核对这次原执行，没有重新运行。"
+                        else failure.message ?: "未核对到这份原输出，没有换成其他文件") })
                 }
             })
         } catch (failure: Exception) { active = null; throw failure }

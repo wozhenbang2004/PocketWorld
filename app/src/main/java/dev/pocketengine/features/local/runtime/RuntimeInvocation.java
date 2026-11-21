@@ -1,6 +1,7 @@
 package dev.pocketengine.features.local.runtime;
 
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
 import dev.pocketengine.features.local.project.ProjectSources;
 import org.json.JSONObject;
 
@@ -13,7 +14,7 @@ public final class RuntimeInvocation {
     private final long pauseRevision;
     private final RuntimeWorkspace workspace;
     private final boolean ownerLockedBuild;
-    private final String editedWebVersion,existingWebVersion;
+    private final String editedWebVersion,existingWebVersion,directCompilerVersion;
 
     public RuntimeInvocation(JSONObject exact,JSONObject nativeBinding,JSONObject frozenSourceSnapshot,
             RunControl original,ProjectRuntime.LiveGate liveGate) throws Exception {
@@ -31,6 +32,11 @@ public final class RuntimeInvocation {
         // An optional identifier from the original native admission, never read from model arguments.
         editedWebVersion=nativeBinding.optString(dev.pocketengine.features.local.project.OriginalNodeWebOutput.EDITED_ROUTE);
         existingWebVersion=nativeBinding.optString(dev.pocketengine.features.local.project.OriginalNodeWebOutput.EXISTING_ROUTE);
+        if(nativeBinding.has(OriginalNodeCompilerOutput.DIRECT_ROUTE)){
+            if(!ownerLockedBuild||!OriginalNodeCompilerOutput.matchesDirectRoute(exact,nativeBinding))
+                throw new SecurityException("runtime_direct_owner_compiler_scope_mismatch");
+            directCompilerVersion=nativeBinding.getString(OriginalNodeCompilerOutput.DIRECT_ROUTE);
+        }else directCompilerVersion="";
         reference=RuntimeExecutionRef.fromHost(exact,nativeBinding);
         source=ProjectSources.copy(frozenSourceSnapshot);
         JSONObject actual=ProjectSources.describe(source);
@@ -49,6 +55,7 @@ public final class RuntimeInvocation {
     public String editedWebVersion(){return editedWebVersion;}
     public String existingWebVersion(){return existingWebVersion;}
     public boolean versionedWebOutput(){return !editedWebVersion.isEmpty()||!existingWebVersion.isEmpty();}
+    public boolean directCompilerOutput(){return !directCompilerVersion.isEmpty();}
     public RuntimeWorkspace workspace() {
         if(workspace==null)throw new SecurityException("runtime_native_active_workspace_required");
         return workspace;

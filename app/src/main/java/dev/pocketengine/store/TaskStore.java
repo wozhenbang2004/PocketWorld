@@ -4,7 +4,12 @@ import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.local.project.OwnerDraftFirstBuild;
+import dev.pocketengine.features.local.LocalModule;
+import dev.pocketengine.features.local.project.OwnerDirectNodeBuild;
+import dev.pocketengine.features.local.project.ProjectBuildPlan;
+import dev.pocketengine.features.local.project.ProjectPlanRecords;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
+import dev.pocketengine.features.local.project.ProjectExecutionExit;
 import dev.pocketengine.features.local.project.ProjectPackageDelivery;
 import dev.pocketengine.features.workspace.WorkspaceArtifacts;
 import dev.pocketengine.phone.MainPhoneOwnerStep;
@@ -18,6 +23,8 @@ import android.util.Base64;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.local.runtime.RuntimeSetupHost;
 import dev.pocketengine.features.local.runtime.RuntimeExecutionRef;
+import dev.pocketengine.features.local.runtime.RuntimeReceipt;
+import dev.pocketengine.features.local.runtime.NativeProcessSupervisor;
 import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.core.ExecutionPlan;
 import dev.pocketengine.core.ExecutionPlanning;
@@ -13925,7 +13932,9 @@ public final class TaskStore {
     }
     private void projectPlanContext(String id,String run,int epoch,JSONObject plan)throws Exception {
         if(required(id).has("ownerLocalTerminal")){requireOwnerLocalTerminalPlan(required(id),run,epoch,plan);return;}
-        JSONObject nativeTask=required(id);if(TaskStoreDeviceTasks.deviceTask(nativeTask)){deviceTasks.requireProjectPlan(id,run,epoch,plan);return;}if(nativeTask.optJSONObject("ownerGit")!=null){requireOwnerGitPlan(nativeTask,run,epoch,plan);return;}if(teamProjectSelection(nativeTask)!=null){teamProjectContextForPlan(id,run,epoch,plan);return;}
+        JSONObject nativeTask=required(id);
+        if(nativeTask.has(OwnerDirectNodeBuild.FIELD)){requireOwnerDirectNodePlan(nativeTask,run,epoch,plan);return;}
+        if(TaskStoreDeviceTasks.deviceTask(nativeTask)){deviceTasks.requireProjectPlan(id,run,epoch,plan);return;}if(nativeTask.optJSONObject("ownerGit")!=null){requireOwnerGitPlan(nativeTask,run,epoch,plan);return;}if(teamProjectSelection(nativeTask)!=null){teamProjectContextForPlan(id,run,epoch,plan);return;}
         JSONObject task=required(id);requirePrivateOwner(task);JSONObject selected=task.getJSONObject("developmentContext");if(!"assistant".equals(task.optString("kind"))||task.has("origin")||!selected.getString("projectId").equals(plan.getString("projectId"))||!selected.getString("checkoutId").equals(plan.getString("checkoutId"))||!selected.getString("runtime").equals(plan.optString("runtimeId","termux")))throw new SecurityException("完整方案不属于原任务已选项目/运行位置");
         try(Cursor row=db.rawQuery("SELECT epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{id,run})){if(!row.moveToFirst()||epoch!=row.getInt(0))throw new SecurityException("完整方案没有此原run/epoch");}
     }
@@ -13991,6 +14000,7 @@ public final class TaskStore {
         public JSONObject route()throws Exception{return new JSONObject(route.toString());}
     }
     private OwnerNodeCompilerBuild nodeCompilerBuild(JSONObject task,String run,int epoch,String operation,boolean current)throws Exception{
+        if(task.has(OwnerDirectNodeBuild.FIELD))return directCompilerBuild(task,run,epoch,operation,current);
         String id=task.getString("id");requirePrivateOwner(task);
         if(!ordinaryPlanningSource(task)||OwnerWorkTask.isOwnerWork(task)||!"assistant".equals(task.opt("kind"))||
                 !"capabilities".equals(task.opt("executionMode"))||!task.isNull("origin")||task.has("workProfileRef")||task.has("workProfileIntent")||
@@ -14506,6 +14516,290 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
 
+    /** Owner already confirmed one exact, ready compiler plan. Much like the native fixed Git
+     * action, this is a consumed native claim, not a model grant or a reusable capability. */
+    public synchronized boolean beginOwnerDirectNodeBuild(OwnerDirectNodeBuild.Confirmed confirmed,LocalModule local)throws Exception{
+        JSONObject scope=confirmed.scope(),plan=confirmed.plan(),capability=confirmed.capability(),step=OwnerDirectNodeBuild.step(plan);
+        JSONObject exact=ProjectDevelopment.exact(plan,step);
+        String id=scope.getString("requestId");
+        db.beginTransaction();try{
+            JSONObject prior=read(id);
+            if(prior!=null){ownerDirectNodeOriginal(prior);db.setTransactionSuccessful();return false;}
+            requireExecutionEnabled();
+            if(projectServiceCheckoutConflict(exact,id,null,true))throw new SecurityException("此副本仍有原执行待结束或核对，没有开始构建");
+            confirmed.enter(local);
+            JSONObject task=beginExternal("local",OwnerDirectNodeBuild.COMMAND,id,new JSONObject().put("goal","本机 TypeScript 构建"));
+            JSONObject context=new JSONObject().put("format","pocketworld.development-context.v1").put("projectId",scope.getString("projectId"))
+                    .put("checkoutId",scope.getString("checkoutId")).put("runtime",scope.getString("runtimeId"))
+                    .put("initialSourceDigest",scope.getString("sourceDigest")).put("filesAreUntrusted",true).put("authorityAdded",false);
+            task.put(OwnerDirectNodeBuild.FIELD,scope).put("kind","tool").put("executionMode","capabilities").put("nativeExecutionMode",OwnerDirectNodeBuild.MODE)
+                    .put("coordinatorEpoch",1).put("developmentContext",context).put("status","running").put("stepCeiling",1)
+                    .put("approvalState","granted").put("summary","已登记原本机构建，等待原执行回执。没有调用模型。");
+            requireOwnerDirectNodePlan(task,id,1,plan);write(task);
+            long now=System.currentTimeMillis();
+            JSONObject grant=new JSONObject().put("principalId","owner").put("spaceId","private").put("mode","capabilities")
+                    .put("expiresAt",now+360_000L).put("stepCeiling",1).put("remainingOperations",0)
+                    .put("nativeOwnerDirectNodeBuild",id).put("tools",new JSONArray()).put("allowedInferencePurposes",new JSONArray());
+            ContentValues attempt=new ContentValues();attempt.put("run_id",id);attempt.put("task_id",id);attempt.put("epoch",1);
+            attempt.put("status","running");attempt.put("checkpoint",new JSONObject().put("steps",1).toString());attempt.put("grant_json",grant.toString());
+            attempt.put("created_at",now);attempt.put("updated_at",now);db.insertOrThrow("runs",null,attempt);
+            JSONObject binding=directNodeBuildBinding(id),reference=ProjectPlanRecords.store(db,binding,plan);
+            JSONObject args=new JSONObject().put("planRef",reference.getString("planRef")).put("planDigest",plan.getString("planDigest")).put("stepId","build");
+            // The pending original is explicitly created without an automatic tool policy.
+            JSONObject pending=requireCapabilityApproval(id,id,"project_execute",args,capability,true);
+            if(!"pending".equals(pending.opt("state")))throw new SecurityException("没有核对到这次明确构建批准");
+            decideCapabilityApproval(id,pending.getString("approvalId"),true,id,1);
+            JSONObject consumed=requireCapabilityApproval(id,id,"project_execute",args,capability);
+            if(!Boolean.TRUE.equals(consumed.opt("approved"))||!pending.getString("approvalId").equals(consumed.opt("approvalId")))
+                throw new SecurityException("原构建的准确批准未消费");
+            JSONObject route=new JSONObject(binding.toString()).put("jobId",id).put("authority","native_host_operation")
+                    .put("approvalId",consumed.getString("approvalId")).put("capabilityFingerprint",capabilityFingerprint(capability));
+            for(String key:new String[]{"command","planDigest","stepId","intent","projectId","checkoutId","sourceDigest","requestDigest","runtimeId","runtimeIdentity"})
+                route.put(key,exact.get(key));
+            route.put(OriginalNodeCompilerOutput.DIRECT_ROUTE,OriginalNodeCompilerOutput.directVersion(exact,binding));
+            JSONObject dispatch=new JSONObject().put("status","unknown").put("code","project_pending").put("accepted",JSONObject.NULL)
+                    .put("projectExecution",route).put("executionStatus","dispatching").put("businessVerified",false).put("replayAllowed",false);
+            ContentValues row=new ContentValues();row.put("operation_id",id);row.put("task_id",id);row.put("run_id",id);row.put("tool","project_execute");
+            row.put("arguments",args.toString());row.put("created_at",now);row.put("state","unknown");row.put("receipt",dispatch.toString());
+            db.insertOrThrow("operations",null,row);ProjectPlanRecords.pin(db,id,args);
+            appendEvent(required(id),new JSONObject().put("type","operation_intent").put("tool","project_execute").put("operationId",id)
+                    .put("runId",id).put("nativeOwnerDirectNodeBuild",true).put("modelDispatched",false));
+            // Leaving the exact page or expiring before this commit makes it a non-admission.
+            confirmed.requireUnenteredWindow();db.setTransactionSuccessful();return true;
+        }finally{db.endTransaction();}
+    }
+    private static JSONObject directNodeBuildBinding(String id)throws Exception{
+        return new JSONObject().put("taskId",id).put("runId",id).put("coordinatorEpoch",1).put("operationId",id);
+    }
+    private JSONObject requireOwnerDirectNodeScope(JSONObject task)throws Exception{
+        requirePrivateOwner(task);
+        JSONObject scope=task.getJSONObject(OwnerDirectNodeBuild.FIELD),context=task.getJSONObject("developmentContext");
+        String id=task.getString("id"),project=scope.getString("projectId"),checkout=scope.getString("checkoutId"),source=scope.getString("sourceDigest");
+        if(!"tool".equals(task.opt("kind"))||!"local".equals(task.opt("feature"))||!OwnerDirectNodeBuild.COMMAND.equals(task.opt("command"))||
+                !OwnerDirectNodeBuild.MODE.equals(task.opt("nativeExecutionMode"))||!"capabilities".equals(task.opt("executionMode"))||
+                task.has("origin")||task.has("conversationId")||task.has("ownerLocalTerminal")||task.has("ownerDeviceWork")||
+                task.has("workProfileRef")||task.has("workProfileIntent")||task.has("teamAssignment")||!task.isNull("parentTaskId")||
+                OwnerWorkTask.isOwnerWork(task)||!OwnerDraftFirstBuild.ownerObservationSourceVisible(task)||
+                !OwnerDirectNodeBuild.FORMAT.equals(scope.opt("format"))||!id.equals(OwnerDirectNodeBuild.workId(project,checkout,source))||
+                task.optInt("coordinatorEpoch")!=1||!Integer.valueOf(1).equals(scope.opt("epoch"))||
+                !id.equals(task.opt("runId"))||!id.equals(task.opt("operationId"))||!id.equals(scope.opt("requestId"))||
+                !id.equals(scope.opt("runId"))||!id.equals(scope.opt("buildOperationId"))||!Boolean.FALSE.equals(scope.opt("modelDispatchAllowed"))||
+                !Boolean.FALSE.equals(scope.opt("replayAllowed"))||!OwnerDirectNodeBuild.path(scope.opt("outputPath"))||
+                !OwnerDirectNodeBuild.digest(scope.opt("lockSha256"))||!OwnerDirectNodeBuild.digest(scope.opt("planDigest"))||
+                !OwnerDirectNodeBuild.digest(scope.opt("runtimeIdentity"))||!"managed_process_v1".equals(scope.opt("runtimeId"))||
+                !"pocketworld.development-context.v1".equals(context.opt("format"))||!project.equals(context.opt("projectId"))||
+                !checkout.equals(context.opt("checkoutId"))||!source.equals(context.opt("initialSourceDigest"))||
+                !scope.getString("runtimeId").equals(context.opt("runtime"))||context.has(OwnerDraftFirstBuild.FIELD)||context.has("clientMessageId"))
+            throw new SecurityException("不是这项原本机编译工作");
+        return scope;
+    }
+    private void requireOwnerDirectNodePlan(JSONObject task,String run,int epoch,JSONObject plan)throws Exception{
+        JSONObject scope=requireOwnerDirectNodeScope(task);
+        OwnerDirectNodeBuild.step(plan);
+        if(!scope.getString("runId").equals(run)||epoch!=1)throw new SecurityException("原本机构建执行代次已变");
+        for(String key:new String[]{"projectId","checkoutId","sourceDigest","planDigest","runtimeId","runtimeIdentity"})
+            if(!scope.getString(key).equals(plan.opt(key)))throw new SecurityException("原构建方案不属于这个副本版本");
+    }
+    public record OwnerDirectNodeOriginal(JSONObject scope,JSONObject operation,JSONObject exact,JSONObject route){}
+    private OwnerDirectNodeOriginal ownerDirectNodeOriginal(JSONObject task)throws Exception{
+        JSONObject scope=requireOwnerDirectNodeScope(task),binding=directNodeBuildBinding(task.getString("id"));
+        JSONObject row=projectOperationForHost(binding),args=row.getJSONObject("arguments"),plan=args.getJSONObject("plan");
+        JSONObject journal=row.getJSONObject("journalArguments"),route=row.getJSONObject("receipt").getJSONObject("projectExecution");
+        JSONObject exact=ProjectDevelopment.exact(plan,OwnerDirectNodeBuild.step(plan));
+        if(!journal.has("planRef")||!"build".equals(journal.opt("stepId"))||!row.optString("state").matches("unknown|receipt")||
+                !OriginalNodeCompilerOutput.matchesDirectRoute(exact,route))
+            throw new SecurityException("没有找到这次原本机构建的已消费操作");
+        for(String key:new String[]{"taskId","runId","coordinatorEpoch","operationId"})
+            if(!canonical(binding.get(key)).equals(canonical(route.opt(key))))throw new SecurityException("原构建操作身份不一致");
+        JSONObject approval=OwnerDraftFirstBuild.consumedCommandApproval(task,journal,route);
+        if(approval==null||!canonical(scope).equals(canonical(approval.getJSONObject("capability").optJSONObject(OwnerDirectNodeBuild.FIELD))))
+            throw new SecurityException("原批准不属于这份本机构建的准确版本");
+        return new OwnerDirectNodeOriginal(scope,row,exact,route);
+    }
+    public synchronized OwnerDirectNodeOriginal ownerDirectNodeOriginalForOwner(String id)throws Exception{return ownerDirectNodeOriginal(required(id));}
+    /** A private, window-bound read of one original Work; not a launch, stop, or log handle. */
+    public static final class OwnerDirectNodeReceiptCheck {
+        private final TaskStore issuer;
+        private final String id,routeDigest;
+        private final RuntimeExecutionRef reference;
+        private final boolean needsProvider;
+        private final java.util.function.BooleanSupplier window;
+        private OwnerDirectNodeReceiptCheck(TaskStore issuer,String id,OwnerDirectNodeOriginal original,
+                java.util.function.BooleanSupplier window)throws Exception{
+            this.issuer=issuer;this.id=id;this.window=window;
+            routeDigest=capabilityFingerprint(original.route());
+            reference=RuntimeExecutionRef.fromHost(original.exact(),original.route());
+            needsProvider="unknown".equals(original.operation().opt("state"));
+        }
+        public boolean needsProvider(){return needsProvider;}
+        public boolean ownerWindowCurrent(){return window.getAsBoolean();}
+        public RuntimeExecutionRef providerReference(){
+            if(!needsProvider||!ownerWindowCurrent())throw new SecurityException("原本机构建核对窗口已关闭");
+            return reference;
+        }
+    }
+    private String directNodeReceiptRunStatus(String id)throws Exception{
+        try(Cursor row=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{id,id})){
+            if(!row.moveToFirst())throw new SecurityException("原本机构建执行已不可核对");
+            return row.getString(0);
+        }
+    }
+    private static boolean pendingDirectNodeReceipt(OwnerDirectNodeOriginal original){
+        JSONObject row=original.operation(),envelope=row.optJSONObject("receipt");
+        return "unknown".equals(row.opt("state"))&&envelope!=null&&"unknown".equals(envelope.opt("status"))&&
+                envelope.opt("accepted")==JSONObject.NULL&&Boolean.FALSE.equals(envelope.opt("replayAllowed"))&&
+                envelope.optString("code").matches("project_pending|project_cancel_pending_unknown");
+    }
+    private static boolean unfinishedDirectNodeReceipt(JSONObject task,OwnerDirectNodeOriginal original,String runStatus){
+        return runStatus.matches("running|interrupted")&&
+                (task.optString("status").matches("running|stopping|reconciling|interrupted")||
+                    "awaiting_user".equals(task.opt("status"))&&"receipt".equals(original.operation().opt("state")));
+    }
+    public synchronized OwnerDirectNodeReceiptCheck captureOwnerDirectNodeReceiptCheck(String id,String run,int epoch,String op,
+            java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        if(ownerWindow==null||!ownerWindow.getAsBoolean()||!id.equals(run)||!id.equals(op)||epoch!=1)
+            throw new SecurityException("请返回这次原本机构建核对");
+        db.beginTransactionNonExclusive();try{
+            JSONObject task=required(id);OwnerDirectNodeOriginal original=ownerDirectNodeOriginal(task);
+            String runStatus=directNodeReceiptRunStatus(id);
+            if(!unfinishedDirectNodeReceipt(task,original,runStatus)||hasUnresolvedExcept(id,id)||
+                    !("receipt".equals(original.operation().opt("state"))||pendingDirectNodeReceipt(original))||!ownerWindow.getAsBoolean())
+                throw new SecurityException("原构建记录已变化，请从同一工作查看");
+            OwnerDirectNodeReceiptCheck checked=new OwnerDirectNodeReceiptCheck(this,id,original,ownerWindow);
+            db.setTransactionSuccessful();return checked;
+        }finally{db.endTransaction();}
+    }
+    private static String verifiedDirectNodeExit(OwnerDirectNodeOriginal original,JSONObject actual,boolean retained)throws Exception{
+        if(actual==null||!"managed_process".equals(actual.opt("provider"))||!"command".equals(actual.opt("kind"))||
+                !"foreground".equals(actual.opt("runMode"))||!"pre_exec_manifest_verified".equals(actual.opt("sourceCheckStatus"))||
+                !"npm".equals(actual.opt("requestedExecutable"))||!"[\"run\",\"build\"]".equals(canonical(actual.opt("requestedArgv")))||
+                !Boolean.FALSE.equals(actual.opt("ownedWorkerLive"))||
+                !Boolean.TRUE.equals(actual.opt("resourcesReleased"))||!Boolean.TRUE.equals(actual.opt("processGroupAbsent"))||
+                !(actual.opt("cancelRequested") instanceof Boolean)||!(actual.opt("timedOut") instanceof Boolean)||
+                !NativeProcessSupervisor.knownOrdinaryExitContract(actual.optString("nativeResultContract"))||
+                retained&&("owned_worker_live".equals(actual.opt("observation"))||!actual.isNull("receiptPersistence")))return null;
+        Object finishedAt=actual.opt("finishedAt");
+        if(!(finishedAt instanceof Integer||finishedAt instanceof Long)||((Number)finishedAt).longValue()<=0)return null;
+        JSONObject exit=ProjectExecutionExit.from(original.exact(),original.route(),actual);
+        if(exit==null||!"no_child".equals(exit.opt("kind"))&&
+                (!"exit_observed".equals(actual.opt("launchPhase"))||!Boolean.FALSE.equals(actual.opt("noChildCreated"))))return null;
+        boolean normalZero="exit_code".equals(exit.opt("kind"))&&exit.getInt("value")==0&&
+                Boolean.FALSE.equals(actual.opt("cancelRequested"))&&Boolean.FALSE.equals(actual.opt("timedOut"));
+        String status=actual.optString("status");
+        return (normalZero?"completed":"failed").equals(status)?status:null;
+    }
+    /** Positive recovery only. If the callback won the race, leave its durable receipt intact. */
+    public synchronized JSONObject settleOwnerDirectNodeReceiptCheck(OwnerDirectNodeReceiptCheck selected,RuntimeReceipt retained)throws Exception{
+        if(selected==null||selected.issuer!=this||!selected.ownerWindowCurrent())
+            throw new SecurityException("原本机构建核对窗口已关闭");
+        db.beginTransaction();try{
+            String id=selected.id;JSONObject task=required(id);OwnerDirectNodeOriginal original=ownerDirectNodeOriginal(task);
+            if(!selected.routeDigest.equals(capabilityFingerprint(original.route()))||!selected.ownerWindowCurrent())
+                throw new SecurityException("原本机构建或核对窗口已变化");
+            String runStatus=directNodeReceiptRunStatus(id),taskStatus=task.getString("status");
+            boolean alreadySettled=taskStatus.matches("completed|failed|paused")&&taskStatus.equals(runStatus);
+            if(!alreadySettled&&(!unfinishedDirectNodeReceipt(task,original,runStatus)||hasUnresolvedExcept(id,id)))
+                throw new SecurityException("原本机构建状态已变化，请从同一工作查看");
+            JSONObject reply=new JSONObject().put("taskId",id).put("runId",id).put("epoch",1).put("buildOperationId",id).put("state","unknown");
+            if(pendingDirectNodeReceipt(original)&&!alreadySettled&&selected.needsProvider()&&retained!=null){
+                JSONObject actual=retained.json();
+                if(verifiedDirectNodeExit(original,actual,true)!=null){
+                    if(!selected.ownerWindowCurrent())throw new SecurityException("原本机构建核对窗口已关闭");
+                    recordProjectOperation(original.route(),original.exact(),actual);
+                    original=ownerDirectNodeOriginal(required(id));
+                    if(!"receipt".equals(original.operation().opt("state")))
+                        throw new IllegalStateException("原本机构建回执仍未确认");
+                }
+            }
+            JSONObject row=original.operation(),receipt=row.getJSONObject("receipt");
+            if("receipt".equals(row.opt("state"))&&"project_process_receipt".equals(receipt.opt("code"))&&Boolean.TRUE.equals(receipt.opt("accepted"))){
+                String status=verifiedDirectNodeExit(original,receipt.optJSONObject("executionReceipt"),false);
+                if(status!=null&&status.equals(receipt.opt("status"))&&status.equals(receipt.opt("executionStatus"))){
+                    if(!selected.ownerWindowCurrent())throw new SecurityException("原本机构建核对窗口已关闭");
+                    if(!alreadySettled)finishOwnerDirectNodeBuildFromReceipt(original.route());
+                    String finished=required(id).getString("status");
+                    String expected=Boolean.TRUE.equals(task.opt("cancelRequested"))?"paused":status;
+                    if(expected.equals(finished)&&finished.equals(directNodeReceiptRunStatus(id)))
+                        reply.put("state","settled").put("status",finished);
+                }
+            }
+            if(!selected.ownerWindowCurrent())throw new SecurityException("原本机构建核对窗口已关闭");
+            db.setTransactionSuccessful();return reply;
+        }finally{db.endTransaction();}
+    }
+    public synchronized JSONObject directNodeWorkForSource(String project,String checkout,String source)throws Exception{
+        String id=OwnerDirectNodeBuild.workId(project,checkout,source);JSONObject task=read(id);
+        if(task==null)return null;
+        return ownerDirectNodeOriginal(task).scope().put("status",task.getString("status"));
+    }
+    /** Called only by the admitted original control, neither from project review nor any tool call. */
+    public synchronized void requireOwnerDirectNodeBuildCurrent(String id,String approval,RunControl original)throws Exception{
+        JSONObject task=required(id),scope=requireOwnerDirectNodeScope(task);
+        requireExecutionEnabled();OwnerExecutionPolicy.requireRevision(ownerExecutionState(),task.getLong("executionAdmissionRevision"));
+        if(!original.matchesHostRun(id,id,1)||original.isCancelled()||original.isPaused()||task.optBoolean("cancelRequested")||
+                !"running".equals(task.opt("status")))throw new SecurityException("原本机构建控制已结束或停止");
+        JSONObject grant=grant(id);
+        if(!"owner".equals(grant.opt("principalId"))||!"private".equals(grant.opt("spaceId"))||!"capabilities".equals(grant.opt("mode"))||
+                !id.equals(grant.opt("nativeOwnerDirectNodeBuild"))||grant.optLong("expiresAt")<=System.currentTimeMillis()||
+                grant.optInt("remainingOperations",-1)!=0||grant.getJSONArray("tools").length()!=0||grant.getJSONArray("allowedInferencePurposes").length()!=0)
+            throw new SecurityException("原一次本机构建准入已失效");
+        try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{id,id})){
+            if(!run.moveToFirst()||!"running".equals(run.getString(0)))throw new SecurityException("原本机构建轮次已结束");
+        }
+        try(Cursor op=db.rawQuery("SELECT operation_id,tool,state FROM operations WHERE task_id=? AND run_id=?",new String[]{id,id})){
+            if(!op.moveToFirst()||!id.equals(op.getString(0))||!"project_execute".equals(op.getString(1))||
+                    !"unknown".equals(op.getString(2))||op.moveToNext())throw new SecurityException("原本机构建不是唯一待执行操作");
+        }
+        JSONArray approvals=task.getJSONArray("approvals");
+        if(approvals.length()!=1||!approval.equals(approvals.getJSONObject(0).opt("id"))||
+                !"consumed".equals(approvals.getJSONObject(0).opt("state"))||
+                !canonical(scope).equals(canonical(approvals.getJSONObject(0).getJSONObject("capability").optJSONObject(OwnerDirectNodeBuild.FIELD))))
+            throw new SecurityException("原本机构建批准已变化");
+    }
+    /** Finish from the retained provider receipt. Missing/replaced/partial still does not imply an exit. */
+    public synchronized void finishOwnerDirectNodeBuildFromReceipt(JSONObject binding)throws Exception{
+        JSONObject task=required(binding.getString("taskId"));
+        if(!task.has(OwnerDirectNodeBuild.FIELD))return;
+        String id=task.getString("id");
+        if(!id.equals(binding.opt("runId"))||binding.optInt("coordinatorEpoch")!=1||!id.equals(binding.opt("operationId"))||
+                task.optString("status").matches("completed|failed|paused"))return;
+        OwnerDirectNodeOriginal original=ownerDirectNodeOriginal(task);
+        JSONObject row=original.operation(),receipt=row.getJSONObject("receipt"),backend=receipt.optJSONObject("executionReceipt");
+        if(!"receipt".equals(row.opt("state"))||backend==null||!Boolean.TRUE.equals(backend.opt("receiptReceived"))||
+                !Boolean.TRUE.equals(backend.opt("resourcesReleased")))return;
+        RuntimeExecutionRef.fromHost(original.exact(),original.route()).requireReceipt(backend);
+        String status=receipt.getString("status");
+        if(!status.matches("completed|failed"))return;
+        if(task.optBoolean("cancelRequested"))status="paused";
+        endAttempt(id,id,status,"paused".equals(status)?"原本机构建已停止，已取得退出和资源回执。":
+                "completed".equals(status)?"原本机构建已成功退出。是否有可保存的编译文件，以这次原执行回执为准。":"原本机构建没有成功，已取得原退出回执。",
+                new JSONObject().put("nativeOwnerDirectNodeBuild",true).put("operationId",id).put("modelDispatched",false).put("businessVerified",false));
+    }
+    public synchronized OwnerDirectNodeOriginal cancelOwnerDirectNodeBuildForOwner(String id)throws Exception{
+        OwnerDirectNodeOriginal original=ownerDirectNodeOriginal(required(id));
+        if(!"receipt".equals(original.operation().opt("state"))){requestCancel(id,id);cancelProjectOperation(original.route(),original.exact());}
+        return original;
+    }
+    private OwnerNodeCompilerBuild directCompilerBuild(JSONObject task,String run,int epoch,String operation,boolean current)throws Exception{
+        OwnerDirectNodeOriginal original=ownerDirectNodeOriginal(task);
+        JSONObject scope=original.scope(),row=original.operation(),receipt=row.getJSONObject("receipt");
+        String id=task.getString("id");
+        if(!id.equals(run)||epoch!=1||!id.equals(operation)||!"completed".equals(task.opt("status"))||
+                !Boolean.FALSE.equals(task.opt("cancelRequested"))||!"receipt".equals(row.opt("state"))||
+                !"project_process_receipt".equals(receipt.opt("code"))||!"completed".equals(receipt.opt("status"))||
+                !Boolean.TRUE.equals(receipt.opt("accepted"))||receipt.optBoolean("cancelRequested")||original.route().optBoolean("cancelRequested")||
+                current&&hasUnresolved(id))throw new SecurityException("尚未核对到已结束的这次原本机构建");
+        try(Cursor ended=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=1",new String[]{id,id})){
+            if(!ended.moveToFirst()||!"completed".equals(ended.getString(0)))throw new SecurityException("原本机构建轮次尚未确认结束");
+        }
+        if(current)try(Cursor active=db.rawQuery("SELECT 1 FROM leases WHERE run_id=? AND epoch=1 LIMIT 1",new String[]{id})){
+            if(active.moveToFirst())throw new SecurityException("原本机构建资源尚未释放");
+        }
+        var witness=OriginalNodeCompilerOutput.fromReceipt(original.exact(),original.route(),receipt.getJSONObject("executionReceipt"));
+        if(witness==null||!scope.getString("outputPath").equals(witness.path()))throw new SecurityException("原本机构建没有这一个可核对的编译文件");
+        return new OwnerNodeCompilerBuild(new OriginalNodeCompilerDelivery(witness),original.exact(),original.route());
+    }
+
     /** Manual PTY admission reuses the original run, immutable project plan and prepared operation.
      * No assistant conversation, model grant or second process journal is constructed. */
     public synchronized JSONObject beginOwnerLocalTerminal(dev.pocketengine.features.local.project.OwnerLocalTerminal.Confirmed confirmed)throws Exception {
@@ -14705,6 +14999,9 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
     private boolean projectServiceCheckoutConflict(JSONObject exact,String operation,String permittedService)throws Exception {
+        return projectServiceCheckoutConflict(exact,operation,permittedService,false);
+    }
+    private boolean projectServiceCheckoutConflict(JSONObject exact,String operation,String permittedService,boolean requireQuietCopy)throws Exception {
         boolean starting="owned_service".equals(exact.getJSONObject("payload").optString("runMode"));String checkout=exact.getString("checkoutId");
         // Every caller owns the original admission transaction: do not open a new
         // snapshot or let a later caller check conflicts outside that atomic admission.
@@ -14713,7 +15010,7 @@ public final class TaskStore {
         if(!db.inTransaction())throw new IllegalStateException("项目冲突核验需要原准入事务");
         try(Cursor rows=db.rawQuery("SELECT operation_id,task_id,run_id FROM operations WHERE tool='project_execute' AND state IN ('prepared','unknown','project_running','project_stopping')",null)){
             while(rows.moveToNext())if(!operation.equals(rows.getString(0))&&!rows.getString(0).equals(permittedService)){JSONObject args=projectStoredArguments(rows.getString(1),rows.getString(2),new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_ARGUMENTS,rows.getString(0)))),plan=dev.pocketengine.features.local.project.ProjectBuildPlan.verified(args.getJSONObject("plan"));if(!checkout.equals(plan.getString("checkoutId")))continue;
-                JSONObject step=dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,args.getString("stepId"));if(starting||dev.pocketengine.features.local.project.ProjectGit.exact(exact)||dev.pocketengine.features.local.project.ProjectGit.plan(plan)||"owned_service".equals(step.getJSONObject("payload").optString("runMode")))return true;
+                JSONObject step=dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,args.getString("stepId"));if(requireQuietCopy||starting||dev.pocketengine.features.local.project.ProjectGit.exact(exact)||dev.pocketengine.features.local.project.ProjectGit.plan(plan)||"owned_service".equals(step.getJSONObject("payload").optString("runMode")))return true;
             }
         }return false;
     }
@@ -14804,7 +15101,8 @@ public final class TaskStore {
                 JSONObject task=required(binding.getString("taskId"));
                 // A late receipt may settle its original row, but cannot revive a run,
                 // alter a replacement attempt, or clear another unresolved effect.
-                if("reconciling".equals(task.optString("status"))&&binding.getString("runId").equals(task.optString("runId"))&&binding.getInt("coordinatorEpoch")==task.optInt("coordinatorEpoch")&&!hasUnresolved(binding.getString("taskId"))){
+                // The dedicated direct compiler finalizer closes its own task and run, including Stop.
+                if(!task.has(OwnerDirectNodeBuild.FIELD)&&"reconciling".equals(task.optString("status"))&&binding.getString("runId").equals(task.optString("runId"))&&binding.getInt("coordinatorEpoch")==task.optInt("coordinatorEpoch")&&!hasUnresolved(binding.getString("taskId"))){
                     boolean ended=false;try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{binding.getString("taskId"),binding.getString("runId"),String.valueOf(binding.getInt("coordinatorEpoch"))})){ended=run.moveToFirst()&&!"running".equals(run.getString(0));}
                     if(ended){task.put("status",task.optBoolean("cancelRequested")?"paused":"awaiting_user").put("summary",nativePackage||nativeOutput?"原文件成果操作已有确定回执；保留文件与记录，等待主人明确继续，不自动保存或执行":preparationNotDispatched?"原准备失败已确认未派发进程且资源已释放；等待主人明确修改或继续，不自动重试":commandNoChild?"原命令已确证未创建子进程且资源已释放；等待主人明确修改或继续，不自动重试":"原项目执行已取得真实退出与资源释放回执；已有日志和文件保留，等待主人明确继续，不自动重启");write(task);}
                 }
@@ -15020,6 +15318,15 @@ public final class TaskStore {
     }
     private ProjectTerminalTarget ownerProjectExecutionTarget(String id,String execution,boolean allowFirstReceiptLookup)throws Exception{
         JSONObject task=required(id);requirePrivateOwner(task);
+        if(task.has(OwnerDirectNodeBuild.FIELD)){
+            if(allowFirstReceiptLookup||!id.equals(execution))throw new SecurityException("请从这件原本机构建查看已确认的原日志");
+            OwnerDirectNodeOriginal original=ownerDirectNodeOriginal(task);
+            JSONObject row=original.operation(),receipt=row.getJSONObject("receipt"),actual=receipt.optJSONObject("executionReceipt");
+            if(!"receipt".equals(row.opt("state"))||actual==null||!Boolean.TRUE.equals(actual.opt("receiptReceived"))||
+                    !Boolean.TRUE.equals(actual.opt("resourcesReleased")))throw new SecurityException("此原构建尚无已确认的退出记录");
+            RuntimeExecutionRef.fromHost(original.exact(),original.route()).requireReceipt(actual);
+            return new ProjectTerminalTarget(this,id,id,1,row,true);
+        }
         if(task.has("ownerLocalTerminal")){
             requireOwnerLocalTerminalTask(id);
             if(allowFirstReceiptLookup||!id.equals(execution))throw new SecurityException("请从原私人任务查看同一次已结束的手动终端");
@@ -17445,6 +17752,7 @@ public final class TaskStore {
             if(teamFile.moveToFirst())throw new SecurityException("团队写回须从原整合任务找回实际文件版本；不能用人工已发生或未发生覆盖回执");
         }
         if(required(id).has("ownerLocalTerminal"))throw new SecurityException("手动终端只查询原进程/输入回执，不能人工确认未发生再重放");
+        if(required(id).has(OwnerDirectNodeBuild.FIELD))throw new SecurityException("本机构建只以原生进程回执核对，不能人工覆盖或重新派发");
         if(required(id).has(RuntimeSetupHost.KEY))throw new SecurityException("本机准备保留原进程与安装证据，不能人工确认未发生再重放");
         try(Cursor notice=db.rawQuery("SELECT 1 FROM operations WHERE task_id=? AND operation_id=? AND tool='post_notice'",new String[]{id,operationId})){if(notice.moveToFirst())throw new SecurityException("通知原提交与阅读状态不能用人工已发生/未发生覆盖；未知通知不会重发");}
         if(required(id).has("ownerBackupUpload"))throw new SecurityException("原备份上传只能查询原远端密文，不能人工确认未发生、恢复或再次上传");

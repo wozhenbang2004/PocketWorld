@@ -19,6 +19,7 @@ import dev.pocketengine.features.local.project.ProjectTextImport;
 import dev.pocketengine.features.local.runtime.ProjectRuntime;
 import dev.pocketengine.features.local.runtime.RuntimeExecutionRef;
 import dev.pocketengine.features.local.runtime.RuntimeInvocation;
+import dev.pocketengine.features.local.runtime.RuntimeReceipt;
 import dev.pocketengine.features.local.runtime.TermuxProjectRuntime;
 import dev.pocketengine.features.local.runtime.ManagedProjectRuntime;
 import dev.pocketengine.features.local.runtime.RuntimeWorkspace;
@@ -1158,6 +1159,38 @@ public final class LocalModule implements EngineModule {
         if(edit&&exact.getJSONObject("payload").has("liveEditServiceExecutionId"))capability.put("liveEditServiceExecutionId",exact.getJSONObject("payload").getString("liveEditServiceExecutionId"));
         return capability;
     }
+    /** This preflight does not claim, install or modify. The original host keeps this same
+     * module monitor through the SQL claim and existing runtime dispatch. */
+    public synchronized void requireDirectNodeBuildForOwner(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.Confirmed selected)throws Exception{
+        selected.requireHost(this);selected.requireUnenteredWindow();
+        JSONObject scope=selected.scope(),plan=selected.plan(),lock=selected.lock();
+        JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.OwnerDirectNodeBuild.step(plan));
+        String checkout=scope.getString("checkoutId"),project=scope.getString("projectId");
+        validateDirectCompilerCheckout(project,checkout);
+        File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),checkout,false),files=new File(home,"files");
+        JSONObject snapshot=exportDirectory(files,checkout(checkout)),source=ProjectSources.describe(snapshot);
+        if(!source.getString("sourceDigest").equals(scope.opt("sourceDigest"))||
+                !scope.getString("outputPath").equals(OriginalNodeCompilerOutput.selectedPathForOwnerReview(exact,snapshot))||
+                !scope.getString("lockSha256").equals(lock.opt("lockSha256"))||
+                !projectCapabilityStillCurrent(exact,selected.capability()))
+            throw new SecurityException("所选副本的源码、锁或实际工具已变化，没有构建");
+        requireDraftDependencyFiles(checkout,lock);
+        selected.requireUnenteredWindow();
+    }
+    private void validateDirectCompilerCheckout(String project,String id)throws Exception{
+        if(closed)throw new IllegalStateException("原本机项目宿主已关闭");
+        File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),id,false),files=new File(home,"files");
+        if(!files.equals(files.getCanonicalFile())||!Files.isDirectory(files.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)||
+                !Files.isRegularFile(new File(home,"checkout.json").toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))
+            throw new SecurityException("原私人副本位置不能核对");
+        requireIdle(id);
+        JSONObject metadata=checkout(id);
+        if(!project.equals(metadata.opt("projectId"))||!id.equals(metadata.opt("id"))||
+                !dev.pocketengine.features.local.project.OwnerDirectNodeBuild.ordinaryCheckout(metadata)||
+                metadata.has(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD)||
+                metadata.has("collectedFromCheckoutId")||metadata.has("collectionOperationId"))
+            throw new SecurityException("这不是所选的普通本机私人副本");
+    }
     /** Native original-operation port. Raw feature requests cannot supply its retained authority. */
     public synchronized JSONObject executeProjectForHost(JSONObject exact,JSONObject binding,RunControl original,ProjectAdmission admission)throws Exception {
         return executeProjectForHost(exact,binding,original,admission,null);
@@ -1501,6 +1534,13 @@ public final class LocalModule implements EngineModule {
         RuntimeExecutionRef ref=firstManagedNodeRef(target);
         var receipt=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID).retainedNodeTerminalReceiptForHost(ref,ownerWindow);
         return receipt==null?null:receipt.json();
+    }
+    /** One already admitted, exact original result after an explicit owner check; no checkout body or logs. */
+    public RuntimeReceipt retainedDirectNodeReceiptForHost(TaskStore.OwnerDirectNodeReceiptCheck original)throws Exception{
+        if(closed||original==null)throw new SecurityException("原本机构建宿主已关闭");
+        RuntimeExecutionRef ref=original.providerReference();
+        return ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID).retainedNodeTerminalReceiptForHost(ref,
+                ()->!closed&&original.ownerWindowCurrent());
     }
     public synchronized JSONObject projectLogForHost(JSONObject exact,JSONObject binding,long cursor,int maxBytes)throws Exception {
         RuntimeExecutionRef reference=RuntimeExecutionRef.fromHost(exact,binding);return runtime(runtimeId(exact)).readLog(reference,cursor,maxBytes);

@@ -362,7 +362,10 @@ internal class PocketWebBridge(
     }
     private val nodeCompilerOutput=PocketWebNodeCompilerOutput({controller.nativeButlerHost().tasks},
         {controller.nativeButlerHost().features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("原本机项目宿主不可用")},
-        controller::runPluginCatalogWork,::captureWindow,::acceptsWindow) {
+        controller::runPluginCatalogWork,::captureWindow,::acceptsWindow,
+        { task, run, epoch, operation, current ->
+            controller.nativeButlerHost().features.checkDirectNodeReceiptForOwner(task,run,epoch,operation,java.util.function.BooleanSupplier { current() })
+        }) {
         taskViewId.takeIf{!closed&&documentId!=null&&section==null&&controller.state.filePath==null&&controller.webPrivateOwnerVisible()}
     }
     private val projectWorkPages = PocketWebProjectWork(controller, { documentId }) {
@@ -2507,7 +2510,7 @@ internal class PocketWebBridge(
                 val epoch = requiredInt(args, "epoch")
                 require(epoch >= 0 && (run.isNotBlank() || epoch == 0) && task.raw.optString("runId") == run &&
                     requiredInt(task.raw, "coordinatorEpoch") == epoch) { "原任务执行已变化，请刷新后核对要停止的执行" }
-                require(canUseTaskControls(task) && PocketWebTaskActions.canStopDirectly(task) && (!PocketWebTaskActions.runtimeSetupTask(task) || controller.webPrivateOwnerVisible())) { "请回这项任务的原能力审核窗口操作" }
+                require(canUseTaskControls(task) && PocketWebTaskActions.canStopDirectly(task) && (!(PocketWebTaskActions.runtimeSetupTask(task)||task.raw.has("ownerDirectNodeBuild")) || controller.webPrivateOwnerVisible())) { "请回这项任务的原能力审核窗口操作" }
                 controller.stopReviewedTask(task)
             }
             "projects.refresh" -> { controller.state.projectId?.let(controller::selectProject) ?: controller.refresh() }

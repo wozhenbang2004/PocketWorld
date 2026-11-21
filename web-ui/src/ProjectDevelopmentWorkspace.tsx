@@ -108,10 +108,21 @@ function checkedRetainedOriginal(value:Data,visit:RetainedOriginalVisit):Retaine
   return value as RetainedOriginalDifference;
 }
 const nodeScripts=['prebuild','build','postbuild'] as const;
+const reviewDirectBuild='projects.development.localBuild.review', confirmDirectBuild='projects.development.localBuild.confirm';
+function directNodeWork(value:Data|undefined,projectId:string,checkoutId:string,sourceDigest:string) {
+  return value?.format==='pocketworld.owner-direct-node-build.v1'&&copyIdentity(value.requestId)&&
+    value.runId===value.requestId&&value.buildOperationId===value.requestId&&value.epoch===1&&
+    value.projectId===projectId&&value.checkoutId===checkoutId&&value.sourceDigest===sourceDigest&&sourceHash(sourceDigest)&&
+    value.runtimeId==='managed_process_v1'&&sourceHash(value.runtimeIdentity)&&sourceHash(value.planDigest)&&sourceHash(value.lockSha256)&&
+    typeof value.outputPath==='string'&&/^dist\/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.js$/.test(value.outputPath)&&
+    value.modelDispatchAllowed===false&&value.replayAllowed===false?value:null;
+}
+const directBuildRegistered=(value:Data|null)=>!!value&&['running','completed','failed','reconciling','paused','stopping','interrupted','awaiting_user','cancelled'].includes(value.status);
+
 
 function checkedBuildPreview(value:Data,projectId:string,checkoutId:string,sourceDigest:string) {
   const allowed=['format','projectId','checkoutId','sourceDigest','runtimeId','manager','scripts','editedCopy','existingCopy',
-    'preservedProjectDraft','commandsAuthorized','executionAuthorized','readOnly','lockedDependencies','dependencyState'];
+    'preservedProjectDraft','commandsAuthorized','executionAuthorized','readOnly','lockedDependencies','dependencyState','directBuild','directBuildWork'];
   const scripts=value?.scripts,lock=value?.lockedDependencies;
   if(value?.format!=='pocketworld.node-build-plan-preview.v1'||Object.keys(value).some(key=>!allowed.includes(key))||
     value.readOnly!==true||value.commandsAuthorized!==false||value.executionAuthorized!==false||
@@ -127,6 +138,13 @@ function checkedBuildPreview(value:Data,projectId:string,checkoutId:string,sourc
       Object.keys(lock).some(key=>!['manager','managerVersion','registry','lockPath','lockSha256','packages'].includes(key))):
       Object.hasOwn(value,'dependencyState')))
     throw Error('没有取得这个副本的只读构建方案，未开始工作。');
+  const offer=directNodeWork(value.directBuild,projectId,checkoutId,sourceDigest), prior=directNodeWork(value.directBuildWork,projectId,checkoutId,sourceDigest);
+  if(Object.hasOwn(value,'directBuild')&&(!offer||value.directBuildWork||value.manager!=='npm'||scripts.build!=='tsc'||
+      Object.hasOwn(scripts,'prebuild')||Object.hasOwn(scripts,'postbuild')||value.dependencyState!=='current_packages_checked'||
+      offer.lockSha256!==lock?.lockSha256||offer.executionAuthorized!==false||!copyIdentity(offer.reviewHandle)||
+      !Number.isSafeInteger(offer.expiresAt)||offer.expiresAt<=Date.now())||
+     Object.hasOwn(value,'directBuildWork')&&!directBuildRegistered(prior))
+    throw Error('没有核对到这份源码的本机构建审阅，没有开始。');
   return value;
 }
 
@@ -276,7 +294,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     source?.projectId===projectId&&source.checkoutId===checkout&&source.sourceDigest===buildPreview.value.sourceDigest&&
     bridge.getState().state.projectId===projectId&&!document.hidden?buildPreview.value:null;
   previewOpen.current=!!preview;
-  const closeBuildPreview=()=>{previewOpen.current=false;setBuildPreview(null);};
+  const closeBuildPreview=()=>{
+    previewOpen.current=false;setBuildPreview(null);
+    const prepared=buildPreview?.value.directBuild;
+    if(prepared?.reviewHandle&&buildPreview&&handle.current===buildPreview.viewHandle)
+      void latest.current.run('projects.development.dismiss',{viewHandle:buildPreview.viewHandle,reviewHandle:prepared.reviewHandle}).catch(()=>{});
+  };
   const retainedVisit=active&&view?.projectId===projectId&&view.executionAuthorized===false&&view.viewHandle===handle.current&&
     !view.draftRecoveryRequired&&!filesOpen&&!hostDiff&&!review&&!preview&&!unresolved(submission)&&!sourceConflict&&!buildCopyMissing&&
     can('projects.development.inspect')?currentRetainedVisit(retainedOriginalVisit,view,projectId,checkout):null;
@@ -793,6 +816,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     /^[a-f0-9]{64}$/.test(source.sourceDigest) ? source.retainedArchiveRoot : null;
   const importedEntry = selectedCopy && !differentBuildCopy ? checkoutWebEntry(source,projectId,checkout) : null;
   const versionBuild = versionBuildFor(source, projectId, checkout);
+  const directWork = selectedCopy?.draftWorkingCopy===false&&!differentBuildCopy&&view?.model?.configured===false&&
+    source?.projectId===projectId&&source.checkoutId===checkout?
+    directNodeWork(source.directNodeBuildWork,projectId,checkout,source.sourceDigest):null;
+  const nativeDirectBuild = can(reviewDirectBuild)&&can(confirmDirectBuild);
   const webTools = selectedCopy && !differentBuildCopy ? checkoutFirstWebTools(source,projectId,checkout) : null;
   const nodeTools = webTools?.kind==='node' ? webTools : null;
   const draftNodeTools = selectedCopy?.draftWorkingCopy===true && !differentBuildCopy
@@ -811,7 +838,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const missingRequiredLock = !!selectedCopy && !differentBuildCopy && source?.projectId===projectId && source.checkoutId===checkout &&
     sourceHash(source.sourceDigest) &&
     (observedLockPath==='package-lock.json'||observedLockPath==='pnpm-lock.yaml') ? observedLockPath : '';
-  const firstBuild = !!(nodeTools || missingRequiredLock) && !versionBuild && !buildLookupUnavailable && can('projects.development.reviewDraftBuild');
+  const directWorkAtTop=buildStepVisible&&directBuildRegistered(directWork)&&can('tasks.open');
+  const firstBuild = !!(nodeTools || missingRequiredLock) && !directWorkAtTop && !versionBuild && !buildLookupUnavailable && can('projects.development.reviewDraftBuild');
   const firstBuildVisible = firstBuild && buildStepVisible;
   const showToolSetupByBuild = firstBuildVisible && !missingRequiredLock && buildToolsBlocked && !missingPnpm &&
     view?.runtime?.preparationAvailable===true && canReviewToolSetup;
@@ -834,10 +862,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     submission.checkoutId===checkout && sourceHash(submission.versionedBuildSourceDigest) &&
     typeof submission.taskId==='string' && /^[A-Za-z0-9_-]{1,80}$/.test(submission.taskId) &&
     (!source || submission.versionedBuildSourceDigest===sourceVersion) ? submission : null;
-  const versionWorkAtTop = buildStepVisible && !!versionBuild && source?.existingNodeBuild===true && can('tasks.open');
-  const acceptedWorkAtTop = buildStepVisible && !versionBuild && !!acceptedBuild && can('tasks.open');
-  const showMissingLock = buildStepVisible && !!missingRequiredLock && !versionWorkAtTop && !acceptedWorkAtTop;
-  const exactBuildNext = !!(firstBuildAction || versionWorkAtTop || acceptedWorkAtTop || showMissingLock);
+  const versionWorkAtTop = buildStepVisible && !directWorkAtTop && !!versionBuild && source?.existingNodeBuild===true && can('tasks.open');
+  const acceptedWorkAtTop = buildStepVisible && !directWorkAtTop && !versionBuild && !!acceptedBuild && can('tasks.open');
+  const showMissingLock = buildStepVisible && !directWorkAtTop && !!missingRequiredLock && !versionWorkAtTop && !acceptedWorkAtTop;
+  const exactBuildNext = !!(firstBuildAction || directWorkAtTop || versionWorkAtTop || acceptedWorkAtTop || showMissingLock);
   // Recognizing Python and its tools only brings the existing scope review closer.
   // The terminal's native review still reads the current copy and execution conditions.
   const savedScriptTooling=source?.checkoutTooling, terminalRuntime=view?.runtime;
@@ -917,10 +945,50 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const viewHandle=handle.current,window=ownerWindow(),expectedSourceDigest=sourceVersion,shown={...draft.current};
     if(firstBuildAction!=='preview'||disabled||previewOpen.current||!viewHandle||view?.viewHandle!==viewHandle||
       !expectedSourceDigest||shown.checkoutId!==checkout)return;
-    void invoke('projects.development.reviewDraftBuild',{viewHandle,checkoutId:checkout,retainedDraft:displayedSavedDraft(shown),
-      previewOnly:true,expectedSourceDigest}, value=>{
+    void invoke(nativeDirectBuild?reviewDirectBuild:'projects.development.reviewDraftBuild',
+      {viewHandle,checkoutId:checkout,retainedDraft:displayedSavedDraft(shown),expectedSourceDigest,...(nativeDirectBuild?{}:{previewOnly:true})}, value=>{
       if(handle.current!==viewHandle||!sameDraft(draft.current,shown))throw Error('原副本或草稿已变化，未展示构建方案。');
       setBuildPreview({value:checkedBuildPreview(value,projectId,checkout,expectedSourceDigest),viewHandle,window});
+    });
+  };
+  const canActOnDirectPreview=()=>{
+    const state=bridge.getState().state;
+    return !!preview&&!!buildPreview&&previewOpen.current&&!entered.current&&!disabled&&!!handle.current&&!document.hidden&&
+      handle.current===buildPreview.viewHandle&&ownerWindow()===buildPreview.window&&state.projectId===projectId&&!state.filePath&&
+      draft.current.checkoutId===preview.checkoutId&&sourceVersion===preview.sourceDigest;
+  };
+  const confirmOwnerCompiler=()=>{
+    const offer=preview?.directBuild;
+    if(!offer||!canActOnDirectPreview()||!nativeDirectBuild||!can('tasks.open'))return;
+    if(offer.expiresAt<=Date.now()){
+      closeBuildPreview();setError('这次本机构建审阅已过期。没有提交，请重新核对同一副本。');return;
+    }
+    const viewHandle=handle.current;
+    // Once confirmed, never reuse that review token, even if the reply is lost.
+    previewOpen.current=false;setBuildPreview(null);
+    void invoke(confirmDirectBuild,{viewHandle,reviewHandle:offer.reviewHandle},value=>{
+      const original=directNodeWork(value,projectId,checkout,sourceVersion);
+      if(!original||!directBuildRegistered(original)||original.requestId!==offer.requestId||original.planDigest!==offer.planDigest||
+         original.runtimeIdentity!==offer.runtimeIdentity||original.lockSha256!==offer.lockSha256||original.outputPath!==offer.outputPath||
+         handle.current!==viewHandle||draft.current.checkoutId!==checkout)
+        throw Error('未取得同一笔本机构建回执。请回原项目核对，没有打开其他任务。');
+      onTaskRegistered();onOpenTask(original.requestId,checkout);
+    },failure=>{
+      setError(failureText(failure)+' 返回核对同一副本时，只查已登记的原构建，不会重复运行。');
+      sourceAttempt.current='';setSource(null);
+    });
+  };
+  const openDirectWork=(shown:Data)=>{
+    const viewHandle=handle.current;
+    if(!viewHandle||disabled||entered.current||draft.current.checkoutId!==checkout||!can('tasks.open'))return;
+    void invoke('projects.development.inspect',{viewHandle,checkoutId:checkout},fresh=>{
+      if(fresh.projectId!==projectId||fresh.checkoutId!==checkout||fresh.sourceDigest!==shown.sourceDigest||handle.current!==viewHandle)
+        throw Error('副本版本已变化，没有打开其他构建。');
+      setSource(fresh);
+      const original=directNodeWork(fresh.directNodeBuildWork,projectId,checkout,shown.sourceDigest);
+      if(!original||!directBuildRegistered(original)||original.requestId!==shown.requestId||original.planDigest!==shown.planDigest)
+        throw Error('未核对到同一笔原构建，没有打开其他任务。');
+      closeBuildPreview();onOpenTask(original.requestId,checkout);
     });
   };
   const readRetainedOriginal=()=>{
@@ -964,7 +1032,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   });
   const canReviewSelectedBuild=!differentBuildCopy&&!!selectedCopy&&
     (selectedCopy.draftWorkingCopy===true||source?.existingNodeBuild===true)&&can('projects.development.reviewDraftBuild');
-  const showBuildReviewFallback=canReviewSelectedBuild&&!versionBuild&&!firstBuild&&!acceptedWorkAtTop&&!buildLookupUnavailable;
+  const showBuildReviewFallback=canReviewSelectedBuild&&!directWorkAtTop&&!versionBuild&&!firstBuild&&!acceptedWorkAtTop&&!buildLookupUnavailable;
   const originalDraftToolBlock=showBuildReviewFallback&&draftNodeTools&&(!draftNodeTools.runtimeReady||draftNodeTools.missing.length>0)?draftNodeTools:null;
   const prepareOriginalDraftTools=originalDraftToolBlock&&!originalDraftToolBlock.missing.includes('pnpm')&&canReviewToolSetup&&
     view?.runtime?.runtimeId==='managed_process_v1'&&view.runtime.preparationAvailable===true;
@@ -998,7 +1066,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {checkedSave&&<p className="pw-field-hint" role="status">{checkedSave.matches?
         <>这版包含刚确认保存的 <bdi>{checkedSave.path}</bdi>。</>:
         <>上次保存的 <bdi>{checkedSave.path}</bdi> 与当前版本不一致。若继续，只审阅上面显示的当前版本。</>}</p>}
-      {(versionWorkAtTop||acceptedWorkAtTop)?<>
+      {directWorkAtTop&&directWork?<div className="pw-form-actions"><Button ref={buildNextAction} disabled={disabled||!can('projects.development.inspect')}
+        onClick={()=>openDirectWork(directWork)}>打开原本机构建</Button></div>:(versionWorkAtTop||acceptedWorkAtTop)?<>
         <p className="pw-field-hint" role="status">{acceptedWorkAtTop?'构建交办已受理，尚不代表命令获准或运行。可在原工作中继续核对。':
           '这一版已有原构建工作。打开可查看实际进展、待确认命令和已保存成果。'}</p>
         {acceptedBuild?.error&&<p className="pw-field-hint">{acceptedBuild.error}</p>}
@@ -1014,7 +1083,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
             {missingPnpm?' 内置准备提供 Node.js 和 npm，不会用 npm 替代 pnpm。':
               builtInSetupUnavailable?' 当前安装包不能准备本机运行环境；文件仍可编辑。':
               showToolSetupByBuild?' 请先审阅手机工具的准备内容。返回后重新核对，不会自动构建。':' 这个窗口不能开始内置准备；仍可编辑文件。'}</>:
-          firstBuildAction==='preview'?`已核对 Node.js 和 ${nodeTools.manager}。可以先看这版要运行的命令和依赖，不需要默认模型。`:
+          firstBuildAction==='preview'?`已核对 Node.js 和 ${nodeTools.manager}。先查看这版的命令与依赖；不用先连接模型。`:
           firstBuildAction==='model'?`已核对 Node.js 和 ${nodeTools.manager}。构建任务还需要连接默认模型；连接不会开始构建。`:
           `已核对 Node.js 和 ${nodeTools.manager}，已有默认模型配置。下一步只看构建方案，依赖和运行仍要分别确认。`}</p>
         <div className="pw-form-actions">
@@ -1189,13 +1258,20 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       <strong>{preview.manager} run build</strong>
       <NodeBuildLock plan={preview} preview/>
       <NodeBuildScripts plan={preview}/>
-      <p>只查看这份副本，没有发送、下载或运行。{preview.preservedProjectDraft&&'你已写的目标留在草稿。'}把构建交给模型才需要默认模型，命令仍须另行批准。</p>
-      {terminalFromPreview&&<p>也可以自己操作。先核对这份副本的手动终端，再决定是否打开；不会代你执行上面的命令或准备依赖。</p>}
+      <p>只核对已保存源码，没有发送、下载或运行。{preview.preservedProjectDraft&&'你已写的目标留在草稿。'}</p>
+      {preview.directBuild?<p>将只在这部手机构建这份已准备依赖的 TypeScript 副本，不调用模型或安装依赖。构建可写入副本，只运行可信项目。在原工作的「过程 → 工具调用」核对 <bdi>{preview.directBuild.outputPath}</bdi>，有实际输出才能另行保存。</p>:
+        preview.directBuildWork?<p>这版已有一笔本机构建。查看原工作，不会再运行。</p>:
+        preview.dependencyState==='needs_lock_review'?<p>先准备这份项目锁定的依赖，再核对构建。手机工具准备只提供运行环境，这里不会安装项目依赖或开始构建。</p>:
+        <p>本机直接构建目前只支持已准备依赖的单文件 TypeScript 构建。交办其他构建才需要模型，命令仍须另行批准。</p>}
+      {terminalFromPreview&&!preview.directBuild&&!preview.directBuildWork&&<p>你也可以核对同一副本的手动终端。打开终端不会代你准备依赖或执行构建。</p>}
       <div className="pw-form-actions">
         <Button variant="secondary" onClick={closeBuildPreview}>返回副本</Button>
-        {terminalFromPreview&&<Button disabled={disabled} onClick={()=>leaveBuildPreview(()=>prepareTerminal(preview.sourceDigest))}>核对同一副本的手动终端</Button>}
-        {view?.model?.configured===false&&can('projects.development.draft')&&<Button variant={terminalFromPreview?'ghost':undefined}
-          disabled={disabled} onClick={()=>leaveBuildPreview(connectBuildModel)}>连接默认模型</Button>}
+        {preview.directBuild&&<Button disabled={disabled||!can('tasks.open')} onClick={confirmOwnerCompiler}>确认在这部手机构建</Button>}
+        {preview.directBuildWork&&<Button disabled={disabled||!can('tasks.open')||!can('projects.development.inspect')}
+          onClick={()=>{if(canActOnDirectPreview())openDirectWork(preview.directBuildWork);}}>打开原本机构建</Button>}
+        {terminalFromPreview&&!preview.directBuild&&!preview.directBuildWork&&<Button disabled={disabled} onClick={()=>leaveBuildPreview(()=>prepareTerminal(preview.sourceDigest))}>核对同一副本的手动终端</Button>}
+        {view?.model?.configured===false&&!preview.directBuildWork&&can('projects.development.draft')&&<Button variant={terminalFromPreview||preview.directBuild?'ghost':undefined}
+          disabled={disabled} onClick={()=>leaveBuildPreview(connectBuildModel)}>{preview.directBuild?'改用模型交办':'连接默认模型'}</Button>}
       </div>
     </div>:review && <div className="pw-local-review">
       {review.draftBuild === true ? <><strong>{review.dependencyState==='needs_lock_review'?'还缺依赖，先审阅这份锁':review.manager+' run build'}</strong>

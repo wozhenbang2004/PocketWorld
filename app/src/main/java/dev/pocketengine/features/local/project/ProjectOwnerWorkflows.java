@@ -80,6 +80,8 @@ public final class ProjectOwnerWorkflows {
                     if(!state.missingLock().isEmpty())source.put("existingNodeBuildMissingLock",state.missingLock());
                     try{source.putOpt("existingNodeBuildTask",tasks.existingNodeBuildForOwner(project,checkout,source.getString("sourceDigest")));}
                     catch(Exception unavailable){source.put("existingNodeBuildUnavailable",true);}
+                    try{source.putOpt("directNodeBuildWork",tasks.directNodeWorkForSource(project,checkout,source.getString("sourceDigest")));}
+                    catch(Exception unavailable){source.put("directNodeBuildWorkUnavailable",true);}
                 }else if(!state.state().isEmpty())source.put("existingNodeBuildBlocked",state.state());
             }else if(ordinaryCheckout(metadata)&&OwnerDraftWorkCopy.matchesRetainedPublication(metadata,copy)){
                 // Same observed source revision; do not turn an independent draft copy into an ordinary build.
@@ -117,6 +119,13 @@ public final class ProjectOwnerWorkflows {
     }
     /** Pin one actual private source tree; a normal checkout does not acquire draft provenance. */
     public JSONObject reviewNodeBuildForOwner(String project,String checkout)throws Exception {
+        return reviewNodeBuild(project,checkout,false).preview();
+    }
+    public record DirectNodeBuildReview(JSONObject preview,OwnerDirectNodeBuild.Review offer){}
+    public DirectNodeBuildReview reviewDirectNodeBuildForOwner(String project,String checkout)throws Exception {
+        return reviewNodeBuild(project,checkout,true);
+    }
+    private DirectNodeBuildReview reviewNodeBuild(String project,String checkout,boolean offerDirect)throws Exception {
         requireOrdinaryFileOwner(project,checkout);JSONObject mark=local.projectCheckoutForHost(checkout).optJSONObject(OwnerDraftWorkCopy.FIELD);
         OwnerDraftWorkCopy.Seed seed=null;JSONObject copy=null;
         if(mark!=null){
@@ -146,7 +155,9 @@ public final class ProjectOwnerWorkflows {
             result.put("dependencyState",local.draftDependencyFilesReady(checkout,deps)?"current_packages_checked":"needs_lock_review");
             if(seed!=null&&!OwnerDraftFirstBuild.edited(pin))result.putOpt("previousVerification",tasks.classicFirstBuildForDraft(seed));
         }
-        return result;
+        var offer=offerDirect&&"npm".equals(pin.opt("manager"))&&"current_packages_checked".equals(result.opt("dependencyState"))
+                ?OwnerDirectNodeBuild.offer(local,plan,pin,snapshot):null;
+        return new DirectNodeBuildReview(result,offer);
     }
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
     /** Project-level saved result shelf, separate from a work draft and from current runtime/tooling. */

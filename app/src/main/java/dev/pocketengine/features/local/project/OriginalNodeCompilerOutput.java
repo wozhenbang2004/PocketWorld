@@ -24,8 +24,14 @@ import org.json.JSONObject;
 /** Evidence for one ordinary locked tsc build. No publication, retained body, or execution permission. */
 public final class OriginalNodeCompilerOutput {
     public static final String WITNESS="nodeCompilerOutput", FORMAT="pocketworld.owner-node-compiler-output.v1";
+    public static final String DIRECT_ROUTE="directOwnerNodeCompilerVersion";
     public static final int MAX_BYTES=256*1024;
     private static final String ABSENT="absent";
+    private static final String DIRECT_FORMAT="pocketworld.owner-native-node-compiler-version.v1";
+    private static final Pattern DIRECT_ID=Pattern.compile("[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}");
+    private static final Set<String> DIRECT_PAYLOAD=Set.of("checkoutId","expectedSourceDigest","executable","argv");
+    private static final Set<String> ROUTE_FACTS=Set.of("command","stepId","intent","projectId","checkoutId","sourceDigest",
+        "planDigest","requestDigest","runtimeId","runtimeIdentity");
     private static final Pattern INPUT=Pattern.compile("src/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\\.ts"),
         OUTPUT=Pattern.compile("dist/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.js");
     private static final Set<String> PIN_KEYS=Set.of("format","taskId","runId","epoch","buildOperationId","projectId","checkoutId",
@@ -37,13 +43,47 @@ public final class OriginalNodeCompilerOutput {
     private static final Set<String> NAMED_OPTIONS=Set.of("target","module","moduleResolution","moduleDetection");
     private OriginalNodeCompilerOutput(){}
 
-    private static boolean npmBuild(JSONObject exact, String marker)throws Exception {
+    private static boolean npmBuild(JSONObject exact)throws Exception {
         JSONObject payload=exact.optJSONObject("payload");
-        return payload!=null&&"managed_process_v1".equals(exact.opt("runtimeId"))&&"project.runtime.run".equals(exact.opt("command"))&&
+        return payload!=null&&"local".equals(exact.opt("feature"))&&"managed_process_v1".equals(exact.opt("runtimeId"))&&
+            "project.runtime.run".equals(exact.opt("command"))&&
             "build".equals(exact.opt("intent"))&&"build".equals(exact.opt("stepId"))&&"npm".equals(payload.opt("executable"))&&
             "[\"run\",\"build\"]".equals(ProjectSources.canonical(payload.opt("argv")))&&".".equals(payload.optString("workingDirectory","."))&&
-            "foreground".equals(payload.optString("runMode","foreground"))&&!payload.has("terminalMode")&&!payload.has("devWatch")&&
-            marker.equals(OwnerDraftFirstBuild.ordinaryWebVersion(exact));
+            "foreground".equals(payload.optString("runMode","foreground"))&&!payload.has("terminalMode")&&!payload.has("devWatch");
+    }
+
+    private static boolean directNpmBuild(JSONObject exact)throws Exception {
+        return npmBuild(exact)&&keysWithin(exact.getJSONObject("payload"),DIRECT_PAYLOAD);
+    }
+
+    /** Output provenance only; the original owner confirmation and native SQL claim still authorize dispatch. */
+    public static String directVersion(JSONObject exact,JSONObject nativeBinding)throws Exception {
+        if(!directNpmBuild(exact)||
+            nativeBinding.has(OriginalNodeWebOutput.EXISTING_ROUTE)||nativeBinding.has(OriginalNodeWebOutput.EDITED_ROUTE)||
+            !(nativeBinding.opt("taskId") instanceof String id)||!DIRECT_ID.matcher(id).matches()||
+            "00000000-0000-0000-0000-000000000000".equals(id)||!id.equals(nativeBinding.opt("runId"))||
+            !id.equals(nativeBinding.opt("operationId"))||!number(nativeBinding.opt("coordinatorEpoch"),1))throw unavailable();
+        RuntimeExecutionRef ref=RuntimeExecutionRef.fromHost(exact,nativeBinding);
+        JSONObject version=ref.binding().put("format",DIRECT_FORMAT);
+        for(String key:ROUTE_FACTS)version.put(key,exact.get(key));
+        return ProjectSources.digest(version);
+    }
+
+    /** Only the original SQL route carries this marker; the provider receipt keeps its existing wire shape. */
+    public static boolean matchesDirectRoute(JSONObject exact,JSONObject originalRoute)throws Exception {
+        if(!(originalRoute.opt(DIRECT_ROUTE) instanceof String marker)||!"native_host_operation".equals(originalRoute.opt("authority"))||
+            !Objects.equals(originalRoute.opt("jobId"),originalRoute.opt("operationId")))return false;
+        for(String key:ROUTE_FACTS)if(!Objects.equals(exact.opt(key),originalRoute.opt(key)))return false;
+        return directVersion(exact,originalRoute).equals(marker);
+    }
+
+    private static boolean existingVersion(JSONObject exact,Object marker)throws Exception {
+        return marker instanceof String&&marker.equals(OwnerDraftFirstBuild.ordinaryWebVersion(exact));
+    }
+
+    /** Reuse the existing one-file profile against an already captured and source-digest-checked snapshot. */
+    public static String selectedPathForOwnerReview(JSONObject exact,JSONObject snapshot)throws Exception {
+        return directNpmBuild(exact)?selectedPath(exact,snapshot):null;
     }
 
     private static String selectedPath(JSONObject exact,JSONObject snapshot)throws Exception {
@@ -108,8 +148,11 @@ public final class OriginalNodeCompilerOutput {
         }
     }
     public static LaunchObservation observeBeforeLaunch(RuntimeInvocation invocation)throws Exception{
-        JSONObject exact=invocation.exact();String marker=invocation.existingWebVersion();
-        if(marker.isEmpty()||!invocation.editedWebVersion().isEmpty()||!npmBuild(exact,marker))return null;
+        JSONObject exact=invocation.exact();
+        if(!invocation.directCompilerOutput()){
+            String marker=invocation.existingWebVersion();
+            if(marker.isEmpty()||!invocation.editedWebVersion().isEmpty()||!npmBuild(exact)||!existingVersion(exact,marker))return null;
+        }
         String path=selectedPath(exact,invocation.sourceSnapshot());if(path==null)return null;
         RuntimeWorkspace root=invocation.workspace();root.verify(invocation);
         try(Sample before=read(root,path,invocation::checkCurrent)){
@@ -140,7 +183,9 @@ public final class OriginalNodeCompilerOutput {
     }
     /** Caller supplies the original SQL route and this actual retained native receipt, never Web/model data. */
     public static Witness fromReceipt(JSONObject exact,JSONObject originalRoute,JSONObject receipt)throws Exception {
-        if(!npmBuild(exact,originalRoute.optString(OriginalNodeWebOutput.EXISTING_ROUTE))||originalRoute.has(OriginalNodeWebOutput.EDITED_ROUTE)||
+        boolean scope=originalRoute.has(DIRECT_ROUTE)?matchesDirectRoute(exact,originalRoute):
+            npmBuild(exact)&&!originalRoute.has(OriginalNodeWebOutput.EDITED_ROUTE)&&existingVersion(exact,originalRoute.opt(OriginalNodeWebOutput.EXISTING_ROUTE));
+        if(!scope||
             !"managed_process".equals(receipt.opt("provider"))||!"command".equals(receipt.opt("kind"))||!"completed".equals(receipt.opt("status"))||
             !"foreground".equals(receipt.opt("runMode"))||!"pre_exec_manifest_verified".equals(receipt.opt("sourceCheckStatus"))||
             !"npm".equals(receipt.opt("requestedExecutable"))||!"[\"run\",\"build\"]".equals(ProjectSources.canonical(receipt.opt("requestedArgv")))||

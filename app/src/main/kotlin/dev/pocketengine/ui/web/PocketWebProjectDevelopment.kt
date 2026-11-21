@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.project.OwnerDraftFirstBuild
+import dev.pocketengine.features.local.project.OwnerDirectNodeBuild
 import dev.pocketengine.features.local.project.OwnerRevisionSource
 import dev.pocketengine.features.local.project.ProjectOwnerWorkflows
 import dev.pocketengine.features.local.project.ProjectSources
@@ -42,10 +43,12 @@ internal class PocketWebProjectDevelopment(
         @Volatile var retainedCopy:RetainedCopyLink?=null
     }
     private data class Review(val handle: String, val page: Page, val input: String, val picked:ProjectConventionDraft.Bound, val modelRevision: Long, val expires: Long, val heldBuildDraftDigest:String?=null)
+    private data class DirectReview(val handle: String,val page: Page,val checkout: String,val heldDraft: String,val offered: OwnerDirectNodeBuild.Review)
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var generation = 0L
     @Volatile private var page: Page? = null
     @Volatile private var review: Review? = null
+    @Volatile private var directReview: DirectReview? = null
     private var busy = false
     private val files = PocketWebCheckoutFiles(controller)
     // Identifiers and unsent text only. Original checkout metadata / Assistant
@@ -62,7 +65,9 @@ internal class PocketWebProjectDevelopment(
         // input references with an older presentation snapshot.
         private val ownerDrafts = linkedMapOf<String, JSONObject>()
         private val deliveryFields = arrayOf("constraints", "deliverable", "completionCriteria")
-        val COMMANDS = setOf("projects.development.read", "projects.development.draft", "projects.development.inspect",
+        private const val LOCAL_BUILD_REVIEW = "projects.development.localBuild.review"
+        private const val LOCAL_BUILD_CONFIRM = "projects.development.localBuild.confirm"
+        val COMMANDS = setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, "projects.development.read", "projects.development.draft", "projects.development.inspect",
             "projects.development.taskPackageSource", "projects.development.resolveTaskPackageSource",
             "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource", "projects.development.readHostDiff",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.reviewDraftBuild", "projects.development.review",
@@ -79,7 +84,8 @@ internal class PocketWebProjectDevelopment(
         }
         held
     }
-    fun clear() { generation++; page = null; review = null; busy = false; files.clear() }
+    private fun clearDirectReview() { val old=directReview;directReview=null;old?.offered?.close() }
+    fun clear() { generation++; page = null; review = null; clearDirectReview(); busy = false; files.clear() }
     private fun public(value: JSONObject) = PocketWebState.publicValue(value) as JSONObject
     private fun fields(value: JSONObject, vararg allowed: String) = require(value.keys().asSequence().all { it in allowed }) { "项目操作包含未声明字段" }
     private fun text(value: JSONObject, key: String, maximum: Int = 80, blank: Boolean = false): String {
@@ -303,12 +309,14 @@ internal class PocketWebProjectDevelopment(
             check(review == null && !busy) { "请先完成或关闭原项目审阅" }
             files.dispatch(action, args, original.project, { current(original) }, done); return
         }
-        if (action in setOf("projects.development.draft", "projects.development.prepare", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start"))
+        if (action in setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, "projects.development.draft", "projects.development.prepare", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start"))
             check(restoreFailure == null) { restoreFailure ?: "本机项目输入引用不可用" }
         when (action) {
             "projects.development.dismiss" -> {
                 fields(args, "viewHandle", "reviewHandle")
-                if (review?.handle == text(args, "reviewHandle")) review = null
+                val id=text(args, "reviewHandle")
+                if (review?.handle == id) review = null
+                if (directReview?.handle == id) clearDirectReview()
                 done(JSONObject().put("dismissed", true).put("taskStopped", false), null)
             }
             "projects.development.draft" -> {
@@ -350,7 +358,7 @@ internal class PocketWebProjectDevelopment(
                         stored.put("constraints",retainedFields.getString("constraints")).remove(ProjectConventionDraft.KEY)
                     } else copyDeliveryFields(retainedFields, stored.put("goal", goal).put("checkoutId", checkout))
                     if (ProjectConventionDraft.present(stored) == null) stored.remove(ProjectConventionDraft.KEY)
-                }; review = null
+                }; review = null; clearDirectReview()
                 original.retainedCopy?.let { if(!shownCheckout(original,it.checkout,allowSole=true))original.retainedCopy=null }
                 done(JSONObject().put("saved", true).put("projectId", original.project).put("removedSelectedSource",drop), null)
             }
@@ -443,10 +451,15 @@ internal class PocketWebProjectDevelopment(
                     observed
                 }
             }
-            "projects.development.reviewDraftBuild" -> {
-                val previewDigest=if(args.has("previewOnly")){
-                    fields(args,"viewHandle","checkoutId","retainedDraft","previewOnly","expectedSourceDigest")
-                    require(args.opt("previewOnly")==true) { "只读构建方案须明确选择" }
+            "projects.development.reviewDraftBuild", LOCAL_BUILD_REVIEW -> {
+                val direct=action==LOCAL_BUILD_REVIEW
+                clearDirectReview()
+                val previewDigest=if(args.has("previewOnly")||direct){
+                    if(direct)fields(args,"viewHandle","checkoutId","retainedDraft","expectedSourceDigest")
+                    else {
+                        fields(args,"viewHandle","checkoutId","retainedDraft","previewOnly","expectedSourceDigest")
+                        require(args.opt("previewOnly")==true) { "只读构建方案须明确选择" }
+                    }
                     check(review==null) { "请先关闭原构建审阅" }
                     text(args,"expectedSourceDigest",64).also { require(it.matches(Regex("[a-f0-9]{64}"))) }
                 }else{
@@ -454,6 +467,9 @@ internal class PocketWebProjectDevelopment(
                     null
                 }
                 val checkout=text(args,"checkoutId")
+                if(direct)check(files.closedForOriginalDraftRead() && shownCheckout(original,checkout,allowSole=true) && controller.state.filePath==null) {
+                    "请返回原项目，选择已保存的同一私人副本"
+                }
                 val shown=args.getJSONObject("retainedDraft")
                 fields(shown,"checkoutId","goal",*deliveryFields)
                 val expected=copyDeliveryFields(shown,JSONObject().put("checkoutId",text(shown,"checkoutId",80,true))
@@ -470,7 +486,9 @@ internal class PocketWebProjectDevelopment(
                 if(previewDigest==null)review=null
                 working(original,done){
                     val host=controller.projectDevelopmentForWeb()
-                    val preparation=host.reviewNodeBuildForOwner(original.project,checkout);val pin=preparation.getJSONObject("pin")
+                    val directPlan=if(direct)host.reviewDirectNodeBuildForOwner(original.project,checkout) else null
+                    val preparation=directPlan?.preview()?:host.reviewNodeBuildForOwner(original.project,checkout)
+                    val pin=preparation.getJSONObject("pin")
                     val actual=source(original,checkout);val selectedModel=if(previewDigest==null)model() else null
                     val edited=OwnerDraftFirstBuild.edited(pin);val existing=OwnerDraftFirstBuild.existingCheckout(pin)
                     check(existing || untouchedBuildDraft(retained,checkout)) { "请保留或清空当前未交办的目标；未提交改稿构建。" }
@@ -492,7 +510,8 @@ internal class PocketWebProjectDevelopment(
                         check(current(original) && review==null && heldDigest==buildDraftDigest(heldDraft())) {
                             "原项目、草稿或审阅状态已变化，没有查看其他版本。"
                         }
-                        // No model snapshot, runnable review, or submission identity.
+                        // Only the separately selected native-owner route can offer a confirmable
+                        // local build. The ordinary preview remains nonexecuting and body-free.
                         return@working JSONObject().put("format","pocketworld.node-build-plan-preview.v1")
                             .put("projectId",original.project).put("checkoutId",checkout).put("sourceDigest",sourceDigest)
                             .put("runtimeId","managed_process_v1").put("manager",pin.getString("manager"))
@@ -503,6 +522,21 @@ internal class PocketWebProjectDevelopment(
                                     val summary=JSONObject()
                                     for(key in listOf("manager","managerVersion","registry","lockPath","lockSha256","packages"))summary.put(key,lock.get(key))
                                     out.put("lockedDependencies",summary).put("dependencyState",preparation.getString("dependencyState"))
+                                }
+                                if(direct){
+                                    val prior=actual.optJSONObject("directNodeBuildWork")
+                                    if(prior!=null){
+                                        directPlan?.offer()?.close();out.put("directBuildWork",prior)
+                                    } else if(actual.opt("directNodeBuildWorkUnavailable")!=true){
+                                        directPlan?.offer()?.let { offered ->
+                                            val handle=UUID.randomUUID().toString()
+                                            val ready=offered.view()
+                                            check(ready.opt("projectId")==original.project && ready.opt("checkoutId")==checkout &&
+                                                ready.opt("sourceDigest")==sourceDigest) { "原本机构建审阅不属于当前源码" }
+                                            directReview=DirectReview(handle,original,checkout,heldDigest,offered)
+                                            out.put("directBuild",ready.put("reviewHandle",handle))
+                                        }
+                                    } else directPlan?.offer()?.close()
                                 }
                             }
                     }
@@ -526,7 +560,23 @@ internal class PocketWebProjectDevelopment(
                         .putOpt("previousVerification",preparation.optJSONObject("previousVerification"))
                 }
             }
+            LOCAL_BUILD_CONFIRM -> {
+                fields(args,"viewHandle","reviewHandle")
+                check(!busy && review==null) { "请先核对原项目审阅" }
+                val prepared=directReview?.takeIf { it.page===original && it.handle==text(args,"reviewHandle") }
+                    ?:error("原本机构建审阅已关闭或使用")
+                fun sameWindow():Boolean = current(original) && controller.state.filePath==null &&
+                    files.closedForOriginalDraftRead() && shownCheckout(original,prepared.checkout,allowSole=true) &&
+                    buildDraftDigest(draft(original.project))==prepared.heldDraft
+                check(sameWindow()) { "已离开原项目副本，没有开始构建" }
+                directReview=null
+                working(original,done,effect=true,extraCurrent=::sameWindow){
+                    try { controller.localTerminalHost().submitDirectNodeBuildForOwner(prepared.offered.confirm(::sameWindow)) }
+                    finally { prepared.offered.close() }
+                }
+            }
             "projects.development.review" -> {
+                clearDirectReview()
                 fields(args, "viewHandle", "checkoutId", "goal", *deliveryFields)
                 check(!pending(original.project)) { "请先查询原项目输入，不要重新开始" }
                 val checkout = text(args, "checkoutId")

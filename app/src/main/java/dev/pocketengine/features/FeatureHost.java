@@ -349,6 +349,72 @@ public final class FeatureHost implements AutoCloseable {
     public boolean ownsGitImportTask(String id)throws Exception{JSONObject task=tasks==null?null:tasks.get(id,false);return task!=null&&(task.has("ownerGitImport")||task.has("ownerGitPublication"));}
     public dev.pocketengine.features.local.project.ProjectGitImport.Result gitImportResultForOwner(String id,dev.pocketengine.core.RunControl observation)throws Exception{JSONObject row=tasks.ownerGitImportForOwner(id);if(row.optBoolean("sourceRetired")||!"completed".equals(row.getString("status")))throw new SecurityException("请先取得未撤回的原Git读取与退出结果，再审阅发布");return ((dev.pocketengine.features.local.LocalModule)module("local")).gitImportsForOwner().result(row.getJSONObject("scope"),row.getJSONObject("nativeJob"),observation);}
 
+    /** Explicit same-window native owner compiler confirmation. No Assistant send, queue or tool grant. */
+    public JSONObject submitDirectNodeBuildForOwner(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.Confirmed confirmed)throws Exception{
+        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))
+            throw new IllegalStateException("原本机项目宿主不可用");
+        confirmed.requireHost(local);confirmed.requireUnenteredWindow();
+        JSONObject scope=confirmed.scope();String id=scope.getString("requestId");
+        synchronized(local){
+            if(tasks.directNodeWorkForSource(scope.getString("projectId"),scope.getString("checkoutId"),scope.getString("sourceDigest"))!=null)
+                return directNodeBuildForOwner(id,false);
+            local.requireDirectNodeBuildForOwner(confirmed);
+            if(!tasks.beginOwnerDirectNodeBuild(confirmed,local))return directNodeBuildForOwner(id,false);
+            var initial=tasks.ownerDirectNodeOriginalForOwner(id);
+            RunControl original=new RunControl();
+            try{
+                original.bindHostRun(id,id,1);
+                String approval=initial.route().getString("approvalId");
+                original.setAuthorityCheck(()->tasks.requireOwnerDirectNodeBuildCurrent(id,approval,original));
+                // A real provider job hand-off returns before the process finishes. The existing
+                // receipt callback then records this exact build and closes its own original Work.
+                JSONObject backend=local.executeProjectForHost(initial.exact(),initial.route(),original,
+                        ()->tasks.requireOwnerDirectNodeBuildCurrent(id,approval,original),null,confirmed.lock());
+                tasks.recordProjectOperation(initial.route(),initial.exact(),backend);
+                tasks.finishOwnerDirectNodeBuildFromReceipt(initial.route());
+            }catch(Exception unconfirmed){
+                // An exception or missing provider row can never certify that the admitted
+                // operation did not run. Keep the Work and never dispatch again for this claim.
+                try{
+                    JSONObject backend=local.projectReceiptForHost(initial.exact(),initial.route(),false);
+                    tasks.recordProjectOperation(initial.route(),initial.exact(),backend);
+                    tasks.finishOwnerDirectNodeBuildFromReceipt(initial.route());
+                }catch(Exception stillUnknown){/* Only original durable ownership is known. */}
+                if(tasks.hasUnresolved(id))
+                    tasks.status(id,"reconciling","原本机构建结果待核对；没有再次运行。");
+            }
+        }
+        emitTask(id);sendState();return directNodeBuildForOwner(id,false);
+    }
+    /** Same original owner action; Stop cannot address a different process or replay this one. */
+    public JSONObject directNodeBuildForOwner(String id,boolean stop)throws Exception{
+        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))
+            throw new IllegalStateException("原本机项目宿主不可用");
+        var original=stop?tasks.cancelOwnerDirectNodeBuildForOwner(id):tasks.ownerDirectNodeOriginalForOwner(id);
+        if(stop&&!"receipt".equals(original.operation().opt("state"))){
+            try{
+                JSONObject backend=local.projectReceiptForHost(original.exact(),original.route(),true);
+                tasks.recordProjectOperation(original.route(),original.exact(),backend);
+                tasks.finishOwnerDirectNodeBuildFromReceipt(original.route());
+            }catch(Exception stillUnknown){/* No stop completion is claimed without the original receipt. */}
+            emitTask(id);sendState();
+        }
+        JSONObject scope=original.scope();
+        return tasks.directNodeWorkForSource(scope.getString("projectId"),scope.getString("checkoutId"),scope.getString("sourceDigest"));
+    }
+    /** Explicit same-Work reconciliation of a durable result, not another dispatch or log observation. */
+    public JSONObject checkDirectNodeReceiptForOwner(String id,String run,int epoch,String operation,BooleanSupplier window)throws Exception{
+        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))
+            throw new IllegalStateException("原本机项目宿主不可用");
+        var checked=tasks.captureOwnerDirectNodeReceiptCheck(id,run,epoch,operation,window);
+        dev.pocketengine.features.local.runtime.RuntimeReceipt retained=null;
+        if(checked.needsProvider())try{retained=local.retainedDirectNodeReceiptForHost(checked);}
+        catch(Exception unreadable){if(Thread.currentThread().isInterrupted())throw unreadable;/* Absence and I/O faults stay unknown. */}
+        JSONObject result=tasks.settleOwnerDirectNodeReceiptCheck(checked,retained);
+        if("settled".equals(result.opt("state"))){emitTask(id);sendState();}
+        return result;
+    }
+
     /** Native project UI only: the opaque confirmation is never accepted by request()/feature JSON. */
     public JSONObject submitProjectGitForOwner(dev.pocketengine.features.local.project.ProjectGit.Confirmed selected)throws Exception {
         if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule))throw new IllegalStateException("原本机项目宿主不可用");
