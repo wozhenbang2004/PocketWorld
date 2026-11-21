@@ -368,9 +368,10 @@ internal class AttachmentOutcomeCoordinator(
     fun detach(){closed=true;close()}
     fun cancel(){val pendingFile=state.open&&state.busy&&restoreFile!=null;generation++;wait?.cancel();wait=null;observation?.cancel();observation=null;state=state.copy(busy=false,observing=false,error=if(pendingFile)"已停止读取这份原文件；目标版本仍保留，可以重新读取。"else state.error)}
     fun foreground(visible:Boolean){resumed=visible;if(!visible){if(state.deviceOriginalOnly)close()else cancel();return};if(exportResult!=null)finishExport()else if(state.open&&state.snapshot==null&&!state.busy)refresh()}
-    fun refresh(){
-        if(state.deviceOriginalOnly)return // never fall through to a full inventory, including after a failed/paused open
-        if(state.team!=null){readTeamFile();return}
+    @JvmOverloads
+    fun refresh(afterRefresh:((Boolean)->Unit)?=null){
+        if(state.deviceOriginalOnly){afterRefresh?.invoke(false);return} // never fall through to a full inventory
+        if(state.team!=null){readTeamFile();afterRefresh?.invoke(false);return}
         val task=state.taskId;val group=state.group;val pin=restoreFile?:state.file;val savedDraft=restoredDocumentDraft
         val showOriginal=restoreFile?.optBoolean("showOriginal")==true
         val directWorkOriginal=showOriginal&&directPrivateWorkEntry()
@@ -378,7 +379,9 @@ internal class AttachmentOutcomeCoordinator(
         val resultRun=state.resultRun?.takeIf{it.taskId==task}
         var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
         var verifiedRecordedOriginal=false
-        work(onSuccess={actual->
+        var refreshed=false
+        work(onFinished=afterRefresh?.let{done->{current:Boolean->done(current&&refreshed)}},
+            completionFailure=if(afterRefresh!=null)"私人文件库尚未刷新，未打开原草稿。" else null,onSuccess={actual->
             if(group==null&&pendingDocumentAction==null&&!verifiedRecordedOriginal&&actual.optString("taskStatus")!in setOf("completed","failed")){
                 originalDocumentAction(task,actual)?.let{action->
                     pendingDocumentAction=action;state=state.copy(pendingDocumentTask=action)
@@ -390,6 +393,7 @@ internal class AttachmentOutcomeCoordinator(
                 if(directPrivateWorkEntry()&&!state.restoredWorkReturn&&state.workReturn==null)
                     state.file?.let{file->state=state.copy(workReturn=AttachmentWorkReturn.capture(actual,file))}
             }
+            refreshed=true
         }){control,window -> if(group==null){
             if(resultRun!=null)requireConversationResult(resultRun,control)
             val actual=app.ownerOutcomeSnapshot(task,control)
@@ -430,12 +434,13 @@ internal class AttachmentOutcomeCoordinator(
         }
     }
     fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null,originalReturn=AttachmentOriginalReturn.DETAILS,externalViewerResult=null,copyReceipt=null,previousCopyInFile=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
-    fun backFromFile(){
-        if(state.originalReturn==AttachmentOriginalReturn.ENTRY){close();return}
+    @JvmOverloads
+    fun backFromFile(afterRefresh:((Boolean)->Unit)?=null){
+        if(state.originalReturn==AttachmentOriginalReturn.ENTRY){close();afterRefresh?.invoke(false);return}
         cancel();restoreFile=null
         state=state.copy(group=state.group?.withoutArtifact(),file=null,document=null,documentOpen=false,thumbnail=null,originalFile=null,
             originalReturn=AttachmentOriginalReturn.DETAILS,copyReceipt=null,previousCopyInFile=null)
-        refresh()
+        refresh(afterRefresh)
     }
     fun chooseSource(){if(state.team!=null||state.group!=null||state.taskId.isNullOrBlank())return;restoreFile=null;state=state.copy(choosingSource=true,file=null,originalFile=null);work{c,_->app.ownerOutcomeSnapshot(null,c) to null}}
     fun attach(file:JSONObject){val task=state.taskId?:return;if(state.group!=null)return
@@ -555,8 +560,16 @@ internal class AttachmentOutcomeCoordinator(
         state=state.copy(documentDraft=pin)
         startDocumentCreation(pin,keepLibraryVisit)
     }
+    /** Fresh, exact success already delivered by the existing standalone writer; no new Book read. */
+    fun currentGeneratedDraftOutput(action:String,plan:String):Pair<String,String>? {
+        val file=state.file?:return null
+        if(!privateLibrary()||state.globalStandaloneDraftVisit==null||!isPublishedDocument(action,file)||
+            file.optJSONObject("source")?.opt("planDigest")!=plan||publishedLibraryDocumentSource(action,file)==null)return null
+        return file.getString("id") to file.getString("sha256")
+    }
+
     /** The current private Library bridge has just revalidated the exact saved revision and consumed its review. */
-    fun createDocumentFromSavedDraft(draft:DocumentDraft, source:RevisionSource?, keepLibraryVisit:(String)->Boolean){
+    fun createDocumentFromSavedDraft(draft:DocumentDraft, source:RevisionSource?, keepLibraryVisit:(String)->Boolean):String {
         check(privateLibrary() && state.globalStandaloneDraftVisit!=null && !state.busy && !exportPending &&
             state.file==null && state.originalFile==null && state.documentDraft==null && !state.documentOpen &&
             state.processingSource==null && state.comparison==null && state.pendingDocumentTask==null && pendingDocumentAction==null){
@@ -569,9 +582,9 @@ internal class AttachmentOutcomeCoordinator(
             "editableSourceSha256" to source.editableSourceSha256())
         require(input.keys().asSequence().toSet()==fields+linked.keys && linked.all { (key, value) -> input.opt(key)==value })
         // The already saved draft stays solely in its own store, not in the legacy editor or Activity Bundle.
-        startDocumentCreation(input,keepLibraryVisit)
+        return startDocumentCreation(input,keepLibraryVisit)
     }
-    private fun startDocumentCreation(pin:JSONObject,keepLibraryVisit:(String)->Boolean){
+    private fun startDocumentCreation(pin:JSONObject,keepLibraryVisit:(String)->Boolean):String {
         val libraryVisit=state.globalStandaloneDraftVisit?.takeIf(keepLibraryVisit)
         val action=java.util.UUID.randomUUID().toString();pendingDocumentAction=action
         state=state.copy(pendingDocumentTask=action)
@@ -585,6 +598,7 @@ internal class AttachmentOutcomeCoordinator(
             isPublishedDocument(action,actual)->showPublishedDocument(action,actual,"新文档已保存到私人文件库，可以打开核对。没有改动原件，也没有导出。",libraryVisit?.takeIf(keepLibraryVisit))
             else->state=state.copy(notice="尚未核对到这次生成的文件。请核对原文档结果，不会自动重新生成。")
         }}){c,_->app.features.createDocumentForOwner(pin,c,action) to null}
+        return action
     }
     private fun originalDocumentAction(task:String?,snapshot:JSONObject?):String?{
         val actual=snapshot?:return null

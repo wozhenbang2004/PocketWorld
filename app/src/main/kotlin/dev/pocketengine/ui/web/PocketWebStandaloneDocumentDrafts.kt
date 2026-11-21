@@ -59,7 +59,7 @@ internal class PocketWebStandaloneDocumentDrafts(
     data class Opened(val state: State, val edit: Edit? = null, val fields: Fields? = null,
                       val sourceName: String? = null, val sourceUnavailable: Boolean = false)
     data class Saved(val state: State, val edit: Edit? = null, val sourceUnavailable: Boolean = false)
-    data class GenerationInput(val fields: Fields, val source: RevisionSource?)
+    data class GenerationInput(val fields: Fields, val source: RevisionSource?, val pin: Pin)
     data class GenerationRead(val input: GenerationInput? = null, val sourceUnavailable: Boolean = false)
     data class Retention(val state: State, val sourceUnavailable: Boolean = false)
     data class TextRetention(val state: State, val savedAt: Long? = null, val sourceUnavailable: Boolean = false)
@@ -190,6 +190,18 @@ internal class PocketWebStandaloneDocumentDrafts(
         check(scope == current && editor == null && blank == null) { "请从当前本机草稿列表打开原版本" }
         require(canonicalId(rowHandle)) { "原草稿列表位置无效" }
         val pin = rows[rowHandle] ?: error("该版本不在当前已核对的本机草稿中")
+        openExact(current, frame, pin, done)
+    }
+
+    /** Called only after the exact fresh generated original returned to its already-admitted Library. */
+    fun openGeneratedSource(frame: Frame, pin: Pin, done: (Opened?) -> Unit) {
+        val current = admission(frame)
+        check(scope == null && pending == null) { "请先离开当前草稿，没有打开其他版本" }
+        scope = current
+        openExact(current, frame, pin, done)
+    }
+
+    private fun openExact(current: Scope, frame: Frame, pin: Pin, done: (Opened?) -> Unit) {
         enqueue(current, frame, fallback = { Read(unknown()) },
             call = { storage, window -> readExact(storage, window, pin) }) { actual ->
             done(actual?.let { result ->
@@ -360,7 +372,7 @@ internal class PocketWebStandaloneDocumentDrafts(
             else if (original.source != null && actual?.sourceName == null) {
                 editor = original.copy(removalOnly = true)
                 done(GenerationRead(sourceUnavailable = true))
-            } else done(GenerationRead(GenerationInput(saved.fields(), original.source)))
+            } else done(GenerationRead(GenerationInput(saved.fields(), original.source, pin)))
         }
     }
 

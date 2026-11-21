@@ -24,6 +24,7 @@ export type SetupWorkspaceProps = {
   onNavigate: (target: SetupDestination) => void;
   onViewChange?: (view: SetupView) => void;
   onClose: () => void;
+  onReviewOriginalVite?: (runtimeIdentity:string) => void;
   registerBackHandler?: (handler: (() => boolean) | null) => void;
 };
 
@@ -118,7 +119,7 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   };
 }
 
-function RuntimePreparation({ preparation, can, blocked }: { preparation: ReturnType<typeof useRuntimePreparation>; can: (action: string) => boolean; blocked: boolean }) {
+function RuntimePreparation({ preparation, can, blocked, projectReview }: { preparation: ReturnType<typeof useRuntimePreparation>; can: (action: string) => boolean; blocked: boolean; projectReview: boolean }) {
   const { view, review, reading, working, error, log, logTrimmed, needsRead } = preparation;
   const locked = blocked || reading || !!working, running = runtimePreparing(view), operation = view?.operation;
   const reviewDetails = review ? { effects: review.review.effects, runtime: review.review.runtimeIdentity, catalog: review.review.catalogIdentity } : null;
@@ -154,7 +155,8 @@ function RuntimePreparation({ preparation, can, blocked }: { preparation: Return
       <div className="pw-setup-actions"><Button variant="ghost" disabled={!!working} onClick={preparation.dismissReview}>暂不安装</Button>
         <Button disabled={locked || !can('setup.runtime.start')} onClick={() => void preparation.start()}>{working === 'setup.runtime.start' ? '正在开始…' : '开始准备'}</Button></div>
     </section> : <div className="pw-setup-actions">
-      {view && (view.canPrepare || view.canRetry) && !running && <Button disabled={locked || needsRead || !can('setup.runtime.review')} onClick={() => void preparation.reviewPreparation()}>
+      {view && (view.canPrepare || view.canRetry) && !running && <Button variant={projectReview?'ghost':undefined}
+        disabled={locked || needsRead || !can('setup.runtime.review')} onClick={() => void preparation.reviewPreparation()}>
         {working === 'setup.runtime.review' ? '正在读取安装内容…' : view.ready ? '检查与修复工具' : view.canRetry ? '重新准备' : '准备开发工具'}
       </Button>}
       {view?.canCancel && <Button variant="secondary" disabled={locked || !can('setup.runtime.cancel')} onClick={() => void preparation.cancel()}>{view.status === 'cancel_requested' ? '已请求停止' : '停止准备'}</Button>}
@@ -177,7 +179,7 @@ function RuntimePreparation({ preparation, can, blocked }: { preparation: Return
 /** The approved Affect task body/review/footer and BoardUI settings rows now
  * serve one preparation purpose at a time. Guide preferences remain separate
  * from real permissions, model availability and runtime operation receipts. */
-export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, initialView, runtimeTaskId, returnLabel, originGoal, onNavigate, onViewChange, onClose, registerBackHandler }: SetupWorkspaceProps) {
+export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, initialView, runtimeTaskId, returnLabel, originGoal, onNavigate, onViewChange, onClose, onReviewOriginalVite, registerBackHandler }: SetupWorkspaceProps) {
   const [data, setData] = useState<SetupRead | null>(null), [view, setView] = useState<SetupView>(initialCapability || initialView || (mode === 'onboarding' ? 'model' : 'overview'));
   const [loading, setLoading] = useState(false), [working, setWorking] = useState('');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [needsRead, setNeedsRead] = useState(false);
@@ -217,6 +219,16 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const focused = !!initialCapability, onboarding = mode === 'onboarding';
   const resumeRevision = setupObject(snapshot.view).resumeRevision;
   const preparation = useRuntimePreparation(entered && !!data && (view === 'tools' || view === 'overview'), can, resumeRevision, run, runtimeTaskId);
+  const readyRuntime = preparation.view;
+  const runtime = setupObject(readyRuntime?.runtime), tools = Array.isArray(runtime.tools)?runtime.tools.map(setupObject):[];
+  const viteReady = !!onReviewOriginalVite && focused && !onboarding && view==='tools' &&
+    !locked && !preparation.reading && !preparation.working && !preparation.review && !preparation.needsRead &&
+    readyRuntime?.status==='ready' && readyRuntime.ready===true && !readyRuntime.operation?.error &&
+    runtime?.runtimeId==='managed_process_v1' && runtime.canExecute===true && typeof runtime.identity==='string' &&
+    /^[a-f0-9]{64}$/.test(runtime.identity) && ['node','npm'].every(name=>{
+      const matches=tools.filter(tool=>tool.name===name), tool=matches[0];
+      return matches.length===1&&tool.installed===true&&(tool.probeVerified===true||tool.hashVerified===true);
+    }) ? runtime.identity : '';
   const connection = backgroundConnection(setupObject(setupObject(snapshot.state.features).display), snapshot.state.activeTaskId, Array.isArray(snapshot.state.moduleBusy) ? snapshot.state.moduleBusy : []);
   const phoneConnection = connection.requiresConnectionCheck ? '连接状态待核对' : !connection.loaded ? '后台连接状态尚未读取' : connection.helperConnected ? '后台助手已连接' : !connection.supported ? '后台独立屏不受支持' : '后台助手尚未连接';
   const enter = async () => {
@@ -362,7 +374,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   </section>;
   const capabilityBody = (id: SetupCapability) => {
     if (!data) return null;
-    if (id === 'tools') return <RuntimePreparation preparation={preparation} can={can} blocked={locked}/>;
+    if (id === 'tools') return <RuntimePreparation preparation={preparation} can={can} blocked={locked} projectReview={!!viteReady}/>;
     if (id === 'phone') return <>
       <p className="pw-setup-copy">聊天、查资料和生成文件可以直接在 App 内使用。需要操作手机界面时，再开启下面的权限。</p>
       <section className="pw-setup-purpose-group"><SetupRow title="界面读取与主屏控制" status={permissionLabel(data.permissions.accessibility)} action={permissionAction('accessibility', data.permissions.accessibility)}/><p className="pw-setup-copy">用手机主屏执行时，开启无障碍并保持手机解锁、亮屏。主屏模式免配对。</p></section>
@@ -407,8 +419,11 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
         {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && readable && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
       </div>
       <footer className="pw-setup-footer">
-        <Button className="pw-setup-next" variant={!onboarding ? 'secondary' : canRecordProgress && optionalTest ? 'primary' : 'ghost'}
-          disabled={!!working || !!preparation.working} onClick={() => void close()}>{working === 'save' ? '正在保存…' : leaveLabel}</Button>
+        <Button className="pw-setup-next" variant={viteReady?'primary':!onboarding?'secondary':canRecordProgress&&optionalTest?'primary':'ghost'}
+          disabled={!!working || !!preparation.working} onClick={() => {
+            if(viteReady&&onReviewOriginalVite)onReviewOriginalVite(viteReady);
+            else void close();
+          }}>{viteReady?'返回原项目核对网页构建':working==='save'?'正在保存…':leaveLabel}</Button>
       </footer>
     </>}
   </section>;

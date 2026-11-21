@@ -37,6 +37,8 @@ type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:str
 export type ProjectTerminalSavedFileReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 export type CheckoutPythonSetupReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 export type ProjectDependencyBuildReturn = {original:DirectNodeDependencyPin; current:()=>boolean; take:()=>boolean};
+export type ProjectViteToolsPosition = {projectId:string;checkoutId:string;sourceDigest:string};
+export type ProjectViteToolsReturn = {position:ProjectViteToolsPosition;runtimeIdentity:string; current:()=>boolean; take:()=>boolean};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
@@ -44,10 +46,11 @@ type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   terminalSavedFile?:ProjectTerminalSavedFileReturn;
   pythonSetupReturn?:CheckoutPythonSetupReturn;
   dependencyBuildReturn?:ProjectDependencyBuildReturn;
+  viteToolsReturn?:ProjectViteToolsReturn;
   onPreparePythonTools?: (position: CheckoutSavedPosition) => void;
   retainedOriginalVisit?:Data;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
-  onOpenTask: (id: string, checkoutId?: string, expected?: {runId:string;epoch:number}) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout, position?:CheckoutSavedPosition) => void;
+  onOpenTask: (id: string, checkoutId?: string, expected?: {runId:string;epoch:number}) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: (project?:ProjectViteToolsPosition) => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout, position?:CheckoutSavedPosition) => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
@@ -340,7 +343,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, dependencyBuildReturn, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, dependencyBuildReturn, viteToolsReturn, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),deliverySummary=useRef<HTMLSpanElement>(null);
@@ -676,7 +679,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const canViewToolSetup = can('setup.read') && can('setup.runtime.read') && can('projects.development.draft');
   const prepareTools = () => {
     if(disabled||entered.current||!canViewToolSetup||draft.current.checkoutId!==checkout||checkout&&!selectedCopy)return;
-    void preserveSelectionBeforeDeparture({...draft.current},()=>openFromBuild(onPrepareTools));
+    const vite = localViteReview&&firstBuildAction==='tools'&&nodeTools?.manager==='npm'&&sourceVersion&&
+      !source?.directViteBuildWorkUnavailable?{projectId,checkoutId:checkout,sourceDigest:sourceVersion}:undefined;
+    void preserveSelectionBeforeDeparture({...draft.current},()=>openFromBuild(()=>onPrepareTools(vite)));
   };
   const connectBuildModel = () => {
     if(disabled||entered.current||!selectedCopy||!can('projects.development.draft')||draft.current.checkoutId!==checkout)return;
@@ -1146,9 +1151,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       setBuildPreview({value:checked,viewHandle,window});
     });
   useEffect(()=>{
-    const arrival=dependencyBuildReturn;
-    if(!arrival||!active||!arrival.current()||busy||entered.current)return;
-    const {original}=arrival;
+    const arrival=dependencyBuildReturn||viteToolsReturn;
+    const dependency=dependencyBuildReturn?.original, vite=dependency?undefined:viteToolsReturn;
+    const original=dependency||vite?.position;
+    if(!arrival||!original||!active||!arrival.current()||busy||entered.current)return;
     const focus=()=>requestAnimationFrame(()=>{
       const anchor=buildReturnAnchor.current;
       if(arrival.current()&&latest.current.active&&anchor?.isConnected&&!anchor.closest('[hidden],[inert]'))
@@ -1163,28 +1169,39 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
        returnTarget||buildReturn||importedEditor||localFilesIntent||pythonSetupReturn||filesOpen||review||preview||sourceConflict||pending||copyUnconfirmed){
       reject('原副本或项目工作已经变化，没有替换选择或打开构建。');return;
     }
-    // Wait for the ordinary fresh source inspection after closing Work, not a second inspection.
+    // Both returns wait for the existing fresh Work inspection, not a second one.
     if(!source){if(error)reject(error);return;}
     if(source.projectId!==projectId||source.checkoutId!==original.checkoutId||source.sourceDigest!==original.sourceDigest||
        source.existingNodeBuild!==true||!nativeDirectBuild){
-      reject('原依赖准备对应的源码已变化或暂不可核对，没有打开其他版本的构建。');return;
+      reject(vite?'原网页源码已变化或暂不可核对，没有打开其他版本的构建。':
+        '原依赖准备对应的源码已变化或暂不可核对，没有打开其他版本的构建。');return;
+    }
+    if(vite&&(!localViteReview||view.runtime?.identity!==vite.runtimeIdentity||view.runtime?.canExecute!==true||
+       nodeTools?.manager!=='npm'||nodeTools.runtimeReady!==true||nodeTools.missing.length)){
+      reject('原网页副本或手机工具已变化，请在原项目重新核对。没有开始准备或构建。');return;
     }
     const shown={...draft.current},viewHandle=handle.current,window=ownerWindow(),sequence=generation.current;
     if(!arrival.take())return;
-    void readBuildPreview(viewHandle,window,shown,original.sourceDigest,true,false,
+    void readBuildPreview(viewHandle,window,shown,original.sourceDigest,true,vite?'exact':false,
       ()=>arrival.current()&&alive.current&&latest.current.active&&generation.current===sequence&&ownerWindow()===window&&
         !activeReview.current&&!previewOpen.current,checked=>{
         const prepared=checked.directDependencyWork,build=directOffer(checked)||directOriginal(checked);
-        if(checked.dependencyState!=='current_packages_checked'||prepared?.status!=='completed'||
-           prepared.requestId!==original.taskId||prepared.runId!==original.runId||prepared.epoch!==original.epoch||
-           prepared.dependencyOperationId!==original.dependencyOperationId||prepared.planDigest!==original.planDigest||
-           prepared.runtimeIdentity!==original.runtimeIdentity||prepared.lockSha256!==original.lockSha256||
-           prepared.managerVersion!==original.managerVersion||prepared.packages!==original.packages||
-           build?.runtimeIdentity!==original.runtimeIdentity||build.lockSha256!==original.lockSha256)
+        if(vite){
+          const next=build||checked.directDependencies||prepared;
+          if(next?.runtimeIdentity!==vite.runtimeIdentity)
+            throw Error('没有核对到这版网页对应的依赖或构建动作，请在原项目查看条件。没有开始准备或构建。');
+          return;
+        }
+        if(!dependency||checked.dependencyState!=='current_packages_checked'||prepared?.status!=='completed'||
+           prepared.requestId!==dependency.taskId||prepared.runId!==dependency.runId||prepared.epoch!==dependency.epoch||
+           prepared.dependencyOperationId!==dependency.dependencyOperationId||prepared.planDigest!==dependency.planDigest||
+           prepared.runtimeIdentity!==dependency.runtimeIdentity||prepared.lockSha256!==dependency.lockSha256||
+           prepared.managerVersion!==dependency.managerVersion||prepared.packages!==dependency.packages||
+           build?.runtimeIdentity!==dependency.runtimeIdentity||build.lockSha256!==dependency.lockSha256)
           throw Error('尚未核对到这次准备对应的工具、锁定依赖与构建。没有重新下载或运行。');
       }).then(value=>{if(!value)focus();});
-  },[dependencyBuildReturn,active,busy,view,error,projectId,checkout,returnTarget,buildReturn,importedEditor,
-    localFilesIntent,pythonSetupReturn,filesOpen,review,preview,sourceConflict,pending,copyUnconfirmed,source,nativeDirectBuild]);
+  },[dependencyBuildReturn,viteToolsReturn,active,busy,view,error,projectId,checkout,returnTarget,buildReturn,importedEditor,
+    localFilesIntent,pythonSetupReturn,filesOpen,review,preview,sourceConflict,pending,copyUnconfirmed,source,nativeDirectBuild,localViteReview]);
   const previewNodeBuild=()=>{
     const viewHandle=handle.current,window=ownerWindow(),expectedSourceDigest=sourceVersion,shown={...draft.current};
     if(firstBuildAction!=='preview'||disabled||previewOpen.current||!viewHandle||view?.viewHandle!==viewHandle||

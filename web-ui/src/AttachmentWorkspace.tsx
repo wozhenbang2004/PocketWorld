@@ -34,7 +34,7 @@ type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
 type WorkTextVisit={taskId:string;runId:string;epoch:number;visit:string};
 type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;textStart?:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit;libraryList?:'returning'|'listed'};
-type StandaloneVisit={windowId:string;document:number;page:Document;presentation:string;entry:'catalog'|'blank'};
+type StandaloneVisit={windowId:string;document:number;page:Document;presentation:string;entry:'catalog'|'blank'|'resume'};
 function standaloneLibrarySurface(view:Json){
  return view.open===true&&view.taskId==null&&view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&
   view.historyResultOnly===false&&view.reportResultOnly===false&&view.resultFilesOnly===false&&
@@ -73,6 +73,31 @@ function standaloneDraftPresentation(native:ReturnType<typeof bridge.getState>,v
     native.state.filePath!=null||!standaloneLibrarySurface(current)||!frame||
     current.standaloneDraftLibraryVisit!==visit.presentation||typeof current.standaloneDraftLibrary!=='boolean')return;
  return {frame,leased:current.standaloneDraftLibrary};
+}
+function generatedDraftHandoff(view:Json){
+ const marker=obj(view.generatedDraftReturn),file=obj(view.file),target=exactFileTarget(file);
+ const token=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
+ if(!privateLibraryWindow(view)||!target||view.documentDraft||view.documentOpen||view.processingOpen||view.comparison||
+    view.restoredWorkReturn!==false||view.busy!==false||view.exportPending!==false||
+    file.role!=='result'||file.sourceKind!=='created_document'||marker.fileId!==target.fileId||marker.sha256!==target.sha256||
+    !token(marker.handle)||!token(marker.library))return;
+ return {handle:marker.handle,library:marker.library,...target};
+}
+function waitForGeneratedDraftList(visit:StandaloneVisit):Promise<boolean>{
+ // A command completion can reach the page before the ordinary native state publication.
+ // Wait for that frame, not a new read, and never reacquire a retired or different window.
+ return new Promise(resolve=>{
+  const finish=(value:boolean)=>{unsubscribe();window.clearTimeout(timer);document.removeEventListener('visibilitychange',update);resolve(value)};
+  const update=()=>{
+   const native=bridge.getState(),view=obj(native.state.attachmentWorkspace);
+   if(visit.page!==document||document.hidden||bridge.getDocumentEpoch()!==visit.document||!ordinaryLibraryOwner(native)||
+      view.open!==true||view.ready===true&&view.windowId!==visit.windowId){finish(false);return}
+   const shown=standaloneDraftPresentation(native,visit);
+   if(shown?.leased===true&&shown.frame.windowId===visit.windowId&&view.busy===false&&view.exportPending===false)finish(true);
+  };
+  const unsubscribe=bridge.subscribe(update),timer=window.setTimeout(()=>finish(false),3000);
+  document.addEventListener('visibilitychange',update);update();
+ });
 }
 function listedLocalTxt(view:Json,target:ExactFile|null){
  if(!target)return false;
@@ -238,6 +263,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const draftVisit=useRef<StandaloneVisit|undefined>(undefined),draftDeskExit=useRef<((close:boolean)=>void)|null>(null);
  const draftDeskReturn=useRef<{windowId:string;entry:StandaloneVisit['entry']}|undefined>(undefined);
  const draftDesk=localDrafts&&standaloneLibrarySurface(view)&&!onReturnToSearch&&state.chatAttachmentPickerOpen===false&&
+  (localDrafts.visit.entry!=='resume'||incoming.ready===true&&incoming.windowId===localDrafts.visit.windowId&&
+   incoming.standaloneDraftLibrary===true&&localDrafts.visit.document===bridge.getDocumentEpoch())&&
   (incoming.ready!==true||incoming.standaloneDraftLibraryVisit===localDrafts.visit.presentation)?localDrafts:undefined;
  const offerDraftDesk=standaloneLibrarySurface(view)&&view.ready===true&&view.standaloneDraftLibrary===true&&
   typeof view.standaloneDraftLibraryVisit==='string'&&!!view.standaloneDraftLibraryVisit&&
@@ -251,7 +278,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const draftFlight=useRef<DraftHandoff|null>(null);
  const reportFlight=useRef(false);
  const attachmentFlight=useRef(false);
- const documentParentFlight=useRef(false);
+ const documentParentFlight=useRef(false),generatedDraftFlight=useRef(false);
  const [previewContinuation,setPreviewContinuation]=useState('');
  useEffect(()=>{if(!view.open){setPreviewContinuation('');setCatalogFilter(null)}},[view.open]);
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
@@ -387,7 +414,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   if(!(command==='drafts.createDocument'&&result.started===true)&&!draftFrame(visit))throw new Error('原草稿窗口已变化');
   return result;
  };
- const openDraftDesk=(entry:StandaloneVisit['entry'])=>{
+ const openDraftDesk=(entry:Exclude<StandaloneVisit['entry'],'resume'>)=>{
   const frame=attachmentFrame(view);
   if(!offerDraftDesk||!frame||draftVisit.current||pending)return;
   const visit={windowId:frame.windowId,document:bridge.getDocumentEpoch(),page:document,presentation:view.standaloneDraftLibraryVisit,entry};
@@ -397,6 +424,36 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   void draftAct(visit,entry==='blank'?'drafts.new':'drafts.list').then(initial=>{
    if(draftVisit.current===visit)setLocalDrafts({visit,loading:false,initial});
   }).catch(()=>{if(draftVisit.current===visit)setLocalDrafts({visit,loading:false})});
+ };
+ const returnGeneratedDraft=async()=>{
+  const shown=generatedDraftHandoff(view);
+  if(!shown||onReturnToSearch||busy||draftBusy||draftVisit.current||backFlight.current||generatedDraftFlight.current)return;
+  const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),fresh=generatedDraftHandoff(live),frame=attachmentFrame(live);
+  if(!frame||!fresh||!ordinaryLibraryOwner(native)||native.state.filePath!=null||native.host?.ready!==true||
+      frame.windowId!==view.windowId||fresh.handle!==shown.handle||fresh.library!==shown.library||
+      fresh.fileId!==shown.fileId||fresh.sha256!==shown.sha256||document.hidden)return;
+  const visit:StandaloneVisit={windowId:frame.windowId,document:bridge.getDocumentEpoch(),page:document,presentation:fresh.library,entry:'resume'};
+  const sameVisit=()=>alive.current&&!document.hidden&&bridge.getDocumentEpoch()===visit.document&&
+   ordinaryLibraryOwner(bridge.getState())&&obj(bridge.getState().state.attachmentWorkspace).windowId===visit.windowId;
+  generatedDraftFlight.current=true;
+  try{
+   const receipt=await act('drafts.returnGenerated',{returnHandle:fresh.handle},frame,false);
+   if(!sameVisit())return;
+   if(receipt.returned!==true||receipt.returnHandle!==fresh.handle||receipt.library!==visit.presentation||
+      receipt.windowId!==visit.windowId||!await waitForGeneratedDraftList(visit))throw new Error();
+   if(!sameVisit()||draftVisit.current||backFlight.current)return;
+   // Mount the same desk first. If the second acknowledgement is lost, Back still releases
+   // only this native draft frame instead of leaving a hidden editor in the Library.
+   draftVisit.current=visit;setLocalDrafts({visit,loading:true});
+   try{
+    const initial=await draftAct(visit,'drafts.openGeneratedSource',{returnHandle:fresh.handle});
+    if(draftVisit.current===visit)setLocalDrafts({visit,loading:false,initial});
+   }catch{
+    if(draftVisit.current===visit)setLocalDrafts({visit,loading:false});
+   }
+  }catch{
+   if(sameVisit())setError('未核对到生成前的原草稿，没有打开其他版本。可到「本机文档草稿」核对。');
+  }finally{generatedDraftFlight.current=false}
  };
  const leaveDraftDesk=async(visit:StandaloneVisit,close:boolean)=>{
   const current=draftFrame(visit);
@@ -602,8 +659,11 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const original=obj(view.originalFile),canSaveOriginal=privateFiles&&hasFile&&view.canSaveOriginal===true;
  const canEditDocument=!scopedResultOnly&&privateFiles&&!!selection&&(file.sourceKind||file.source?.kind)==='created_document'&&
   editableDocumentMimes.has(file.mimeType)&&!!exactFileTarget(obj(file.editableSource||file.source?.editableSource));
+ const canReturnGeneratedDraft=!onReturnToSearch&&(mode==='detail'||mode==='original')&&!!generatedDraftHandoff(view);
+ const generatedDraftAction=(variant:'primary'|'secondary')=><Button variant={variant} disabled={busy||draftBusy||view.exportPending}
+  onClick={()=>void returnGeneratedDraft()}>回原草稿</Button>;
  const editDocument=(variant:'primary'|'secondary'|'ghost')=><Button variant={variant} disabled={busy||draftBusy||view.exportPending||!!view.pendingDocumentTask}
-  onClick={()=>run('continueDocument')}>从此版继续编辑</Button>;
+  onClick={()=>run('continueDocument')}>{canReturnGeneratedDraft?'从此版另起修改稿':'从此版继续编辑'}</Button>;
  const offerDocumentEdit=canEditDocument&&canSaveOriginal&&!state.chatAttachmentPickerOpen;
  const standaloneDocument=canChooseStandaloneDocument?standaloneDocumentSelection(view):undefined;
  const canChooseAttachment=!localOnlyFile&&!scopedResultOnly&&(!view.taskId||!!standaloneDocument)&&canSaveOriginal&&!!draftTarget&&!!selection&&!!onChooseAttachment;
@@ -1020,9 +1080,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   (view.wordExcerptSaveAttempted?'正在保存这段摘录…':'正在核对这段原文…'):copyStage==='writing'?'正在写入并核对这次另存…':'正在核对原记录…'}</p><Button variant="ghost" onClick={()=>run('cancel')}>{pdfPageText?(savePdfPagePending?'停止等待':'取消本页读取'):copyStage==='writing'?'停止本次另存':'停止本次读取'}</Button></div>}
  {!reportError&&!attachmentChoiceError&&(error||view.error)&&<p className="pw-error" role="alert">{error||view.error}</p>}{view.notice&&<p role="status">{view.notice}</p>}
  {!view.ready&&!draftDesk&&<p>回到当前工作区后继续查看，原文件、记录和当前输入保留。</p>}
- {draftDesk?(draftDesk.visit.entry==='blank'&&draftDesk.loading?<p role="status">正在打开空白文档…</p>:
+ {draftDesk?(draftDesk.visit.entry!=='catalog'&&draftDesk.loading?
+  <p role="status">{draftDesk.visit.entry==='blank'?'正在打开空白文档…':'正在核对生成前的原草稿…'}</p>:
   <AttachmentStandaloneDrafts active={draftDeskActive} recoverable={draftDeskReadOnly} loading={draftDesk.loading} initial={draftDesk.initial}
-  initialBlank={draftDesk.visit.entry==='blank'}
+  initialBlank={draftDesk.visit.entry==='blank'} initialResume={draftDesk.visit.entry==='resume'}
   invoke={(command,args)=>draftAct(draftDesk.visit,command,args)} registerExit={handler=>{draftDeskExit.current=handler}}
   onExit={close=>leaveDraftDesk(draftDesk.visit,close)}/>):view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}
   retainLinkedDraft={view.canRetainLinkedDocumentDraft===true&&!onReturnToSearch}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<><AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
@@ -1037,6 +1098,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {view.group&&<p className="pw-muted">这是原群任务与原受众的文件。群投递回执在原任务中核对。</p>}
  <div className="pw-action-row">
   <Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>查看原件</Button>
+  {canReturnGeneratedDraft&&generatedDraftAction('secondary')}
   {reuseAction}
   {!scopedResultOnly&&exportAction}
   {canEditDocument&&editDocument('ghost')}
@@ -1110,7 +1172,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    onClick={()=>run('external',{reviewProjectApk:true})}>核对这份 APK</Button>}
   {saveFirst&&exportAction}
   {useInTopic}
-  {offerDocumentEdit&&editDocument(preferSave||useInTopic?'secondary':'primary')}
+  {canReturnGeneratedDraft&&generatedDraftAction(preferSave||useInTopic?'secondary':'primary')}
+  {offerDocumentEdit&&editDocument(canReturnGeneratedDraft?'ghost':preferSave||useInTopic?'secondary':'primary')}
   {wordOriginAction}
   {markdownTarget&&(markdown.state==='READY'||markdown.state==='UNKNOWN')&&
    <Button variant="secondary" disabled={busy||draftBusy||view.exportPending} onClick={retainMarkdown}>
@@ -1120,7 +1183,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {markdownTarget&&['SAVED','VERIFIED'].includes(markdown.state)&&Number.isSafeInteger(markdown.savedAt)&&markdown.savedAt>0&&
    <p className="pw-file-draft-status" role="status">已保留 Word 草稿「{markdown.name}」（{new Date(markdown.savedAt).toLocaleString()}）。
     可在「成果 → 本机文档草稿」继续编辑或核对生成，不会改动原件。</p>}
-  {canChooseAttachment&&<Button variant={preferSave||offerDocumentEdit?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending}
+  {canChooseAttachment&&<Button variant={preferSave||offerDocumentEdit||canReturnGeneratedDraft?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending}
    aria-busy={attachmentFlight.current||undefined} onClick={()=>void chooseAttachment()}>{attachmentFlight.current?'正在核对原文件…':`选作「${draftTarget?.label}」的附件…`}</Button>}
   {attachmentChoiceError&&<p className="pw-file-draft-status pw-error" role="alert">{attachmentChoiceError}</p>}
   {canKeepSupplement&&<Button variant={preferSave||useInTopic||offerDocumentEdit?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>{view.continuationDraft?.text?.trim()?'查看补充草稿':'留一条补充'}</Button>}
