@@ -57,6 +57,14 @@ public final class OwnerQuestionInputs {
     public synchronized Waiting find(String task,String run,int epoch,String request,long revision){
         prune(System.currentTimeMillis());Waiting value=waiting.get(task);return value!=null&&value.matches(task,run,epoch,request,revision)?value:null;
     }
+    /** Presentation only: observe the exact retained wait, without pruning or checking execution authority. */
+    public synchronized boolean hasCurrentOriginal(JSONObject task,long now)throws Exception{
+        JSONObject question=OwnerQuestionReply.reference(task);if(question==null)return false;
+        String id=question.getString("taskId"),run=question.getString("runId");int epoch=question.getInt("coordinatorEpoch");Waiting value=waiting.get(id);
+        return value!=null&&value.matches(id,run,epoch,question.getString("requestId"),question.getLong("waitRevision"))
+                &&value.conversationId().equals(task.getString("conversationId"))&&value.expiresAt()>now
+                &&!value.original.isCancelled()&&!value.original.isPaused()&&value.original.matchesHostRun(id,run,epoch);
+    }
     private synchronized boolean current(Waiting value){return value.issuer==this&&waiting.get(value.taskId())==value;}
     /** SQL continuation must already have been atomically claimed. No scheduling occurs here. */
     public synchronized boolean take(Waiting value){return value!=null&&value.issuer==this&&waiting.remove(value.taskId(),value);}

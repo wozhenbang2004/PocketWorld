@@ -132,13 +132,19 @@ export function OwnerTaskQuestion({question, text, onTextChange, disabled, canAn
     // Never automatically replay after an unknown save. A fresh native review is required.
   };
   const saved = question.answered || receipt !== null;
+  const readOnly = question.replyAvailability !== undefined && (question.replyAvailability !== 'current_wait' || !canAnswer);
   const locked = disabled || pending || sent.current || saved;
-  return <section className="pw-approval-item pw-task-decision pw-task-question" aria-label="回答原问题" aria-busy={pending}>
+  return <section className="pw-approval-item pw-task-decision pw-task-question" aria-label={readOnly && !saved ? '原问题' : '回答原问题'} aria-busy={pending}>
     <header className="pw-decision-heading">
-      <span className="pw-decision-eyebrow">{saved ? '已回答' : '需要你的回答'}</span>
+      <span className="pw-decision-eyebrow">{saved ? '已回答' : readOnly ? '原问题' : '需要你的回答'}</span>
       <h4 className="pw-question-title">{question.question}</h4>
     </header>
-    {saved ? <p className="pw-decision-notice" role="status">{ownerQuestionSavedMessage(question, receipt)}</p> : <>
+    {saved ? <p className="pw-decision-notice" role="status">{ownerQuestionSavedMessage(question, receipt)}</p> : readOnly ? <>
+      {question.options?.length ? <ul className="pw-decision-meta" aria-label="原问题选项">
+        {question.options.map(option => <li key={option.id}>{option.label}</li>)}
+      </ul> : null}
+      <p className="pw-decision-notice" role="status">暂未核对到可接收回答的原执行。可重新核对。</p>
+    </> : <>
       <p className="pw-decision-caveat">回答只进入这个原等待项，不代表批准敏感操作。</p>
       {canChoose && question.options?.length ? <div className="pw-question-choices" aria-label="原问题选项">
         <p className="pw-decision-meta">选择一项即发送回答</p>

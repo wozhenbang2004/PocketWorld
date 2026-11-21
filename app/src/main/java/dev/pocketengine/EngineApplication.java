@@ -41,6 +41,11 @@ public final class EngineApplication extends Application implements dev.pocketen
     private final java.util.Set<String> taskNoticePending=java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final java.util.Set<String> taskNoticeDirty=java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /** Used only with the already-read original Work review; this is not an owner command. */
+    public boolean hasCurrentOriginalOwnerWorkQuestion(JSONObject task)throws Exception{
+        return businessReady()&&ownerQuestionInputs.hasCurrentOriginal(task,System.currentTimeMillis());
+    }
+
     public interface Observer { void onEvent(JSONObject event); }
     private final CopyOnWriteArrayList<Observer> observers=new CopyOnWriteArrayList<>();
     private final Handler main=new Handler(Looper.getMainLooper());

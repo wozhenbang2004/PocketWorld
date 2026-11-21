@@ -108,7 +108,9 @@ internal class PocketWebTaskActions(
                     else {
                         val binding = if (captured.raw.optString("taskProjection") == "approval_only")
                             controller.state.tasks.firstOrNull { it.id == captured.id } ?: throw IllegalStateException("原审批任务窗口已关闭") else captured
-                        complete(review(captured, approvals, reviews, controller.state.activeTaskId, canUseTaskControls(captured), binding), null)
+                        val currentOwnerWorkWait = !specialOwnerTask(captured) && PocketWebOwnerQuestions.isOrdinaryOwnerWorkWait(captured.raw) &&
+                            controller.hasCurrentOriginalOwnerWorkQuestion(captured)
+                        complete(review(captured, approvals, reviews, controller.state.activeTaskId, canUseTaskControls(captured), binding, currentOwnerWorkWait), null)
                     }
                 }
                 try {
@@ -141,7 +143,8 @@ internal class PocketWebTaskActions(
         val DECISIONS = setOf("tasks.plan.enter", "tasks.resume", "tasks.approve", "tasks.confirm", "tasks.resolve", "tasks.scope")
 
         /** Only original native task facts and original plan reads can add review actions. */
-        fun review(task: UiTask, approvalViews: JSONArray, reviews: PocketWebTaskReviews, activeTaskId: String?, canUseTaskControls: Boolean, bindingTask: UiTask = task): JSONObject {
+        fun review(task: UiTask, approvalViews: JSONArray, reviews: PocketWebTaskReviews, activeTaskId: String?, canUseTaskControls: Boolean,
+                   bindingTask: UiTask = task, currentOwnerWorkWait: Boolean = false): JSONObject {
             if (task.raw.optString("taskProjection") == "approval_only") {
                 val read = task.raw.getJSONObject("capabilityApprovalRead")
                 val original = pendingCapabilityApprovals(task).singleOrNull()
@@ -168,7 +171,8 @@ internal class PocketWebTaskActions(
             val unknown = unresolvedForReview(task)
             val approvals = pendingCapabilityApprovals(task)
             val projectContinuation = PocketWebProjectContinuation.view(task, task.id == activeTaskId)
-            val question = PocketWebOwnerQuestions.view(task.raw)
+            val question = PocketWebOwnerQuestions.view(task.raw,
+                currentOwnerWorkWait.takeIf { !special && PocketWebOwnerQuestions.isOrdinaryOwnerWorkWait(task.raw) })
             val screenshot = task.raw.optJSONObject("evidence")?.optJSONObject("screenshot")
             if (task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" &&
                 task.raw.optJSONObject("origin")?.optString("kind") !in setOf("group", "paired_device") &&

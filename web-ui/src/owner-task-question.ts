@@ -4,6 +4,7 @@ export type OwnerQuestionView = {
   kind: 'phone' | 'capabilities';
   question: string;
   answered: boolean;
+  replyAvailability?: 'current_wait' | 'unconfirmed';
   options?: OwnerQuestionOption[];
   answerText?: string;
   continuationState?: string;

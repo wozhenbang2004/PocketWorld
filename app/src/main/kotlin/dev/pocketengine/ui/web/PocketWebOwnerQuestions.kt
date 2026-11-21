@@ -4,14 +4,16 @@ import dev.pocketengine.features.assistant.OwnerPhoneQuestions
 import dev.pocketengine.features.assistant.OwnerQuestionInputs
 import dev.pocketengine.features.assistant.notifications.OwnerQuestionReply
 import dev.pocketengine.runtime.policy.OwnerQuestionChoices
+import dev.pocketengine.store.OwnerWorkTask
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.UiTask
+import dev.pocketengine.ui.objects
 import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** Presentation and reply routing only. The existing native reply transaction and retained
- * physical owner still decide whether an answer can be saved and the original run continued. */
+ * original execution still decide whether an answer can be saved and the run continued. */
 internal object PocketWebOwnerQuestions {
     const val ANSWER = "tasks.answerQuestion"
     const val CHOOSE = "tasks.answerQuestionChoice"
@@ -24,6 +26,20 @@ internal object PocketWebOwnerQuestions {
     }
 
     private fun kind(task: JSONObject) = if (task.optString("kind") == "phone") "phone" else "capabilities"
+
+    fun isOrdinaryOwnerWorkWait(task: JSONObject): Boolean {
+        val work = task.optJSONObject("ownerWork") ?: return false
+        val id = task.opt("id") as? String ?: return false
+        val conversation = task.opt("conversationId") as? String ?: return false
+        return OwnerWorkTask.isOwnerWork(task) && task.opt("kind") == "assistant" && task.opt("executionMode") == "capabilities" &&
+            task.opt("actorId") == "owner" && task.opt("spaceId") == "private" && task.opt("status") == "awaiting_user" &&
+            task.isNull("origin") && task.isNull("parentTaskId") && id.isNotBlank() && conversation.isNotBlank() &&
+            id == work.opt("workTaskId") && conversation == work.opt("conversationId") &&
+            task.opt("taskProjection") == "detail_window" && task.opt("taskCoreReadLimited") == false && task.opt("contextAvailable") == true &&
+            task.optJSONArray("ownerWorkTeams")?.length() == 0 && task.opt("ownerWorkTeamsUnavailable") != true &&
+            task.optJSONArray("approvals").objects().none { it.opt("tool") == "teams_start" && it.opt("state") == "pending" } &&
+            listOf("developmentContext", "ownerDeviceWork", "teamAssignment", "teamRunId", "teamWriteScope", "workProfileRef", "workProfileIntent").all(task::isNull)
+    }
 
     /** A display/draft key, never an execution capability. A replacement physical hold gets
      * its own key even when the task and the textual question happen to be unchanged. */
@@ -38,11 +54,13 @@ internal object PocketWebOwnerQuestions {
             .joinToString("") { "%02x".format(it.toInt() and 255) }
     }
 
-    fun view(task: JSONObject): JSONObject? {
+    fun view(task: JSONObject, currentOwnerWorkWait: Boolean? = null): JSONObject? {
         val question = nativeQuestion(task) ?: return null
         val view = JSONObject().put("questionKey", key(task, question.getJSONObject("identity")))
             .put("kind", kind(task)).put("question", question.getString("question"))
             .put("answered", question.getBoolean("answered")).put("executionAuthorized", false)
+        if (currentOwnerWorkWait != null && !question.getBoolean("answered"))
+            view.put("replyAvailability", if (currentOwnerWorkWait) "current_wait" else "unconfirmed")
         // Deliberately omit native identity, notice tokens, holds, grants and controllers.
         for (name in listOf("options", "answerText", "continuationState", "ownerAction"))
             if (question.has(name)) view.put(name, question.get(name))
@@ -50,7 +68,8 @@ internal object PocketWebOwnerQuestions {
     }
 
     fun actions(question: JSONObject?): Set<String> {
-        if (question == null || question.optBoolean("answered")) return emptySet()
+        if (question == null || question.optBoolean("answered") ||
+            question.has("replyAvailability") && question.opt("replyAvailability") != "current_wait") return emptySet()
         return if ((question.optJSONArray("options")?.length() ?: 0) > 0) commands else setOf(ANSWER)
     }
 
@@ -109,6 +128,8 @@ internal object PocketWebOwnerQuestions {
         val original = prepare(task.raw, action, args)
         val receive: (JSONObject?, String?) -> Unit = { value, error ->
             if (error != null) done(null, error)
+            else if (value?.opt("expired") == true && isOrdinaryOwnerWorkWait(task.raw))
+                done(null, "暂未核对到可接收回答的原执行。请重新核对原任务；不会自动重送。")
             else runCatching { savedReceipt(original, value) }.fold(
                 { done(it, null) }, { done(null, it.message ?: "回答保存回执未确认，请核对原任务；没有自动重发。") })
         }

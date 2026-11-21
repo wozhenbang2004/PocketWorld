@@ -5525,6 +5525,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var conversationSourceRevision by mutableStateOf(0L)
         private set
+    internal fun hasCurrentOriginalOwnerWorkQuestion(task: UiTask): Boolean {
+        if (!webPrivateOwnerVisible() || webTaskViewId != task.id) return false
+        val current = state.tasks.firstOrNull { it.id == task.id } ?: return false
+        if (current.updatedAt != task.updatedAt || current.status != task.status ||
+            current.raw.opt("conversationId") != task.raw.opt("conversationId")) return false
+        return runCatching {
+            val reviewed = dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.reference(task.raw)
+                ?: return@runCatching false
+            val observed = dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.reference(current.raw)
+            observed?.toString() == reviewed.toString() && app.hasCurrentOriginalOwnerWorkQuestion(current.raw)
+        }.getOrDefault(false)
+    }
     internal fun answerOwnerQuestion(question: JSONObject, text: String, done: (JSONObject?, String?) -> Unit) {
         if (text.isBlank() || text.length > 4000) { done(null, "请填写不超过4000字的回答"); return }
         submitOwnerQuestion("answerOwnerQuestion", question, JSONObject().put("text", text), done)
