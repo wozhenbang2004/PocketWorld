@@ -9,6 +9,7 @@ internal data class UiProject(val id: String, val name: String)
 internal data class UiFile(val path: String, val version: Int)
 internal data class UiFileRevision(val version: Int, val at: Long, val characters: Int, val deleted: Boolean, val original:FormalHistoryPin?=null)
 internal data class UiLaunchApp(val packageName: String, val label: String)
+internal data class UiReminderNotice(val id: String, val ruleId: String, val revision: Int, val occurrenceAt: Long, val connectionRevision: Int)
 internal data class UiTask(
     val id: String,
     val goal: String,
@@ -126,6 +127,7 @@ internal data class PocketUiState(
     val requestedTaskRevision: Int = 0,
     val requestedConnectionSection: String? = null,
     val requestedConnectionRevision: Int = 0,
+    val requestedReminderNotice: UiReminderNotice? = null,
     val requestedCommitmentId: String? = null,
     val requestedFollowUpClaimId: String? = null,
     val requestedCommitmentRevision: Int = 0,

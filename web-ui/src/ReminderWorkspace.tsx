@@ -6,6 +6,7 @@ import { useSurfaceEnter } from './library/surface-motion';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { PressButton } from './library/press';
 import { CalendarDateTimeFields } from './CalendarDateTimeFields';
+import { bridge } from './bridge';
 import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form-drafts';
 import { WheelTimeField } from './forms-library/uiux/WheelTimeField';
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, StretchSwitch, TextAreaField, TextField } from './forms-library';
@@ -18,6 +19,21 @@ const array = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x
 const date = (value: any) => Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString() : '';
 const types = [{ id: 'once', label: '一次' }, { id: 'interval', label: '固定间隔' }, { id: 'daily', label: '每天' }, { id: 'weekly', label: '每周' }, { id: 'monthly', label: '每月' }, { id: 'cron', label: 'Cron 表达式' }];
 type OccurrenceFeedback = { id: string; location: string; read: string; message: string; error?: boolean; prepared?: boolean };
+export type ReminderNoticeVisit = { connection: number; navigation: number; documentEpoch: number; resume: number; warm: boolean };
+type ReminderNotice = { id: string; ruleId: string; revision: number; occurrenceAt: number; connectionRevision: number };
+function reminderNotice(state: Data, visit: ReminderNoticeVisit): ReminderNotice | null {
+  const pin = state.requestedReminderNotice;
+  return state.requestedConnectionSection === 'automation' && state.requestedConnectionRevision === visit.connection &&
+    pin?.connectionRevision === visit.connection && typeof pin.id === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(pin.id) &&
+    typeof pin.ruleId === 'string' && !!pin.ruleId.trim() && pin.ruleId.length <= 240 &&
+    Number.isSafeInteger(pin.revision) && pin.revision > 0 && Number.isSafeInteger(pin.occurrenceAt) && pin.occurrenceAt > 0
+    ? pin : null;
+}
+function currentReminderVisit(visit: ReminderNoticeVisit) {
+  const live = bridge.getState(), shown = live.view as Data | undefined;
+  return !document.hidden && bridge.getDocumentEpoch() === visit.documentEpoch && shown?.section === 'automation' &&
+    shown.taskId === null && shown.resumeRevision === visit.resume && !!reminderNotice(live.state, visit);
+}
 
 /** Existing forms, list hierarchy and host authority. No second scheduler or local saved records. */
 export default function ReminderWorkspace({ state, data, supported, run, registerTransientBack, registerBeforeLeave }: {
@@ -57,7 +73,6 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
       (target || root.current)?.focus({ preventScroll: true }); returnRule.current = '';
     }
   }, [selectedRule?.id, reading]);
-  const refresh = async () => { const [list, receipts] = await Promise.all([run('automation.list'), run('automation.receipts')]); if (uncertain && list?.requestId && receipts?.requestId) setCheckRequests({ list: list.requestId, receipts: receipts.requestId }); };
   const close = () => { generation.current++; setEditor(null); setReview(null); setError(''); setAdvanced(false); };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
   useEffect(() => {
@@ -120,9 +135,58 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const rulesById = new Map(rules.map(rule => [rule.id, rule]));
   const receipts = array(state.moduleResults?.['automation.receipts']?.receipts).slice().reverse();
   const now = Date.now(), rows = receipts.map(receipt => ({ receipt, view: reminderOccurrence(receipt, rulesById.get(receipt.ruleId), now) }));
+  const visit = state.reminderNoticeVisit as ReminderNoticeVisit | undefined;
+  const openedNotice = visit && !document.hidden && !pending && !editor && !review && state.webWorkspaceTaskOpen === false &&
+    state.webWorkspaceSection === 'automation' && state.webWorkspaceResumeRevision === visit.resume ? reminderNotice(state, visit) : null;
+  const currentVisit = useRef<ReminderNoticeVisit | undefined>(undefined), attemptedWarm = useRef<ReminderNoticeVisit | undefined>(undefined);
+  const warmReadGeneration = useRef(0);
+  const [warmRead, setWarmRead] = useState<{ visit: ReminderNoticeVisit; previous: string; requestId: string | null }>();
+  useLayoutEffect(() => { currentVisit.current = visit; return () => { currentVisit.current = undefined; }; }, [visit]);
+  const recordWarmRead = (origin: ReminderNoticeVisit, attempt: number, previous: string, reply?: Data) => {
+    if (currentVisit.current !== origin || warmReadGeneration.current !== attempt || !currentReminderVisit(origin)) return;
+    setWarmRead({ visit: origin, previous, requestId: reply?.accepted === true && typeof reply.requestId === 'string' && reply.requestId ? reply.requestId : null });
+  };
+  const refresh = async () => {
+    const origin = currentVisit.current, previous = receiptRead;
+    const attempt = origin?.warm ? ++warmReadGeneration.current : 0;
+    if (origin?.warm) attemptedWarm.current = origin;
+    try {
+      const [list, receipts] = await Promise.all([run('automation.list'), run('automation.receipts')]);
+      if (uncertain && list?.requestId && receipts?.requestId) setCheckRequests({ list: list.requestId, receipts: receipts.requestId });
+      if (origin?.warm) recordWarmRead(origin, attempt, previous, receipts);
+    } catch (failure) {
+      if (origin?.warm) recordWarmRead(origin, attempt, previous);
+      throw failure;
+    }
+  };
+  const canReadReceipts = supported('automation.receipts');
+  useEffect(() => {
+    if (!visit?.warm || !openedNotice || receiptsBusy || attemptedWarm.current === visit || !currentReminderVisit(visit)) return;
+    attemptedWarm.current = visit;
+    const attempt = ++warmReadGeneration.current;
+    // An already-mounted reminder page has no new connections.enter read.
+    // This is the same scoped receipts read, once for the explicit tap.
+    if (!canReadReceipts) { recordWarmRead(visit, attempt, receiptRead); return; }
+    void bridge.command('automation.receipts').then(reply => recordWarmRead(visit, attempt, receiptRead, reply), () => recordWarmRead(visit, attempt, receiptRead));
+  }, [visit, openedNotice?.connectionRevision, receiptsBusy, receiptRead, canReadReceipts]);
+  const readHere = warmRead?.visit === visit ? warmRead : undefined;
+  const matchingRead = !visit?.warm || !!readHere?.requestId && readHere.requestId === receiptRead;
+  const noticeReady = !!openedNotice && !reading && !receiptsBusy &&
+    (matchingRead || !!readHere && (readHere.requestId === null || receiptRead !== readHere.previous));
+  const noticeRows = noticeReady && matchingRead && hasRules && !readingError && receiptsReady && !receiptsError
+    ? rows.filter(({ receipt }) => receipt.id === openedNotice.id) : [];
+  const exactNotice = openedNotice && noticeRows.length === 1 ? noticeRows.find(({ receipt, view }) => !view.sourceHeld && receipt.kind === 'reminder' &&
+    receipt.ruleId === openedNotice.ruleId && receipt.revision === openedNotice.revision && receipt.occurrenceAt === openedNotice.occurrenceAt) : undefined;
+  const noticeRegion = useRef<HTMLElement | null>(null), focusedNotice = useRef(0);
+  useEffect(() => {
+    const region = noticeRegion.current;
+    if (!openedNotice || !noticeReady || !region || !visit || focusedNotice.current === visit.connection || !currentReminderVisit(visit)) return;
+    focusedNotice.current = visit.connection;
+    region.scrollIntoView({ block: 'nearest' }); region.focus({ preventScroll: true });
+  }, [openedNotice?.connectionRevision, noticeReady, visit]);
   const selectedRows = selectedRule ? rows.filter(row => row.receipt.ruleId === selectedRule.id) : rows;
-  const latest = selectedRule ? selectedRows[0] : undefined, historyRows = selectedRule ? selectedRows.slice(1) : rows;
-  const attentionReceipts = rows.filter(row => row.view.attention);
+  const latest = selectedRule ? selectedRows[0] : undefined, historyRows = (selectedRule ? selectedRows.slice(1) : rows).filter(row => row !== exactNotice);
+  const attentionReceipts = rows.filter(row => row.view.attention && row !== exactNotice);
   const occurrenceBlocked = pending || reading || readingError || receiptsBusy || !!receiptsError || !receiptsReady || !!state.webWorkspaceTaskOpen;
   const actOnOccurrence = async (row: typeof rows[number], location: string) => {
     if (occurrenceBlocked || occurrenceLock.current) return;
@@ -169,7 +233,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   </dl>;
   const unknownRead = !!checkRequests && !reading && !readingError && !receiptsBusy && !receiptsError && hasRules && receiptsReady && state.moduleResultInputs?.['automation.list']?._requestId === checkRequests.list && state.moduleResultInputs?.['automation.receipts']?._requestId === checkRequests.receipts;
   const unknownControls = uncertain && <div className="pw-field-hint"><p>提交结果尚待核对。先读取已有提醒与投递记录；不会自动重试。</p><div className="pw-form-actions"><Button variant="secondary" disabled={reading || receiptsBusy} onClick={() => { void refresh().catch(failure => setError((failure as Error).message)); }}>读取原记录核对结果</Button><Button variant="secondary" disabled={!unknownRead} onClick={() => { formDraft.clearSubmitted(); setUncertain(false); setCheckRequests(null); setError(''); }}>已核对原记录，继续编辑</Button></div></div>;
-  const receiptRow = (row: typeof rows[number], location: 'history' | 'attention' | 'latest') => {
+  const receiptRow = (row: typeof rows[number], location: 'history' | 'attention' | 'latest' | 'notification') => {
     const { receipt, view } = row, currentRule = rulesById.get(receipt.ruleId);
     const olderVersion = currentRule && Number.isInteger(receipt.revision) && receipt.revision !== currentRule.revision;
     const title = location === 'latest' ? '最近一次记录' : view.sourceHeld ? '原发生记录' : receipt.title || '原发生记录';
@@ -180,8 +244,8 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
       <p className="pw-reminder-outcome">{view.task || view.delivery}</p>
       {view.task && <p className="pw-reminder-result-message">通知：{view.delivery}</p>}
       {olderVersion && !view.sourceHeld && <p className="pw-field-hint">这是修改前安排的发生记录。</p>}
-      {location === 'history' && !view.sourceHeld && receipt.message && <p className="pw-field-hint">投递时记录：{receipt.message}</p>}
-      {location === 'history' && date(receipt.claimedAt) && <p className="pw-field-hint">实际登记：{date(receipt.claimedAt)}</p>}
+      {(location === 'history' || location === 'notification') && !view.sourceHeld && receipt.message && <p className="pw-field-hint">投递时记录：{receipt.message}</p>}
+      {(location === 'history' || location === 'notification') && date(receipt.claimedAt) && <p className="pw-field-hint">实际登记：{date(receipt.claimedAt)}</p>}
       {view.action && <div className="pw-form-actions"><Button variant="secondary" disabled={occurrenceBlocked || alreadyPrepared || !supported(view.action.kind === 'open' ? 'tasks.open' : 'automation.prepareOccurrence')} onClick={() => { void actOnOccurrence(row, location); }}>{view.action.label}</Button></div>}
       {feedback && !view.sourceHeld && (!feedback.prepared || alreadyPrepared) && <p role={feedback.error ? 'alert' : 'status'} className={feedback.error ? 'pw-field-error' : 'pw-field-hint'}>{feedback.message}</p>}
     </article>;
@@ -213,6 +277,12 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     selector: '[data-reminder-receipt-id]', active: receiptsReady && !receiptsBusy && collectionActive,
   });
   return <div ref={root} className="pw-reminder-workspace pw-knowledge-workspace" tabIndex={-1}>
+    {openedNotice && <section ref={noticeRegion} tabIndex={-1} className="pw-settings-section" aria-label="通知对应的发生记录">
+      <header className="pw-section-heading"><h2>这次提醒</h2></header>
+      {exactNotice ? receiptRow(exactNotice, 'notification') : <p role="status" className="pw-field-hint">
+        {noticeReady ? '未在本次读取中定位到这次提醒。请用本页刷新核对原记录。' : '正在核对通知对应的发生记录…'}
+      </p>}
+    </section>}
     <section className="pw-settings-section" aria-label="提醒规则">
       {selectedRule && <Button variant="ghost" leadingIcon={IconChevronLeft} disabled={pending} onClick={() => setSelectedId('')}>返回提醒列表</Button>}
       {selectedRule ? <header className="pw-followup-heading"><div><h2 ref={heading} tabIndex={-1}>{selectedRule.title || '未命名提醒'}</h2></div>{refreshButton}</header> : !emptyDirectory && <div className="pw-reminder-directory-toolbar">{hasRules && rules.length > 0 && <p>{rules.length} 条提醒</p>}<div className="pw-reminder-directory-actions">{refreshButton}{newReminder}</div></div>}
@@ -238,7 +308,7 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
           <p className="pw-knowledge-next-time">{availability.exhausted ? '这次安排已到期或已有发生记录；原结果仍以回执为准。' : rule.nextAt > 0 ? '计划时间：' + date(rule.scheduledAt || rule.nextAt) : '已暂停或安排已结束'}</p>
           {availability.sourceCurrent && (rule.kind === 'phone_goal' ? <section className="pw-knowledge-section"><h3>到时提醒你开始</h3><p className="pw-user-text">{rule.goal || '原记录未提供任务目标，请核对后操作。'}</p><p className="pw-field-hint">只提醒查看目标，仍需你明确开始手机任务。</p></section> : rule.kind === 'reminder' && <p className="pw-field-hint">到时只发送本机通知，不会启动手机任务。</p>)}
           {receiptsBusy || receiptsError || !receiptsReady ? <p role="status" className="pw-field-hint">{receiptsBusy ? '正在核对最近一次发生记录…' : '最近一次发生记录尚未核对，请刷新。'}</p>
-            : latest ? receiptRow(latest, 'latest') : <p className="pw-field-hint">还没有读到这条提醒的发生记录。</p>}
+            : latest ? latest === exactNotice ? null : receiptRow(latest, 'latest') : <p className="pw-field-hint">还没有读到这条提醒的发生记录。</p>}
 
           {!availability.sourceCurrent && <p>原提醒来源已变化或仍待核对。请刷新后操作。</p>}
           {availability.exhausted && Object.hasOwn(rule, 'nativeOrigin') && <p>此提醒来自原对话；请在原对话重新明确提出安排，未复制旧来源。</p>}

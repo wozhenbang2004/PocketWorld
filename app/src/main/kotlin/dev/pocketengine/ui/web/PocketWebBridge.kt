@@ -527,6 +527,7 @@ internal class PocketWebBridge(
         if (documentReplaced) {
             // A replacement document did not choose this project namespace. Normal backgrounding is not an exit.
             if (section == "memory" || section == "memoryReview") { controller.leaveOwnerDomain("memoryReview"); section = null }
+            if (surface == "business" && documentId != null) controller.clearReminderNotice()
             documentId = null; taskReturnSection = null
         }
     }
@@ -559,6 +560,14 @@ internal class PocketWebBridge(
             projection = PocketWebState.snapshot(controller, ::canReadProjectGoal)
             if(section==null&&taskViewId==null) controller.adoptedFormalComparisonForWeb()?.let {
                 projection?.getJSONObject("state")?.put("adoptedFormalComparison",it)
+            }
+            if (surface == "business") {
+                val state = controller.state
+                state.requestedReminderNotice?.takeIf { state.requestedConnectionSection == "automation" && state.requestedConnectionRevision == it.connectionRevision }?.let {
+                    projection?.getJSONObject("state")?.put("requestedReminderNotice", JSONObject()
+                        .put("id", it.id).put("ruleId", it.ruleId).put("revision", it.revision).put("occurrenceAt", it.occurrenceAt)
+                        .put("connectionRevision", it.connectionRevision))
+                }
             }
             retainedDraftCopyOpenForWeb()?.let { projection?.getJSONObject("state")?.put("openedRetainedDraftCopy", it) }
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)

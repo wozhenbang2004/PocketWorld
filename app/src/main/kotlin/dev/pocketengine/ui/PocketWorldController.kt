@@ -2752,13 +2752,38 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun suggestInput(text: String, phoneTask: Boolean? = null) {
         if (text.isNotBlank()) state = state.copy(suggestedInputRevision = state.suggestedInputRevision + 1, suggestedInput = text, suggestedPhoneTask = phoneTask)
     }
-    fun prepareReminderOccurrence(occurrenceId: String) {
+    private var reminderNoticeRequest = 0L
+    internal fun clearReminderNotice() {
+        if (state.requestedReminderNotice != null) state = state.copy(requestedReminderNotice = null)
+    }
+    fun prepareReminderOccurrence(occurrenceId: String, notifiedRule: String? = null) {
+        val tap = notifiedRule?.let { ++reminderNoticeRequest }
+        fun navigation() = Triple(state.requestedConnectionRevision, state.requestedTaskRevision, state.requestedProjectRevision)
+        val origin = navigation()
         io.execute {
             try {
                 val module = app.features.module("automation") ?: throw IllegalStateException("提醒模块暂不可用")
-                val receipt = module.handle("receipts", JSONObject()).optJSONArray("receipts").objects().firstOrNull { it.optString("id") == occurrenceId } ?: throw IllegalStateException("提醒已删除或不在当前记录中")
+                val matches = module.handle("receipts", JSONObject()).optJSONArray("receipts").objects().filter { it.optString("id") == occurrenceId }
+                val receipt = matches.firstOrNull() ?: throw IllegalStateException("提醒已删除或不在当前记录中")
                 if (receipt.optString("kind") != "phone_goal") {
-                    main.post { if (!closed) state = state.copy(notice = receipt.optString("title", "提醒已打开"), requestedConnectionSection = "automation", requestedConnectionRevision = state.requestedConnectionRevision + 1) }
+                    val ordinaryTap = notifiedRule != null && receipt.opt("kind") == "reminder"
+                    val revision = receipt.opt("revision") as? Int
+                    val at = (receipt.opt("occurrenceAt") as? Number)?.takeIf { it is Int || it is Long }?.toLong()
+                    val pinned = ordinaryTap && matches.size == 1 && receipt.opt("id") == occurrenceId &&
+                        runCatching { UUID.fromString(occurrenceId).toString() == occurrenceId }.getOrDefault(false) &&
+                        receipt.opt("ruleId") == notifiedRule && revision != null && revision > 0 && at != null && at in 1..253402300799999L &&
+                        receipt.opt("instanceKey") == "$notifiedRule:$revision:$at" &&
+                        receipt.optString("status") in setOf("notified", "dispatching", "delivery_unknown") &&
+                        !receipt.optBoolean("sourceInvalidated") && !receipt.optBoolean("sourceCheckPending")
+                    main.post {
+                        if (closed || ordinaryTap && (tap != reminderNoticeRequest || navigation() != origin)) return@post
+                        val connection = state.requestedConnectionRevision + 1
+                        val original = if (pinned && notifiedRule != null && revision != null && at != null)
+                            UiReminderNotice(occurrenceId, notifiedRule, revision, at, connection) else null
+                        state = state.copy(requestedConnectionSection = "automation", requestedConnectionRevision = connection,
+                            requestedReminderNotice = original,
+                            notice = if (original != null) state.notice else if (ordinaryTap) "未能定位这次提醒的原发生记录。" else receipt.optString("title", "提醒已打开"))
+                    }
                 } else {
                     val result = app.dispatchOwnerAction("prepareReminderTask", JSONObject().put("occurrenceId", occurrenceId).put("executionMode", "background"))
                     val task = result.getJSONObject("task")

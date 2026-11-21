@@ -413,8 +413,16 @@ class ComposeActivity : ComponentActivity() {
         }
         val occurrence = intent?.getStringExtra("automationOccurrence")?.takeIf { it.isNotBlank() }
         if (occurrence != null) {
+            // An external locator is not proof of a saved notification. Carry the
+            // matching native notification route only as a hint for Book readback.
+            val route = intent.data
+            val notifiedRule = intent.getStringExtra("automationRuleId")?.takeIf {
+                it.isNotBlank() && it.length <= 240 && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0 &&
+                    route?.scheme == "pocketengine" && route.host == "automation" && route.pathSegments == listOf(occurrence) &&
+                    route.userInfo == null && route.port == -1 && route.query == null && route.fragment == null
+            }
             intent.removeExtra("automationOccurrence"); intent.removeExtra("automationGoal"); intent.removeExtra("automationRuleId")
-            controller.prepareReminderOccurrence(occurrence)
+            controller.prepareReminderOccurrence(occurrence, notifiedRule)
             return
         }
         if (intent?.hasExtra("automationRuleId") == true || intent?.data?.host == "automation") {

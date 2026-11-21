@@ -56,7 +56,7 @@ type ResultMember = { id: string; generation: number; deliveryKey: string; round
 type ResultOrigin = { runId: string; key: string; scroll: number; member?: ResultMember };
 type WorkMemberAudit = Pick<WorkTeamResultReturn,'source'|'rearm'> & {summary:string;resume:number;request:number;seen?:true;receipt?:true;returnHandle?:string};
 type MemberDeliveryReturn = {team:string;key:string;section:'progress'|'result';taskId:string;sourceHandle:string;scroll:number;
-  entered:boolean;ordinary:boolean;documentEpoch:number;member?:ResultMember;work?:WorkMemberAudit};
+  entered:boolean;ordinary:boolean;documentEpoch:number;member?:ResultMember;work?:WorkMemberAudit;record?:true};
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const object = (value: unknown): Data => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 const label = (value: unknown): string => typeof value === 'string' ? value : '';
@@ -427,6 +427,19 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const openResearchTask = (memberId: string, record: TeamResearchRecord) => {
     const original = currentReading.current;
     if (busy || materialBusy || backgrounded.current || !ownsNativeWindow() || !original?.viewHandle || original.kind !== 'run') return;
+    if (deliveryReturn.current?.record) return; // This exact record open is already in flight.
+    // The stage-record button already has a held native read. When it is a
+    // proven original Work visit, use the same exact child/return as a Result.
+    if (!record.historical && record.recordedStatus === 'completed' && original === reading &&
+      canRead && canOpenMemberResult && !entered.current && !deliveryReturn.current && !classicAnswerFlight.current &&
+      !document.hidden && shownRunSection.current === 'progress') {
+      const origin = readMemberWorkAudit(original, original);
+      if (origin) {
+        const sources = teamResearchDeliveries(original.run, original.messages).filter(row =>
+          row.memberId === memberId && row.round === record.round && row.taskId === record.taskId);
+        if (sources.length === 1) { openMemberDelivery(sources[0], 'progress', origin); return; }
+      }
+    }
     const open = () => { void invoke('teams.openResearchTask', { viewHandle: original.viewHandle, memberId, round: record.round, taskId: record.taskId }); };
     if (materialBeforeLeave.current) materialBeforeLeave.current(open); else open();
   };
@@ -533,6 +546,17 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     return () => { document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
   });
   const verifiedWorkResultReturn = () => onOpenWork&&workResultReturn.current?.current()===true;
+  const readMemberWorkAudit = (original:Data,next:Data):WorkMemberAudit|undefined => {
+    const work=workResultReturn.current, live=bridge.getState();
+    const resume=object(live.view).resumeRevision, request=live.state.requestedTaskRevision;
+    // The original result predicate includes the ordinary saved team, current
+    // private parent Work and exact completed summary; a catalogue row is not enough.
+    const summary=work?.current()?originalWorkTeamResult(original,work.source):undefined;
+    if(!work||!summary||next.run.generation!==original.run.generation||
+      next!==original&&originalWorkTeamResult(next,work.source)!==summary||!Number.isSafeInteger(resume)||resume<0||
+      !Number.isSafeInteger(request)||request<0)return;
+    return {source:work.source,rearm:work.rearm,summary,resume,request};
+  };
   useLayoutEffect(() => { if(workResultReturn.current&&!verifiedWorkResultReturn())retireWorkResult(); });
   const backFromRun = () => {
     if(!verifiedWorkResultReturn()){retireWorkResult();back();return;}
@@ -1118,38 +1142,44 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     }
     chooseRunSection(section, () => setResultSource(saved => saved === source ? null : saved));
   };
-  const openMemberDelivery=(item:TeamResearchDelivery, section: 'progress' | 'result' = 'result')=>{
+  const openMemberDelivery=(item:TeamResearchDelivery, section: 'progress' | 'result' = 'result', record?: WorkMemberAudit)=>{
     const original=currentReading.current;
     if(deliveryReturn.current||!canOpenMemberResult||!canRead||materialBusy||!ownsNativeWindow()||original?.run?.id!==item.team)return;
-    const sameSection = () => shownRunSection.current === section && !document.hidden;
-    leaveWithDrafts(()=>{
-      if(!sameSection()||!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle)return;
-      void invoke('teams.readRun',{runId:item.team},reply=>{
-        const next=reply.reading;
-        if(!sameSection()||!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle){release(next);return}
-        if(next?.kind!=='run'||!next.viewHandle||next.run?.id!==item.team){release(next);throw new Error('未读取到原协作，没有打开其他分工。')}
+    const documentEpoch=bridge.getDocumentEpoch(), sameSection = () => shownRunSection.current === section && !document.hidden;
+    const expiredRecord = () => {
+      if(record&&alive.current&&sameSection()&&ownsNativeWindow()&&bridge.getDocumentEpoch()===documentEpoch&&currentReading.current?.run?.id===item.team)
+        setNotice('原工作或这份答复已变化，没有打开其他分工。');
+    };
+    const open = () => {
+      if(!sameSection()||!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle||
+        record&&(backgrounded.current||entered.current||!!deliveryReturn.current||classicAnswerFlight.current||
+        bridge.getDocumentEpoch()!==documentEpoch||!bridge.getState().capabilities.commands.includes('teams.openResearchTask'))){
+        expiredRecord();return;
+      }
+      const inspect = (next:Data|null, refreshed:boolean) => {
+        if(!sameSection()||!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle){if(refreshed)release(next);return}
+        if(next?.kind!=='run'||!next.viewHandle||next.run?.id!==item.team){if(refreshed)release(next);throw new Error('未读取到原协作，没有打开其他分工。')}
         const deliveries=teamResearchDeliveries(next.run,next.messages,item.archivedVersion?'archived':'current');
         const same=deliveries.find(row=>row.key===item.key);
-        const work=workResultReturn.current;
-        const summary=section==='result'&&work?.current()?originalWorkTeamResult(original,work.source):undefined;
-        acceptReading(next);
-        if(!same){setNotice('这份成员原件已变化，请重新核对。没有打开另一阶段。');return}
+        if(!same){if(refreshed)acceptReading(next);setNotice('这份成员原件已变化，请重新核对。没有打开另一阶段。');return}
         const member=Number.isSafeInteger(next.run.generation)?{id:same.memberId,generation:next.run.generation,deliveryKey:same.key,round:same.round}:undefined;
         const ordinary = !same.archivedVersion && next.run.mode === 'collaborate' && next.run.definitionKind !== 'one_time' &&
           !next.run.nativeWorkProfileModels && !next.run.workPlan && !next.run.productionScope &&
           next.run.researchExecutionFormat === 'pocketworld.team-research-agent.v1' &&
           rows(next.run.members).every(slot => (slot.runner || 'model') === 'model' && (!slot.device || slot.device === 'phone'));
-        const live=bridge.getState(),resume=object(live.view).resumeRevision,request=live.state.requestedTaskRevision;
-        const audit=ordinary&&work&&summary&&member?.generation===original.run.generation&&
-          originalWorkTeamResult(next,work.source)===summary&&deliveries.filter(row=>row.key===same.key).length===1&&
-          Number.isSafeInteger(resume)&&resume>=0&&Number.isSafeInteger(request)&&request>=0
-          ? {source:work.source,rearm:work.rearm,summary,resume,request}:undefined;
+        const audit=ordinary&&(section==='result'||record)&&deliveries.filter(row=>row.key===same.key).length===1
+          ? readMemberWorkAudit(original,next):undefined;
+        if(refreshed)acceptReading(next);
+        if(record&&(!audit||audit.source!==record.source||audit.rearm!==record.rearm||audit.summary!==record.summary||
+          audit.resume!==record.resume||audit.request!==record.request)){expiredRecord();return}
         const origin:MemberDeliveryReturn={team:item.team,key:item.key,section,taskId:item.taskId,sourceHandle:next.viewHandle,
-          scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,ordinary,documentEpoch:bridge.getDocumentEpoch(),member,work:audit};
+          scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,ordinary,documentEpoch:bridge.getDocumentEpoch(),
+          member,work:audit,...(record?{record:true as const}:{})};
         if (section === 'progress') setResultSource(saved=>saved?.runId===item.team&&saved.member?.deliveryKey===same.key?saved:null);
         else if(same.archivedVersion)setShownArchives(old=>({...old,[item.team]:true}));
         else rememberSourcesOpened(item.team);
         deliveryReturn.current=origin;
+        if(record){setError('');setNotice('');}
         setOpeningMemberResult(true);
         void run('teams.openResearchTask',{viewHandle:next.viewHandle,memberId:same.memberId,round:same.round,taskId:same.taskId,outputFingerprint:same.hash,
           ...(same.archivedVersion?{archivedVersion:same.archivedVersion}:{})}).then(value=>{
@@ -1166,8 +1196,15 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           if(alive.current&&!backgrounded.current&&ownsNativeWindow()&&currentReading.current?.run?.id===item.team)
             setError(failure instanceof Error?failure.message:'原答复暂时无法打开。');
         }).finally(() => { if (alive.current) setOpeningMemberResult(false); });
-      });
-    });
+      };
+      // Native open will still verify the exact child run/epoch/fingerprint.
+      // The stage record doesn't need an extra Team read on the way in.
+      if(record)inspect(original,false);
+      else void invoke('teams.readRun',{runId:item.team},reply=>inspect(reply.reading,true));
+    };
+    if(!record)leaveWithDrafts(open);
+    else if(materialBeforeLeave.current)materialBeforeLeave.current(open);
+    else open();
   };
   useLayoutEffect(()=>{
     const origin=deliveryReturn.current;if(!origin)return;
@@ -1184,18 +1221,30 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const area=root.current?.querySelector<HTMLElement>(fromProgress ? '[data-team-section="members"]' : '.pw-team-result');
     const selector = fromProgress ? '[data-team-progress-delivery]' : '[data-team-delivery]';
     const sameGeneration = !!origin.member && current.generation === origin.member.generation;
-    const exact = Array.from(area?.querySelectorAll<HTMLButtonElement>(selector)||[])
-      .find(row=>(fromProgress?row.dataset.teamProgressDelivery:row.dataset.teamDelivery)===origin.key&&!row.disabled&&!row.closest('[hidden],[inert]'));
+    const visible = (row:HTMLButtonElement) => !row.disabled&&!row.closest('[hidden],[inert]');
+    let exact:HTMLButtonElement|undefined;
+    if(origin.record){
+      const member=origin.member;
+      if(member&&sameGeneration&&teamResearchDeliveries(current,reading.messages).filter(row=>row.key===origin.key).length===1){
+        const records=Array.from(area?.querySelectorAll<HTMLButtonElement>(
+          `[data-team-member-id="${CSS.escape(member.id)}"] [data-team-source-task="${CSS.escape(origin.taskId)}"][data-team-record-round="${member.round}"]`)||[]).filter(visible);
+        if(records.length===1)exact=records[0];
+      }
+    }else exact=Array.from(area?.querySelectorAll<HTMLButtonElement>(selector)||[])
+      .find(row=>(fromProgress?row.dataset.teamProgressDelivery:row.dataset.teamDelivery)===origin.key&&visible(row));
     const stage = fromProgress && origin.member && sameGeneration ? memberStage(origin.member) : undefined;
     const audit=origin.work,returnHandle=audit?.returnHandle;
-    if(!fromProgress&&exact&&sameGeneration&&audit&&returnHandle&&returnHandle===reading.viewHandle&&!workResultReturn.current){
+    if((!fromProgress||origin.record)&&exact&&sameGeneration&&audit&&returnHandle&&returnHandle===reading.viewHandle&&!workResultReturn.current){
       const verified=()=>{
         const shown=currentReading.current;
-        return alive.current&&!backgrounded.current&&shownRunSection.current==='result'&&shown?.viewHandle===returnHandle&&
+        return alive.current&&!backgrounded.current&&shownRunSection.current===origin.section&&shown?.viewHandle===returnHandle&&
           memberAuditWindow(origin,bridge.getState())==='returned'&&shown?.run?.generation===origin.member?.generation&&
           originalWorkTeamResult(shown,audit.source)===audit.summary;
       };
-      if(verified())workResultReturn.current=audit.rearm(verified);
+      if(verified()){
+        workResultReturn.current=audit.rearm(verified);
+        if(origin.record&&workResultReturn.current)setNotice('已返回原成员阶段，可返回原工作。');
+      }
     }
     if (!fromProgress) setResultSource(exact&&origin.member&&Number.isSafeInteger(current.generation)
       ? {runId:origin.team,key:origin.key,scroll:origin.scroll,member:{...origin.member,generation:current.generation}} : null);
@@ -1477,7 +1526,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                 {(model || researchMember) && <p className="pw-muted">计划模型：{model || '沿用原团队主模型'}</p>}
                 {researchMember && !observed && <p className="pw-muted">没有可核对的答复回执，实际模型与执行位置未确认。</p>}</AccordionItem></Accordion>
                 {researchRecords.length > 0 && <section aria-label="原研究记录"><h4>原研究记录</h4><p className="pw-field-hint">查看完整产出、待处理事项和执行过程；打开不会继续工作，最新状态以原任务为准。</p>
-                  <div className="pw-form-actions">{researchRecords.filter(record => !record.historical).map(record => <Button key={`${record.round}:${record.taskId}`} data-team-source-task={record.taskId} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段记录{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div>
+                  <div className="pw-form-actions">{researchRecords.filter(record => !record.historical).map(record => <Button key={`${record.round}:${record.taskId}`} data-team-source-task={record.taskId} data-team-record-round={record.round} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段记录{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div>
                   {researchRecords.some(record => record.historical) && <Accordion variant="divided"><AccordionItem id="research-history" title="历史研究版本"><p className="pw-field-hint">这些版本已被后续输入替代，不代表当前成果，也不会转移给新成员。</p><div className="pw-form-actions">{researchRecords.filter(record => record.historical).map(record => <Button key={`${record.round}:${record.taskId}:${record.version}`} variant="ghost" trailingIcon={IconExternalLink} disabled={!workspaceActive || !reading?.viewHandle || busy || materialBusy || changed} onClick={() => openResearchTask(member.id, record)}>第 {record.round} 阶段 · 旧版本 {record.version}{record.recordedStatus ? ` · 记录时${status(record.recordedStatus)}` : ''}</Button>)}</div></AccordionItem></Accordion>}
                 </section>}
                 {member.text && <section className="pw-team-member-output" aria-labelledby={`team-output-${member.id}`}><h4 id={`team-output-${member.id}`}>{unversionedCopy ? '留存文字（未核对为本版交付）' : '已保存的成员产出'}</h4>{outputIdentity && <TeamMemberIdentity member={outputIdentity} name={teamMessageAuthor(outputMessage!, members)} detail={outputIdentity.name !== member.name ? `原名称 · ${member.id}` : undefined} size={24} />}<AIAnswer text={String(member.text)} /></section>}

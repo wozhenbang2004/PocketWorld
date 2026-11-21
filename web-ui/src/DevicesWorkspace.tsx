@@ -59,6 +59,18 @@ function matchesPinnedWorkspaceWork(state: Data, focus: SentPhoneGoalFocus | und
     !Object.prototype.hasOwnProperty.call(work, 'directPhone') &&
     (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => work.directWorkspace?.[key] === focus[key]);
 }
+function matchesPinnedPhonePreparation(state: Data, focus: SentPhoneGoalFocus | undefined) {
+  if (focus?.purpose !== 'partner_connection') return false;
+  const tasks = rows(state.tasks).filter(row => row.id === focus.taskId);
+  const task = tasks.length === 1 ? tasks[0] : undefined, raw = task?.raw, work = raw?.ownerDeviceWork;
+  return !!task && !unreadSource(task) && raw?.id === focus.taskId && raw.actorId === 'owner' && raw.spaceId === 'private' &&
+    raw.kind === 'assistant' && raw.executionMode === 'capabilities' && raw.conversationId === '' &&
+    raw.taskProjection === 'detail_window' && raw.taskCoreReadLimited === false && raw.contextWithdrawn !== true && !('origin' in raw) &&
+    task.status === 'paused' && raw.status === task.status && raw.runId === '' && raw.coordinatorEpoch === 0 && raw.cancelRequested === false &&
+    !('deviceSourceScope' in raw) && work?.format === 'pocketworld.owner-device-work.v1' && work.requestId === task.id &&
+    /^[a-f0-9]{64}$/.test(work.requestDigest || '') && !('directWorkspace' in work) &&
+    (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => work.directPhone?.[key] === focus[key]);
+}
 const retired = (peer: Data) => peer.revoked === true || peer.connection?.state === 'REVOKED';
 const peerPlatform = (peer: Data) => peer.windowsDesktop ? 'Windows' : peer.platform || '';
 type LastWindowsRead = { windowKey: string; receivedAt: number; metadata: Data };
@@ -668,7 +680,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     && it.certificateFingerprint===sourceFocus.certificateFingerprint && !retired(it)
     && (!peerPlace.current || placeRead.current && sameDeviceReadingPlace(peerPlace.current, local, it))):undefined;
   const pinnedWorkspace = matchesPinnedWorkspaceWork(state, sourceFocus);
-  const pinnedScopePlace = pinnedWorkspace && localReadCurrent && focusedPeer?.revoked === false &&
+  const pinnedPhonePreparation = matchesPinnedPhonePreparation(state, sourceFocus);
+  const pinnedScopePlace = (pinnedWorkspace || pinnedPhonePreparation) && localReadCurrent && focusedPeer?.revoked === false &&
     state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen && supported('devices.readSavedPeerScope')
     ? deviceReadingPlace(local, focusedPeer) : undefined;
   const readSavedPeerScope = (target: Data, done: (scope: Data | undefined) => void, current = () => true) => {
@@ -677,14 +690,15 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       deviceId: target.deviceId, instanceId: target.instanceId, fingerprint: target.certificateFingerprint,
     }, value => { if (current()) done(value.savedPeerScope); });
   };
-  const readPinnedWorkspaceScope = (done: (scope: Data | undefined) => void) => {
+  const readPinnedWorkScope = (done: (scope: Data | undefined) => void) => {
     if (!pinnedScopePlace || !focusedPeer) return;
     const documentEpoch = bridge.getDocumentEpoch();
+    const sameWork = pinnedPhonePreparation ? matchesPinnedPhonePreparation : matchesPinnedWorkspaceWork;
     readSavedPeerScope(focusedPeer, done, () => {
       const live = bridge.getState(), view = live.view as Data | undefined;
       return bridge.getDocumentEpoch() === documentEpoch && view?.section === 'devices' && !view.taskId &&
         view.resumeRevision === state.webWorkspaceResumeRevision && live.state.deviceWorkspaceRevision === localRead?.revision &&
-        matchesPinnedWorkspaceWork(live.state, sourceFocus);
+        sameWork(live.state, sourceFocus);
     });
   };
   const activeArchive = samePhoneGoalArchive(phoneArchive, peer, local) && (phoneArchive?.sourceTaskId||'')===(sourceFocus?.taskId||'')
@@ -1269,7 +1283,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {notice && <MotionFeedback identity={notice} className="pw-device-feedback" role="status">{notice}</MotionFeedback>}
         <WorkingStatus active={busy && !form && !(review?.kind==='history' && originalView.phoneGoalResult===true)}>正在读取原设备回执…</WorkingStatus>
         {sourceFocus && pinnedConnection && <section className="pw-device-section" aria-label="原工作指定的设备连接">
-          <WorkspaceSectionHeading title={focusedPeer?name(focusedPeer):'原工作的执行设备'} description={pinnedWorkspace?'这里显示本机的原连接记录，不代表电脑当前可用。':'这里只读取本机记录，不联系设备或启动任务。'} />
+          <WorkspaceSectionHeading title={focusedPeer?name(focusedPeer):'原工作的执行设备'} description={pinnedWorkspace?'这里显示本机的原连接记录，不代表电脑当前可用。':pinnedPhonePreparation?'只核对这份工作选定的手机，不会换设备。':'这里只读取本机记录，不联系设备或启动任务。'} />
           {!snapshot || !pinnedReadReady ? <p>等待读取本机当前保存的伙伴身份。</p> : !focusedPeer ? <p role="status">{peers.some(row=>row.deviceId===sourceFocus.deviceId)
             ? '原伙伴已撤销，或者证书或实例已变化，没有打开现在的设备。'
             : snapshot.hasMorePeers?'原身份不在本次本机读取范围。没有改选其他伙伴。':'本机没有匹配这份工作的原伙伴。没有改选其他设备。'}</p>
@@ -1277,10 +1291,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 {!deviceChannelWasConnected(focusedPeer) && <p>{connectionRecoveryLine(focusedPeer)}</p>}
                 {deviceChannelWasConnected(focusedPeer) && !pinnedScopePlace && <p>连接记录不代表现在可执行。回到这份原工作后再核对设备范围。</p>}
                 {pinnedScopePlace && <>
-                  <p className="pw-field-hint">核对授权回执只读本机，不联系电脑。读取电脑上的最新内容仍需核对原连接和范围。</p>
+                  {pinnedPhonePreparation ? <>
+                    <h3>这部手机能接手吗？</h3>
+                    <p className="pw-field-hint">配对或接通不等于能接手。核对本机回执，可区分对方曾允许提交目标，还是只允许调用指定工具。不会联系对方；这次能用什么仍在原工作里核对。</p>
+                  </> : <p className="pw-field-hint">核对授权回执只读本机，不联系电脑。读取电脑上的最新内容仍需核对原连接和范围。</p>}
                   <SavedPeerScopeReceipt
                     key={JSON.stringify([sourceFocus.taskId, pinnedScopePlace, focusedPeer.authorizationEpoch, state.webWorkspaceResumeRevision, localRead?.revision])}
-                    here={local} peer={focusedPeer} busy={busy} read={readPinnedWorkspaceScope} />
+                    here={local} peer={focusedPeer} busy={busy} read={readPinnedWorkScope} />
                 </>}
                 {!deviceChannelWasConnected(focusedPeer) && available(focusedPeer.actions?.connect) && supported('devices.reviewAction') &&
                   <Button variant="secondary" disabled={busy} onClick={() => reviewPeerConnection(focusedPeer)}>核对并连接这台原设备</Button>}</>}
