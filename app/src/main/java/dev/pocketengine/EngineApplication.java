@@ -4219,6 +4219,81 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             dev.pocketengine.runtime.models.InferenceRouteContinuity.requireCurrent(capturedInference,settings.currentForCaptured(capturedInference),original);return capturedInference;
         })),()->features.checkTeamResearchParentInputs(id,run,epoch,original));
     }
+    private JSONObject approveOriginalOwnerWorkText(JSONObject reviewed,String run,int epoch,String approvalId)throws Exception {
+        String id=reviewed.getString("id"),conversation=reviewed.getString("nativeOwnerWorkTextConversation");
+        JSONObject model=tasks.ownerWorkExecutionModel(id,run,epoch);
+        String kind=model.getJSONObject("target").getString("kind");
+        if(!kind.matches("api|legacy_current"))throw new SecurityException("未确认原工作的本机直连模型绑定；没有保存决定或调用模型");
+        ModelConfig selected=captureOwnerWorkModel(model);
+        if(selected.usesAccount())throw new SecurityException("未确认原工作的本机直连模型绑定；没有续接账号或保存决定");
+        var permissions=settings.permissionPolicySnapshot(conversation);
+        long policyRevision=permissions.getLong("revision");
+        var policy=new dev.pocketengine.features.capabilities.CapabilityApprovalPolicy(permissions.getJSONObject("effective"));
+        if(policy.decisionFor("attachments_create_text",true)!=dev.pocketengine.features.capabilities.CapabilityApprovalPolicy.Decision.NATIVE)
+            throw new SecurityException("原本机文字确认规则已变化；未授权或保存文件");
+        if(!(features.module("attachments") instanceof dev.pocketengine.features.attachments.AttachmentsModule attachments))
+            throw new IllegalStateException("原本机附件库不可用；没有保存决定");
+        synchronized(assistantAdmissions){
+            RunControl original=new RunControl();
+            if(capabilityControls.putIfAbsent(id,original)!=null)throw new IllegalStateException("原工作尚在收尾，请在本次工作中重新核对");
+            var admission=new dev.pocketengine.core.CapabilityAttemptAdmission(original,
+                    ()->closeUnstartedWorkText(id,run,epoch,approvalId,original),
+                    ()->{capabilityControls.remove(id,original);publishWorkTextOnly(id);});
+            TaskStore.OwnerWorkTextApproval claim=null;
+            try{
+                if(settings.permissionPolicyRevision()!=policyRevision)throw new SecurityException("原确认规则已变化，未保存决定");
+                claim=tasks.claimOwnerWorkTextApproval(id,run,epoch,approvalId,model,original);
+                final TaskStore.OwnerWorkTextApproval exact=claim;
+                admission.submit(capabilityWorkers,()->{},()->runApprovedWorkText(exact,attachments,selected,original,policyRevision));
+            }catch(Exception failure){
+                admission.abandon();
+                if(claim==null)throw failure;
+                return json("id",id,"runId",run,"coordinatorEpoch",epoch,"approvalDecisionSaved",true,"continuationScheduled",false,
+                        "message","确认已保存，未确认开始本机保存。请在原工作核对，不要再次生成。");
+            }
+            publishWorkTextOnly(id);
+            return json("id",id,"runId",run,"coordinatorEpoch",epoch,"approvalDecisionSaved",true,"continuationScheduled",true,
+                    "message","已确认保存这份本机 TXT，等待实际文件回执；没有继续其他步骤。");
+        }
+    }
+
+    /** Just publish the original Work's ordinary projection. No report/model/learning scheduler. */
+    private void publishWorkTextOnly(String id){
+        try{JSONObject task=tasks.getForUi(id,false);if(task!=null)publish(json("type","task","task",task));}
+        catch(Exception unavailable){error("暂未核对到本机文字保存状态，请重新打开原工作。");}
+    }
+    private void closeUnstartedWorkText(String id,String run,int epoch,String approval,RunControl original){
+        if(!original.matchesHostRun(id,run,epoch))return;
+        try{
+            if(original.isCancelled()&&tasks.endCancelledPreparingCapabilityAttempt(id,run,original,"已停止后续本机保存；已有原回执保留，不重试。"))return;
+            tasks.approvedCapabilityContinuationUnavailable(id,run,epoch,approval,original);
+        }catch(Exception unavailable){RuntimeDiagnostics.event("run_settlement","unconfirmed","OWNER_WORK_TEXT_ADMISSION_UNCONFIRMED",original,unavailable);}
+    }
+    private void runApprovedWorkText(TaskStore.OwnerWorkTextApproval exact,dev.pocketengine.features.attachments.AttachmentsModule attachments,
+                                     ModelConfig selected,RunControl original,long policyRevision){
+        boolean settling=false;String id=exact.taskId,run=exact.runId;int epoch=exact.epoch;
+        try{
+            RunOutcome outcome;
+            var binding=new dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding(id,run,epoch,original,true,"");
+            var authority=new dev.pocketengine.features.capabilities.TaskStoreCapabilityAuthority(tasks,binding,features::emitApproval);
+            // Only the existing native attachment leaf is installed; no model or extension loop.
+            try(AutoCloseable scope=original.retainAuthorityCheck(()->{
+                if(capabilityControls.get(id)!=original||settings.permissionPolicyRevision()!=policyRevision||features.module("attachments")!=attachments)
+                    throw new SecurityException("原文字保存的本机范围已变化");
+                exact.requireCurrent(original);
+            });CapabilityPort port=new dev.pocketengine.features.capabilities.ModelCapabilityAdapters(binding,authority,null,null,null,attachments,null)){
+                var runner=new dev.pocketengine.runtime.AgentRunner(null,port);
+                outcome=runner.runApprovedOwnerWorkText(exact,selected,original,event->{},tasks.journal(id,run,epoch,original));
+                settling=true;
+            }
+            tasks.finishCapabilityAttempt(id,run,epoch,original,outcome);
+        }catch(Exception failure){
+            if(!settling)closeUnstartedWorkText(id,run,epoch,exact.approvalId,original);
+            else try{tasks.markCapabilitySettlementUnconfirmed(id,run,epoch,original);}
+                catch(Exception unavailable){RuntimeDiagnostics.event("run_settlement","unconfirmed","OWNER_WORK_TEXT_RESULT_UNCONFIRMED",original,unavailable);}
+        }
+    }
+
     /** Native immutable decision identity, carried through queue pickup, never selected again by taskId. */
     private static final class CapabilityApprovalContinuation {
         final String taskId,runId,approvalId;final int epoch;final boolean attachmentCall;final String planPin;final java.util.function.BooleanSupplier ownerCurrent;
@@ -4738,7 +4813,8 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 String id=input.getString("taskId");
                 if(memoryConsolidationTask(id))throw new SecurityException("记忆候选只在原生审核页明确采用或拒绝，不走通用工具审批");
                 if(features.ownsMediaTask(id))throw new SecurityException("请回媒体原任务核对并明确提交，不由通用审批重新启动媒体请求");
-                JSONObject reviewed=tasks.approvalContextSnapshot(id);if(reviewed==null)throw new SecurityException("原审批任务不存在");
+                boolean approved=input.getBoolean("approved");String approvalId=input.getString("approvalId");
+                JSONObject reviewed=tasks.approvalContextSnapshot(id,approved?approvalId:null);if(reviewed==null)throw new SecurityException("原审批任务不存在");
                 boolean group=groupOrigin(reviewed);if(group){groupOwnerWorkflows.check();reviewedGroupAttempt(reviewed,input);}
                 if(teamWriteOrigin(reviewed))tasks.checkTeamOwnerAttempt(input);
                 // Web/native reviewed callers carry both fields. Legacy native callers capture
@@ -4749,12 +4825,13 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                     if(!(input.opt("runId") instanceof String))throw new SecurityException("原审批执行身份无效");
                     reviewedRun=input.getString("runId");reviewedEpoch=dev.pocketengine.store.TaskExecutionScope.exactInt(input,"epoch",1,Integer.MAX_VALUE);
                 }else{reviewedRun=reviewed.getString("runId");reviewedEpoch=reviewed.getInt("coordinatorEpoch");}
-                boolean approved=input.getBoolean("approved");String approvalId=input.getString("approvalId");
                 boolean planDecision=false;JSONArray originalApprovals=reviewed.optJSONArray("approvals");for(int i=0;originalApprovals!=null&&i<originalApprovals.length();i++){JSONObject row=originalApprovals.getJSONObject(i);if(approvalId.equals(row.optString("id")))planDecision=dev.pocketengine.core.ExecutionPlanning.REVIEW.equals(row.optString("tool"));}
                 if(!planDecision&&(input.has("planRevision")||input.has("planArtifactRef")||input.has("planHash")))throw new SecurityException("计划确认字段不属于此原审批");
                 JSONObject browserDecision=planDecision||browserTaskHost==null?null:browserTaskHost.decideIfWaiting(id,approvalId,approved,reviewedRun,reviewedEpoch);
                 if(browserDecision!=null){pushTask(id);return browserDecision;}
                 RunControl originalPhone="phone".equals(reviewed.optString("kind"))?control(id):null;
+                if(approved&&!planDecision&&reviewed.has("nativeOwnerWorkTextConversation"))
+                    return approveOriginalOwnerWorkText(reviewed,reviewedRun,reviewedEpoch,approvalId);
                 JSONObject task=planDecision?tasks.decideExecutionPlanApproval(id,approvalId,approved,reviewedRun,reviewedEpoch,dev.pocketengine.store.TaskExecutionScope.exactLong(input,"expectedScopeRevision",1,Long.MAX_VALUE),dev.pocketengine.store.TaskExecutionScope.exactLong(input,"planRevision",1,Long.MAX_VALUE),input.getString("planArtifactRef"),input.getString("planHash"),originalOwnerCurrent):tasks.decideCapabilityApproval(id,approvalId,approved,reviewedRun,reviewedEpoch);
                 CapabilityApprovalContinuation continuation=approved&&!group?new CapabilityApprovalContinuation(task,approvalId,planDecision?originalOwnerCurrent:null):null;
                 pushTask(id);

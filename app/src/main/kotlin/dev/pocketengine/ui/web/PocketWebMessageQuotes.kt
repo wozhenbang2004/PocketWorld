@@ -43,7 +43,8 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
         const val OPEN_DOCUMENT_COPY = "messageQuote.document.open"
         const val RETAIN_DOCUMENT_COPY = "messageQuote.document.retain"
         const val CHECK_DOCUMENT_COPY = "messageQuote.document.check"
-        val DOCUMENT_COPY_COMMANDS = setOf(OPEN_DOCUMENT_COPY, RETAIN_DOCUMENT_COPY, CHECK_DOCUMENT_COPY)
+        const val OPEN_SAVED_DOCUMENT = "messageQuote.document.openSaved"
+        val DOCUMENT_COPY_COMMANDS = setOf(OPEN_DOCUMENT_COPY, RETAIN_DOCUMENT_COPY, CHECK_DOCUMENT_COPY, OPEN_SAVED_DOCUMENT)
         val COMMANDS = setOf("messageQuote.open", "messageQuote.stage", "messageQuote.close", "composer.source.remove", "messageQuote.pin", READ_DRAFT_SOURCE,
             "messageShelf.list", "messageShelf.read", "messageShelf.remove", "messageShelf.close", "messageShelf.dismiss", "messageShelf.stage") + DOCUMENT_COPY_COMMANDS
     }
@@ -259,6 +260,29 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
             receipt.opt("status") in setOf("accepted", "consumed")
     }
 
+    private fun exactDocumentCopy(original: Window, locator: JSONObject): Boolean = runCatching {
+        val doc = checkNotNull(original.documentCopy)
+        check(window === original && doc.visible() && controller.conversationSourceRevision == doc.conversationRevision &&
+            controller.state.memoryRefreshRevision == doc.memoryRevision && !controller.composerSaving)
+        checkCurrent(original)
+        val message = controller.state.messages.single { it.id == original.messageId }
+        documentMessage(message, locator, locator.getString("conversationId")) && message.role == doc.role
+    }.getOrDefault(false)
+
+    /** Transfer only the positively retained disk pin, never the quote source or an editor handle. */
+    fun takeSavedDocument(args: JSONObject): Pin {
+        require(args.keys().asSequence().toSet() == setOf("windowId"))
+        val original = window?.takeIf { it.id == text(args, "windowId") && it.documentCopy != null }
+            ?: error("原文档保留回执已关闭")
+        val attempt = documentAttempt?.takeIf { it.original === original }
+            ?: error("尚未核对这份已保留的草稿")
+        val receipt = attempt.receipt
+        check(pending == null && receipt != null && receipt.opt("windowId") == original.id &&
+            receipt.opt("status") in setOf(State.SAVED.name, State.VERIFIED.name) &&
+            exactDocumentCopy(original, JSONObject(original.locator))) { "原文档保留回执已变化，没有打开其他草稿" }
+        return checkNotNull(attempt.pin).also { clear() }
+    }
+
     /** A document copy uses only this explicit private review. No composer reference, task or model is started. */
     private fun retainDocument(args: JSONObject, checking: Boolean, done: (JSONObject?, String?) -> Unit) {
         require(args.keys().asSequence().toSet() == if (checking) setOf("windowId") else setOf("windowId", "offset", "chars"))
@@ -267,13 +291,7 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
         val doc = checkNotNull(original.documentCopy)
         val locator = JSONObject(original.locator)
         val conversation = locator.getString("conversationId")
-        fun exact(): Boolean = runCatching {
-            check(window === original && doc.visible() && controller.conversationSourceRevision == doc.conversationRevision &&
-                controller.state.memoryRefreshRevision == doc.memoryRevision && !controller.composerSaving)
-            checkCurrent(original)
-            val message = controller.state.messages.single { it.id == original.messageId }
-            documentMessage(message, locator, conversation) && message.role == doc.role
-        }.getOrDefault(false)
+        fun exact(): Boolean = exactDocumentCopy(original, locator)
         val owner = PocketWebStandaloneDraftFence.window(::exact)
         check(owner.current()) { "原消息或窗口已变化，没有保留其他文字" }
         fun unknown() = JSONObject().put("windowId", original.id).put("status", State.UNKNOWN.name)

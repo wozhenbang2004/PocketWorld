@@ -1402,6 +1402,12 @@ public final class LocalModule implements EngineModule {
      * The typed reviewed bytes live only until this one native owner confirmation or dismissal. */
     public synchronized dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(
             dev.pocketengine.features.local.project.ProjectFileDraft file, ProjectRuntime.LiveGate window)throws Exception{
+        return reviewOwnerPythonForOwner(file,false,window);
+    }
+    /** The program review reads only the parent of the already admitted editor path.
+     * It does not use an old directory page after saving or take a folder path from Web. */
+    public synchronized dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(
+            dev.pocketengine.features.local.project.ProjectFileDraft file,boolean directory,ProjectRuntime.LiveGate window)throws Exception{
         var runtime=ownerPythonRuntime();
         window.check();
         if(file==null||!dev.pocketengine.features.local.runtime.OwnerPythonRun.supportsPath(file.path))
@@ -1415,6 +1421,8 @@ public final class LocalModule implements EngineModule {
         JSONObject scope=JsonFiles.read(record);
         if(!ordinaryPythonFileCheckout(scope,file.projectId,file.checkoutId))
             throw new SecurityException("这不是所选的普通私人开发副本");
+        // This only observes and freezes source. A writer fence would invalidate a running build's output observation.
+        if(directory)requireIdle(file.checkoutId);
         Object checkoutKey=pythonDirectoryKey(home.getParentFile()),homeKey=pythonDirectoryKey(home),filesKey=pythonDirectoryKey(files);
         var target=NativeCommandExecutor.within(files,file.path).toPath();
         List<Object> parentKeys=pythonParentKeys(files,file.path);
@@ -1424,7 +1432,9 @@ public final class LocalModule implements EngineModule {
         if(before.fileKey()==null||!pythonSingleLink(target))
             throw new SecurityException("原脚本不是副本内的独立普通文件");
         byte[] observed=ProjectFileBytes.read(target,before,dev.pocketengine.features.local.runtime.OwnerPythonRun.MAX_SOURCE);
+        Map<String,byte[]> siblings=new LinkedHashMap<>();
         try{
+            if(directory)capturePythonSiblings(files,file.path,before,observed.length,siblings,window);
             window.check();
             var after=Files.readAttributes(target,basic,noFollow);
             if(!target.equals(NativeCommandExecutor.within(files,file.path).toPath())||
@@ -1435,8 +1445,67 @@ public final class LocalModule implements EngineModule {
                     !record.equals(record.getCanonicalFile())||!Files.isRegularFile(record.toPath(),noFollow)||
                     !ProjectSources.canonical(scope).equals(ProjectSources.canonical(JsonFiles.read(record))))
                 throw new SecurityException("原文件读取期间身份变化，未采用替代脚本");
-            return runtime.reviewOwnerPython(file,observed,()->{window.check();if(closed)throw new SecurityException("原本机项目已关闭");});
-        }finally{Arrays.fill(observed,(byte)0);}
+            ProjectRuntime.LiveGate current=()->{window.check();if(closed)throw new SecurityException("原本机项目已关闭");};
+            return directory?runtime.reviewOwnerPythonDirectory(file,observed,siblings,current):runtime.reviewOwnerPython(file,observed,current);
+        }finally{Arrays.fill(observed,(byte)0);siblings.values().forEach(bytes->Arrays.fill(bytes,(byte)0));}
+    }
+    private static void capturePythonSiblings(File root,String entry,java.nio.file.attribute.BasicFileAttributes entryAttributes,
+            int entryBytes,Map<String,byte[]> captured,ProjectRuntime.LiveGate window)throws Exception{
+        File parent=NativeCommandExecutor.within(root,entry).getParentFile();
+        Object folderKey=pythonDirectoryKey(parent);
+        String prefix=entry.substring(0,entry.lastIndexOf('/')+1);
+        var inventory=pythonFolderInventory(root,parent,folderKey,prefix,entry,window);
+        if(!samePythonStamp(entryAttributes,inventory.get(entry)))
+            throw new SecurityException("原入口在目录核对前已变化");
+        int remaining=dev.pocketengine.features.local.runtime.OwnerPythonRun.MAX_SOURCE-entryBytes;
+        for(var file:inventory.entrySet()) {
+            if(entry.equals(file.getKey()))continue;
+            window.check();
+            if(!folderKey.equals(pythonDirectoryKey(parent)))throw new SecurityException("原 Python 目录位置已变化");
+            var attrs=file.getValue();
+            if(attrs.size()>remaining)throw new SecurityException("这次只带入合计不超过 256 KiB 的同目录 Python 源码");
+            var leaf=NativeCommandExecutor.within(root,file.getKey()).toPath();
+            byte[] bytes=ProjectFileBytes.read(leaf,attrs,remaining);captured.put(file.getKey(),bytes);
+            remaining-=bytes.length;
+        }
+        var finalInventory=pythonFolderInventory(root,parent,folderKey,prefix,entry,window);
+        if(!folderKey.equals(pythonDirectoryKey(parent))||!inventory.keySet().equals(finalInventory.keySet()))
+            throw new SecurityException("这次核对期间原目录已变化，没有运行");
+        for(var file:inventory.entrySet())if(!samePythonStamp(file.getValue(),finalInventory.get(file.getKey())))
+            throw new SecurityException("这次核对期间原源码已变化，没有运行");
+    }
+    private static Map<String,java.nio.file.attribute.BasicFileAttributes> pythonFolderInventory(
+            File root,File parent,Object folderKey,String prefix,String entry,ProjectRuntime.LiveGate window)throws Exception{
+        var found=new java.util.TreeMap<String,java.nio.file.attribute.BasicFileAttributes>();
+        if(!folderKey.equals(pythonDirectoryKey(parent)))throw new SecurityException("原 Python 目录位置已变化");
+        try(var dir=Files.newDirectoryStream(parent.toPath())){
+            int visited=0;
+            for(var child:dir){
+                if(++visited>64)throw new SecurityException("请选择只放少量文件的 Python 程序目录");
+                String leaf=child.getFileName().toString();
+                if(!leaf.endsWith(".py"))continue;
+                window.check();
+                String path=prefix+leaf;
+                if(!entry.equals(path)&&!dev.pocketengine.features.local.runtime.OwnerPythonRun.programCompanion(entry,path))
+                    throw new SecurityException("同目录程序只支持可直接导入的普通 .py 文件及一个原入口");
+                if(found.size()==dev.pocketengine.features.local.runtime.OwnerPythonRun.MAX_PROGRAM_FILES)
+                    throw new SecurityException("本机小程序只带入 2 至 8 个同目录 Python 源码文件");
+                if(!child.equals(NativeCommandExecutor.within(root,path).toPath()))
+                    throw new SecurityException("原 Python 文件位置已变化");
+                var attrs=Files.readAttributes(child,java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                if(!attrs.isRegularFile()||attrs.fileKey()==null||!pythonSingleLink(child))
+                    throw new SecurityException("原 Python 文件不是原目录内的独立普通文件");
+                found.put(path,attrs);
+            }
+        }
+        if(!folderKey.equals(pythonDirectoryKey(parent)))throw new SecurityException("原 Python 目录位置已变化");
+        if(found.size()<2||!found.containsKey(entry))
+            throw new SecurityException("没有核对到同目录的其他 Python 源码，可返回运行单个脚本");
+        return found;
+    }
+    private static boolean samePythonStamp(java.nio.file.attribute.BasicFileAttributes a,java.nio.file.attribute.BasicFileAttributes b){
+        return b!=null&&a.isRegularFile()&&b.isRegularFile()&&a.fileKey().equals(b.fileKey())&&a.size()==b.size()&&
+                a.lastModifiedTime().equals(b.lastModifiedTime());
     }
     private static List<Object> pythonParentKeys(File root,String relative)throws Exception{
         List<Object> keys=new ArrayList<>();File directory=root;String[] parts=relative.split("/",-1);

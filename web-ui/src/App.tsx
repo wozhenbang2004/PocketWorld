@@ -57,7 +57,7 @@ import {SetupWorkspace,type SetupDestination,type SetupView} from './SetupWorksp
 import {readSetup,type SetupCapability} from './setup-contract';
 import {ownerWindowAvailable} from './background-settings';
 import {backgroundConnection} from './forms-library/host-contracts';
-import {AttachmentWorkspace,matchesStandaloneDocumentBook,type FileDraftTarget,type FileResultTopic,type OriginalAttachmentChoice} from './AttachmentWorkspace';
+import {AttachmentWorkspace,matchesStandaloneDocumentBook,type FileDraftTarget,type FileResultTopic,type OriginalAttachmentChoice,type QuotedDraftArrival} from './AttachmentWorkspace';
 import type {SavedFileNote} from './AttachmentDocumentEditor';
 import RemoteInboxWorkspace,{type NotificationViewMemory} from './RemoteInboxWorkspace';
 import type {TeamAttentionLocator} from './NotificationTeamAttention';
@@ -88,7 +88,7 @@ import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
 import {ProjectConventionProvided} from './ProjectConventionProvided';
 import {ProvidedMemories} from './ProvidedMemories';
 import {originalAnswerMemoryMessage} from './memory-history';
-import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
+import {MessageQuote,type MessageQuoteTarget,type OpenedMessageDocumentDraft} from './MessageQuote';
 import {MessageOriginReader,type MessageOriginTarget} from './MessageOriginReader';
 import {PhoneReturnedReport,type PhoneReportTarget} from './PhoneReturnedReport';
 import {PhoneMessageReturn} from './PhoneMessageReturn';
@@ -778,7 +778,9 @@ export default function App(){
  const providedMemoryBack=useRef<(()=>boolean)|null>(null);
  const registerProvidedMemoryBack=useCallback((handler:(()=>boolean)|null)=>{providedMemoryBack.current=handler},[]);
  useEffect(()=>{setProvidedMemoryMessage(null)},[route,state.conversationId]);
- const [messageQuoteTarget,setMessageQuoteTarget]=useState<{target:MessageQuoteTarget;documentSource?:string}|null>(null);
+ const [messageQuoteTarget,setMessageQuoteTarget]=useState<{target:MessageQuoteTarget;documentSource?:string;
+  documentOrigin?:Pick<QuotedDraftArrival,'document'|'current'|'restoreFocus'>}|null>(null);
+ const [quotedDraftArrival,setQuotedDraftArrival]=useState<QuotedDraftArrival>();
  const [messageOriginTarget,setMessageOriginTarget]=useState<MessageOriginTarget|PhoneReportTarget|null>(null);
  const [workSupplementTarget,setWorkSupplementTarget]=useState<WorkSupplementTarget|null>(null);
  const workSupplementBeforeLeave=useRef<(WorkSupplementLeave&{target:WorkSupplementTarget;panel:HTMLElement})|null>(null);
@@ -4648,13 +4650,50 @@ export default function App(){
  };
 
  const openSource=(message:Message)=>{if(can('sources.open')&&message.id&&message.retainedSources)setSourceSelection({messageId:message.id});else setLocalStatus('这条回答没有可核对的原来源身份。');};
- useEffect(()=>{setMessageQuoteTarget(null)},[draftKey,draftEpoch,intent]);
+ useEffect(()=>{setMessageQuoteTarget(null);setQuotedDraftArrival(undefined)},[draftKey,draftEpoch,intent,route,state.conversationId]);
  const openQuote=(message:Message,documentCopy=false)=>{
-  if(intent==='chat'&&!state.chatSubmitting&&draftKey&&can(documentCopy?'messageQuote.document.open':'messageQuote.open')&&
-     message.quoteAvailable&&message.id&&Number.isSafeInteger(message.sourceRevision)&&Number(message.sourceRevision)>0)
-   setMessageQuoteTarget({target:{messageId:message.id,sourceRevision:Number(message.sourceRevision),key:draftKey,epoch:draftEpoch},
-    ...(documentCopy?{documentSource:message.content}:{})});
-  else setLocalStatus('原消息或草稿已变化，请重新核对原文。');
+  if(intent!=='chat'||state.chatSubmitting||!draftKey||!can(documentCopy?'messageQuote.document.open':'messageQuote.open')||
+     !message.quoteAvailable||!message.id||!Number.isSafeInteger(message.sourceRevision)||Number(message.sourceRevision)<1){
+   setLocalStatus('原消息或草稿已变化，请重新核对原文。');return;
+  }
+  const target={messageId:message.id,sourceRevision:Number(message.sourceRevision),key:draftKey,epoch:draftEpoch};
+  if(!documentCopy){setMessageQuoteTarget({target});return;}
+  const live=bridge.getState(),conversation=live.state.conversationId,doc=bridge.getDocumentEpoch();
+  const navigation=navigationWindow.current,resume=obj(live.view).resumeRevision,node=scroll.current;
+  const article=()=>Array.from(node?.querySelectorAll<HTMLElement>('article[data-message-id]')||[])
+   .find(row=>row.dataset.messageId===target.messageId);
+  const originalArticle=article();
+  const inset=node&&originalArticle?originalArticle.getBoundingClientRect().top-node.getBoundingClientRect().top:undefined;
+  const current=()=>{
+   const native=bridge.getState(),view=obj(native.view);
+   return route==='chat'&&!document.hidden&&bridge.getDocumentEpoch()===doc&&navigationWindow.current===navigation&&
+    native.host?.ready===true&&Number.isSafeInteger(resume)&&view.resumeRevision===resume&&view.section===null&&view.taskId===null&&
+    typeof conversation==='string'&&target.key===`conversation:${conversation}`&&native.state.conversationId===conversation&&
+    native.composer?.ready===true&&native.composer.key===target.key&&native.composer.epoch===target.epoch&&
+    !native.state.conversationReader&&!native.state.queuedInputsPage&&!native.state.chatAttachmentPickerOpen&&!native.state.filePath;
+  };
+  const restoreFocus=(event:Event)=>{
+   if(event.defaultPrevented||!current()||scroll.current!==node||!node?.isConnected)return;
+   const matching=asArray<Message>(bridge.getState().state.messages).filter(row=>row.id===target.messageId);
+   if(matching.length!==1||matching[0].sourceRevision!==target.sourceRevision)return;
+   const row=article();if(!row?.isConnected||row.closest('[inert],[aria-hidden="true"]'))return;
+   event.preventDefault();stopFollowing();
+   if(inset!==undefined)node.scrollTop+=row.getBoundingClientRect().top-node.getBoundingClientRect().top-inset;
+   (row.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')||row).focus({preventScroll:true});
+  };
+  setMessageQuoteTarget({target,documentSource:message.content,documentOrigin:{document:doc,current,restoreFocus}});
+ };
+ const openQuotedDocument=(receipt:OpenedMessageDocumentDraft)=>{
+  const original=messageQuoteTarget,origin=original?.documentOrigin;
+  if(!original||!origin?.current())return false;
+  const live=bridge.getState(),workspace=obj(live.state.attachmentWorkspace);
+  const matching=asArray<Message>(live.state.messages).filter(row=>row.id===original.target.messageId);
+  if(matching.length!==1||matching[0].sourceRevision!==original.target.sourceRevision||
+     workspace.open===true&&workspace.ready===true&&workspace.windowId!==receipt.windowId)return false;
+  stopFollowing();rememberChatPosition();
+  setQuotedDraftArrival({...receipt,...origin});
+  setMessageQuoteTarget(previous=>previous===original?null:previous);
+  return true;
  };
  const managedNodePending=(taskId:string):OriginalManagedNodePending[]=>
   review?.task?.id===taskId&&currentReviewWindow(reviewWindow.current)?asArray<Json>(review.unresolvedOperations).flatMap(row=>{
@@ -7039,7 +7078,12 @@ export default function App(){
     onClose={()=>closeOriginalReminder(shownOriginalReminder)} onOpenSavedRule={pin=>openSavedOriginalReminder(shownOriginalReminder,pin)}
     registerBack={registerOriginalReminderBack}/>}
   {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
-  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} returnToDeliveredFiles={deliveredFileCurrent&&deliveredFileOwnsFrame} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined}
+  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={event=>{
+   restoreTaskFileFocus(event);
+   if(quotedDraftArrival&&bridge.getState().state.attachmentWorkspace?.open!==true){
+    quotedDraftArrival.restoreFocus(event);setQuotedDraftArrival(previous=>previous===quotedDraftArrival?undefined:previous);
+   }
+  }} returnToDeliveredFiles={deliveredFileCurrent&&deliveredFileOwnsFrame} quotedDraftArrival={quotedDraftArrival} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined}
    canReturnToOpenWork={continueFromWorkFiles}
    draftTarget={fileDraftTarget} resultTopic={fileResultTopic} keepResultReadingDraft={keepResultReadingDraft} onStageFile={can('composer.object.add')?stageFileInDraft:undefined} onOpenDraft={showFileDraft} onUseResult={useFileInOriginalTopic}
    onChooseResultAttachment={resultAttachmentAvailable?chooseFileInOriginalTopic:liveChatResultAttachmentAvailable?chooseLiveChatResultAttachment:
@@ -7173,7 +7217,8 @@ export default function App(){
   onRefresh={can('phone.notice.refresh')?()=>{void bridge.command('phone.notice.refresh',{noticeHandle:phoneNotification.token}).catch(()=>{})}:undefined}/>}
  {messageOriginTarget&&('phoneResult' in messageOriginTarget?<PhoneReturnedReport key={messageOriginTarget.phoneResult.deliveryId} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>:<MessageOriginReader key={`${messageOriginTarget.conversationId}:${messageOriginTarget.messageId}`} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>)}
  {messageQuoteTarget&&<MessageQuote key={`${messageQuoteTarget.target.key}:${messageQuoteTarget.target.epoch}:${messageQuoteTarget.target.messageId}:${messageQuoteTarget.documentSource!==undefined?'document':'quote'}`}
-   target={messageQuoteTarget.target} documentSource={messageQuoteTarget.documentSource} onClose={()=>setMessageQuoteTarget(null)}/>}
+   target={messageQuoteTarget.target} documentSource={messageQuoteTarget.documentSource}
+   onOpenSavedDocument={messageQuoteTarget.documentOrigin?openQuotedDocument:undefined} onClose={()=>setMessageQuoteTarget(null)}/>}
  {projectConventionMessage&&<ProjectConventionProvided key={projectConventionMessage} messageId={projectConventionMessage} onClose={()=>setProjectConventionMessage(null)}/>}
  {providedMemoryMessage&&<ProvidedMemories key={providedMemoryMessage} messageId={providedMemoryMessage} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setProvidedMemoryMessage(null)} onManage={original=>{setProvidedMemoryMessage(null);openPersonalMemory(original?{view:'memory',id:original.id,candidate:false,expectedRevision:original.revision}:{view:'memories'})}} registerBack={registerProvidedMemoryBack}/>}
  {sourceSelection&&<AnswerSources key={sourceSelection.messageId||sourceSelection.taskId} target={sourceSelection} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setSourceSelection(null)}/>}

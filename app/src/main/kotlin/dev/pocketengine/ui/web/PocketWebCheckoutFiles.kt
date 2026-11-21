@@ -143,7 +143,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         }
         val file = opened(original, args)
         if (action == PYTHON_REVIEW) {
-            val keys = args.keys().asSequence().toSet()
+            val directory = args.has("sourceMode")
+            if (directory) require(args.opt("sourceMode") == "directory") { "请明确选择同目录 Python 程序" }
+            val keys = args.keys().asSequence().toSet() - "sourceMode"
             val common = setOf("viewHandle", "filesHandle", "fileHandle")
             val fromSave = keys == common + "saveId"
             require(fromSave || keys == common + "readRevision") { "请核对这次原文件读取或保存，不能混用" }
@@ -177,7 +179,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     view.put("reviewHandle", offer.id)
                 } finally { if (!kept) reviewed.close() }
             }, { reviewed -> reviewed.close() }) {
-                controller.projectDevelopmentForWeb().reviewOwnerPythonForOwner(draft, java.util.function.BooleanSupplier { stillCurrent() })
+                controller.projectDevelopmentForWeb().reviewOwnerPythonForOwner(draft, directory, java.util.function.BooleanSupplier { stillCurrent() })
             }
             return
         }

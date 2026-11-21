@@ -220,6 +220,10 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             LiveGate current)throws Exception {
         return OwnerPythonRun.review(this,draft,observed,current);
     }
+    public OwnerPythonRun.Review reviewOwnerPythonDirectory(dev.pocketengine.features.local.project.ProjectFileDraft draft,byte[] observed,
+            Map<String,byte[]> siblings,LiveGate current)throws Exception {
+        return OwnerPythonRun.reviewDirectory(this,draft,observed,siblings,current);
+    }
     public void requireReactTypeScriptNodeForHost()throws Exception {
         AndroidRuntimePreparation profile=androidRuntime;
         if(profile==null||!jobs.available())throw new IllegalStateException("请先核对这部手机原托管开发工具");
@@ -242,8 +246,8 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             return new OwnerPythonRun.Tool(generation,profile.ownerPythonInterpreterHash(generation));
         }
     }
-    OwnerPythonRun.Stage materializeOwnerPython(String id,String path,String sha,byte[] bytes)throws Exception {
-        return OwnerPythonRun.materialize(privateRuntime,id,path,sha,bytes);
+    OwnerPythonRun.Stage materializeOwnerPython(OwnerPythonRun.Source source,Map<String,byte[]> bytes)throws Exception {
+        return OwnerPythonRun.materialize(privateRuntime,source,bytes);
     }
     /** No generic dispatch, shell, model parameters, or interactive handles. Transfers the staging lease once. */
     RuntimeReceipt startOwnerPython(RuntimeInvocation invocation,OwnerPythonRun.Tool tool,OwnerPythonRun.Stage stage)throws Exception {

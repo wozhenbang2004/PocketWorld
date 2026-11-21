@@ -5,21 +5,25 @@ import { confirmedQuoteStage, messageQuoteRange, selectedQuoteRange } from './me
 import { originalPhoneReplyText } from './phone-reply-text';
 
 export type MessageQuoteTarget = { messageId: string; sourceRevision: number; key: string; epoch: number; prior?: { reader: number; request: string; revision: number; offset: number; chars: number } };
+export type OpenedMessageDocumentDraft = { library: string; windowId: string };
 type QuoteWindow = { windowId: string; text: string; maxChars: number; draftRevision: number; shelfEligible?: boolean };
 type DocumentReceipt = { name: string; savedAt: number };
+const token=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
 const sourceFingerprint = async (text: string) => 'sha256:' +
   Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))),
     n => n.toString(16).padStart(2,'0')).join('');
 
 /** Selection only; the original locator and draft transaction remain in the native controller. */
-export function MessageQuote({ target, onClose, onStaged, phoneReceipt, documentSource }: {
+export function MessageQuote({ target, onClose, onStaged, phoneReceipt, documentSource, onOpenSavedDocument }: {
   target: MessageQuoteTarget; onClose: () => void; onStaged?: () => void; phoneReceipt?: 'full'|'excerpt'; documentSource?: string;
+  onOpenSavedDocument?: (visit:OpenedMessageDocumentDraft)=>boolean;
 }) {
   const documentCopy = documentSource !== undefined && !phoneReceipt && !target.prior;
   const [view, setView] = useState<QuoteWindow | null>(null), [selection, setSelection] = useState({ start: 0, end: 0 });
   const [busy, setBusy] = useState(true), [attempted, setAttempted] = useState(false), [error, setError] = useState('');
   const [staged, setStaged] = useState(false);
   const [documentAttempt, setDocumentAttempt] = useState<'unknown'|'quota'|DocumentReceipt>();
+  const [documentOpenUnconfirmed,setDocumentOpenUnconfirmed]=useState(false);
   const copyingDocument = useRef(false);
   const [pinRange, setPinRange] = useState<{offset:number;chars:number}|null>(null), [label, setLabel] = useState(''), [pinNotice, setPinNotice] = useState('');
   const savingPin = useRef(false), remembered = useRef<{start:number;end:number}|null>(null);
@@ -116,6 +120,25 @@ export function MessageQuote({ target, onClose, onStaged, phoneReceipt, document
     }).finally(()=>{copyingDocument.current=false;if(alive.current&&generation.current===serial)setBusy(false)});
   };
   const dismiss = () => { if ((!submitted.current || !busy) && !copyingDocument.current) onClose(); };
+  const openSavedDocument=()=>{
+    if(!documentCopy||typeof documentAttempt!=='object'||!view||!windowId.current||busy||copyingDocument.current||
+       documentOpenUnconfirmed||!onOpenSavedDocument)return;
+    const native=bridge.getState();
+    if(!stillInDraft()||native.composer?.revision!==view.draftRevision||native.state.attachmentWorkspace?.open){
+      setError('原对话已变化。草稿仍保留在本机，没有打开其他草稿。');return;
+    }
+    const id=windowId.current,serial=generation.current;
+    copyingDocument.current=true;setBusy(true);setError('');
+    void bridge.command('messageQuote.document.openSaved',{windowId:id}).then(value=>{
+      if(!alive.current||generation.current!==serial)return;
+      if(!stillInDraft()||value?.opened!==true||value.quoteWindowId!==id||!token(value.windowId)||!token(value.library)||
+         !onOpenSavedDocument({windowId:value.windowId,library:value.library}))throw new Error();
+    }).catch(()=>{
+      if(alive.current&&generation.current===serial){
+        setDocumentOpenUnconfirmed(true);setError('草稿已保留，打开尚未核对。可返回原消息，或到「成果 → 本机文档草稿」核对。');
+      }
+    }).finally(()=>{copyingDocument.current=false;if(alive.current&&generation.current===serial)setBusy(false)});
+  };
   const finish = () => {
     if (!stillInDraft()) { setError('原草稿已切换；请选择原来的草稿继续。'); return; }
     onClose(); onStaged?.();
@@ -136,7 +159,7 @@ export function MessageQuote({ target, onClose, onStaged, phoneReceipt, document
   if(documentCopy){
     const saved=typeof documentAttempt==='object'?documentAttempt:undefined;
     return <SettingsDialog isOpen onClose={dismiss} closeLabel="返回原消息" title={saved?'已保留文档草稿':'选择文档文字'}>
-      {saved?<p role="status">「{saved.name}」已保留在「成果 → 本机文档草稿」（{new Date(saved.savedAt).toLocaleString()}）。可继续编辑，原消息和输入未改。</p>:<>
+      {saved?<p role="status">「{saved.name}」已保留在「成果 → 本机文档草稿」（{new Date(saved.savedAt).toLocaleString()}）。原消息和输入未改。</p>:<>
         <p>只把选中的原文保留为可编辑草稿，不生成文件，也不发送消息。</p>
         {view&&<TextAreaField ref={textArea} label="长按或拖动选择原文" value={sourceText} isReadOnly isDisabled={busy||!!documentAttempt} rows={6}/>}
         {view&&!documentAttempt&&<p className="pw-muted">{range?`已选择 ${range.chars} / 4000 个字符`:'请选择完整的一段原文，最多 4000 个字符。'}</p>}
@@ -147,6 +170,8 @@ export function MessageQuote({ target, onClose, onStaged, phoneReceipt, document
       <div className="pw-form-actions">
         {!documentAttempt&&<Button disabled={busy||!range} onPointerDown={event=>event.preventDefault()} onClick={()=>retainDocument()}>保留为文档草稿</Button>}
         {documentAttempt==='unknown'&&<Button variant="secondary" disabled={busy} onClick={()=>retainDocument(true)}>{busy?'正在核对…':'核对这份草稿'}</Button>}
+        {saved&&!documentOpenUnconfirmed&&onOpenSavedDocument&&bridge.getState().capabilities.commands.includes('messageQuote.document.openSaved')&&
+          <Button disabled={busy} onClick={openSavedDocument}>{busy?'正在打开…':'打开这份草稿'}</Button>}
         <Button variant="ghost" disabled={copyingDocument.current} onClick={dismiss}>返回原消息</Button>
       </div>
     </SettingsDialog>;

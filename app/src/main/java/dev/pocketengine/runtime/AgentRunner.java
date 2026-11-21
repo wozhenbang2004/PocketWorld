@@ -385,6 +385,57 @@ public final class AgentRunner {
         planning.finishRead(read,PlanningReadReceipt.unconfirmedReceipt(),ExecutionPlanning.ReadOutcome.UNCONFIRMED);
     }
 
+    /** Native-only single approved TXT. Never enters the model/approval-provider loop. */
+    public RunOutcome runApprovedOwnerWorkText(dev.pocketengine.store.TaskStore.OwnerWorkTextApproval selected,
+                                              ModelConfig config,RunControl control,EventSink sink,RunJournal journal){
+        String task=selected.taskId,name="attachments_create_text",prepared=null,returned=null;
+        JSONObject actual=null;boolean entered=false;int steps=0;
+        try{
+            if(capabilities==null||journal==null||!control.matchesHostRun(task,selected.runId,selected.epoch))
+                throw new SecurityException("原文字保存缺少准确执行记录");
+            JSONObject args=selected.take(control),saved=restore(journal);
+            steps=saved.getInt("steps");
+            if(steps<0||steps>=executionStepCeiling(config,journal))throw new SecurityException("原文字保存没有剩余操作额度");
+            if(!CompactionPlan.fingerprint(args).equals(CompactionPlan.fingerprint(safeJson(args,config,false))))
+                throw new SecurityException("原文字或名称已被脱敏，本次没有派发");
+            JSONArray messages=saved.getJSONArray("messages");
+            if(messages.length()==0||!capabilities.supports(name)||!capabilities.sideEffecting(name))
+                throw new SecurityException("原文字保存能力或检查点不可读取");
+            capabilities.validate(name,args);
+            if(capabilities.beforeTool(name,args,control)!=null)throw new SecurityException("原文字保存未经过当前本机范围");
+            long pause=control.pauseRevision();
+            prepared=begin(journal,name,args,config);steps++;
+            selected.requireOriginalSources(control);
+            control.check();
+            if(pause!=control.pauseRevision())throw new SecurityException("原文字保存已被暂停");
+            entered=true;
+            JSONObject submitted=capabilities.execute(name,new JSONObject(args.toString()).put("_hostOperationId",prepared),control);
+            if(submitted==null)throw new UncertainOperation();
+            actual=completeOperation(journal,prepared,submitted,config);returned=prepared;prepared=null;
+            JSONObject file=actual.optJSONObject("data");byte[] bytes=args.getString("content").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            StringBuilder sha=new StringBuilder(64);for(byte b:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))
+                sha.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+            boolean created=ToolOutcome.classify(actual).successful()&&"created".equals(actual.opt("status"))
+                    &&returned.equals(actual.opt("hostOperationId"))&&name.equals(actual.opt("tool"))&&file!=null&&file.optString("id").matches("[a-f0-9-]{36}")
+                    &&"text/plain".equals(file.opt("mimeType"))&&file.opt("size") instanceof Number
+                    &&file.getLong("size")==bytes.length&&sha.toString().equals(file.opt("sha256"));
+            if(!created)return finishQuietly(task,"awaiting_user","尚未核对到这份 TXT 的准确保存结果；请查看原工作记录，不会再生成。",
+                    actual,steps,config,sink);
+            JSONObject evidence=new JSONObject().put("operationId",returned).put("receiptRecorded",true).put("fileId",file.getString("id"))
+                    .put("sha256",file.getString("sha256")).put("size",file.getLong("size")).put("automaticReplayAllowed",false);
+            journal.checkpoint(messages,steps,evidence);
+            return finishQuietly(task,"needs_confirmation","这份 TXT 已保存在原工作中。没有继续其他步骤；可打开原文件核对。",evidence,steps,config,sink);
+        }catch(Exception unavailable){
+            RuntimeDiagnostics.event("run_settlement","unconfirmed","OWNER_WORK_TEXT_SAVE_UNCONFIRMED",control,unavailable);
+            if(prepared!=null&&!entered)try{completeOperation(journal,prepared,new JSONObject().put("status","not_dispatched").put("ok",false)
+                    .put("accepted",false).put("nativeDispatched",false).put("automaticReplayAllowed",false),config);}
+                catch(Exception unsettled){/* Keep the original prepared row as unresolved; never replay it. */}
+            return finishQuietly(task,control.isCancelled()?"cancelled":"awaiting_user",entered?
+                    "请在原工作核对这次文字保存的原回执和文件；不会再次生成。":"原工作状态已变化，本次未派发文字保存。",
+                    actual==null?new JSONObject():actual,steps,config,sink);
+        }
+    }
+
     private RunOutcome runOwnerSkillBound(String taskId,String goal,ModelConfig config,RunControl control,EventSink originalSink,RunJournal journal,
                                          dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation selected) {
         JSONObject evidence=new JSONObject(),confirmedReceipt=null,traceReceipt=null;String operation=null,recordedOperation=null;boolean dispatchEntered=false;int steps=0;

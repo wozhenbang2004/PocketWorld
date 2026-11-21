@@ -577,6 +577,17 @@ internal class PocketWebBridge(
     internal fun acceptsWindow(ticket: PocketWebWindowTicket): Boolean =
         ticket.accepts(commandFence.ticket(), controller.webWindowTicket())
 
+    private fun freshLibraryEntry(): (() -> Boolean)? {
+        val document = documentId ?: return null
+        val ticket = captureWindow()
+        val current = {
+            !closed && documentId == document && acceptsWindow(ticket) && section == null && taskViewId == null &&
+                controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
+                !controller.state.chatAttachmentPickerOpen && controller.state.filePath == null
+        }
+        return current.takeIf { it() }
+    }
+
     fun postMessage(raw: String, window: PocketWebWindowTicket, onStaleWindow: () -> Unit) {
         if (closed) return
         // The existing workspace backend remains the authority on individual file size limits.
@@ -1003,16 +1014,6 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebAttachments.COMMANDS) {
-                fun freshLibraryEntry(): (() -> Boolean)? {
-                    val document = documentId ?: return null
-                    val ticket = captureWindow()
-                    val current = {
-                        !closed && documentId == document && acceptsWindow(ticket) && section == null && taskViewId == null &&
-                            controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
-                            !controller.state.chatAttachmentPickerOpen && controller.state.filePath == null
-                    }
-                    return current.takeIf { it() }
-                }
                 val draftCommand = args.opt("command") as? String
                 if (action == "attachmentWorkspace.action" && draftCommand != null && draftCommand in PocketWebAttachments.PRIVATE_DRAFT_COMMANDS) {
                     // Warm Library actions and the expressly selected PDF page require a fresh owner ticket.
@@ -2277,6 +2278,24 @@ internal class PocketWebBridge(
                             !controller.attachmentOutcomes.state.open && !controller.state.chatAttachmentPickerOpen && controller.state.filePath == null
                     }).also { check(it()) { "请回到当前私人对话，再保留原文" } }
                 } else null
+                if (action == PocketWebMessageQuotes.OPEN_SAVED_DOCUMENT) {
+                    val conversation = controller.state.conversationId
+                    val resume = workspaceResumeRevision
+                    val draftKey = controller.composerDraft?.key ?: error("原私人草稿窗口尚未就绪")
+                    val draftEpoch = controller.composerViewEpoch
+                    check(!phoneComposer.intent && !controller.hasChannelPhoneOrigin && documentWindow?.invoke() == true)
+                    val pin = messageQuotes.takeSavedDocument(args)
+                    // The quote was retired above. Take a fresh ordinary Library ticket, not its old selection ticket.
+                    val library = freshLibraryEntry() ?: error("原私人文件库窗口尚未就绪")
+                    val landing = attachmentPages.openQuotedDraft(pin) {
+                        library() && controller.state.conversationId == conversation && resume == workspaceResumeRevision &&
+                            controller.composerDraft?.key == draftKey && controller.composerViewEpoch == draftEpoch &&
+                            controller.queuedInputsPage == null && !phoneComposer.intent && !controller.hasChannelPhoneOrigin
+                    }
+                    complete(id, landing.put("quoteWindowId", requiredString(args,"windowId")), null, retainValue = false,
+                        replayHint = "原草稿已保留，请在本机文档草稿核对；没有重放打开动作。")
+                    publishState(); return
+                }
                 messageQuotes.dispatch(action, args, documentWindow) { result, error ->
                     val local = action == "messageQuote.pin" || action.startsWith("messageShelf.")
                     val hint = when {

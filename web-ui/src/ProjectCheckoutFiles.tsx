@@ -401,15 +401,21 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     ['reviewPython','confirmPython','dismissPython'].every(action=>bridge.getState().capabilities.commands.includes(ownerPythonFiles+action));
   const canPreparePythonTools = !!onPreparePythonTools && !!pythonSource && canReviewPython &&
     bridge.getState().capabilities.commands.includes(command+'close');
+  const pythonFolder=pythonSource?pythonSource.path.slice(0,Math.max(0,pythonSource.path.lastIndexOf('/'))):undefined;
+  const canReviewPythonDirectory = canReviewPython && !canPreparePythonTools && !!pythonSource &&
+    (finder==='directory' && directory?.path===pythonFolder || rows(listing?.files).some(row=>
+      row.binary===false && row.change!=='deleted' && savedPythonPath(row.path) && row.path!==pythonSource.path &&
+      row.path.slice(0,Math.max(0,row.path.lastIndexOf('/')))===pythonFolder));
   const exactPythonEditor = () => canReviewPython && !!file && !!pythonSource && live(generation.current) &&
     currentFile.current===file && file.filesHandle===handle.current && currentText.current===pythonSource.content &&
     editorInput.current?.value===textareaText(pythonSource.content) && !entered.current && !edits.current &&
     !activeAdoption.current && !activeMarkdown.current && !choice && !file.draftError;
-  const readPythonReview = () => {
+  const readPythonReview = (directory=false) => {
     if (!exactPythonEditor() || !file || !pythonSource || pythonReviewNow.current) return;
-    void invoke('reviewPython', {fileHandle:file.fileHandle,...pythonSource.selection}, value=>{
+    if (directory && !canReviewPythonDirectory) return;
+    void invoke('reviewPython', {fileHandle:file.fileHandle,...pythonSource.selection,...(directory?{sourceMode:'directory'}:{})}, value=>{
       const review=pythonReview(value,{projectId,checkoutId,path:pythonSource.path,sha256:pythonSource.sha256});
-      if (!review) throw Error('未核对到当前已保存的原脚本，没有运行。');
+      if (!review || !!review.programFiles!==directory) throw Error('未核对到当前保存的原 Python 源码，没有运行。');
       pythonReviewNow.current=review;setPythonRunReview(review);
       requestAnimationFrame(()=>pythonHeading.current?.focus());
     });
@@ -705,7 +711,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
           {canReviewPython && !pythonRunReview && (canPreparePythonTools
             ? <Button disabled={locked} onClick={preparePythonTools}>查看手机工具准备</Button>
-            : <Button disabled={locked} onClick={readPythonReview}>运行已保存的脚本…</Button>)}
+            : <Button disabled={locked} onClick={()=>readPythonReview()}>运行已保存的脚本…</Button>)}
+          {canReviewPythonDirectory && !pythonRunReview &&
+            <Button variant="ghost" disabled={locked} onClick={()=>readPythonReview(true)}>核对同目录 Python 程序…</Button>}
           {showingSavedFile ? <>
             <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
             {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' : '已保存，回到项目工作区'}
@@ -716,8 +724,12 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
               onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
         </div>}
         {pythonRunReview && <section className="pw-checkout-adoption" aria-label="核对本机运行脚本">
-          <h3 ref={pythonHeading} tabIndex={-1}>在这部手机运行 <bdi>{pythonRunReview.path}</bdi>？</h3>
-          <p>仅使用这次已保存的脚本 <code>{pythonRunReview.sha256.slice(0,8)}</code>，最多运行 60 秒，不需要模型或安装依赖。</p>
+          <h3 ref={pythonHeading} tabIndex={-1}>{pythonRunReview.programFiles?'同目录 Python 程序：':'在这部手机运行 '}<bdi>{pythonRunReview.path}</bdi>？</h3>
+          {pythonRunReview.programFiles ? <>
+            <p>以选中的文件为入口。只带入以下同目录、已保存的 .py 文件，不带入子目录、数据文件或依赖。</p>
+            <ul>{pythonRunReview.programFiles.map(input=><li key={input.path}><bdi>{input.path.split('/').at(-1)}</bdi> · <code>{input.sha256.slice(0,8)}</code>{input.path===pythonRunReview.path?' · 入口':''}</li>)}</ul>
+            <p>最多运行 60 秒，不需要模型。</p>
+          </> : <p>仅使用这次已保存的脚本 <code>{pythonRunReview.sha256.slice(0,8)}</code>，最多运行 60 秒，不需要模型或安装依赖。</p>}
           <p>脚本可能联网，不保证限制其访问范围。只运行你信任的脚本。这里不挂载原副本，也不会导回运行生成的文件。</p>
           <div className="pw-form-actions"><Button variant="secondary" disabled={busy || editing} onClick={dismissPythonReview}>返回编辑</Button>
             <Button disabled={busy || editing || !canReviewPython} onClick={confirmSavedPython}>在本机运行</Button></div>

@@ -24,7 +24,8 @@ export const ownerPythonRead = 'projects.pythonRun.read';
 export const ownerPythonSaveText = 'projects.pythonRun.saveOutput';
 
 export type SavedPython = {projectId: string; checkoutId: string; path: string; sha256: string};
-type PythonSource = SavedPython & {requestId: string; bytes: number; runtimeIdentity: string; interpreterSha256: string};
+type PythonProgramFile = {path:string;sha256:string;bytes:number};
+type PythonSource = SavedPython & {requestId: string; bytes: number; runtimeIdentity: string; interpreterSha256: string; programFiles?: PythonProgramFile[]};
 export type PythonReview = PythonSource & {reviewHandle: string};
 export type OriginalPythonRun = PythonSource & {taskId: string; runId: string; operationId: string; epoch: 1; scriptInputDigest: string; planDigest: string};
 export type PythonExit = {exitKind: 'exit_code' | 'signal' | 'no_child'; value: number; timedOut: boolean; cancelRequested: boolean};
@@ -37,13 +38,36 @@ export type PythonRead = {state: 'pending' | 'not_started'} | {
 
 const sameSource = (a: SavedPython, b: SavedPython) =>
   a.projectId === b.projectId && a.checkoutId === b.checkoutId && a.path === b.path && a.sha256 === b.sha256;
+const sameProgram = (a: PythonSource, b: PythonSource) =>
+  a.programFiles?.length === b.programFiles?.length && (!a.programFiles || a.programFiles.every((file, i) =>
+    file.path === b.programFiles?.[i]?.path && file.sha256 === b.programFiles?.[i]?.sha256 && file.bytes === b.programFiles?.[i]?.bytes));
 
 function source(row: Data | undefined): PythonSource | undefined {
   if (!row || row.format !== scopeFormat || !id(row.requestId) || !key(row.projectId) || !key(row.checkoutId) ||
       !savedPythonPath(row.path) || !digest(row.sha256) || typeof row.bytes !== 'number' || !Number.isSafeInteger(row.bytes) ||
       row.bytes < 0 || row.bytes > 262144 || !key(row.runtimeIdentity) || !digest(row.interpreterSha256)) return undefined;
   const {requestId, projectId, checkoutId, path, sha256, bytes, runtimeIdentity, interpreterSha256} = row;
-  return {requestId, projectId, checkoutId, path, sha256, bytes, runtimeIdentity, interpreterSha256};
+  const input:PythonSource = {requestId, projectId, checkoutId, path, sha256, bytes, runtimeIdentity, interpreterSha256};
+  if (!Object.hasOwn(row, 'programFiles')) return input;
+  if (!Array.isArray(row.programFiles) || row.programFiles.length < 2 || row.programFiles.length > 8) return;
+  const prefix = path.slice(0, path.lastIndexOf('/') + 1), files:PythonProgramFile[] = [];
+  let prior='', total=0, entry=false;
+  for (const item of row.programFiles) {
+    const file=record(item);
+    if (!file || !savedPythonPath(file.path) || !file.path.startsWith(prefix) || file.path.slice(prefix.length).includes('/') ||
+        file.path<=prior || !digest(file.sha256) || typeof file.bytes!=='number' || !Number.isSafeInteger(file.bytes) ||
+        file.bytes<0 || file.bytes>262144) return;
+    if (file.path===path) {
+      if (file.sha256!==sha256 || file.bytes!==bytes) return;
+      entry=true;
+    } else {
+      const leaf=file.path.slice(prefix.length);
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,119}\.py(?![\s\S])/.test(leaf)) return;
+    }
+    files.push({path:file.path,sha256:file.sha256,bytes:file.bytes});
+    prior=file.path;total+=file.bytes;
+  }
+  return entry&&total<=262144 ? {...input,programFiles:files} : undefined;
 }
 
 export function pythonReview(value: unknown, saved: SavedPython): PythonReview | undefined {
@@ -58,7 +82,7 @@ export function originalPythonRun(value: unknown, reviewed?: PythonReview): Orig
   const row = record(value), input = source(row);
   if (!row || !input || !id(row.taskId) || !id(row.runId) || !id(row.operationId) || row.epoch !== 1 ||
       !digest(row.scriptInputDigest) || !digest(row.planDigest) || row.modelDispatchAllowed !== false || row.replayAllowed !== false) return undefined;
-  if (reviewed && (!sameSource(input, reviewed) || input.requestId !== reviewed.requestId || input.bytes !== reviewed.bytes ||
+  if (reviewed && (!sameSource(input, reviewed) || !sameProgram(input, reviewed) || input.requestId !== reviewed.requestId || input.bytes !== reviewed.bytes ||
       input.runtimeIdentity !== reviewed.runtimeIdentity || input.interpreterSha256 !== reviewed.interpreterSha256)) return undefined;
   const {taskId, runId, operationId, epoch, scriptInputDigest, planDigest} = row;
   return {...input, taskId, runId, operationId, epoch, scriptInputDigest, planDigest};
@@ -66,7 +90,7 @@ export function originalPythonRun(value: unknown, reviewed?: PythonReview): Orig
 
 export function samePythonRun(a: OriginalPythonRun, b?: OriginalPythonRun) {
   return !!b && a.taskId === b.taskId && a.runId === b.runId && a.operationId === b.operationId &&
-    a.epoch === b.epoch && a.requestId === b.requestId && sameSource(a, b) &&
+    a.epoch === b.epoch && a.requestId === b.requestId && sameSource(a, b) && sameProgram(a,b) &&
     a.scriptInputDigest === b.scriptInputDigest && a.planDigest === b.planDigest &&
     a.runtimeIdentity === b.runtimeIdentity && a.interpreterSha256 === b.interpreterSha256;
 }

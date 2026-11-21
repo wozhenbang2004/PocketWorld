@@ -41,9 +41,9 @@ function acknowledgedResume(value:Json|undefined):Editor|undefined{
 }
 
 /** This editor owns only the current Web document's input. Native versions are opaque handles. */
-export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,generationPending,initialBlank=false,initialResume=false,
+export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,generationPending,initialBlank=false,initialResume=false,fromMessage=false,
  warmResumeKey,onWarmResume,invoke,registerExit,onExit}:{
- active:boolean;recoverable:boolean;loading:boolean;initial?:Json;generationPending:boolean;initialBlank?:boolean;initialResume?:boolean;
+ active:boolean;recoverable:boolean;loading:boolean;initial?:Json;generationPending:boolean;initialBlank?:boolean;initialResume?:boolean;fromMessage?:boolean;
  warmResumeKey?:string;onWarmResume:(key:string)=>Promise<Json>;invoke:Invoke;
  registerExit:(handle:((close:boolean)=>void)|null)=>void;onExit:(close:boolean)=>Promise<void>;
 }){
@@ -222,7 +222,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
    }
   });
  };
- const removalTarget=generationPending?undefined:unavailable??(editor?.version&&!dirty&&!editor.uncertain?{
+ const removalTarget=generationPending||fromMessage?undefined:unavailable??(editor?.version&&!dirty&&!editor.uncertain?{
   editorHandle:editor.handle,versionHandle:editor.version,name:editor.original.name,format:editor.original.format}:undefined);
  const reviewRemoval=()=>{
   if(!editable||!removalTarget||flight.current)return;
@@ -295,7 +295,8 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
      {removalTarget&&!generation&&!removal&&<Button variant="ghost" disabled={!editable} onClick={reviewRemoval}>删除草稿</Button>}
     </footer></>:
    blankUnconfirmed?<p role="status">没有核对到空白草稿，未保存任何内容。请返回文件库后再试。</p>:
-   resumeUnconfirmed?<p role="status">尚未确认打开生成前的原草稿。没有打开其他版本。返回成果后可查看本机文档草稿。</p>:
+   resumeUnconfirmed?<p role="status">{fromMessage?'尚未确认打开这份刚保留的草稿，没有打开其他草稿。可以返回原消息，或到本机文档草稿核对。':
+    '尚未确认打开生成前的原草稿。没有打开其他版本。返回成果后可查看本机文档草稿。'}</p>:
    loading||busy&&catalog===null?<p role="status">正在读取本机草稿清单</p>:<>{shown?.metadataComplete===false&&<p role="status">草稿清单尚未核对齐全，可以打开已经列出的原稿。</p>}
     {shown?.metadataComplete===true&&!rows.length&&<p>还没有已保留的草稿。</p>}
     {!shown&&<p role="status">草稿清单尚未核对。</p>}

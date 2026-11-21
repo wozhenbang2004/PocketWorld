@@ -197,8 +197,8 @@ internal class PocketWebStandaloneDocumentDrafts(
         openExact(current, frame, pin, done, allowWarm = true)
     }
 
-    /** Called only after the exact fresh generated original returned to its already-admitted Library. */
-    fun openGeneratedSource(frame: Frame, pin: Pin, done: (Opened?) -> Unit) {
+    /** Explicit navigation from a native Library handoff; a browser cannot submit a Pin. */
+    fun openPinnedSource(frame: Frame, pin: Pin, done: (Opened?) -> Unit) {
         val current = admission(frame)
         check(scope == null && pending == null) { "请先离开当前草稿，没有打开其他版本" }
         scope = current
@@ -504,8 +504,9 @@ internal class PocketWebStandaloneDocumentDrafts(
             controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
             !controller.state.chatAttachmentPickerOpen && !controller.state.attachmentImporting && !importing &&
             flow.privateLibrary() && !state.fromWorkResult && !state.restoredWorkReturn && state.libraryDocumentReturn == null &&
-            visible != null && visible.opt("taskId") == "" &&
-            visible.optJSONArray("sources") != null && visible.optJSONArray("artifacts") != null &&
+            (if (state.focusedStandaloneDraft) visible == null && state.globalStandaloneDraftVisit != null
+            else visible != null && visible.opt("taskId") == "" &&
+                visible.optJSONArray("sources") != null && visible.optJSONArray("artifacts") != null) &&
             state.file == null && state.originalFile == null && state.documentDraft == null && !state.documentOpen &&
             state.processingSource == null && state.comparison == null && !state.busy && !flow.exportPending &&
             state.pendingDocumentTask == expected.pendingDocument && displayedLibraryFrame(frame)

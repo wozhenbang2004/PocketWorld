@@ -25,6 +25,7 @@ import dev.pocketengine.phone.PhoneAccessibilityService;
 import dev.pocketengine.phone.PhoneNotificationControls;
 import dev.pocketengine.phone.OriginalPhoneNotice;
 import dev.pocketengine.phone.FirstMainScreenWindow;
+import dev.pocketengine.phone.OwnerMainPhoneProgress;
 import dev.pocketengine.phone.observation.AdaptivePhonePort;
 import dev.pocketengine.runtime.AgentRunner;
 import dev.pocketengine.store.TaskStore;
@@ -81,6 +82,21 @@ public final class PhoneRunService extends Service {
     private record FirstMainWait(String task,String run,int epoch,RunControl owner,ModelConfig config,
                                  String goal,int start,long policy,AtomicBoolean checking){}
     private volatile FirstMainWait firstMainWait;
+    /** Set only from a positive owner-private Main row at this native Service's original START. */
+    private volatile RunControl mainProgressOwner;
+    private PhoneAccessibilityService mainProgressSurface(String id,String run,int epoch,RunControl original){
+        return !destroyed&&mainProgressOwner==original&&ownerControl==original&&id.equals(runningId)&&run.equals(runningRunId)&&
+                epoch==runningEpoch&&original.matchesHostRun(id,run,epoch)&&original.phoneSurfaceActive()&&
+                !original.isPaused()&&!original.isCancelled()&&app.retainsShownPhoneControl(id,original)?PhoneAccessibilityService.get():null;
+    }
+    private void retainMainProgressEvent(String id,String run,int epoch,RunControl original,JSONObject event,long pause,long surface){
+        Object type=event.opt("type");
+        if(!"tool".equals(type)&&!"observation".equals(type))return;
+        try{
+            var overlay=mainProgressSurface(id,run,epoch,original);
+            if(overlay!=null)overlay.retainOriginalMainProgress(original,OwnerMainPhoneProgress.event(original,overlay.observationSessionId(),event,pause,surface));
+        }catch(RuntimeException unavailable){/* An optional observation must never affect the original runner. */}
+    }
     private boolean ownsFirstMain(FirstMainWait wait){
         return wait!=null&&firstMainWait==wait&&!destroyed&&waitingForUser&&ownerControl==wait.owner()&&
                 runningConfig==wait.config()&&wait.task().equals(runningId)&&wait.run().equals(runningRunId)&&wait.epoch()==runningEpoch&&
@@ -120,6 +136,9 @@ public final class PhoneRunService extends Service {
                 waitingForUser=false;firstMainWait=null;++ownerWaitGeneration;
             }
             PhoneAccessibilityService service=PhoneAccessibilityService.get();
+            if(service!=null&&service==mainProgressSurface(wait.task(),wait.run(),wait.epoch(),original))try{
+                service.retainOriginalMainProgress(original,OwnerMainPhoneProgress.screen(original,service.observationSessionId(),structure));
+            }catch(RuntimeException unavailable){/* The already saved original observation is unchanged. */}
             if(service!=null)try{service.showControls(wait.task(),wait.goal(),original);}catch(RuntimeException ignored){/* Existing exact notification remains the stop surface. */}
             run(wait.task(),wait.run(),wait.epoch(),wait.goal(),wait.config(),original,wait.start(),false,null,null,structure);
         }catch(Exception unavailable){
@@ -277,6 +296,9 @@ public final class PhoneRunService extends Service {
         runningId=id;phoneSession=null;
         try{
             JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);String runId=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");runningRunId=runId;runningEpoch=epoch;runningGoal=task.optString("goal");runningConfig=config;ownerControl=control;lastStartId=startId;
+            mainProgressOwner=START.equals(intent.getAction())&&id.equals(task.opt("id"))&&"main_screen".equals(task.opt("executionMode"))&&
+                    Boolean.TRUE.equals(task.opt("originalNoticePrivateLocal"))&&runId.equals(intent.getStringExtra("phoneRunId"))&&
+                    epoch==intent.getIntExtra("phoneEpoch",-1)&&control.matchesHostRun(id,runId,epoch)?control:null;
             boolean first=TaskStore.firstMainScreenPending(task)||intent.getBooleanExtra(TaskStore.FIRST_MAIN_SCREEN,false);
             if(first){
                 long policy=-1;
@@ -660,7 +682,11 @@ public final class PhoneRunService extends Service {
             AgentRunner runner=new AgentRunner(agentPort,capabilities,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),
                     app.phoneOwnerProjection(id,control),app.phoneOwnerInputs(id,runId,epoch,control)).forMainOwnerReturn(returned==null?null:returned.page());
             if(firstMainStructure!=null)runner.forOwnerFirstMainStructure(firstMainStructure);
-            RunOutcome result=runner.run(id,goal,config,control,event->app.record(id,event,control),app.journalForTask(id,runId,epoch,control,config));
+            long progressPause=control.pauseRevision(),progressSurface=control.surfaceRevision();
+            RunOutcome result=runner.run(id,goal,config,control,event->{
+                retainMainProgressEvent(id,runId,epoch,control,event,progressPause,progressSurface);
+                app.record(id,event,control);
+            },app.journalForTask(id,runId,epoch,control,config));
             if(returned!=null&&!runner.ownerReturnPageRead()&&!control.isCancelled()&&!result.evidence.has("mainOwnerPageCheck")){
                 // If configuration or the existing read fails earlier, do not lose the original refusal or fall back to generic resume.
                 JSONObject retained=returned.page().blocked(returned.pause());result=new RunOutcome("awaiting_user",retained.getString("message"),retained);
@@ -874,6 +900,7 @@ public final class PhoneRunService extends Service {
         main.post(()->{
             clearCancellationWatch(owner);
             if(owner==null||owner!=app.control(id))return;
+            if(mainProgressOwner==owner)mainProgressOwner=null;
             if(id.equals(runningId)){runningId=null;runningRunId=null;taskBackgroundPort=null;deviceGoal=null;pendingDeviceApproval=null;if(leaseWatch!=null){leaseWatch.cancel(false);leaseWatch=null;}}
             app.released(id,owner);app.pushTask(id);
             String active=app.activeId();

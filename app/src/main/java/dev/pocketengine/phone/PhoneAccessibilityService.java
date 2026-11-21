@@ -58,6 +58,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private volatile PhoneInputMethod phoneInputMethod;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final OwnerOverlayReads<PhoneOwnerControls.ViewState> openControlRead=new OwnerOverlayReads<>(main),shownControlRead=new OwnerOverlayReads<>(main);
+    private final java.util.concurrent.atomic.AtomicReference<OwnerMainPhoneProgress> mainRunProgress=new java.util.concurrent.atomic.AtomicReference<>();
     private PhoneOwnerControls openingControls;
     private RunControl openingRun;
     private OwnerReturnButton openingReturn;
@@ -85,6 +86,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private final Set<Object> captureHides = new HashSet<>();
     private LinearLayout controls;
     private TextView status;
+    private PhoneOwnerControls.ViewState ownerStatusView;
     private Button pause;
     private android.widget.FrameLayout ownerActionSlot;
     private record RenderedOwnerAction(PhoneOwnerControls owner,PhoneOwnerControls.ViewState state,OwnerReturnButton hand){}
@@ -378,6 +380,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             closeSignalFeedsLocked();
         }
         unregisterSignalDisplays();
+        mainRunProgress.set(null);
         if(wasCurrent)dev.pocketengine.phone.setup.PhoneSetupModule.onAccessibilityDisconnected();
         if (control != null) control.cancel();
         if (quickPanel != null) quickPanel.close();
@@ -387,6 +390,12 @@ public final class PhoneAccessibilityService extends AccessibilityService {
 
     public void showControls(String taskId, String goal, RunControl runControl) {
         showControls(taskId,goal,runControl,null);
+    }
+    /** The regular overlay already refreshes on the task's next native event. Do not request another read. */
+    public void retainOriginalMainProgress(RunControl original,OwnerMainPhoneProgress fact){
+        if(fact==null||instance!=this||!fact.current(original,observationSessionId))return;
+        mainRunProgress.updateAndGet(previous->instance!=this||!fact.current(original,observationSessionId)||
+                !fact.isAction()&&previous!=null&&previous.isAction()&&previous.current(original,observationSessionId)?previous:fact);
     }
     /** Only the exact waiting native Service holds this one start action. It is not a notification/Web command. */
     public void showFirstMainControls(String taskId,String goal,RunControl runControl,java.util.function.BooleanSupplier current,
@@ -445,6 +454,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             grip.setContentDescription("拖动可移动手机任务控制条；点击展开操作");
             grip.setOnClickListener(v -> {
                 boolean expand = details.getVisibility() != View.VISIBLE;
+                if(expand&&ownerControls==bound&&ownerStatusView!=null)renderOwnerStatus(bound,ownerStatusView);
                 details.setVisibility(expand ? View.VISIBLE : View.GONE);
                 grip.setText(expand ? "任务 ▴" : "任务 ▾");updateOwnerGripLabel();
                 renderResultWatch();
@@ -566,10 +576,18 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         var first=firstMainControl;
         pause.setEnabled(!waiting&&(hand!=null||state.action()!=PhoneOwnerControls.Action.NONE&&
                 (state.action()!=PhoneOwnerControls.Action.FIRST_MAIN_START||first!=null&&first.current().getAsBoolean())));
-        status.setText(shortText(state.message(),140));
+        ownerStatusView=state;renderOwnerStatus(expected,state);
         allowedResultWatch=state.current()&&state.resultWatch()?expected:null;
         renderResultWatch();
         updateOwnerGripLabel();
+    }
+    private void renderOwnerStatus(PhoneOwnerControls expected,PhoneOwnerControls.ViewState state){
+        OwnerMainPhoneProgress recent=mainRunProgress.get();
+        String progress=state.privateRunningProgress()&&recent!=null&&expected.retained()&&expected.samePause(state)&&
+                controls!=null&&controls.getDisplay()!=null&&controls.getDisplay().getDisplayId()==Display.DEFAULT_DISPLAY&&
+                recent.current(control,observationSessionId)?recent.label():null;
+        String text=progress==null?shortText(state.message(),140):progress+"\n"+shortText(state.message(),100);
+        if(!android.text.TextUtils.equals(status.getText(),text))status.setText(text);
     }
     /** No local read on expand: this is the exact owner fact from the existing status read,
      * not a claim that the watch is currently saved or that the phone has produced a result. */
@@ -647,9 +665,10 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         refreshOwnerControls(bound,goal);
     }
 
-    public void hideControls() { runOnMain(this::removeControls); }
+    public void hideControls() { runOnMain(()->{mainRunProgress.set(null);removeControls();}); }
     public void hideControls(RunControl original) { runOnMain(()->{
         if(original==null)return;
+        mainRunProgress.updateAndGet(recent->recent!=null&&recent.belongsTo(original)?null:recent);
         if(openingRun==original)clearOpeningControls();
         if(control==original)removeInstalledControls();
     }); }
@@ -774,6 +793,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         }
         controls = null;
         status = null;
+        ownerStatusView=null;
         pause = null;
         controlGrip = null;
         controlDetails = null;

@@ -11,9 +11,9 @@ import org.json.JSONObject;
 /** Buttons are bound to one native source and one displayed intention, not to a live toggle. */
 final class PhoneOwnerControls {
     enum Action { NONE, PAUSE, RESUME_LOCAL, RESUME_SOURCE, REVIEW, FIRST_MAIN_START }
-    record ViewState(boolean current,Action action,long pause,long scope,String displayHandle,String message,boolean resultWatch) {
+    record ViewState(boolean current,Action action,long pause,long scope,String displayHandle,String message,boolean resultWatch,boolean privateRunningProgress) {
         boolean sameInput(ViewState other){return other!=null&&action==other.action&&pause==other.pause&&scope==other.scope&&Objects.equals(displayHandle,other.displayHandle);}
-        ViewState withResultWatch(){return new ViewState(current,action,pause,scope,displayHandle,message,true);}
+        ViewState withPrivateRunningProgress(){return new ViewState(current,action,pause,scope,displayHandle,message,true,true);}
     }
     private final EngineApplication app;
     private final String taskId;
@@ -83,7 +83,7 @@ final class PhoneOwnerControls {
             boolean unresolved=row.optBoolean("unresolved");
             if(!original.isPaused()){
                 ViewState shown=state(true,Action.PAUSE,revision,unresolved?"动作结果待核对，可先暂停并返回原任务":goal);
-                return row.getBoolean("privateLocal")&&"running".equals(row.opt("status"))&&!unresolved?shown.withResultWatch():shown;
+            return row.getBoolean("privateLocal")&&"running".equals(row.opt("status"))&&!unresolved?shown.withPrivateRunningProgress():shown;
             }
             if(!"paused".equals(row.optString("status"))||unresolved||!original.ownerPausedAt(revision))
                 return state(true,Action.REVIEW,revision,unresolved?"有未核对的动作，请查看原任务；不会自动继续":"已停在原任务，请核对暂停或本人步骤");
@@ -91,8 +91,8 @@ final class PhoneOwnerControls {
                     state(true,Action.REVIEW,revision,"这次暂停的来源尚未核实，请查看原任务");
             long scope=row.optLong("scopeRevision",-1);String handle=scope<1?null:original.displayedPauseHandle(revision);
             if(handle==null)return state(true,Action.REVIEW,revision,"这次暂停仍需核对，请查看原任务");
-            return new ViewState(true,Action.RESUME_LOCAL,revision,scope,handle,"已暂停。继续只恢复面前的原执行，不代表已取得新屏幕",true);
+            return new ViewState(true,Action.RESUME_LOCAL,revision,scope,handle,"已暂停。继续只恢复面前的原执行，不代表已取得新屏幕",true,false);
         } catch(Exception unavailable){return state(ownsControl(),Action.NONE,-1,"原任务状态暂不可核对，请返回应用");}
     }
-    private static ViewState state(boolean current,Action action,long pause,String message){return new ViewState(current,action,pause,-1,null,message,false);}
+    private static ViewState state(boolean current,Action action,long pause,String message){return new ViewState(current,action,pause,-1,null,message,false,false);}
 }

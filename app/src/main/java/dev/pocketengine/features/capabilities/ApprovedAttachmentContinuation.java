@@ -17,6 +17,17 @@ public final class ApprovedAttachmentContinuation implements AgentRunner.Approve
         this.tasks=java.util.Objects.requireNonNull(tasks);this.taskId=taskId;this.runId=runId;this.epoch=epoch;this.approvalId=approvalId;
     }
 
+    /** The first local Work lane is plain TXT only, using the same leaf schema/defaults. */
+    public static JSONObject normalizeFreshWorkText(JSONObject original)throws Exception {
+        JSONObject args=CapabilityDescriptor.createText().normalize(original);
+        String content=args.getString("content");
+        if(!"text/plain".equals(args.getString("mimeType"))||
+                !args.getString("name").toLowerCase(java.util.Locale.ROOT).endsWith(".txt")||
+                content.isBlank()||!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(content))
+            throw new SecurityException("此入口只保存已经审阅的本机纯文字 TXT");
+        return args;
+    }
+
     @Override public synchronized JSONObject take(JSONArray history,RunControl original)throws Exception {
         if(taken)throw new SecurityException("原审批续接已取用，不能再次派发");
         original.check();

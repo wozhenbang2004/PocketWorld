@@ -42,8 +42,10 @@ internal class PocketWebAttachments(
             "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.remove", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument",
             "drafts.retainRevision", "drafts.checkRevision", "drafts.retainMarkdown", "drafts.checkMarkdown",
             "drafts.retainPdfPage", "drafts.checkPdfPage",
-            "drafts.returnGenerated", "drafts.openGeneratedSource", "drafts.resumeSaved")
+            "drafts.returnGenerated", "drafts.openGeneratedSource", "drafts.openQuotedSource", "drafts.resumeSaved")
         private val DRAFTS_WHILE_DOCUMENT_PENDING = setOf("drafts.list", "drafts.open", "drafts.save", "drafts.leave", "drafts.resumeSaved")
+        private val FOCUSED_DRAFT_COMMANDS = setOf("drafts.openQuotedSource", "drafts.save", "drafts.leave", "drafts.reviewDocument",
+            "drafts.dismissDocument", "drafts.createDocument")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
         private const val DOCUMENT_REVIEW_TTL = 120_000L
@@ -63,8 +65,10 @@ internal class PocketWebAttachments(
     private var review: Review? = null
     private var processingReview: ProcessingReview? = null
     private val viewer = PocketWebOriginalFiles(controller.webPresentationActivity(), { controller.webUiCanInteract() }, changed)
-    // Set only by the currently admitted explicit no-argument entry from the business bridge.
+    // Set only by a freshly admitted explicit ordinary Library entry from the business bridge.
     private var globalDraftLibrary: DraftLibraryVisit? = null
+    private data class QuotedDraft(val window: Window, val library: DraftLibraryVisit, val pin: Pin)
+    private var quotedDraft: QuotedDraft? = null
     private data class RetiredSavedDraft(val library: String,val previousWindow: String,val editor: PocketWebStandaloneDocumentDrafts.WarmEditor)
     private var retiredSavedDraft: RetiredSavedDraft? = null
     private var warmDraftCheck: DraftLibraryVisit? = null
@@ -101,7 +105,8 @@ internal class PocketWebAttachments(
     private var scopedResultCurrent: (() -> Boolean)? = null
     val hasScopedResult: Boolean get() = scopedResultCurrent != null
     val hasOpenWorkspace: Boolean get() = flow.state.open
-    private fun ordinaryLibrary()=flow.privateLibrary()&&scopedResultCurrent==null&&!controller.state.chatAttachmentPickerOpen&&controller.webPrivateOwnerVisible()
+    private fun privateLibraryOwner()=flow.privateLibrary()&&scopedResultCurrent==null&&!controller.state.chatAttachmentPickerOpen&&controller.webPrivateOwnerVisible()
+    private fun ordinaryLibrary()=privateLibraryOwner()&&!flow.state.focusedStandaloneDraft
     private fun libraryPdfSurface(state: AttachmentOutcomeState, allowPageText: Boolean = false) =
         // The no-locator Library's native presentation survives a normal system picker pause.
         // This does not reuse or renew the retired draft permission or an old file window.
@@ -142,18 +147,18 @@ internal class PocketWebAttachments(
                 it.opt("mimeType") == "application/pdf" && it.optLong("size", 0) > 0
         } == true
 
-    private fun ordinaryDraftLibrarySurface(): Boolean {
+    private fun ordinaryDraftLibrarySurface(focused: Boolean = false): Boolean {
         val state = flow.state
         val catalog = state.snapshot
-        return ordinaryLibrary() && controller.conversationReader == null && controller.state.filePath == null &&
+        return privateLibraryOwner() && state.focusedStandaloneDraft == focused && controller.conversationReader == null && controller.state.filePath == null &&
             !state.busy && !flow.exportPending &&
             state.file == null && state.originalFile == null && state.documentDraft == null && !state.documentOpen &&
             state.processingSource == null && state.comparison == null &&
             state.libraryDocumentReturn == null && !state.fromWorkResult && !state.restoredWorkReturn &&
             !controller.state.attachmentImporting &&
             state.libraryImport?.phase !in setOf("selecting", "selection_unconfirmed", "registering") &&
-            catalog != null && catalog.opt("taskId") == "" &&
-            catalog.optJSONArray("sources") != null && catalog.optJSONArray("artifacts") != null
+            (if (focused) catalog == null else catalog != null && catalog.opt("taskId") == "" &&
+                catalog.optJSONArray("sources") != null && catalog.optJSONArray("artifacts") != null)
     }
     private fun warmSavedDraft(now: Window): RetiredSavedDraft? = retiredSavedDraft?.takeIf {
         globalDraftLibrary == null && it.previousWindow != now.id && it.library == flow.state.globalStandaloneDraftVisit &&
@@ -161,7 +166,7 @@ internal class PocketWebAttachments(
     }
     private fun mayUseDraftLibrary(): Boolean {
         val visit = globalDraftLibrary ?: return false
-        return flow.state.globalStandaloneDraftVisit == visit.id && visit.current() && ordinaryDraftLibrarySurface()
+        return flow.state.globalStandaloneDraftVisit == visit.id && visit.current() && ordinaryDraftLibrarySurface(flow.state.focusedStandaloneDraft)
     }
     private fun ownsGeneratedDraftReturn(origin: GeneratedDraftReturn) =
         generatedDraftReturn === origin && window === origin.window && keepsDraftLibraryVisit(origin.library)
@@ -347,6 +352,7 @@ internal class PocketWebAttachments(
         } else if (retiredSavedDraft?.let { it.library != state.globalStandaloneDraftVisit || it.editor.pendingDocument != state.pendingDocumentTask } == true)
             retiredSavedDraft = null
         globalDraftLibrary = null
+        quotedDraft = null
         warmDraftCheck = null
         draftDocumentReview = null
         generatedDraftReturn = null
@@ -369,6 +375,17 @@ internal class PocketWebAttachments(
         clear();deviceTaskCurrent=current
         flow.openReceivedOriginal(file,current);changed()
     }
+    /** Explicit owner click from the immediately preceding positive message-to-draft save. */
+    fun openQuotedDraft(pin: Pin, owner: () -> Boolean): JSONObject {
+        check(!flow.state.open && !flow.exportPending && controller.webPrivateOwnerVisible() && owner())
+        clear()
+        val library = DraftLibraryVisit(UUID.randomUUID().toString(), owner)
+        flow.openStandaloneDraftFocus(library.id)
+        globalDraftLibrary = library
+        val active = activeWindow()
+        quotedDraft = QuotedDraft(active, library, pin)
+        return JSONObject().put("opened", true).put("library", library.id).put("windowId", active.id)
+    }
     fun snapshot(draftPresentation: Boolean = false): JSONObject {
         if(flow.state.deviceOriginalOnly && deviceTaskCurrent?.invoke()!=true || scopedResultCurrent?.invoke()==false)clear()
         flow.state.pdfPageText?.let { page ->
@@ -379,6 +396,10 @@ internal class PocketWebAttachments(
             if(displayedWordExcerpt(flow.state,paired=true)!=excerpt)flow.backFromDocument()
         }
         val state = flow.state
+        if (state.focusedStandaloneDraft && globalDraftLibrary?.let { it.id == state.globalStandaloneDraftVisit && it.current() } != true) {
+            clear()
+            return JSONObject().put("open", false)
+        }
         globalDraftLibrary?.let { visit ->
             if (state.globalStandaloneDraftVisit != visit.id || !visit.current()) retireDraftLibrary()
         }
@@ -472,6 +493,7 @@ internal class PocketWebAttachments(
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
             .put("standaloneDraftLibrary", mayUseDraftLibrary())
+            .put("focusedStandaloneDraft", state.focusedStandaloneDraft)
             .put("canRetainLinkedDocumentDraft", linkedEditorSource() != null)
             .put("warmSavedDraft", if (draftPresentation) warmSavedDraft(current)?.let {
                 JSONObject().put("library",it.library).put("previousWindow",it.previousWindow).put("key",it.editor.key)
@@ -480,7 +502,7 @@ internal class PocketWebAttachments(
             .put("markdownDraft", draftTextIndicator(markdown)).put("pdfPageDraft", draftTextIndicator(pdfDraft))
             // This ordinary state projection may match a retained Web pane, never a draft command or handle.
             .put("standaloneDraftLibraryVisit", flow.state.globalStandaloneDraftVisit?.takeIf {
-                draftPresentation && ordinaryDraftLibrarySurface()
+                draftPresentation && ordinaryDraftLibrarySurface(state.focusedStandaloneDraft)
             })
             .put("canOpenReportOriginalWork", canNavigateFromReport(state))
             .put("libraryDocumentActionId", if(ordinaryLibrary)flow.libraryDocumentActionId() else null)
@@ -525,6 +547,10 @@ internal class PocketWebAttachments(
                  done: (JSONObject?, String?) -> Unit) {
         try {
             check(controller.webUiCanInteract()) { "请回到当前工作区再操作文件" }
+            if (flow.state.focusedStandaloneDraft) {
+                check(action == "attachmentWorkspace.action" && args.length() == 3 &&
+                    args.optString("command") in setOf("back", "close", "cancel", "queryDocument")) { "请先离开这份原草稿" }
+            }
             if(flow.state.deviceOriginalOnly){
                 check(deviceTaskCurrent?.invoke()==true && controller.webPrivateOwnerVisible()){"原文件所属的工作窗口已变化"}
                 check(action=="attachmentWorkspace.viewer" || action=="attachmentWorkspace.action" && args.optString("command") in setOf("back","close","cancel","continueTask")){"从此入口只查看这一个原文件，请先回原工作"}
@@ -572,6 +598,7 @@ internal class PocketWebAttachments(
             val current = window ?: error("文件窗口已关闭，请重新打开")
             check(args.optString("windowId") == current.id && acceptsWindow(current.ticket)) { "原文件窗口已变化，请重新核对" }
             check(flow.state.open) { "原文件窗口已关闭" }
+            quotedDraft = null // Any new ordinary file action leaves the one-shot original draft landing.
             if (action == "attachmentWorkspace.viewer") {
                 check(flow.state.pdfPageText==null&&flow.state.wordExcerpt==null) { "请先返回原件阅读" }
                 viewer.dispatch(args, done); return
@@ -671,12 +698,12 @@ internal class PocketWebAttachments(
                 "queryDocument" -> flow.queryDocument(::keepsDraftLibraryVisit) {
                     val live = flow.state
                     draftLibraryEntry?.invoke() == true && window === current && acceptsWindow(current.ticket) &&
-                        frame.location == location(live) && ordinaryLibrary() && !flow.exportPending &&
-                        live.snapshot?.opt("taskId") == "" && live.file == null && live.originalFile == null &&
-                        live.documentDraft == null && !live.documentOpen && live.processingSource == null &&
-                        live.comparison == null && live.libraryDocumentReturn == null &&
-                        !live.fromWorkResult && !live.restoredWorkReturn && !controller.state.attachmentImporting &&
-                        live.libraryImport?.phase !in setOf("selecting", "selection_unconfirmed", "registering")
+                        frame.location == location(live) && (if (live.focusedStandaloneDraft) mayUseDraftLibrary()
+                        else ordinaryLibrary() && !flow.exportPending && live.snapshot?.opt("taskId") == "" &&
+                            live.file == null && live.originalFile == null && live.documentDraft == null && !live.documentOpen &&
+                            live.processingSource == null && live.comparison == null && live.libraryDocumentReturn == null &&
+                            !live.fromWorkResult && !live.restoredWorkReturn && !controller.state.attachmentImporting &&
+                            live.libraryImport?.phase !in setOf("selecting", "selection_unconfirmed", "registering"))
                 }
                 "openDocumentAction" -> {
                     val id=args.getString("taskId")
@@ -876,6 +903,8 @@ internal class PocketWebAttachments(
         try {
             val frame = PocketWebStandaloneDocumentDrafts.Frame(text("windowId"), text("frameId"))
             val command = text("command")
+            if (flow.state.focusedStandaloneDraft) check(command in FOCUSED_DRAFT_COMMANDS)
+            if (command != "drafts.openQuotedSource") quotedDraft = null
             // A live draft shelf may edit a different storage record, never resume or replace the pending generation.
             check(flow.state.pendingDocumentTask == null || command in DRAFTS_WHILE_DOCUMENT_PENDING)
             check(warmDraftCheck == null || command == "drafts.leave")
@@ -946,7 +975,7 @@ internal class PocketWebAttachments(
                 check(currentDraftFrame(frame))
                 generatedDraftReturn = null
                 val adapter = drafts.value
-                adapter.openGeneratedSource(frame, origin.pin) { opened ->
+                adapter.openPinnedSource(frame, origin.pin) { opened ->
                     val verified = opened?.takeIf { currentDraftFrame(frame) && it.state == State.VERIFIED &&
                         it.edit != null && it.fields != null && !it.sourceUnavailable }
                     if (verified == null) {
@@ -955,6 +984,24 @@ internal class PocketWebAttachments(
                     }
                     else reply(JSONObject().put("returnedSource", true).put("status", verified.state.name).edit(verified.edit)
                         .put("fields", verified.fields?.let(::content)).put("sourceName", verified.sourceName))
+                }
+                return
+            }
+            if (command == "drafts.openQuotedSource") {
+                exact("library")
+                check(flow.state.focusedStandaloneDraft)
+                val origin = quotedDraft?.takeIf { it.window === window && it.window.id == frame.windowId &&
+                    it.library === globalDraftLibrary && it.library.id == text("library") }
+                    ?: error("原消息的草稿打开回执已离开")
+                check(currentDraftFrame(frame))
+                quotedDraft = null
+                val adapter = drafts.value
+                adapter.openPinnedSource(frame, origin.pin) { opened ->
+                    val verified = opened?.takeIf { currentDraftFrame(frame) && it.state == State.VERIFIED &&
+                        it.edit != null && it.fields != null && !it.sourceUnavailable && it.sourceName == null }
+                    if (verified == null) reply(null)
+                    else reply(JSONObject().put("returnedSource", true).put("status", verified.state.name).edit(verified.edit)
+                        .put("library", origin.library.id).put("fields", verified.fields?.let(::content)))
                 }
                 return
             }
@@ -1129,12 +1176,13 @@ internal class PocketWebAttachments(
     fun response(uri: Uri, method: String, headers: Map<String, String>): WebResourceResponse? = viewer.response(uri, method, headers)
     fun foreground(visible: Boolean) { if (!visible) clear(keepDraftPresentation = true) }
     fun clear(keepDraftPresentation: Boolean = false) {
+        val focusedDraft = flow.state.focusedStandaloneDraft
         retireDraftLibrary(keepDraftPresentation)
         if(flow.state.pdfPageText!=null||flow.state.wordExcerpt!=null)flow.backFromDocument()
         flow.discardWordExcerptSource()
         val scoped = flow.state.deviceOriginalOnly || scopedResultCurrent != null
         deviceTaskCurrent=null; scopedResultCurrent=null
-        if(scoped && flow.state.open)flow.close()
+        if((scoped || focusedDraft) && flow.state.open)flow.close()
         flow.discardLibraryDocumentReturn()
         window = null; frames.clear(); review = null; processingReview = null; viewer.clear()
     }

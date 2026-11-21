@@ -274,9 +274,13 @@ public final class ProjectOwnerWorkflows {
     public JSONObject fileForOwner(String project,String checkout,String path)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.readDevelopmentFileForOwner(project,checkout,path);}
     public dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(ProjectFileDraft file,
             java.util.function.BooleanSupplier window)throws Exception{
+        return reviewOwnerPythonForOwner(file,false,window);
+    }
+    public dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(ProjectFileDraft file,
+            boolean directory,java.util.function.BooleanSupplier window)throws Exception{
         if(!window.getAsBoolean())throw new SecurityException("原副本文件窗口已关闭");
         requireOrdinaryFileOwner(file.projectId,file.checkoutId);
-        return local.reviewOwnerPythonForOwner(file,()->{
+        return local.reviewOwnerPythonForOwner(file,directory,()->{
             if(!window.getAsBoolean())throw new SecurityException("原副本文件窗口已变化，未使用其他代码");
         });
     }

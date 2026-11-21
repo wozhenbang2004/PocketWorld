@@ -30,3 +30,9 @@
 
 - **已发布：** `v0.1.305` 补上符合条件的新 TypeScript/npm 项目的锁定依赖准备；`v0.1.306` 补上基础 Vite 实际构建和原工作固定网页；`v0.1.307` 允许直接查看刚构建的基础 Vite 网页，不用先保存。三个版本的签名发布已核对；尚未在安卓上走完整条用户旅程。
 - **React 项目验收：** 按 [Vite 官方 React JavaScript 模板](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react) 的默认配置，导入带原始 npm 锁的可信项目，在手机上修改 `src/App.jsx` 中只由组件渲染的文字。确认所需依赖与构建，在原工作打开这次生成的网页，核对新文字和本地样式，点一下原组件的计数按钮。返回同一份工作，固定保存可选。这条验收不能拿构建退出码、源 HTML、截图或新开任务替代；自定义配置、React TypeScript 构建和热更新不算本轮覆盖。
+
+### 同目录 Python 小程序（源码候选，待手机验收）
+
+[DSH Go](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/session/workspace_files.dart#L21-L49) 把实际工作区文件和交付放在同一会话；[Mika](https://github.com/wangzan101/Mika/blob/c8178d218dd13bbaa1a2a78a8bcf43d14a901a20/docs/features.en.md#L75-L82) 的同一工作区能执行 Python，但其手动终端不计入原工作记录。PocketWorld 原单脚本只带入当前文件且用 `-I`，不能运行依赖同目录模块的小程序。候选只扩展这条本机主人路径：确认一份普通已保存入口和同目录实际 2–8 个 UTF-8 `.py` 文件（合计 ≤256 KiB），先看每个原文件版本再批准一次。采用 [CPython 的隔离命令启动](https://github.com/python/cpython/blob/v3.12.3/Modules/main.c#L565-L595)，由固定宿主代码先读选定的已核对入口，再让其显式导入的同目录模块在标准库之后查找。原目录不改、不挂载，不带入子目录、数据文件或安装依赖。不声称脚本离线或在安全沙箱内。
+
+建议验收：工具备妥后导入可信的 `main.py` + `greeting.py`（存放在同目录，入口用普通 `import greeting`），在手机保存一处能改变输出的修改。核对同目录程序应显示两份实际来源和入口；确认后从同一原工作读到此次实际 stdout、stderr 和退出状态，再点返回程序入口继续编辑该项目。判定以实际程序输出和原文件返回为准，不用确认回执、旧输出或编译替代。保持原单文件入口不变。

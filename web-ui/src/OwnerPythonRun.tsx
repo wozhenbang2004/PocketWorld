@@ -74,7 +74,9 @@ export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText
   return <section className="pw-task-overview pw-task-review" aria-label="本机 Python 运行">
     <div className="pw-work-current-progress">
       <h3><bdi>{work.path}</bdi></h3>
-      <p>{preparationFailed?'这部手机':'在这部手机运行'} · 保存版本 <code>{work.sha256.slice(0,8)}</code></p>
+      <p>{preparationFailed?'这部手机':'在这部手机运行'} · {work.programFiles?
+        <>{work.programFiles.length} 份同目录 .py 文件 · 源码版本 <code>{work.scriptInputDigest.slice(0,8)}</code></>:
+        <>保存版本 <code>{work.sha256.slice(0,8)}</code></>}</p>
       <strong role="status">{preparationFailed?'没有启动 Python':exit?endText(exit):'尚未核对到本次运行结束'}</strong>
       {preparationFailed && <p>未能准备这份脚本的运行副本。原脚本没有被这次操作改写。</p>}
     </div>
@@ -86,7 +88,7 @@ export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText
         </Button>}
       {!preparationFailed && textSave?.state==='saved' && openOutput && <Button variant="secondary" disabled={pending}
         onClick={event=>{if(current.current())openOutput(textSave.file,event.currentTarget)}}>打开已保存的 TXT</Button>}
-      {reopen && <Button variant="secondary" disabled={pending} onClick={()=>{if(current.current())reopen()}}>返回原脚本</Button>}
+      {reopen && <Button variant="secondary" disabled={pending} onClick={()=>{if(current.current())reopen()}}>{work.programFiles?'返回程序入口':'返回原脚本'}</Button>}
     </div>
     {pending && <p role="status">{textSave?.state==='pending'?'正在保存或核对这份 TXT…':exit?'正在打开本次原输出…':'正在核对运行进度…'}</p>}
     {error && <p role="alert">{error}</p>}

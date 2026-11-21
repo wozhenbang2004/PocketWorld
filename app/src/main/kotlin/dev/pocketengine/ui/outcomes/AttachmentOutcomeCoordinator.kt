@@ -223,7 +223,8 @@ internal data class AttachmentOutcomeState(
     val globalStandaloneDraftVisit:String?=null, // Native in-session provenance, never restored from Bundle.
     val pdfPageText:AttachmentPdfPageText?=null, // The still-open original display, never restored.
     val wordExcerpt:AttachmentWordExcerpt?=null,val wordSaveAttempted:Boolean=false,
-    val wordSourceVisit:AttachmentWordSourceVisit?=null // One explicit origin lookup; never restored from Bundle.
+    val wordSourceVisit:AttachmentWordSourceVisit?=null, // One explicit origin lookup; never restored from Bundle.
+    val focusedStandaloneDraft:Boolean=false // In-session exact draft editor, not an attachment catalogue.
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -327,6 +328,13 @@ internal class AttachmentOutcomeCoordinator(
             pendingProcessingTask=pendingProcessingAction,resultRun=resultRun,globalStandaloneDraftVisit=globalStandaloneDraftVisit)
         refresh()
     }
+    fun openStandaloneDraftFocus(visit:String) {
+        check(!state.open&&!exportPending&&pendingDocumentAction==null&&pendingProcessingAction==null){
+            "请先核对原待办文档或文件；这份草稿仍保留在本机"
+        }
+        cancel();restoreFile=null;restoredDocumentDraft=null
+        state=AttachmentOutcomeState(open=true,globalStandaloneDraftVisit=visit,focusedStandaloneDraft=true)
+    }
     fun discardStandaloneDraftPresentation(){
         if(state.globalStandaloneDraftVisit!=null)state=state.copy(globalStandaloneDraftVisit=null)
     }
@@ -367,10 +375,10 @@ internal class AttachmentOutcomeCoordinator(
     fun close(){if(export!=null)exportAbandoned=true;cancel();restoreFile=null;restoredDocumentDraft=null;releaseWindow();state=AttachmentOutcomeState()}
     fun detach(){closed=true;close()}
     fun cancel(){val pendingFile=state.open&&state.busy&&restoreFile!=null;generation++;wait?.cancel();wait=null;observation?.cancel();observation=null;state=state.copy(busy=false,observing=false,error=if(pendingFile)"已停止读取这份原文件；目标版本仍保留，可以重新读取。"else state.error)}
-    fun foreground(visible:Boolean){resumed=visible;if(!visible){if(state.deviceOriginalOnly)close()else cancel();return};if(exportResult!=null)finishExport()else if(state.open&&state.snapshot==null&&!state.busy)refresh()}
+    fun foreground(visible:Boolean){resumed=visible;if(!visible){if(state.deviceOriginalOnly||state.focusedStandaloneDraft)close()else cancel();return};if(exportResult!=null)finishExport()else if(state.open&&state.snapshot==null&&!state.busy)refresh()}
     @JvmOverloads
     fun refresh(afterRefresh:((Boolean)->Unit)?=null){
-        if(state.deviceOriginalOnly){afterRefresh?.invoke(false);return} // never fall through to a full inventory
+        if(state.deviceOriginalOnly||state.focusedStandaloneDraft){afterRefresh?.invoke(false);return} // no general inventory in a focused view
         if(state.team!=null){readTeamFile();afterRefresh?.invoke(false);return}
         val task=state.taskId;val group=state.group;val pin=restoreFile?:state.file;val savedDraft=restoredDocumentDraft
         val showOriginal=restoreFile?.optBoolean("showOriginal")==true
@@ -516,7 +524,12 @@ internal class AttachmentOutcomeCoordinator(
     }.getOrNull()
 
     private fun showPublishedDocument(action:String,file:JSONObject,notice:String,libraryVisit:String?){
-        val inLibrary=privateLibrary()
+        val focused=state.focusedStandaloneDraft
+        val focusedEditable=if(focused)publishedLibraryDocumentSource(action,file)?:run {
+            state=state.copy(notice="尚未核对到这次生成的原件；已保留草稿，没有打开其他成果。")
+            return
+        } else null
+        val inLibrary=privateLibrary()&&!focused
         val catalog=state.snapshot?.takeIf{
             if(inLibrary)it.opt("taskId")==""
             else state.taskId==action&&state.documentDraft==null&&!state.fromWorkResult&&state.resultRun==null&&
@@ -533,8 +546,8 @@ internal class AttachmentOutcomeCoordinator(
         }
         val retainedImport=state.libraryImport.takeIf{inLibrary}
         val retainedVisit=libraryVisit?.takeIf{inLibrary&&catalog!=null&&state.globalStandaloneDraftVisit==it}
-        val editable=retainedVisit?.let{publishedLibraryDocumentSource(action,file)}
-        val published=if(inLibrary)JSONObject(file.toString()).put("role","result")
+        val editable=focusedEditable?:retainedVisit?.let{publishedLibraryDocumentSource(action,file)}
+        val published=if(inLibrary||focused)JSONObject(file.toString()).put("role","result")
             .put("sourceKind","created_document").put("sourceTaskId",action).apply{
                 if(editable!=null)put("availability","available").put("sourceOperationId",file.getJSONObject("source").getString("operationId"))
                     .put("editableSource",editable)
@@ -542,8 +555,9 @@ internal class AttachmentOutcomeCoordinator(
         if(pendingDocumentAction==action)pendingDocumentAction=null
         restoredDocumentDraft=null;restoreFile=null
         // Show only this operation's Book file; a separate pending save still needs its own receipt.
-        // The creation task is the file's provenance, not the library's navigation scope.
+        // Only an actual produced file leaves the focused draft for the existing exact Work/result reader.
         state=AttachmentOutcomeState(open=true,taskId=action.takeUnless{inLibrary},snapshot=catalog,file=published,
+            originalReturn=if(focused)AttachmentOriginalReturn.ENTRY else AttachmentOriginalReturn.DETAILS,
             pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,notice=notice,
             libraryImport=retainedImport,libraryDocumentReturn=retainedReturn,globalStandaloneDraftVisit=retainedVisit?.takeIf{editable!=null})
     }
@@ -1325,7 +1339,7 @@ internal class AttachmentOutcomeCoordinator(
         if(privateLibrary())state.libraryImport?.let{bundle.putString("attachmentLibraryImport",it.toJson().toString())}
         bundle.remove("attachmentOutcomeVerifiedCopies")
         if(verifiedCopies.isNotEmpty())bundle.putStringArrayList("attachmentOutcomeVerifiedCopies",ArrayList(verifiedCopies.values.map{it.toJson().toString()}))
-        pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator(savedNavigation=true).toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
+        pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null||state.focusedStandaloneDraft)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator(savedNavigation=true).toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
     fun restore(bundle:Bundle?){
         restoreVerifiedCopies(bundle)
         bundle?.getString("attachmentPendingProcessingTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingProcessingAction=it;state=state.copy(pendingProcessingTask=it)};bundle?.getString("attachmentPendingDocumentTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingDocumentAction=it;state=state.copy(pendingDocumentTask=it)};try{bundle?.getString("attachmentOutcomeExport")?.let{val pin=JSONObject(it);val requestId=pin.optString("exportRequestId")
