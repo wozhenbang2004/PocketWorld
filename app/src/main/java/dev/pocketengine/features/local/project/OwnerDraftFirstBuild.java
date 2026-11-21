@@ -297,7 +297,50 @@ public final class OwnerDraftFirstBuild {
             .put("taskId",binding.getString("taskId")).put("runId",binding.getString("runId")).put("epoch",epoch)
             .put("operationId",binding.getString("operationId")).put("projectId",pin.getString("projectId"))
             .put("checkoutId",pin.getString("checkoutId")).put("phase",phase)
-            .put("canObserve",boundManagedNodeBackend(route,envelope.optJSONObject("executionReceipt"),pin.getString("manager"),phase,epoch));
+            .put("canObserve",boundManagedNodeBackend(route,envelope.optJSONObject("executionReceipt"),pin.getString("manager"),phase,epoch))
+            .put("canCheck",canCheckBareManagedNode(task,row.optJSONObject("arguments"),pin,envelope,route,binding));
+    }
+    public static boolean ownerObservationSourceVisible(JSONObject task){
+        return (!task.has("contextAvailable")||Boolean.TRUE.equals(task.opt("contextAvailable")))&&
+            (!task.has("contextWithdrawn")||Boolean.FALSE.equals(task.opt("contextWithdrawn")))&&
+            (!task.has("sourceCurrentReadRequired")||Boolean.FALSE.equals(task.opt("sourceCurrentReadRequired")))&&
+            !"source_unavailable".equals(task.opt("taskProjection"));
+    }
+    private static boolean canCheckBareManagedNode(JSONObject task,JSONObject args,JSONObject pin,JSONObject envelope,JSONObject route,JSONObject binding){
+        if(!ownerObservationSourceVisible(task)||!existingCheckout(pin)||envelope.has("executionReceipt")||!"project_pending".equals(envelope.opt("code"))||
+            !"dispatching".equals(envelope.opt("executionStatus"))||!Boolean.FALSE.equals(task.opt("cancelRequested"))||
+            envelope.optBoolean("cancelRequested")||route.optBoolean("cancelRequested")||
+            !binding.opt("runId").equals(task.opt("runId"))||binding.optInt("coordinatorEpoch")!=task.optInt("coordinatorEpoch",-1))return false;
+        try{return consumedCommandApproval(task,args,route)!=null;}
+        catch(Exception unverified){return false;}
+    }
+    /** Already used in the original native CAS, never available to approve/execute anything again. */
+    public static JSONObject consumedCommandApproval(JSONObject task,JSONObject args,JSONObject route)throws Exception{
+        JSONArray approvals=task.optJSONArray("approvals");JSONObject matched=null;
+        String id=route.getString("approvalId");
+        for(int i=0;approvals!=null&&i<approvals.length();i++){
+            JSONObject row=approvals.getJSONObject(i);
+            if(!id.equals(row.opt("id")))continue;
+            if(matched!=null)return null;matched=row;
+        }
+        return matched!=null&&"consumed".equals(matched.opt("state"))&&"project_execute".equals(matched.opt("tool"))&&
+            route.getString("runId").equals(matched.opt("runId"))&&matched.isNull("policyDecision")&&
+            ProjectSources.digest(args).equals(matched.opt("argumentsHash"))&&
+            ProjectSources.digest(matched.getJSONObject("capability")).equals(route.opt("capabilityFingerprint"))?matched:null;
+    }
+
+    /** Only the existing provider's persisted settled ordinary exit can close this first read. */
+    public static boolean verifiedFirstTerminalObservation(JSONObject exact,JSONObject route,JSONObject backend)throws Exception{
+        String status=backend.optString("status"),phase=exact.optString("intent");
+        if(!status.matches("completed|failed")||!Boolean.FALSE.equals(backend.opt("ownedWorkerLive"))||
+            "owned_worker_live".equals(backend.opt("observation"))||!backend.isNull("receiptPersistence")||
+            !Boolean.TRUE.equals(backend.opt("resourcesReleased"))||!Boolean.TRUE.equals(backend.opt("processGroupAbsent"))||
+            !Boolean.FALSE.equals(backend.opt("cancelRequested"))||!Boolean.FALSE.equals(backend.opt("timedOut"))||
+            !"pre_exec_manifest_verified".equals(backend.opt("sourceCheckStatus"))||backend.optLong("finishedAt")<=0||
+            !dev.pocketengine.features.local.runtime.NativeProcessSupervisor.knownOrdinaryExitContract(backend.optString("nativeResultContract"))||
+            !boundManagedNodeBackend(route,backend,exact.getJSONObject("payload").getString("executable"),phase,route.getInt("coordinatorEpoch")))return false;
+        JSONObject exit=ProjectExecutionExit.from(exact,route,backend);
+        return exit!=null&&"exit_code".equals(exit.opt("kind"))&&"completed".equals(status)==(exit.getInt("value")==0);
     }
 
     // Same native binding and reviewed command as the explicit terminal observer. A route alone is not a log.

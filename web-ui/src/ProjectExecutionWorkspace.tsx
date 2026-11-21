@@ -6,11 +6,12 @@ import {ProjectExecutionExitPanel} from './ProjectExecutionExitPanel';
 import {originalExecutionExit,type ExecutionExit} from './project-execution-exit';
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
-import { currentManagedNodeOperation, originalFirstBuildFailure, projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, sameManagedNodeOperation, type OriginalManagedNodePending, type ProjectExecutionData as Data } from './project-execution';
+import { bareManagedNodeCheck, currentManagedNodeOperation, originalFirstBuildFailure, projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, sameManagedNodeOperation, type BareManagedNodeCheck, type OriginalManagedNodePending, type ProjectExecutionData as Data } from './project-execution';
 import './local-workspace.css';
 import './project-workspace-manga.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
+type ExecutionView = Data & {checkedPending?:BareManagedNodeCheck};
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.taskId, view.section, view.resumeRevision].join('|'); };
 const drafts = new Map<string, string>(), stopped = new Set<string>();
 const keys = [{ id: '\r', label: 'Enter' }, { id: '\t', label: 'Tab' }, { id: '\u001b', label: 'Esc' }, { id: '\u001b[A', label: '↑' }, { id: '\u001b[B', label: '↓' }, { id: '\u001b[C', label: '→' }, { id: '\u001b[D', label: '←' }];
@@ -31,56 +32,75 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const pendingOriginal = !operation && task.raw?.developmentContext?.ownerDraftFirstBuild &&
     (task.raw.hasUnresolvedOperations === true || task.raw.historyHasUnconfirmedOperations === true);
   const selected = focusFailure ? failure : entries.find(row => row.operationId === selection) || failure || (pendingOriginal ? undefined : entries.at(-1));
-  const noPendingLog=!!selected&&selected.state==='unknown'&&reviewedPending.some(pin=>!pin.canObserve&&sameManagedNodeOperation(selected,pin));
+  const waitingPending=selected?.state==='unknown'?reviewedPending.find(pin=>!pin.canObserve&&sameManagedNodeOperation(selected,pin)):undefined;
+  const noPendingLog=!!waitingPending;
+  const checkable=operation&&waitingPending?bareManagedNodeCheck(task,waitingPending):undefined;
   const pendingTitle=originalPending?.phase==='dependencies'?'原依赖准备':'原构建';
   const execution = selected?.operationId || '', originalKey = `${task.id}|${execution}`;
   const failureName = failure && execution === failure.operationId ? failure.failureStage === 'dependencies' ? '原依赖准备失败' : '原构建失败' : '';
-  const [storedView, setView] = useState<Data | null>(null), [busy, setBusy] = useState(''), [error, setError] = useState(''), [painted, setPainted] = useState('');
-  const view = storedView?.executionId === execution ? storedView : null;
+  const [storedView, setView] = useState<ExecutionView | null>(null), [busy, setBusy] = useState(''), [error, setError] = useState(''), [painted, setPainted] = useState('');
+  const view = storedView && storedView.executionId===execution && (!storedView.checkedPending||currentManagedNodeOperation(task,storedView.checkedPending)) ? storedView : null;
+  const waitingForReceipt=noPendingLog&&!view?.checkedPending;
   const [, updateWindow] = useState(0);
   const [input, setInput] = useState(() => drafts.get(originalKey) || ''), [accepted, setAccepted] = useState(false), [uncertain, setUncertain] = useState(false), [inputReceipt, setInputReceipt] = useState<Data | null>(null);
   const [columns, setColumns] = useState('80'), [height, setHeight] = useState('24'), [key, setKey] = useState('\r'), [stopReview, setStopReview] = useState(false), [stopRequested, setStopRequested] = useState(stopped.has(originalKey)), [stopReceipt, setStopReceipt] = useState<Data | null>(null);
-  const alive = useRef(true), pending = useRef<object | null>(null), generation = useRef(0), currentPage = useRef<Data | null>(null), windowId = useRef(ownerWindow());
+  const alive = useRef(true), pending = useRef<object | null>(null), generation = useRef(0), currentPage = useRef<ExecutionView | null>(null), windowId = useRef(ownerWindow());
   const live = useRef({ active, expanded, execution, originalKey, input, accepted, uncertain, stopRequested, stopReview, columns, height, key });
   live.current = { active, expanded, execution, originalKey, input, accepted, uncertain, stopRequested, stopReview, columns, height, key };
   const captured = { execution, originalKey, generation: generation.current, window: ownerWindow() };
-  const samePendingWindow=()=>{
-    if(!originalPending)return true;
-    const snapshot=bridge.getState();
-    const liveTask=(Array.isArray(snapshot.state.tasks)?snapshot.state.tasks as Data[]:[]).find(t=>t.id===task.id);
-    return (snapshot.view as Data).section==null&&!!currentManagedNodeOperation(liveTask,originalPending);
+  const liveOriginalTask=()=>{
+    const snapshot=bridge.getState(),nativeView=snapshot.view as Data;
+    if(nativeView.section!=null||nativeView.taskId!==task.id)return undefined;
+    return (Array.isArray(snapshot.state.tasks)?snapshot.state.tasks as Data[]:[]).find(t=>t.id===task.id);
   };
+  const samePendingWindow=(pin=originalPending??currentPage.current?.checkedPending)=>
+    !pin||!!currentManagedNodeOperation(liveOriginalTask(),pin);
   const current = () => alive.current && live.current.active && live.current.expanded && !document.hidden && (bridge.getState().view as Data).taskId === task.id && captured.execution === live.current.execution && captured.generation === generation.current && captured.window === ownerWindow() && samePendingWindow();
   const close = () => {
     const old = currentPage.current; currentPage.current = null; generation.current++; pending.current = null; live.current.accepted = false; live.current.stopReview = false;
     if (alive.current) { setView(null); setBusy(''); setAccepted(false); setStopReview(false); setPainted(''); updateWindow(value => value + 1); }
     if (old?.handle) void run('local.execution.close', { handle: old.handle }).catch(() => {});
   };
-  const apply = (value: Data) => {
+  const apply = (value: ExecutionView) => {
     currentPage.current = value; setView(value);
     const waiting = value.metadata?.inputUncertain === true || value.output?.inputUncertain === true;
     if (waiting || value.metadata?.inputUncertain === false && value.output?.inputUncertain === false) { live.current.uncertain = waiting; setUncertain(waiting); }
   };
-  const request = async (action: string, args: Data = {}) => {
-    if (!current() || pending.current || noPendingLog || originalPending&&(!originalPending.canObserve||
-      (action!=='local.execution.observe'&&action!=='local.execution.readLogs'))) return;
-    const opening = action === 'local.execution.open' || action === 'local.execution.observe', prior = currentPage.current;
+  const request = async (action: string, args: Data = {}, check?:BareManagedNodeCheck) => {
+    const prior=currentPage.current,checked=check??prior?.checkedPending,receiptPin=originalPending??checked;
+    if (!current() || pending.current || noPendingLog&&!checked || originalPending&&!originalPending.canObserve ||
+        receiptPin&&action!=='local.execution.observe'&&action!=='local.execution.readLogs') return;
+    if(check){
+      const live=bareManagedNodeCheck(liveOriginalTask(),check);
+      if(action!=='local.execution.observe'||!bridge.getState().capabilities.commands.includes(action)||
+        !live||live.sourceDigest!==check.sourceDigest||live.planDigest!==check.planDigest)return;
+    }
+    const opening = action === 'local.execution.open' || action === 'local.execution.observe';
     if (!opening && (!prior || prior.executionId !== execution) || opening && !selected) return;
     const token = {}, epoch = generation.current, owner = ownerWindow(), originalExecution = execution;
     pending.current = token; setBusy(action); setError('');
-    const valid = () => alive.current && live.current.active && live.current.expanded && !document.hidden && epoch === generation.current && owner === ownerWindow() && execution === live.current.execution && pending.current === token && samePendingWindow();
+    const valid = () => alive.current && live.current.active && live.current.expanded && !document.hidden && epoch === generation.current && owner === ownerWindow() && execution === live.current.execution && pending.current === token && samePendingWindow(receiptPin);
     let acquired: Data | null = null;
     try {
-      const value = await run(action, opening ? { taskId: task.id, executionId: originalExecution, ...(action==='local.execution.observe'?{}:{observingOnly:args.observingOnly}) } : { ...args, handle: prior!.handle });
+      const value = await run(action, opening ? { taskId: task.id, executionId: originalExecution,
+        ...(check?{checkFirstReceipt:true}:action==='local.execution.observe'?{}:{observingOnly:args.observingOnly}) } : { ...args, handle: prior!.handle });
       if (opening) acquired = value;
       if (!valid()) { if (opening && value?.handle) void run('local.execution.close', { handle: value.handle }).catch(() => {}); return; }
       if (value?.taskId !== task.id || value.executionId !== originalExecution || typeof value.handle !== 'string' || !value.handle || !opening && value.handle !== prior!.handle) throw new Error('原项目执行回执身份不可核对，请重新打开原记录。');
       if (opening || action === 'local.execution.readLogs') {
         if(action==='local.execution.observe'&&value.metadata?.observingOnly!==true)throw Error('未取得原执行的只读观察，不进入交互终端。');
         if (value.metadata?.taskId !== task.id || value.metadata?.executionId !== originalExecution || value.output?.executionId !== originalExecution) throw new Error('原日志或终端元数据身份不一致。');
-        if(originalPending&&(value.metadata.observingOnly!==true||value.metadata.runId!==originalPending.runId||
-          value.metadata.epoch!==originalPending.epoch||value.metadata.projectId!==originalPending.projectId||
-          value.metadata.checkoutId!==originalPending.checkoutId))throw Error('未取得同一次本机执行的原日志，没有读取其他记录。');
+        if(receiptPin&&(value.metadata.observingOnly!==true||value.metadata.runId!==receiptPin.runId||
+          value.metadata.epoch!==receiptPin.epoch||value.metadata.projectId!==receiptPin.projectId||
+          value.metadata.checkoutId!==receiptPin.checkoutId))throw Error('未取得同一次本机执行的原日志，没有读取其他记录。');
+        if(checked){
+          const exit=originalExecutionExit(value.output.observedExit,value.metadata,value.output.nativeStatus);
+          if(value.output.terminal!==true||value.output.resourcesReleased!==true||!exit||exit.kind!=='exit_code'||
+            exit.sourceDigest!==checked.sourceDigest||exit.planDigest!==checked.planDigest||exit.stepId!==checked.phase||
+            exit.resourcesReleased!==true||exit.processGroupAbsent!==true||exit.cancelRequested!==false||exit.timedOut!==false||
+            !(exit.nativeStatus==='completed'&&exit.value===0||exit.nativeStatus==='failed'&&exit.value>0))
+            throw Error('未取得这次执行的已结束回执。');
+        }
         if (focusFailure) {
           const receipt=originalExecutionExit(value.output.observedExit,value.metadata,value.output.nativeStatus);
           if (!failure || value.metadata.observingOnly !== true || !receipt || receipt.kind !== 'exit_code' || receipt.nativeStatus !== 'failed' ||
@@ -89,7 +109,7 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
               receipt.stepId !== failure.failureStage || receipt.value !== failure.exitCode)
             throw new Error('未取得这次失败的原日志与退出回执，没有读取其他执行。');
         }
-        apply(value);
+        apply(checked?{...value,checkedPending:checked}:value);
         if (opening) { setColumns(String(value.metadata.columns)); setHeight(String(value.metadata.rows)); live.current.uncertain = value.metadata.inputUncertain === true || value.output.inputUncertain === true; setUncertain(live.current.uncertain); setInputReceipt(null); live.current.stopRequested = stopped.has(originalKey) || value.stopRequested === true; setStopRequested(live.current.stopRequested); }
       } else if (action === 'local.execution.input' || action === 'local.execution.inputReceipt') {
         setInputReceipt(value);
@@ -101,7 +121,12 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
         }
       } else if (action === 'local.execution.stop') setStopReceipt(value);
       return value;
-    } catch (failure) { if (opening && acquired?.handle && currentPage.current?.handle !== acquired.handle) void run('local.execution.close', { handle: acquired.handle }).catch(() => {}); if (valid()) setError(failure instanceof Error ? failure.message : String(failure)); }
+    } catch (failure) {
+      if (opening && acquired?.handle && currentPage.current?.handle !== acquired.handle) void run('local.execution.close', { handle: acquired.handle }).catch(() => {});
+      if (valid()) setError(check?(currentManagedNodeOperation(liveOriginalTask(),check)?.state==='receipt'?
+        '同一条原执行记录已更新。可重新查看原回执；没有重新运行。':
+        '尚未核对到这次执行的结束回执，结果仍待核对。没有重新运行。'):failure instanceof Error ? failure.message : String(failure));
+    }
     finally { if (pending.current === token) { pending.current = null; if (alive.current) setBusy(''); } }
   };
   useEffect(() => {
@@ -115,7 +140,7 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const output = view?.output || {}, metadata = view?.metadata || {}, frame = output.screen;
   const frameId = `${view?.handle}|${frame?.generation}|${frame?.revision}`;
   useEffect(() => {
-    if (originalPending || noPendingLog || !active || !expanded || !view || busy || error || stopReview || painted !== frameId || !projectExecutionShouldRead(output)) return;
+    if (originalPending || view?.checkedPending || noPendingLog || !active || !expanded || !view || busy || error || stopReview || painted !== frameId || !projectExecutionShouldRead(output)) return;
     const timer = window.setTimeout(() => { void request('local.execution.readLogs'); }, output.hasMore ? 100 : 700);
     return () => window.clearTimeout(timer);
   }, [originalPending, noPendingLog, active, expanded, view, busy, error, stopReview, painted, frameId]);
@@ -136,7 +161,7 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const commands=bridge.getState().capabilities.commands,canObserve=commands.includes('local.execution.observe'),canInteract=commands.includes('local.execution.open')&&commands.includes('local.execution.input');
   const observed=originalExecutionExit(output.observedExit,metadata,output.nativeStatus);
   if (!entries.length) return null;
-  return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title={originalPending ? pendingTitle+'的日志与回执' : focusFailure ? failureName : '原执行与日志'} description={originalPending ? '只读，不会重跑' : focusFailure && failure ? `实际退出码 ${failure.exitCode}` : failureName || (operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`)}>
+  return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title={originalPending ? pendingTitle+'的日志与回执' : focusFailure ? failureName : waitingForReceipt&&checkable&&canObserve ? '原执行记录' : '原执行与日志'} description={originalPending ? '只读，不会重跑' : focusFailure && failure ? `实际退出码 ${failure.exitCode}` : failureName || (operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`)}>
     {focusFailure && failure && <>
       <dl className="pw-facts">
         <div><dt>本次所用副本</dt><dd dir="auto">{projectName || failure.projectId} · <bdi>{failure.checkoutId}</bdi></dd></div>
@@ -145,7 +170,10 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
       {editFailedCopy&&<div className="pw-form-actions"><Button variant="secondary" disabled={!active||!!busy} onClick={editFailedCopy}>编辑原副本的当前文件</Button></div>}
     </>}
     {!focusFailure && !operation && (entries.length > 1 || !selected) && <SelectField label="原项目执行" value={execution} isDisabled={!!busy || stopReview} options={entries.map(row => ({ id: row.operationId, label: `${row.routeKind==='termux'?'外部 Termux 回执':row.interactive&&canInteract?'当前 PTY':'本机只读执行'} · ${row.operationId}` }))} onChange={value => { if (pending.current || !current()) return; close(); live.current.execution = value; setSelection(value); }} />}
-    {!selected?<p className="pw-field-hint">原操作仍有待核对项，没有用之前的日志当作本次结果。可以手动选择具体的历史执行。</p>:noPendingLog?<p className="pw-field-hint">尚未确认原进程回执，暂不能读取日志。没有日志不代表没有执行。</p>:selected.routeKind==='termux'?(commands.includes('local.execution.savedTermux')?
+    {!selected?<p className="pw-field-hint">原操作仍有待核对项，没有用之前的日志当作本次结果。可以手动选择具体的历史执行。</p>:waitingForReceipt?<>
+      <p className="pw-field-hint" role="status">{busy&&checkable?'正在核对这次执行…':error||(checkable&&canObserve?'尚未确认原进程回执。若核对到结束回执，只更新这次的原记录，不会重新运行。':'尚未确认原进程回执，暂不能读取日志。没有日志不代表没有执行。')}</p>
+      {checkable&&canObserve&&<div className="pw-form-actions"><Button variant="secondary" disabled={!active||!!busy} onClick={()=>{void request('local.execution.observe',{},checkable)}}>核对这次执行</Button></div>}
+    </>:selected.routeKind==='termux'?(commands.includes('local.execution.savedTermux')?
       <ProjectTermuxOriginalReceipt key={originalKey} task={task} row={selected} active={active&&expanded} run={run}/>:<p>当前版本没有外部 Termux 的原回调阅读能力，不转去本机终端。</p>):!view ? <><p className="pw-field-hint">读取原标准输出、错误输出和记录游标。打开页面不会新建或恢复执行。</p><div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy || !!originalPending&&!canObserve} onClick={() => { void request(originalPending||focusFailure||canObserve?'local.execution.observe':'local.execution.open', { observingOnly: true }); }}>{originalPending ? '读取原日志与回执' : failureName ? `查看${failureName}日志` : '查看原执行日志'}</Button>{!originalPending && selected.interactive && canInteract && <Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: false }); }}>打开原交互终端</Button>}</div></> : <>
       <div className="pw-local-screen-toolbar"><span><strong>{metadata.executable}</strong><small>{metadata.workingDirectory}</small></span><Button variant="ghost" size="small" onClick={close}>关闭视图</Button></div>
       <p className="pw-field-hint pw-execution-scope">{metadata.observingOnly ? '只读观察，不能输入或停止执行。' : '原交互终端；输入仍受原任务时限、额度与进程状态约束。'}关闭视图只结束查看，不停止原进程。</p>
@@ -174,7 +202,7 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
       </div></AccordionItem></Accordion>}
       <Accordion><AccordionItem id="project-terminal-identity" title="原执行身份"><dl className="pw-facts"><div><dt>任务</dt><dd>{metadata.taskId}</dd></div><div><dt>运行</dt><dd>{metadata.runId} · {metadata.epoch}</dd></div><div><dt>执行</dt><dd>{metadata.executionId}</dd></div><div><dt>项目 / 副本</dt><dd>{metadata.projectId} / {metadata.checkoutId}</dd></div></dl></AccordionItem></Accordion>
     </>}
-    {error && <p role="alert" className="pw-secondary-error">{error}</p>}
+    {error && !waitingForReceipt && <p role="alert" className="pw-secondary-error">{error}</p>}
     <SettingsDialog isOpen={stopReview} title="停止这个原项目进程？" onClose={() => { live.current.stopReview = false; setStopReview(false); }}><p>只停止当前核对的原执行，已写入的副本和原日志保留。</p><p className="pw-field-hint">{metadata.taskId} · {metadata.runId} · {metadata.executionId}</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => { live.current.stopReview = false; setStopReview(false); }}>返回</Button><Button variant="danger" disabled={!!busy || !active} onClick={() => { if (!current() || pending.current || !live.current.stopReview || live.current.stopRequested || currentPage.current?.handle !== view?.handle) return; live.current.stopRequested = true; live.current.stopReview = false; stopped.add(originalKey); if (stopped.size > 64) stopped.delete(stopped.values().next().value!); setStopRequested(true); setStopReview(false); void request('local.execution.stop'); }}>确认停止原进程一次</Button></div></SettingsDialog>
   </AccordionItem></Accordion>;
 }

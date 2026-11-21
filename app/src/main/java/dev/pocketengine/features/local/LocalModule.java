@@ -1408,8 +1408,28 @@ public final class LocalModule implements EngineModule {
         if("collectProjectOutput".equals(exact.optString("command")))return queryManagedOutputReceipt(exact,binding);
         RuntimeExecutionRef reference=RuntimeExecutionRef.fromHost(exact,binding);ProjectRuntime selected=runtime(runtimeId(exact));return (cancel?selected.requestCancel(reference):selected.query(reference)).json();
     }
+    private RuntimeExecutionRef firstManagedNodeRef(dev.pocketengine.store.TaskStore.ProjectTerminalTarget target)throws Exception{
+        if(closed||target==null||!target.firstReceiptLookup())throw new SecurityException("缺少这次待核对的本机执行");
+        JSONObject original=target.originalRequest(),plan=original.getJSONObject("plan");
+        JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,original.getString("stepId")));
+        return RuntimeExecutionRef.fromHost(exact,original.getJSONObject("binding"));
+    }
+    /** Only the opt-in original owner observation holds a SQL-verified bare target. */
+    public synchronized JSONObject firstManagedNodeReceiptForHost(dev.pocketengine.store.TaskStore.ProjectTerminalTarget target,
+            java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        RuntimeExecutionRef ref=firstManagedNodeRef(target);
+        var receipt=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID).retainedNodeTerminalReceiptForHost(ref,ownerWindow);
+        return receipt==null?null:receipt.json();
+    }
     public synchronized JSONObject projectLogForHost(JSONObject exact,JSONObject binding,long cursor,int maxBytes)throws Exception {
         RuntimeExecutionRef reference=RuntimeExecutionRef.fromHost(exact,binding);return runtime(runtimeId(exact)).readLog(reference,cursor,maxBytes);
+    }
+    /** The initial page follows the existing log reader with the original foreground fence. */
+    public synchronized JSONObject firstManagedNodeLogForHost(dev.pocketengine.store.TaskStore.ProjectTerminalTarget original,
+            dev.pocketengine.store.TaskStore.ProjectTerminalTarget verified,long cursor,int maxBytes,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        RuntimeExecutionRef ref=firstManagedNodeRef(original);
+        if(!original.sameOriginal(verified)||verified.firstReceiptLookup())throw new SecurityException("原执行尚无可核对的结束回执");
+        return ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID).firstNodeLogForHost(ref,cursor,maxBytes,ownerWindow);
     }
     @Override public synchronized JSONObject handle(String command,JSONObject input)throws Exception {
         if(closed)throw new IllegalStateException("本地开发模块已关闭");if(input==null)input=new JSONObject();

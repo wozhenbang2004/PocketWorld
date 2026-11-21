@@ -5,6 +5,7 @@ import dev.pocketengine.core.RunJournal;
 import dev.pocketengine.features.local.LocalModule;
 import dev.pocketengine.store.TaskStore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import org.json.JSONObject;
 
 /** Native owner terminal over the one original approved PTY. No new runner, shell,
@@ -14,21 +15,75 @@ public final class ProjectOwnerTerminal {
     public ProjectOwnerTerminal(TaskStore tasks,LocalModule local,TaskStoreProjectHost.CurrentControl controls){this.tasks=tasks;this.local=local;this.controls=controls;}
     public Session open(String task,String execution,RunControl observation)throws Exception{return new Session(tasks.ownerProjectTerminalForOwner(task,execution),observation);}
     public Session openObservation(String task,String execution,RunControl observation)throws Exception{return new Session(tasks.ownerProjectExecutionForOwner(task,execution),observation);}
+    /** The existing explicit owner observe action alone may look for this job's first durable result. */
+    public Session openExplicitObservation(String task,String execution,RunControl observation,BooleanSupplier currentOwner)throws Exception{
+        if(currentOwner==null||!currentOwner.getAsBoolean())throw new SecurityException("原执行核对窗口已关闭");
+        var target=tasks.ownerProjectExecutionForOwner(task,execution,true);
+        if(!target.firstReceiptLookup())throw new SecurityException("原执行回执已更新，请从同一任务重新读取；没有重新派发。");
+        return new Session(target,observation,currentOwner);
+    }
     public JSONObject readStoredTermuxCommand(String task,String execution,String source,String channel,String expected)throws Exception{
         return tasks.ownerTermuxCommandRecord(task,execution).read(source,channel,expected,(exact,binding)->local.projectReceiptForHost(exact,binding,false));
     }
     public final class Session implements AutoCloseable {
+        private static final String FIRST_RECEIPT_UNKNOWN="尚未读到这次执行的已结束回执，结果仍待核对。没有重新派发。";
         private final TaskStore.ProjectTerminalTarget target;private final RunControl observation;private final AtomicBoolean closed=new AtomicBoolean();private boolean inputUncertain;private JSONObject lastInput;private ProjectTerminalScreen screen;
-        private Session(TaskStore.ProjectTerminalTarget target,RunControl observation)throws Exception{this.target=target;this.observation=java.util.Objects.requireNonNull(observation);JSONObject meta=check().metadata();inputUncertain=meta.optInt("pendingInputCount")>0;if(meta.has("pendingInputOperationId"))lastInput=new JSONObject().put("taskId",target.taskId).put("runId",target.runId).put("coordinatorEpoch",target.epoch).put("operationId",meta.getString("pendingInputOperationId"));}
-        private TaskStore.ProjectTerminalTarget check()throws Exception{if(closed.get())throw new IllegalStateException("终端视图已关闭");observation.check();TaskStore.ProjectTerminalTarget now=target.observingOnly()?tasks.ownerProjectExecutionForOwner(target.taskId,target.executionId):tasks.ownerProjectTerminalForOwner(target.taskId,target.executionId);if(!target.sameOriginal(now))throw new SecurityException("原终端执行代次已变化，未切换到其他会话");return now;}
-        public synchronized JSONObject metadata()throws Exception{return check().metadata().put("inputUncertain",inputUncertain).put("viewerOnlyClose",true).put("secretInputSupported",false);}
+        private BooleanSupplier firstReceiptWindow;
+        private Session(TaskStore.ProjectTerminalTarget target,RunControl observation)throws Exception{this(target,observation,null);}
+        private Session(TaskStore.ProjectTerminalTarget target,RunControl observation,BooleanSupplier currentOwner)throws Exception{
+            this.target=target;this.observation=java.util.Objects.requireNonNull(observation);
+            if(target.firstReceiptLookup())firstReceiptWindow=java.util.Objects.requireNonNull(currentOwner);
+            JSONObject meta=check().metadata();inputUncertain=meta.optInt("pendingInputCount")>0;if(meta.has("pendingInputOperationId"))lastInput=new JSONObject().put("taskId",target.taskId).put("runId",target.runId).put("coordinatorEpoch",target.epoch).put("operationId",meta.getString("pendingInputOperationId"));
+        }
+        private void checkFirstReceiptWindow(){
+            if(firstReceiptWindow!=null&&!firstReceiptWindow.getAsBoolean())throw new SecurityException("原执行核对窗口已关闭");
+        }
+        private TaskStore.ProjectTerminalTarget check()throws Exception{
+            if(closed.get())throw new IllegalStateException("终端视图已关闭");observation.check();checkFirstReceiptWindow();
+            TaskStore.ProjectTerminalTarget now=target.observingOnly()?tasks.ownerProjectExecutionForOwner(target.taskId,target.executionId,firstReceiptWindow!=null):tasks.ownerProjectTerminalForOwner(target.taskId,target.executionId);
+            if(!target.sameOriginal(now))throw new SecurityException("原终端执行代次已变化，未切换到其他会话");
+            checkFirstReceiptWindow();return now;
+        }
+        private JSONObject viewerMetadata(TaskStore.ProjectTerminalTarget current)throws Exception{
+            return current.metadata().put("inputUncertain",inputUncertain).put("viewerOnlyClose",true).put("secretInputSupported",false);
+        }
+        public synchronized JSONObject metadata()throws Exception{
+            if(firstReceiptWindow!=null)throw new IllegalStateException(FIRST_RECEIPT_UNKNOWN);
+            return viewerMetadata(check());
+        }
+        /** No observing viewer or first page until the same owner source and window have passed the full read. */
+        public synchronized JSONObject firstObservation()throws Exception{
+            if(firstReceiptWindow==null)throw new IllegalStateException(FIRST_RECEIPT_UNKNOWN);
+            JSONObject output=readScreen(),metadata=viewerMetadata(check());
+            JSONObject result=new JSONObject().put("metadata",metadata).put("output",output);
+            checkFirstReceiptWindow();firstReceiptWindow=null;
+            return result;
+        }
         public synchronized JSONObject read(long cursor)throws Exception{
-            check();JSONObject original=target.originalRequest(),plan=original.getJSONObject("plan"),exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,original.getString("stepId"))),binding=original.getJSONObject("binding");
-            JSONObject backend=local.projectReceiptForHost(exact,binding,false),durable=ProjectSources.copy(backend);durable.remove("activity");tasks.recordProjectOperation(binding,exact,durable);tasks.finishOwnerLocalTerminalFromReceipt(binding);
+            TaskStore.ProjectTerminalTarget current=check();
+            JSONObject original=target.originalRequest(),plan=original.getJSONObject("plan"),exact=ProjectDevelopment.exact(plan,ProjectBuildPlan.step(plan,original.getString("stepId"))),binding=original.getJSONObject("binding");
+            boolean first=firstReceiptWindow!=null;
+            JSONObject backend;
+            if(first){
+                if(!current.firstReceiptLookup())throw new SecurityException("原执行回执已更新，请从同一任务重新读取；没有重新派发。");
+                checkFirstReceiptWindow();
+                backend=local.firstManagedNodeReceiptForHost(current,firstReceiptWindow);
+                if(backend==null||!OwnerDraftFirstBuild.verifiedFirstTerminalObservation(exact,binding,backend))
+                    throw new IllegalStateException(FIRST_RECEIPT_UNKNOWN);
+                tasks.recordFirstProjectReceiptForOwner(target,backend,firstReceiptWindow);
+            }else{
+                backend=local.projectReceiptForHost(exact,binding,false);
+                JSONObject durable=ProjectSources.copy(backend);durable.remove("activity");
+                tasks.recordProjectOperation(binding,exact,durable);tasks.finishOwnerLocalTerminalFromReceipt(binding);
+            }
             JSONObject policy=local.automaticProjectLogPolicyForHost(exact.optString("runtimeId","termux"));int pageBytes=policy.getInt("automaticLogPageBytes");if(pageBytes!=8192&&pageBytes!=32768)throw new IllegalStateException("runtime_native_log_policy_invalid");
-            JSONObject log=local.projectLogForHost(exact,binding,cursor,pageBytes);check();
+            JSONObject log;
+            if(first){log=local.firstManagedNodeLogForHost(target,check(),cursor,pageBytes,firstReceiptWindow);}
+            else log=local.projectLogForHost(exact,binding,cursor,pageBytes);
+            check();
             JSONObject exit=ProjectExecutionExit.from(exact,binding,backend);if(exit!=null)log.put("observedExit",exit);
-            if(backend.optJSONObject("activity")!=null)log.put("activity",ProjectSources.copy(backend.getJSONObject("activity")));return log.put("logObservationPolicy",policy).put("terminal",backend.optBoolean("receiptReceived")&&backend.optString("status").matches("completed|failed")).put("nativeStatus",backend.optString("status")).put("processExited",backend.optBoolean("processExited")).put("resourcesReleased",backend.optBoolean("resourcesReleased")).put("inputUncertain",inputUncertain);
+            if(backend.optJSONObject("activity")!=null)log.put("activity",ProjectSources.copy(backend.getJSONObject("activity")));
+            return log.put("logObservationPolicy",policy).put("terminal",backend.optBoolean("receiptReceived")&&backend.optString("status").matches("completed|failed")).put("nativeStatus",backend.optString("status")).put("processExited",backend.optBoolean("processExited")).put("resourcesReleased",backend.optBoolean("resourcesReleased")).put("inputUncertain",inputUncertain);
         }
         /** Native page/session owns the cursor; navigation can close this display without stopping the process. */
         public synchronized JSONObject readScreen()throws Exception {

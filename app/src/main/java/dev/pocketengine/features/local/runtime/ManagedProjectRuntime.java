@@ -324,6 +324,18 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public RuntimeReceipt gitImportReceiptForHost(RuntimeExecutionRef ref)throws Exception {
         requireProvider(ref);if(!dev.pocketengine.features.local.project.ProjectGitImport.exact(ref.exact()))throw new SecurityException("runtime_not_original_git_import");return jobs.existing(ref);
     }
+    private static void requireOriginalNodeCommand(RuntimeExecutionRef ref)throws Exception{
+        requireProvider(ref);JSONObject exact=ref.exact();
+        if(!"project.runtime.run".equals(exact.opt("command"))||!java.util.Set.of("build","dependencies").contains(exact.optString("intent")))
+            throw new SecurityException("runtime_original_node_command_required");
+    }
+    /** The first explicitly inspected managed Node result must come from the exact retained receipt. */
+    public RuntimeReceipt retainedNodeTerminalReceiptForHost(RuntimeExecutionRef ref,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        requireOriginalNodeCommand(ref);return jobs.retainedTerminalReceipt(ref,java.util.Objects.requireNonNull(ownerWindow));
+    }
+    public JSONObject firstNodeLogForHost(RuntimeExecutionRef ref,long cursor,int maxBytes,java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        requireOriginalNodeCommand(ref);return jobs.readLog(ref,cursor,maxBytes,java.util.Objects.requireNonNull(ownerWindow));
+    }
     @Override public RuntimeReceipt query(RuntimeExecutionRef ref) throws Exception {requireProvider(ref);return jobs.query(ref);}
     @Override public RuntimeReceipt requestCancel(RuntimeExecutionRef ref) throws Exception {requireProvider(ref);return jobs.requestCancel(ref);}
     @Override public JSONObject readLog(RuntimeExecutionRef ref,long afterSequence,int maxBytes) throws Exception {

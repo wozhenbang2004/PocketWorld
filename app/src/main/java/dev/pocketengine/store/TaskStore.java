@@ -14614,12 +14614,15 @@ public final class TaskStore {
      * not revive a stopped service or the finite startup input approval. */
     public static final class ProjectTerminalTarget {
         public final String taskId,runId,executionId,projectId,checkoutId;public final int epoch;
-        private final JSONObject request,view;private final TaskStore issuer;private final boolean observingOnly;
+        private final JSONObject request,view;private final TaskStore issuer;private final boolean observingOnly,firstReceiptLookup;
         private ProjectTerminalTarget(TaskStore issuer,String task,String run,int epoch,JSONObject row)throws Exception{
-            this(issuer,task,run,epoch,row,false);
+            this(issuer,task,run,epoch,row,false,false);
         }
         private ProjectTerminalTarget(TaskStore issuer,String task,String run,int epoch,JSONObject row,boolean observingOnly)throws Exception{
-            this.observingOnly=observingOnly;
+            this(issuer,task,run,epoch,row,observingOnly,false);
+        }
+        private ProjectTerminalTarget(TaskStore issuer,String task,String run,int epoch,JSONObject row,boolean observingOnly,boolean firstReceiptLookup)throws Exception{
+            this.observingOnly=observingOnly;this.firstReceiptLookup=firstReceiptLookup;
             this.issuer=issuer;taskId=task;runId=run;this.epoch=epoch;executionId=row.getString("operationId");JSONObject args=row.getJSONObject("arguments"),plan=args.getJSONObject("plan"),payload=dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,args.getString("stepId")).getJSONObject("payload"),route=row.getJSONObject("receipt").getJSONObject("projectExecution");projectId=plan.getString("projectId");checkoutId=plan.getString("checkoutId");
             request=new JSONObject().put("plan",plan).put("stepId",args.getString("stepId")).put("binding",route);
             view=new JSONObject().put("taskId",taskId).put("runId",runId).put("epoch",epoch).put("executionId",executionId).put("projectId",projectId).put("checkoutId",checkoutId).put("executable",payload.getString("executable")).put("workingDirectory",payload.optString("workingDirectory",".")).put("argvCount",payload.getJSONArray("argv").length()).put("timeoutMillis",payload.optLong("timeoutMillis",300000)).put("originalState",row.getString("state")).put("planDigest",plan.getString("planDigest")).put("terminalMode",payload.optString("terminalMode","pipes")).put("observingOnly",observingOnly);
@@ -14636,6 +14639,7 @@ public final class TaskStore {
         public JSONObject originalRequest()throws Exception{return new JSONObject(request.toString());}
         public JSONObject metadata()throws Exception{return new JSONObject(view.toString());}
         public boolean observingOnly(){return observingOnly;}
+        public boolean firstReceiptLookup(){return firstReceiptLookup;}
         public boolean sameOriginal(ProjectTerminalTarget other){return other!=null&&issuer==other.issuer&&observingOnly==other.observingOnly&&taskId.equals(other.taskId)&&runId.equals(other.runId)&&epoch==other.epoch&&executionId.equals(other.executionId)&&view.optString("planDigest").equals(other.view.optString("planDigest"));}
     }
     public synchronized ProjectTerminalTarget ownerProjectTerminalForOwner(String id,String execution)throws Exception{
@@ -14655,17 +14659,78 @@ public final class TaskStore {
         }
     }
     public synchronized ProjectTerminalTarget ownerProjectExecutionForOwner(String id,String execution)throws Exception{
+        return ownerProjectExecutionForOwner(id,execution,false);
+    }
+    /** Native original view only. An opted-in, route-only target carries no receipt or ready viewer. */
+    public synchronized ProjectTerminalTarget ownerProjectExecutionForOwner(String id,String execution,boolean allowFirstReceiptLookup)throws Exception{
+        boolean owns=allowFirstReceiptLookup&&!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
+        try{
+            ProjectTerminalTarget target=ownerProjectExecutionTarget(id,execution,allowFirstReceiptLookup);
+            if(owns)db.setTransactionSuccessful();
+            return target;
+        }finally{if(owns)db.endTransaction();}
+    }
+    private ProjectTerminalTarget ownerProjectExecutionTarget(String id,String execution,boolean allowFirstReceiptLookup)throws Exception{
         JSONObject task=required(id);requirePrivateOwner(task);if(task.has("ownerLocalTerminal"))requireOwnerLocalTerminalTask(id);else if(!"assistant".equals(task.optString("kind"))||task.has("origin")||task.optJSONObject("developmentContext")==null)throw new SecurityException("请从原私人项目任务观察执行");
         dev.pocketengine.features.local.project.ProjectBuildPlan.identity(execution);
         try(Cursor selected=db.rawQuery("SELECT o.run_id,r.epoch FROM operations o JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id WHERE o.task_id=? AND o.operation_id=? AND o.tool='project_execute'",new String[]{id,execution})){
             if(!selected.moveToFirst())throw new SecurityException("原任务没有此真实项目执行");String run=selected.getString(0);int epoch=selected.getInt(1);
+            if(allowFirstReceiptLookup)requireFirstProjectObservationSource(task,run,epoch);
             JSONObject binding=new JSONObject().put("taskId",id).put("runId",run).put("coordinatorEpoch",epoch).put("operationId",execution),row=projectOperationForHost(binding),request=originalProjectRequestForHost(binding),plan=request.getJSONObject("plan"),exact=dev.pocketengine.features.local.project.ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,request.getString("stepId")));
             if(!"managed_process_v1".equals(exact.optString("runtimeId"))||!"project.runtime.run".equals(exact.optString("command")))throw new SecurityException("请选择原本机进程执行；此观察不启动工具准备或其它宿主");
-            JSONObject envelope=row.getJSONObject("receipt"),route=envelope.getJSONObject("projectExecution"),backend=envelope.getJSONObject("executionReceipt");
+            JSONObject envelope=row.getJSONObject("receipt"),route=envelope.getJSONObject("projectExecution");
+            if(allowFirstReceiptLookup&&!envelope.has("executionReceipt")){
+                JSONObject journal=row.getJSONObject("journalArguments");
+                JSONObject raw=new JSONObject(row.toString()).put("arguments",journal).put("runEpoch",epoch);
+                JSONObject pending=OwnerDraftFirstBuild.pendingManagedNode(task,raw);
+                if(pending==null||!Boolean.TRUE.equals(pending.opt("canCheck")))
+                    throw new SecurityException("原本机构建的派发凭据不能用于此次核对；没有读取其他执行。");
+                JSONObject pin=task.getJSONObject("developmentContext").getJSONObject(OwnerDraftFirstBuild.FIELD);
+                OwnerDraftFirstBuild.requireSourceBinding(binding,request.getJSONObject("binding"));
+                OwnerDraftFirstBuild.requirePlan(pin,plan,id);
+                JSONObject approval=OwnerDraftFirstBuild.consumedCommandApproval(task,journal,route);
+                // Compare at the original consume point; the copied state has no authority.
+                if(approval==null||!OwnerDraftFirstBuild.sameApprovedProposal(new JSONObject(approval.toString()).put("state","approved"),OwnerDraftFirstBuild.reviewOperation(pin,plan,binding)))
+                    throw new SecurityException("原本机构建的批准与此派发不匹配；没有读取其他执行。");
+                return new ProjectTerminalTarget(this,id,run,epoch,row,true,true);
+            }
+            JSONObject backend=envelope.getJSONObject("executionReceipt");
             dev.pocketengine.features.local.runtime.RuntimeExecutionRef.fromHost(exact,route).requireReceipt(backend);
             dev.pocketengine.features.local.project.ProjectDevelopment.recordedReceipt(task,row);
             return new ProjectTerminalTarget(this,id,run,epoch,row,true);
         }
+    }
+    /** Initial opt-in read only: same original private source before/after provider receipt and first log. */
+    private void requireFirstProjectObservationSource(JSONObject task,String run,int epoch)throws Exception{
+        JSONObject context=task.optJSONObject("developmentContext"),pin=context==null?null:context.optJSONObject(OwnerDraftFirstBuild.FIELD);
+        if(!ordinaryPlanningSource(task)||OwnerWorkTask.isOwnerWork(task)||task.has("workProfileRef")||task.has("workProfileIntent")||
+            !run.equals(task.opt("runId"))||epoch!=task.optInt("coordinatorEpoch",-1)||!Boolean.FALSE.equals(task.opt("cancelRequested"))||
+            !OwnerDraftFirstBuild.ownerObservationSourceVisible(task)||pin==null||!OwnerDraftFirstBuild.existingCheckout(pin))
+            throw new SecurityException("原任务的当前来源或执行轮次不可核对；没有读取其他执行。");
+        // Same native lookup used to find this exact project/source's ordinary first build:
+        // it checks the retained private submission and conversation/source deletion, without message text.
+        JSONObject anchored=existingNodeBuildForOwner(pin.getString("projectId"),pin.getString("checkoutId"),pin.getString("sourceDigest"));
+        if(anchored==null||!task.getString("id").equals(anchored.opt("id"))||!run.equals(anchored.opt("runId"))||epoch!=anchored.optInt("epoch",-1))
+            throw new SecurityException("原构建的私人请求已不可核对；没有读取其他执行。");
+    }
+    /** Record only an actual first observation with the original owner window and pending CAS both still current. */
+    public synchronized void recordFirstProjectReceiptForOwner(ProjectTerminalTarget selected,JSONObject backend,java.util.function.BooleanSupplier currentOwner)throws Exception{
+        if(selected==null||selected.issuer!=this||!selected.firstReceiptLookup()||currentOwner==null)
+            throw new SecurityException("没有这次原执行的待核对身份");
+        db.beginTransaction();try{
+            if(!currentOwner.getAsBoolean())throw new SecurityException("原执行核对窗口已关闭");
+            ProjectTerminalTarget current=ownerProjectExecutionTarget(selected.taskId,selected.executionId,true);
+            if(!selected.sameOriginal(current)||!current.firstReceiptLookup())
+                throw new SecurityException("原执行回执已更新，请从同一任务重新读取；没有重新派发。");
+            JSONObject request=current.originalRequest(),plan=request.getJSONObject("plan"),route=request.getJSONObject("binding");
+            JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,request.getString("stepId")));
+            if(!OwnerDraftFirstBuild.verifiedFirstTerminalObservation(exact,route,backend)||!currentOwner.getAsBoolean())
+                throw new SecurityException("这次的原执行结束回执或窗口不能核对");
+            recordProjectOperation(route,exact,backend);
+            if(!selected.sameOriginal(ownerProjectExecutionTarget(selected.taskId,selected.executionId,true))||!currentOwner.getAsBoolean())
+                throw new SecurityException("原执行核对窗口或原回执已变化");
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
     }
     public synchronized boolean projectProcessInputAllowed(String id,String run,int epoch,JSONObject args)throws Exception {
         dev.pocketengine.features.local.project.ProjectCommandSpec.inputRequest(args);ptyServiceRow(id,run,epoch,dev.pocketengine.features.local.project.ProjectBuildPlan.identity(args.getString("executionId")),true);return true;

@@ -88,7 +88,9 @@ internal class PocketWebLocal(private val controller: PocketWorldController, pri
             "local.terminal.query", "local.terminal.stop" -> { fields(args, "taskId", "runId", "epoch", "executionId"); val task = id(args, "taskId"); require(id(args, "runId") == task && id(args, "executionId") == task && args.opt("epoch") == 1) { "不是原手动终端身份" } }
             "local.terminal.open" -> { fields(args, "taskId", "executionId"); id(args, "taskId"); id(args, "executionId") }
             "local.execution.observe" -> {
-                fields(args,"taskId","executionId");check(taskView()==executionId(args,"taskId")){"请重新打开原私人任务"};executionId(args,"executionId")
+                fields(args,"taskId","executionId","checkFirstReceipt")
+                require(!args.has("checkFirstReceipt") || args.opt("checkFirstReceipt")==true) { "首次回执核对需要明确选择" }
+                check(taskView()==executionId(args,"taskId")){"请重新打开原私人任务"};executionId(args,"executionId")
             }
             "local.execution.open" -> { fields(args, "taskId", "executionId", "observingOnly"); check(taskView() == executionId(args, "taskId")) { "请重新打开这份原项目任务" }; executionId(args, "executionId"); require(args.opt("observingOnly") is Boolean) { "请明确选择只读日志或原交互终端" } }
         }
@@ -114,9 +116,15 @@ internal class PocketWebLocal(private val controller: PocketWorldController, pri
                         JSONObject().put("metadata", opened!!.metadata()).put("output", opened!!.readScreen())
                     }
                     "local.execution.observe" -> {
-                        opened=controller.localTerminalHost().openProjectExecutionForOwner(input.getString("taskId"),input.getString("executionId"),observation)
-                        val metadata=opened!!.metadata();check(metadata.opt("observingOnly")==true){"未取得只读观察回执"}
-                        JSONObject().put("metadata",metadata).put("output",opened!!.readScreen())
+                        val task=input.getString("taskId");val execution=input.getString("executionId");val host=controller.localTerminalHost()
+                        val firstReceipt=input.opt("checkFirstReceipt")==true
+                        opened=if(firstReceipt)host.openExplicitProjectExecutionForOwner(task,execution,observation) {
+                            current(owner,request,originalTask)
+                        } else host.openProjectExecutionForOwner(task,execution,observation)
+                        if(firstReceipt) opened!!.firstObservation() else {
+                            val metadata=opened!!.metadata();check(metadata.opt("observingOnly")==true){"未取得只读观察回执"}
+                            JSONObject().put("metadata",metadata).put("output",opened!!.readScreen())
+                        }
                     }
                     "local.execution.open" -> {
                         opened = if (input.getBoolean("observingOnly")) controller.localTerminalHost().openProjectExecutionForOwner(input.getString("taskId"), input.getString("executionId"), observation)

@@ -4,7 +4,7 @@ const object = (value: any): ProjectExecutionData => value && typeof value === '
 const operationId = (value: unknown): value is string => typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
 
 export type OriginalManagedNodePending = {taskId:string;runId:string;epoch:number;operationId:string;
-  projectId:string;checkoutId:string;phase:'build'|'dependencies';canObserve:boolean};
+  projectId:string;checkoutId:string;phase:'build'|'dependencies';canObserve:boolean;canCheck:boolean};
 
 export function reviewedManagedNodePending(taskId:string, row:ProjectExecutionData):OriginalManagedNodePending|undefined {
   const pin=object(row.originalManagedNodePending);
@@ -14,7 +14,7 @@ export function reviewedManagedNodePending(taskId:string, row:ProjectExecutionDa
     !Number.isSafeInteger(pin.epoch)||pin.epoch<1||(pin.phase!=='build'&&pin.phase!=='dependencies')||
     typeof pin.canObserve!=='boolean')return undefined;
   return {taskId,runId:pin.runId,epoch:pin.epoch,operationId:pin.operationId,projectId:pin.projectId,
-    checkoutId:pin.checkoutId,phase:pin.phase,canObserve:pin.canObserve};
+    checkoutId:pin.checkoutId,phase:pin.phase,canObserve:pin.canObserve,canCheck:pin.canObserve===false&&pin.canCheck===true};
 }
 
 export const sameManagedNodeOperation=(row:ProjectExecutionData,pin:OriginalManagedNodePending)=>
@@ -30,6 +30,26 @@ export function currentManagedNodeOperation(task:ProjectExecutionData|undefined,
     !Array.isArray(raw.operations))return undefined;
   return raw.operations.map(object).find((row:ProjectExecutionData)=>sameManagedNodeOperation(row,pin)&&
     (row.state==='unknown'||row.state==='receipt'));
+}
+
+export type BareManagedNodeCheck = OriginalManagedNodePending & {sourceDigest:string;planDigest:string};
+
+/** The native review permits a new read of this exact unconfirmed row, not a log or dispatch. */
+export function bareManagedNodeCheck(task:ProjectExecutionData|undefined,pin:OriginalManagedNodePending):BareManagedNodeCheck|undefined {
+  const raw=object(task?.raw),scope=object(raw.developmentContext),build=object(scope.ownerDraftFirstBuild);
+  const row=pin.canCheck&&!pin.canObserve?currentManagedNodeOperation(task,pin):undefined;
+  const receipt=object(row?.receipt),route=object(receipt.projectExecution),args=object(row?.arguments);
+  const sourceDigest=build.sourceDigest,planDigest=pin.phase==='build'?build.planDigest:object(build.lockedDependencies).planDigest;
+  if(row?.state!=='unknown'||raw.cancelRequested!==false||build.existingCheckoutBuild!==true||scope.draftOnly===true||
+    receipt.code!=='project_pending'||receipt.status!=='unknown'||receipt.accepted!==null||receipt.executionStatus!=='dispatching'||
+    Object.hasOwn(receipt,'executionReceipt')||route.cancelRequested===true||args.stepId!==pin.phase||args.planDigest!==planDigest||
+    typeof sourceDigest!=='string'||!/^[a-f0-9]{64}$/.test(sourceDigest)||scope.initialSourceDigest!==sourceDigest||
+    typeof planDigest!=='string'||!/^[a-f0-9]{64}$/.test(planDigest))return undefined;
+  const binding={authority:'native_host_operation',command:'project.runtime.run',runtimeId:'managed_process_v1',
+    taskId:pin.taskId,runId:pin.runId,coordinatorEpoch:pin.epoch,operationId:pin.operationId,jobId:pin.operationId,
+    projectId:pin.projectId,checkoutId:pin.checkoutId,sourceDigest,planDigest,stepId:pin.phase,intent:pin.phase};
+  if(Object.entries(binding).some(([name,value])=>route[name]!==value))return undefined;
+  return {...pin,sourceDigest,planDigest};
 }
 
 /** Native detail locator only. Even if its operation is outside this history page,

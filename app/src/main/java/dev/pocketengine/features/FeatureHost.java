@@ -246,6 +246,9 @@ public final class FeatureHost implements AutoCloseable {
     public dev.pocketengine.features.local.project.ProjectOwnerTerminal.Session openProjectExecutionForOwner(String task,String execution,dev.pocketengine.core.RunControl observation)throws Exception{
         var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerTerminals().openObservation(task,execution,observation);
     }
+    public dev.pocketengine.features.local.project.ProjectOwnerTerminal.Session openExplicitProjectExecutionForOwner(String task,String execution,dev.pocketengine.core.RunControl observation,BooleanSupplier currentOwner)throws Exception{
+        var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerTerminals().openExplicitObservation(task,execution,observation,currentOwner);
+    }
     public JSONObject readStoredTermuxCommandForOwner(String task,String execution,String source,String channel,String expected)throws Exception{
         var host=projectHost;if(host==null)throw new IllegalStateException("原项目宿主尚未挂载");return host.ownerTerminals().readStoredTermuxCommand(task,execution,source,channel,expected);
     }

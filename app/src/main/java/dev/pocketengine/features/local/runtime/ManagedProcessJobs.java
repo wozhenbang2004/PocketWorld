@@ -530,6 +530,23 @@ public final class ManagedProcessJobs implements AutoCloseable {
             job.receipt.put("logCursor",job.sequence).put("outputBytes",job.receivedBytes).put("storedOutputBytes",job.storedBytes);
         }
     }
+    /** Exact stored result only; no live snapshot, log summary, recovery or directory creation. */
+    synchronized RuntimeReceipt retainedTerminalReceipt(RuntimeExecutionRef ref,java.util.function.BooleanSupplier firstOwnerWindow)throws Exception {
+        if(!firstOwnerWindow.getAsBoolean())throw new SecurityException("原执行核对窗口已关闭");
+        String id=ref.operationId();
+        if(closing||live.containsKey(id)||unresolvedLeases.containsKey(id))return null;
+        File directory=new File(root,id),file=new File(directory,"receipt.json");
+        if(java.nio.file.Files.isSymbolicLink(directory.toPath())||
+            !java.nio.file.Files.isRegularFile(file.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))return null;
+        try{
+            JSONObject stored=RuntimeFiles.read(file);ref.requireReceipt(stored);
+            if(!Boolean.TRUE.equals(stored.opt("receiptReceived"))||!Boolean.TRUE.equals(stored.opt("resourcesReleased"))||
+                !stored.optString("status").matches("completed|failed"))return null;
+            stored.remove("stdout");stored.remove("stderr");stored.remove("activity");
+            return RuntimeReceipt.fromBackend(ref,stored);
+        }catch(java.io.IOException|org.json.JSONException unreadable){return null;}
+    }
+
     public synchronized RuntimeReceipt query(RuntimeExecutionRef ref) throws Exception {
         Job job=live.get(ref.operationId());JSONObject receipt;
         if(job!=null) {synchronized(job) {receipt=ProjectSources.copy(job.receipt).put("ownedWorkerLive",!Boolean.TRUE.equals(job.receipt.opt("resourcesReleased"))).put("observation","owned_worker_live");}}
@@ -638,16 +655,29 @@ public final class ManagedProcessJobs implements AutoCloseable {
         return query(ref);
     }
     /** Bounded raw-byte pages; sequence cursor avoids UTF-8 corruption at pipe chunk boundaries. */
-    public synchronized JSONObject readLog(RuntimeExecutionRef ref,long afterSequence,int maxBytes) throws Exception {
+    public JSONObject readLog(RuntimeExecutionRef ref,long afterSequence,int maxBytes) throws Exception {
+        return readLog(ref,afterSequence,maxBytes,null);
+    }
+    synchronized JSONObject readLog(RuntimeExecutionRef ref,long afterSequence,int maxBytes,java.util.function.BooleanSupplier firstOwnerWindow)throws Exception {
         if(afterSequence<0 || maxBytes<8192 || maxBytes>262144) throw new IllegalArgumentException("runtime_log_page_invalid");
         Job job=live.get(ref.operationId());Object lock=job==null?this:job;
         synchronized(lock) {
-            JSONObject receipt=job==null?RuntimeFiles.read(new File(new File(root,ref.operationId()),"receipt.json")):job.receipt;
+            JSONObject receipt;File log=new File(new File(root,ref.operationId()),"output.bin");
+            if(firstOwnerWindow==null){
+                receipt=job==null?RuntimeFiles.read(new File(log.getParentFile(),"receipt.json")):job.receipt;
+            }else{
+                RuntimeReceipt retained=retainedTerminalReceipt(ref,firstOwnerWindow);
+                if(retained==null||java.nio.file.Files.isSymbolicLink(log.toPath()))throw new SecurityException("原执行的留存回执或日志不再可核对");
+                receipt=retained.json();
+            }
             ref.requireReceipt(receipt);JSONArray chunks=new JSONArray();long next=afterSequence;int total=0;boolean more=false,incompleteTail=false;
-            File log=new File(new File(root,ref.operationId()),"output.bin");
-            if(log.isFile()) try(FileInputStream file=new FileInputStream(log);DataInputStream input=new DataInputStream(file)) {
+            if(firstOwnerWindow!=null&&!firstOwnerWindow.getAsBoolean())throw new SecurityException("原执行核对窗口已关闭");
+            if(log.isFile()) try(FileInputStream normal=firstOwnerWindow==null?new FileInputStream(log):null;
+                    java.nio.channels.FileChannel file=normal!=null?normal.getChannel():java.nio.channels.FileChannel.open(
+                        log.toPath(),java.nio.file.StandardOpenOption.READ,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    DataInputStream input=new DataInputStream(normal!=null?normal:java.nio.channels.Channels.newInputStream(file))) {
                 while(true) {
-                    long recordStart=file.getChannel().position(),sequence;int stream,length;byte[] bytes;
+                    long recordStart=file.position(),sequence;int stream,length;byte[] bytes;
                     try {
                         sequence=input.readLong();stream=input.readUnsignedByte();length=input.readInt();
                         if((stream!=1 && stream!=2)||length<1||length>8192)throw new java.io.IOException("runtime_log_record_invalid");
@@ -655,7 +685,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                     }catch(EOFException end){
                         // Recover only the complete original prefix. Do not erase or search
                         // past an incomplete record, infer an exit, or repair the original bytes.
-                        incompleteTail=file.getChannel().position()!=recordStart;break;
+                        incompleteTail=file.position()!=recordStart;break;
                     }
                     if(sequence<=afterSequence)continue;
                     if(total+length>maxBytes){more=true;break;}
@@ -664,6 +694,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                     total+=length;next=sequence;
                 }
             }
+            if(firstOwnerWindow!=null&&!firstOwnerWindow.getAsBoolean())throw new SecurityException("原执行核对窗口已关闭");
             return new JSONObject().put("operationId",ref.operationId()).put("chunks",chunks).put("nextCursor",next)
                     .put("hasMore",more).put("logIncompleteTail",incompleteTail).put("outputTruncated",receipt.optBoolean("outputTruncated"));
         }
