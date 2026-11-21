@@ -1,7 +1,8 @@
 import type { HostEditorFile } from './ProjectHostFileComparison';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { InlineDiff } from './shell-library';
+import { IconSearch } from './icons';
 import {checkoutEditorSelection,ProjectCheckoutTextSearch} from './ProjectCheckoutTextSearch';
 import {ProjectCheckoutPathSearch} from './ProjectCheckoutPathSearch';
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
@@ -13,6 +14,7 @@ import './project-workspace-manga.css';
 type Data = Record<string, any>;
 type SavedEdit = { id: string; filesHandle: string; path: string; beforeHash: string; savedHash: string; before: string; after: string };
 type EditorPosition = { start: number; end: number; scrollTop: number; scrollLeft: number };
+type FileFind = { fileHandle: string; query: string; result?: { text: string; at: number; line: number; wrapped: boolean } };
 // A UI bookmark, not a reusable native save handle or a copy of the file.
 export type CheckoutSavedPosition = { projectId: string; checkoutId: string; path: string; savedHash: string; caret?: EditorPosition };
 export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandle: string; id: string };
@@ -65,7 +67,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const [gitView,setGitView]=useState<CheckoutGitView|null>(null);
   const [savedEdit,setSavedEdit]=useState<SavedEdit|null>(null), [listingStale,setListingStale]=useState(false);
   const [searchVersion,setSearchVersion]=useState(0);
-  const editorContainer=useRef<HTMLElement>(null);
+  const editorContainer=useRef<HTMLElement>(null), editorInput=useRef<HTMLTextAreaElement>(null);
+  const [fileFind,setFileFind]=useState<FileFind|null>(null);
+  const findId=useId(), findTrigger=useRef<HTMLButtonElement>(null);
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
   const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
   const [checkingSavedSource, setCheckingSavedSource] = useState(false);
@@ -83,12 +87,31 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const canCheckSavedBuild = !!onPrepareBuild && (!prepareBuildAfterPath || recentSave?.path===prepareBuildAfterPath);
   const keyFor = (path: string) => `${projectId}|${checkoutId}|${path}`;
   const live = (sequence: number) => alive.current && generation.current === sequence && originalWindow.current === windowKey() && !document.hidden;
+  const canFindInFile = !sourceMember && !hostFile && !!file?.fileHandle;
+  const localFind = canFindInFile && fileFind?.fileHandle===file?.fileHandle ? fileFind : null;
+  const localMatch = localFind?.result?.text===text ? localFind?.result : undefined;
+  const findBlocked = busy || !!adoption || !!choice;
+  const closeFileFind = () => { setFileFind(null); findTrigger.current?.focus({ preventScroll: true }); };
+  const findInFile = () => {
+    const area=editorInput.current, query=localFind?.query, buffer=currentText.current;
+    if (!localFind || !query || !area?.isConnected || !alive.current || document.hidden || entered.current ||
+        activeAdoption.current || choice || currentFile.current?.fileHandle!==localFind.fileHandle ||
+        area.value!==textareaText(buffer)) return;
+    const previous=localFind.result, from=previous?.text===buffer && previous.at>=0 ? previous.at+query.length : 0;
+    let at=area.value.indexOf(query,from);
+    const wrapped=at<0 && from>0;
+    if (wrapped) at=area.value.indexOf(query);
+    const line=at<0 ? 0 : area.value.slice(0,at).split('\n').length;
+    if (at>=0) { area.focus(); area.setSelectionRange(at,at+query.length); }
+    setFileFind({ ...localFind, result:{ text:buffer,at,line,wrapped } });
+  };
   const apply = (value: Data, body = true) => {
     if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('回执不属于这个原私人副本。');
     const next = { ...(currentFile.current?.fileHandle === value.fileHandle ? currentFile.current : {}), ...value };
     if (body) for (const key of ['saveStatus', 'message', 'saveError', 'importStatus', 'importReceipt', 'importMessage', 'importError', 'projectListRefreshMessage']) if (!(key in value)) delete next[key];
     if (!('sourceHit' in value)) delete next.sourceHit;
     if (!('formalFile' in value)) delete next.formalFile;
+    if (currentFile.current?.fileHandle!==value.fileHandle) setFileFind(null);
     currentFile.current = next; setFile(next);
     if (body && typeof value.text === 'string') {
       const retained = interfaceDrafts.get(keyFor(value.path));
@@ -221,7 +244,11 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       .catch(failure => { if (live(sequence)) setError(failureText(failure)); })
       .finally(() => { if (entered.current === token) { entered.current = null; if (alive.current) { setBusy(false); setCheckingSavedSource(false); } } });
   };
-  const closeCurrent = useRef(close); closeCurrent.current = close;
+  const closeCurrent = useRef(close);
+  closeCurrent.current = () => {
+    if (localFind && !entered.current && !edits.current && !activeAdoption.current && !choice) closeFileFind();
+    else close();
+  };
   useEffect(() => {
     alive.current = true; originalWindow.current = windowKey();
     const retire = () => {
@@ -353,7 +380,24 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
             if(!area||!range){setError('编辑框和已读取的版本不一致，没有替你移动光标。');return}
             area.focus();area.setSelectionRange(...range);
           }}>在编辑框选中这一处</Button>}</div>}
-        <TextAreaField label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || orphan !== null} className="pw-code-editor" />
+        {canFindInFile && <>
+          <div className="pw-form-actions"><Button ref={findTrigger} variant="ghost" size="small" leadingIcon={IconSearch}
+            disabled={findBlocked} aria-expanded={!!localFind} aria-controls={localFind ? findId : undefined}
+            onClick={()=>localFind ? closeFileFind() : setFileFind({fileHandle:file.fileHandle,query:''})}>
+            {localFind?'收起查找':'在此文件查找'}
+          </Button></div>
+          {localFind && <section id={findId} aria-label="在此文件查找">
+            <TextField label="查找当前编辑框中的文字" value={localFind.query} maxLength={128} autoFocus
+              isDisabled={findBlocked} inputDir="auto" hint="区分大小写，包含尚未保存的文字。"
+              onChange={query=>setFileFind({fileHandle:localFind.fileHandle,query})}
+              onKeyDown={e=>{if(e.key==='Enter'&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229){e.preventDefault();findInFile()}}}/>
+            <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={findBlocked||!localFind.query}
+              onClick={findInFile}>{localMatch&&localMatch.at>=0?'下一处':'查找'}</Button></div>
+            {localMatch&&<p className="pw-field-hint" role="status">{localMatch.at<0?'当前编辑框没有匹配。':
+              `${localMatch.wrapped?'已回到开头 · ':''}第 ${localMatch.line} 行`}</p>}
+          </section>}
+        </>}
+        <TextAreaField ref={editorInput} label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || orphan !== null} className="pw-code-editor" />
         {(file.conflict || file.saveUnknown) && <p role="status">{file.saveUnknown ? '保存结果待核对，请读取同一文件。' : '副本文件与保留草稿的基线不同。请比较后决定，未自动覆盖。'}</p>}
         <Accordion>{(recentSave?.path!==file.path || file.dirty || file.conflict || orphan!==null) &&
           <AccordionItem id="checkout-file-diff" title="比较保留的修改"><InlineDiff before={file.baseContent || ''} after={text} versionLabel="草稿原基线" />{file.latest && file.conflict && <><h4>当前副本与保留草稿</h4><InlineDiff before={file.latest.content || ''} after={text} versionLabel="刚读取的副本" /></>}</AccordionItem>}

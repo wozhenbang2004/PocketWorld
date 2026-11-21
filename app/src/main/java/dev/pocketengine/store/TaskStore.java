@@ -9541,7 +9541,19 @@ public final class TaskStore {
     }
     public synchronized void interruptTeamResearch(TeamResearchBinding binding,String status)throws Exception {if(binding==null||binding.issuer!=this||binding.inspect)return;JSONObject task=teamResearchIdentity(binding);if(!binding.runId().equals(task.optString("runId"))||binding.epoch()!=task.optInt("coordinatorEpoch")||task.optString("status").equals("completed"))return;endAttempt(binding.taskId(),binding.runId(),hasUnresolved(binding.taskId())?"blocked_unknown":status,"原研究child未取得确定终态；原用量、检查点与未知操作保留，不重放",new JSONObject().put("researchInterrupted",true));}
     public synchronized JSONObject teamResearchResult(TeamResearchBinding binding)throws Exception {
-        JSONObject task=teamResearchIdentity(binding);String status=hasUnresolved(binding.taskId())?"blocked_unknown":task.optString("status");JSONObject result=binding.view().put("status",status).put("message",task.optString("summary")).put("content",status.equals("completed")?researchFinalContent(task):"").put("factVerified",false).put("businessVerified",false).put("inspectOnly",binding.inspect);if(status.equals("completed"))result.put("outputReference",new JSONObject(task.getJSONObject("teamResearchOutputReference").toString()));return result;
+        JSONObject task=teamResearchIdentity(binding);String status=hasUnresolved(binding.taskId())?"blocked_unknown":task.optString("status");
+        JSONObject result=binding.view().put("status",status).put("message",task.optString("summary")).put("content",status.equals("completed")?researchFinalContent(task):"").put("factVerified",false).put("businessVerified",false).put("inspectOnly",binding.inspect);
+        if(status.equals("completed"))result.put("outputReference",new JSONObject(task.getJSONObject("teamResearchOutputReference").toString()));
+        // Label only the already returned summary. The model child's original question is not a direct answer route.
+        if(!binding.inspect&&"awaiting_user".equals(status)&&!task.optBoolean("cancelRequested")&&!binding.original.isCancelled()
+                &&result.getString("runId").equals(task.opt("runId"))&&result.getInt("coordinatorEpoch")==task.optInt("coordinatorEpoch")
+                &&binding.original.matchesHostRun(binding.taskId(),result.getString("runId"),result.getInt("coordinatorEpoch"))){
+            JSONObject evidence=task.optJSONObject("evidence"),question=evidence==null?null:evidence.optJSONObject("ownerQuestion");
+            if(question!=null&&!question.has("options")&&question.opt("question") instanceof String message&&!message.isBlank()
+                    &&message.equals(result.opt("message"))&&dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.identity(task)!=null)
+                result.put("originalOwnerQuestionPending",true);
+        }
+        return result;
     }
     /** The existing owner-only Teams reading can show one verified recent answer per member.
      * This bounded read never writes a coordinator snapshot or exposes a receipt to another member. */

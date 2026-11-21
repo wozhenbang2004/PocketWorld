@@ -392,6 +392,21 @@ export function deviceSavedOwnerChoice(task: DeviceData, snapshot: DeviceData | 
   return { scopeRevision: saved.scopeRevision, runId: raw.runId, epoch: raw.coordinatorEpoch,
     conversationId: raw.conversationId, localDeviceId: here.deviceId, target };
 }
+/** A full native task does not carry the summary's device navigation index.
+ * Recover only the exact original local preparation, never a grant or launch option. */
+function matchesOriginalWorkspacePreparation(task: DeviceData, snapshot: DeviceData | null, peer: DeviceData | undefined) {
+  const raw = task.raw, marker = raw?.ownerDeviceWork;
+  if (task.summaryOnly === true || !object(raw) || raw.id !== task.id || deviceWorkspaceTaskMode(raw) !== 'agent_device' ||
+      raw.taskProjection !== 'detail_window' || raw.taskCoreReadLimited !== false || raw.auditBodyIncluded !== true ||
+      raw.contextAvailable === false || raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true || raw.conversationId !== '' ||
+      task.status !== 'paused' || raw.status !== 'paused' || raw.runId !== '' || raw.coordinatorEpoch !== 0 || raw.cancelRequested !== false ||
+      Object.hasOwn(raw, 'deviceSourceScope') || raw.hasUnresolvedOperations !== false || raw.historyHasUnconfirmedOperations !== false ||
+      !Array.isArray(raw.operations) || raw.operations.length !== 0 || !peer || peer.revoked !== false || peer.connection?.state === 'REVOKED' ||
+      !object(marker) || marker.format !== 'pocketworld.owner-device-work.v1' || marker.requestId !== task.id || !digest(marker.requestDigest) ||
+      Object.hasOwn(marker, 'directPhone') || !object(marker.directWorkspace) || Object.keys(marker.directWorkspace).length !== 3) return false;
+  const place = deviceReadingPlace(snapshot?.local, marker.directWorkspace);
+  return !!place && place.here.deviceId !== place.partner.deviceId && sameDeviceReadingPlace(place, snapshot?.local, peer);
+}
 export function deviceTaskRows(tasks: unknown, snapshot: DeviceData | null, peerId = ''): DeviceData[] {
   const links = deviceRows(Array.isArray(snapshot?.taskLinks) ? snapshot.taskLinks : snapshot?.taskLinks?.links);
   const peer = peerId ? deviceRows(snapshot?.peers).find(item => item.deviceId === peerId) : undefined;
@@ -403,7 +418,7 @@ export function deviceTaskRows(tasks: unknown, snapshot: DeviceData | null, peer
     if (manual) return samePreparedPhone(manual, peer) ? [task] : []; // A deviceId alone cannot retarget a preparation.
     const selected = deviceRows(raw.deviceSourceScope?.routes);
     const targets = deviceStrings(raw.deviceWorkspaceNavigation?.targetDeviceIds);
-    const linked = peerId ? prepared && (selected.some(route => route.targetDeviceId === peerId) || targets.includes(peerId) || raw.ownerDeviceWork?.directPhone?.deviceId === peerId) || links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
+    const linked = peerId ? prepared && (selected.some(route => route.targetDeviceId === peerId) || targets.includes(peerId) || raw.ownerDeviceWork?.directPhone?.deviceId === peerId || matchesOriginalWorkspacePreparation(task, snapshot, peer)) || links.some(link => link.targetDeviceId === peerId && link.parentTaskId === task.id) || origin.kind === 'paired_device' && ['originDeviceId', 'callerDeviceId', 'targetDeviceId'].some(key => origin[key] === peerId) || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_') && operation.arguments?.targetDeviceId === peerId)
       : prepared || origin.kind === 'paired_device' || operations.some(operation => typeof operation.tool === 'string' && operation.tool.startsWith('device_')) || links.some(link => link.parentTaskId === task.id);
     if (linked) return [task];
     const savedDeviceChoice = deviceSavedOwnerChoice(task, snapshot, peer);

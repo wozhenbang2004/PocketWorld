@@ -4,15 +4,22 @@ import { IconChevronRight } from './icons';
 import { AIAnswer } from './library';
 import type { teamPartialReading, teamResultReading, TeamFollowUp } from './team-result-reading';
 
-type Actions = { items: TeamFollowUp[]; disabled: boolean; read: (item: TeamFollowUp) => void; expanded?: boolean; toggle?: () => void };
-export function TeamFollowUps({ items, disabled, read, expanded = true, toggle }: Actions) {
+type Actions = { items: (TeamFollowUp & { originalQuestion?: boolean })[]; disabled: boolean; read: (item: TeamFollowUp) => void;
+  expanded?: boolean; toggle?: () => void; parentSupplement?: { open: () => void; disabled: boolean } };
+export function TeamFollowUps({ items, disabled, read, expanded = true, toggle, parentSupplement }: Actions) {
   if (!items.length) return null;
   const visible = !toggle || expanded ? items : items.slice(0, 2);
   return <section className="pw-team-action-list" aria-label="这次协作需要你处理的原事项">
     <header className="pw-collaboration-group-heading"><h3>需要你处理</h3><span>{items.length} 项</span></header>
     {visible.map(item => <Button key={item.key} className="pw-team-question-row h-auto whitespace-normal" variant="ghost"
       trailingIcon={IconChevronRight} data-team-follow-up={item.key} disabled={disabled} onClick={() => read(item)}>
-      <span className="pw-team-attention-copy"><strong>{item.title}</strong><small>{item.detail}</small></span></Button>)}
+      <span className="pw-team-attention-copy"><strong dir={item.originalQuestion ? 'auto' : undefined}
+        style={item.originalQuestion ? { whiteSpace: 'pre-wrap' } : undefined}>{item.title}</strong><small>{item.detail}</small></span></Button>)}
+    {parentSupplement && visible.some(item => item.originalQuestion) && <div className="pw-team-message-entry">
+      <Button variant="secondary" size="small" trailingIcon={IconChevronRight} disabled={disabled || parentSupplement.disabled}
+        onClick={parentSupplement.open}>到原工作补充信息</Button>
+      <p className="pw-field-hint">只打开原工作输入，不是直接回答成员。</p>
+    </div>}
     {toggle && items.length > 2 && <Button variant="ghost" size="small" aria-expanded={expanded} onClick={toggle}>
       {expanded ? '收起其余事项' : `查看其余 ${items.length - 2} 项`}</Button>}
   </section>;

@@ -58,6 +58,39 @@ const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const object = (value: unknown): Data => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 const label = (value: unknown): string => typeof value === 'string' ? value : '';
 const questionKey = (value: Data): string => ['memberId', 'workItemId', 'assignmentId', 'questionId'].map(key => label(value[key])).join(':');
+
+function originalResearchQuestion(run: Data, item: TeamFollowUp): string {
+  const at = item.locator;
+  if (item.status !== 'awaiting_user' || at.childKind !== 'research' || !at.taskId || at.questionId || at.assignmentId ||
+      at.workItemId || at.runId !== run.id || at.generation !== run.generation) return '';
+  const members = rows(run.members).filter(row => row?.id === at.memberId), member = members[0];
+  if (members.length !== 1 || member.exited || member.paused || member.status !== 'awaiting_user' || member.round !== at.round ||
+      member.generation !== at.memberGeneration || (member.identityRevision ?? 1) !== at.identityRevision) return '';
+  const stages = rows(member.roundStates).filter(row => row?.round === at.round), stage = stages[0];
+  if (stages.length !== 1 || stage.status !== 'awaiting_user' || stage.researchTaskId !== at.taskId ||
+      stage.generation !== at.memberGeneration || !label(stage.turnId)) return '';
+  const child = object(stage.researchTask), message = label(child.message);
+  return child.originalOwnerQuestionPending === true && child.status === 'awaiting_user' && child.inspectOnly === false &&
+    child.executionAuthorized === false && child.taskId === at.taskId && child.teamRunId === at.runId &&
+    child.memberId === at.memberId && child.round === at.round && child.executionTurnId === stage.turnId &&
+    child.runGeneration === at.generation && child.memberGeneration === at.memberGeneration && child.identityRevision === at.identityRevision &&
+    !!label(child.runId).trim() && Number.isSafeInteger(child.coordinatorEpoch) && child.coordinatorEpoch > 0 &&
+    message.trim() && message.length <= 4000 ? message : '';
+}
+
+function acceptingOriginalParent(reading: Data | null, tasks: unknown): boolean {
+  const link = reading?.ownerWorkLink;
+  if (!link || link.readOnly !== true || link.currentRun !== true || link.stopping !== false ||
+      !label(link.teamTaskId) || link.teamTaskId !== reading?.taskId || link.teamRunId !== reading?.run?.id ||
+      !label(link.taskId) || !label(link.runId) || !label(link.conversationId) || !Number.isSafeInteger(link.epoch) || link.epoch < 1) return false;
+  const parents = rows(tasks).filter(row => row?.id === link.taskId), parent = object(parents[0]?.raw);
+  return parents.length === 1 && parent.id === link.taskId && parent.actorId === 'owner' && parent.spaceId === 'private' &&
+    parent.executionRole === 'owner_work' && parent.cancelRequested !== true && parent.contextAvailable === true &&
+    parent.runId === link.runId && parent.coordinatorEpoch === link.epoch && parent.conversationId === link.conversationId &&
+    parent.controls?.canInput === true;
+}
+const newerTeamReading = (run: Data, live: Data) => live.id === run.id && (live.generation > run.generation ||
+  live.generation === run.generation && live.revision > run.revision);
 const blankMember = (id: string, index: number) => teamProductionEditorMember({ id, name: `成员 ${index + 1}`, role: '', model: '', runner: 'model' });
 const starterMembers = (template: string): Data[] => [
   { ...blankMember('member-0', 0), name: template === 'options' ? '方案设计' : '资料研究', role: template === 'options' ? '围绕共同目标提出不同方案，说明依据与限制。' : '围绕共同目标搜集和整理信息，标明来源与不确定性。' },
@@ -470,13 +503,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const current = reading?.kind === 'run' ? object(reading.run) : null;
   // This relationship comes only from readRun's native parent-work check.
   const ownerWorkLink = reading?.kind === 'run' && reading.ownerWorkLink ? reading.ownerWorkLink as TeamOwnerWorkLink : null;
-  const openOwnerWork = (intent: 'overview' | 'supplement') => {
+  const openOwnerWork = (intent: 'overview' | 'supplement', stillAccepting?: () => boolean) => {
     if (!onOpenWork || !ownerWorkLink || busy || materialBusy || intent === 'supplement' && (ownerWorkLink.currentRun !== true || changed || !reading?.viewHandle)) return;
-    leaveWithDrafts(() => onOpenWork(ownerWorkLink, intent));
+    leaveWithDrafts(() => { if (!stillAccepting || stillAccepting()) onOpenWork(ownerWorkLink, intent); });
   };
   const latest = current ? object(object(state.teamRuns)[current.id]) : {};
-  const changed = !!current && latest.id === current.id && (latest.generation > current.generation
-    || latest.generation === current.generation && latest.revision > current.revision);
+  const changed = !!current && newerTeamReading(current, latest);
   useEffect(() => {
     if (!changed || !workspaceActive || busy || materialBusy || openingMemberResult || readingFiles || editor || memberDraft || review || phoneSelection || backgrounded.current) return;
     const runId = current!.id, originalHandle = reading?.viewHandle, generation = requestGeneration.current;
@@ -762,12 +794,38 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     resultSource.member.generation === current.generation ? resultSource.member.deliveryKey : '';
   const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
   const remainingMember = teamRemainingMember(reading, deliveries.filter(source => canOpenMemberResult || source.answer && openReading), state.tasks);
-  const scopedFollowUps = remainingMember?.canReview && !uncertain ? followUps.map(item => item.key === remainingMember.item.key
-    ? { ...item, title: '核对' + name(item.locator.memberId) + '的未完成分工' } : item) : followUps;
+  const showOriginalQuestions = ordinaryAnswers && workspaceActive && !!reading?.viewHandle && !changed &&
+    !!label(current.teamId).trim() && current.definitionKind == null && !current.nativeWorkProfileModels && current.archived !== true &&
+    ['running', 'paused'].includes(current.status) && members.length > 0 &&
+    members.every(member => (member.runner || 'model') === 'model' && (!member.device || member.device === 'phone'));
+  const scopedFollowUps = followUps.map(item => {
+    const question = showOriginalQuestions && current ? originalResearchQuestion(current, item) : '';
+    if (question) return { ...item, title: question, detail: name(item.locator.memberId) + ' · 第 ' + item.locator.round + ' 阶段提问', originalQuestion: true };
+    return remainingMember?.canReview && !uncertain && item.key === remainingMember.item.key
+      ? { ...item, title: '核对' + name(item.locator.memberId) + '的未完成分工', originalQuestion: false }
+      : { ...item, originalQuestion: false };
+  }).sort((a, b) => Number(b.originalQuestion) - Number(a.originalQuestion));
   const canSupplementParent = ownerWorkLink?.currentRun && ownerWorkLink.stopping !== true &&
     (!teamHasEnded(current?.status) || current?.status === 'completed' && rows(state.tasks).some(task =>
       task.id === ownerWorkLink.taskId && task.raw?.runId === ownerWorkLink.runId && task.raw?.coordinatorEpoch === ownerWorkLink.epoch &&
       task.raw?.conversationId === ownerWorkLink.conversationId && task.raw?.controls?.canInput === true));
+  const supplementByQuestion = canSupplementParent && onOpenWork && runSection !== 'details' && !messageDraft.requiresRecheck && !uncertain &&
+    scopedFollowUps.some(item => item.originalQuestion) && acceptingOriginalParent(reading, state.tasks) &&
+    ['tasks.open', 'ownerWork.supplement.read'].every(command => bridge.getState().capabilities.commands.includes(command)) ? {
+      disabled: !canRead || materialBusy,
+      open: () => {
+        if (!reading?.viewHandle || !current) return;
+        const documentEpoch = bridge.getDocumentEpoch(), resume = object(bridge.getState().view).resumeRevision;
+        const stillAccepting = () => {
+          const live = bridge.getState();
+          return alive.current && !entered.current && !document.hidden && !backgrounded.current && ownsNativeWindow() && currentReading.current === reading &&
+            documentEpoch === bridge.getDocumentEpoch() && resume === object(live.view).resumeRevision &&
+            ['tasks.open', 'ownerWork.supplement.read'].every(command => live.capabilities.commands.includes(command)) &&
+            !newerTeamReading(current, object(object(live.state.teamRuns)[current.id])) && acceptingOriginalParent(reading, live.state.tasks);
+        };
+        if (stillAccepting()) openOwnerWork('supplement', stillAccepting);
+      },
+    } : undefined;
   const canPrepareFollowUp = !!onOpenWork && ownerWorkLink?.savedResultForDraft === true && ownerWorkLink.currentRun === true &&
     ownerWorkLink.stopping === false && ownerWorkLink.teamRunId === current?.id && current?.status === 'completed' &&
     teamResult.original && Array.isArray(reading?.attention) && reading.attention.length === 0 &&
@@ -1120,7 +1178,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       {changed && <p className="pw-team-reading-notice" role="status">正在更新进展，阅读位置与未发送内容保留。</p>}
       {workspaceActive && !busy && !reading?.viewHandle && <p className="pw-team-reading-notice" role="status">请刷新记录后继续操作，未发送内容保留。</p>}
       <div className="pw-team-run-controls">
-        <div className="pw-team-work-actions">{ownerWorkLink && onOpenWork ? <><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openOwnerWork('overview')}>查看原工作</Button>{canSupplementParent &&
+        <div className="pw-team-work-actions">{ownerWorkLink && onOpenWork ? <><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openOwnerWork('overview')}>查看原工作</Button>{canSupplementParent && !supplementByQuestion &&
           <Button variant="secondary" disabled={!canRead || materialBusy} onClick={() => openOwnerWork('supplement')}>补充要求</Button>}</> : <span className="pw-team-history-label">保留原目标与执行记录</span>}</div>
         <div className="pw-team-current-actions">
           {!hasWorkPlan && !remainingMember && (teamCanResume(current.status) || current.phase === 'intervention' || current.phase === 'awaiting_member' && currentMembers.length > 0) && <Button leadingIcon={IconPlay} disabled={!canMutate} onClick={() => control('resume')}>继续协作</Button>}
@@ -1138,7 +1196,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         {resultSource && !resultSource.member && resultSource.runId === current.id && runSection !== 'result' && <Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy || materialBusy}
           onClick={() => resultBack.current()}>返回协作成果</Button>}
         <TabPanel id="progress">
-          <TeamFollowUps items={scopedFollowUps} read={openFollowUp} disabled={!canRead || materialBusy}/>
+          <TeamFollowUps items={scopedFollowUps} read={openFollowUp} disabled={!canRead || materialBusy} parentSupplement={supplementByQuestion}/>
           {current.phase === 'intervention' && !hasWorkPlan && <div className="pw-collaboration-attention" role="status"><div><strong>新要求已保存</strong><span>受影响成员已暂停。继续协作后处理，沿用剩余额度。</span></div></div>}
           {!!teamResult.body && <section className="pw-team-result-overview" aria-label={teamResult.previous ? '上次汇总摘要' : teamResult.partial ? '部分汇总摘要' : '本轮汇总摘要'}>
             <h3>{teamResult.previous ? '上次保存的共同汇总' : teamResult.partial ? '本次的部分汇总' : '已有共同汇总'}</h3>
@@ -1261,7 +1319,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             archivedSources={archivedDeliveries.length>0 && canOpenMemberResult ? <TeamResearchDeliveries records={archivedDeliveries} archived disabled={!canRead||materialBusy} rawAvailable={canOpenMemberResult} open={openMemberDelivery}
               locate={resultPhaseLink ? {deliveryKey:resultPhaseLink,open:()=>selectRunTab('progress')} : undefined}
               expanded={shownArchives[current.id] ?? !deliveries.length} onExpanded={value=>setShownArchives(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}
-            actions={{ items: scopedFollowUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id],
+            actions={{ items: scopedFollowUps, read: openFollowUp, disabled: !canRead || materialBusy, expanded: !!allResultActions[current.id], parentSupplement: supplementByQuestion,
               toggle: () => setAllResultActions(old => ({ ...old, [current.id]: !old[current.id] })) }}
             finalPackageReader={teamPackage&&reading&&workspaceActive&&runSection==='result'&&bridge.getState().capabilities.commands.includes('teams.readFinalPackageFiles')
               ? <TeamFinalPackageReading key={reading.viewHandle+':'+teamPackage.operationId} item={teamPackage} handle={reading.viewHandle} fromWork={focusedPackage?()=>leaveWithDrafts(focusedPackage.returnToWork):undefined} disabled={!canRead||materialBusy} exportState={state.teamFinalPackageExport===undefined?reading.finalPackageExport:state.teamFinalPackageExport}
