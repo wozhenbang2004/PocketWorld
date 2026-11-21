@@ -21,7 +21,27 @@ const routeName = (route:Data, names:Data[]):string => {
 
 const tools = (value: any): string => Array.isArray(value) ? value.map(row => row.toolName).join('、') : value && typeof value === 'object' ? Object.keys(value).join('、') : '未提供';
 
-function ScopeFacts({ value, peers, names, human = false }: { value: Data; peers: Data[]; names:Data[]; human?: boolean }) {
+type WorkspaceReadFacts = { id: string; actions: string };
+
+/** Present the exact native workspace and read declarations, not a path or a new permission. */
+function workspaceReadFacts(value: Data, original?: OriginalDevice): WorkspaceReadFacts | undefined {
+  const binding = value.resourceBinding, instance = value.targetInstanceId ?? value.instanceId;
+  if (!original || value.targetDeviceId !== original.deviceId || instance !== original.instanceId ||
+    value.targetInstanceId != null && value.instanceId != null && value.targetInstanceId !== value.instanceId ||
+    value.kind !== 'tool_session' || value.capabilityVersion !== 'workspace-v1' || binding?.kind !== 'workspace' ||
+    Object.keys(binding).length !== 3 || typeof binding.environmentId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(binding.environmentId) ||
+    typeof binding.binding !== 'string' || !/^[a-f0-9]{64}$/.test(binding.binding)) return;
+  const declarations = value.toolDeclarations;
+  const entries = Array.isArray(declarations) ? declarations.map(row => [row?.toolName, row?.effect]) :
+    declarations && typeof declarations === 'object' ? Object.entries(declarations) : [];
+  if (!entries.length || entries.length > 2 || entries.some(([name, effect]) => effect !== 'read' ||
+    (name !== 'workspace.list' && name !== 'workspace.read'))) return;
+  const agreed = new Set(entries.map(([name]) => name));
+  if (agreed.size !== entries.length) return;
+  return { id: binding.environmentId, actions: [agreed.has('workspace.list') && '列目录', agreed.has('workspace.read') && '读小型 UTF-8 文本'].filter(Boolean).join('、') };
+}
+
+function ScopeFacts({ value, peers, names, human = false, workspace }: { value: Data; peers: Data[]; names:Data[]; human?: boolean; workspace?: WorkspaceReadFacts }) {
   const resource = value.resourceBinding || {};
   const declarations = Array.isArray(value.toolDeclarations) ? value.toolDeclarations : Object.entries(value.toolDeclarations || {}).map(([toolName, effect]) => ({ toolName, effect }));
   const writes = declarations.filter(row => row.effect === 'write').length, external = declarations.filter(row => row.effect === 'external').length;
@@ -32,8 +52,8 @@ function ScopeFacts({ value, peers, names, human = false }: { value: Data; peers
     <dl className="pw-facts">
       <div><dt>接收设备</dt><dd>{routeName(value,names) || deviceName(value.targetDeviceId || '', peers)}</dd></div>
       <div><dt>使用方式</dt><dd>{routeTitle(value, human)}</dd></div>
-      <div><dt>作用范围</dt><dd>{target}</dd></div>
-      <div><dt>操作影响</dt><dd>{human ? '你逐次进行全屏输入；不调用模型，不继承 AI 自动操作权限' : phoneTextOnly(value) ? '对方不使用工具；机主核对后，本机可从原工作查看最多 2,048 个字的摘要' : value.kind === 'goal' ? '对端模型在原授权工具范围内处理目标' : writes || external ? `含 ${writes} 项写入操作、${external} 项外部影响能力，执行时仍受原工具审批约束` : declarations.length && declarations.every(row => row.effect === 'read') ? '当前列出的工具仅报告读取能力' : '尚未取得完整操作影响，不能推定只读'}</dd></div>
+      <div><dt>作用范围</dt><dd>{workspace ? <>电脑工作区 <bdi style={{overflowWrap:'anywhere'}}>{workspace.id}</bdi></> : target}</dd></div>
+      <div><dt>{workspace ? '允许的读取' : '操作影响'}</dt><dd>{workspace ? workspace.actions : human ? '你逐次进行全屏输入；不调用模型，不继承 AI 自动操作权限' : phoneTextOnly(value) ? '对方不使用工具；机主核对后，本机可从原工作查看最多 2,048 个字的摘要' : value.kind === 'goal' ? '对端模型在原授权工具范围内处理目标' : writes || external ? `含 ${writes} 项写入操作、${external} 项外部影响能力，执行时仍受原工具审批约束` : declarations.length && declarations.every(row => row.effect === 'read') ? '当前列出的工具仅报告读取能力' : '尚未取得完整操作影响，不能推定只读'}</dd></div>
       {value.toolBudget !== undefined && <div><dt>累计份额</dt><dd>工具 {value.toolBudget} 次 · 模型 {value.modelBudget} 次</dd></div>}
       {value.deadline && <div><dt>截止</dt><dd>{time(value.deadline)}</dd></div>}
     </dl>
@@ -176,6 +196,12 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const ownerNames=rows(view?.ownerDisplayNames);
   const peerIds = [...new Set(options.map(option => option.targetDeviceId))];
   const noFirstRange = firstDirectedScope && !peerIds.length;
+  const savedWorkspace = view?.directWorkspace;
+  const workspaceTarget = directedWorkspace && !directed && !directedManual && view?.taskId === taskId &&
+    !!page.current && view.pageHandle === page.current && view.executionAuthorized === false &&
+    (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => savedWorkspace?.[key] === directedWorkspace[key]) ? directedWorkspace : undefined;
+  const reviewedWorkspace = review?.kind === 'scope' && review.taskId === taskId && review.pageHandle === page.current && review.executionAuthorized === false ? workspaceTarget : undefined;
+  const workspaceNotice = '这里选择的是电脑授权的工作区，不是目标中提到的单个文件。';
   const groupName=(id:string) => {
     const labels=new Set(rows(view?.options).filter(option=>option.targetDeviceId===id).map(option=>routeName(option,ownerNames)));
     return labels.size===1 && !labels.has('') ? [...labels][0] : deviceName(id,peers);
@@ -203,6 +229,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
         {view && !review && <>
           <h3>{view.goal}</h3>
           <p>{view.humanInputOnly ? '只选择一个手机屏幕。需要对端主人已明确授予全屏捕获、输入及准确应用范围。你逐次操作，不调用模型，不发送材料或转派。' : '只选择这项原任务可以用的设备。工具份额来自本任务剩余预算，设备已配对不等于已授权。默认不发送文件、项目或私人记忆。'}</p>
+          {options.some(option => workspaceReadFacts(option, workspaceTarget)) && <p className="pw-field-hint">{workspaceNotice}</p>}
           <dl className="pw-facts"><div><dt>当前可分配</dt><dd>工具 {view.toolsAvailable} 次 · 模型 {view.modelsAvailable} 次</dd></div><div><dt>原任务最晚截止</dt><dd>{time(view.deadlineMaximum)}</dd></div></dl>
           <p>{view.humanInputOnly ? '每次对端操作同时占用一次本机派发额度；对端份额至少 2 次，最多分配当前总额的一半。每次刷新也占用调用。' : '发起设备操作本身还至少占用 1 次本机工具调用；不要把全部剩余额度分给对端。'}已执行和未知结果的占用不会因改范围退回。</p>
           {unavailable.length > 0 && <><p role="alert">有 {unavailable.length} 项已保存范围当前未能读取。可能是离线、授权到期或资源变化，未替换成其他设备。</p><CheckboxField isSelected={removeUnavailable} isDisabled={busy} onChange={setRemoveUnavailable}>这次保存明确移除当前不可读取的旧选择（不会撤回已发生的操作）</CheckboxField></>}
@@ -211,10 +238,11 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
               const draft = drafts[option.optionId]; if (!draft) return null;
               const update = (next: RouteDraft) => { dismissReview(); setDrafts(old => ({ ...(view.humanInputOnly && next.selected ? Object.fromEntries(Object.entries(old).map(([id, value]) => [id, { ...value, selected: false }])) : old), [option.optionId]: next })); };
               const shareCount = Object.values(draft.shares).filter(row => row.selected).length;
-              return <AccordionItem key={option.optionId} id={option.optionId} title={routeTitle(option, view.humanInputOnly)}
-                description={[routeUseSummary(option, view.humanInputOnly), draft.selected ? '已选择 · 尚未执行' : ''].filter(Boolean).join(' · ') || '未选择'}>
+              const workspace = workspaceReadFacts(option, workspaceTarget);
+              return <AccordionItem key={option.optionId} id={option.optionId} title={workspace ? <>只读工作区 <bdi style={{overflowWrap:'anywhere'}}>{workspace.id}</bdi></> : routeTitle(option, view.humanInputOnly)}
+                description={[workspace ? workspace.actions : routeUseSummary(option, view.humanInputOnly), draft.selected ? '已选择 · 尚未执行' : ''].filter(Boolean).join(' · ') || '未选择'}>
                 <CheckboxField isSelected={draft.selected} isDisabled={busy} onChange={selected => update({ ...draft, selected })}>将这个准确范围用于本任务</CheckboxField>
-                <ScopeFacts value={option} peers={peers} names={ownerNames} human={view.humanInputOnly} />
+                <ScopeFacts value={option} peers={peers} names={ownerNames} human={view.humanInputOnly} workspace={workspace} />
                 {draft.selected && <>
                   {!!draft.missingShares.length && <><p role="alert">有 {draft.missingShares.length} 项原下游范围当前无法核对，未自动替换或移除。</p><Button variant="secondary" disabled={busy} onClick={() => update({ ...draft, missingShares: [] })}>明确移除这些旧下游选择</Button></>}
                   {phoneTextOnly(option) ? <p>工具 0 次，不使用屏幕。</p> : <TextField label={'工具总份额（最多 ' + option.toolBudgetMaximum + ' 次）'} value={draft.tools} inputMode="numeric" isDisabled={busy} onChange={tools => update({ ...draft, tools })} />}
@@ -253,7 +281,8 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
         </>}
         {review && <>
           <h3>{review.goal || view?.goal}</h3><p>{review.kind === 'scope' ? '下面是原生解析后的准确选择。保存不发送目标、不开始任务，不为对端扩大授权。' : '确认只允许原任务导入这份已经接收的项目包；不会立即执行、覆盖已有项目或创建第二项任务。'}</p>
-          {rows(review.routes).map(route => <div key={route.sourceKey}><ScopeFacts value={route} peers={peers} names={ownerNames} human={view?.humanInputOnly} />
+          {rows(review.routes).some(route => workspaceReadFacts(route, reviewedWorkspace)) && <p className="pw-field-hint">{workspaceNotice}</p>}
+          {rows(review.routes).map(route => <div key={route.sourceKey}><ScopeFacts value={route} peers={peers} names={ownerNames} human={view?.humanInputOnly} workspace={workspaceReadFacts(route, reviewedWorkspace)} />
             <p>上下文：仅本次目标（goal_only）；私人记忆与整份工作区不提供。</p>
             {['files','projects'].map(kind => rows(route[kind]).map(item => <p key={kind + item.id}>{kind === 'files' ? '原件' : '项目包'}：{item.name || item.id} → {item.path} · {item.size} 字节 · {item.expectedVersion === 'absent' ? '仅新建' : '覆盖已核对版本 ' + item.expectedVersion}<br />SHA-256：{item.sha256}</p>))}
             {rows(route.downstreamShares).length > 0 && <><p>对端本机：工具 {route.localToolShare} 次 · 模型 {route.localModelShare} 次</p>{rows(route.downstreamShares).map((item,index) => <p key={index}>下游 {deviceName(item.targetDeviceId, peers)} · {JSON.stringify(item.resourceBinding)} · 工具 {item.toolBudget} 次 · 模型 {item.modelBudget} 次</p>)}</>}

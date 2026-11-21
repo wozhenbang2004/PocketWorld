@@ -30,7 +30,7 @@ export type ProjectWorkspaceOverviewProps = {
   onOpenTerminal: () => void;
   onOpenPairedDevices?: (trigger: HTMLButtonElement) => void;
   onAskButler?: () => void;
-  editImported?: { label: string; onOpen: () => void };
+  editLocalFiles?: { label: string; onOpen: () => void };
   localCopyFirst?: boolean;
   startContent?: ReactNode;
   savedWebContent?: ReactNode;
@@ -40,7 +40,7 @@ export type ProjectWorkEntry = WorkEntry | 'outcomes';
 export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionFilter; expanded: boolean; selected: string; selectedEntry?: ProjectWorkEntry };
 
 /** Project work directory; saved Web versions separately use exact original B4 receipts. */
-export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onOpenPairedDevices, onAskButler, editImported, localCopyFirst = false, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
+export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onOpenPairedDevices, onAskButler, editLocalFiles, localCopyFirst = false, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
   const savedWebLink = useRef<FindSavedBuildWeb|null>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
@@ -100,8 +100,8 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
   return <section ref={root} className="pw-project-overview" aria-label={`${project.name}的项目工作`}>
     <header className="pw-project-overview-heading">
       <div><p className="pw-project-overview-eyebrow">项目工作台</p><h2>{project.name}</h2></div>
-      {editImported ? <div className="pw-action-row">
-        <Button variant="primary" leadingIcon={IconFile} onClick={editImported.onOpen}>{editImported.label}</Button>
+      {editLocalFiles ? <div className="pw-action-row">
+        <Button variant="primary" leadingIcon={IconFile} onClick={editLocalFiles.onOpen}>{editLocalFiles.label}</Button>
         {askButler}
       </div> : askButler}
     </header>

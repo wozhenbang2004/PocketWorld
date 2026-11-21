@@ -3,7 +3,7 @@ import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconClose, IconExtern
 import {bridge} from './bridge';
 import {Accordion,AccordionItem,Button,IconButton,SelectField,TextField} from './forms-library';
 import {Drawer,ContextMenuTrigger,ContextMenu,ContextMenuItem} from './shell-library';
-import {AttachmentOriginalReader,DocumentProjection,FileDetails} from './AttachmentOriginalReader';
+import {AttachmentOriginalReader,DocumentProjection,FileDetails,type DisplayedOriginalText} from './AttachmentOriginalReader';
 import {AttachmentDocumentEditor,AttachmentProcessingEditor,AttachmentVersionContinuation,type SavedFileNote} from './AttachmentDocumentEditor';
 import {OriginalImageComparison} from './workspace-library/OriginalImageComparison';
 import {AttachmentFileCollection} from './workspace-library/AttachmentFileCollection';
@@ -30,6 +30,22 @@ type Props={
 };
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
+type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;reopening?:true;start?:{viewerId:string;top:number}};
+function privateTxtPositionScope(view:Json){
+ const file=obj(view.file),version=exactFileTarget(file);
+ return view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&
+  view.originalReturn==='list'&&view.taskId==null&&obj(view.snapshot).taskId===''&&
+  view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.fromWorkResult===false&&view.resultFilesOnly===false&&
+  view.historyResultOnly===false&&view.reportResultOnly===false&&view.choosingSource===false&&
+  typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
+  JSON.stringify([view.windowId,version.fileId,version.sha256]):'';
+}
+function matchesTextViewer(view:Json,range:DisplayedOriginalText){
+ const original=obj(view.originalFile);
+ return view.windowId===range.windowId&&view.canSaveOriginal===true&&original.kind==='text'&&original.sourceUnavailable===false&&
+  typeof range.viewerId==='string'&&!!range.viewerId&&original.id===range.viewerId&&original.identity===range.identity&&
+  original.sha256===range.sha256&&range.sha256===view.file?.sha256&&typeof range.identity==='string'&&/^[a-f0-9]{64}$/.test(range.identity);
+}
 const catalogFormats=[{id:'all',label:'全部类型'},{id:'document',label:'文档'},{id:'table',label:'表格'},
  {id:'text',label:'文本'},{id:'media',label:'图片和音视频'},{id:'other',label:'其他文件'}];
 const importMessages:Record<string,string>={
@@ -123,11 +139,41 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const selection=exactFileTarget(file),draftHasFile=!!(draftTarget&&selection&&draftContainsFile(draftTarget,selection));
  const handoff=!topic&&((currentHandoff?.phase==='added'&&!draftHasFile)||(currentHandoff?.phase==='failed'&&draftHasFile))?null:currentHandoff;
  const draftBusy=draftHandoff?.phase==='adding'||draftHandoff?.phase==='opening';
- const rememberPosition=()=>{if(view.ready&&scroller.current)positions.current.set(location,scroller.current.scrollTop)};
+ const displayedText=useRef<DisplayedOriginalText|null>(null),textReturn=useRef<TextReturn|null>(null);
+ const textScope=!onReturnToSearch&&state.chatAttachmentPickerOpen===false?privateTxtPositionScope(incoming):'';
+ const textDisplayed=useCallback((range:DisplayedOriginalText)=>{
+  displayedText.current=range;
+  const pin=textReturn.current,body=scroller.current;
+  if(!pin?.start||pin.start.viewerId!==range.viewerId||!body)return;
+  textReturn.current=null; // The newly painted reader gets one chance; later reads never retarget it.
+  const native=bridge.getState(),live=obj(native.state.attachmentWorkspace);
+  if(document.hidden||bridge.getDocumentEpoch()!==pin.document||native.state.chatAttachmentPickerOpen!==false||
+     privateTxtPositionScope(live)!==pin.scope||!matchesTextViewer(live,range)||obj(live.originalFile).busy!==false||
+     range.encoding!==pin.range.encoding||
+     range.offset!==pin.range.offset||range.identity!==pin.range.identity||body.scrollTop!==pin.start.top)return;
+  body.scrollTop=pin.top;
+ },[]);
+ const rememberPosition=()=>{
+  if(!view.ready||!scroller.current)return;
+  const top=scroller.current.scrollTop,start=textReturn.current?.start;
+  if(start&&mode==='original'&&obj(view.originalFile).id===start.viewerId&&top!==start.top)textReturn.current=null;
+  positions.current.set(location,top);
+ };
  useLayoutEffect(()=>{
-  if(!view.open){positions.current.clear();return;}
-  if(!view.ready)return;
-  if(scroller.current)scroller.current.scrollTop=positions.current.get(location)||0;
+  if(!view.open)positions.current.clear();
+  if(!view.open||!view.ready){textReturn.current=null;displayedText.current=null;return;}
+  if(textReturn.current?.scope!==textScope)textReturn.current=null;
+  const pin=textReturn.current,body=scroller.current;
+  if(body){
+   if(mode==='original'&&pin?.reopening){
+    const now=obj(view.originalFile);
+    // Native has admitted a new viewer for the same file, but its text may not have been laid out yet.
+    body.scrollTop=0;
+    if(typeof now.id==='string'&&now.id!==pin.range.viewerId&&matchesTextViewer(view,{...pin.range,viewerId:now.id}))
+     pin.start={viewerId:now.id,top:body.scrollTop};
+    else textReturn.current=null;
+   }else body.scrollTop=positions.current.get(location)||0;
+  }
   heading.current?.focus({preventScroll:true});
  },[view.open,view.ready,location]);
  useEffect(()=>{if(view.open)returningToSearch.current=false},[view.windowId]);
@@ -151,6 +197,17 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   return operation.catch(cause=>{if(alive.current&&showError)setError(cause instanceof Error?cause.message:'原文件操作未确认');throw cause}).finally(()=>{if(alive.current)setPending(x=>Math.max(0,x-1))});
  },[view.windowId,view.frameId,view.ready]);
  const run=(command:string,args:Json={})=>{
+  const pin=textReturn.current;
+  if(textScope&&(command==='originalDetails'||command==='openOriginal'&&pin)){
+   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),scope=privateTxtPositionScope(live),documentEpoch=bridge.getDocumentEpoch();
+   const same=!document.hidden&&scope===textScope&&native.state.chatAttachmentPickerOpen===false;
+   if(command==='originalDetails'){
+    const range=displayedText.current,body=scroller.current;
+    textReturn.current=same&&mode==='original'&&range&&body&&body.scrollTop>0&&body.querySelector('.pw-original-text')&&
+     matchesTextViewer(live,range)&&obj(live.originalFile).busy===false?{scope,document:documentEpoch,range,top:body.scrollTop}:null;
+   }else if(mode==='detail'&&!Object.keys(args).length&&same&&pin?.scope===scope&&pin.document===documentEpoch)pin.reopening=true;
+   else textReturn.current=null;
+  }else textReturn.current=null;
   rememberPosition();
   const leavesEditor=['openOriginal','originalDetails','continueDocument','openProcessing','compareParent','read','ocr','selectFile','attach','chooseSource','newDocument','continueTask','refresh'].includes(command);
   void Promise.resolve(leavesEditor?beforeBack.current?.():undefined).then(frame=>act(command,args,frame)).catch(()=>{});
@@ -159,6 +216,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   const current=latest.current,transfer=draftFlight.current;
   if(!current.open)return false;
   if(backFlight.current||current.busy||!current.ready||transfer&&(transfer.phase==='opening'||!current.originalFile))return true;
+  textReturn.current=null;
   if(scroller.current)positions.current.set(location,scroller.current.scrollTop);
   backFlight.current=true;
   void Promise.resolve().then(()=>beforeBack.current?.()).then(frame=>act('back',{},frame)).catch(()=>{}).finally(()=>{backFlight.current=false});
@@ -172,6 +230,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const title=view.documentDraft?'编辑文档':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
   if(!view.ready||draftFlight.current)return;
+  textReturn.current=null;
   const returnToWork=view.restoredWorkReturn!==true&&view.fromWorkResult===true&&!!view.taskId&&openTaskId!==view.taskId;
   if(view.busy){if(!returnToWork)run('close');return}
   void Promise.resolve(beforeBack.current?.()).then(frame=>act(returnToWork?'continueTask':'close',{},frame)).catch(()=>{});
@@ -424,17 +483,31 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   snapshot.taskId===view.taskId&&snapshot.taskRunId===view.taskId&&snapshot.coordinatorEpoch===1&&snapshot.originalDocumentActionId===view.taskId;
  const pendingDocumentHere=!!view.pendingDocumentTask&&(privateLibrary||documentRecord&&view.pendingDocumentTask===view.taskId);
  const otherPendingDocument=privateFiles&&!scopedResultOnly&&!!view.pendingDocumentTask&&!!view.taskId&&view.pendingDocumentTask!==view.taskId;
- const catalogOrigins=useMemo(()=>privateLibrary&&view.open&&view.ready&&mode==='list'&&!catalogUnread?
+ const workSourceSelecting=privateFiles&&!scopedResultOnly&&!resultFilesOnly&&view.choosingSource===true&&
+  !!openTaskId&&view.taskId===openTaskId&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
+ const sourceWork=workSourceSelecting?obj(rows(state.tasks).find(row=>row.id===openTaskId)?.raw):{};
+ const nativeWork=workSourceSelecting?obj(bridge.getState().view):{};
+ const workSourcePicker=workSourceSelecting&&view.ready===true&&snapshot.taskId===''&&!catalogUnread&&
+  nativeWork.taskId===openTaskId&&nativeWork.section===null&&sourceWork.id===openTaskId&&sourceWork.kind==='assistant'&&
+  sourceWork.actorId==='owner'&&sourceWork.spaceId==='private'&&sourceWork.origin==null&&
+  sourceWork.parentTaskId==null&&sourceWork.teamRunId==null&&sourceWork.memberId==null&&
+  sourceWork.ownerDeviceWork==null&&sourceWork.ownerPhoneControl==null&&sourceWork.contextAvailable!==false&&
+  sourceWork.contextWithdrawn!==true&&sourceWork.sourceCurrentReadRequired!==true&&sourceWork.taskProjection!=='source_unavailable';
+ const catalogOrigins=useMemo(()=>(privateLibrary||workSourcePicker)&&view.open&&view.ready&&mode==='list'&&!catalogUnread?
   libraryFileOrigins([...rows(snapshot.artifacts),...rows(snapshot.sources)],rows(state.tasks)):undefined,
-  [privateLibrary,view.open,view.ready,mode,catalogUnread,snapshot.artifacts,snapshot.sources,state.tasks]);
+  [privateLibrary,workSourcePicker,view.open,view.ready,mode,catalogUnread,snapshot.artifacts,snapshot.sources,state.tasks]);
  // One view of the native catalog: no content search, new index, or changes to which originals can open.
- const filterable=privateLibrary||privateFiles&&!!view.taskId&&!scopedResultOnly&&!view.choosingSource&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
+ const [sourceName,setSourceName]=useState<{scope:string;name:string}|null>(null);
+ useEffect(()=>{if(!view.choosingSource)setSourceName(null);},[view.choosingSource]);
+ const sourceScope=workSourcePicker?JSON.stringify([view.windowId,openTaskId]):'';
+ const filterable=workSourcePicker||privateLibrary||privateFiles&&!!view.taskId&&!scopedResultOnly&&!view.choosingSource&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
  const fileFilter=filterable&&catalogFilter?.scope===listScope?catalogFilter:null;
- const nameFilter=fileFilter?.name||'',formatFilter=fileFilter?.format||'all',needle=normalizedFileName(nameFilter);
+ const nameFilter=workSourcePicker?(sourceName?.scope===sourceScope?sourceName.name:''):fileFilter?.name||'',
+  formatFilter=workSourcePicker?'all':fileFilter?.format||'all',needle=normalizedFileName(nameFilter);
  const filterActive=!!needle||formatFilter!=='all';
  const matchesFile=(row:Json)=>(!needle||normalizedFileName(row.name).includes(needle))&&
   (formatFilter==='all'||attachmentFileFormat(row.mimeType,row.name).category===formatFilter);
- const updateFilter=(name:string,format:string)=>setCatalogFilter({scope:listScope,name,format});
+ const updateFilter=(name:string,format:string)=>workSourcePicker?setSourceName({scope:sourceScope,name}):setCatalogFilter({scope:listScope,name,format});
  const libraryImport=privateLibrary?obj(view.libraryImport):{},registration=obj(libraryImport.registration);
  const importPhase=typeof libraryImport.phase==='string'?libraryImport.phase:'';
  const selectionPending=['selecting','selection_unconfirmed','registering'].includes(importPhase);
@@ -501,7 +574,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {view.busy&&<div className="pw-action-row"><p role="status">{copyStage==='writing'?'正在写入并核对这次另存…':'正在核对原记录…'}</p><Button variant="ghost" onClick={()=>run('cancel')}>{copyStage==='writing'?'停止本次另存':'停止本次读取'}</Button></div>}
  {!reportError&&!attachmentChoiceError&&(error||view.error)&&<p className="pw-error" role="alert">{error||view.error}</p>}{view.notice&&<p role="status">{view.notice}</p>}
  {!view.ready&&<p>回到当前工作区后继续查看，原文件、记录和当前输入保留。</p>}
- {view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
+ {view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false} onTextDisplayed={textScope?textDisplayed:undefined}
   recovery={{canSave:canSaveOriginal,busy:busy||draftBusy,onOpenInReader:offerReader?()=>run('openInReader'):undefined}}/>:view.documentOpen?<section><h3>{file.name||'原文件'}</h3><div className="pw-action-row">{Number(view.document?.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>run('read',{unit:view.document.nextUnit,chunk:view.document.nextChunk||0})}>读取后续范围</Button>}{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>识别原图或 PDF 文字</Button>}{view.canSaveRead&&<Button variant="primary" disabled={busy} onClick={()=>run('saveRead')}>保存当前已读范围为文件</Button>}</div><DocumentProjection value={obj(view.document)}/><p className="pw-muted">文字摘录只包含当前已查看的部分，并保留来源位置。</p></section>:view.team?<section><h3>{snapshot.artifact?.path||'成员的固定文件成果'}</h3><div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>查看原件</Button><Button variant="secondary" disabled={busy||view.exportPending} onClick={()=>run('export')}>导出到手机</Button><Button variant="ghost" disabled={busy} onClick={()=>run('newerTeam')}>核对较新成果</Button>{view.hasPreviousTeamArtifact&&<Button variant="ghost" disabled={busy} onClick={()=>run('previousTeam')}>返回上一份成果</Button>}{view.canReadTeamDifference&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference')}>比较原项目当前文件</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>回原分工</Button></div>{typeof snapshot.content==='string'&&<pre className="pw-file-text">{snapshot.content}</pre>}{typeof snapshot.preview?.content==='string'&&<pre className="pw-file-text">{snapshot.preview.content}</pre>}<FileDetails value={snapshot} title="原成果与读取范围"/>{snapshot.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('readTeam',{offset:snapshot.nextOffset})}>读取后续内容</Button>}{view.teamDifference&&<><FileDetails value={view.teamDifference} title="原文件差异"/>{view.teamDifference.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference',{offset:view.teamDifference.nextOffset})}>读取后续差异</Button>}</>}</section>:<>
  {otherPendingDocument&&<p className="pw-muted">另有文档待核对，可回「成果」核对。</p>}
  {!scopedResultOnly&&(documentRecord||pendingDocumentHere)&&<div className="pw-action-row">{pendingDocumentHere&&<p>有原文档动作待核对。</p>}<Button variant="secondary" disabled={busy} onClick={()=>run('queryDocument')}>{pendingDocumentHere?'核对原文档结果':'核对这条文档记录'}</Button></div>}{!scopedResultOnly&&view.pendingProcessingTask&&<div className="pw-action-row"><p>有原加工动作待核对。</p><Button variant="secondary" disabled={busy} onClick={()=>run('queryProcessing')}>核对原加工结果</Button></div>}
@@ -528,9 +601,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {importMessage&&<p role="status" className="pw-field-hint">{importMessage}
    {confirmedImport&&registeredCount>recentSources.length&&!busy&&' 当前清单未列齐这批已登记文件，可重新读取，不必再导入。'}</p>}
  </>}
- {filterable&&(hasLibraryFiles||filterActive)&&<div role="search" aria-label="查找当前清单中的文件" className="pw-file-search">
+ {filterable&&((workSourcePicker?fileCount>1:hasLibraryFiles)||filterActive)&&<div role="search" aria-label="查找当前清单中的文件" className="pw-file-search">
   <TextField label="文件名" placeholder="在当前清单查找" leadingIcon={IconSearch} value={nameFilter} onChange={name=>updateFilter(name.slice(0,180),formatFilter)}/>
-  <SelectField label="文件类别" compactValue options={catalogFormats} value={formatFilter} onChange={format=>updateFilter(nameFilter,format)}/>
+  {!workSourcePicker&&<SelectField label="文件类别" compactValue options={catalogFormats} value={formatFilter} onChange={format=>updateFilter(nameFilter,format)}/>}
  </div>}
  {filterActive&&!busy&&<div className="pw-action-row"><p className="pw-muted" role="status">{matchingCount?`已读取的文件中有 ${matchingCount} 项匹配。`:'当前已读取的文件没有匹配项。'}{catalogIncomplete&&' 文件清单尚未读全。'}</p><Button variant="ghost" onClick={()=>updateFilter('','all')}>清除筛选</Button></div>}
  {privateLibrary&&recentSourcesList}

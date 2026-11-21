@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Button,IconButton,RadioOptions,TextAreaField} from './forms-library';
 import {IconClose,IconRefresh} from './icons';
 import {ThinkingLoader} from './library';
@@ -8,14 +8,15 @@ import {ownerWorkIdentity,workIdentityKey,type WorkIdentity} from './conversatio
 
 type Json=Record<string,any>;
 export type WorkSupplementTarget=WorkIdentity&{conversationId:string;goal:string};
-export type WorkSupplementLeave=()=>Promise<boolean>;
+export type WorkSupplementLeave={flush:()=>Promise<boolean>;keepsReceipt:()=>boolean};
 type Draft=WorkIdentity&{conversationId:string;key:string;revision:number;text:string;mode:'queue'|'steer';current:boolean;canQueue:boolean;canSteer:boolean;reason:string;pending:Json[];otherDrafts?:Json[];receipt?:Json};
-type Props={target:WorkSupplementTarget;task:Json;can:(action:string)=>boolean;registerBeforeLeave:(guard:WorkSupplementLeave|null)=>void;onClose:()=>void;onSelectOriginal:(target:WorkIdentity)=>void};
+type Props={target:WorkSupplementTarget;task:Json;can:(action:string)=>boolean;registerBeforeLeave:(guard:WorkSupplementLeave|null,panel:HTMLElement)=>void;onClose:(flush:WorkSupplementLeave['flush'])=>void;onSelectOriginal:(target:WorkIdentity)=>void};
 const binding=(target:WorkSupplementTarget)=>({taskId:target.taskId,runId:target.runId,epoch:target.epoch,conversationId:target.conversationId});
 const expectedKey=(target:WorkSupplementTarget)=>`work:${target.taskId}:${target.runId}:${target.epoch}`;
 const failureText=(error:unknown)=>error instanceof Error?error.message:'原补充尚未确认，请保留本页文字并核对。';
 const sameContent=(a:{text:string;mode:string},b:{text:string;mode:string})=>a.text===b.text&&a.mode===b.mode;
 const queueLabel='等当前答复结束再加入',steerLabel='下个安全步骤加入';
+const settledReceipt=(status:unknown)=>['accepted','queued','consumed','withdrawn','rejected','not_sent'].includes(String(status));
 
 function readDraft(value:Json,target:WorkSupplementTarget):Draft{
  if(!value||value.key!==expectedKey(target)||value.taskId!==target.taskId||value.runId!==target.runId||value.epoch!==target.epoch||value.conversationId!==target.conversationId
@@ -34,10 +35,12 @@ function receiptLabel(receipt:Json|undefined):string{
 export function OwnerWorkSupplement({target,task,can,registerBeforeLeave,onClose,onSelectOriginal}:Props){
  const [draft,setDraft]=useState<Draft|null>(null),[text,setText]=useState(''),[mode,setMode]=useState<'queue'|'steer'>('queue');
  const [loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const [receipt,setReceipt]=useState<Json>(),[unknownClient,setUnknownClient]=useState<string|null>(null);
- const live=useRef<{draft:Draft|null;text:string;mode:'queue'|'steer';paused:boolean}>({draft:null,text:'',mode:'queue',paused:false});
- const saveFlight=useRef<Promise<boolean>|null>(null),actionFlight=useRef(false),mounted=useRef(true),input=useRef<HTMLTextAreaElement>(null);
- const editSequence=useRef(0),submittedSequence=useRef<number|null>(null);
+ const [receipt,showReceipt]=useState<Json>(),[unknownClient,showUnknownClient]=useState<string|null>(null);
+ const live=useRef<{draft:Draft|null;text:string;mode:'queue'|'steer';paused:boolean;receipt?:Json;unknownClient:string|null}>({draft:null,text:'',mode:'queue',paused:false,unknownClient:null});
+ const setReceipt=(value:Json|undefined)=>{live.current.receipt=value;showReceipt(value)};
+ const setUnknownClient=(client:string|null)=>{live.current.unknownClient=client;showUnknownClient(client)};
+ const saveFlight=useRef<Promise<boolean>|null>(null),actionFlight=useRef<false|'refresh'|'receipt'>(false),mounted=useRef(true),input=useRef<HTMLTextAreaElement>(null);
+ const editSequence=useRef(0),submittedSequence=useRef<number|null>(null),panel=useRef<HTMLElement>(null);
  const currentIdentity=ownerWorkIdentity(task),current=!!currentIdentity&&workIdentityKey(currentIdentity)===workIdentityKey(target);
  const accepts=current&&task.raw?.controls?.canInput===true;
  const notifyError=(message:string)=>{if(mounted.current)setError(message)};
@@ -80,19 +83,28 @@ export function OwnerWorkSupplement({target,task,can,registerBeforeLeave,onClose
   saveFlight.current=savingNow;return savingNow;
  };
  useEffect(()=>{mounted.current=true;void read().then(value=>{if(value&&mounted.current)input.current?.focus({preventScroll:true})});return()=>{mounted.current=false}},[]);
- useEffect(()=>{registerBeforeLeave(()=>flush());return()=>registerBeforeLeave(null)});
+ useLayoutEffect(()=>{
+  const shown=panel.current;if(!shown)return;
+  registerBeforeLeave({flush:()=>flush(),keepsReceipt:()=>{
+   const {draft,receipt,unknownClient}=live.current;
+   return actionFlight.current==='receipt'||!!unknownClient||
+    draft?.pending.some(row=>!settledReceipt(row.receipt?.status??row.status))===true||
+    !!receipt&&!settledReceipt(receipt.status);
+  }},shown);
+  return()=>registerBeforeLeave(null,shown);
+ });
  const edit=(next:string,nextMode=live.current.mode)=>{
   editSequence.current++;live.current.text=next;live.current.mode=nextMode;setText(next);setMode(nextMode);setReceipt(undefined);void flush();
  };
  const refresh=async()=>{
   if(actionFlight.current||saveFlight.current)return;
-  actionFlight.current=true;setError('');
+  actionFlight.current='refresh';setError('');
   const dirty=!!live.current.draft&&!sameContent(live.current,live.current.draft);
   try{await read(dirty)}finally{actionFlight.current=false}
  };
  const submit=async(retry?:Json)=>{
   if(actionFlight.current||!can('ownerWork.supplement.send')||!accepts)return;
-  actionFlight.current=true;setBusy(true);setError('');
+  actionFlight.current='receipt';setBusy(true);setError('');
   try{
    if(!await flush(true))return;
    const original=live.current.draft;if(!original||!original.text.trim()||!original.current||original.pending.length&&!retry)return;
@@ -100,7 +112,7 @@ export function OwnerWorkSupplement({target,task,can,registerBeforeLeave,onClose
    try{
     const result=await bridge.command('ownerWork.supplement.send',{...binding(target),key:original.key,revision:original.revision,clientMessageId:client});
     const next=apply(result,false);setReceipt(next.receipt);
-    setUnknownClient(['accepted','queued','consumed','withdrawn','rejected','not_sent'].includes(String(next.receipt?.status))?null:next.pending.some(row=>row.clientMessageId===client)?client:null);
+    setUnknownClient(settledReceipt(next.receipt?.status)?null:next.pending.some(row=>row.clientMessageId===client)?client:null);
    }catch(failure){
     notifyError(failureText(failure));
     if((failure as {code?:string})?.code==='not_accepted')setUnknownClient(null);
@@ -110,7 +122,7 @@ export function OwnerWorkSupplement({target,task,can,registerBeforeLeave,onClose
  };
  const query=async(client:string)=>{
   if(actionFlight.current||!can('ownerWork.supplement.query')||!live.current.draft)return;
-  actionFlight.current=true;setBusy(true);setError('');
+  actionFlight.current='receipt';setBusy(true);setError('');
   const original=live.current.draft,dirty=!sameContent(live.current,original)&&editSequence.current!==submittedSequence.current;
   try{
    const next=apply(await bridge.command('ownerWork.supplement.query',{...binding(target),key:original.key,clientMessageId:client}),dirty);
@@ -118,12 +130,11 @@ export function OwnerWorkSupplement({target,task,can,registerBeforeLeave,onClose
   }catch(failure){notifyError(failureText(failure));await read(true)}
   finally{actionFlight.current=false;if(mounted.current)setBusy(false)}
  };
- const close=async()=>{if(await flush())onClose()};
  const dirty=!!draft&&!sameContent({text,mode},draft),pending=draft?.pending||[];
  const unknownOutsideList=unknownClient&&!pending.some(row=>row.clientMessageId===unknownClient)?unknownClient:null;
  const canSend=can('ownerWork.supplement.send')&&!!draft&&accepts&&draft.current&&(mode==='queue'?draft.canQueue:draft.canSteer)&&!pending.length&&!unknownClient&&!loading&&!busy&&!!text.trim();
- return <section className="pw-work-supplement" aria-label={`补充给：${target.goal}`}>
-  <header className="pw-work-supplement-heading"><div><small>补充给这件工作</small><h3>{target.goal}</h3></div><div className="pw-action-row"><IconButton icon={IconRefresh} aria-label="重新读取原工作补充" disabled={loading||busy||saving} onClick={()=>void refresh()}/><IconButton icon={IconClose} aria-label="收起补充，保留草稿" disabled={saving} onClick={()=>void close()}/></div></header>
+ return <section ref={panel} className="pw-work-supplement" aria-label={`补充给：${target.goal}`}>
+  <header className="pw-work-supplement-heading"><div><small>补充给这件工作</small><h3>{target.goal}</h3></div><div className="pw-action-row"><IconButton icon={IconRefresh} aria-label="重新读取原工作补充" disabled={loading||busy||saving} onClick={()=>void refresh()}/><IconButton icon={IconClose} aria-label="收起补充，保留草稿" disabled={saving} onClick={()=>onClose(()=>flush())}/></div></header>
   {loading&&!draft?<ThinkingLoader phase="正在读取这件工作的独立草稿"/>:draft?<>
    <p className="pw-muted">{!current?'工作已进入另一轮；这份草稿仍属于原执行，请核对后决定。':draft.reason}</p>
    {!!draft.otherDrafts?.length&&<div className="pw-work-pending-links" aria-label="保留的原执行草稿">{draft.otherDrafts.filter(row=>row.taskId===target.taskId&&row.conversationId===target.conversationId&&typeof row.runId==='string'&&Number.isSafeInteger(row.epoch)).map(row=><Button key={row.key} variant="ghost" size="small" disabled={busy||saving} onClick={()=>onSelectOriginal({taskId:row.taskId,runId:row.runId,epoch:row.epoch})}>查看另一轮保留的{row.hasText?'补充草稿':'待核对输入'}</Button>)}</div>}

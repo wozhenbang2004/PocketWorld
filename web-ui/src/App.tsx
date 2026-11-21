@@ -589,8 +589,14 @@ export default function App(){
  const [messageQuoteTarget,setMessageQuoteTarget]=useState<MessageQuoteTarget|null>(null);
  const [messageOriginTarget,setMessageOriginTarget]=useState<MessageOriginTarget|PhoneReportTarget|null>(null);
  const [workSupplementTarget,setWorkSupplementTarget]=useState<WorkSupplementTarget|null>(null);
- const workSupplementBeforeLeave=useRef<WorkSupplementLeave|null>(null);
- const registerWorkSupplementBeforeLeave=useCallback((guard:WorkSupplementLeave|null)=>{workSupplementBeforeLeave.current=guard},[]);
+ const workSupplementBeforeLeave=useRef<(WorkSupplementLeave&{target:WorkSupplementTarget;panel:HTMLElement})|null>(null);
+ const registerWorkSupplementBeforeLeave=useCallback((target:WorkSupplementTarget,panel:HTMLElement,guard:WorkSupplementLeave|null)=>{
+  if(guard)workSupplementBeforeLeave.current={target,panel,...guard};
+  else if(workSupplementBeforeLeave.current?.target===target&&workSupplementBeforeLeave.current.panel===panel)workSupplementBeforeLeave.current=null;
+ },[]);
+ const dismissWorkSupplement=useCallback((target:WorkSupplementTarget)=>{
+  setWorkSupplementTarget(previous=>previous===target?null:previous);
+ },[]);
  const [workControls,setWorkControls]=useState<Record<string,WorkControlFeedback>>({});
  const workControlEntered=useRef(new Set<string>());
  const [readingDocuments,setReadingDocuments]=useState<ReadingDocument[]>([]);const readingSerial=useRef(0);
@@ -892,7 +898,30 @@ export default function App(){
  const releasePhoneNotice=useCallback(()=>{const pin=phoneNoticeRef.current;if(!pin)return;phoneNoticeRef.current=null;setPhoneNoticePin(null);setPhoneNoticePanel(null);
   if(can('phone.notice.close'))void bridge.command('phone.notice.close',{noticeHandle:pin.token}).catch(()=>{});
  },[can]);
- const closeTask=useCallback((restoreButlerWork=false,onClosing?:()=>void)=>{const commit=async()=>{if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current())return false;
+ const closeCurrentWorkSupplement=useCallback((explicit=false)=>{
+  const target=workSupplementTarget,owner=workSupplementBeforeLeave.current,body=taskScroll.current;
+  if(!taskOpen||taskOpening||taskLayer!=='overview'||!target||target.taskId!==taskId||owner?.target!==target||!body)return false;
+  const {panel,flush}=owner,navigation=navigationWindow.current,request=reviewRequest.current;
+  const documentEpoch=bridge.getDocumentEpoch(),resume=openedTaskResumeRevision.current;
+  const current=()=>{
+   const registered=workSupplementBeforeLeave.current,live=bridge.getState(),view=obj(live.view);
+   if(document.hidden||bridge.getDocumentEpoch()!==documentEpoch||navigationWindow.current!==navigation||reviewRequest.current!==request||
+      openedTaskId.current!==target.taskId||view.section!==null||view.taskId!==target.taskId||view.resumeRevision!==resume||
+      registered?.target!==target||registered.panel!==panel||taskScroll.current!==body||!body.contains(panel)||
+      panel.closest('[hidden],[inert],[aria-hidden="true"]')||!panel.getClientRects().length||
+      live.state.conversationReader||live.state.queuedInputsPage||live.state.attachmentWorkspace?.open===true||
+      !live.capabilities.commands.includes('ownerWork.supplement.read'))return false;
+   const rows=asArray<Task>(live.state.tasks).filter(row=>row.id===target.taskId);
+   const work=ordinaryChatWorkRow(rows.length===1?rows[0]:undefined,target.conversationId,true);
+   return !!work&&work.runId===target.runId&&work.epoch===target.epoch;
+  };
+  if(!current())return false;
+  // Back cannot hide an unsettled receipt; X is the explicit close as before.
+  const keepReceipt=()=>!explicit&&owner.keepsReceipt();
+  if(!keepReceipt())void flush().then(saved=>{if(saved&&current()&&!keepReceipt())dismissWorkSupplement(target)});
+  return true;
+ },[taskOpen,taskOpening,taskLayer,taskId,workSupplementTarget,dismissWorkSupplement]);
+ const closeTask=useCallback((restoreButlerWork=false,onClosing?:()=>void)=>{const commit=async()=>{if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current.flush())return false;
   onClosing?.();
   const origin=homeWorkReturn.current;
   // The original overview can still be the same read-only visit from Home.
@@ -1395,7 +1424,7 @@ export default function App(){
    else if(!taskOpen||searchQuery!==undefined)chatWorkReturn.current=null;
    if(onOpened)onOpened();else if(readReview)loadTaskReview(id,originalApprovalId)}).catch(failedOpen);
   };
-  if(workSupplementBeforeLeave.current)void workSupplementBeforeLeave.current().then(saved=>{if(saved)void commit()});else void commit();
+  if(workSupplementBeforeLeave.current)void workSupplementBeforeLeave.current.flush().then(saved=>{if(saved)void commit()});else void commit();
  },[act,loadTaskReview,tasks,taskId,taskOpen,taskLayer,route,rememberTaskPosition,invalidateContinuation,leaveInlinePreparation,releasePhoneNotice,can]);
  useEffect(()=>{
   const invalidate=()=>{
@@ -1417,7 +1446,7 @@ export default function App(){
  },[invalidateContinuation]);
  const backFromTask=useCallback(()=>{
   if(taskMenuOpen){setTaskMenuOpen(false);return}
-  if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.())return;
+  if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.()||closeCurrentWorkSupplement())return;
   if(taskLayer==='scope'){showTaskLayer('goal');return}
   const origin=taskReconciliationOrigin.current;
   if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}
@@ -1438,7 +1467,7 @@ export default function App(){
     source.navigation===navigationWindow.current&&source.resumeRevision===Number(view.resumeRevision||0)&&
     !live.state.conversationReader&&!!chatWorkLocation(source,undefined,true);
   }).then(closed=>{if(closed&&searchReturn&&!returnToSource)showWorkSearch()});
- },[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,searchReturn,showWorkSearch,route,chatWorkLocation,currentChatWorkRow]);
+ },[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,closeCurrentWorkSupplement,searchReturn,showWorkSearch,route,chatWorkLocation,currentChatWorkRow]);
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
  const chooseConversation=useCallback((target:string|null)=>{
   const action=target===null?'conversation.new':'conversation.select';
@@ -2080,7 +2109,7 @@ export default function App(){
   }).finally(settled);
  };
  useLayoutEffect(()=>{if(route!=='chat'||!butlerSendConversation.current)return;const original=butlerSendConversation.current;butlerSendConversation.current=null;if(original===String(state.conversationId||''))goToLatest();},[route,state.conversationId,goToLatest]);
- const targetWork=async(task:Task,original?:WorkIdentity)=>{const identity=original||ownerWorkIdentity(task),conversationId=privateTaskConversationId(task);if(!identity||!identity.runId||identity.epoch<1||!conversationId||!can('ownerWork.supplement.read'))return;if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current())return;setWorkSupplementTarget({...identity,goal:task.goal,conversationId});if(taskOpen&&taskId===task.id)showTaskLayer('overview');else openTask(task.id);};
+ const targetWork=async(task:Task,original?:WorkIdentity)=>{const identity=original||ownerWorkIdentity(task),conversationId=privateTaskConversationId(task);if(!identity||!identity.runId||identity.epoch<1||!conversationId||!can('ownerWork.supplement.read'))return;if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current.flush())return;setWorkSupplementTarget({...identity,goal:task.goal,conversationId});if(taskOpen&&taskId===task.id)showTaskLayer('overview');else openTask(task.id);};
  const returnToWorkInput=(pending:Json)=>{const identity=obj(pending.originalTarget) as WorkIdentity,task=tasks.find(row=>row.id===identity.taskId);if(task&&identity.runId&&Number.isSafeInteger(identity.epoch))void targetWork(task,identity);else if(can('composer.returnPending'))run('composer.returnPending',{clientMessageId:pending.clientMessageId});};
  const workWaitsForTeamDecision=(task:Task)=>ownerWorkPendingTeamStart(task,
   review?.task&&taskBinding(review.task)===taskBinding(task)&&currentReviewWindow(reviewWindow.current)?review.approvals:undefined);
@@ -3684,7 +3713,9 @@ export default function App(){
      {taskLayer==='overview'&&ownerWorkActions(task,currentResultDecision)}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
-     {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&workSupplementTarget?.taskId===task.id&&can('ownerWork.supplement.read')&&<OwnerWorkSupplement key={workIdentityKey(workSupplementTarget)} target={workSupplementTarget} task={task} can={can} registerBeforeLeave={registerWorkSupplementBeforeLeave} onClose={()=>setWorkSupplementTarget(null)} onSelectOriginal={identity=>void targetWork(task,identity)}/>}
+     {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&workSupplementTarget?.taskId===task.id&&can('ownerWork.supplement.read')&&<OwnerWorkSupplement key={workIdentityKey(workSupplementTarget)} target={workSupplementTarget} task={task} can={can}
+       registerBeforeLeave={(guard,panel)=>registerWorkSupplementBeforeLeave(workSupplementTarget,panel,guard)}
+       onClose={flush=>{if(!closeCurrentWorkSupplement(true))void flush().then(saved=>{if(saved)dismissWorkSupplement(workSupplementTarget)})}} onSelectOriginal={identity=>void targetWork(task,identity)}/>}
      {workSupplementTarget?.taskId!==task.id&&pendingInputs.some(item=>String(item.draftKey).startsWith('work:')&&item.originalTarget?.taskId===task.id)&&<div className="pw-work-pending-links" aria-label="原工作补充">{pendingInputs.filter(item=>String(item.draftKey).startsWith('work:')&&item.originalTarget?.taskId===task.id).map(item=><Button key={item.clientMessageId} variant="secondary" size="small" onClick={()=>returnToWorkInput(item)}>核对原工作中的补充</Button>)}</div>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.ownerDeviceWork&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'device:'+task.id} taskId={task.id} run={act} directed={task.raw.ownerDeviceWork.directPhone} directedWorkspace={task.raw.ownerDeviceWork.directWorkspace}
        startedPhone={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&!!task.raw.runId&&Number.isSafeInteger(task.raw.coordinatorEpoch)&&task.raw.coordinatorEpoch>0}
@@ -4753,17 +4784,21 @@ export default function App(){
    Array.isArray(listed.files)&&!listed.files.length&&Array.isArray(live.state.files)&&!live.state.files.length&&
    !asArray<string>(live.state.moduleBusy).includes('workspace.list')&&canEditImportedCheckout(action=>live.capabilities.commands.includes(action));
  };
- const firstLocalFilesProject=currentProject&&!importedFileTarget&&route==='projects'&&projectSection==='files'&&!fileQuery&&
+ const emptyCreatedProject=currentProject&&route==='projects'&&
   !previewBlocked&&!projectPreview.expanded&&!projectListBusy&&!projectListError&&!projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&
   !projectWorkDrafts[currentProject.id]?.operation&&!projectWorkDrafts[currentProject.id]?.expanded&&
   firstProjectFilesCurrent(bridge.getState(),currentProject.id)?currentProject.id:'';
- const openFirstLocalFiles=()=>{
-  const projectId=firstLocalFilesProject,navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+ const firstLocalFilesProject=projectSection==='files'&&!fileQuery&&!importedFileTarget?emptyCreatedProject:'';
+ const openFirstLocalFiles=(from:'files'|'work')=>{
+  if(route!=='projects'||projectSection!==from)return;
+  const projectId=from==='work'?firstLocalFilesWorkProject:firstLocalFilesProject;
+  const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
   const resume=obj(bridge.getState().view).resumeRevision;
   const current=()=>{
    const live=bridge.getState();
    return !!projectId&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&
-    Number.isSafeInteger(resume)&&obj(live.view).resumeRevision===resume&&firstProjectFilesCurrent(live,projectId);
+    Number.isSafeInteger(resume)&&obj(live.view).resumeRevision===resume&&firstProjectFilesCurrent(live,projectId)&&
+    (from==='files'||live.capabilities.commands.includes('projects.development.prepare'));
   };
   if(!current())return;
   setProjectLocalFilesIntent({projectId,current});
@@ -4791,7 +4826,7 @@ export default function App(){
     firstLocalFilesProject?'要在手机上运行，请在工作副本里添加源码。新建正式文件不会改动已有副本。':'从一个新文件开始，也可以重新读取当前项目。'}</p>
   {fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<div className="pw-action-row">
    {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget,'files')}>{fixedTaskCopy?'编辑新副本源码':'编辑导入的本机源码'}</Button>}
-   {firstLocalFilesProject&&<Button variant="primary" leadingIcon={IconFolder} onClick={openFirstLocalFiles}>在本机副本里编辑</Button>}
+   {firstLocalFilesProject&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openFirstLocalFiles('files')}>在本机副本里编辑</Button>}
    {can('projects.newFile')&&<Button variant={importedFileTarget||firstLocalFilesProject?'ghost':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('file')}>{importedFileTarget||firstLocalFilesProject?'新建正式文件':'新建文件'}</Button>}
    {can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}
   </div>}
@@ -4820,6 +4855,12 @@ export default function App(){
   open:!!(projectStartDraft?.operation||projectStartDraft?.expanded),
   mode:projectStartDraft?.operation||projectStartDraft?.expanded||!can('projects.development.read')?'profile':'default',
  };
+ // The formal list proves nothing about the checkout. The existing Work page
+ // still checks the saved choice and owns explicit copy preparation.
+ const firstLocalFilesWorkProject=emptyCreatedProject&&projectSection==='work'&&!projectStartPresentation.open&&
+  !taskOpening&&!importedCopy&&!retainedCopyFirst&&!projectLocalFilesIntent&&can('projects.development.prepare')&&
+  projectWorkView.filter==='all'&&!projectWorkView.query.trim()&&projectDirectory.loaded&&!projectDirectory.busy&&!projectDirectory.error&&
+  !projectDirectory.hasMore&&!projectDirectory.hasReadGaps&&!projectDirectory.tasks.length?emptyCreatedProject:'';
  const pairedDeviceProjectCurrent=(native:ReturnType<typeof bridge.getState>,projectId:string,returning=false)=>{
   const view=obj(native.view),owner=native.state;
   return (view.section===null||returning&&view.section==='devices')&&view.taskId===null&&Number.isSafeInteger(view.resumeRevision)&&owner.projectId===projectId&&
@@ -4858,7 +4899,8 @@ export default function App(){
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onOpenPairedDevices={canUsePairedDevice?visitPairedDevices:undefined} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
-        editImported={importedWorkTarget?{onOpen:()=>openOriginalImportedFiles(importedWorkTarget,'work'),label:fixedTaskCopy?'编辑新副本源码':'编辑导入源码'}:undefined}
+        editLocalFiles={importedWorkTarget?{onOpen:()=>openOriginalImportedFiles(importedWorkTarget,'work'),label:fixedTaskCopy?'编辑新副本源码':'编辑导入源码'}:
+         firstLocalFilesWorkProject?{onOpen:()=>openFirstLocalFiles('work'),label:'编辑本机文件'}:undefined}
         localCopyFirst={importedSourceFirst||retainedCopyFirst}
         savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
@@ -5006,7 +5048,7 @@ export default function App(){
    canChooseStandaloneDocument={!!existingPrivateAttachmentDraft}
    onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
-  <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.())closeTask(true)}else setTaskOpen(true)}} direction="right" handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
+  <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement())closeTask(true)}else setTaskOpen(true)}} direction="right" handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
    const chatOrigin=chatWorkReturn.current;chatWorkReturn.current=null;
    if(route==='chat'&&chatOrigin?.taskId===taskId&&chatOrigin.navigation===navigationWindow.current&&restoreChatWorkAt(chatOrigin)){event.preventDefault();return;}

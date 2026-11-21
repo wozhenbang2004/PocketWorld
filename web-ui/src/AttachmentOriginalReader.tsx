@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Accordion,AccordionItem,Button,RadioOptions,TextField} from './forms-library';
 import {IconExternalLink} from './icons';
 import {MarkdownBody} from './library';
@@ -22,7 +22,9 @@ export function DocumentProjection({value}:{value:Json}) {
 }
 
 const textEncodings=['UTF-8','UTF-16LE','UTF-16BE','GB18030','ISO-8859-1'].map(id=>({id,label:id}));
-type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
+export type DisplayedOriginalText={windowId:string;viewerId:string;identity:string;sha256:string;encoding:string;offset:number};
+type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;onTextDisplayed?:(range:DisplayedOriginalText)=>void;
+ recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
 type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:boolean};
 function pdfRaster(value:Json):PdfRaster|null {
  const {pdfRasterId,page,pages,searchAvailable}=value;
@@ -39,7 +41,8 @@ export function AttachmentOriginalReader(props:OriginalReaderProps) {
  return <OriginalReader key={JSON.stringify([props.windowId,props.source.id])} {...props}/>;
 }
 
-function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReaderProps) {
+function OriginalReader({source,windowId,showTitle=true,recovery,onTextDisplayed}:OriginalReaderProps) {
+ const textBody=useRef<HTMLDivElement>(null);
  const [toolsVisible,setToolsVisible]=useState(false);
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
  const [recoveryEncoding,setRecoveryEncoding]=useState('');
@@ -98,6 +101,12 @@ function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReader
  const unavailable=actual.previewAvailable===false?'这个格式没有内置预览。':officeIssue;
  const ready=(!failed||retaining)&&!unavailable&&type!=='unsupported'&&Object.keys(actual).length>0,page=Number(actual.page||1),pages=Number(actual.pages||0);
  const readerBusy=busy||source.busy||pdfAttempt!==null;
+ const shownText=ready&&!readerBusy&&!failed&&type==='text'&&source.sourceUnavailable===false&&typeof actual.content==='string'&&!!actual.content&&
+  textEncodings.some(row=>row.id===actual.encoding)&&Number.isSafeInteger(actual.offset)&&actual.offset>=0;
+ useLayoutEffect(()=>{
+  if(!onTextDisplayed||!shownText||!textBody.current?.isConnected)return;
+  onTextDisplayed({windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,encoding:actual.encoding,offset:actual.offset});
+ },[onTextDisplayed,shownText,windowId,source.id,source.identity,source.sha256,actual.encoding,actual.offset]);
  const imageTools=(type==='pdf'||type==='image')&&ready;
  const isMarkdown=String(source.name||'').toLowerCase().endsWith('.md');
  const read=(args:Json)=>void invoke('read',args);
@@ -127,7 +136,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery}:OriginalReader
   <Button variant="ghost" aria-expanded={toolsVisible} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'阅读工具'}</Button>
  </div>}
  {type==='pdf'&&ready&&<div hidden={!toolsVisible} className="pw-action-row pw-original-pagination pw-material-navigation"><TextField label="页码" value={position} onChange={setPosition}/><Button variant="secondary" disabled={readerBusy||!/^\d+$/.test(position)||Number(position)<1||Number(position)>pages} onClick={()=>read({page:Number(position)})}>跳转</Button></div>}
- {ready&&type==='text'&&<div className="pw-original-text">{markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text">{actual.content}</pre>}
+ {ready&&type==='text'&&<div ref={textBody} className="pw-original-text">{markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text">{actual.content}</pre>}
   <div className="pw-action-row">{!!actual.offset&&<Button variant="ghost" disabled={busy} onClick={()=>read({encoding:actual.encoding,offset:0})}>从开头</Button>}
    {actual.nextOffset!=null&&<Button variant="secondary" disabled={busy} onClick={()=>read({encoding:actual.encoding,offset:actual.nextOffset})}>读取后续</Button>}
    {(!!actual.offset||actual.nextOffset!=null)&&<small>字符位置 {Number(actual.offset||0)+1}</small>}</div>
