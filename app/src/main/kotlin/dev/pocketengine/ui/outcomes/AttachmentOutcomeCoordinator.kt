@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.attachments.AttachmentBook
+import dev.pocketengine.features.attachments.OwnerFilePreviewSource
 import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.TeamWorkspaceOutcomeHost
 import dev.pocketengine.features.attachments.AttachmentRepository
@@ -85,12 +86,57 @@ internal data class OwnerAttachmentCopyReceipt(val requestId:String,val taskId:S
 
 internal enum class AttachmentOriginalReturn(val value:String) { DETAILS("details"), LIST("list"), ENTRY("entry") }
 /** A saveable navigation hint for the work behind an already-opened original, never a read grant. */
-internal data class AttachmentWorkReturn(val run:AttachmentResultRun,val fileId:String,val sha256:String) {
+internal data class AttachmentWorkReturn(val run:AttachmentResultRun,val fileId:String,val sha256:String,
+                                         private val recordedDocument:Boolean=false) {
     fun matchesFile(file:JSONObject?)=file!=null&&file.optString("id")==fileId&&file.optString("sha256")==sha256
-    fun matchesTask(task:JSONObject)=run.matchesCompletedResult(task)&&!task.optBoolean("contextWithdrawn")&&
-        !task.optBoolean("sourceCurrentReadRequired")
+    fun matchesTask(task:JSONObject)=!task.optBoolean("contextWithdrawn")&&!task.optBoolean("sourceCurrentReadRequired")&&
+        (run.matchesCompletedResult(task)||recordedDocument&&matchesRecordedDocumentTask(task))
     fun matchesResult(snapshot:JSONObject,file:JSONObject?):Boolean=matchesFile(file)&&file?.optString("role")=="result"&&
         runCatching{run.files(snapshot).entries.count{matchesFile(it)}==1}.getOrDefault(false)
+
+    private fun matchesRecordedDocumentRow(file:JSONObject?):Boolean= file!=null&&matchesFile(file)&&
+        file.opt("role")=="result"&&file.opt("availability")=="available"&&file.opt("recordedDocumentOriginal")==true&&
+        file.opt("sourceKind")=="created_document"&&file.opt("sourceTaskId")==run.taskId&&
+        file.opt("sourceTaskRunId")==run.runId&&file.opt("sourceOperationId")==run.taskId&&
+        file.opt("mimeType") in setOf("application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+    /** Select the stricter check from the current native file catalogue, never from the Bundle. */
+    fun forRecordedDocument(snapshot:JSONObject,file:JSONObject?):AttachmentWorkReturn?=
+        takeIf{run.report==null&&run.taskId==run.runId&&run.epoch==1&&snapshot.opt("taskStatus")=="needs_confirmation"&&
+            snapshot.opt("originalDocumentActionId")==run.taskId&&matchesRecordedDocumentRow(file)&&
+            runCatching{run.files(snapshot).entries.count(::matchesRecordedDocumentRow)==1}.getOrDefault(false)}
+            ?.copy(recordedDocument=true)
+
+    /** A native original returned only after the same Book ID and complete digest have been read. */
+    fun matchesVerifiedDocument(file:JSONObject,original:OwnerFilePreviewSource):Boolean=recordedDocument&&runCatching{
+        val meta=original.metadata()
+        val source=meta.getJSONObject("source");val publication=source.getJSONObject("nativePublication")
+        val plan=source.getString("planDigest");val action=run.taskId
+        val format=if(original.mimeType=="application/pdf")"pdf" else "docx"
+        matchesRecordedDocumentRow(file)&&matchesFile(meta)&&!original.tombstone&&original.sha256==sha256&&
+            original.mimeType==file.opt("mimeType")&&original.sizeBytes==file.optLong("size",-1L)&&original.sizeBytes>0&&
+            meta.opt("principalId")=="owner"&&meta.opt("spaceId")=="private"&&!meta.optBoolean("outputSourceRetired")&&
+            source.opt("kind")=="created_document"&&!source.has("groupSpaceId")&&source.opt("documentFormat")==format&&
+            publication.opt("role")=="document_output"&&publication.opt("planDigest")==plan&&
+            listOf("taskId","runId","operationId").all{source.opt(it)==action&&publication.opt(it)==action}&&
+            AttachmentBook.isOriginalPublicationId(fileId,action,"document_output",action,action,plan)
+    }.getOrDefault(false)
+
+    private fun matchesRecordedDocumentTask(task:JSONObject):Boolean {
+        val action=run.taskId
+        val producer=task.optJSONObject("externalRefs")?.optJSONObject("documentCreation")?:return false
+        val evidence=task.optJSONObject("evidence")?:return false
+        return run.report==null&&action==run.runId&&run.epoch==1&&task.opt("id")==action&&task.opt("runId")==action&&
+            task.opt("operationId")==action&&task.optInt("coordinatorEpoch")==1&&task.opt("actorId")=="owner"&&
+            task.opt("spaceId")=="private"&&task.opt("kind")=="attachments"&&task.opt("feature")=="attachments"&&task.opt("command")=="createDocument"&&
+            listOf("origin","conversationId","parentTaskId","teamRunId","memberId").all{task.isNull(it)}&&
+            task.opt("taskProjection")=="detail_window"&&task.opt("taskCoreReadLimited")==false&&task.optBoolean("contextAvailable",true)&&
+            task.opt("status")=="needs_confirmation"&&task.opt("executionStatus")=="completed"&&task.opt("externalId")==fileId&&
+            task.opt("externalOperationId")==action&&evidence.opt("id")==fileId&&evidence.opt("operationId")==action&&
+            evidence.opt("executorStatus")=="completed"&&producer.opt("format") in setOf("docx","pdf")&&
+            runCatching{AttachmentBook.isOriginalPublicationId(fileId,action,"document_output",action,action,producer.getString("planDigest"))}.getOrDefault(false)
+    }
+
     fun toJson()=JSONObject().put("taskId",run.taskId).put("runId",run.runId).put("epoch",run.epoch)
         .put("fileId",fileId).put("sha256",sha256)
     companion object {
@@ -102,10 +148,9 @@ internal data class AttachmentWorkReturn(val run:AttachmentResultRun,val fileId:
             return AttachmentWorkReturn(AttachmentResultRun(task,run,epoch),file,sha)
         }
         fun capture(snapshot:JSONObject,file:JSONObject):AttachmentWorkReturn?=runCatching{
-            check(snapshot.opt("taskStatus")=="completed")
             from(JSONObject().put("taskId",snapshot.getString("taskId")).put("runId",snapshot.getString("taskRunId"))
                 .put("epoch",snapshot.getInt("coordinatorEpoch")).put("fileId",file.getString("id")).put("sha256",file.getString("sha256")))
-                .takeIf{it.matchesResult(snapshot,file)}
+                .takeIf{it.matchesResult(snapshot,file)&&(snapshot.opt("taskStatus")=="completed"||it.forRecordedDocument(snapshot,file)!=null)}
         }.getOrNull()
     }
 }
@@ -286,11 +331,13 @@ internal class AttachmentOutcomeCoordinator(
         if(state.team!=null){readTeamFile();return}
         val task=state.taskId;val group=state.group;val pin=restoreFile?:state.file;val savedDraft=restoredDocumentDraft
         val showOriginal=restoreFile?.optBoolean("showOriginal")==true
+        val directWorkOriginal=showOriginal&&directPrivateWorkEntry()
         var unpublishedEdits=savedDraft!=null
         val resultRun=state.resultRun?.takeIf{it.taskId==task}
         var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
+        var verifiedRecordedOriginal=false
         work(onSuccess={actual->
-            if(group==null&&pendingDocumentAction==null&&actual.optString("taskStatus")!in setOf("completed","failed")){
+            if(group==null&&pendingDocumentAction==null&&!verifiedRecordedOriginal&&actual.optString("taskStatus")!in setOf("completed","failed")){
                 originalDocumentAction(task,actual)?.let{action->
                     pendingDocumentAction=action;state=state.copy(pendingDocumentTask=action)
                 }
@@ -311,7 +358,13 @@ internal class AttachmentOutcomeCoordinator(
                 fromRun.entries
             }else actual.optJSONArray("sources").objects()+actual.optJSONArray("artifacts").objects()
             val file=pin?.let{selected->files.firstOrNull{it.optString("id")==selected.optString("id")&&it.optString("sha256")==selected.optString("sha256")&&it.optString("availability")=="available"}?:throw IllegalStateException("原文件版本当前不可读，请回原任务核对")}
-            if(showOriginal&&file!=null)original=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),control)
+            if(showOriginal&&file!=null){
+                val verified=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),control)
+                original=verified
+                // A locally verified file can still await owner acceptance. Don't install a publication-recovery latch for it.
+                if(directWorkOriginal)verifiedRecordedOriginal=AttachmentWorkReturn.capture(actual,file)
+                    ?.forRecordedDocument(actual,file)?.matchesVerifiedDocument(file,verified)==true
+            }
             if(savedDraft!=null){
                 DocumentDraft(savedDraft)
                 if(savedDraft.has("parentArtifactId")){
@@ -765,6 +818,8 @@ internal class AttachmentOutcomeCoordinator(
         }
         val generationAtRead=generation+1
         val snapshot=state.snapshot;val file=state.file
+        val recordedDocument=snapshot?.let{entry.forRecordedDocument(it,file)}
+        val checkedEntry=recordedDocument?:entry
         fun current()=!closed&&generation==generationAtRead&&needsRestoredWorkReturn()&&state.workReturn===entry&&state.taskId==entry.run.taskId&&
             entry.matchesFile(state.file)&&windowCurrent()
         var handedOff=false
@@ -773,16 +828,17 @@ internal class AttachmentOutcomeCoordinator(
         },onSuccess={
             if(current()){
                 handedOff=true
-                try{ready(entry,::current)}catch(failure:Exception){failed(safe(failure))}
+                try{ready(checkedEntry,::current)}catch(failure:Exception){failed(safe(failure))}
             }
         },completionFailure=mismatch){control,_->
             check(current()){mismatch}
             val task=entry.run.taskId
-            check(entry.matchesTask(app.tasks.getForUi(task,false)?:error(mismatch))){mismatch}
+            check(checkedEntry.matchesTask(app.tasks.getForUi(task,false)?:error(mismatch))){mismatch}
             check(snapshot!=null&&entry.matchesResult(snapshot,file)){mismatch}
-            app.attachmentOutcomes.originalFile(task,entry.fileId,entry.sha256,control)
+            if(recordedDocument!=null)app.attachmentOutcomes.originalRecordedDocument(task,entry.fileId,entry.sha256,control)
+            else app.attachmentOutcomes.originalFile(task,entry.fileId,entry.sha256,control)
             control.check()
-            check(current()&&entry.matchesTask(app.tasks.getForUi(task,false)?:error(mismatch))){mismatch}
+            check(current()&&checkedEntry.matchesTask(app.tasks.getForUi(task,false)?:error(mismatch))){mismatch}
             JSONObject() to null
         }
     }

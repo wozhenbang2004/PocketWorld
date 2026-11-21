@@ -3839,7 +3839,33 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         originalOwnerWorkBinding(expected,conversation,state.tasks)
         return model.workDraft(conversation,taskId,runId,epoch)
     }
-    private fun ownerWorkSupplementSnapshot(expected: JSONObject): JSONObject {
+    private data class WorkSupplementCopyTarget(val run: String, val epoch: Int, val draft: OwnerComposerState.Draft) {
+        fun locator() = JSONObject().put("runId", run).put("epoch", epoch).put("revision", draft.revision)
+    }
+
+    /** An already opened, strictly empty destination. The earlier draft is never edited by copying. */
+    private fun workSupplementCopyTarget(model: OwnerComposerState, expected: JSONObject, source: OwnerComposerState.Draft): WorkSupplementCopyTarget? {
+        val taskId = expected.getString("taskId"); val topic = expected.getString("conversationId")
+        val raw = state.tasks.singleOrNull { it.id == taskId }?.raw ?: return null
+        val run = raw.optString("runId"); val epoch = raw.optInt("coordinatorEpoch", -1)
+        if (!workRequestWindowCurrent(taskId, run, epoch) || conversationReader != null ||
+            raw.opt("kind") != "assistant" || raw.opt("executionMode") != "capabilities" || raw.opt("conversationId") != topic ||
+            raw.opt("taskProjection") != "detail_window" || raw.opt("taskCoreReadLimited") != false ||
+            raw.opt("contextWithdrawn") == true || raw.opt("sourceCurrentReadRequired") == true ||
+            listOf("origin", "parentTaskId", "teamRunId", "teamAssignment", "teamWriteScope", "ownerDeviceWork", "ownerPhoneControl",
+                "developmentContext", "workProfileRef", "workProfileIntent").any { !raw.isNull(it) } ||
+            run == expected.getString("runId") || epoch <= expected.getInt("epoch") || source.text.isBlank() || source.text.length > 12000)
+            return null
+        val key = OwnerComposerState.workKey(taskId, run, epoch.toLong())
+        return synchronized(model) {
+            val draft = model.draft(key) ?: return@synchronized null
+            if (draft.conversationId != topic || draft.text.isNotEmpty() || model.draft(source.key) !== source ||
+                model.pending().any { it.draftKey == key || it.draftKey == source.key }) return@synchronized null
+            WorkSupplementCopyTarget(run, epoch, draft)
+        }
+    }
+
+    private fun ownerWorkSupplementSnapshot(expected: JSONObject, offerCopy: Boolean = false): JSONObject {
         val draft=ownerWorkSupplementDraft(expected);val model=ownerComposer?:error("工作草稿尚未读取")
         val task=state.tasks.first{it.id==expected.getString("taskId")}
         val current=runCatching{originalOwnerWorkBinding(expected,draft.conversationId,state.tasks)}.isSuccess
@@ -3857,6 +3883,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             .put("conversationId",draft.conversationId).put("key",draft.key).put("revision",draft.revision).put("text",draft.text).put("mode",draft.mode)
             .put("current",current).put("canQueue",accepts).put("canSteer",accepts).put("pending",pending).put("otherDrafts",otherDrafts)
             .put("reason",if(!current)"这是原执行的补充草稿；工作已进入另一轮，未自动改投。" else if(!accepts)"这件工作当前不接收补充，草稿仍保留。" else "补充会保存在这件工作的原话题，并交给同一执行处理。")
+            .also { view ->
+                if (offerCopy && !current) runCatching { workSupplementCopyTarget(model, expected, draft) }.getOrNull()
+                    ?.let { view.put("copyToCurrent", it.locator()) }
+            }
     }
     private fun saveOwnerWorkSupplement(model:OwnerComposerState,snapshot:JSONObject,done:(JSONObject?,String?)->Unit) {
         val version=model.revision();main.removeCallbacks(composerSave);composerSaving=true;publishComposer()
@@ -3868,15 +3898,67 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }}
     }
     internal fun readOwnerWorkSupplement(expected:JSONObject,done:(JSONObject?,String?)->Unit) {
-        val snapshot=ownerWorkSupplementSnapshot(expected)
+        val snapshot=ownerWorkSupplementSnapshot(expected, offerCopy = true)
         saveOwnerWorkSupplement(ownerComposer?:error("工作草稿尚未读取"),snapshot,done)
+    }
+
+    internal fun copyOwnerWorkSupplement(expected: JSONObject, key: String, revision: Long, run: String, epoch: Int,
+                                         targetRevision: Long, window: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val model = ownerComposer ?: error("工作草稿尚未读取")
+        val task = expected.getString("taskId"); val topic = expected.getString("conversationId")
+        val earlierRun = expected.getString("runId"); val earlierEpoch = expected.getInt("epoch")
+        require(window() && workRequestWindowCurrent(task, run, epoch) &&
+            key == OwnerComposerState.workKey(task, earlierRun, earlierEpoch.toLong())) { "原工作窗口或轮次已变化，未复制" }
+        val source = model.draft(key) ?: error("原补充草稿不再可读，未复制")
+        val to = workSupplementCopyTarget(model, expected, source) ?: error("当前轮草稿不是已核对的空白草稿，未复制")
+        require(source.revision == revision && source.conversationId == topic &&
+            to.run == run && to.epoch == epoch && to.draft.revision == targetRevision) { "原草稿或当前轮已变化，未替换任何内容" }
+        val store = app.tasks
+        io.execute {
+            val copied = try {
+                // No host I/O or disk wait holds the task monitor. An advance cannot
+                // move the local CAS to a newer run and the original remains immutable.
+                synchronized(store) {
+                    check(window() && app.tasks === store) { "原工作窗口已关闭，未复制" }
+                    store.requireCurrentOwnerWorkDraftCopy(task, topic, earlierRun, earlierEpoch, run, epoch)
+                    synchronized(model) {
+                        val destination = to.draft
+                        check(window() && model.draft(key) === source && model.draft(destination.key) === destination &&
+                            model.pending().none { it.draftKey == key || it.draftKey == destination.key }) { "原草稿或当前轮已变化，未替换任何内容" }
+                        // Both objects are the exact immutable revisions captured while verifying the empty destination.
+                        Math.addExact(model.revision(), 1L)
+                        Math.addExact(targetRevision, 1L)
+                        model.edit(destination.key, targetRevision, source.text, destination.mode, JSONArray())
+                    }
+                }
+            } catch (failure: Exception) {
+                main.post { done(null, if (window()) failure.message ?: "未能核对同一工作的当前轮草稿" else "原工作窗口已关闭") }
+                return@execute
+            }
+            // Queue the exact snapshot only if it still contains this version,
+            // outside the TaskStore monitor. The serial store compares and verifies bytes.
+            val saving = synchronized(model) {
+                if (model.draft(copied.key) === copied) ownerComposerStore.save(model) else null
+            }
+            val checkDraft = "未能确认复制已保存；原稿仍保留，请读取对应轮次核对。没有发送补充。"
+            if (saving == null) { main.post { done(null, checkDraft) }; return@execute }
+            saving.whenComplete { _, failure -> main.post {
+                if (!window() || ownerComposer !== model || app.tasks !== store || !workRequestWindowCurrent(task, run, epoch)) {
+                    done(null, "当前工作或轮次已变化，请在原轮次核对草稿。没有发送补充。"); return@post
+                }
+                if (failure != null || model.draft(copied.key) !== copied) { done(null, checkDraft); return@post }
+                done(JSONObject().put("saved", true).put("sent", false).put("taskId", task).put("conversationId", topic)
+                    .put("fromRunId", earlierRun).put("fromEpoch", earlierEpoch).put("fromRevision", revision)
+                    .put("runId", run).put("epoch", epoch).put("revision", copied.revision), null)
+            } }
+        }
     }
     internal fun editOwnerWorkSupplement(expected:JSONObject,key:String,revision:Long,text:String,mode:String,done:(JSONObject?,String?)->Unit) {
         val original=ownerWorkSupplementDraft(expected)
         require(original.key==key&&text.length<=12000&&mode in setOf("queue","steer")){"请核对原工作草稿与补充方式"}
         val model=ownerComposer?:error("工作草稿尚未读取")
         model.edit(key,revision,text,mode,org.json.JSONArray())
-        saveOwnerWorkSupplement(model,ownerWorkSupplementSnapshot(expected),done)
+        saveOwnerWorkSupplement(model,ownerWorkSupplementSnapshot(expected, offerCopy = true),done)
     }
     internal fun sendOwnerWorkSupplement(expected:JSONObject,key:String,revision:Long,client:String,done:(JSONObject?,String?)->Unit) {
         check(!state.chatSubmitting){"请先核对上一条输入回执"}

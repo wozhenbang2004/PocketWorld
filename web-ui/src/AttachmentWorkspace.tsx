@@ -723,6 +723,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const allSources=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts);
  const privateLibrary=privateFiles&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
  const currentNative=bridge.getState(),libraryView=obj(currentNative.view);
+ const documentHistory=obj(snapshot.documentActions),documentActions=rows(documentHistory.actions);
+ const hasOlderDocumentActions=documentHistory.hasMore===true&&typeof documentHistory.nextCursor==='string'&&
+  documentHistory.nextCursor.length>0&&documentHistory.nextCursor.length<=2048;
+ const mayContinueEmptyDocumentPage=privateLibrary&&ordinaryLibraryOwner(currentNative)&&hasOlderDocumentActions;
  const documentParent=privateLibrary&&!catalogUnread&&mode==='detail'&&ordinaryLibraryOwner(currentNative)&&currentNative.state.filePath==null?
   listedDocumentParent(view):undefined;
  const openDocumentParent=async()=>{
@@ -911,7 +915,16 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {privateLibrary&&recentSourcesList}
  {hasLibraryFiles?privateLibrary?<>{outputsList}{sourcesList}{editableSourceList}</>:view.taskId&&!view.choosingSource?<>{outputsList}{sourcesList}{libraryActions}</>:<>{libraryActions}{sourcesList}{outputsList}</>
  :!busy&&!catalogUnconfirmed&&!error&&!view.error?<div className="pw-file-library-empty"><IconFolder size={28} aria-hidden="true"/><h2>{view.choosingSource?'还没有可关联的文件':resultFilesOnly?'本轮暂无可读取的文件':view.taskId?'这个任务还没有文件':'资料库还没有文件'}</h2><p>{view.choosingSource?'导入文件后，就可以把它关联到当前任务。':view.taskId?resultFilesOnly?(scopedResultOnly?'没有用其他轮次或同名文件替代。':'本轮文件将在这里显示，也可回原工作核对已保存的文件。'):'任务中使用的文件和生成的成果会出现在这里。':'从手机选择文件。支持的 PDF、Word（.docx）、Excel（.xlsx）和文本可在本机查看，不用模型。'}</p>{!privateLibrary&&libraryActions}</div>:!privateLibrary&&!catalogUnconfirmed&&libraryActions}
- {privateFiles&&!view.taskId&&!catalogUnread&&rows(snapshot.documentActions?.actions).length>0&&<details><summary>文档生成记录</summary>{rows(snapshot.documentActions.actions).map(action=><div className="pw-file-action-record" key={action.taskId}><div><strong>{action.name||'文档'} · {String(action.format||'').toUpperCase()}</strong><small>{action.status}</small></div><Button variant="ghost" disabled={busy} onClick={()=>run('openDocumentAction',{taskId:action.taskId})}>打开原记录</Button></div>)}{snapshot.documentActions.hasMore&&<Button variant="ghost" disabled={busy} onClick={()=>run('olderDocumentActions')}>读取更早记录</Button>}<FileDetails value={snapshot.documentActions.gaps} title="未完整核对的记录"/></details>}
+ {privateFiles&&!view.taskId&&!catalogUnread&&(documentActions.length>0||mayContinueEmptyDocumentPage)&&<details>
+  <summary>文档生成记录</summary>
+  {!documentActions.length&&<p className="pw-muted" role="status">本页没有可打开的记录，可以继续查找更早的记录。</p>}
+  {documentActions.map(action=><div className="pw-file-action-record" key={action.taskId}>
+   <div><strong>{action.name||'文档'} · {String(action.format||'').toUpperCase()}</strong><small>{action.status}</small></div>
+   <Button variant="ghost" disabled={busy} onClick={()=>run('openDocumentAction',{taskId:action.taskId})}>打开原记录</Button>
+  </div>)}
+  {hasOlderDocumentActions&&<Button variant="ghost" disabled={busy} onClick={()=>run('olderDocumentActions')}>读取更早记录</Button>}
+  <FileDetails value={documentHistory.gaps} title="未完整核对的记录"/>
+ </details>}
  </section>
  </>}
  {media.map(job=><Accordion className="pw-attachment-tools" key={job.operationId}><AccordionItem id={`media-${job.operationId}`} title="原媒体操作与取回" description={job.status==='completed'?'已完成':job.status||'尚待核对'}><section className="pw-file-media-job"><div className="pw-action-row"><Button variant="secondary" disabled={busy} onClick={()=>run('refreshMedia',{operationId:job.operationId})}>查询原操作</Button><Button variant="secondary" disabled={busy} onClick={()=>run('fetchMedia',{operationId:job.operationId})}>取回实际成果</Button>{view.observing?<Button variant="ghost" onClick={()=>run('stopObservation')}>停止观察</Button>:<Button variant="ghost" disabled={busy} onClick={()=>run('observeMedia',{operationId:job.operationId})}>观察进度</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('cancelMedia',{operationId:job.operationId})}>请求取消原操作</Button></div>{view.progress&&<FileDetails value={view.progress} title="实际进度回执"/>}<FileDetails value={job} title="生成与保存回执"/></section></AccordionItem></Accordion>)}

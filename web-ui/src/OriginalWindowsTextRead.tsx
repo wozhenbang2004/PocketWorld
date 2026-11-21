@@ -15,7 +15,7 @@ type Snapshot = { text: string; bytes: number; recordedAt: number };
 type Received = { identity: string; requestDigest: string; content: string; bytes: number; version: string };
 const directoryKinds = { directory: '目录', file: '文件', reparse_point: '重解析点，未跟随', unsupported: '其他' };
 type DirectoryEntry = { name: string; kind: keyof typeof directoryKinds };
-type ReceivedDirectory = { identity: string; returned: number; truncated: boolean; entries: DirectoryEntry[] };
+type ReceivedDirectory = { identity: string; returned: number; truncated: boolean; entries: DirectoryEntry[]; linkedFileIndex?: number };
 
 /** Visible local tool row only. Native rechecks the actual Work, wire, claim and current peer. */
 function originalWindowsReadAt(task: TaskHeader, op: TaskOperation, tool: WorkspaceRead): Original | undefined {
@@ -78,12 +78,21 @@ function receivedOriginalWindowsReadAt(task: TaskHeader, op: TaskOperation, orig
 
   const proof = [original, requestDigest, job, wireDigest, send.wireSha256, send.allocationId,
     accepted.acceptedAt, resource.environmentId, resource.binding];
-  return { proof, requestDigest, data: record(result.payload), args };
+  // A relationship between two receipts also needs their actual same original grant,
+  // not just the same device name or two reported relative paths.
+  const workspace = nativeId(audience.grantId) && Number.isSafeInteger(audience.authorizationEpoch) && audience.authorizationEpoch > 0
+    ? JSON.stringify([requestDigest, audience.callerDeviceId, audience.grantId, audience.authorizationEpoch,
+      resource.environmentId, resource.binding, send.allocationId]) : undefined;
+  return { proof, requestDigest, data: record(result.payload), args, workspace, job, acceptedAt: accepted.acceptedAt };
 }
+type OriginalRead = NonNullable<ReturnType<typeof receivedOriginalWindowsReadAt>>;
 
 export function receivedOriginalWindowsTextAt(task: TaskHeader, op: TaskOperation, original: Original, page?: AuditPage): Received | undefined {
   const held = receivedOriginalWindowsReadAt(task, op, original, page);
-  if (!held) return;
+  if (held) return receivedWindowsText(held);
+}
+
+function receivedWindowsText(held: OriginalRead): Received | undefined {
   // Exact initial Windows WorkspaceFiles read shape. revisionRetained is not a
   // claim that the PC still has a copy; the bytes here were received by this phone.
   const { proof, requestDigest, data, args } = held, path = args?.path;
@@ -96,7 +105,8 @@ export function receivedOriginalWindowsTextAt(task: TaskHeader, op: TaskOperatio
   return { identity, requestDigest, content: data.content, bytes: data.bytes, version: data.version };
 }
 
-function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation, page: AuditPage): ReceivedDirectory | undefined {
+function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation, page: AuditPage,
+  file?: { read: OriginalRead; operation: TaskOperation; bytes: number }): ReceivedDirectory | undefined {
   const original = originalWindowsReadAt(task, op, 'workspace.list');
   const held = original && receivedOriginalWindowsReadAt(task, op, original, page);
   if (!held?.data || !held.args || Object.keys(held.args).some(key => key !== 'path')) return;
@@ -109,6 +119,10 @@ function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation,
     !data.directoryIdentity.every((part: unknown) => typeof part === 'number' && Number.isInteger(part) && part >= 0 && part <= 0xffffffff) ||
     typeof data.truncated !== 'boolean' || !Array.isArray(data.files) || data.files.length > 200) return;
   const prefix = path ? path + '/' : '', names = new Set<string>(), entries: DirectoryEntry[] = [];
+  const linkedPath = file && held.workspace && file.read.workspace === held.workspace && file.read.job !== held.job &&
+    held.acceptedAt <= file.read.acceptedAt && typeof op.position === 'number' && typeof file.operation.position === 'number' &&
+    op.position < file.operation.position ? file.read.args?.path : undefined;
+  let linkedFileIndex: number | undefined;
   for (const raw of data.files) {
     const entry = record(raw), name: unknown = entry?.name, kind: unknown = entry?.kind;
     if (!entry || Object.keys(entry).length !== 5 || typeof name !== 'string' || !name || [...name].length > 255 ||
@@ -116,10 +130,14 @@ function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation,
       !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || !Number.isSafeInteger(entry.modifiedAt) ||
       typeof kind !== 'string' || !Object.hasOwn(directoryKinds, kind)) return;
     names.add(name);
-    if (entries.length < 8) entries.push({ name: name.replace(/\p{C}/gu, '�'), kind: kind as DirectoryEntry['kind'] });
+    if (entries.length < 8) {
+      if (file && typeof linkedPath === 'string' && entry.path === linkedPath && kind === 'file' && entry.bytes === file.bytes)
+        linkedFileIndex = entries.length;
+      entries.push({ name: name.replace(/\p{C}/gu, '�'), kind: kind as DirectoryEntry['kind'] });
+    }
   }
-  return { identity: JSON.stringify([...proof, op.position, data.directoryIdentity, data.truncated, data.files.length]),
-    returned: data.files.length, truncated: data.truncated, entries };
+  return { identity: JSON.stringify([...proof, op.position, data.directoryIdentity, data.truncated, data.files.length, linkedFileIndex]),
+    returned: data.files.length, truncated: data.truncated, entries, linkedFileIndex };
 }
 
 const displayText = (content: string) => content.replace(/\r\n?/g, '\n').replace(/\p{C}/gu, ch => ch === '\n' || ch === '\t' ? ch : '�');
@@ -146,9 +164,17 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
   const current = calls.filter(op => op.runId === raw.runId);
   const reads = current.filter(op => record(op.arguments)?.toolName === 'workspace.read');
   if (reads.length === 1) {
-    const original = originalWindowsTextAt(task, reads[0]);
-    const received = original && receivedOriginalWindowsTextAt(task, reads[0], original, page);
-    if (original && received) return { kind: 'text' as const, original, received, resumeRevision };
+    const operation = reads[0], original = originalWindowsTextAt(task, operation);
+    const read = original && receivedOriginalWindowsReadAt(task, operation, original, page);
+    const received = read && receivedWindowsText(read);
+    if (original && read && received) {
+      // Only two original invocations, no guesses among files, windows or later runs.
+      const other = current.length === 2 ? current.find(op => op !== operation) : undefined;
+      const folder = other && receivedOriginalWindowsDirectoryAt(task, other, page, { read, operation, bytes: received.bytes });
+      if (folder?.linkedFileIndex !== undefined)
+        return { kind: 'directory' as const, received: folder, linked: { original, received }, resumeRevision };
+      return { kind: 'text' as const, original, received, resumeRevision };
+    }
   }
   // Do not choose a directory from several results or put a second action beside the text result.
   if (current.length !== 1 || reads.length !== 0) return;
@@ -164,17 +190,24 @@ export function OriginalWindowsWorkspaceOverview({ taskId }: { taskId: string })
   const source = documentEpoch > 0 ? overviewWindowsRead(snapshot, taskId) : undefined;
   if (!source) return null;
   const { resumeRevision } = source, sourceRevision = String(snapshot.state.traceSourceRevision ?? 0);
-  const key = JSON.stringify([documentEpoch, resumeRevision, sourceRevision, source.received.identity]);
-  if (source.kind === 'directory') return <OriginalWindowsDirectory key={key} received={source.received} current={() => {
-    if (document.hidden || bridge.getDocumentEpoch() !== documentEpoch) return false;
-    const live = bridge.getState();
-    if (live === snapshot) return true;
-    const actual = overviewWindowsRead(live, taskId);
-    return actual?.kind === 'directory' && actual.resumeRevision === resumeRevision &&
-      String(live.state.traceSourceRevision ?? 0) === sourceRevision &&
-      actual.received.identity === source.received.identity && actual.received.entries.every((row, index) =>
-        row.name === source.received.entries[index]?.name && row.kind === source.received.entries[index]?.kind);
-  }}/>;
+  const key = JSON.stringify([documentEpoch, resumeRevision, sourceRevision, source.received.identity,
+    source.kind === 'directory' ? source.linked?.received.identity : undefined]);
+  if (source.kind === 'directory') {
+    const linked = source.linked;
+    const sameDirectory = (live: PocketSnapshot) => {
+      if (live === snapshot) return true;
+      const actual = overviewWindowsRead(live, taskId);
+      return actual?.kind === 'directory' && actual.resumeRevision === resumeRevision &&
+        String(live.state.traceSourceRevision ?? 0) === sourceRevision &&
+        actual.received.identity === source.received.identity && actual.received.entries.length === source.received.entries.length &&
+        actual.received.entries.every((row, index) => row.name === source.received.entries[index]?.name && row.kind === source.received.entries[index]?.kind) &&
+        (linked ? !!actual.linked && sameReceived(actual.linked.received, linked.received) : !actual.linked);
+    };
+    return <OriginalWindowsDirectory key={key} received={source.received}
+      current={() => !document.hidden && bridge.getDocumentEpoch() === documentEpoch && sameDirectory(bridge.getState())}
+      linked={linked && <ReceivedOriginalWindowsText original={linked.original} received={linked.received}
+        documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null} checkOverview={sameDirectory}/>}/>;
+  }
   return <ReceivedOriginalWindowsText key={key}
     original={source.original} received={source.received} documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null} checkOverview={live => {
       if (live === snapshot) return true;
@@ -183,7 +216,7 @@ export function OriginalWindowsWorkspaceOverview({ taskId }: { taskId: string })
     }}/>;
 }
 
-function OriginalWindowsDirectory({ received, current }: { received: ReceivedDirectory; current: () => boolean }) {
+function OriginalWindowsDirectory({ received, current, linked }: { received: ReceivedDirectory; current: () => boolean; linked?: ReactNode }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     const retire = () => setOpen(false);
@@ -198,11 +231,13 @@ function OriginalWindowsDirectory({ received, current }: { received: ReceivedDir
   return <section className="pw-operation-entry" aria-label="本机收到的原电脑目录">
     <Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={open ? ['original-directory'] : []}
       onExpandedChange={keys => setOpen(keys.has('original-directory') && current())}>
-      <AccordionItem id="original-directory" headingLevel={4} title="查看当时列出的目录">
+      <AccordionItem id="original-directory" headingLevel={4}
+        title={linked ? '查看当时的目录和已读文件' : '查看当时列出的目录'}>
         {open && <>
           <p className="pw-muted">本机留存：当时返回 {received.returned} 项，不是当前目录。</p>
           {received.entries.length > 0 && <ul>{received.entries.map((row, index) =>
-            <li key={index}><bdi>{row.name}</bdi> · {directoryKinds[row.kind]}</li>)}</ul>}
+            <li key={index}><bdi>{row.name}</bdi> · {directoryKinds[row.kind]}
+              {index === received.linkedFileIndex && linked}</li>)}</ul>}
           {received.entries.length < received.returned && <p>这里只显示留存的前 8 项。</p>}
           {received.truncated && <p>电脑当时只返回了部分目录项。</p>}
         </>}

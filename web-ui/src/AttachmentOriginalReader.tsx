@@ -1,6 +1,6 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import {Accordion,AccordionItem,Button,RadioOptions,TextField} from './forms-library';
-import {IconExternalLink} from './icons';
+import {Accordion,AccordionItem,Button,IconButton,RadioOptions,TextField} from './forms-library';
+import {IconChevronLeft,IconChevronRight,IconExternalLink} from './icons';
 import {MarkdownBody} from './library';
 import {bridge} from './bridge';
 import {documentTable,fileObject as obj,fileRows as rows,type FileJson as Json} from './attachment-workspace';
@@ -59,7 +59,7 @@ type PdfMatchTarget={page:number;input:PdfFindInput;receipt:PdfFindReceipt;inter
 type PdfPageStart={kind:'pageStart';page:number;pin:PdfFindPin;epoch:number;interaction:number;focus:Element|null;body:HTMLDivElement;top:number;left:number};
 type PdfReveal=PdfPageStart|PdfMatchTarget;
 type PdfHitBox=readonly [number,number,number,number];
-type PdfMark={raster:PdfRaster;receipt:PdfFindReceipt;boxes:PdfHitBox[]};
+type PdfMark={raster:PdfRaster;receipt:PdfFindReceipt;hits:PdfHitBox[][];index:number};
 type TextAdvance={range:DisplayedOriginalText;epoch:number;interaction:number;focus:Element|null;pane:HTMLElement};
 function textRangeMatches(value:Json,range:DisplayedOriginalText){
  return value.sourceIdentity===range.identity&&value.sha256===range.sha256&&value.encoding===range.encoding&&
@@ -98,9 +98,17 @@ function isPdfHitBox(box:unknown):box is PdfHitBox {
  return Array.isArray(box)&&box.length===4&&box.every(value=>Number.isFinite(value)&&value>=0&&value<=1)&&
   box[0]<box[2]&&box[1]<box[3];
 }
-function firstPdfHit(value:Json,page:number):PdfHitBox[]|undefined{
- for(const hit of rows(value.matches))if(hit.page===page&&Number.isSafeInteger(hit.textStart)&&hit.textStart>=0&&
-    Array.isArray(hit.boxes)&&hit.boxes.length>0&&hit.boxes.length<=16&&hit.boxes.every(isPdfHitBox))return hit.boxes;
+function pdfHitPositions(value:Json,page:number):PdfHitBox[][]{
+ // This is a local count of distinguishable positions, not a complete match count.
+ const hits:PdfHitBox[][]=[],starts=new Set<number>(),anchors=new Set<string>();
+ for(const hit of rows(value.matches)){
+  if(hit.page!==page||!Number.isSafeInteger(hit.textStart)||hit.textStart<0||starts.has(hit.textStart)||
+     !Array.isArray(hit.boxes)||!hit.boxes.length||hit.boxes.length>16||!hit.boxes.every(isPdfHitBox))continue;
+  const anchor=JSON.stringify(hit.boxes[0]);
+  if(anchors.has(anchor))continue;
+  starts.add(hit.textStart);anchors.add(anchor);hits.push(hit.boxes);
+ }
+ return hits;
 }
 function displayedPdfImage(body:HTMLElement,raster:PdfRaster,pin:PdfFindPin){
  const layer=body.querySelector<HTMLElement>(`[data-pdf-raster="${raster.pdfRasterId}"]`),image=layer?.firstElementChild;
@@ -121,6 +129,9 @@ function pdfRaster(value:Json):PdfRaster|null {
   Number.isSafeInteger(page)&&Number.isSafeInteger(pages)&&page>=1&&page<=pages&&typeof searchAvailable==='boolean'
   ?{pdfRasterId,page,pages,searchAvailable}:null;
 }
+function isDisplayedPdfRaster(value:Json,raster:PdfRaster){
+ return value.pdfRasterId===raster.pdfRasterId&&value.page===raster.page&&value.pages===raster.pages&&value.searchAvailable===true;
+}
 const officePreviewIssue:Record<string,string>={
  unsupported:'这个文档格式没有内置预览。', encrypted:'这份文档受加密保护，无法在这里预览。',
  invalid:'未能读出这份文档的结构。', limit_exceeded:'这份文档超出了内置预览的读取范围。', unavailable:'这份文档暂时不能在这里预览。',
@@ -140,7 +151,7 @@ export function AttachmentOriginalReader(props:OriginalReaderProps) {
 
 function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed}:OriginalReaderProps) {
  const readerSurface=useRef<HTMLElement>(null),textAdvance=useRef<TextAdvance|null>(null);
- const textBody=useRef<HTMLDivElement>(null),pdfBody=useRef<HTMLDivElement>(null);
+ const textBody=useRef<HTMLDivElement>(null),pdfBody=useRef<HTMLDivElement>(null),pdfView=useRef<HTMLDivElement>(null);
  const [toolsVisible,setToolsVisible]=useState(false);
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
  const [recoveryEncoding,setRecoveryEncoding]=useState('');
@@ -331,6 +342,25 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   !!paintedPdfReceipt&&paintedPdfReceipt.epoch===bridge.getDocumentEpoch()&&!document.hidden;
  const currentPdfMark=pdfMark&&ready&&!readerBusy&&pdfMark.raster===pdfShown&&ownsPaintedFind()&&
   pdfMark.receipt===paintedPdfReceipt&&pdfMark.receipt.pin&&matchesPdfFindPin(pdfMark.receipt.pin,windowId,source)?pdfMark:null;
+ const pdfOccurrenceNav=currentPdfMark&&currentPdfMark.hits.length>1&&isDisplayedPdfRaster(details,currentPdfMark.raster)?currentPdfMark:null;
+ const placePdfOccurrence=(body:HTMLDivElement,pin:PdfFindPin,mark:PdfMark)=>{
+  const box=mark.hits[mark.index]?.[0],image=box&&displayedPdfImage(body,mark.raster,pin);
+  if(!box||!image)return false;
+  setPdfMark(mark);
+  const [left,top,right,bottom]=box,viewport=body.getBoundingClientRect();
+  body.scrollLeft+=image.left-viewport.left-body.clientLeft+(left+right)/2*image.width-body.clientWidth/2;
+  body.scrollTop+=image.top-viewport.top-body.clientTop+(top+bottom)/2*image.height-body.clientHeight/2;
+  return true;
+ };
+ const stepPdfOccurrence=(direction:-1|1)=>{
+  const mark=pdfOccurrenceNav,body=pdfBody.current,pin=mark?.receipt.pin;
+  if(!mark||!pin||!body?.isConnected||body.hidden||!ownsPaintedFind()||pending.current||pdfPending.current)return;
+  const view=obj(bridge.getState().state.attachmentWorkspace),reader=obj(view.originalFile);
+  if(view.open!==true||view.ready!==true||reader.busy!==false||!matchesPdfFindPin(pin,view.windowId,reader)||
+     !isDisplayedPdfRaster(obj(reader.information),mark.raster)){setPdfMark(null);return}
+  const index=(mark.index+direction+mark.hits.length)%mark.hits.length;
+  if(!placePdfOccurrence(body,pin,{...mark,index}))setPdfMark(null);
+ };
  const revealPdfMatch=(target:PdfMatchTarget,raster:PdfRaster,reset:boolean)=>{
   const body=pdfBody.current,active=document.activeElement;
   if(raster.page!==target.page||!body?.isConnected||body.hidden||live.current.retired||document.hidden||readerInteraction.current!==target.interaction||
@@ -339,23 +369,17 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   const fileView=obj(bridge.getState().state.attachmentWorkspace),reader=obj(fileView.originalFile);
   if(fileView.open!==true||fileView.ready!==true||fileView.windowId!==windowId||reader.id!==source.id||
      reader.identity!==source.identity||reader.sha256!==source.sha256||reader.sourceUnavailable!==false)return;
-  const pane=body.closest<HTMLElement>('.pw-file-page-scroll');
-  if(!pane)return;
+  const pane=body.closest<HTMLElement>('.pw-file-page-scroll'),view=pdfView.current;
+  if(!pane||!view?.contains(body))return;
   const pin=target.receipt.pin;
-  const boxes=pin&&raster.searchAvailable&&matchesPdfFindPin(pin,windowId,source)&&matchesPdfFindPin(pin,fileView.windowId,reader)?
-   firstPdfHit(target.receipt.value,raster.page):undefined;
-  const image=pin&&boxes?displayedPdfImage(body,raster,pin):undefined;
-  if(image&&pin&&boxes){
-   setPdfMark({raster,receipt:target.receipt,boxes});
-   const [left,top,right,bottom]=boxes[0],viewport=body.getBoundingClientRect();
-   body.scrollLeft+=image.left-viewport.left-body.clientLeft+(left+right)/2*image.width-body.clientWidth/2;
-   body.scrollTop+=image.top-viewport.top-body.clientTop+(top+bottom)/2*image.height-body.clientHeight/2;
-  }else{
+  const hits=pin&&raster.searchAvailable&&matchesPdfFindPin(pin,windowId,source)&&matchesPdfFindPin(pin,fileView.windowId,reader)?
+   pdfHitPositions(target.receipt.value,raster.page):[];
+  if(!pin||!placePdfOccurrence(body,pin,{raster,receipt:target.receipt,hits,index:0})){
    setPdfMark(null);
    if(reset)body.scrollTop=0;
   }
   // Move only this reader's scroll surface, not its Work, Library or page underneath.
-  pane.scrollTop+=body.getBoundingClientRect().top-pane.getBoundingClientRect().top;
+  pane.scrollTop+=view.getBoundingClientRect().top-pane.getBoundingClientRect().top;
   body.focus({preventScroll:true});
  };
  useLayoutEffect(()=>{
@@ -429,16 +453,23 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  {imageTools&&<div hidden={!toolsVisible} className="pw-action-row pw-original-zoom pw-material-navigation" role="group" aria-label="原件显示比例"><Button variant="ghost" disabled={zoom<=1} onClick={()=>zoomOriginal(x=>Math.max(1,x/1.5))}>缩小</Button><Button variant="ghost" onClick={()=>{zoomOriginal(1);setTurn(0)}}>适合页面 · {Math.round(zoom*100)}%</Button><Button variant="ghost" disabled={zoom>=8} onClick={()=>zoomOriginal(x=>Math.min(8,x*1.5))}>放大</Button>{type==='image'&&<Button variant="ghost" onClick={()=>setTurn(x=>(x+90)%360)}>旋转查看</Button>}</div>}
  {ready&&type==='image'&&<><p className="pw-muted">原尺寸 {actual.width} × {actual.height}{actual.sampled?' · 显示时已采样，导出保留完整原图':''}</p><div className="pw-original-raster"><img src={source.url} style={{width:`${zoom*100}%`,transform:`rotate(${turn}deg)`}} alt="选定的固定原图" onError={()=>setError('原件显示已关闭或未完成，请返回后重新打开')}/></div></>}
  {/* Keep the previous decoded image mounted until the next exact raster is acknowledged; never fetch it again as a fallback. */}
- {type==='pdf'&&!retired&&(pdfShown||pdfAttempt)&&<div ref={pdfBody} tabIndex={-1} role="region"
+ {type==='pdf'&&!retired&&(pdfShown||pdfAttempt)&&<div ref={pdfView} hidden={!ready}>
+  {pdfOccurrenceNav&&<div role="group" aria-label="本页查找位置" className="pw-action-row pw-original-pdf-hit-navigation">
+   <IconButton icon={IconChevronLeft} size="small" aria-label="定位上一处匹配" onClick={()=>stepPdfOccurrence(-1)}/>
+   <span className="pw-muted" role="status">本页可定位 {pdfOccurrenceNav.index+1} / {pdfOccurrenceNav.hits.length}</span>
+   <IconButton icon={IconChevronRight} size="small" aria-label="定位下一处匹配" onClick={()=>stepPdfOccurrence(1)}/>
+  </div>}
+  <div ref={pdfBody} tabIndex={-1} role="region"
   aria-label={pdfShown?`原 PDF 第 ${pdfShown.page} 页`:'原 PDF'} className="pw-original-raster" hidden={!ready}>
   {[pdfShown,pdfAttempt].map(raster=>raster&&<div key={raster.pdfRasterId} data-pdf-raster={raster.pdfRasterId} className="pw-original-pdf-page"
    style={{display:pdfShown===raster?'block':'none',width:`${zoom*100}%`}}>
    <img src={`${source.url}?page=${raster.page}&raster=${raster.pdfRasterId}`} loading="eager" style={{width:'100%'}}
     alt={`原 PDF 第 ${raster.page} 页`} onLoad={()=>void confirmRaster(raster)} onError={()=>failRaster(raster)}/>
-   {currentPdfMark?.raster===raster&&currentPdfMark.boxes.map(([left,top,right,bottom],index)=><span key={index}
+   {currentPdfMark?.raster===raster&&currentPdfMark.hits[currentPdfMark.index]?.map(([left,top,right,bottom],index)=><span key={index}
     aria-hidden="true" className="pw-original-pdf-match"
     style={{left:`${left*100}%`,top:`${top*100}%`,width:`${(right-left)*100}%`,height:`${(bottom-top)*100}%`}}/>)}
   </div>)}
+  </div>
  </div>}
  {ready&&(type==='video'||type==='audio')&&<OriginalMediaPlayer key={`${windowId}:${source.id}`} url={source.url} kind={type} name={String(source.name||'媒体原件')} onError={()=>setError('此设备未能播放这份原媒体。')} />}
  {ready&&type==='office'&&<>

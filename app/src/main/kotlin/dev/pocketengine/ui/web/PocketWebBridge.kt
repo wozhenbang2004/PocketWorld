@@ -1261,9 +1261,10 @@ internal class PocketWebBridge(
             if (action.startsWith("ownerWork.supplement.")) {
                 val identityFields=setOf("taskId","runId","epoch","conversationId")
                 val operation=action.removePrefix("ownerWork.supplement.")
+                val copy=operation=="edit"&&args.has("copyToCurrent")
                 val fields=when(operation){
                     "read"->identityFields
-                    "edit"->identityFields+setOf("key","revision","text","mode")
+                    "edit"->identityFields+(if(copy)setOf("key","revision","copyToCurrent") else setOf("key","revision","text","mode"))
                     "send"->identityFields+setOf("key","revision","clientMessageId")
                     "query"->identityFields+setOf("key","clientMessageId")
                     else->error("工作补充动作不可用")
@@ -1272,6 +1273,25 @@ internal class PocketWebBridge(
                 val expected=JSONObject().put("taskId",requiredString(args,"taskId")).put("runId",requiredString(args,"runId"))
                     .put("epoch",requiredInt(args,"epoch")).put("conversationId",requiredString(args,"conversationId"))
                 require(section==null&&taskViewId==expected.getString("taskId")&&controller.webPrivateOwnerVisible()) { "请在原工作详情中核对这份补充" }
+                if(copy){
+                    val target=args.getJSONObject("copyToCurrent")
+                    checkedPayload(target,setOf("runId","epoch","revision"))
+                    require(taskReturnSection==null&&controller.conversationReader==null) { "请在原普通工作核对当前轮草稿" }
+                    val doc=requireNotNull(documentId);val task=expected.getString("taskId")
+                    val fence=commandFence.ticket();val owner=controller.displayedPhoneWindowVersion()
+                    val reader=controller.conversationReaderRevision
+                    // Safe on the worker: do not call the display synchronizer under the task monitor.
+                    fun current()=!closed&&documentId==doc&&commandFence.accepts(fence)&&taskViewId==task&&
+                        controller.displayedPhoneWindowAlive(owner)&&controller.conversationReaderRevision==reader
+                    controller.copyOwnerWorkSupplement(expected,requiredString(args,"key"),requiredLong(args,"revision"),
+                        requiredString(target,"runId"),requiredInt(target,"epoch"),requiredLong(target,"revision"),::current){ result,error ->
+                        val shown=current()&&section==null&&controller.webPrivateOwnerVisible()
+                        complete(id,if(shown)result else null,if(shown)error else "原窗口已关闭，请在原工作核对草稿",
+                            "operation_failed",retainValue=false,replayHint="请从原工作核对复制的草稿；没有发送补充")
+                        publishState()
+                    }
+                    return
+                }
                 val done:(JSONObject?,String?)->Unit={result,error->complete(id,result,error,if(operation=="send")"outcome_unknown" else "operation_failed");publishState()}
                 when(operation){
                     "read"->controller.readOwnerWorkSupplement(expected,done)

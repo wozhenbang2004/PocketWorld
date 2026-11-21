@@ -3829,6 +3829,27 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
     private void requireOwnerWorkTuple(JSONObject task,String run,int epoch)throws Exception {OwnerWorkTask.require(task);if(run==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原工作执行代次已变化，没有操作后继执行");}
+    /** Only the current identity of the same private Work and the retained earlier run.
+     * The UI holds this monitor through its in-memory draft CAS, not through disk save. */
+    public synchronized void requireCurrentOwnerWorkDraftCopy(String id,String conversation,String earlierRun,int earlierEpoch,String run,int epoch)throws Exception {
+        if(earlierEpoch<1||earlierEpoch>=epoch||earlierRun.equals(run))throw new SecurityException("只能复制到同一工作的当前一轮草稿");
+        String sql="SELECT CASE WHEN length(CAST(t.ui_header AS BLOB))<=32768 THEN t.ui_header END,g.value FROM tasks t "+
+                "JOIN runs a ON a.task_id=t.task_id AND a.run_id=? AND a.epoch=? "+
+                "JOIN runs b ON b.task_id=t.task_id AND b.run_id=? AND b.epoch=? "+
+                "JOIN meta g ON g.key='assistant_history_generation' "+
+                "JOIN assistant_conversations c ON c.generation=g.value AND c.conversation_id=? AND c.deleted=0 "+
+                "WHERE t.task_id=? LIMIT 1";
+        try(Cursor row=db.rawQuery(sql,new String[]{earlierRun,Integer.toString(earlierEpoch),run,Integer.toString(epoch),conversation,id})){
+            if(!row.moveToFirst()||row.isNull(0))throw new SecurityException("原工作或草稿轮次暂不可核对");
+            JSONObject header=new JSONObject(row.getString(0));
+            requireOwnerWorkTuple(header,run,epoch);
+            if(!id.equals(header.opt("id"))||!conversation.equals(header.opt("conversationId"))||
+                    !row.getString(1).equals(header.getJSONObject("ownerWork").opt("generation"))||header.optBoolean("metadataLimited")||
+                    header.has("developmentContext")||header.has("teamAssignment")||header.has("deviceWorkspaceNavigation")||
+                    header.optBoolean("nativeResultHandling"))
+                throw new SecurityException("只可复制这件普通私人工作的原补充草稿");
+        }
+    }
     public synchronized JSONObject ownerWorkScope(String id,String run,int epoch,RunControl control)throws Exception {
         JSONObject task=required(id);requireOwnerWorkTuple(task,run,epoch);requireCapabilityAttempt(id,control);control.check();requireOwnerWorkSources(task);
         return copy(task,false).put("scope",new JSONObject(task.getJSONObject("executionScope").toString()));

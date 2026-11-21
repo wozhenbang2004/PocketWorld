@@ -96,6 +96,8 @@
 .pw-original-file { width: 100%; max-width: 760px; margin-inline: auto; }
 .pw-original-file > header { padding-block: 4px 12px; }
 .pw-original-raster { background: var(--pw-inset); padding: 8px; border-radius: 22px; }
+.pw-original-pdf-hit-navigation { margin-block-end: var(--pw-gap-related,8px); font-variant-numeric: tabular-nums; }
+.pw-original-pdf-hit-navigation button { min-width: var(--pw-control-target,44px); }
 .pw-original-pdf-page { position: relative; }
 .pw-original-pdf-match { position: absolute; pointer-events: none; border-radius: 2px;
   background: color-mix(in srgb, var(--pw-accent) 22%, transparent);
