@@ -3,6 +3,7 @@ import {FormalHistoryComparison} from './FormalHistoryComparison';
 import { FileObservation, ProjectFormalReadOnly, RetainedFormalDraft } from './ProjectFormalReadOnly';
 import { ProjectFormalFileDelivery } from './ProjectFormalFileDelivery';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { bridge } from './bridge';
 import { IconArrowLeft, IconCopy, IconRefresh } from './icons';
 import { Button, TextAreaField } from './forms-library';
 import { Tabs, TabList, Tab, TabPanel, InlineDiff } from './shell-library';
@@ -13,8 +14,23 @@ import { MotionDisclosure, MotionFeedback, useCollectionMotion } from './library
 import './project-workspace.css';
 import './project-workspace-manga.css';
 type Data = Record<string, any>;
-type Props = { path: string; version: number; draft?: { text: string; baseline: string; version: number; dirty: boolean }; state: Data; conflict: boolean; mode: FileLayer; setMode: (value: FileLayer) => void; can: (action: string) => boolean; edit: (value: string) => void; save: () => void; readHistory: () => void; readRevision: (revision: number) => void; retry: () => void; copy: () => void; adoption: { pending: boolean; unknown: boolean; message: string; adopt: () => void }; registerBack: (handler: (() => boolean) | null) => void };
-export function ProjectFileEditor({ path, version, draft, state, conflict, mode, setMode, can, edit, save, readHistory, readRevision, retry, copy, adoption, registerBack }: Props) {
+type Props = { path: string; version: number; draft?: { text: string; baseline: string; version: number; dirty: boolean }; state: Data; conflict: boolean; mode: FileLayer; setMode: (value: FileLayer) => void; can: (action: string) => boolean; edit: (value: string) => void; save: () => void; readHistory: () => void; readRevision: (revision: number) => void; retry: () => void; copy: () => void; copyRevision: (text: string) => void; adoption: { pending: boolean; unknown: boolean; message: string; adopt: () => void }; registerBack: (handler: (() => boolean) | null) => void };
+
+function observedEarlierText(state: Data, path: string, head: number, selected: number) {
+  const source = state.revisionObservation, text = state.revisionContent;
+  if (!Number.isSafeInteger(selected) || selected < 1 || selected >= head || state.fileReady !== true ||
+      state.fileLoading !== false || state.fileSaving !== false || state.fileVersion !== head || state.filePath !== path ||
+      state.revisionLoading !== false || state.revisionNumber !== selected || !source ||
+      typeof state.projectId !== 'string' || !state.projectId || source.projectId !== state.projectId ||
+      source.path !== path || source.version !== selected || source.kind !== 'text' || source.representation !== 'text' ||
+      typeof source.revisionId !== 'string' || !/^[a-f0-9-]{36}$/.test(source.revisionId) ||
+      typeof source.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(source.sha256) ||
+      !Number.isSafeInteger(source.bytes) || source.bytes <= 0 || source.bytes > 262144 ||
+      typeof text !== 'string' || !text.length || text.length > 65536) return;
+  return { project: state.projectId, revision: source.revisionId, sha: source.sha256, bytes: source.bytes, text };
+}
+
+export function ProjectFileEditor({ path, version, draft, state, conflict, mode, setMode, can, edit, save, readHistory, readRevision, retry, copy, copyRevision, adoption, registerBack }: Props) {
   const [selected, setSelected] = useState<number | null>(null), [reviewing, setReviewing] = useState(false);
   const root = useRef<HTMLElement>(null);
   const adoptionTrigger = useRef<HTMLButtonElement>(null), adoptionReview = useRef<HTMLDivElement>(null), adoptionHeading = useRef<HTMLHeadingElement>(null), reviewWasOpen = useRef(false);
@@ -29,6 +45,22 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   const history = Array.isArray(state.fileHistory) ? state.fileHistory : [];
   const selectedReady = selected !== null && state.revisionNumber === selected && typeof state.revisionContent === 'string' && state.revisionObservation?.representation === 'text' && state.revisionObservation?.version === selected && !state.revisionLoading;
   const locked = !!state.fileSaving || adoption.pending;
+  const earlierText = mode === 'history' && selected !== null && !reviewing && can('projects.revision') &&
+    typeof navigator.clipboard?.writeText === 'function' ? observedEarlierText(state, path, version, selected) : undefined;
+  const shownDocument = bridge.getDocumentEpoch(), shownView = bridge.getState().view as Data | undefined;
+  const copyEarlier = (button: HTMLButtonElement) => {
+    if (!earlierText || selected === null || locked || document.hidden || !button.isConnected ||
+        button.closest('[hidden],[inert],[aria-hidden="true"]') || bridge.getDocumentEpoch() !== shownDocument) return;
+    const live = bridge.getState(), view = live.view as Data | undefined;
+    if (live.host?.ready !== true || view?.section !== null || view?.taskId !== null ||
+        !Number.isSafeInteger(view.resumeRevision) || view.resumeRevision !== shownView?.resumeRevision ||
+        !live.capabilities.commands.includes('projects.revision') || live.state.attachmentWorkspace?.open || live.state.conversationReader) return;
+    const actual = observedEarlierText(live.state, path, version, selected);
+    // Native verifies the complete revision bytes when opening this version. Copy only
+    // the same text that is still shown, never the head or its edited draft.
+    if (actual?.project === earlierText.project && actual.revision === earlierText.revision && actual.sha === earlierText.sha &&
+        actual.bytes === earlierText.bytes && actual.text === earlierText.text) copyRevision(actual.text);
+  };
   useLayoutEffect(() => {
     const wasOpen = reviewWasOpen.current; reviewWasOpen.current = reviewing;
     if (wasOpen === reviewing || mode !== 'history' || !selectedReady) return;
@@ -58,7 +90,7 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
         <TabPanel id="diff"><InlineDiff before={draft.baseline} after={draft.text} versionLabel={`原版本 ${draft.version}`} onCancel={() => setMode('edit')} pending={locked}/></TabPanel>
         <TabPanel id="history" className="pw-file-history-panel">
           {selected === null ? <><FormalHistoryComparison version={state.fileVersion} rows={history} project={state.projectId} path={path}/><div className="pw-file-subheading"><p>已保存的版本</p><Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={locked} onClick={readHistory}>重新读取</Button></div><div ref={historyScroll} className="pw-file-version-list" onScroll={event => { historyTop.current = event.currentTarget.scrollTop; }}>{history.map((item: Data) => <Button key={item.version} data-revision={item.version} data-motion-key={`revision:${item.version}`} variant="ghost" className="pw-file-version-row" disabled={locked || !can('projects.revision')} onClick={() => { lastRevision.current = item.version; setSelected(item.version); readRevision(item.version); }}><span className="pw-version-number">版本 {item.version}</span><small>{typeof item.at === 'number' && item.at > 0 ? new Date(item.at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '保存时间未提供'}</small></Button>)}</div>{!history.length && <p className="pw-empty-small">尚未读到这个文件的版本记录。可重新读取原文件历史。</p>}</> : <section className="pw-file-revision">
-            <div className="pw-file-subheading"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={adoption.pending} onClick={() => { setReviewing(false); setSelected(null); }}>版本记录</Button><span>版本 {selected}</span></div>
+            <div className="pw-file-subheading"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={adoption.pending} onClick={() => { setReviewing(false); setSelected(null); }}>版本记录</Button><span>版本 {selected}</span>{earlierText && <Button variant="ghost" size="small" leadingIcon={IconCopy} disabled={locked} onClick={event => copyEarlier(event.currentTarget)}>复制此版正文</Button>}</div>
             {state.revisionLoading ? <ProgressBar label="正在读取所选原版本" isIndeterminate showValueLabel={false} size="sm"/> : selectedReady ? <><pre className="pw-file-revision-content">{state.revisionContent || '（空文件）'}</pre><div className="pw-file-adoption"><MotionDisclosure open={reviewing}><div ref={adoptionReview} className="pw-file-adoption-review"><h3 ref={adoptionHeading} tabIndex={-1}>替换当前编辑草稿？</h3><p>{draft.dirty ? '当前有未保存的修改。采用后会被所选历史内容替换，可先复制保留。' : '所选历史内容将放入当前编辑草稿。'}保存后才会生成新版本。</p>{draft.dirty && <Button variant="ghost" leadingIcon={IconCopy} onClick={copy}>复制当前草稿</Button>}<div className="pw-action-row"><Button variant="ghost" disabled={adoption.pending} onClick={() => setReviewing(false)}>取消</Button><Button variant="primary" disabled={locked || conflict || adoption.unknown || !can('projects.useRevision')} onClick={adoption.adopt}>{adoption.pending ? '正在核对原内容…' : '采用到编辑草稿'}</Button></div></div></MotionDisclosure>{!reviewing && <Button ref={adoptionTrigger} variant="secondary" disabled={locked || conflict || adoption.unknown || !can('projects.useRevision')} onClick={() => setReviewing(true)}>替换编辑草稿…</Button>}</div></> : state.revisionObservation?.version===selected && state.revisionObservation.path===path ? <FileObservation value={state.revisionObservation} older={!!state.fileError}/> : <p className="pw-muted">没有取得所选版本的完整文字。未把空白当成原稿。</p>}
           </section>}
         </TabPanel>

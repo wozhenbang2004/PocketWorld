@@ -42,13 +42,19 @@ function originalRef(runId:string, memberId:string, round:number, taskId:unknown
 /** The current native parent Work link is required; a team ID from the directory is not enough. */
 export function classicAnswerOwner(reading:Row|null):string{
   const run=reading?.run, link=reading?.ownerWorkLink, roster=rows(run?.members);
+  // Trust only the source fact delivered with this exact native detail, never
+  // the earlier directory: archived reads can return the same saved bytes.
+  const failedAggregate=reading?.currentFailedAggregateSource===true&&run?.status==='failed'&&run.phase==='failed'&&
+    Number.isSafeInteger(run.generation)&&run.generation>=0&&positive(run.revision);
   if(reading?.kind!=='run'||!reading.viewHandle||!id(run?.id)||!id(run.teamId)||run.mode!=='collaborate'||run.definitionKind!=null||
     (run.discussionFormat??'classic')!=='classic'||run.discussion||run.workPlan||run.productionScope||run.nativeWorkProfileModels||
-    run.researchExecutionFormat!=='pocketworld.team-research-agent.v1'||run.archived===true||!['running','paused','completed','partial'].includes(run.status)||
+    run.researchExecutionFormat!=='pocketworld.team-research-agent.v1'||run.archived===true||
+    (!failedAggregate&&!['running','paused','completed','partial'].includes(run.status))||
     roster.length<1||roster.length>4||!roster.every(slot=>(slot.runner||'model')==='model'&&(!slot.device||slot.device==='phone'))||
     link?.readOnly!==true||link.currentRun!==true||link.stopping!==false||link.teamRunId!==run.id||!id(link.teamTaskId)||
     reading.taskId!==link.teamTaskId||!id(link.taskId)||!id(link.runId)||!positive(link.epoch)||!id(link.conversationId))return '';
-  return JSON.stringify([run.id,run.teamId,link.teamTaskId,link.taskId,link.runId,link.epoch,link.conversationId]);
+  return JSON.stringify([run.id,run.teamId,link.teamTaskId,link.taskId,link.runId,link.epoch,link.conversationId,
+    ...(failedAggregate?['failed']:[])]);
 }
 const classicAnswerBytes=65536;
 

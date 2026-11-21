@@ -2149,9 +2149,13 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     private void persist()throws Exception{JsonFiles.write(file,new JSONObject().put("runs",list()).put("archived",history()));}
     private File contextFile(String id)throws Exception{if(id==null||id.isEmpty())throw new IllegalArgumentException("团队任务身份无效");return new File(new File(file.getParentFile(),file.getName()+".contexts"),TeamWorkFiles.hash(id)+".json");}
     /** An owner opening a retained conversation needs its saved data, not an execution slot. */
-    synchronized JSONObject retainedOwnerReading(String id)throws Exception {
+    synchronized JSONObject retainedOwnerReading(String id)throws Exception {return retainedOwnerRun(id).run();}
+    /** The source flag and exact returned record come from the same lookup.
+     * Moving a run to history need not change its revision or its saved bytes. */
+    public record OwnerRunReading(JSONObject run,boolean currentSource){}
+    synchronized OwnerRunReading retainedOwnerRun(String id)throws Exception {
         Run hot=runs.get(id);
-        return hot==null?archivedOriginal(id,archived.get(id)):JsonFiles.copy(hot.json);
+        return hot==null?new OwnerRunReading(archivedOriginal(id,archived.get(id)),false):new OwnerRunReading(JsonFiles.copy(hot.json),true);
     }
     JSONObject parentMessageDelivery(dev.pocketengine.store.TaskStore.TeamParentOrigin source,String id,String messageId)throws Exception {
         source.checkCurrent();JSONObject parent=source.view();

@@ -83,6 +83,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
 
     companion object {
         const val RESTORE_MEMBER_RESULT_RUN = "restoreMemberResultRunId"
+        const val CURRENT_FAILED_AGGREGATE_SOURCE = "currentFailedAggregateSource"
         val COMMANDS = setOf("teams.openWorkFileDecision", "teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
             "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM, "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.reviewSoleFailedHandoff", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
@@ -231,7 +232,20 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         return assignment.optString("assignmentId") == question.optString("assignmentId") &&
             assignment.optJSONArray("questions").objects().none { it.optString("state") == "pending" }
     }
-    private fun view(kind: String, value: JSONObject, answerRoutes: JSONArray? = null): JSONObject {
+    private fun originalFailedClassicAggregate(value: JSONObject): Boolean {
+        if (value.opt("status") != "failed" || value.opt("phase") != "failed" || value.opt("mode") != "collaborate" ||
+            value.has("definitionKind") || value.optString("discussionFormat", "classic") != "classic" || value.has("discussion") ||
+            value.has("workPlan") || value.has("productionScope") || value.has("nativeWorkProfileModels") ||
+            value.opt("researchExecutionFormat") != TeamCoordinator.RESEARCH_FORMAT) return false
+        val teamId = value.opt("teamId") as? String ?: return false
+        if (!runCatching { UUID.fromString(teamId).toString() == teamId }.getOrDefault(false)) return false
+        val roster = value.optJSONArray("members") ?: return false
+        return roster.length() in 1..4 && (0 until roster.length()).all { index ->
+            val member = roster.optJSONObject(index) ?: return@all false
+            member.optString("runner", "model") == "model" && member.opt("device").let { it == null || it == "phone" }
+        }
+    }
+    private fun view(kind: String, value: JSONObject, answerRoutes: JSONArray? = null, currentSource: Boolean = false): JSONObject {
         while (readings.size >= 24) readings.remove(readings.keys.first())?.retire()
         val handle = UUID.randomUUID().toString()
         // Reading/editing is bound to the visible native window, not a timer.
@@ -260,6 +274,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 result.put("ownerWorkLink", PocketWebState.publicValue(link))
                 // The original host may have left the recent task window.
                 result.put("taskId", link.getString("teamTaskId"))
+                if (currentSource && link.opt("readOnly") == true && link.opt("currentRun") == true && link.opt("stopping") == false &&
+                    originalFailedClassicAggregate(value)) result.put(CURRENT_FAILED_AGGREGATE_SOURCE, true)
                 if (link.opt("currentRun") == true && link.opt("stopping") == false) attention.objects().singleOrNull()?.takeIf {
                     it.optString("kind") == "member_attention" && it.optString("status") in setOf("failed", "interrupted")
                 }?.optString("memberId")?.takeIf(String::isNotBlank)?.let { member ->
@@ -378,12 +394,13 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
         }
-        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, catalogRun: JSONObject? = null, accept: (JSONObject?, JSONArray?, String?) -> Unit) {
+        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, catalogRun: JSONObject? = null, accept: (JSONObject?, JSONArray?, String?, Boolean) -> Unit) {
             controller.runTeamPhoneWork {
                 val result = runCatching {
                     check(currentWindow()) { "原团队阅读窗口已关闭" }
                     val teams = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主尚未接入")
-                    val retained = (catalogRun ?: teams.retainedOwnerReading(id)).also {
+                    val source = if (catalogRun == null) teams.retainedOwnerRun(id) else null
+                    val retained = (catalogRun ?: checkNotNull(source).run()).also {
                         check(it.optString("id") == id) { "原团队运行身份不匹配" }
                         if (proposalOrigin != null) {
                             controller.requireWorkOrigin(proposalOrigin,id)
@@ -396,16 +413,16 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         reader.setAuthorityCheck { check(currentWindow()) { "原团队阅读窗口已关闭" } }
                         controller.nativeTokenBudgetHost().tasks.ownerTeamResearchAnswerRoutes(retained,reader).takeIf { it.length() > 0 }
                     }.getOrNull()
-                    retained to observations
+                    Triple(retained, observations, source?.currentSource() == true)
                 }
                 main.post {
                     if (!currentWindow()) done(null, "原团队阅读窗口已关闭，请回原记录核对")
-                    else result.fold({ accept(it.first,it.second,null) }, { accept(null,null,it.message ?: "原团队暂不可读") })
+                    else result.fold({ accept(it.first,it.second,null,it.third) }, { accept(null,null,it.message ?: "原团队暂不可读",false) })
                 }
             }
         }
         fun feature(command: String, input: JSONObject, messageId: String? = null, attention: JSONObject? = null, proposalOrigin: JSONObject? = null) {
-            fun received(result: JSONObject?, error: String?, observations: JSONArray? = null) {
+            fun received(result: JSONObject?, error: String?, observations: JSONArray? = null, currentSource: Boolean = false) {
                 if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return }
                 if (error != null || result == null) deliver(null, error ?: "原团队操作没有返回回执")
                 else if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) try {
@@ -419,7 +436,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     if (command == "answerAssignment") receipt.put("runId", input.getString("runId")).put("memberId", input.getString("memberId"))
                     if (command in setOf("get", "pause", "resume", "feedback", "continueMessages", "cancel", "sendMessage", "configureMember")) {
                         check(result.optString("id") == input.getString("runId")) { "原团队运行身份不匹配" }
-                        receipt.put("reading", view("run", result, observations))
+                        receipt.put("reading", view("run", result, observations, currentSource))
                         if (attention != null) receipt.put("focus", attentionFocus(result, attention))
                     }
                     if (command == "start") {
@@ -437,7 +454,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         if (command == "save") receipt.put("reading", view("definition", result))
                     }
                     if (command == "answerAssignment") {
-                        readOwnerRun(input.getString("runId")) { current, observed, readError ->
+                        readOwnerRun(input.getString("runId")) { current, observed, readError, _ ->
                             if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) {
                                 if (readError == null && current != null && current.optString("id") == input.getString("runId")) receipt.put("reading", view("run", current, observed))
                                 else receipt.put("readRequired", true)
@@ -449,7 +466,9 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     deliverReceipt(receipt)
                 } catch (failure: Exception) { deliver(null, failure.message ?: "原团队回执待核对") }
             }
-            if (command == "get") readOwnerRun(input.getString("runId"), proposalOrigin) { result, observations, error -> received(result,error,observations) }
+            if (command == "get") readOwnerRun(input.getString("runId"), proposalOrigin) { result, observations, error, currentSource ->
+                received(result, error, observations, currentSource && attention == null && proposalOrigin == null)
+            }
             else controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow) { result, error -> received(result,error) }
         }
         when (action) {
@@ -549,7 +568,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                                 val visible = catalog.getJSONArray("runs")
                                 val at = (0 until visible.length()).singleOrNull { visible.optJSONObject(it)?.opt("id") == restoreRun }
                                 if (hot == null || at == null) deliver(reply, null)
-                                else readOwnerRun(restoreRun, catalogRun = hot) { original, observations, failure ->
+                                else readOwnerRun(restoreRun, catalogRun = hot) { original, observations, failure, _ ->
                                     if (original == null || failure != null) deliver(reply, null)
                                     else try {
                                         // Keep the existing SQL/link checks and send the full run only in the detail.

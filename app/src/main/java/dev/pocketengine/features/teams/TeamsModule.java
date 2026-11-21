@@ -139,6 +139,7 @@ public final class TeamsModule implements EngineModule {
     @Override public String id(){return "teams";}
     /** Private foreground reading; not a feature command, task update or execution admission. */
     public JSONObject retainedOwnerReading(String runId)throws Exception{return coordinator.retainedOwnerReading(runId);}
+    public TeamCoordinator.OwnerRunReading retainedOwnerRun(String runId)throws Exception{return coordinator.retainedOwnerRun(runId);}
     /** Foreground owner receipt recovery only; not exposed by handle() or any model tool. */
     public JSONObject recoverOwnerOriginalFile(String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{
         if(writeHost==null)throw new IllegalStateException("原团队文件宿主不可用");return writeHost.recoverOriginalFile(coordinator,id,run,epoch,operation,ownerWindow);

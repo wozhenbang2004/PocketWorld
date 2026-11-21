@@ -1666,7 +1666,9 @@ internal class PocketWebBridge(
                 requireSection("teams")
                 val restoringMemberResult = action == "teams.snapshot" && args.has(PocketWebTeams.RESTORE_MEMBER_RESULT_RUN)
                 teamPages.dispatch(action, args) { result, error ->
-                    complete(id, result, error, "outcome_unknown", retainValue = !restoringMemberResult &&
+                    val currentFailedAggregate = action == "teams.readRun" && error == null &&
+                        result?.optJSONObject("reading")?.opt(PocketWebTeams.CURRENT_FAILED_AGGREGATE_SOURCE) == true
+                    complete(id, result, error, "outcome_unknown", retainValue = !restoringMemberResult && !currentFailedAggregate &&
                         action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget"))
                     if (action != "teams.readFinalPackageFiles") publishState()
                 }
