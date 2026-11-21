@@ -79,7 +79,7 @@ import { OriginalReceivedTextResult } from './OriginalReceivedTextResult';
 import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
 import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
-import {bareManagedNodeCheck,currentManagedNodeOperation,originalDirectViteEditorReturn,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
+import {bareManagedNodeCheck,currentManagedNodeOperation,originalDirectNodeDependencyExecution,originalDirectViteEditorReturn,originalFirstBuildFailure,reviewedManagedNodePending,sameDirectNodeDependency,type DirectNodeDependencyPin,type OriginalManagedNodePending} from './project-execution';
 import { OwnerPythonRun } from './OwnerPythonRun';
 import { originalPythonExit, originalPythonNotStarted, originalPythonRun, ownerPythonRead, ownerPythonSaveText, samePythonRun, savedPythonPath, type OriginalPythonRun } from './owner-python-run';
 import {failedBuildFeedback,nodeBuildContinuationText,originalNodeBuildAfterDependencies,projectFeedbackKey,type ExecutionExit} from './project-execution-exit';
@@ -103,7 +103,7 @@ import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
@@ -551,6 +551,8 @@ export default function App(){
  const [projectDraftReturn,setProjectDraftReturn]=useState<ProjectDraftReturn|null>(null);
  const [projectBuildReturn,setProjectBuildReturn]=useState<ProjectBuildCopy|null>(null),openingBuildCopy=useRef(false);
  const handledBuildReturn=useCallback((target:ProjectBuildCopy)=>setProjectBuildReturn(value=>value===target?null:value),[]);
+ const [dependencyBuildReturn,setDependencyBuildReturn]=useState<ProjectDependencyBuildReturn>();
+ const dependencyBuildParent=useRef(''),dependencyBuildClosing=useRef(false);
  useEffect(()=>{if(route!=='projects'||state.filePath||state.projectId!==projectBuildReturn?.projectId)setProjectBuildReturn(null);},[route,state.filePath,state.projectId,projectBuildReturn?.projectId]);
  useEffect(()=>{if(route!=='projects'||state.projectId!==projectDraftReturn?.projectId)setProjectDraftReturn(null);},[route,state.projectId,projectDraftReturn?.projectId]);
  const [projectWorkPresentations,setProjectWorkPresentations]=useState<Record<string,ProjectWorkPresentation>>({});
@@ -2229,6 +2231,47 @@ export default function App(){
     (!!originalPythonExit(raw.ownerPythonScriptExit,work) ||
       rows[0]?.status==='failed' && raw.hasUnresolvedOperations===false && originalPythonNotStarted(raw.ownerPythonScriptNotStarted,work)) && asArray<Project>(owner.projects).filter(row=>row.id===work.projectId).length===1;
  };
+ const currentDependencyBuildVisit=(pin:DirectNodeDependencyPin,live:ReturnType<typeof bridge.getState>)=>{
+  const origin=projectTaskReturn.current,visit=acknowledgedWorkVisit.current,view=obj(live.view);
+  if(dependencyBuildParent.current!==pin.projectId||!taskOpen||taskOpening||taskLayer!=='overview'||document.hidden||
+     openedTaskId.current!==pin.taskId||visit?.taskId!==pin.taskId||visit.documentEpoch!==bridge.getDocumentEpoch()||
+     view.taskId!==pin.taskId||view.section!==null||view.resumeRevision!==visit.resumeRevision||live.state.projectId!==pin.projectId||
+     origin?.projectId!==pin.projectId||origin?.checkoutId!==pin.checkoutId||origin?.taskId!==pin.taskId||
+     origin.expected?.runId!==pin.runId||origin.expected?.epoch!==pin.epoch||
+     !['tasks.close','projects.development.read','projects.development.inspect','projects.development.localBuild.review',
+       'projects.development.localBuild.confirm'].every(command=>live.capabilities.commands.includes(command)))return false;
+  const matches=asArray<Task>(live.state.tasks).filter(row=>row.id===pin.taskId);
+  const result=sameDirectNodeDependency(originalDirectNodeDependencyExecution(matches.length===1?matches[0]:undefined),pin);
+  return result?.phase==='completed'&&result.exit.kind==='exit_code'&&result.exit.value===0;
+ };
+ const reviewBuildAfterDependencies=async(pin:DirectNodeDependencyPin)=>{
+  const initial=bridge.getState();
+  if(dependencyBuildClosing.current||dependencyBuildReturn||workSupplementBeforeLeave.current||!currentDependencyBuildVisit(pin,initial))return;
+  const doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current,request=reviewRequest.current;
+  const resume=obj(initial.view).resumeRevision,projectRevision=initial.state.requestedProjectRevision;
+  if(!Number.isSafeInteger(projectRevision)||!Number.isSafeInteger(resume))return;
+  const sameVisit=()=>{
+   const native=bridge.getState(),view=obj(native.view),owner=native.state;
+   return dependencyBuildParent.current===pin.projectId&&!document.hidden&&bridge.getDocumentEpoch()===doc&&
+    navigationWindow.current===navigation&&reviewRequest.current===request+1&&openedTaskId.current===null&&
+    view.resumeRevision===resume&&view.section===null&&(view.taskId===pin.taskId||view.taskId===null)&&
+    owner.projectId===pin.projectId&&owner.requestedProjectRevision===projectRevision&&!owner.filePath&&!owner.fileSaving&&!owner.fileLoading&&
+    !owner.conversationReader&&!owner.attachmentWorkspace?.open&&!owner.localSourceIntake?.window&&owner.projectPreview?.localWebWork!==true;
+  };
+  const current=()=>sameVisit()&&obj(bridge.getState().view).taskId===null;
+  dependencyBuildClosing.current=true;let armed=false;
+  try{
+   const closed=await closeTask(false,()=>{armed=reviewRequest.current===request&&navigationWindow.current===navigation&&
+     bridge.getDocumentEpoch()===doc&&currentDependencyBuildVisit(pin,bridge.getState());});
+   if(!closed||!armed||!await awaitPickerProjection(sameVisit,()=>current()?true:undefined)||!current())return;
+   let consumed=false;
+   const arrival:ProjectDependencyBuildReturn={original:pin,current,take:()=>{
+    if(consumed||!current())return false;
+    consumed=true;setDependencyBuildReturn(previous=>previous===arrival?undefined:previous);return true;
+   }};
+   setDependencyBuildReturn(previous=>previous??arrival);
+  }finally{dependencyBuildClosing.current=false;}
+ };
  const currentViteEditorVisit=(target:ProjectBuildCopy,live:ReturnType<typeof bridge.getState>)=>{
   const desired=target.editorResume,owner=live.state,view=obj(live.view);
   const inProject=route==='projects'&&owner.projectId===target.projectId;
@@ -2362,6 +2405,21 @@ export default function App(){
  const projectPreview=useProjectPreview({value:state.projectPreview,exportValue:state.projectPackageExport,projectId:String(state.projectId||''),resumeRevision:Number(obj(snapshot?.view).resumeRevision||0),active:route==='projects'&&!state.filePath,blocked:previewBlocked,can,onReturned:()=>navigate('chat'),onPackageTask:returnFromPackage,
   openOriginalBuildCopy:!projectDraftReturn&&!projectWorkDrafts[String(state.projectId||'')]?.operation&&
     can('projects.development.read')&&can('projects.development.files.open')?openSavedWebBuildCopy:undefined});
+ const preparedProject=String(state.projectId||''),dependencyPresentation=projectWorkPresentations[preparedProject];
+ const dependencyBuildProject=route==='projects'&&projectSection==='work'&&dependencyPresentation?.open===true&&
+  dependencyPresentation.mode==='default'&&!projectPreview.expanded&&!projectWorkReviewOpen&&!projectDraftReturn&&
+  !projectBuildReturn&&!projectImportedEditor&&!projectLocalFilesIntent&&!pythonSetupReturn&&!projectWorkDrafts[preparedProject]?.operation&&
+  !state.filePath&&!state.conversationReader&&!state.attachmentWorkspace?.open&&!state.localSourceIntake?.window&&
+  !projectPickerOpen&&!newProjectOpen&&!newFileOpen&&!workOpen&&!commandOpen?preparedProject:'';
+ dependencyBuildParent.current=dependencyBuildProject;
+ useEffect(()=>{
+  if(!dependencyBuildReturn)return;
+  const retire=()=>setDependencyBuildReturn(previous=>previous===dependencyBuildReturn?undefined:previous);
+  if(!dependencyBuildReturn.current()){retire();return;}
+  const hidden=()=>{if(document.hidden)retire();};
+  document.addEventListener('visibilitychange',hidden);
+  return()=>document.removeEventListener('visibilitychange',hidden);
+ },[dependencyBuildReturn,dependencyBuildProject,snapshot,navigationRevision]);
  const packageHandoff=useProjectPackageHandoff({route,navigationRevision,projectId:String(state.projectId||''),blocked:previewBlocked,
   navigation:()=>navigationWindow.current,supported:can,show:projectPreview.showPackage,error:message=>toast.error(message,{id:'project-package-error'}),
   leaveTask:stillCurrent=>navigate('projects',undefined,{keepOrigin:true,stillCurrent})});
@@ -4590,6 +4648,7 @@ export default function App(){
     const row=originals.length===1?originals[0]:undefined, raw=row?.raw;
     return !document.hidden && taskOpen && !taskOpening && openedTaskId.current===work.taskId &&
       bridge.getDocumentEpoch()===visit && nativeView.taskId===work.taskId && nativeView.section==null &&
+      !current.state.filePath && !current.state.conversationReader && !current.state.attachmentWorkspace?.open &&
       nativeView.resumeRevision===viewRevision && raw?.actorId==='owner' && raw.spaceId==='private' &&
       raw.contextAvailable!==false && raw.contextWithdrawn!==true && raw.sourceCurrentReadRequired!==true &&
       raw.runId===work.runId && raw.coordinatorEpoch===work.epoch && samePythonRun(work,originalPythonRun(raw.ownerPythonScriptRun));
@@ -4765,6 +4824,10 @@ export default function App(){
     (route==='projects'&&state.projectId===buildTarget.projectId||failureOverview&&['tasks','chat','butler'].includes(route)&&
       (state.projectId===buildTarget.projectId||can('projects.select')))?buildTarget:null;
   const viteEditor=overviewActive?originalViteEditorCopy(task):null;
+  const preparedDependencies=overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!dependencyBuildReturn?
+   originalDirectNodeDependencyExecution(task):undefined;
+  const dependencyBuild=preparedDependencies?.phase==='completed'&&currentDependencyBuildVisit(preparedDependencies.pin,snapshot)?
+   preparedDependencies.pin:undefined;
   const taskFiles=obj(snapshot?.view).taskId===task.id&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.kind!=='inference'&&can('attachmentWorkspace.open')
    ? {taskId:task.id,supported:can('tasks.resultFiles'),onOpen:(file:TaskResultFile,target:HTMLButtonElement)=>openTaskResultFile(task.id,file,target),
       onOriginalRequest: originatingRequestConversation(task) && can('conversation.select') && !state.chatSubmitting && !returningConversation ? () => void returnToTaskConversation(task) : undefined,
@@ -4876,6 +4939,7 @@ export default function App(){
        reviewed={!!review&&!reviewStale&&!readingReview} canStart={actionNames.includes('tasks.resume')} onHistory={can('history.read')?()=>showTaskLayer('process'):undefined}
        onReview={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {inspectResult?[evidence,taskToolsInOverview&&taskTools,decision,workFacts]:decisionFirst?[mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence,taskToolsInOverview&&taskTools]:[latestProgress,workFacts,evidence,taskToolsInOverview&&taskTools,decision]}
+     {dependencyBuild&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>void reviewBuildAfterDependencies(dependencyBuild)}>核对这版的本机构建</Button></div>}
      {taskLayer==='overview'&&ownerWorkActions(task,currentResultDecision,currentPlanDecision)}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
@@ -6347,6 +6411,7 @@ export default function App(){
             localFilesIntent={projectLocalFilesIntent?.projectId===currentProject.id?projectLocalFilesIntent:undefined} onLocalFilesIntentHandled={handledLocalFilesIntent}
             terminalSavedFile={terminalSavedFileArrival.current?.position.projectId===currentProject.id?terminalSavedFileArrival.current:undefined}
             pythonSetupReturn={pythonSetupReturn?.position.projectId===currentProject.id?pythonSetupReturn:undefined}
+            dependencyBuildReturn={dependencyBuildReturn?.original.projectId===currentProject.id?dependencyBuildReturn:undefined}
             onPreparePythonTools={openPythonTools}
             buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)}
             onOpenPackageOriginal={({taskId,runId,epoch})=>{

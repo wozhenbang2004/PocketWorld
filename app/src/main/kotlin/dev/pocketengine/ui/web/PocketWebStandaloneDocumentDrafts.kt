@@ -4,12 +4,14 @@ import android.os.Handler
 import android.os.Looper
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.attachments.AttachmentBook
+import dev.pocketengine.features.attachments.OwnerFilePreviewSource
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Fields
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Outcome
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Pin
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.RevisionSource
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.State
+import dev.pocketengine.ui.AttachmentPdfPageText
 import dev.pocketengine.ui.PocketWorldController
 import org.json.JSONObject
 import java.io.IOException
@@ -39,11 +41,18 @@ internal class PocketWebStandaloneDocumentDrafts(
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val displayedLibraryFrame: (Frame) -> Boolean,
     private val displayedRevisionFrame: (Frame) -> Boolean,
-    private val displayedMarkdownSource: (String, PocketWebOriginalFiles.MarkdownDraftSeed) -> Boolean
+    private val displayedTextSource: (String, TextSeed) -> Boolean
 ) {
     data class Frame(val windowId: String, val frameId: String)
+    enum class TextOrigin(val rowFlag: String) { MARKDOWN("justCopiedMarkdown"), PDF_PAGE("justCopiedPdfPage") }
     data class Row(val rowHandle: String, val name: String, val format: String, val savedAt: Long, val linkedRevision: Boolean,
-        val justCopiedMarkdown: Boolean = false)
+        val recentTextOrigin: TextOrigin? = null)
+
+    sealed class TextSeed(val fields: Fields, val origin: TextOrigin) {
+        class Markdown(val original: PocketWebOriginalFiles.MarkdownDraftSeed) : TextSeed(original.fields, TextOrigin.MARKDOWN)
+        class PdfPage(val page: AttachmentPdfPageText, val source: OwnerFilePreviewSource, val file: JSONObject,
+            val read: JSONObject, val receiptId: String, fields: Fields) : TextSeed(fields, TextOrigin.PDF_PAGE)
+    }
     data class Catalog(val rows: List<Row>, val metadataComplete: Boolean)
     data class Edit(val editorHandle: String, val versionHandle: String)
     data class NewDraft(val editorHandle: String, val fields: Fields)
@@ -53,16 +62,15 @@ internal class PocketWebStandaloneDocumentDrafts(
     data class GenerationInput(val fields: Fields, val source: RevisionSource?)
     data class GenerationRead(val input: GenerationInput? = null, val sourceUnavailable: Boolean = false)
     data class Retention(val state: State, val sourceUnavailable: Boolean = false)
-    data class MarkdownRetention(val state: State, val savedAt: Long? = null, val sourceUnavailable: Boolean = false)
+    data class TextRetention(val state: State, val savedAt: Long? = null, val sourceUnavailable: Boolean = false)
 
     private data class Scope(val windowId: String, val ticket: PocketWebWindowTicket, val linkedEditor: Boolean,
-        val markdown: PocketWebOriginalFiles.MarkdownDraftSeed? = null)
+        val textSource: TextSeed? = null)
     private data class Editor(val edit: Edit, val pin: Pin, val source: RevisionSource? = null, val removalOnly: Boolean = false)
     private class FirstAttempt(val handle: String, var pin: Pin? = null)
     private class LinkedAttempt(val source: RevisionSource, var pin: Pin? = null)
-    private class MarkdownAttempt(val source: PocketWebOriginalFiles.MarkdownDraftSeed, var pin: Pin? = null,
-        var receipt: MarkdownRetention? = null)
-    private data class RecentMarkdown(val windowId: String, val ticket: PocketWebWindowTicket, val pin: Pin)
+    private class TextAttempt(val source: TextSeed, var pin: Pin? = null, var receipt: TextRetention? = null)
+    private data class RecentText(val windowId: String, val ticket: PocketWebWindowTicket, val pin: Pin, val origin: TextOrigin)
     private data class Read(val outcome: Outcome, val sourceName: String? = null)
     private data class Write(val outcome: Outcome, val sourceUnavailable: Boolean = false)
     private data class Request(val scope: Scope, val frame: Frame)
@@ -74,17 +82,17 @@ internal class PocketWebStandaloneDocumentDrafts(
     private var blank: String? = null
     private var first: FirstAttempt? = null
     private var linkedFirst: LinkedAttempt? = null
-    private var markdownFirst: MarkdownAttempt? = null
-    private var recentMarkdown: RecentMarkdown? = null
+    private var textFirst: TextAttempt? = null
+    private var recentText: RecentText? = null
     private var pending: Request? = null
     private val defaults = Fields(OwnerStandaloneDocumentDraftStore.Format.WORD, "文档", "", "", 12)
-    fun showing() = scope?.let { !it.linkedEditor && it.markdown == null } == true
+    fun showing() = scope?.let { !it.linkedEditor && it.textSource == null } == true
     fun retainingLinked() = scope?.linkedEditor == true
     fun retireLinked() { if (retainingLinked()) retire() }
-    fun markdownSource() = scope?.markdown
-    fun markdownRetention() = markdownFirst?.let { it.receipt ?: MarkdownRetention(State.UNKNOWN) }
-    fun retireMarkdown() { if (markdownSource() != null) retire() }
-    fun forgetRecentMarkdown() { recentMarkdown = null }
+    fun textSource() = scope?.textSource
+    fun textRetention() = textFirst?.let { it.receipt ?: TextRetention(State.UNKNOWN) }
+    fun retireText() { if (textSource() != null) retire() }
+    fun forgetRecentText() { recentText = null }
 
     /** Explicit shelf action only. It does not open a body. Null means this presentation retired. */
     fun list(frame: Frame, done: (Catalog?) -> Unit) {
@@ -97,11 +105,12 @@ internal class PocketWebStandaloneDocumentDrafts(
             call = { storage, window -> storage.catalog(window) }) { actual ->
             done(actual?.let { catalog ->
                 val pins = linkedMapOf<String, Pin>()
-                val copied = recentMarkdown?.takeIf { it.windowId == current.windowId && it.ticket == current.ticket }?.pin
+                val copied = recentText?.takeIf { it.windowId == current.windowId && it.ticket == current.ticket }
                 val metadata = catalog.entries().map { row ->
                     val handle = token()
                     pins[handle] = row.pin()
-                    Row(handle, row.name(), row.format().value, row.savedAt(), row.revisionSource() != null, row.pin() == copied)
+                    Row(handle, row.name(), row.format().value, row.savedAt(), row.revisionSource() != null,
+                        copied?.takeIf { row.pin() == it.pin }?.origin)
                 }
                 rows = pins
                 Catalog(metadata, catalog.metadataComplete())
@@ -282,34 +291,37 @@ internal class PocketWebStandaloneDocumentDrafts(
         }
     }
 
-    /** Explicitly retain a copy of the native reader's fully decoded Markdown in an ordinary standalone draft. */
-    fun retainMarkdown(frame: Frame, source: PocketWebOriginalFiles.MarkdownDraftSeed, checking: Boolean,
-                       done: (MarkdownRetention?) -> Unit) {
-        val current = admission(frame, markdown = source)
+    /** Explicitly retain the native reader's already displayed text as a new independent draft. */
+    fun retainText(frame: Frame, source: TextSeed, checking: Boolean, done: (TextRetention?) -> Unit) {
+        val current = admission(frame, textSource = source)
         check(scope == current || scope == null && !checking) { "请先核对原草稿操作" }
-        val earlier = markdownFirst
+        val earlier = textFirst
         if (earlier != null) {
             check(earlier.source === source)
             earlier.receipt?.let { done(it); return }
-            if (!checking || pending != null || earlier.pin == null) { done(MarkdownRetention(State.UNKNOWN)); return }
+            if (!checking || pending != null || earlier.pin == null) { done(TextRetention(State.UNKNOWN)); return }
         } else check(!checking && pending == null)
         if (scope == null) scope = current
-        val attempt = earlier ?: MarkdownAttempt(source).also { markdownFirst = it }
+        val attempt = earlier ?: TextAttempt(source).also { textFirst = it }
         val expected = attempt.pin
         enqueue(current, frame, fallback = { Write(unknown()) }, call = { storage, window ->
-            val control = RunControl()
-            // Keep Book I/O outside the owner-window handshake. The native store applies
-            // the same private window again at the actual commit, not from this read.
-            val verified = try {
-                window.current() && run { source.source.requireCurrent(control); window.current() }
-            } catch (_: Exception) { false }
-            finally { control.cancel() }
+            val verified = when (source) {
+                is TextSeed.Markdown -> {
+                    val control = RunControl()
+                    // Preserve the existing full-original Markdown check outside the owner-window handshake.
+                    try { window.current() && run { source.original.source.requireCurrent(control); window.current() } }
+                    catch (_: Exception) { false }
+                    finally { control.cancel() }
+                }
+                // Copy the already verified, displayed PDF text receipt. No second file read or PDF parse.
+                is TextSeed.PdfPage -> window.current()
+            }
             if (!verified) Write(unknown(), sourceUnavailable = true)
             else if (checking) Write(storage.read(checkNotNull(expected), window))
             else {
                 val initial = storage.initialize(window)
                 val firstPin = storage.expectedFirstPin(initial, source.fields)
-                onMain { check(window.current() && markdownFirst === attempt); attempt.pin = firstPin }
+                onMain { check(window.current() && textFirst === attempt); attempt.pin = firstPin }
                 Write(storage.firstWrite(initial, source.fields))
             }
         }) { actual ->
@@ -320,15 +332,15 @@ internal class PocketWebStandaloneDocumentDrafts(
                 if ((status == State.SAVED || checking && status == State.VERIFIED) && saved != null &&
                     saved.metadata().pin() == attempt.pin && saved.metadata().revisionSource() == null &&
                     saved.fields() == source.fields && saved.metadata().savedAt() > 0) {
-                    val receipt = MarkdownRetention(status, saved.metadata().savedAt())
+                    val receipt = TextRetention(status, saved.metadata().savedAt())
                     attempt.receipt = receipt
                     // Pure presentation: same-view list tags this exact stored head, never just its name.
-                    recentMarkdown = RecentMarkdown(current.windowId, current.ticket, saved.metadata().pin())
+                    recentText = RecentText(current.windowId, current.ticket, saved.metadata().pin(), source.origin)
                     receipt
                 } else if (!checking && (write.sourceUnavailable || status == State.QUOTA || status == State.NO_EDIT)) {
-                    retireMarkdown() // Only definite no-write cases can start again from this same read.
-                    MarkdownRetention(status, sourceUnavailable = write.sourceUnavailable)
-                } else MarkdownRetention(State.UNKNOWN, sourceUnavailable = write.sourceUnavailable)
+                    retireText() // Only definite no-write cases can start again from this same read.
+                    TextRetention(status, sourceUnavailable = write.sourceUnavailable)
+                } else TextRetention(State.UNKNOWN, sourceUnavailable = write.sourceUnavailable)
             })
         }
     }
@@ -424,22 +436,22 @@ internal class PocketWebStandaloneDocumentDrafts(
         blank = null
         first = null
         linkedFirst = null
-        markdownFirst = null
+        textFirst = null
         pending = null
     }
 
-    private fun admission(frame: Frame, linkedEditor: Boolean = false, markdown: PocketWebOriginalFiles.MarkdownDraftSeed? = null): Scope {
+    private fun admission(frame: Frame, linkedEditor: Boolean = false, textSource: TextSeed? = null): Scope {
         checkMain()
         check(canonicalId(frame.windowId) && canonicalId(frame.frameId)) { "原文件窗口身份无效" }
-        val next = Scope(frame.windowId, captureWindow(), linkedEditor, markdown)
+        val next = Scope(frame.windowId, captureWindow(), linkedEditor, textSource)
         check(current(next, frame)) { "请在当前私人文件库核对原文档草稿" }
         return next
     }
 
     private fun current(expected: Scope, frame: Frame): Boolean {
         checkMain()
-        expected.markdown?.let { seed ->
-            return expected.windowId == frame.windowId && acceptsWindow(expected.ticket) && displayedMarkdownSource(frame.windowId, seed)
+        expected.textSource?.let { seed ->
+            return expected.windowId == frame.windowId && acceptsWindow(expected.ticket) && displayedTextSource(frame.windowId, seed)
         }
         if (expected.linkedEditor) return expected.windowId == frame.windowId && acceptsWindow(expected.ticket) && displayedRevisionFrame(frame)
         val flow = controller.attachmentOutcomes

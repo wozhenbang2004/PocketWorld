@@ -887,13 +887,41 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   run('read',{pdfViewerId:viewerId,displayedPdfRaster:rasterId});
  };
  const savePdfPagePending=!!pdfPageText&&pdfTextCurrent&&typeof pdfTextRead.readReceiptId==='string';
+ const pdfDraft=obj(view.pdfPageDraft),pdfDraftFile=pdfTextCurrent?exactFileTarget(file):undefined;
+ const retainPdfPage=()=>{
+  if(!pdfDraftFile||busy||draftBusy||view.exportPending||!['READY','UNKNOWN'].includes(pdfDraft.state))return;
+  const epoch=bridge.getDocumentEpoch(),viewerId=nativePdfPage.viewerId,rasterId=nativePdfPage.rasterId,readReceiptId=pdfTextRead.readReceiptId;
+  if(typeof viewerId!=='string'||typeof rasterId!=='string'||typeof readReceiptId!=='string'||!readReceiptId)return;
+  const current=()=>{
+   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),target=exactFileTarget(obj(live.file)),
+    page=obj(live.pdfPageText),read=obj(live.document);
+   return alive.current&&!document.hidden&&bridge.getDocumentEpoch()===epoch&&ordinaryLibraryOwner(native)&&
+    live.windowId===view.windowId&&page.viewerId===viewerId&&page.rasterId===rasterId&&page.page===pdfPageText&&
+    target?.fileId===pdfDraftFile.fileId&&target?.sha256===pdfDraftFile.sha256&&read.readReceiptId===readReceiptId?live:undefined;
+  };
+  const live=current(),frame=attachmentFrame(live);
+  if(!frame||obj(live?.pdfPageDraft).state!==pdfDraft.state)return;
+  void act(pdfDraft.state==='READY'?'drafts.retainPdfPage':'drafts.checkPdfPage',
+   {viewerId,rasterId,readReceiptId,...pdfDraftFile},frame,false).then(result=>{
+    if(!current())return;
+    if(result.sourceAvailable===false)setError('未核对到当前原页。可到本机文档草稿核对，不会自动再次保留。');
+    else if(result.status==='QUOTA')setError('本机草稿已达到容量上限，没有保留这份草稿。');
+   }).catch(()=>{if(current())setError('还未确认草稿已保留。请先核对本机文档草稿。')});
+ };
+ const savedPdfDraft=['SAVED','VERIFIED'].includes(pdfDraft.state)&&Number.isSafeInteger(pdfDraft.savedAt)&&pdfDraft.savedAt>0;
  const pdfPageTextView=pdfPageText&&<section aria-label={`原 PDF 第 ${pdfPageText} 页的文字`}>
   {pdfTextCurrent?<DocumentProjection value={pdfTextRead} pdfPage={pdfPageText}/>:
    !view.busy&&!error&&!view.error&&<p role="status">本页文字尚未读到。可返回原 PDF。</p>}
   {pdfTextCurrent&&view.canSaveRead===true&&<div className="pw-action-row">
-   <Button variant="primary" disabled={busy} onClick={()=>run('saveRead')}>保存本页文字为 TXT</Button>
-   <p className="pw-muted">保存到私人文件库，原 PDF 保留。</p>
+   <Button variant="primary" disabled={busy||draftBusy} onClick={()=>run('saveRead')}>保存本页文字为 TXT</Button>
+   {pdfDraftFile&&['READY','UNKNOWN'].includes(pdfDraft.state)&&<Button variant="secondary"
+    disabled={busy||draftBusy||view.exportPending} onClick={retainPdfPage}>{pdfDraft.state==='UNKNOWN'?'核对本页草稿':'保留为可编辑草稿'}</Button>}
   </div>}
+  {pdfDraftFile&&savedPdfDraft?<p role="status">已保留本页文字草稿。返回「成果 → 本机文档草稿」可继续编辑。</p>:
+   pdfDraftFile&&pdfDraft.state==='UNKNOWN'?<p role="status">草稿是否保留仍待核对，不会重复保存。</p>:
+   pdfTextCurrent&&view.canSaveRead===true&&<p className="pw-muted">
+    {pdfDraftFile&&pdfDraft.state==='READY'?'草稿只含本页文字层，不保留原排版。':'保存到私人文件库，原 PDF 保留。'}
+   </p>}
  </section>;
  const markdown=obj(view.markdownDraft),markdownTarget=mode==='original'&&privateLibrary&&view.ready===true&&
   file.role==='source'&&file.sourceKind==='content_uri'&&typeof markdown.name==='string'&&markdown.name.length>0&&markdown.name.length<=80?

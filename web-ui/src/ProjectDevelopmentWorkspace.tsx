@@ -6,6 +6,7 @@ import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextArea
 import {ProjectTaskPackageOrigin,type TaskPackageOriginalWork} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
 import { savedPythonPath, type OriginalPythonRun } from './owner-python-run';
+import type {DirectNodeDependencyPin} from './project-execution';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutPythonToolsDeparture, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
@@ -29,18 +30,20 @@ export type ProjectBuildEditorResume = CheckoutBuildEditorResume & { taskId:stri
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string; editorResume?:ProjectBuildEditorResume; pythonEditor?:OriginalPythonRun };
 const builtinViteStarter='builtin_vite_starter';
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https'|typeof builtinViteStarter;
-export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
+export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true};
 export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
 type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:string};
 export type ProjectTerminalSavedFileReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 export type CheckoutPythonSetupReturn = {position:CheckoutSavedPosition; take:()=>boolean};
+export type ProjectDependencyBuildReturn = {original:DirectNodeDependencyPin; current:()=>boolean; take:()=>boolean};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
   localFilesIntent?:ProjectLocalFilesIntent; onLocalFilesIntentHandled?:(target:ProjectLocalFilesIntent)=>void;
   terminalSavedFile?:ProjectTerminalSavedFileReturn;
   pythonSetupReturn?:CheckoutPythonSetupReturn;
+  dependencyBuildReturn?:ProjectDependencyBuildReturn;
   onPreparePythonTools?: (position: CheckoutSavedPosition) => void;
   retainedOriginalVisit?:Data;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
@@ -268,11 +271,17 @@ export function originalImportedEditor(projectId:string):ProjectImportedEditor|n
       !sourceHash(git.manifestSha256)||!sourceHash(git.gitMetadataDigest))return null;
     identity.push(git.actionId,git.commitId,git.manifestSha256,git.gitMetadataDigest);
   }
-  return {projectId,checkoutId:copy.id,importIdentity:JSON.stringify(identity),sourceKind,window:ownerWindow()};
+  // The native registered phone publication has exactly these seven source fields.
+  // A host/device source or a derived copy may still be browsable but is not this original.
+  const exactPhoneSource=(sourceKind==='external_zip'||sourceKind==='saf_tree')&&Object.keys(source).length===7&&
+    !['ownerDevelopmentRequestId','ownerDraftWorkCopy','collectedFromCheckoutId','collectionOperationId'].some(key=>key in copy);
+  return {projectId,checkoutId:copy.id,importIdentity:JSON.stringify(identity),sourceKind,window:ownerWindow(),
+    ...(exactPhoneSource?{exactPhoneSource:true as const}:{})};
 }
 export const sameImportedEditor = (target:ProjectImportedEditor, observed:ProjectImportedEditor|null) =>
   !!observed&&target.projectId===observed.projectId&&target.checkoutId===observed.checkoutId&&
-  target.importIdentity===observed.importIdentity&&target.sourceKind===observed.sourceKind&&target.window===observed.window;
+  target.importIdentity===observed.importIdentity&&target.sourceKind===observed.sourceKind&&
+  target.exactPhoneSource===observed.exactPhoneSource&&target.window===observed.window;
 export const canEditImportedCheckout = (can:(action:string)=>boolean) =>
   ['projects.development.read','projects.development.files.open','projects.development.files.read',
     'projects.development.files.edit','projects.development.files.save'].every(can);
@@ -331,7 +340,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, dependencyBuildReturn, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),deliverySummary=useRef<HTMLSpanElement>(null);
@@ -983,13 +992,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const starterForSave=visibleStarter?.sourceKind===builtinViteStarter&&visibleStarter.checkoutId===checkout&&
     selectedCopy?.draftWorkingCopy===false&&view?.executionAuthorized===false&&view.commandsAuthorized===false&&nativeDirectBuild&&
     sameImportedEditor(visibleStarter,originalImportedEditor(projectId))?visibleStarter:null;
-  const gitViteEntry=!!fileWindow?.buildResume||(ordinaryBuildSource&&source?.directBuildKind==='vite');
-  const candidateGit=fileWindow&&(directImportedSave||gitViteEntry)?originalImportForSave||originalImportedEditor(projectId):null;
-  const gitForSave=candidateGit?.sourceKind==='git_https'&&candidateGit.checkoutId===checkout&&
-    selectedCopy?.draftWorkingCopy===false&&view?.executionAuthorized===false&&view.commandsAuthorized===false&&nativeDirectBuild&&
-    sameImportedEditor(candidateGit,originalImportedEditor(projectId))?candidateGit:null;
-  const viteForSave=starterForSave||gitForSave;
-  const showViteSaveLabel=!!starterForSave||!!gitForSave&&gitViteEntry;
+  const importedViteEntry=!!fileWindow?.buildResume||(ordinaryBuildSource&&source?.directBuildKind==='vite');
+  const candidateImport=fileWindow&&(directImportedSave||importedViteEntry)?originalImportForSave||originalImportedEditor(projectId):null;
+  const importedViteForSave=candidateImport&&(candidateImport.sourceKind==='git_https'||candidateImport.exactPhoneSource===true)&&
+    candidateImport.checkoutId===checkout&&selectedCopy?.draftWorkingCopy===false&&view?.executionAuthorized===false&&
+    view.commandsAuthorized===false&&nativeDirectBuild&&
+    sameImportedEditor(candidateImport,originalImportedEditor(projectId))?candidateImport:null;
+  const viteForSave=starterForSave||importedViteForSave;
+  const showViteSaveLabel=!!starterForSave||!!importedViteForSave&&importedViteEntry;
   const pythonToolSetup = !!onPreparePythonTools && !!fileWindow && !fileWindow.originalImport && !fileWindow.unselectedImport &&
     checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&!view?.draftRecoveryRequired&&
     selectedCopy?.draftWorkingCopy===false&&view?.runtime?.runtimeId==='managed_process_v1'&&
@@ -1077,7 +1087,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       if(exactOrigin&&(!sameImportedEditor(exactOrigin,originalImportedEditor(projectId))||observation.matches!==true))
         throw Error('原导入副本或刚保存的字节已变化，没有进入其他版本的构建核对。');
       const tools=checkoutFirstWebTools(value,projectId,saved.checkoutId);
-      goToReview=!!vite&&(vite.sourceKind==='git_https'?value.existingNodeBuild===true:value.firstImportedWebFile?.sourceKind===builtinViteStarter)&&
+      goToReview=!!vite&&(vite.sourceKind===builtinViteStarter?value.firstImportedWebFile?.sourceKind===builtinViteStarter:value.existingNodeBuild===true)&&
         value.directBuildKind==='vite'&&
         tools?.kind==='node'&&tools.manager==='npm'&&tools.runtimeReady&&tools.missing.length===0&&
         !value.existingNodeBuildTask&&!value.existingNodeBuildUnavailable&&!value.directViteBuildWork&&!value.directViteBuildWorkUnavailable;
@@ -1122,15 +1132,56 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     /^[a-f0-9]{64}$/.test(source.sourceDigest) ? buildOrigin : null;
   const versionChanged = comparedBuild && comparedBuild.sourceDigest!==source?.sourceDigest;
   const readBuildPreview=(viewHandle:string,window:string,shown:DevelopmentDraft,expectedSourceDigest:string,direct:boolean,
-    requireVite:'exact'|'offer'|false,stillCurrent?:()=>boolean)=>
+    requireVite:'exact'|'offer'|false,stillCurrent?:()=>boolean,verify?: (value:Data)=>void)=>
     invoke(direct?reviewDirectBuild:'projects.development.reviewDraftBuild',
       {viewHandle,checkoutId:shown.checkoutId,retainedDraft:displayedSavedDraft(shown),expectedSourceDigest,...(direct?{}:{previewOnly:true})}, value=>{
       if(handle.current!==viewHandle||!sameDraft(draft.current,shown)||stillCurrent?.()===false)throw Error('原副本或草稿已变化，未展示构建方案。');
       const checked=checkedBuildPreview(value,projectId,shown.checkoutId,expectedSourceDigest);
       if(requireVite&&checked.directBuildKind!=='vite'&&(requireVite==='exact'||directOffer(checked)||directOriginal(checked)||checked.directDependencies||checked.directDependencyWork))
         throw Error('原网页方案没有得到核对，没有换成其他构建。');
+      verify?.(checked);
       setBuildPreview({value:checked,viewHandle,window});
     });
+  useEffect(()=>{
+    const arrival=dependencyBuildReturn;
+    if(!arrival||!active||!arrival.current()||busy||entered.current)return;
+    const {original}=arrival;
+    const focus=()=>requestAnimationFrame(()=>{
+      const anchor=buildReturnAnchor.current;
+      if(arrival.current()&&latest.current.active&&anchor?.isConnected&&!anchor.closest('[hidden],[inert]'))
+        anchor.focus({preventScroll:true});
+    });
+    const reject=(message:string)=>{if(arrival.take()){setError(message);focus();}};
+    if(!view){if(error)reject(error);return;}
+    const ordinary=rows(view.checkouts).filter(copy=>copy.projectId===projectId&&copy.checkoutId===original.checkoutId);
+    if(original.projectId!==projectId||view.projectId!==projectId||view.viewHandle!==handle.current||
+       view.commandsAuthorized!==false||view.executionAuthorized!==false||view.draftRecoveryRequired!==false||
+       checkout!==original.checkoutId||draft.current.checkoutId!==original.checkoutId||ordinary.length!==1||ordinary[0].draftWorkingCopy!==false||
+       returnTarget||buildReturn||importedEditor||localFilesIntent||pythonSetupReturn||filesOpen||review||preview||sourceConflict||pending||copyUnconfirmed){
+      reject('原副本或项目工作已经变化，没有替换选择或打开构建。');return;
+    }
+    // Wait for the ordinary fresh source inspection after closing Work, not a second inspection.
+    if(!source){if(error)reject(error);return;}
+    if(source.projectId!==projectId||source.checkoutId!==original.checkoutId||source.sourceDigest!==original.sourceDigest||
+       source.existingNodeBuild!==true||!nativeDirectBuild){
+      reject('原依赖准备对应的源码已变化或暂不可核对，没有打开其他版本的构建。');return;
+    }
+    const shown={...draft.current},viewHandle=handle.current,window=ownerWindow(),sequence=generation.current;
+    if(!arrival.take())return;
+    void readBuildPreview(viewHandle,window,shown,original.sourceDigest,true,false,
+      ()=>arrival.current()&&alive.current&&latest.current.active&&generation.current===sequence&&ownerWindow()===window&&
+        !activeReview.current&&!previewOpen.current,checked=>{
+        const prepared=checked.directDependencyWork,build=directOffer(checked)||directOriginal(checked);
+        if(checked.dependencyState!=='current_packages_checked'||prepared?.status!=='completed'||
+           prepared.requestId!==original.taskId||prepared.runId!==original.runId||prepared.epoch!==original.epoch||
+           prepared.dependencyOperationId!==original.dependencyOperationId||prepared.planDigest!==original.planDigest||
+           prepared.runtimeIdentity!==original.runtimeIdentity||prepared.lockSha256!==original.lockSha256||
+           prepared.managerVersion!==original.managerVersion||prepared.packages!==original.packages||
+           build?.runtimeIdentity!==original.runtimeIdentity||build.lockSha256!==original.lockSha256)
+          throw Error('尚未核对到这次准备对应的工具、锁定依赖与构建。没有重新下载或运行。');
+      }).then(value=>{if(!value)focus();});
+  },[dependencyBuildReturn,active,busy,view,error,projectId,checkout,returnTarget,buildReturn,importedEditor,
+    localFilesIntent,pythonSetupReturn,filesOpen,review,preview,sourceConflict,pending,copyUnconfirmed,source,nativeDirectBuild]);
   const previewNodeBuild=()=>{
     const viewHandle=handle.current,window=ownerWindow(),expectedSourceDigest=sourceVersion,shown={...draft.current};
     if(firstBuildAction!=='preview'||disabled||previewOpen.current||!viewHandle||view?.viewHandle!==viewHandle||

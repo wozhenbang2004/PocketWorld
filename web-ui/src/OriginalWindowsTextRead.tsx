@@ -11,6 +11,8 @@ const digest = (value: unknown): value is string => typeof value === 'string' &&
 const deviceId = (value: unknown): value is string => typeof value === 'string' && /^pw1_[a-f0-9]{64}$/.test(value);
 type Original = { taskId: string; runId: string; epoch: number; operationId: string; deviceId: string; instanceId: string; fingerprint: string };
 type WorkspaceRead = 'workspace.read' | 'workspace.list';
+const RECEIVED_TEXT_LIMIT = 8 * 1024;
+const RECEIVED_TEXT_PAGE_BYTES = 1024;
 type Snapshot = { text: string; bytes: number; recordedAt: number };
 type Received = { identity: string; requestDigest: string; content: string; bytes: number; version: string };
 const directoryKinds = { directory: '目录', file: '文件', reparse_point: '重解析点，未跟随', unsupported: '其他' };
@@ -93,12 +95,12 @@ export function receivedOriginalWindowsTextAt(task: TaskHeader, op: TaskOperatio
 }
 
 function receivedWindowsText(held: OriginalRead): Received | undefined {
-  // Exact initial Windows WorkspaceFiles read shape. revisionRetained is not a
-  // claim that the PC still has a copy; the bytes here were received by this phone.
+  // Exact complete initial Windows WorkspaceFiles payload, already held in the
+  // current original audit page. This is never the remote history excerpt.
   const { proof, requestDigest, data, args } = held, path = args?.path;
   if (!data || Object.keys(data).length !== 5 || typeof data.revisionRetained !== 'boolean' || typeof path !== 'string' ||
-    !path || path.length > 2048 || data.path !== path || typeof data.content !== 'string' || data.content.length > 1024 ||
-    !Number.isSafeInteger(data.bytes) || data.bytes < 0 || data.bytes > 1024 || typeof data.version !== 'string' ||
+    !path || path.length > 2048 || data.path !== path || typeof data.content !== 'string' || data.content.length > RECEIVED_TEXT_LIMIT ||
+    !Number.isSafeInteger(data.bytes) || data.bytes < 0 || data.bytes > RECEIVED_TEXT_LIMIT || typeof data.version !== 'string' ||
     !/^sha256:[a-f0-9]{64}$/.test(data.version) || new TextEncoder().encode(data.content).length !== data.bytes) return;
   // Native publishes fresh JSON objects even when the original receipt has not changed.
   const identity = JSON.stringify([...proof, path, data.version, data.bytes]);
@@ -142,6 +144,20 @@ function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation,
 
 const displayText = (content: string) => content.replace(/\r\n?/g, '\n').replace(/\p{C}/gu, ch => ch === '\n' || ch === '\t' ? ch : '�');
 const sameReceived = (a: Received, b: Received) => a.identity === b.identity && a.content === b.content;
+
+/** Presentation only, after the complete original byte/SHA check. Never split a Unicode scalar. */
+function receivedTextPageEnds(text: string): number[] {
+  const ends: number[] = [];
+  let end = 0, bytes = 0;
+  for (const point of text) {
+    const code = point.codePointAt(0)!;
+    const size = code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+    if (bytes + size > RECEIVED_TEXT_PAGE_BYTES) { ends.push(end); bytes = 0; }
+    end += point.length; bytes += size;
+  }
+  ends.push(end);
+  return ends;
+}
 
 function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
   const view = record(snapshot.view), tasks: unknown = snapshot.state.tasks;
@@ -251,12 +267,12 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
   checkOverview?: (live: PocketSnapshot) => boolean;
 }) {
   const [check, setCheck] = useState<{ generation: number; verified: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false), [page, setPage] = useState(0);
   const latest = useRef({ source: received, generation: 0 }), alive = useRef(true), sequence = useRef(0), reading = useRef(false);
   // Keep no copy of the verified text: the display stamp follows only this loaded row.
   const generation = latest.current.generation + (sameReceived(latest.current.source, received) ? 0 : 1);
   latest.current = { source: received, generation };
-  const clear = () => { sequence.current++; reading.current = false; setCheck(null); setBusy(false); };
+  const clear = () => { sequence.current++; reading.current = false; setCheck(null); setBusy(false); setPage(0); };
   useEffect(() => {
     alive.current = true;
     const visibility = () => { if (document.hidden) clear(); };
@@ -274,14 +290,14 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
   const read = async () => {
     if (reading.current || !current()) return;
     reading.current = true; const attempt = ++sequence.current;
-    setBusy(true); setCheck(null);
+    setBusy(true); setCheck(null); setPage(0);
     const eligible = () => sequence.current === attempt && latest.current.generation === generation && current();
     try {
       const bytes = new TextEncoder().encode(received.content);
       const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
       const version = 'sha256:' + Array.from(hash, b => b.toString(16).padStart(2, '0')).join('');
-      if (eligible()) setCheck({ generation, verified: version === received.version &&
-        new TextEncoder().encode(displayText(received.content)).length <= 1024 });
+      if (eligible()) setCheck({ generation, verified: bytes.length === received.bytes && bytes.length <= RECEIVED_TEXT_LIMIT &&
+        version === received.version && new TextEncoder().encode(displayText(received.content)).length <= RECEIVED_TEXT_LIMIT });
     } catch {
       if (eligible()) setCheck({ generation, verified: false });
     } finally {
@@ -292,11 +308,26 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
   if (checkOverview && !inWindow) return null;
   const checked = inWindow && check?.generation === generation ? check : null;
   if (checked?.verified === false) return <><p role="status">本机收到的原文本无法核对或超过显示范围，未显示正文。</p>{fallback}</>;
+  // Derive the displayed pages only while the original already-loaded receipt is
+  // still current. No extra body cache, history read, peer call or file operation.
+  const text = checked ? displayText(received.content) : '';
+  const ends = receivedTextPageEnds(text), pageCount = ends.length, index = Math.min(page, pageCount - 1);
+  const stamp = sequence.current;
+  const go = (step: -1 | 1) => {
+    if (checked && stamp === sequence.current && latest.current.generation === generation && current())
+      setPage(value => Math.max(0, Math.min(pageCount - 1, value + step)));
+  };
   return <section className="pw-operation-entry" aria-label="本机收到的原电脑文本">
     {checked ? <>
       <h4>当时读到的文本</h4>
-      <p className="pw-muted">本机已收到这次读取的结果 · 原文件 {received.bytes} 字节。不是当前文件。</p>
-      {received.bytes === 0 ? <p>原回执已核对：当时文件为 0 字节。</p> : <pre className="pw-source-copy" dir="auto">{displayText(received.content)}</pre>}
+      <p className="pw-muted">本机当时已收到完整文本 · 原文件 {received.bytes} 字节。不重新读取电脑。</p>
+      {received.bytes === 0 ? <p>原回执已核对：当时文件为 0 字节。</p> :
+        <pre className="pw-source-copy" dir="auto" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.slice(index > 0 ? ends[index - 1] : 0, ends[index])}</pre>}
+      {pageCount > 1 && <nav className="pw-action-row" aria-label="本机原文本翻页">
+        <Button variant="ghost" disabled={index === 0} onClick={() => go(-1)}>上一段</Button>
+        <span role="status">第 {index + 1} / {pageCount} 段</span>
+        <Button variant="ghost" disabled={index === pageCount - 1} onClick={() => go(1)}>下一段</Button>
+      </nav>}
       <Button variant="ghost" onClick={clear}>关闭原文本</Button>
     </> : <Button variant="secondary" disabled={busy || !inWindow} onClick={() => void read()}>
       {busy ? '正在核对本机原文本…' : checkOverview ? '查看这次收到的原文本' : '查看本机收到的原文本'}

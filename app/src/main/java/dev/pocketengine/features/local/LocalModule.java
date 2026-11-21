@@ -1307,7 +1307,7 @@ public final class LocalModule implements EngineModule {
         DirectViteEditorResume resume=null;
         if(selected.vite())try{
             EditorSaveOrigin origin=editorSaveOrigin(snapshot.getJSONObject("checkout"),project,checkout);
-            if(origin==EditorSaveOrigin.BUILTIN_VITE||origin==EditorSaveOrigin.IMPORT_GIT){
+            if(origin==EditorSaveOrigin.BUILTIN_VITE||origin==EditorSaveOrigin.IMPORTED_VERSIONED){
                 ProjectFileSavePosition position=readEditorSavePosition(origin,project,checkout,source);
                 if(position!=null){
                     JSONArray actual=snapshot.getJSONArray("files");
@@ -1986,7 +1986,7 @@ public final class LocalModule implements EngineModule {
                 "nativeGitImportPending","collectedFromCheckoutId","collectionOperationId"})if(row.has(special))return false;
         return true;
     }
-    private enum EditorSaveOrigin { PREPARED, BUILTIN_VITE, IMPORT_GIT }
+    private enum EditorSaveOrigin { PREPARED, BUILTIN_VITE, IMPORTED_VERSIONED }
     private static boolean importIdentity(Object value){
         return value instanceof String id&&id.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}");
     }
@@ -2003,6 +2003,8 @@ public final class LocalModule implements EngineModule {
                 !id.equals(UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString()))return null;
         EditorSaveOrigin origin;
         if(ProjectSourceImport.BUILTIN_VITE_STARTER.equals(source.opt("sourceKind"))&&source.length()==7)origin=EditorSaveOrigin.BUILTIN_VITE;
+        else if(source.length()==7 && ("external_zip".equals(source.opt("sourceKind"))||"saf_tree".equals(source.opt("sourceKind"))))
+            origin=EditorSaveOrigin.IMPORTED_VERSIONED; // Ordinary phone import, not an inherited host/device or collected copy.
         else if("git_https".equals(source.opt("sourceKind"))&&source.length()==10){
             JSONObject git=source.optJSONObject("gitOriginal");
             if(git==null||!Boolean.TRUE.equals(source.opt("gitHistoryCopied"))||!Boolean.FALSE.equals(source.opt("credentialsRestored"))||
@@ -2010,13 +2012,13 @@ public final class LocalModule implements EngineModule {
                     !(git.opt("commitId") instanceof String commit)||!commit.matches("(?:[a-f0-9]{40}|[a-f0-9]{64})")||
                     !source.getString("manifestIdentity").equals(git.opt("sourceManifestIdentity"))||
                     !OwnerDirectNodeBuild.digest(git.opt("manifestSha256"))||!OwnerDirectNodeBuild.digest(git.opt("gitMetadataDigest")))return null;
-            origin=EditorSaveOrigin.IMPORT_GIT;
+            origin=EditorSaveOrigin.IMPORTED_VERSIONED;
         }else return null;
         JSONObject registered=packageWorkspace().sourceProjectRegistrationForOwner(client,source.getString("packageSha256"),row.optString("name"),true);
         return Boolean.TRUE.equals(registered.opt("registered"))&&project.equals(registered.opt("expectedProjectId"))?origin:null;
     }
     private ProjectFileSavePosition readEditorSavePosition(EditorSaveOrigin origin,String project,String id,JSONObject source)throws Exception{
-        return origin==EditorSaveOrigin.IMPORT_GIT?ProjectFileSavePosition.readForOwner(root,project,id,source.getString("sourceDigest")):
+        return origin==EditorSaveOrigin.IMPORTED_VERSIONED?ProjectFileSavePosition.readForOwner(root,project,id,source.getString("sourceDigest")):
                 ProjectFileSavePosition.readForOwner(root,project,id);
     }
     private static boolean matchingSavedFile(JSONObject member,ProjectFileSavePosition position){
@@ -2039,7 +2041,7 @@ public final class LocalModule implements EngineModule {
                 if(origin!=null&&current.getAsBoolean()){
                     var position=new ProjectFileSavePosition(intent.projectId,intent.checkoutId,intent.path,sha);
                     String revision=null;
-                    if(origin==EditorSaveOrigin.IMPORT_GIT){
+                    if(origin==EditorSaveOrigin.IMPORTED_VERSIONED){
                         // Only this confirmed native write is applied to the already checked manifest.
                         // The ordinary listing and build preflight compare this pin to their actual fresh tree.
                         JSONArray manifest=new JSONArray(),before=committed.sourceManifest();

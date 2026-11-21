@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Button } from './forms-library';
 import { ownerPythonRead, ownerPythonSaveText, pythonOutputSaveResult, pythonReadResult,
@@ -20,9 +20,10 @@ export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText
   const [read, setRead] = useState<PythonRead>(), [pending, setPending] = useState(false), [error, setError] = useState('');
   const [textSave,setTextSave]=useState<PythonOutputSave>();
   const alive = useRef(false), entered = useRef(false), submitted = useRef(false), current = useRef(live);
+  const openedOutput = useRef(false);
   current.current = live;
   useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
-  const readOutput = async () => {
+  const readOutput = useCallback(async () => {
     if (!canRead || entered.current || !current.current()) return;
     entered.current=true;setPending(true);setError('');
     const {taskId,runId,operationId,epoch}=work;
@@ -40,7 +41,15 @@ export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText
       entered.current=false;
       if (alive.current) setPending(false);
     }
-  };
+  },[canRead,work]);
+  // Work is already open. Once its native exit confirms the original process ended,
+  // show its local result in place, without another tap or any polling/re-execution.
+  const completion = released && released.exitKind !== 'no_child' && !notStarted;
+  useEffect(()=>{
+    if(!completion || !canRead || pending || entered.current || openedOutput.current || !current.current())return;
+    openedOutput.current=true;
+    if(read?.state!=='settled')void readOutput();
+  },[completion,canRead,pending,read,readOutput]);
   const saveText = async () => {
     const ready=textSave;
     if (ready?.state!=='ready' || !canSaveText || submitted.current || entered.current || !current.current()) return;
@@ -70,13 +79,16 @@ export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText
       {preparationFailed && <p>未能准备这份脚本的运行副本。原脚本没有被这次操作改写。</p>}
     </div>
     <div className="pw-action-row">
-      {canRead && !preparationFailed && <Button variant={output?'secondary':undefined} disabled={pending} onClick={()=>void readOutput()}>
-        {pending?'正在核对…':textSave?.state==='pending'?'核对这次保存':exit?'读取本次输出':'查看运行进度'}
-      </Button>}
+      {canRead && !preparationFailed && !pending &&
+        (!output || textSave?.state==='pending' || textSave?.state==='unavailable' || !!error) &&
+        <Button variant={output?'secondary':undefined} onClick={()=>void readOutput()}>
+          {textSave?.state==='pending'?'核对这次保存':exit?'重新核对本次输出':'查看运行进度'}
+        </Button>}
       {!preparationFailed && textSave?.state==='saved' && openOutput && <Button variant="secondary" disabled={pending}
         onClick={event=>{if(current.current())openOutput(textSave.file,event.currentTarget)}}>打开已保存的 TXT</Button>}
       {reopen && <Button variant="secondary" disabled={pending} onClick={()=>{if(current.current())reopen()}}>返回原脚本</Button>}
     </div>
+    {pending && <p role="status">{textSave?.state==='pending'?'正在保存或核对这份 TXT…':exit?'正在打开本次原输出…':'正在核对运行进度…'}</p>}
     {error && <p role="alert">{error}</p>}
     {!preparationFailed && textSave?.state==='pending' && <p role="status">这次保存尚待核对，不会再写一份。</p>}
     {!preparationFailed && textSave?.state==='unavailable' && <p role="status">这次原保存暂不可读取。</p>}

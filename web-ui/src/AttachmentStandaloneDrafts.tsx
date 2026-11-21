@@ -6,7 +6,7 @@ import {registerOverlayBack} from './overlay-back';
 
 type Fields={format:'docx'|'pdf';name:string;title:string;body:string;fontPoints:number};
 type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update';sourceName?:string};
-type Row={rowHandle:string;name:string;format:Fields['format'];savedAt:number;linkedRevision?:true;justCopiedMarkdown?:true};
+type Row={rowHandle:string;name:string;format:Fields['format'];savedAt:number;linkedRevision?:true;justCopiedMarkdown?:true;justCopiedPdfPage?:true};
 type OutputChoice={editorHandle:string;versionHandle:string;format:Fields['format']};
 type GenerationReview={id:string;editorHandle:string;versionHandle:string;fileName:string;format:Fields['format']};
 type RemovalReview={editorHandle:string;versionHandle:string;name:string;format:Fields['format']};
@@ -264,7 +264,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
     </div>
     {rows.map((row,index)=>{
      const name=row.name.trim()||'未命名草稿',time=dateOf(row.savedAt),details=[row.format==='pdf'?'PDF':'Word',
-      row.linkedRevision?'已有文件的修改草稿':row.justCopiedMarkdown===true?'刚从原文保留':'',time].filter(Boolean).join(' · ');
+      row.linkedRevision?'已有文件的修改草稿':row.justCopiedMarkdown===true?'刚从原文保留':row.justCopiedPdfPage===true?'刚从 PDF 原页保留':'',time].filter(Boolean).join(' · ');
      const duplicate=rows.filter(other=>(other.name.trim()||'未命名草稿')===name&&other.format===row.format&&dateOf(other.savedAt)===time).length>1;
      const caption=duplicate?`${details} · 第 ${index+1} 项`:details;
      return <div className="pw-file-action-record" key={row.rowHandle}><div><strong>{name}</strong><small>{caption}</small></div>

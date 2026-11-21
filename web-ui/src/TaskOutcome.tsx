@@ -250,7 +250,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
         <p className="pw-reading-note" role="status">尚未核对到原网页成果。可在「过程」查看这次构建的原记录。</p>}
     {(directWebResult||repairViteEditor)&&onResumeViteBuildEditor&&<div className="pw-form-actions">
       <Button variant={repairViteEditor?'primary':'secondary'} onClick={onResumeViteBuildEditor}>
-        {repairViteEditor?'返回编辑刚才的文件':'继续编辑刚才的文件'}
+        {repairViteEditor?'返回本次构建的源文件':'继续编辑本次构建的源文件'}
       </Button>
     </div>}
   </section>;

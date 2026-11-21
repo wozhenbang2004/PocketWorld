@@ -19,6 +19,7 @@ import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.AttachmentWorkReturn
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.objects
+import dev.pocketengine.ui.web.PocketWebStandaloneDocumentDrafts.TextSeed
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery
 import dev.pocketengine.features.local.runtime.OwnerPythonOutputText
 import org.json.JSONArray
@@ -36,7 +37,8 @@ internal class PocketWebAttachments(
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
         val PRIVATE_DRAFT_COMMANDS = setOf("drafts.list", "drafts.new", "drafts.open", "drafts.saveFirst",
             "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.remove", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument",
-            "drafts.retainRevision", "drafts.checkRevision", "drafts.retainMarkdown", "drafts.checkMarkdown")
+            "drafts.retainRevision", "drafts.checkRevision", "drafts.retainMarkdown", "drafts.checkMarkdown",
+            "drafts.retainPdfPage", "drafts.checkPdfPage")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
         private const val DOCUMENT_REVIEW_TTL = 120_000L
@@ -60,7 +62,7 @@ internal class PocketWebAttachments(
     private var draftDocumentReview: DraftDocumentReview? = null
     private val drafts = lazy(LazyThreadSafetyMode.NONE) {
         PocketWebStandaloneDocumentDrafts(controller, captureWindow, acceptsWindow, ::currentDraftFrame, ::currentRevisionFrame,
-            ::currentMarkdownSource)
+            ::currentDraftTextSource)
     }
 
     private fun activeWindow(): Window {
@@ -127,15 +129,16 @@ internal class PocketWebAttachments(
         return active.id == selected.windowId && acceptsWindow(active.ticket) && mayUseDraftLibrary() &&
             frames[selected.frameId]?.location == location(flow.state)
     }
-    /** Only the explicit ordinary Library can copy an actually imported local Markdown original. */
-    private fun markdownLibraryFile(): JSONObject? {
+    /** Only a live explicitly opened Library can retain text from its actually imported private original. */
+    private fun importedDraftFile(pdfPage: Boolean = false): JSONObject? {
         val state = flow.state
         val file = state.file ?: return null
         val visit = state.globalStandaloneDraftVisit ?: return null
         if (!keepsDraftLibraryVisit(visit) || controller.conversationReader != null || controller.state.filePath != null ||
             state.originalReturn != dev.pocketengine.ui.AttachmentOriginalReturn.LIST || state.originalFile == null || state.fromWorkResult ||
             state.restoredWorkReturn || state.libraryDocumentReturn != null || state.snapshot?.opt("taskId") != "" ||
-            state.busy || flow.exportPending || state.pendingDocumentTask != null || state.documentDraft != null || state.documentOpen ||
+            state.busy || flow.exportPending || state.pendingDocumentTask != null || state.documentDraft != null ||
+            state.documentOpen != pdfPage || pdfPage && file.opt("mimeType") != "application/pdf" ||
             state.processingSource != null || state.comparison != null || controller.state.attachmentImporting ||
             file.opt("role") != "source" || file.opt("sourceKind") != "content_uri" || file.has("sourceTaskId") ||
             file.opt("availability") != "available") return null
@@ -143,13 +146,74 @@ internal class PocketWebAttachments(
         return file.takeIf { listed?.opt("sha256") == it.opt("sha256") && listed?.opt("role") == "source" &&
             listed?.opt("sourceKind") == "content_uri" && listed?.opt("availability") == "available" }
     }
-    private fun currentMarkdownSource(windowId: String, seed: PocketWebOriginalFiles.MarkdownDraftSeed): Boolean =
-        window?.id == windowId && markdownLibraryFile() != null && flow.state.originalFile === seed.source &&
-            viewer.retainsMarkdownSource(seed)
-    private fun markdownDraftSeed(file: JSONObject): PocketWebOriginalFiles.MarkdownDraftSeed? {
-        val attempted = if (drafts.isInitialized()) drafts.value.markdownSource() else null
-        if (attempted != null && viewer.retainsMarkdownSource(attempted)) return attempted
-        return viewer.markdownDraftSeed(file, flow.state.originalFile)
+    private fun retainsDraftText(seed: TextSeed): Boolean {
+        val state = flow.state
+        return when (seed) {
+            is TextSeed.Markdown -> state.originalFile === seed.original.source && viewer.retainsMarkdownSource(seed.original)
+            is TextSeed.PdfPage -> state.file === seed.file && state.originalFile === seed.source &&
+                state.documentOpen && state.document === seed.read && state.pdfPageText == seed.page &&
+                state.document?.opt("readReceiptId") == seed.receiptId && viewer.displayedPdfPage(state.file) == seed.page
+        }
+    }
+    private fun currentDraftTextSource(windowId: String, seed: TextSeed): Boolean =
+        window?.id == windowId && importedDraftFile(seed is TextSeed.PdfPage) != null && retainsDraftText(seed)
+    private fun markdownDraftSeed(file: JSONObject): TextSeed.Markdown? {
+        val attempted = if (drafts.isInitialized()) drafts.value.textSource() as? TextSeed.Markdown else null
+        if (attempted != null && retainsDraftText(attempted)) return attempted
+        return viewer.markdownDraftSeed(file, flow.state.originalFile)?.let { TextSeed.Markdown(it) }
+    }
+    private fun pdfPageDraftSeed(file: JSONObject): TextSeed.PdfPage? {
+        val attempt = if (drafts.isInitialized()) drafts.value.textSource() as? TextSeed.PdfPage else null
+        if (attempt != null && retainsDraftText(attempt)) return attempt
+        val state = flow.state
+        val source = state.originalFile ?: return null
+        val page = state.pdfPageText?.takeIf { viewer.displayedPdfPage(file) == it } ?: return null
+        val read = state.document?.takeIf { flow.canSaveRead() } ?: return null
+        val receipt = read.opt("readReceiptId") as? String ?: return null
+        return runCatching {
+            check(UUID.fromString(receipt).toString() == receipt && source.mimeType == "application/pdf" &&
+                source.sha256 == file.opt("sha256") && source.sizeBytes == file.optLong("size", -1L))
+            val meta = source.metadata()
+            val origin = meta.getJSONObject("source")
+            check(meta.opt("id") == file.opt("id") && meta.opt("principalId") == "owner" && meta.opt("spaceId") == "private" &&
+                !meta.optBoolean("outputSourceRetired") && !meta.has("groupSource") && origin.opt("kind") == "content_uri" &&
+                !origin.has("archiveEvidence") && !origin.has("groupSpaceId") && origin.optString("taskId").isEmpty() &&
+                origin.optString("projectId").isEmpty())
+            val total = read.opt("totalUnits") as? Int ?: return@runCatching null
+            check(page.page in 1..total && read.opt("extractionStatus") == "partial")
+            // A range cap inside this page must not silently become a page-length draft.
+            // A cursor on the next page is normal for the existing one-page text-layer read.
+            val next = if (page.page < total) page.page + 1 else 0
+            check(read.opt("nextUnit") == next && read.opt("nextChunk") == 0 &&
+                read.opt("truncated") == (next > 0) && read.opt("status") == (if (next > 0) "truncated" else "partial"))
+            val chunks = read.getJSONArray("chunks").objects()
+            check(chunks.size in 1..48)
+            val body = StringBuilder()
+            var block = 0
+            var at = 0
+            chunks.forEachIndexed { index, chunk ->
+                val locator = chunk.getJSONObject("locator")
+                val nextBlock = locator.getString("textBlock").toInt()
+                val start = locator.getString("charStart").toInt()
+                val end = locator.getString("charEnd").toInt()
+                val text = chunk.getString("text")
+                check(chunk.opt("chunk") == index && chunk.opt("kind") == "pdf_text" &&
+                    locator.opt("page") == page.page.toString() && locator.opt("coordinateUnit") == "pdf_points" &&
+                    nextBlock > 0 && text.length in 1..1024 && start >= 0 && end - start == text.length)
+                if (nextBlock != block) {
+                    check(nextBlock > block && start == 0)
+                    if (block > 0) body.append('\n')
+                    block = nextBlock
+                } else check(start == at)
+                body.append(text)
+                at = end
+                check(body.length <= 12_000)
+            }
+            check(body.isNotBlank())
+            val name = source.name.substringBeforeLast('.').trim().take(60).trimEnd { Character.isHighSurrogate(it) }
+                .ifBlank { "PDF" } + " 第 ${page.page} 页"
+            TextSeed.PdfPage(page, source, file, read, receipt, Fields(Format.WORD, name, "", body.toString(), 12))
+        }.getOrNull()
     }
     /** Do not derive a linked draft entry from a restored or unscoped file/editor. */
     private fun linkedEditorSource(): RevisionSource? {
@@ -183,7 +247,7 @@ internal class PocketWebAttachments(
         draftDocumentReview = null
         if (drafts.isInitialized()) {
             drafts.value.retire()
-            drafts.value.forgetRecentMarkdown()
+            drafts.value.forgetRecentText()
         }
         if (!keepPresentation) flow.discardStandaloneDraftPresentation()
     }
@@ -250,12 +314,15 @@ internal class PocketWebAttachments(
         val frameId = UUID.randomUUID().toString()
         frames[frameId] = Frame(location(state), files, libraryPdfResume, displayedPdfPage)
         while (frames.size > 16) frames.remove(frames.keys.first())
-        if (drafts.isInitialized()) drafts.value.markdownSource()?.let { attempted ->
-            if (flow.state.originalFile !== attempted.source || !viewer.retainsMarkdownSource(attempted)) drafts.value.retireMarkdown()
+        if (drafts.isInitialized()) drafts.value.textSource()?.let { attempted ->
+            if (!retainsDraftText(attempted)) drafts.value.retireText()
         }
-        val markdown = if (draftPresentation) markdownLibraryFile()?.let(::markdownDraftSeed) else null
-        val markdownRetention = if (markdown != null && drafts.isInitialized() && drafts.value.markdownSource() === markdown)
-            drafts.value.markdownRetention() else null
+        val markdown = if (draftPresentation) importedDraftFile()?.let(::markdownDraftSeed) else null
+        val pdfDraft = if (draftPresentation) importedDraftFile(pdfPage = true)?.let(::pdfPageDraftSeed) else null
+        fun draftTextIndicator(seed: TextSeed?): JSONObject? = seed?.let {
+            val retained = if (drafts.isInitialized() && drafts.value.textSource() === seed) drafts.value.textRetention() else null
+            JSONObject().put("name", seed.fields.name()).put("state", retained?.state?.name ?: "READY").put("savedAt", retained?.savedAt)
+        }
         val originalReview = state.processingReview
         if (originalReview == null || state.pendingProcessingTask != null) processingReview = null
         else if (processingReview?.value !== originalReview) processingReview = ProcessingReview(UUID.randomUUID().toString(), originalReview)
@@ -282,10 +349,7 @@ internal class PocketWebAttachments(
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
             .put("standaloneDraftLibrary", mayUseDraftLibrary())
             .put("canRetainLinkedDocumentDraft", linkedEditorSource() != null)
-            .put("markdownDraft", markdown?.let { seed ->
-                JSONObject().put("name", seed.fields.name()).put("state", markdownRetention?.state?.name ?: "READY")
-                    .put("savedAt", markdownRetention?.savedAt)
-            })
+            .put("markdownDraft", draftTextIndicator(markdown)).put("pdfPageDraft", draftTextIndicator(pdfDraft))
             // This ordinary state projection may match a retained Web pane, never a draft command or handle.
             .put("standaloneDraftLibraryVisit", flow.state.globalStandaloneDraftVisit?.takeIf {
                 draftPresentation && ordinaryDraftLibrarySurface()
@@ -632,14 +696,25 @@ internal class PocketWebAttachments(
         try {
             val frame = PocketWebStandaloneDocumentDrafts.Frame(text("windowId"), text("frameId"))
             val command = text("command")
-            if (command == "drafts.retainMarkdown" || command == "drafts.checkMarkdown") {
-                exact("viewerId", "fileId", "sha256")
-                val file = markdownLibraryFile() ?: error("请在这份本机 Markdown 原件中保留草稿")
-                val seed = markdownDraftSeed(file) ?: error("请先完整读取这份 Markdown 原件")
-                check(currentMarkdownSource(frame.windowId, seed) && frames[frame.frameId]?.location == location(flow.state) &&
-                    text("viewerId") == seed.viewerId && text("fileId") == file.opt("id") && text("sha256") == seed.source.sha256)
-                drafts.value.retainMarkdown(frame, seed, command == "drafts.checkMarkdown") { retained ->
-                    reply(retained?.takeIf { currentMarkdownSource(frame.windowId, seed) }?.let {
+            if (command in setOf("drafts.retainMarkdown", "drafts.checkMarkdown", "drafts.retainPdfPage", "drafts.checkPdfPage")) {
+                val pdfPage = command == "drafts.retainPdfPage" || command == "drafts.checkPdfPage"
+                val file = importedDraftFile(pdfPage) ?: error("请在当前私人文件库查看原件后保留草稿")
+                val seed = if (pdfPage) {
+                    exact("viewerId", "rasterId", "fileId", "sha256", "readReceiptId")
+                    val shown = pdfPageDraftSeed(file) ?: error("尚未核对这份 PDF 本页的文字层")
+                    check(text("viewerId") == shown.page.viewerId && text("rasterId") == shown.page.rasterId &&
+                        text("readReceiptId") == shown.receiptId && text("sha256") == shown.source.sha256)
+                    shown
+                } else {
+                    exact("viewerId", "fileId", "sha256")
+                    val shown = markdownDraftSeed(file) ?: error("请先完整读取这份 Markdown 原件")
+                    check(text("viewerId") == shown.original.viewerId && text("sha256") == shown.original.source.sha256)
+                    shown
+                }
+                check(currentDraftTextSource(frame.windowId, seed) && frames[frame.frameId]?.location == location(flow.state) &&
+                    text("fileId") == file.opt("id"))
+                drafts.value.retainText(frame, seed, command == "drafts.checkMarkdown" || command == "drafts.checkPdfPage") { retained ->
+                    reply(retained?.takeIf { currentDraftTextSource(frame.windowId, seed) }?.let {
                         JSONObject().put("status", it.state.name).put("savedAt", it.savedAt)
                             .sourceUnavailable(it.sourceUnavailable)
                     })
@@ -674,7 +749,7 @@ internal class PocketWebAttachments(
                             .put("name", row.name).put("format", row.format).put("savedAt", row.savedAt)
                             .also {
                                 if (row.linkedRevision) it.put("linkedRevision", true)
-                                if (row.justCopiedMarkdown) it.put("justCopiedMarkdown", true)
+                                row.recentTextOrigin?.let { origin -> it.put(origin.rowFlag, true) }
                             } })) })
                 } }
                 "drafts.new" -> { exact(); val new = adapter.newDraft(frame)
