@@ -70,7 +70,7 @@ import {PhoneControlWorkspace} from './PhoneControlWorkspace';
 import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
 import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
-import {currentManagedNodeOperation,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
+import {bareManagedNodeCheck,currentManagedNodeOperation,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
 import {failedBuildFeedback,nodeBuildContinuationText,originalNodeBuildAfterDependencies,projectFeedbackKey,type ExecutionExit} from './project-execution-exit';
 import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWorkspace';
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
@@ -2666,6 +2666,7 @@ export default function App(){
   };
   const managedPending=managedNodePending(task.id);
   const waitingManaged=!reviewStale?managedPending.filter(pin=>currentManagedNodeOperation(task,pin)?.state!=='receipt'):[];
+  const guideManagedCheck=!protectedDisabled&&originalTaskOverview(task)&&can('history.read')&&can('local.execution.observe');
   const managedProjectHold=waitingManaged.length>0&&!!project?.reason&&!actionNames.includes('tasks.resume');
   const projectControls=fixedDraftOptions||(managedProjectHold&&project?<p role="status">{project.reason}</p>:legacyBuildHold&&project? <>
    <p role="status">{project.reason}</p>
@@ -2814,7 +2815,9 @@ export default function App(){
       {reviewTools&&(foldAcceptedDraftReview?<Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="accepted-draft-options" title="更多操作">{reviewTools}</AccordionItem></Accordion>:reviewTools)}
       {!inlineDraftDecision&&(!actionNames.includes('tasks.confirm')||reviewStale)&&fixedDraftOptions}
       {waitingManaged.filter(pin=>!managedLogs.some(log=>log.pin===pin)).map(pin=><p key={pin.operationId} className="pw-field-hint" role="status">
-       {pin.phase==='dependencies'?'原依赖准备':'原构建'}仍待核对。{pin.canObserve?'当前窗口不能读取这次原执行的回执。':'尚未核对到原进程回执，不能判断是否已经执行。'}
+       {pin.phase==='dependencies'?'原依赖准备':'原构建'}仍待核对。{pin.canObserve?'当前窗口不能读取这次原执行的回执。':
+        guideManagedCheck&&bareManagedNodeCheck(task,pin)?'在「过程」→「工具调用」中展开「原执行记录」，点「核对这次执行」。不会重新运行。':
+        '尚未核对到原进程回执，不能判断是否已经执行。'}
       </p>)}
       {managedLogs.map(({pin,row})=>{
        const actualFailure=!!failureOverview&&failureOverview.runId===pin.runId&&failureOverview.operationId===pin.operationId;
