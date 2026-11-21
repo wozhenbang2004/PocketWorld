@@ -5246,7 +5246,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         } } catch (error: Exception) { state = state.copy(modelTesting = false, modelTest = null, modelTestTaskId = null); throw error }
     }
-    private fun feature(feature: String, command: String, payload: JSONObject = JSONObject(), originalOwnerCurrent: (() -> Boolean)? = null): String {
+    private fun feature(feature: String, command: String, payload: JSONObject = JSONObject(), originalOwnerCurrent: (() -> Boolean)? = null,
+                        formalSaveFileList: Boolean = false): String {
         val id = UUID.randomUUID().toString()
         val key = "$feature.$command"
         state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
@@ -5257,7 +5258,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         if(feature=="assistant"&&command=="get")latestChatGet=id
         pending[id] = Pair(key, metadata)
-        native("featureRequest", JSONObject().put("feature", feature).put("command", command).put("payload", payload).put("requestId", id), originalOwnerCurrent = originalOwnerCurrent)
+        native("featureRequest", JSONObject().put("feature", feature).put("command", command).put("payload", payload).put("requestId", id),
+            originalOwnerCurrent = originalOwnerCurrent, formalSaveFileList = formalSaveFileList)
         return id
     }
     internal var nativeEvaluationOpen by mutableStateOf(false)
@@ -5592,7 +5594,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             } catch (error: Exception) { main.post { if (!closed) done(null, message(error)) } }
         }
     }
-    private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null, projectMemoryRequest: ProjectStartMemoryRequest? = null, completed: ((JSONObject?, String?) -> Unit)? = null, originalOwnerCurrent: (() -> Boolean)? = null) {
+    private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null, projectMemoryRequest: ProjectStartMemoryRequest? = null, completed: ((JSONObject?, String?) -> Unit)? = null,
+                       formalSaveFileList: Boolean = false, originalOwnerCurrent: (() -> Boolean)? = null) {
         val viewerEpoch = inspectionEpoch
         val inlinePreview = phoneInlinePreview.takeIf { action == "observeTask" }
         val targetTask = input.optString("taskId")
@@ -5633,6 +5636,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     else if (needsGroupOwner) app.groupOwnerWorkflows.call(groupWindow ?: throw SecurityException("请在当前原群任务详情重新建立本机审核窗口")) { app.dispatchOwnerAction(action, reviewedInput) }
                     else if (originalOwnerCurrent != null && action == "featureRequest") {
                         app.features.request(input, java.util.function.BooleanSupplier { originalOwnerCurrent() })
+                        null
+                    } else if (formalSaveFileList) {
+                        check(action == "featureRequest" && input.opt("feature") == "workspace" && input.opt("command") == "list")
+                        app.requestFormalSaveFileList(input.getJSONObject("payload").getString("projectId"), input.getString("requestId"))
                         null
                     } else if (phoneTakeoverOwnerAction) {
                         // Helper preparation may wait; keep the application and stop queue free.
@@ -6050,7 +6057,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         heldFormalDraft = state.heldFormalDraft?.takeIf { it.matchesDifferentText(project, path, text) },
                         fileVersion = seen.first.version, fileLoading = false, fileSaving = false, fileReady = true, fileError = null,
                         lastSavedVersion = if (command == "write") seen.first.version else null)
-                    if (command == "write") state.projectId?.let { feature("workspace", "list", JSONObject().put("projectId", it)) }
+                    if (command == "write") feature("workspace", "list", JSONObject().put("projectId", project), formalSaveFileList = true)
                     if (command == "write" && state.fileHistory.isNotEmpty()) fileHistory()
                 }
             }

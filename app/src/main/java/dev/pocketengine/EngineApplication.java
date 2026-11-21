@@ -4488,8 +4488,15 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         if(current==null||!current.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未执行排队操作");return dispatchOwnerAction(action,input,current);
     }
     public JSONObject dispatchOwnerAction(String action,JSONObject input)throws Exception{return dispatchOwnerAction(action,input,null);}
-    private JSONObject dispatchOwnerAction(String action,JSONObject input,java.util.function.BooleanSupplier originalOwnerCurrent)throws Exception {
+    private void requireOwnerActionReady(String action){
         if(!businessReady()&&!java.util.Set.of("stopTask","stopRun","pauseRun").contains(action))throw new SecurityException("原启动恢复或维护尚未完成；请先读取启动维护页");
+    }
+    public void requestFormalSaveFileList(String projectId,String requestId){
+        requireOwnerActionReady("featureRequest");
+        features.requestFormalSaveFileList(projectId,requestId);
+    }
+    private JSONObject dispatchOwnerAction(String action,JSONObject input,java.util.function.BooleanSupplier originalOwnerCurrent)throws Exception {
+        requireOwnerActionReady(action);
         if(input==null)input=new JSONObject();
         if(input.has("taskId")&&java.util.Set.of("updateTask","resumeTask","configureTaskExecutionScope","enterTaskPlanning","approveCapability","resolveOperation","reconcileExternalTask","confirmResult","stopTask","takeoverTask","ownerPhoneHandoff","observeTask","manualTaskAction","ownerSecretInput","continueDevelopmentTask").contains(action)
                 &&tasks.isDeviceTaskForOwnerRouting(input.getString("taskId")))throw new SecurityException("配对设备任务保留原来源；请用准确原run的设备控制/原生审阅，通用Owner输入、私有范围、重建run和结果确认入口不接管此任务");

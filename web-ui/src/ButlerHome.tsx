@@ -33,6 +33,7 @@ export type ButlerHomeProps = {
   moreWork?: boolean;
   active?: boolean;
   phoneActivity?: ReactNode;
+  phoneAttention?: { key: string; row: ReactNode }[];
   hasPreparations?: boolean;
   tasks: ButlerHomeTask[];
   canOpen: boolean;
@@ -45,6 +46,10 @@ export type ButlerHomeProps = {
 
 const updatedAt = (task: ButlerHomeTask) => typeof task.updatedAt === 'number' && Number.isFinite(task.updatedAt) ? task.updatedAt : 0;
 const resumeRevision = () => Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0);
+export function needsOwnerOnHome(task: ButlerHomeTask, view = workCollectionPresentation(task), exact = homeWorkIdentity(task)) {
+  return !view.reconciliation && (view.pendingApproval || view.handling?.needsAttention === true ||
+    !!exact && ['awaiting_user','waiting_user','waiting_permission','awaiting_permission','waiting_approval','awaiting_approval','needs_confirmation'].includes(task.status));
+}
 type WorkReturn = {
   target:Pick<VerifiedHomeReport['target'],'taskId'|'runId'|'epoch'>;
   report?:VerifiedHomeReport['target']; domain?:HomeDomain; intent:'row'|'report'; offset?:number;
@@ -64,7 +69,7 @@ function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresenta
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onImportProject, stagingLocal=false, modelSetup, firstHostSave, composer, preparations, phoneActivity, hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onImportProject, stagingLocal=false, modelSetup, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -104,8 +109,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
       // The butler may have filed its report before the owner accepts the work.
       // Keep that decision in place; the saved report is something to read, not a verdict.
       const report=presentation.group==='ended'||decision?reportedHomeWork(task,handling):null;
-      const needsOwner = !!decision || !presentation.reconciliation && (presentation.pendingApproval || handling?.needsAttention === true ||
-        !!exact && ['awaiting_user','waiting_user','waiting_permission','awaiting_permission','waiting_approval','awaiting_approval','needs_confirmation'].includes(task.status));
+      const needsOwner = !!decision || needsOwnerOnHome(task,presentation,exact);
       return { task, decision, needsOwner, report, saved, exact, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
         group: presentation.group, busy: presentation.busy, completed: presentation.completed, action: presentation.actionLabel };
     });
@@ -124,6 +128,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
     return rows;
   };
   const decisions=work.filter(item=>item.needsOwner);
+  const decisionCount=decisions.length+phoneAttention.length, hasPhone=!!phoneActivity||phoneAttention.length>0;
   const shownDecisions=showDecisions?decisions:recent(decisions,2);
   const checking=work.filter(item=>!item.needsOwner&&item.group==='attention');
   const running=work.filter(item=>item.group==='running');
@@ -131,15 +136,15 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const ended=work.filter(item=>item.group==='ended'&&!item.report&&!item.saved);
   const shownRunning=recent(running,2), shownResults=allResults?results:recent(results,2);
   const decisionsExpanded=shownDecisions.length===decisions.length, resultsExpanded=shownResults.length===results.length;
-  const showChecking=(!!returned&&checking.includes(returned))||(checkingExpanded??(!decisions.length&&!running.length&&!results.length&&!phoneActivity));
+  const showChecking=(!!returned&&checking.includes(returned))||(checkingExpanded??(!decisionCount&&!running.length&&!results.length&&!hasPhone));
   const shownEnded=recent(ended,1), shownChecking=showChecking?recent(checking,2):[];
   const homeNotice=notice||(ready&&retained&&!returned?'首页暂不能定位这轮原工作，可到「全部工作」核对。':'');
   // Present each job once under the human question it answers. Fold only
   // diagnostics; real decisions and the newest original results stay one tap away.
   const visible=[...shownDecisions,...shownRunning,...shownResults,...shownChecking,...shownEnded];
-  const revision = JSON.stringify([ready, canOpen, canReadReports, visible.map(({ task, status, detail, report }) => [task.id, status, detail, report?.reportMessageId])]);
+  const revision = JSON.stringify([ready, canOpen, canReadReports, phoneAttention.map(item=>item.key), visible.map(({ task, status, detail, report }) => [task.id, status, detail, report?.reportMessageId])]);
   useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false, enter:!retained||restoredWork.current===retained });
-  const empty = ready && !work.length && !hasPreparations && !phoneActivity && !moreWork && !homeNotice;
+  const empty = ready && !work.length && !hasPreparations && !hasPhone && !moreWork && !homeNotice;
 
   useLayoutEffect(() => {
     if (!ready || restored.current || !scroller.current) return;
@@ -271,7 +276,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   };
   // The editor never moves. An optional capability is not the next step ahead
   // of work the owner already has, except for an action on the current draft.
-  const workFirst = !firstHostSave && !stagingLocal && (work.length > 0 || !!phoneActivity);
+  const workFirst = !firstHostSave && !stagingLocal && (work.length > 0 || hasPhone);
   const showLocal = stagingLocal || empty && !!onTryLocal;
   const showSetup = ready && !modelReady && !localDisplayDraft && !stagingLocal;
   const showProjectImport = empty && active && !localDisplayDraft && !stagingLocal && !firstHostSave && !!onImportProject;
@@ -294,15 +299,16 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
           {composer}
         </section>
         {!workFirst&&nextSteps}
-        {(!ready || work.length > 0 || phoneActivity || moreWork || homeNotice) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
+        {(!ready || work.length > 0 || hasPhone || moreWork || homeNotice) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
           onBlurCapture={event => { const node = event.target as HTMLElement; if (event.relatedTarget instanceof Node ? !event.currentTarget.contains(event.relatedTarget) : node.isConnected && !node.closest('[inert],[hidden]') && !node.matches(':disabled')) focused.current = null; }}>
           <header className="pw-butler-work-heading"><h2 id={workHeading}>我的工作</h2>{ready && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('all')}>全部工作</Button>}</header>
           {!ready ? <p className="pw-butler-reading" role="status"><ProgressCircle isIndeterminate size="sm" aria-label="正在恢复工作记录" /><span>正在恢复工作记录…</span></p> : <>
             {homeNotice&&<p className="pw-butler-work-note" role="status">{homeNotice}</p>}
-            {decisions.length>0&&<section className="pw-butler-work-group pw-butler-work-inbox" aria-label="等你处理">
-              <header className="pw-butler-group-heading"><h3>等你处理</h3><span className="pw-butler-group-count" aria-label={`眼前的 ${decisions.length} 项待处理工作`}>{decisions.length}</span></header>
-              <ol id={decisionList} className="pw-butler-work-list">{shownDecisions.map(renderTask)}</ol>
+            {decisionCount>0&&<section className="pw-butler-work-group pw-butler-work-inbox" aria-label="等你处理">
+              <header className="pw-butler-group-heading"><h3>等你处理</h3><span className="pw-butler-group-count" aria-label={`眼前的 ${decisionCount} 项待处理工作`}>{decisionCount}</span></header>
+              {phoneAttention.map(item=>item.row)}
+              {shownDecisions.length>0&&<ol id={decisionList} className="pw-butler-work-list">{shownDecisions.map(renderTask)}</ol>}
               {decisions.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-controls={decisionList} aria-expanded={decisionsExpanded} onClick={()=>{setWorkReturn(null);setShowDecisions(!decisionsExpanded)}}>{decisionsExpanded?'收起待处理工作':`再看 ${decisions.length-shownDecisions.length} 项`}</Button>}
             </section>}
             {(shownRunning.length>0||phoneActivity)&&<section className="pw-butler-work-group" aria-label="正在跟进">

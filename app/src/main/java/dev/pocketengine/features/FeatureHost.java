@@ -732,13 +732,18 @@ public final class FeatureHost implements AutoCloseable {
         return hostGoalLinks.bind(source.conversation(),source,location,exact);
     }
     public void request(JSONObject request){
-        request(request,()->true,false);
+        request(request,()->true,false,false);
     }
     /** Captured by the local owner UI; JSON cannot mint or replace this queue admission check. */
     public void request(JSONObject request,BooleanSupplier originalOwnerCurrent){
-        request(request,originalOwnerCurrent,true);
+        request(request,originalOwnerCurrent,true,false);
     }
-    private void request(JSONObject request,BooleanSupplier originalOwnerCurrent,boolean nativeOwnerAdmission){
+    /** Native follow-up to a verified formal save. The write already publishes feature state. */
+    public void requestFormalSaveFileList(String projectId,String requestId){
+        request(json("feature","workspace","command","list","requestId",requestId,
+                "payload",json("projectId",projectId)),()->true,false,true);
+    }
+    private void request(JSONObject request,BooleanSupplier originalOwnerCurrent,boolean nativeOwnerAdmission,boolean formalSaveFileList){
         java.util.Objects.requireNonNull(originalOwnerCurrent);
         String feature=request.optString("feature"),command=request.optString("command"),requestId=request.optString("requestId");
         if(requestId.length()>100||feature.length()>40||command.length()>80){reply(feature,command,requestId,false,null,"请求标识过长");return;}
@@ -936,7 +941,7 @@ public final class FeatureHost implements AutoCloseable {
                 JSONObject actualResult=result==null?new JSONObject():result;
                 boolean revisionNeedsOwnerReview=feature.equals("teams")&&command.matches("reviseAssignment|continueOutcome")&&!actualResult.optBoolean("ok",true);
                 reply(feature,command,requestId,!revisionNeedsOwnerReview,actualResult,revisionNeedsOwnerReview?actualResult.optString("message","修订状态待核对，请勿重送本次反馈"):null);
-                sendState();
+                if(!formalSaveFileList||!(module instanceof dev.pocketengine.features.workspace.WorkspaceModule))sendState();
             }catch(Exception error){
                 if(feature.equals("media")&&tasks!=null){try{JSONObject input=request.optJSONObject("payload");String id=input==null?"":input.optString("taskId");if(id.isEmpty()&&input!=null&&!input.optString("operationId").isEmpty())id=tasks.operationTask("media",input.getString("operationId"));if(id!=null&&!id.isEmpty())emitTask(id);sendState();}catch(Exception unavailable){}}
                 if(browserAdmission!=null)resources.releaseBrowser(browserAdmission);

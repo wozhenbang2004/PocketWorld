@@ -124,7 +124,7 @@ import {MemoryDraftReview,type SavedMemoryConversationPin} from './MemoryDraftRe
 import {RouteReference,type RouteReferenceTarget} from './RouteReference';
 import {ConversationDrafts} from './ConversationDrafts';
 import {ConversationWork} from './ConversationWork';
-import {ButlerHome} from './ButlerHome';
+import {ButlerHome,needsOwnerOnHome,type ButlerHomeProps} from './ButlerHome';
 import {homeWorkIdentity} from './butler-work-entry';
 import {exactSavedHostMessage,localSavedHostMessage,type CloudGoal,type SavedHostSource} from './cloud-goal';
 import {SavedHostPicker,savedHostProfiles,currentSavedHostProfile} from './SavedHostWork';
@@ -3394,10 +3394,12 @@ export default function App(){
    phoneActivityPick.current={kind:'activity',handle:activityHandle,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),resume:Number(obj(bridge.getState().view).resumeRevision||0),entry};
    run('phone.activity.original',{taskId,runId,epoch,activityHandle});
  };
- const phoneActivity=phoneRows.length||stopReceipts.rows.length?<>{phoneRows.map(({task,surface})=>{
+ const homePhoneAttention:NonNullable<ButlerHomeProps['phoneAttention']>=[];
+ const phoneActivityRows=phoneRows.map(({task,surface})=>{
    const held=stopReceipts.rows.find(x=>surface?.activityHandle===x.activityHandle);
    if((held?.phase==='requested'||held?.phase==='local_only')&&surface?.stopRequested)return null;
-   return <PhoneTaskStatus key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} surface={surface||undefined} can={can}
+   const key=JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch]);
+   const row=<PhoneTaskStatus key={key} task={task} surface={surface||undefined} can={can}
      onOpen={()=>{const entry=attention(task)&&can('tasks.review')?'review':'overview';
        if(!isPrivateLocalPhone(task)){openTask(task.id,entry);return}
        if(surface?.activityHandle)openOriginalActivity({...surface,activityHandle:surface.activityHandle},entry)}}
@@ -3405,8 +3407,17 @@ export default function App(){
        if(action==='phone.stop'&&surface?.activityHandle&&isPrivateLocalPhone(task)){
          if(!sameStopWindow()){setLocalError('原手机任务页面已变化，这次没有发送停止。');return}
          if(stopReceipts.request({...identity,activityHandle:surface.activityHandle},()=>exactPhoneControl(action,identity,true)))return}
-       triggerPhoneControl(action,identity,isPrivateLocalPhone(task),shownPause)}}/>
- })}{stopReceipts.rows.map(item=>{const row=stoppedSource(item,tasks);if(!row)return null;
+       triggerPhoneControl(action,identity,isPrivateLocalPhone(task),shownPause)}}/>;
+   if(route==='butler'&&surface?.activityHandle&&!surface.stopRequested&&task.status!=='stopping'&&task.status!=='cancelling'&&
+      can('tasks.open')&&can('phone.activity.original')){
+     const view=workCollectionPresentation(task),exact=homeWorkIdentity(task);
+     if(exact?.domain==='phone'&&view.group==='attention'&&needsOwnerOnHome(task,view,exact)){
+       homePhoneAttention.push({key,row});return null;
+     }
+   }
+   return row;
+ });
+ const phoneActivity=phoneActivityRows.some(Boolean)||stopReceipts.rows.length?<>{phoneActivityRows}{stopReceipts.rows.map(item=>{const row=stoppedSource(item,tasks);if(!row)return null;
    return <PhoneInlineStopReceipt key={item.ticket} item={item} goal={row.goal} recordedStatus={row.status}
      onDismiss={()=>stopReceipts.dismiss(item.ticket)} onOpen={can('phone.activity.original')?()=>{
        if(sameStopSource(item))openOriginalActivity(item,'overview')}:undefined}/>
@@ -3674,7 +3685,7 @@ export default function App(){
    </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
      {memoryStatus&&<Button variant="ghost" size="small" className="pw-composer-memory-status" trailingIcon={IconChevronRight} aria-haspopup="dialog" onClick={()=>setConversationMemoryOpen(true)}>{memoryStatus}</Button>}
    </ChatComposer>
-   {route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&
+   {route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&!homePhoneAttention.length&&
     stageExample&&<ConversationStarters onDraft={stageExample}/>}
    {intent!=='chat'&&['elsewhere','changed','unverified'].includes(phoneDraft.sourceState)&&<p className="pw-field-hint" role="status">{phoneDraft.sourceState==='elsewhere'?'手机草稿仍留在原私人对话，这里不会显示或提交它。':phoneDraft.sourceState==='changed'?'原消息已换版或不是最新交代。草稿已保留。要改用最新交代，请在那条消息的操作里选择「保留手机草稿，关联这条原话」。':'这份保留草稿缺少可核对的原消息。原文字还在，可在最新主人消息的操作里重新指定来源，或清空后另写。'}</p>}
    {intent!=='chat'&&phoneDraft.phone===true&&!state.conversationId&&!phoneDraft.channelOrigin&&composer.key&&can('phone.draft.recentStarts')&&<EarlierDraftPhoneStarts key={chatOwner} composer={String(composer.key)} except={phoneStart?.taskId} onTask={openBlankFirst}/>}
@@ -4284,7 +4295,7 @@ export default function App(){
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
   </NavigationChrome>:workspaceNotices}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
     if(report){homeReport.current=report;homeWorkReturn.current=null;taskReading.current.delete(`${task.id}:homeReport`);
      openTask(task.id,'homeReport',alreadyOpen,undefined,undefined,undefined,()=>homeReport.current===report&&currentHomeReport(report),undefined,undefined,
       returnWorkFocus?()=>{homeWorkReturn.current={taskId:task.id,report,focus:returnWorkFocus}}:undefined);return}
