@@ -1824,6 +1824,39 @@ internal class PocketWebBridge(
                 projectWorkPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
             }
             if (action in PocketWebPlans.COMMANDS) {
+                val originalReminderRead = action == "plans.reviewSchedule" && args.has("messageId")
+                val originalReminderConfirm = action == "plans.confirm" && args.has("originalChatReminder")
+                if (originalReminderRead || originalReminderConfirm) {
+                    val document = documentId
+                    val bridge = commandFence.ticket()
+                    val owner = controller.displayedPhoneWindowVersion()
+                    val reader = controller.conversationReaderRevision
+                    val channel = controller.phoneOriginRevision
+                    val composer = controller.composerViewEpoch
+                    fun current(): Boolean {
+                        val shown = controller.state
+                        val conversation = shown.conversationId ?: return false
+                        return !closed && document != null && documentId == document && commandFence.accepts(bridge) &&
+                            controller.displayedPhoneWindowAlive(owner) && controller.webPrivateOwnerVisible() &&
+                            section == null && taskViewId == null && taskReturnSection == null && shown.filePath == null &&
+                            !phoneComposer.intent && !controller.hasChannelPhoneOrigin && controller.phoneOriginRevision == channel &&
+                            controller.conversationReader == null && controller.conversationReaderRevision == reader &&
+                            controller.queuedInputsPage == null && !shown.chatAttachmentPickerOpen && !controller.attachmentOutcomes.state.open &&
+                            controller.composerViewEpoch == composer &&
+                            controller.composerDraft?.let { it.key == "conversation:$conversation" && it.conversationId == conversation } == true
+                    }
+                    check(current()) { "请在原私人对话核对这条回复的提醒" }
+                    val replay = "请重新核对原回复的提醒；没有重新保存"
+                    val done: (JSONObject?, String?) -> Unit = { value, error ->
+                        if (document == documentId) {
+                            if (current()) complete(id, value, error, "outcome_unknown", retainValue = false, replayHint = replay)
+                            else complete(id, null, "原私人提醒窗口已变化，请重新核对原回复", retainValue = false, replayHint = replay)
+                        }
+                    }
+                    if (originalReminderRead) planPages.readOriginalReminder(args, ::current, done)
+                    else planPages.confirmOriginalReminder(args, ::current, done)
+                    return
+                }
                 requireSection("commitments"); planPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
             }
             if (action in PocketWebCommitments.COMMANDS) {

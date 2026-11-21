@@ -167,6 +167,29 @@ public final class ConversationRepository {
                     .put("sourceRef",new SourceRef("message",sourceId,state.getLong("revision"),"owner","private").toJson()).put("bodyFingerprint",row.getString(1));
         }
     }
+    /** Original queued reply and its consumed USER identity, never either message body. */
+    public String originalReminderReplyGeneration(String conversation,String reply,long revision,String task,String run,int epoch,
+                                                       String nativeReply,SourceRef ownerInput)throws Exception{
+        JSONObject source=nativeMessageSource(new SourceRef("message",reply,revision,"owner","private"));
+        String generation=source.getString("generation");
+        if(!conversation.equals(source.getString("sourceConversationId")))return null;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(a.source_json AS BLOB))<=65536 THEN a.source_json END,"
+                +"CASE WHEN length(CAST(u.source_json AS BLOB))<=65536 THEN u.source_json END FROM assistant_sources a "
+                +"JOIN assistant_sources u ON u.generation=a.generation AND u.conversation_id=a.conversation_id AND u.source_id=? "
+                +"WHERE a.generation=? AND a.source_id=? AND a.role='assistant' AND a.revision=? "
+                +"AND u.role='user' AND u.revision=? AND u.deleted=0 LIMIT 1",
+                new String[]{ownerInput.sourceId,generation,reply,Long.toString(revision),Long.toString(ownerInput.revision)})){
+            if(!row.moveToFirst()||row.isNull(0)||row.isNull(1))return null;
+            JSONObject answer=new JSONObject(row.getString(0)),submission=new JSONObject(row.getString(1)).optJSONObject("submission");
+            if(answer.optBoolean("nativeProvenanceImported")||!task.equals(answer.opt("nativeTaskId"))||!run.equals(answer.opt("nativeRunId"))
+                ||!Integer.valueOf(epoch).equals(answer.opt("nativeEpoch"))||!nativeReply.equals(answer.opt("nativeReplyId"))
+                ||submission==null||!"consumed".equals(submission.opt("status"))||!"materialized".equals(submission.opt("queueState"))
+                ||!task.equals(submission.opt("taskId"))||!run.equals(submission.opt("consumedRunId"))
+                ||!Integer.valueOf(epoch).equals(submission.opt("consumedEpoch"))||!reply.equals(submission.opt("replyMessageId"))
+                ||integer(submission,"ownerMessageRevision",1)!=ownerInput.revision)return null;
+            return generation;
+        }
+    }
     private static boolean originalAnonymousSource(JSONObject row,long revision){
         return row!=null&&revision>0&&revision==row.optLong("revision")&&!row.optBoolean("deleted")
                 &&!row.optBoolean("nativeProvenanceImported")&&!row.optBoolean("memoryContextRetired")&&row.optLong("memorySourceRetiredThrough")<revision

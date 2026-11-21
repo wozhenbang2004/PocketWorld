@@ -49,6 +49,32 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
         return guard.call(refs,()->tasks.withScheduleProposalSourceCurrent(task,run,epoch,conversation,refs,action));
     }
     @Override public JSONObject withOriginalScheduleSource(JSONObject origin,java.util.concurrent.Callable<JSONObject> originalBookAction)throws Exception {return withProposalSource(origin,originalBookAction);}
+    public record OriginalReminderRead(TaskStore.OriginalReminderProposal selected,JSONObject value){}
+    /** The known source can cross only the same native Memory -> TaskStore -> Book gate. */
+    public OriginalReminderRead readOriginalConversationReminder(AutomationModule module,TaskStore.OriginalReminderReply reply,
+                                                                 java.util.function.BooleanSupplier current)throws Exception{
+        var selected=new TaskStore.OriginalReminderProposal[1];
+        if(!current.getAsBoolean())throw new SecurityException("原私人提醒窗口已变化");
+        JSONObject origin=reply.origin();
+        JSONObject value=withProposalSource(origin,()->{
+            if(!current.getAsBoolean())throw new SecurityException("原私人提醒窗口已变化");
+            var actual=tasks.originalReminderForReply(reply);
+            if(actual==null)return new JSONObject().put("status","unavailable");
+            selected[0]=actual;
+            return module.readOriginalConversationReminder(origin,actual.operation(),actual.id(),actual.digest());
+        });
+        return new OriginalReminderRead(selected[0],value);
+    }
+    public JSONObject approveOriginalConversationReminder(AutomationModule module,TaskStore.OriginalReminderReply reply,
+                                                          TaskStore.OriginalReminderProposal expected,java.util.function.BooleanSupplier current)throws Exception{
+        if(expected==null||!current.getAsBoolean())throw new SecurityException("原私人提醒审阅已变化");
+        JSONObject origin=reply.origin();
+        return module.approveOriginalConversationReminder(origin,expected.operation(),expected.id(),expected.digest(),bookAction->
+            withProposalSource(origin,()->{
+                if(!current.getAsBoolean()||!expected.equals(tasks.originalReminderForReply(reply)))throw new SecurityException("原私人提醒身份已变化，未保存");
+                return bookAction.call();
+            }),current);
+    }
     /** The model can only write an inert draft under its original prepared operation. */
     public JSONObject proposeScheduleForTask(AutomationModule module,String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception {
         tasks.requireScheduleProposalPrepared(task,run,epoch,operation,draft,original);JSONObject current=tasks.get(task,false);privateOwner(current);if(current.optJSONObject("origin")!=null||current.optString("conversationId").isBlank())throw new SecurityException("仅原私人对话能提出计划");

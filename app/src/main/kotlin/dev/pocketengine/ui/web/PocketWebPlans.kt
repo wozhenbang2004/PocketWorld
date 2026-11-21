@@ -1,5 +1,7 @@
 package dev.pocketengine.ui.web
 
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.features.automation.AutomationSchedule
 import dev.pocketengine.features.automation.DeviceScheduleOrigin
@@ -11,6 +13,7 @@ import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.executionPlanDefinition
 import dev.pocketengine.ui.executionStepPatch
 import dev.pocketengine.ui.objects
+import dev.pocketengine.store.TaskStore
 import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
@@ -23,11 +26,19 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
     private var snapshot = JSONObject()
     private val readings = linkedMapOf<String, Pair<String, Long>>()
     private val reviews = linkedMapOf<String, Review>()
+    private val main = Handler(Looper.getMainLooper())
+    @Volatile private var reminderSelection = 0L
+    private data class OriginalReminder(
+        val handle: String, val expires: Long, val reply: TaskStore.OriginalReminderReply,
+        val proposal: TaskStore.OriginalReminderProposal, val sameSource: () -> Boolean,
+    )
+    private var originalReminder: OriginalReminder? = null
     companion object {
         val COMMANDS = setOf("plans.snapshot", "plans.read", "plans.reviewCreate", "plans.reviewStep", "plans.reviewAction",
             "plans.reviewApproval", "plans.reviewSchedule", "plans.confirm", "plans.inspect", "plans.discard")
     }
-    fun clear() { generation++; snapshot = JSONObject(); readings.clear(); reviews.clear() }
+    fun clear() { generation++; snapshot = JSONObject(); readings.clear(); reviews.clear(); clearOriginalReminder() }
+    fun clearOriginalReminder() { reminderSelection++; originalReminder = null }
     private fun fields(input: JSONObject, vararg allowed: String) { require(input.keys().asSequence().all { it in allowed }) { "计划操作包含不适用的字段" } }
     private fun text(input: JSONObject, key: String, max: Int = 128, empty: Boolean = false): String {
         val value = input.opt(key)
@@ -38,6 +49,82 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
         require(value is Number && value.toDouble().isFinite() && value.toDouble() == value.toLong().toDouble() && value.toLong() in min..max) { "请核对$key" }; return value.toLong()
     }
     private fun public(value: JSONObject) = PocketWebState.publicValue(value) as JSONObject
+    private fun originalReply(message: String, revision: Long): TaskStore.OriginalReminderReply? {
+        val shown = controller.state
+        val conversation = shown.conversationId?.takeIf(String::isNotBlank) ?: return null
+        val row = shown.messages.singleOrNull { it.id == message && it.sourceRevision == revision && it.role == "assistant" } ?: return null
+        val reply = row.replyContext ?: return null
+        val replyId = reply.replyId?.takeIf { reply.deliveryId == null } ?: return null
+        val user = reply.replyToMessageIds.singleOrNull()?.takeIf { row.taskId == reply.taskId } ?: return null
+        return TaskStore.OriginalReminderReply(conversation, message, revision, reply.taskId, reply.runId, reply.epoch, replyId, user)
+    }
+    private fun reminderResult(reply: TaskStore.OriginalReminderReply, status: String): JSONObject =
+        JSONObject().put("status", status).put("messageId", reply.messageId()).put("sourceRevision", reply.sourceRevision())
+            .put("executionAuthorized", false).also { if (status != "unavailable") it.put("source", reply.view()) }
+    /** Literal opt-in from the original message menu; the renderer never chooses task, run or rule. */
+    fun readOriginalReminder(args: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        fields(args, "messageId", "sourceRevision")
+        val message = text(args, "messageId", 240); val rev = integer(args, "sourceRevision", 1, 9_007_199_254_740_991L)
+        clearOriginalReminder()
+        val selected = reminderSelection
+        val reply = originalReply(message, rev)?.takeIf { current() }
+        if (reply == null) {
+            done(JSONObject().put("status", "unavailable").put("messageId", message).put("sourceRevision", rev).put("executionAuthorized", false), null)
+            return
+        }
+        fun sameSource() = reminderSelection == selected && current() && originalReply(message, rev) == reply
+        controller.runPluginCatalogWork(Runnable {
+            val read = runCatching { controller.nativeButlerHost().readOriginalConversationReminder(reply) { sameSource() } }.getOrNull()
+            main.post {
+                if (!sameSource()) { done(null, "原私人提醒窗口已变化，请回到这条回复重新核对"); return@post }
+                val value = read?.value()
+                val output = runCatching {
+                    if (value == null) reminderResult(reply, "unavailable") else when (value.optString("status")) {
+                        "pending" -> {
+                            val proposal = read?.selected() ?: error("原草案身份未核对")
+                            val checked = value.getJSONObject("proposal")
+                            val expires = SystemClock.elapsedRealtime() + 120_000
+                            val handle = UUID.randomUUID().toString()
+                            val input = JSONObject().put("id", proposal.id()).put("digest", proposal.digest())
+                            val review = JSONObject().put("reviewHandle", handle).put("expiresInMs", 120_000)
+                                .put("command", "approveSchedule").put("input", input).put("plan", public(checked))
+                                .put("ordinaryReminderPreview", ordinaryReminderPreview(checked) ?: error("无法核对日历"))
+                            reminderResult(reply, "pending").put("review", review).also {
+                                originalReminder = OriginalReminder(handle, expires, reply, proposal, ::sameSource)
+                            }
+                        }
+                        "saved" -> reminderResult(reply, "saved").put("ruleId", value.getString("ruleId")).put("ruleRevision", value.getInt("ruleRevision"))
+                        "unknown" -> reminderResult(reply, "unknown")
+                        else -> reminderResult(reply, "unavailable")
+                    }
+                }.getOrElse { reminderResult(reply, "unavailable") }
+                done(output, null)
+            }
+        })
+    }
+    fun confirmOriginalReminder(args: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        fields(args, "reviewHandle", "originalChatReminder"); require(args.opt("originalChatReminder") == true)
+        val handle = text(args, "reviewHandle")
+        val held = originalReminder?.takeIf { it.handle == handle } ?: error("原提醒审阅已使用或关闭，请重新核对")
+        originalReminder = null
+        fun sameSource() = current() && held.sameSource()
+        fun maySave() = sameSource() && SystemClock.elapsedRealtime() < held.expires
+        check(maySave()) { "原提醒审阅已过期或已离开，请重新核对" }
+        controller.runPluginCatalogWork(Runnable {
+            val saved = runCatching { controller.nativeButlerHost().approveOriginalConversationReminder(held.reply, held.proposal) { maySave() } }
+            main.post {
+                if (!sameSource()) { done(null, "原私人提醒窗口已变化，请核对原回执；没有重试"); return@post }
+                val output = saved.mapCatching { schedule ->
+                    val rule = schedule.getJSONObject("rule")
+                    check(rule.getString("id") == held.proposal.id() && rule.getInt("revision") == 1)
+                    reminderResult(held.reply, "saved").put("ruleId", rule.getString("id")).put("ruleRevision", 1)
+                        .put("confirmed", true).put("command", "approveSchedule")
+                        .put("result", JSONObject().put("schedule", public(schedule)))
+                }.getOrNull()
+                done(output, if (output == null) "尚未确认保存结果，请重新核对这条回复的原提醒；没有重试" else null)
+            }
+        })
+    }
     private fun known(id: String) = snapshot.optJSONArray("plans").objects().singleOrNull { it.optString("id") == id } ?: error("请刷新原持续目标清单")
     private fun read(handle: String): JSONObject {
         val value = readings[handle]; check(value != null && value.second > SystemClock.elapsedRealtime()) { "原目标读取已关闭或过期，请重新读取" }; return JSONObject(value.first)
@@ -65,6 +152,22 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
             review.put("calendar", JSONObject().put("local", local.toLocalDateTime().toString()).put("zone", local.zone.id).put("offset", local.offset.id))
         }
         return review
+    }
+    private fun ordinaryReminderPreview(checked: JSONObject): JSONObject? {
+        val draft = checked.getJSONObject("draft")
+        if (draft.getString("kind") != "reminder" || DeviceScheduleOrigin.isDevice(checked.getJSONObject("origin"))) return null
+        val schedule = draft.getJSONObject("schedule")
+        return AutomationSchedule.preview(schedule, System.currentTimeMillis(), 3).also { calendar ->
+            // Absolute times have no stored time zone. Display that same instant
+            // in the phone's zone without changing the reviewed definition/digest.
+            if (schedule.getString("type") in setOf("once", "interval")) {
+                val zone = ZoneId.systemDefault()
+                for (occurrence in calendar.optJSONArray("occurrences").objects()) {
+                    val local = Instant.ofEpochMilli(occurrence.getLong("at")).atZone(zone)
+                    occurrence.put("local", local.toLocalDateTime().toString()).put("zone", zone.id).put("offset", local.offset.id)
+                }
+            }
+        }
     }
     private fun draft(input: JSONObject, original: JSONObject? = null): ExecutionStepDraft {
         fields(input, "goal", "executor", "projectId", "path", "heading", "minimumBytes", "dependencies", "remoteWait", "businessWait")
@@ -174,21 +277,7 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
                 val row = snapshot.optJSONArray("scheduleProposals").objects().singleOrNull { it.optString("id") == id } ?: error("请重新读取原时间草案")
                 check(row.optBoolean("sourceAvailable") && row.optString("status") == "pending") { "原时间草案来源不可核对" }
                 val checked = dev.pocketengine.features.automation.AutomationBook.reviewedProposalForDisplay(row)
-                val draft = checked.getJSONObject("draft")
-                val preview = if (draft.getString("kind") == "reminder" && !DeviceScheduleOrigin.isDevice(checked.getJSONObject("origin"))) {
-                    val schedule = draft.getJSONObject("schedule")
-                    AutomationSchedule.preview(schedule, System.currentTimeMillis(), 3).also { calendar ->
-                        // Absolute times have no stored time zone. Show that same instant
-                        // in the phone's zone; leave the reviewed definition and digest intact.
-                        if (schedule.getString("type") in setOf("once", "interval")) {
-                            val zone = ZoneId.systemDefault()
-                            for (occurrence in calendar.optJSONArray("occurrences").objects()) {
-                                val local = Instant.ofEpochMilli(occurrence.getLong("at")).atZone(zone)
-                                occurrence.put("local", local.toLocalDateTime().toString()).put("zone", zone.id).put("offset", local.offset.id)
-                            }
-                        }
-                    }
-                } else null
+                val preview = ordinaryReminderPreview(checked)
                 deliver(review("approveSchedule", JSONObject().put("id", id).put("digest", checked.getString("digest")), checked)
                     .also { result -> preview?.let { result.put("ordinaryReminderPreview", it) } }, null)
             }

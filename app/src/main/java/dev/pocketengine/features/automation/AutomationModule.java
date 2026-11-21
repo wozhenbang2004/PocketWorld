@@ -186,6 +186,18 @@ public final class AutomationModule implements EngineModule {
             return book.approveScheduleProposal(id,digest,System.currentTimeMillis());
         });reschedule(context.android);if(!result.optBoolean("duplicate"))emitScheduleChange("approveSchedule",result.getJSONObject("rule"),id);return result;
     }
+    /** Exact native Chat route, not a feature command or a global schedule list. */
+    public JSONObject readOriginalConversationReminder(JSONObject origin,String operation,String id,String digest)throws Exception{
+        return book.readOriginalConversationReminder(origin,operation,id,digest);
+    }
+    public JSONObject approveOriginalConversationReminder(JSONObject origin,String operation,String id,String digest,OriginalProposalSource source,
+                                                         java.util.function.BooleanSupplier current)throws Exception{
+        JSONObject saved=source.call(()->book.approveOriginalConversationReminder(origin,operation,id,digest,System.currentTimeMillis(),current));
+        // Same normal replan, only after explicit approval and outside source/Book locks.
+        // Global snapshot/reconciliation is not part of this selected receipt.
+        try{reschedule(context.android);}catch(Exception unavailable){/* Existing saved receipt survives alarm uncertainty. */}
+        return saved;
+    }
     /** Native supervisor validates this exact occurrence before admitting its own persistent task. */
     public JSONObject taskRequest(String occurrenceId)throws Exception {
         JSONObject origin=book.receiptNativeOrigin(occurrenceId);if(origin==null)return book.taskRequest(occurrenceId,System.currentTimeMillis());final Exception[] bookFailure={null};

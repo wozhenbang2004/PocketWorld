@@ -182,25 +182,77 @@ public final class AutomationBook {
     public JSONArray scheduleProposals(String originalTask)throws Exception {
         synchronized(lock){JSONArray rows=read().optJSONArray("proposals"),result=new JSONArray();for(int i=0;rows!=null&&i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(originalTask==null||originalTask.equals(row.getJSONObject("origin").optString("taskId")))result.put(copy(row));}return result;}
     }
+    /** Look up only the exact Book ID earned by the original native operation. */
+    JSONObject readOriginalConversationReminder(JSONObject origin,String operation,String id,String digest)throws Exception{
+        synchronized(lock){
+            JSONObject state=read(),proposal=originalConversationReminder(state,origin,operation,id,digest);
+            JSONObject unavailable=new JSONObject().put("status","unavailable");
+            if(proposal==null)return unavailable;
+            JSONObject rule=originalReminderRow(state.getJSONArray("rules"),id);
+            if(pendingOriginalReminder(proposal,rule))return new JSONObject().put("status","pending").put("proposal",proposal);
+            if("pending".equals(proposal.opt("status"))&&Boolean.TRUE.equals(proposal.opt("ruleCreationEntered"))
+                    &&"unknown".equals(proposal.opt("ruleCreationState")))return new JSONObject().put("status","unknown");
+            if(!"approved".equals(proposal.opt("status"))||!Boolean.TRUE.equals(proposal.opt("ruleCreationEntered"))
+                    ||!"observed_original_rule".equals(proposal.opt("ruleCreationState"))||!id.equals(proposal.opt("ruleId"))
+                    ||rule==null||!"reminder".equals(rule.opt("kind"))||rule.optBoolean("sourceInvalidated")||rule.optBoolean("sourceCheckPending")
+                    ||rule.optJSONObject("nativeOrigin")==null||!canonicalObject(origin).equals(canonicalObject(rule.getJSONObject("nativeOrigin")))
+                    ||!(rule.opt("revision") instanceof Integer)||rule.getInt("revision")<1)return unavailable;
+            return new JSONObject().put("status","saved").put("ruleId",id).put("ruleRevision",rule.getInt("revision"));
+        }
+    }
+    JSONObject approveOriginalConversationReminder(JSONObject origin,String operation,String id,String digest,long now,
+                                                   java.util.function.BooleanSupplier current)throws Exception{
+        synchronized(lock){
+            JSONObject state=read(),proposal=originalConversationReminder(state,origin,operation,id,digest);
+            if(proposal==null||!pendingOriginalReminder(proposal,originalReminderRow(state.getJSONArray("rules"),id))||!current.getAsBoolean())
+                throw new SecurityException("这份原提醒不再可确认，请重新核对原回执");
+            return approveScheduleProposal(state,id,digest,now,current);
+        }
+    }
+    private static JSONObject originalReminderRow(JSONArray rows,String id)throws Exception{
+        if(rows==null)return null;
+        if(rows.length()>100)throw new SecurityException("原提醒记录超过读取范围");
+        JSONObject selected=null;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!id.equals(row.opt("id")))continue;
+            if(selected!=null)throw new SecurityException("原提醒身份不唯一");selected=row;}
+        return selected;
+    }
+    private static JSONObject originalConversationReminder(JSONObject state,JSONObject origin,String operation,String id,String digest)throws Exception{
+        JSONObject proposal=originalReminderRow(state.optJSONArray("proposals"),id);
+        if(proposal==null||!digest.equals(proposal.opt("digest"))||!Boolean.FALSE.equals(proposal.opt("executionAuthorized"))
+                ||!(origin.getString("taskId")+":"+operation).equals(proposal.opt("identity"))
+                ||proposal.optBoolean("sourceInvalidated")||proposal.optBoolean("sourceCheckPending")
+                ||proposal.optJSONObject("origin")==null||!canonicalObject(origin).equals(canonicalObject(proposal.getJSONObject("origin"))))return null;
+        JSONObject checked=reviewedProposalForDisplay(proposal);
+        return "reminder".equals(checked.getJSONObject("draft").opt("kind"))?checked:null;
+    }
+    private static boolean pendingOriginalReminder(JSONObject proposal,JSONObject rule){
+        return rule==null&&!proposal.has("ruleId")&&"pending".equals(proposal.opt("status"))
+                &&Boolean.FALSE.equals(proposal.opt("ruleCreationEntered"))&&"not_entered".equals(proposal.opt("ruleCreationState"));
+    }
     /** The exact displayed digest is approved by the existing native owner window only. */
     public JSONObject approveScheduleProposal(String proposal,String digest,long now)throws Exception {
-        synchronized(lock){JSONObject state=read();JSONArray rows=state.optJSONArray("proposals");int at=rows==null?-1:indexOf(rows,proposal);if(at<0)throw new IllegalArgumentException("计划草案不存在");JSONObject row=rows.getJSONObject(at);
+        synchronized(lock){return approveScheduleProposal(read(),proposal,digest,now,null);}
+    }
+    private JSONObject approveScheduleProposal(JSONObject state,String proposal,String digest,long now,
+                                               java.util.function.BooleanSupplier current)throws Exception{
+        JSONArray rows=state.optJSONArray("proposals");int at=rows==null?-1:indexOf(rows,proposal);if(at<0)throw new IllegalArgumentException("计划草案不存在");JSONObject row=rows.getJSONObject(at);
             reviewedProposalForDisplay(row);
             if(row.optBoolean("sourceCheckPending"))throw new SecurityException("原草稿来源尚未核对，不能批准新安排");
             if(!digest.equals(row.getString("digest"))||!digest.equals(proposalDigest(row.getJSONObject("origin"),row.getJSONObject("draft"))))throw new SecurityException("显示的计划草案已变化");
-            JSONObject exactSchedule=row.getJSONObject("draft").getJSONObject("schedule");if(AutomationSchedule.nextAt(exactSchedule,Math.max(0,now-1))<0)throw new IllegalStateException("草案时间已过或日历已耗尽，请在原对话明确重新提出安排");
+            if(current!=null)now=System.currentTimeMillis();
+            JSONObject exactSchedule=row.getJSONObject("draft").getJSONObject("schedule");if(AutomationSchedule.nextAt(exactSchedule,current==null?Math.max(0,now-1):now)<0)throw new IllegalStateException("草案时间已过或日历已耗尽，请在原对话明确重新提出安排");
             if(!row.getString("status").matches("pending|approved"))throw new SecurityException("此草案不能批准");
             JSONObject rule=null;JSONArray rules=state.getJSONArray("rules");int existing=indexOf(rules,proposal);
             if(existing>=0){rule=rules.getJSONObject(existing);requireOriginalProposalRule(row,rule);if("approved".equals(row.getString("status")))return new JSONObject().put("proposal",copy(row)).put("rule",copy(rule)).put("duplicate",true).put("executionAuthorized",false);}
             else{
                 if(!Boolean.FALSE.equals(row.opt("ruleCreationEntered"))||!"not_entered".equals(row.optString("ruleCreationState"))||"approved".equals(row.getString("status")))throw new SecurityException("原计划创建已进入、已撤回或未确认；不能用旧草案重建");
+                if(current!=null&&!current.getAsBoolean())throw new SecurityException("原提醒审阅已关闭或过期，未开始保存");
                 // Persist in this SAME original proposal before the first rule write. Any
                 // later missing/uncertain rule is query-only, never a new creation attempt.
                 row.put("ruleCreationEntered",true).put("ruleCreationState","unknown").put("ruleCreationEnteredAt",now);write(state);
                 rule=save(row.getJSONObject("draft"),now,proposal,row.getJSONObject("origin"));state=read();rows=state.getJSONArray("proposals");at=indexOf(rows,proposal);row=rows.getJSONObject(at);
             }
             row.put("status","approved").put("ruleId",rule.getString("id")).put("approvedAt",now).put("ruleCreationEntered",true).put("ruleCreationState","observed_original_rule");write(state);return new JSONObject().put("proposal",copy(row)).put("rule",copy(rule)).put("duplicate",false).put("executionAuthorized",false);
-        }
     }
     private static void requireOriginalProposalRule(JSONObject row,JSONObject rule)throws Exception {
         JSONObject draft=row.getJSONObject("draft"),origin=rule.optJSONObject("nativeOrigin");

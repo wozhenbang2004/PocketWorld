@@ -2287,6 +2287,14 @@ public final class EngineApplication extends Application implements dev.pocketen
     private dev.pocketengine.features.automation.AutomationModule automationModule()throws Exception{
         EngineModule module=features.module("automation");if(!(module instanceof dev.pocketengine.features.automation.AutomationModule))throw new IllegalStateException("持续目标模块尚未准备");return (dev.pocketengine.features.automation.AutomationModule)module;
     }
+    public dev.pocketengine.features.AutomationPlanHost.OriginalReminderRead readOriginalConversationReminder(
+            TaskStore.OriginalReminderReply reply,java.util.function.BooleanSupplier current)throws Exception{
+        return automationPlans.readOriginalConversationReminder(automationModule(),reply,current);
+    }
+    public JSONObject approveOriginalConversationReminder(TaskStore.OriginalReminderReply reply,TaskStore.OriginalReminderProposal selected,
+                                                           java.util.function.BooleanSupplier current)throws Exception{
+        return automationPlans.approveOriginalConversationReminder(automationModule(),reply,selected,current);
+    }
     private static boolean automationPlanTask(JSONObject task){JSONObject origin=task==null?null:task.optJSONObject("origin");return origin!=null&&origin.optString("kind").equals("automation")&&!origin.optString("planId").isEmpty();}
     private JSONObject reviewedAutomationRequest(JSONObject task)throws Exception{
         JSONObject origin=task.getJSONObject("origin"),request=automationModule().planTaskRequest(json("ownerId","owner","spaceId","private"),origin.getString("planId"),origin.getString("commitmentId"),origin.getString("occurrenceId"));

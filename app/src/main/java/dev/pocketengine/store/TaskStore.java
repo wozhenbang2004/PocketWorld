@@ -632,6 +632,51 @@ public final class TaskStore {
         for(int i=0;i<inputs.length();i++){JSONObject row=inputs.getJSONObject(i);if(!run.equals(row.optString("materializedRunId")))continue;if(!id.equals(row.optString("acceptedTaskId"))||epoch!=row.optInt("materializedEpoch",-1)||!"materialized".equals(row.optString("queueState")))throw new SecurityException("原主人输入的纳入或撤回状态已变化");String message=row.getString("messageId");long revision=TaskExecutionScope.exactLong(row,"ownerMessageRevision",1,Long.MAX_VALUE);if(!message.matches("[a-fA-F0-9-]{36}"))throw new SecurityException("原主人输入身份不唯一");if(!seen.add(message)){if(OwnerWorkTask.isOwnerWork(task))continue;throw new SecurityException("原主人输入身份不唯一");}refs.put(new JSONObject().put("kind","message").put("sourceId",message).put("revision",revision).put("ownerId","owner").put("spaceId","private"));}
         if(refs.length()==0)throw new SecurityException("旧提案缺原生主人输入纳入证明，请在原私聊重新提出");return refs;
     }
+    /** The view constructs this from the current native saved message, never from renderer run IDs. */
+    public record OriginalReminderReply(String conversationId,String messageId,long sourceRevision,String taskId,
+                                        String runId,int epoch,String replyId,String ownerMessageId) {
+        public JSONObject origin()throws Exception{return new JSONObject().put("ownerId","owner").put("spaceId","private")
+                .put("conversationId",conversationId).put("taskId",taskId).put("runId",runId).put("epoch",epoch);}
+        public JSONObject view()throws Exception{return new JSONObject().put("conversationId",conversationId).put("taskId",taskId)
+                .put("runId",runId).put("epoch",epoch).put("replyId",replyId);}
+        private boolean matchesOrigin(JSONObject origin){return origin!=null&&origin.length()==6&&"owner".equals(origin.opt("ownerId"))
+                &&"private".equals(origin.opt("spaceId"))&&conversationId.equals(origin.opt("conversationId"))&&taskId.equals(origin.opt("taskId"))
+                &&runId.equals(origin.opt("runId"))&&Integer.valueOf(epoch).equals(origin.opt("epoch"));}
+    }
+    public record OriginalReminderProposal(String id,String digest,String operation,String generation){}
+    /** Only under the existing original schedule source transaction: a sole real
+     * inert operation on a sole materialized private input, tied to this actual reply. */
+    public synchronized OriginalReminderProposal originalReminderForReply(OriginalReminderReply reply)throws Exception{
+        if(!db.inTransaction()||conversationRepository==null)throw new SecurityException("请在原私人对话核对提醒");
+        JSONObject task=required(reply.taskId());
+        if(!OwnerWorkTask.isButlerSource(task)||!reply.conversationId().equals(task.opt("conversationId"))
+                ||!reply.runId().equals(task.opt("runId"))||reply.epoch()!=task.optInt("coordinatorEpoch")
+                ||task.optBoolean("cancelRequested")||!task.optString("status").matches("completed|needs_confirmation")
+                ||hasUnresolved(reply.taskId()))return null;
+        String operation;JSONObject proposal;
+        // Count any original attempt, including unsuccessful/unknown, before selecting.
+        try(Cursor rows=db.rawQuery("SELECT operation_id,state,CASE WHEN length(CAST(receipt AS BLOB))<=16384 THEN receipt END "
+                +"FROM operations WHERE task_id=? AND run_id=? AND tool='schedule_propose' LIMIT 2",
+                new String[]{reply.taskId(),reply.runId()})){
+            if(!rows.moveToFirst()||!"receipt".equals(rows.getString(1))||rows.isNull(2))return null;
+            operation=rows.getString(0);JSONObject receipt=new JSONObject(rows.getString(2));
+            if(rows.moveToNext()||!Boolean.TRUE.equals(receipt.opt("ok"))||!Boolean.TRUE.equals(receipt.opt("reviewRequired"))
+                    ||!Boolean.FALSE.equals(receipt.opt("scheduled"))||!Boolean.FALSE.equals(receipt.opt("executionAuthorized")))return null;
+            proposal=receipt.optJSONObject("proposal");
+        }
+        if(operation==null||!operation.matches("[a-f0-9-]{36}")||proposal==null
+                ||!proposal.optString("id").matches("[a-f0-9-]{36}")||!proposal.optString("digest").matches("[a-f0-9]{64}")
+                ||!"pending".equals(proposal.opt("status"))||!Boolean.FALSE.equals(proposal.opt("executionAuthorized"))
+                ||!(reply.taskId()+":"+operation).equals(proposal.opt("identity"))||!reply.matchesOrigin(proposal.optJSONObject("origin"))
+                ||proposal.optJSONObject("draft")==null||!"reminder".equals(proposal.optJSONObject("draft").opt("kind")))return null;
+        JSONArray refs=scheduleProposalUserRefs(reply.taskId(),reply.runId(),reply.epoch(),reply.conversationId());
+        if(refs.length()!=1)return null;
+        var input=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
+        if(!reply.ownerMessageId().equals(input.sourceId))return null;
+        String generation=conversationRepository.originalReminderReplyGeneration(reply.conversationId(),reply.messageId(),
+                reply.sourceRevision(),reply.taskId(),reply.runId(),reply.epoch(),reply.replyId(),input);
+        return generation==null?null:new OriginalReminderProposal(proposal.getString("id"),proposal.getString("digest"),operation,generation);
+    }
     /** Only the already-prepared inert schedule draft may cross this native entry.
      * Its own prepared row is not an unrelated unknown effect; every other unresolved row is. */
     public synchronized void requireScheduleProposalPrepared(String id,String run,int epoch,String operation,JSONObject arguments,RunControl original)throws Exception {

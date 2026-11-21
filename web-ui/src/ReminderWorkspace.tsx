@@ -19,6 +19,10 @@ const array = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x
 const date = (value: any) => Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString() : '';
 const types = [{ id: 'once', label: '一次' }, { id: 'interval', label: '固定间隔' }, { id: 'daily', label: '每天' }, { id: 'weekly', label: '每周' }, { id: 'monthly', label: '每月' }, { id: 'cron', label: 'Cron 表达式' }];
 type OccurrenceFeedback = { id: string; location: string; read: string; message: string; error?: boolean; prepared?: boolean };
+export type OriginalChatReminderRuleVisit = {
+  ruleId:string; ruleRevision:number; navigation:number; documentEpoch:number; previousList:string;
+  source:{conversationId:string; taskId:string; runId:string; epoch:number};
+};
 export type ReminderNoticeVisit = { connection: number; navigation: number; documentEpoch: number; resume: number; warm: boolean };
 type ReminderNotice = { id: string; ruleId: string; revision: number; occurrenceAt: number; connectionRevision: number };
 function reminderNotice(state: Data, visit: ReminderNoticeVisit): ReminderNotice | null {
@@ -62,6 +66,22 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const reading = (state.moduleBusy || []).includes('automation.list');
   const readingError = Boolean(state.moduleErrors?.['automation.list']);
   const pending = requesting || busy || occurrenceBusy || Boolean(submission) || uncertain;
+  const originalChatVisit=state.originalChatReminderRuleVisit as OriginalChatReminderRuleVisit|undefined;
+  const handledChatVisit=useRef<OriginalChatReminderRuleVisit|undefined>(undefined);
+  const ruleListResult=state.moduleResultInputs?.['automation.list'];
+  useEffect(()=>{
+    const visit=originalChatVisit;
+    if(!visit||handledChatVisit.current===visit||document.hidden||bridge.getDocumentEpoch()!==visit.documentEpoch||
+       state.webWorkspaceSection!=='automation'||state.webWorkspaceTaskOpen!==false||reading||editor||review||pending||
+       !ruleListResult?._requestId||ruleListResult._requestId===visit.previousList)return;
+    handledChatVisit.current=visit;
+    const matching=rules.filter(rule=>rule.id===visit.ruleId&&rule.revision===visit.ruleRevision&&rule.kind==='reminder'&&
+      rule.sourceInvalidated!==true&&rule.sourceCheckPending!==true&&rule.nativeOrigin?.ownerId==='owner'&&
+      rule.nativeOrigin?.spaceId==='private'&&rule.nativeOrigin.conversationId===visit.source.conversationId&&
+      rule.nativeOrigin.taskId===visit.source.taskId&&rule.nativeOrigin.runId===visit.source.runId&&rule.nativeOrigin.epoch===visit.source.epoch);
+    if(!readingError&&ruleListResult._failed!==true&&matching.length===1)chooseRule(visit.ruleId);
+    else setNotice('尚未核实原对话里的这条提醒，没有打开其他提醒。');
+  },[originalChatVisit,state.webWorkspaceSection,state.webWorkspaceTaskOpen,reading,editor,review,pending,ruleListResult,readingError,rules]);
   useLayoutEffect(() => {
     const changed = previousRule.current !== selectedRule?.id; previousRule.current = selectedRule?.id;
     const scroller = root.current?.closest('.pw-secondary-scroll');
