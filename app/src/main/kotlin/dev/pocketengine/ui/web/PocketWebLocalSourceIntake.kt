@@ -15,9 +15,13 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
     private val current: () -> Boolean, private val project: () -> String?) {
     companion object {
         const val PREFIX = "projects.localSource."
+        const val OPEN_PROJECT = PREFIX + "openProject"
         val COMMANDS = setOf("open", "openPrepared", "close", "folder", "zip", "starter", "select", "review", "back", "confirm",
             "query", "retry", "releaseMissing", "discard", "openProject", "another").map { PREFIX + it }.toSet()
         private val KINDS = setOf("saf_tree", "external_zip", "host_saved_snapshot", "task_source_package", "builtin_vite_starter")
+        private val PHONE_FILES = setOf("saf_tree", "external_zip")
+        private val PHONE_SOURCE_FIELDS = setOf("clientId", "packageSha256", "manifestIdentity", "mode",
+            "executionAuthorityRestored", "sourceKind", "sourceEvidenceSha256")
     }
     private var window by mutableStateOf<String?>(null)
     private var origin: String? = null
@@ -73,6 +77,15 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         source != null && original.matchesWebSourceReceipt(row) && source.optString("sourceKind") in KINDS &&
             source.optString("mode") == "new_project" && row.optBoolean("imported") && row.optString("id").isNotBlank() && row.optString("projectId").isNotBlank()
     }
+    private fun ordinaryPhoneSource(row: JSONObject?): String? {
+        if (row == null || row.opt("projectRegistered") != true ||
+            listOf("ownerDevelopmentRequestId", "ownerDraftWorkCopy", "collectedFromCheckoutId", "collectionOperationId",
+                "teamProjectCopy", "skillExecutionCopy", "isolatedGit", "nativeGitImportPending").any(row::has)) return null
+        val source = row.optJSONObject("sourceImport") ?: return null
+        return source.optString("sourceKind").takeIf { it in PHONE_FILES &&
+            source.keys().asSequence().toSet() == PHONE_SOURCE_FIELDS && source.opt("mode") == "new_project" &&
+            source.opt("executionAuthorityRestored") == false }
+    }
     private fun plan() = original.state.importPlan?.optJSONObject("plan")?.takeIf {
         val staged = original.state.staged ?: return@takeIf false
         evidence(staged) != null && it.optString("selectionId") == staged.optString("selectionId") &&
@@ -98,6 +111,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
             .put("otherPending", !recovery && state.pendingImport != null && pending == null).put("mayRetry", pending != null && state.retryImport)
             .put("mayRelease", pending != null && (state.retryImport || state.missingSourceAction == pending.optString("clientImportId")))
             .put("project", result?.getString("projectId")).put("checkout", result?.getString("id")).put("name", result?.optString("name"))
+            .put("openSourceFiles", !recovery && result?.opt("projectId") != origin && ordinaryPhoneSource(result) != null)
     }
 
     fun close() {
@@ -105,7 +119,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
     }
     fun pause() { if (window != null) original.forgetImportPlan() } // document picker necessarily pauses the same Activity
 
-    fun dispatch(action: String, args: JSONObject): JSONObject {
+    fun dispatch(action: String, args: JSONObject, openedSource: ((JSONObject?, String?) -> Unit)? = null): JSONObject? {
         val op = action.removePrefix(PREFIX)
         val fields = when (op) {
             "open" -> if (args.has("recovery")) setOf("recovery") else emptySet()
@@ -113,7 +127,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
             "select", "discard" -> setOf("window", "id", "sha")
             "review" -> setOf("window", "id", "sha", "name")
             "confirm", "query", "retry", "releaseMissing" -> setOf("window", "actionId")
-            "openProject" -> setOf("window", "project", "checkout")
+            "openProject" -> if (openedSource != null) setOf("window", "project", "checkout", "sourceFiles") else setOf("window", "project", "checkout")
             "folder" -> if (args.has("excludedDirectory")) setOf("window", "excludedDirectory") else setOf("window")
             "zip" -> setOf("window", "stripRoot")
             else -> setOf("window")
@@ -193,14 +207,28 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
             "discard" -> { check(matches(state.staged) && plan() == null && result() == null) { "原临时选择已变化" }; original.discardStage() }
             "openProject" -> {
                 val row = result() ?: error("没有已核对的原工作副本")
-                val requestedWindow = window
+                val requestedWindow = checkNotNull(window)
                 val target = row.getString("projectId")
-                check(target == args.getString("project") && row.getString("id") == args.getString("checkout")) { "项目或工作副本已变化" }
-                original.continueWebSourceImport({ window == requestedWindow && here() && result() === row }) {
-                    // Selecting the same project does not retire this window.
-                    // Close only after the original native open has happened.
-                    if (window == requestedWindow && current() && project() == target) close()
+                val checkout = row.getString("id")
+                check(target == args.getString("project") && checkout == args.getString("checkout")) { "项目或工作副本已变化" }
+                val sourceKind = if (openedSource == null) null else ordinaryPhoneSource(row)
+                if (openedSource != null) check(args.opt("sourceFiles") == true && original.webSourceRecovery == null &&
+                    project() != target && sourceKind != null) { "没有核对到这次导入的原手机源码" }
+                val failed: ((Exception) -> Unit)? = openedSource?.let { reply ->
+                    { _: Exception -> reply(null, "原源码窗口未确认。可以回项目工作台核对，没有打开其他文件。") }
                 }
+                original.continueWebSourceImport({ checked ->
+                    window == requestedWindow && here() && result() === row && (openedSource == null ||
+                        original.matchesWebSourceReceipt(checked) && ordinaryPhoneSource(checked) == sourceKind)
+                }, failed) {
+                    // The existing native selector has now opened the exact project and copy.
+                    if (window == requestedWindow && current() && project() == target) {
+                        close()
+                        openedSource?.invoke(JSONObject().put("opened", true).put("sourceFiles", true)
+                            .put("window", requestedWindow).put("project", target).put("checkout", checkout), null)
+                    } else failed?.invoke(IllegalStateException("原导入窗口已变化"))
+                }
+                if (openedSource != null) return null
             }
             "another" -> original.newWebSourceSelection()
             else -> error("不支持这个本机源码操作")

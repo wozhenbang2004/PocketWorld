@@ -4,20 +4,22 @@ import {Button, SettingsDialog, TextField} from './forms-library';
 import './project-git-intake.css';
 
 type Source = {retainedArchiveRoot?:{directory:string;descriptor:string};strippedArchiveRoot?:string;firstWebFile?:string;id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package'|'builtin_vite_starter';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
+export type PhoneImportFiles = {window:string;project:string;checkout:string};
+type OpenFiles = (target:PhoneImportFiles)=>Promise<void>;
 type Intake = {window:string;busy:boolean;picking:boolean;recoveryOnly?:boolean;notice?:string;error?:string;suggestedSkip?:string;staged?:Source;saved:Source[];
-  reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string};
+  reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string;openSourceFiles?:boolean};
 const prefix='projects.localSource.', number=(n:number)=>new Intl.NumberFormat('zh-CN').format(n);
 const sourceKind=(s:Source)=>s.kind==='builtin_vite_starter'?'内置小网页模板':s.kind==='task_source_package'?'原私人任务的固定源码':s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':s.fixedPackage?'PocketWorld 源项目包':'源码 ZIP';
 
-export function ProjectLocalSourceIntake({state,canCreateStarter=false}:{state?:Intake;canCreateStarter?:boolean}) {
+export function ProjectLocalSourceIntake({state,canCreateStarter=false,onOpenSourceFiles}:{state?:Intake;canCreateStarter?:boolean;onOpenSourceFiles?:OpenFiles}) {
   // A system picker pauses this document. Close only when the project surface actually unmounts,
   // not when its private snapshot is intentionally hidden in the background.
   const lastWindow=useRef('');
   if(state?.window)lastWindow.current=state.window;
   useEffect(()=>()=>{if(lastWindow.current)void bridge.command(prefix+'close',{window:lastWindow.current}).catch(()=>{});},[]);
-  return state?.window?<SourcePanel key={state.window} state={state} canCreateStarter={canCreateStarter}/>:null;
+  return state?.window?<SourcePanel key={state.window} state={state} canCreateStarter={canCreateStarter} onOpenSourceFiles={onOpenSourceFiles}/>:null;
 }
-function SourcePanel({state,canCreateStarter}:{state:Intake;canCreateStarter:boolean}){
+function SourcePanel({state,canCreateStarter,onOpenSourceFiles}:{state:Intake;canCreateStarter:boolean;onOpenSourceFiles?:OpenFiles}){
   const source=state.staged, inflight=useRef(false), zipRootHint=useId();
   const starterAvailable=canCreateStarter&&!state.recoveryOnly, starter=source?.kind==='builtin_vite_starter';
   const root=source?.kind==='external_zip'&&!source.fixedPackage&&!source.strippedArchiveRoot?source.retainedArchiveRoot:undefined;
@@ -25,13 +27,16 @@ function SourcePanel({state,canCreateStarter}:{state:Intake;canCreateStarter:boo
   const [pending,setPending]=useState(false),[error,setError]=useState(''),[excluded,setExcluded]=useState('');
   useEffect(()=>{setName((source?.label||'').slice(0,80));setDiscard(false);setError('');if(source?.id)setExcluded('');},[source?.id]);
   const busy=pending||state.busy||state.picking;
-  async function act(op:string, extra:Record<string,unknown>={}){
+  async function perform(request:()=>Promise<unknown>){
     if(inflight.current)return;
     inflight.current=true;setPending(true);setError('');
-    try{await bridge.command(prefix+op,{window:state.window,...extra});}
+    try{await request();}
     catch(err){setError(err instanceof Error?err.message:'原操作尚未确认，请返回核对。');}
     finally{inflight.current=false;setPending(false);}
   }
+  const act=(op:string, extra:Record<string,unknown>={})=>perform(()=>bridge.command(prefix+op,{window:state.window,...extra}));
+  const sourceFiles=state.openSourceFiles===true&&onOpenSourceFiles;
+  const published=state.project&&state.checkout?{window:state.window,project:state.project,checkout:state.checkout}:null;
   const pin=source?{id:source.id,sha:source.sha}:{};
   const close=()=>{void act('close');};
   return <SettingsDialog isOpen title={state.recoveryOnly?'核对原导入':starterAvailable?'新建或导入本机项目':'导入手机上的工程'} closeLabel="返回项目" onClose={close}>
@@ -43,8 +48,11 @@ function SourcePanel({state,canCreateStarter}:{state:Intake;canCreateStarter:boo
         <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('query',{actionId:state.pendingId})}>核对原结果</Button>
         {state.mayRetry&&<Button variant="secondary" disabled={busy} onClick={()=>void act('retry',{actionId:state.pendingId})}>沿同一方案重试</Button>}
         {state.mayRelease&&<Button variant="ghost" disabled={busy} onClick={()=>void act('releaseMissing',{actionId:state.pendingId})}>放下这次创建定位</Button>}</div></>
-      :state.project&&state.checkout?<><h3>{state.name} · 本机私人项目</h3><p>新工作副本已登记。打开项目后，可从「工作」编辑这份副本。没有启动任务。</p>
-        <div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>void act('openProject',{project:state.project,checkout:state.checkout})}>打开这个项目</Button>
+      :published?<><h3>{state.name} · 本机私人项目</h3><p>{sourceFiles?'私人副本已登记，可以直接查看目录并选择要编辑的文件。没有启动任务。':'新工作副本已登记。打开项目后，可从「工作」编辑这份副本。没有启动任务。'}</p>
+        <div className="pw-action-row">
+          {sourceFiles&&<Button variant="primary" disabled={busy} onClick={()=>void perform(()=>sourceFiles(published))}>打开导入的源码</Button>}
+          <Button variant={sourceFiles?'secondary':'primary'} disabled={busy}
+            onClick={()=>void act('openProject',{project:published.project,checkout:published.checkout})}>打开这个项目</Button>
           {!state.recoveryOnly&&<Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>{starterAvailable?'另选项目来源':'导入另一份源码'}</Button>}</div></>
       :state.recoveryOnly?(!busy&&!state.notice&&!state.error&&!error&&<p>原导入定位尚未载入，请返回项目后重新核对。</p>):source?<><h3>{state.reviewId?'核对新项目':root&&!discard?'选择工程根':starter?'小网页模板已准备':'已固定本次源码'}</h3>
         {starter&&<p>这是内置的小网页源码。创建私人项目后可编辑；准备和创建都不会安装依赖、构建或调用模型。</p>}

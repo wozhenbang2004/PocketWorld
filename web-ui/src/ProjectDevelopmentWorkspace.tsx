@@ -30,7 +30,7 @@ export type ProjectBuildEditorResume = CheckoutBuildEditorResume & { taskId:stri
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string; editorResume?:ProjectBuildEditorResume; pythonEditor?:OriginalPythonRun };
 const builtinViteStarter='builtin_vite_starter';
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https'|typeof builtinViteStarter;
-export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true};
+export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true; openDirectory?:true};
 export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
 type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:string};
@@ -745,13 +745,16 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       sameImportedEditor(importedEditor,originalImportedEditor(projectId))&&canEditImportedCheckout(latest.current.can);
     const nativeCopies=rows(view.checkouts).filter(copy=>copy?.projectId===projectId&&copy.checkoutId===checkoutId);
     const gitImport=importedEditor.sourceKind==='git_https', starter=importedEditor.sourceKind===builtinViteStarter;
-    const admitted=gitImport||starter?nativeCopies.length===1&&nativeCopies[0].draftWorkingCopy===false&&view.commandsAuthorized===false:
+    const directory=importedEditor.openDirectory===true;
+    const admitted=gitImport||starter||directory?nativeCopies.length===1&&nativeCopies[0].draftWorkingCopy===false&&view.commandsAuthorized===false:
       nativeCopies.some(copy=>importedEditor.sourceKind!=='task_source_package'||copy.taskPackageSource===true);
     if(!originalIsCurrent()||view.projectId!==projectId||view.executionAuthorized!==false||!admitted){
       setImportEditorNotice('原导入副本已不能核对，没有打开其他文件。');return;
     }
     const hasDifferentCopy=()=>[draft.current.checkoutId,view.draft?.checkoutId].some(id=>id&&id!==checkoutId);
-    if(view.draftRecoveryRequired===true||unresolved(submission)||sourceConflict||hasDifferentCopy()||starter&&draft.current.checkoutId!==checkoutId){
+    if(view.draftRecoveryRequired===true||unresolved(submission)||sourceConflict||hasDifferentCopy()||
+       ((starter||directory)&&draft.current.checkoutId!==checkoutId)||
+       (directory&&(importedEditor.exactPhoneSource!==true||view.draftRecoveryRequired!==false))){
       setImportEditorNotice(starter?'请先核对当前选择，再选中原网页副本 '+checkoutId.slice(0,8)+'。未打开其他文件。':
         '当前项目保留了其他副本选择或待核对的工作。请先核对，再明确选择原导入副本 '+checkoutId.slice(0,8)+'。');return;
     }
@@ -767,9 +770,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       setFileWindow({checkoutId,firstEntry:firstEntry??undefined,originalImport:importedEditor,
         unselectedImport:!draft.current.checkoutId&&!view.draft?.checkoutId?importedEditor:undefined});
     };
-    // Git has no pinned web starter: open only its ordinary file list. Other
-    // imports still use their existing exact entry observation when available.
-    if(!gitImport&&latest.current.can('projects.development.inspect'))
+    // The import-result action shows the real directory before choosing any
+    // file. Other paths keep their existing exact entry observation.
+    if(!gitImport&&!directory&&latest.current.can('projects.development.inspect'))
       void invoke('projects.development.inspect',{viewHandle:view.viewHandle,checkoutId}).then(openCopy);
     else openCopy();
   },[importedEditor,onImportedEditorHandled,active,view,busy,review,fileCheckout,buildReturn,projectId,submission,sourceConflict]);

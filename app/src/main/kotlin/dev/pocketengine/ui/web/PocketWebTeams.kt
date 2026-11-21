@@ -236,7 +236,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         val directory = captured.deliveryWorkers?.let { JSONObject(it) } ?: error("请先读取原交付进展")
         val task = text(args,"taskId"); val run = text(args,"runId"); val epoch = args.opt("epoch")
         require(epoch is Int && epoch > 0)
-        return directory.getJSONArray("workers").objects().singleOrNull { it.optBoolean("canOpen") && it.optString("taskId") == task &&
+        val entries = directory.getJSONArray("workers").objects() + listOfNotNull(directory.optJSONObject("settledOriginal"))
+        return entries.singleOrNull { it.optBoolean("canOpen") && it.optString("taskId") == task &&
             it.optString("runId") == run && it.optInt("epoch") == epoch && directory.getString("teamRunId")==it.optString("teamRunId") }
             ?: error("这不是打开时所选的独审或整合执行，没有打开其他任务")
     }
@@ -461,7 +462,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 val observed=runCatching {
                     check(currentWindow() && owner.live)
                     val module=controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主不可用")
-                    module.ownerFinalWorkers(team)
+                    // Only the native view() of this held Reading supplies the dated original observation.
+                    module.ownerFinalWorkers(team,source)
                 }.getOrElse { dev.pocketengine.features.teams.TeamDeliveryWorkers.unavailable(team) }
                 val pack=if(!owner.projectRun) null else runCatching {
                     check(currentWindow() && owner.live)

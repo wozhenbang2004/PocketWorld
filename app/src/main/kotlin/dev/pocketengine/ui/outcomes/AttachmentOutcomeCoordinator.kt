@@ -86,6 +86,44 @@ internal data class OwnerAttachmentCopyReceipt(val requestId:String,val taskId:S
 
 internal enum class AttachmentOriginalReturn(val value:String) { DETAILS("details"), LIST("list"), ENTRY("entry") }
 internal data class AttachmentPdfPageText(val viewerId: String, val rasterId: String, val page: Int)
+internal data class AttachmentWordExcerpt(val viewerId:String,val unit:Int,val chunk:Int,val original:JSONObject,
+                                          val blocks:List<JSONObject>) {
+    fun matchesPreview(value:JSONObject):Boolean {
+        val parts=value.optJSONArray("chunks").objects()
+        return value.opt("format")=="docx"&&value.opt("readContext")=="native_owner_preview"&&
+            value.opt("coverage")=="body_paragraphs_and_tables"&&value.opt("extraction")=="text"&&value.opt("taskId")==""&&
+            !value.optString("readReceiptId").isNullOrBlank()&&parts.size==blocks.size&&parts.indices.all{index->
+                val a=blocks[index];val b=parts[index]
+                val from=a.optJSONObject("locator")?:return@all false
+                val to=b.optJSONObject("locator")?:return@all false
+                listOf("unit","chunk","kind","text").all{a.opt(it)==b.opt(it)}&&
+                    from.length()==to.length()&&from.keys().asSequence().all{from.opt(it)==to.opt(it)}
+            }
+    }
+    fun view()=JSONObject().put("viewerId",viewerId).put("unit",unit).put("chunk",chunk).put("parts",blocks.size)
+}
+internal data class AttachmentWordOrigin(val fileId:String,val sha256:String,val unit:Int,val chunk:Int,val parts:Int) {
+    companion object {
+        const val FORMAT="pocketworld.original-word-excerpt.v1"
+        const val MIME="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        fun from(value:JSONObject?):AttachmentWordOrigin? {
+            value?:return null
+            val id=value.opt("fileId") as? String?:return null
+            val sha=value.opt("sha256") as? String?:return null
+            val unit=value.opt("unit") as? Int?:return null
+            val chunk=value.opt("chunk") as? Int?:return null
+            val parts=value.opt("parts") as? Int?:return null
+            return AttachmentWordOrigin(id,sha,unit,chunk,parts).takeIf{value.length()==6&&value.opt("format")==FORMAT&&
+                id.matches(Regex("[a-f0-9-]{36}"))&&sha.matches(Regex("[a-f0-9]{64}"))&&
+                unit in 1..1_000_000&&chunk in 0..1_000_000&&parts in 1..2}
+        }
+    }
+    fun matchesSource(file:JSONObject)=file.opt("id")==fileId&&file.opt("sha256")==sha256&&file.opt("mimeType")==MIME&&
+        file.opt("role")=="source"&&file.opt("availability")=="available"&&file.opt("sourceKind")=="content_uri"&&
+        file.isNull("sourceTaskId")&&file.optLong("size",0)>0
+}
+internal data class AttachmentWordSourceVisit(val origin:AttachmentWordOrigin,
+    val source:OwnerFilePreviewSource,val excerpt:JSONObject)
 /** A saveable navigation hint for the work behind an already-opened original, never a read grant. */
 internal data class AttachmentWorkReturn(val run:AttachmentResultRun,val fileId:String,val sha256:String,
                                          private val recordedDocument:Boolean=false) {
@@ -183,7 +221,9 @@ internal data class AttachmentOutcomeState(
     val workReturn:AttachmentWorkReturn?=null,val restoredWorkReturn:Boolean=false,
     val libraryDocumentReturn:AttachmentLibraryDocumentReturn?=null,
     val globalStandaloneDraftVisit:String?=null, // Native in-session provenance, never restored from Bundle.
-    val pdfPageText:AttachmentPdfPageText?=null // The still-open original display, never restored.
+    val pdfPageText:AttachmentPdfPageText?=null, // The still-open original display, never restored.
+    val wordExcerpt:AttachmentWordExcerpt?=null,val wordSaveAttempted:Boolean=false,
+    val wordSourceVisit:AttachmentWordSourceVisit?=null // One explicit origin lookup; never restored from Bundle.
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -729,6 +769,21 @@ internal class AttachmentOutcomeCoordinator(
             app.ownerOutcomeDocument(null,file.getString("id"),file.getString("sha256"),range,control) to null
         }
     }
+    /** One deliberate review of only the native Word fragments already displayed behind the review. */
+    fun readDisplayedWordExcerpt(shown:AttachmentWordExcerpt,current:()->Boolean){
+        val file=checkNotNull(state.file)
+        check(privateLibrary()&&!state.busy&&!exportPending&&!state.documentOpen&&state.originalFile!=null&&
+            file.opt("mimeType")==AttachmentWordOrigin.MIME&&current()){"请先定位到这份 Word 的原段落"}
+        val range=DocumentContent.Request.originalWordExcerpt(shown.unit,shown.chunk,shown.blocks.size)
+        state=state.copy(wordExcerpt=shown,wordSaveAttempted=false,document=null)
+        work(document=true){control,_->
+            control.setAuthorityCheck { check(current()){"原 Word 位置已变化，没有换读其他文字"} }
+            control.check()
+            val value=app.ownerOutcomeDocument(null,file.getString("id"),file.getString("sha256"),range,control)
+            check(shown.matchesPreview(value)){"原段落片段无法核对，没有展示其他文字"}
+            value to null
+        }
+    }
     fun canRequestOcr():Boolean {
         val file=state.file?:return false;val caps=state.snapshot?.optJSONObject("documentCapabilities")?:return false
         val actual=state.document?.takeIf{it.optString("attachmentId")==file.optString("id")&&it.optString("sha256")==file.optString("sha256")}
@@ -753,6 +808,9 @@ internal class AttachmentOutcomeCoordinator(
                 read.opt("extraction")!="text"||read.opt("coverage")!="pdf_text_layer"||
                 shown.size!=chunks.length()||shown.any{it.opt("unit")!=page.page})return false
         }
+        state.wordExcerpt?.let{shown->
+            if(state.wordSaveAttempted||!state.documentOpen||!privateLibrary()||state.originalFile==null||!shown.matchesPreview(read))return false
+        }
         return state.group==null&&read.optString("attachmentId")==file.optString("id")&&read.optString("sha256")==file.optString("sha256")&&read.optString("readReceiptId").isNotBlank()&&chunks.length()>0
     }
     private fun listedWorkPdf(snapshot:JSONObject,file:JSONObject):Boolean =
@@ -761,10 +819,13 @@ internal class AttachmentOutcomeCoordinator(
                 it.opt("mimeType")=="application/pdf"&&it.opt("sourceKind")=="content_uri"&&it.isNull("sourceTaskId")&&
                 it.optLong("size",-1)>0&&it.optLong("size",-1)==file.optLong("size",-2)
         }==true
-    fun saveReadAsFile(currentPdfPage:(()->Boolean)?=null){
+    fun saveReadAsFile(currentPdfPage:(()->Boolean)?=null,currentWord:(()->Boolean)?=null){
         if(state.busy||!canSaveRead())return;val task=state.taskId;val file=state.file?:return;val read=state.document?:return
         val page=state.pdfPageText
+        val word=state.wordExcerpt
         check(page==null||currentPdfPage?.invoke()==true) { "原 PDF 阅读位置已变化，未保存摘录" }
+        check(word==null||currentWord?.invoke()==true) { "原 Word 位置已变化，未保存摘录" }
+        if(word!=null)state=state.copy(wordSaveAttempted=true)
         val receipt=read.getString("readReceiptId")
         val pdfWork=state.snapshot?.takeIf{task!=null&&it.opt("taskId")==task&&it.opt("taskStatus")=="completed"&&
             it.optString("taskRunId").isNotBlank()&&it.optInt("coordinatorEpoch")>0&&
@@ -772,16 +833,34 @@ internal class AttachmentOutcomeCoordinator(
             state.originalFile==null&&state.documentOpen&&file.opt("role")=="source"&&file.opt("mimeType")=="application/pdf"&&
             read.opt("readContext")=="native_owner_preview"&&read.opt("taskId")==task&&read.opt("format")=="pdf"&&
             read.opt("coverage")=="pdf_text_layer"&&listedWorkPdf(it,file)}
-        work(replaceDocumentWithFile=true,onSuccess={if(page!=null && state.pdfPageText==page)
-            state=state.copy(originalFile=null,pdfPageText=null)}){c,_->
+        work(replaceDocumentWithFile=word==null,onSuccess={if(page!=null && state.pdfPageText==page)
+            state=state.copy(originalFile=null,pdfPageText=null)
+            else if(word!=null && state.wordExcerpt===word)
+                state=state.copy(documentOpen=false,document=null,wordExcerpt=null,wordSaveAttempted=false)}){c,_->
             if(page!=null){
                 c.setAuthorityCheck { check(currentPdfPage?.invoke()==true) { "原 PDF 阅读位置已变化，未确认保存" } }
+                c.check()
+            }
+            if(word!=null){
+                c.setAuthorityCheck { check(currentWord?.invoke()==true){"原 Word 位置已变化，未确认保存"} }
                 c.check()
             }
             val saved=app.attachmentOutcomes.saveOwnerDocumentExtract(task,file.getString("id"),file.getString("sha256"),receipt,c)
             val snapshot=app.ownerOutcomeSnapshot(task,c);val artifacts=snapshot.optJSONArray("artifacts").objects()
             val selected=artifacts.firstOrNull{it.optString("id")==saved.getString("id")&&it.optString("sha256")==saved.getString("sha256")}?:throw IllegalStateException("摘录文件已保存，请刷新原任务成果核对；没有再次生成")
             val source=saved.optJSONObject("source")
+            if(word!=null){
+                val expected=AttachmentWordOrigin(file.getString("id"),file.getString("sha256"),word.unit,word.chunk,word.blocks.size)
+                check(source!=null&&source.opt("readReceiptId")==receipt&&source.opt("originalWordExcerpt")==AttachmentWordOrigin.FORMAT&&
+                    saved.opt("principalId")=="owner"&&saved.opt("spaceId")=="private"&&selected.opt("mimeType")=="text/plain"&&
+                    selected.opt("role")=="result"&&selected.opt("availability")=="available"&&
+                    AttachmentWordOrigin.from(selected.optJSONObject("originalWordExcerpt"))==expected&&
+                    artifacts.count{it.opt("id")==selected.opt("id")}==1){"摘录尚未核对，请回成果清单，不会自动重复保存"}
+                val verified=JSONObject().put("id",selected.opt("id")).put("sha256",selected.opt("sha256"))
+                    .put("viewerId",word.viewerId).put("unit",word.unit).put("chunk",word.chunk)
+                return@work snapshot.put("savedWordExcerptHere",verified)
+                    .put("outcomeNotice","已保存 Word 摘录，原文件和当前阅读位置保留。") to null
+            }
             val samePdfSave=pdfWork!=null&&source!=null&&snapshot.opt("taskId")==task&&snapshot.opt("taskStatus")=="completed"&&
                 snapshot.opt("taskRunId")==pdfWork.opt("taskRunId")&&snapshot.opt("coordinatorEpoch")==pdfWork.opt("coordinatorEpoch")&&
                 saved.opt("principalId")=="owner"&&saved.opt("spaceId")=="private"&&saved.opt("mimeType")=="text/plain"&&
@@ -801,8 +880,60 @@ internal class AttachmentOutcomeCoordinator(
         work{c,w->val image=if(group==null)app.attachmentOutcomes.thumbnail(task,file.getString("id"),file.getString("sha256"),c)else{var image:android.graphics.Bitmap?=null;groupCall(w){image=app.groupOutcomeThumbnail(group,c);JSONObject()};image?:throw IllegalStateException("图片预览未取得");}
             main.post{if(!closed&&state.open&&wait===c&&!c.isCancelled)state=state.copy(thumbnail=image)else image.recycle()};JSONObject() to null}
     }
-    fun backFromDocument(){cancel();state=if(state.pdfPageText==null)state.copy(documentOpen=false)
-        else state.copy(documentOpen=false,pdfPageText=null,document=null)}
+    fun backFromDocument(){cancel();state=if(state.pdfPageText==null&&state.wordExcerpt==null)state.copy(documentOpen=false)
+        else state.copy(documentOpen=false,pdfPageText=null,wordExcerpt=null,wordSaveAttempted=false,document=null)}
+
+    /** Current Library only: the saved artifact supplies the source reference, not the browser. */
+    fun libraryWordExcerpt():Pair<AttachmentWordOrigin,JSONObject>? {
+        val saved=state.file?:return null
+        val snapshot=state.snapshot?:return null
+        if(!privateLibrary()||state.globalStandaloneDraftVisit==null||snapshot.opt("taskId")!=""||
+            state.wordSourceVisit!=null||state.documentOpen||state.documentDraft!=null||state.processingSource!=null||state.comparison!=null||
+            saved.opt("sourceKind")!="document_extract"||saved.opt("mimeType")!="text/plain"||saved.opt("role")!="result")return null
+        val row=snapshot.optJSONArray("artifacts").objects().singleOrNull{it.opt("id")==saved.opt("id")}?:return null
+        val origin=AttachmentWordOrigin.from(row.optJSONObject("originalWordExcerpt"))?:return null
+        if(row.opt("sha256")!=saved.opt("sha256")||row.opt("sourceKind")!="document_extract"||
+            row.opt("mimeType")!="text/plain"||row.opt("role")!="result"||row.opt("availability")!="available"||
+            saved.opt("id")==origin.fileId||saved.opt("sourceAttachmentId")!=origin.fileId||saved.opt("sourceSha256")!=origin.sha256)return null
+        val source=snapshot.optJSONArray("sources").objects().singleOrNull{it.opt("id")==origin.fileId}
+            ?.takeIf(origin::matchesSource)?:return null
+        return origin to source
+    }
+    fun openLibraryWordExcerptSource(current:()->Boolean){
+        val (origin,row)=checkNotNull(libraryWordExcerpt()){"摘录的原 Word 版本暂不可核对"}
+        val excerpt=checkNotNull(state.file)
+        check(!state.busy&&!exportPending&&current()){"摘录的原 Word 版本暂不可核对"}
+        var verified:OwnerFilePreviewSource?=null
+        fun sameExcerpt()=state.file===excerpt&&libraryWordExcerpt()?.first==origin&&current()
+        work(onSuccess={
+            if(sameExcerpt())verified?.let{source->
+                state=state.copy(file=row,originalFile=source,originalReturn=AttachmentOriginalReturn.DETAILS,document=null,
+                    copyReceipt=null,previousCopyInFile=null,wordSourceVisit=AttachmentWordSourceVisit(origin,source,excerpt))
+            }
+        }){control,_->
+            control.setAuthorityCheck { check(sameExcerpt()){"原摘录窗口已变化，未打开其他文件"} }
+            control.check()
+            val actual=app.attachmentOutcomes.originalWordExcerptSource(excerpt.getString("id"),excerpt.getString("sha256"),
+                origin.fileId,origin.sha256,origin.unit,origin.chunk,origin.parts,control)
+            check(actual.mimeType==AttachmentWordOrigin.MIME&&actual.sha256==origin.sha256&&actual.name==row.opt("name")&&
+                actual.sizeBytes==row.optLong("size",-1)){"摘录的原 Word 版本已变化"}
+            verified=actual
+            JSONObject() to null
+        }
+    }
+    fun backFromWordExcerptSource(){
+        val visit=state.wordSourceVisit?:return
+        check(privateLibrary()&&state.originalFile===visit.source&&state.file?.let(visit.origin::matchesSource)==true)
+        cancel()
+        state=state.copy(file=visit.excerpt,originalFile=null,document=null,documentOpen=false,
+            originalReturn=AttachmentOriginalReturn.DETAILS,copyReceipt=null,previousCopyInFile=null,wordSourceVisit=null)
+    }
+    fun discardWordExcerptSource(){
+        val visit=state.wordSourceVisit?:return
+        if(privateLibrary()&&state.originalFile===visit.source&&state.file?.let(visit.origin::matchesSource)==true)
+            backFromWordExcerptSource()
+        else state=state.copy(wordSourceVisit=null)
+    }
     fun openOriginalFile(){
         if(state.busy)return;val selectedTeam=state.team;val selectedGroup=state.group;val selectedFile=state.file;val task=state.taskId
         if(selectedTeam==null&&selectedFile==null)return

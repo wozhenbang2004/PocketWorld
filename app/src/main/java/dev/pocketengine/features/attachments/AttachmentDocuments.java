@@ -15,6 +15,7 @@ import org.json.JSONObject;
 /** Bounded document reads and explicit local extracts. The host owns task/run identity, scope and cancellation. */
 public final class AttachmentDocuments {
     public static final int MAX_RESPONSE_BYTES=48*1024;
+    static final String WORD_EXCERPT="pocketworld.original-word-excerpt.v1";
     private final AttachmentBook book;
     private final DocumentReader reader;
     private final Map<String,Preview> previews=new LinkedHashMap<>();
@@ -47,6 +48,18 @@ public final class AttachmentDocuments {
     /** Native owner preview only. This receipt identifies what was read; it is never a scope or write grant. */
     JSONObject preview(String taskId,String attachmentId,String expectedSha256,DocumentContent.Request range,RunControl control)throws Exception {
         JSONObject result=read(attachmentId,expectedSha256,range,control);
+        if(range.wordExcerpt){
+            JSONArray chunks=result.optJSONArray("chunks");
+            if(taskId!=null||!"docx".equals(result.opt("format"))||!"partial".equals(result.opt("extractionStatus"))||
+                    !"body_paragraphs_and_tables".equals(result.opt("coverage"))||
+                    chunks==null||chunks.length()!=range.maxChunks)
+                throw new SecurityException("没有核对到这份 Word 的原段落片段");
+            for(int i=0;i<chunks.length();i++){
+                JSONObject block=chunks.getJSONObject(i);
+                if(block.getInt("unit")!=range.startUnit||block.getInt("chunk")!=range.startChunk+i)
+                    throw new SecurityException("没有核对到这份 Word 的原段落片段");
+            }
+        }
         if(savable(result)){
             AttachmentBook.VerifiedMetadata source=book.readVerifiedMetadata(attachmentId,expectedSha256,control);
             Preview preview=new Preview(taskId==null?"":taskId,fingerprint(result),source,range);String token=UUID.randomUUID().toString();control.checkpoint();
@@ -69,6 +82,7 @@ public final class AttachmentDocuments {
             .put("readReceiptId",readReceiptId).put("readRange",range(preview.range)).put("extraction",actual.getString("extraction"))
             .put("parserVersion",actual.getString("parserVersion")).put("engineVersion",actual.getString("engineVersion")).put("coverage",actual.getString("coverage"))
             .put("nextUnit",actual.getInt("nextUnit")).put("nextChunk",actual.getInt("nextChunk"));
+        if(preview.range.wordExcerpt)source.put("originalWordExcerpt",WORD_EXCERPT);
         if(!preview.taskId.isEmpty())source.put("taskId",preview.taskId);
         JSONObject created=null;
         try {
@@ -100,7 +114,14 @@ public final class AttachmentDocuments {
         if("ocr".equals(result.optString("extraction"))||result.optString("coverage").contains("ocr"))text.append("OCR 识别文字可能有误，请与原图或原页核对。\n");
         if(result.optBoolean("truncated"))text.append("本次读取尚有后续内容；后续内容未包含在此摘录中。\n");
         JSONArray chunks=result.getJSONArray("chunks");
-        for(int i=0;i<chunks.length();i++){
+        if(preview.range.wordExcerpt){
+            // Preserve a phrase uninterrupted when it straddles the parser's UTF-16 chunk cut.
+            JSONObject from=new JSONObject(chunks.getJSONObject(0).getJSONObject("locator").toString());
+            from.put("charEnd",chunks.getJSONObject(chunks.length()-1).getJSONObject("locator").getString("charEnd"));
+            text.append("\n[来源位置：").append(canonical(from)).append("]\n");
+            for(int i=0;i<chunks.length();i++)text.append(chunks.getJSONObject(i).getString("text"));
+            text.append('\n');
+        }else for(int i=0;i<chunks.length();i++){
             JSONObject chunk=chunks.getJSONObject(i);text.append("\n[来源位置：").append(canonical(chunk.getJSONObject("locator"))).append("]\n").append(chunk.getString("text")).append('\n');
         }
         JSONArray warnings=result.optJSONArray("warnings");if(warnings!=null&&warnings.length()>0){text.append("\n读取说明\n");for(int i=0;i<warnings.length();i++)text.append("- ").append(warnings.getString(i)).append('\n');}

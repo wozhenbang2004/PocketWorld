@@ -96,7 +96,7 @@ import {ReadingView} from './ReadingView';
 import {ReadingContext,type ReadingDocument,type ReadingSnapshot} from './reading-context';
 import {ComposerSourceReferences,ComposerObjectReferences} from './ComposerSourceReferences';
 import {ComposerPreviewReferences} from './ComposerPreviewReferences';
-import {ProjectLocalSourceIntake} from './ProjectLocalSourceIntake';
+import {ProjectLocalSourceIntake,type PhoneImportFiles} from './ProjectLocalSourceIntake';
 import {ProjectGitIntake,type PublicGitDraft} from './ProjectGitIntake';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
 import {ProjectFileEditor} from './ProjectFileEditor';
@@ -557,6 +557,7 @@ export default function App(){
  useEffect(()=>{if(route!=='projects'||state.projectId!==projectDraftReturn?.projectId)setProjectDraftReturn(null);},[route,state.projectId,projectDraftReturn?.projectId]);
  const [projectWorkPresentations,setProjectWorkPresentations]=useState<Record<string,ProjectWorkPresentation>>({});
  const [projectImportedEditor,setProjectImportedEditor]=useState<ProjectImportedEditor|null>(null);
+ const phoneImportFilesQuiet=useRef<(project:string)=>boolean>(()=>false);
  const handledImportedEditor=useCallback((target:ProjectImportedEditor)=>setProjectImportedEditor(value=>value===target?null:value),[]);
  const [projectLocalFilesIntent,setProjectLocalFilesIntent]=useState<ProjectLocalFilesIntent|null>(null);
  const handledLocalFilesIntent=useCallback((target:ProjectLocalFilesIntent)=>setProjectLocalFilesIntent(value=>value===target?null:value),[]);
@@ -733,7 +734,7 @@ export default function App(){
  const providedMemoryBack=useRef<(()=>boolean)|null>(null);
  const registerProvidedMemoryBack=useCallback((handler:(()=>boolean)|null)=>{providedMemoryBack.current=handler},[]);
  useEffect(()=>{setProvidedMemoryMessage(null)},[route,state.conversationId]);
- const [messageQuoteTarget,setMessageQuoteTarget]=useState<MessageQuoteTarget|null>(null);
+ const [messageQuoteTarget,setMessageQuoteTarget]=useState<{target:MessageQuoteTarget;documentSource?:string}|null>(null);
  const [messageOriginTarget,setMessageOriginTarget]=useState<MessageOriginTarget|PhoneReportTarget|null>(null);
  const [workSupplementTarget,setWorkSupplementTarget]=useState<WorkSupplementTarget|null>(null);
  const workSupplementBeforeLeave=useRef<(WorkSupplementLeave&{target:WorkSupplementTarget;panel:HTMLElement})|null>(null);
@@ -930,8 +931,23 @@ export default function App(){
  const freshOwnerQuestionReview=ownerQuestionInWindow&&!reviewPending;
  const mainPhoneQuestionSource=isChatSurface&&freshOwnerQuestionReview&&review?.actions?.some(row=>row.action==='tasks.answerQuestion')?
   mainPhoneAnswerSource(review.task,ownerQuestion):undefined;
- const {text:questionAnswer,edit:setQuestionAnswer,close:closeQuestionAnswer,saved:clearSavedQuestionAnswer}=
-  useOwnerQuestionDraft(ownerQuestion,mainPhoneQuestionSource,isChatSurface,freshOwnerQuestionReview,ownerQuestionInWindow&&reviewPending);
+ // Home and chat can show the same private topic without replacing its composer.
+ // Neither this local text nor a system viewer keeps the native review it came from.
+ const questionWorkScope=intent==='chat'&&(isChatSurface||route==='tasks')&&phoneDraft.channelOrigin!==true?
+  composer.ready===true?state.conversationId&&composer.conversationId===state.conversationId&&
+   composer.key===`conversation:${state.conversationId}`&&Number.isSafeInteger(composer.epoch)?
+    JSON.stringify([composer.key,composer.epoch]):null:undefined:null;
+ const questionWorkConversation=String(review?.task?.raw?.conversationId||'');
+ const questionWorkIdentity=questionWorkScope&&ownerQuestionInWindow&&state.conversationId===questionWorkConversation?
+  ordinaryChatWorkRow(review?.task,questionWorkConversation,true):null;
+ const questionWorkSource=questionWorkScope&&questionWorkIdentity&&questionWorkIdentity.epoch>0&&review?.task?.status==='awaiting_user'&&
+  review.task.raw?.status==='awaiting_user'&&review.task.raw.cancelRequested===false&&
+  ownerQuestion?.kind==='capabilities'&&ownerQuestion.replyAvailability==='current_wait'&&ownerQuestion.answered===false&&
+  /^[a-f0-9]{64}$/.test(ownerQuestion.questionKey)&&review.actions?.some(row=>row.action==='tasks.answerQuestion')?
+   {...questionWorkIdentity,conversation:questionWorkConversation,scope:questionWorkScope}:undefined;
+ const {text:questionAnswer,edit:setQuestionAnswer,close:closeQuestionAnswer,started:markQuestionAttempted,saved:clearSavedQuestionAnswer}=
+  useOwnerQuestionDraft(ownerQuestion,mainPhoneQuestionSource,isChatSurface,freshOwnerQuestionReview,ownerQuestionInWindow&&reviewPending,
+   questionWorkSource,questionWorkScope);
  const isListening=!!state.listening||!!state.voiceInput?.active;
  const draftKey=String(composer.key||'');const draftEpoch=Number(composer.epoch||0);
  const newMemoryScope=!state.conversationId&&draftKey.startsWith('new:')&&typeof composer.firstMessageMemory?.paused==='boolean'&&can('composer.firstMemory.save');
@@ -4038,6 +4054,7 @@ export default function App(){
  const submitQuestion=async(action:string,args:Record<string,unknown>)=>{
   if(!taskId||!review||reviewStale||reviewSubmitted||!review.ownerQuestion||!can(action))throw new Error('请先重新核对这个原问题。');
   const request=reviewRequest.current;const handle=review.reviewHandle;setQuestionPending(true);setReviewSubmitted(true);
+  markQuestionAttempted();
   try{return await act(action,{reviewHandle:handle,...args},taskId)}
   finally{if(reviewRequest.current===request)setQuestionPending(false)}
  };
@@ -4343,7 +4360,13 @@ export default function App(){
 
  const openSource=(message:Message)=>{if(can('sources.open')&&message.id&&message.retainedSources)setSourceSelection({messageId:message.id});else setLocalStatus('这条回答没有可核对的原来源身份。');};
  useEffect(()=>{setMessageQuoteTarget(null)},[draftKey,draftEpoch,intent]);
- const openQuote=(message:Message)=>{if(intent==='chat'&&!state.chatSubmitting&&draftKey&&can('messageQuote.open')&&message.quoteAvailable&&message.id&&Number.isSafeInteger(message.sourceRevision)&&Number(message.sourceRevision)>0)setMessageQuoteTarget({messageId:message.id,sourceRevision:Number(message.sourceRevision),key:draftKey,epoch:draftEpoch});else setLocalStatus('原消息或草稿已变化，请重新核对后引用。');};
+ const openQuote=(message:Message,documentCopy=false)=>{
+  if(intent==='chat'&&!state.chatSubmitting&&draftKey&&can(documentCopy?'messageQuote.document.open':'messageQuote.open')&&
+     message.quoteAvailable&&message.id&&Number.isSafeInteger(message.sourceRevision)&&Number(message.sourceRevision)>0)
+   setMessageQuoteTarget({target:{messageId:message.id,sourceRevision:Number(message.sourceRevision),key:draftKey,epoch:draftEpoch},
+    ...(documentCopy?{documentSource:message.content}:{})});
+  else setLocalStatus('原消息或草稿已变化，请重新核对原文。');
+ };
  const managedNodePending=(taskId:string):OriginalManagedNodePending[]=>
   review?.task?.id===taskId&&currentReviewWindow(reviewWindow.current)?asArray<Json>(review.unresolvedOperations).flatMap(row=>{
    const pin=reviewedManagedNodePending(taskId,row);return pin?[pin]:[];
@@ -6058,6 +6081,12 @@ export default function App(){
       conversationNext(originalProject,can).action!=='draft'?{row:originalProject,target:originalProject.originalTask,draftId:originalProject.originalDraft.draftId,
        label:originalProject.acceptedDraft?'查看已验收的原改稿':'查看原改稿'}:undefined;
     const canQuote=intent==='chat'&&m.quoteAvailable&&can('messageQuote.open')&&can('messageQuote.stage')&&can('messageQuote.close');
+    const canKeepDocument=intent==='chat'&&route==='chat'&&!!state.conversationId&&draftKey===`conversation:${state.conversationId}`&&
+      !taskOpen&&!state.conversationReader&&!state.attachmentWorkspace?.open&&!state.chatAttachmentPickerOpen&&!state.filePath&&
+      m.quoteAvailable&&!!m.id&&Number.isSafeInteger(m.sourceRevision)&&Number(m.sourceRevision)>0&&!!m.content.trim()&&
+      !phoneResult&&!taskResult&&!m.hostGoalTaskId&&!m.originalHostFinal&&
+      (m.role==='assistant'||m.role==='user'&&['accepted','consumed'].includes(m.submission?.status||''))&&
+      ['messageQuote.document.open','messageQuote.document.retain','messageQuote.document.check','messageQuote.close'].every(action=>can(action));
     const savedAttachmentChoices=messageAttachmentDraft?savedOwnerAttachmentChoices(m):[];
     const memoryShortcut=intent==='chat'&&row.lastOfRole&&!phoneResult&&!taskResult&&can('taskMemory.answer')?originalAnswerMemoryMessage(m,replyContext):null;
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
@@ -6137,6 +6166,8 @@ export default function App(){
         {m.id&&replyContext?.replyToMessageIds.length&&can('message.origin')?<Button variant="ghost" leadingIcon={IconHistory} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);rememberChatPosition();setMessageOriginTarget({conversationId:String(state.conversationId),messageId:m.id!,sourceMessageIds:replyContext.replyToMessageIds,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>查看对应原请求</Button>:null}
         {m.role==='user'&&m.submission?.taskId&&can('queued.open')&&!savedLocalScreenResult(m,String(state.conversationId||''))&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{setMessageMenu(null);run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}}>原任务的输入队列</Button>}
         {canQuote&&<Button variant="ghost" leadingIcon={IconQuote} disabled={!draftKey||!!state.chatSubmitting} onClick={()=>{setMessageMenu(null);openQuote(m)}}>引用到草稿</Button>}
+        {canKeepDocument&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting}
+          onClick={()=>{setMessageMenu(null);openQuote(m,true)}}>保留为文档草稿</Button>}
         {messageAttachmentDraft&&savedAttachmentChoices.map((file,index)=><Button key={file.fileId} variant="ghost" leadingIcon={IconFile} title={file.name}
          disabled={fileAttachmentPickerLaunch.current?.settled===false} onClick={()=>void chooseSavedMessageAttachment(m,file,messageAttachmentDraft)}>
          选作草稿附件{savedAttachmentChoices.length>1?` ${index+1}`:''} · {file.name}</Button>)}
@@ -6280,6 +6311,11 @@ export default function App(){
   setProjectWorkPresentations(previous=>({...previous,[projectId]:{open:true,mode:'default'}}));
  };
  const fixedTaskCopy=importedCopy?.sourceKind==='task_source_package';
+ const showImportedEditor=(target:ProjectImportedEditor)=>{
+  setProjectImportedEditor(target);
+  setProjectSections(previous=>({...previous,[target.projectId]:'work'}));
+  setProjectWorkPresentations(previous=>({...previous,[target.projectId]:{open:true,mode:'default'}}));
+ };
  const openOriginalImportedFiles=(target:ProjectImportedEditor,from:'work'|'files')=>{
   const live=bridge.getState().state,list=obj(obj(live.moduleResultInputs)['workspace.list']);
   if(route!=='projects'||projectSection!==from||live.localSourceIntake?.window||
@@ -6289,9 +6325,44 @@ export default function App(){
     asArray<string>(live.moduleBusy).includes('workspace.list'))){
     setLocalError('原项目或导入副本状态已变化，没有打开其他文件。');return;
   }
-  setProjectImportedEditor(target);
-  setProjectSections(previous=>({...previous,[target.projectId]:'work'}));
-  setProjectWorkPresentations(previous=>({...previous,[target.projectId]:{open:true,mode:'default'}}));
+  showImportedEditor(target);
+ };
+ phoneImportFilesQuiet.current=project=>ready&&route==='projects'&&!previewBlocked&&!projectPreview.expanded&&!packageOpening&&!taskOpening&&
+  !projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&!projectLocalFilesIntent&&!pythonSetupReturn&&!dependencyBuildReturn&&
+  !projectWorkPresentations[project]?.open&&!projectWorkDrafts[project]?.operation&&!projectWorkDrafts[project]?.expanded;
+ const openPhoneImportFiles=async(target:PhoneImportFiles)=>{
+  const initial=bridge.getState(), selected=initial.state.projectId??null;
+  const navigation=navigationWindow.current, request=reviewRequest.current, doc=bridge.getDocumentEpoch(), resume=obj(initial.view).resumeRevision;
+  const originalIntake=(value:Json)=>value.window===target.window&&value.project===target.project&&
+   value.checkout===target.checkout&&value.openSourceFiles===true;
+  const current=()=>{
+   const live=bridge.getState(), view=obj(live.view), owner=live.state, intake=obj(owner.localSourceIntake);
+   const project=owner.projectId??null;
+   return !document.hidden&&bridge.getDocumentEpoch()===doc&&navigationWindow.current===navigation&&reviewRequest.current===request&&
+    Number.isSafeInteger(resume)&&view.resumeRevision===resume&&view.section===null&&view.taskId===null&&
+    phoneImportFilesQuiet.current(target.project)&&(project===selected||project===target.project)&&
+    !owner.filePath&&!owner.fileLoading&&!owner.fileSaving&&!owner.conversationReader&&!owner.attachmentWorkspace?.open&&
+    !owner.chatAttachmentPickerOpen&&!owner.projectGitImport?.open&&(!intake.window||originalIntake(intake))&&
+    canEditImportedCheckout(action=>live.capabilities.commands.includes(action));
+  };
+  if(!current()||selected===target.project||!originalIntake(obj(initial.state.localSourceIntake)))
+   throw Error('原导入或项目窗口已变化，没有打开其他文件。');
+  const opened=await bridge.command('projects.localSource.openProject',{...target,sourceFiles:true});
+  if(!current())return;
+  if(opened?.opened!==true||opened.sourceFiles!==true||opened.window!==target.window||opened.project!==target.project||opened.checkout!==target.checkout)
+   throw Error('原源码窗口未确认。可以回项目工作台核对。');
+  const exact=()=>{
+   const live=bridge.getState().state;
+   if(live.localSourceIntake?.window||live.projectId!==target.project)return;
+   const source=originalImportedEditor(target.project);
+   return source?.exactPhoneSource===true&&source.checkoutId===target.checkout?source:undefined;
+  };
+  const original=await awaitPickerProjection(current,exact);
+  if(!current())return;
+  if(!original||!sameImportedEditor(original,exact()??null)){
+   setLocalStatus('没有核对到原副本的源码入口。可在项目工作台重新打开。');return;
+  }
+  showImportedEditor({...original,openDirectory:true});
  };
  const starterFiles=importedFileTarget?.sourceKind==='builtin_vite_starter';
  const starterWork=importedWorkTarget?.sourceKind==='builtin_vite_starter';
@@ -6456,7 +6527,9 @@ export default function App(){
     {can('projects.create')&&<Button variant={canImportLocalProject?'secondary':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('project')}>{canImportLocalProject?'新建空白项目':'新建项目'}</Button>}
     {can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}
    </div></div>}
-  <ProjectLocalSourceIntake state={state.localSourceIntake} canCreateStarter={canCreateLocalStarter}/>
+  <ProjectLocalSourceIntake state={state.localSourceIntake} canCreateStarter={canCreateLocalStarter}
+    onOpenSourceFiles={canOpenImported&&typeof state.localSourceIntake?.project==='string'&&
+      phoneImportFilesQuiet.current(state.localSourceIntake.project)?openPhoneImportFiles:undefined}/>
   <ProjectGitIntake state={state.projectGitImport} toolReturn={projectGitToolReturn} onPrepareTools={can('setup.runtime.read')?()=>{void openSetup('tools')}:undefined}/>
  </motion.main>;
  const readStoppedChatWork=()=>{
@@ -6663,7 +6736,8 @@ export default function App(){
   chatVisible={route==='chat'&&!taskOpen&&(intent==='chat'||!!state.conversationReader)} changed={tasks.some(t=>t.id===phoneNotification.taskId&&(t.raw?.runId!==phoneNotification.runId||t.raw?.coordinatorEpoch!==phoneNotification.epoch))} onClose={returnFromPhoneNotice} onSame={can('tasks.open')?()=>enterPhoneNotification(phoneNotification):undefined}
   onRefresh={can('phone.notice.refresh')?()=>{void bridge.command('phone.notice.refresh',{noticeHandle:phoneNotification.token}).catch(()=>{})}:undefined}/>}
  {messageOriginTarget&&('phoneResult' in messageOriginTarget?<PhoneReturnedReport key={messageOriginTarget.phoneResult.deliveryId} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>:<MessageOriginReader key={`${messageOriginTarget.conversationId}:${messageOriginTarget.messageId}`} target={messageOriginTarget} onClose={()=>setMessageOriginTarget(null)}/>)}
- {messageQuoteTarget&&<MessageQuote key={`${messageQuoteTarget.key}:${messageQuoteTarget.epoch}:${messageQuoteTarget.messageId}`} target={messageQuoteTarget} onClose={()=>setMessageQuoteTarget(null)}/>}
+ {messageQuoteTarget&&<MessageQuote key={`${messageQuoteTarget.target.key}:${messageQuoteTarget.target.epoch}:${messageQuoteTarget.target.messageId}:${messageQuoteTarget.documentSource!==undefined?'document':'quote'}`}
+   target={messageQuoteTarget.target} documentSource={messageQuoteTarget.documentSource} onClose={()=>setMessageQuoteTarget(null)}/>}
  {projectConventionMessage&&<ProjectConventionProvided key={projectConventionMessage} messageId={projectConventionMessage} onClose={()=>setProjectConventionMessage(null)}/>}
  {providedMemoryMessage&&<ProvidedMemories key={providedMemoryMessage} messageId={providedMemoryMessage} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setProvidedMemoryMessage(null)} onManage={original=>{setProvidedMemoryMessage(null);openPersonalMemory(original?{view:'memory',id:original.id,candidate:false,expectedRevision:original.revision}:{view:'memories'})}} registerBack={registerProvidedMemoryBack}/>}
  {sourceSelection&&<AnswerSources key={sourceSelection.messageId||sourceSelection.taskId} target={sourceSelection} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setSourceSelection(null)}/>}

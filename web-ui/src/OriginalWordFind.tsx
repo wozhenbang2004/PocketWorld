@@ -70,10 +70,11 @@ function confirmedRange(value:Json,found:Found,hit:OriginalWordHit){
  return text===query;
 }
 
-export function OriginalWordFind({source,windowId,value,busy,find,read,children}:{
+export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt,onSavedExcerpt,children}:{
  source:Json;windowId:string;value:Json;busy:boolean;
  find:(query:string)=>Promise<Json|null>;read:(unit:number,chunk:number)=>Promise<Json|null>;
- children:(match?:OriginalWordHit)=>ReactNode;
+ onExcerpt?:(viewerId:string,unit:number,chunk:number)=>void;onSavedExcerpt?:()=>void;
+ children:(match?:OriginalWordHit,action?:ReactNode)=>ReactNode;
 }){
  const input=useRef<Input>({query:''}),entered=useRef(false),mounted=useRef(false),interaction=useRef(0);
  const body=useRef<HTMLDivElement>(null),focusNext=useRef<Reveal|undefined>(undefined);
@@ -150,6 +151,12 @@ export function OriginalWordFind({source,windowId,value,busy,find,read,children}
     {shown.more&&<p className="pw-muted">只显示前 40 处匹配。可用更具体的文字重新查找。</p>}
    </>)}
   </AccordionItem></Accordion>}
-  <div ref={body}>{children(selected?.hit)}</div>
+  <div ref={body}>{children(selected?.hit,selected&&(onSavedExcerpt?
+   <Button variant="ghost" disabled={busy||pending} onClick={()=>{if(current(selected.found))onSavedExcerpt()}}>打开已保存的摘录</Button>:
+   onExcerpt&&<Button variant="ghost" disabled={busy||pending} onClick={()=>{
+    const page=liveWord(selected.found.scope);
+    if(page&&current(selected.found)&&confirmedRange(page,selected.found,selected.hit))
+     onExcerpt(selected.found.scope.viewerId,selected.hit.unit,selected.hit.chunk);
+   }}>核对这段摘录</Button>))}</div>
  </>;
 }

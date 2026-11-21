@@ -165,8 +165,8 @@ public final class TeamsModule implements EngineModule {
             ended.accept(error);
         });
     }
-    public JSONObject ownerFinalWorkers(String runId)throws Exception{
-        if(writeHost==null)return TeamDeliveryWorkers.unavailable(runId);JSONObject workers=writeHost.finalWorkers(runId);
+    public JSONObject ownerFinalWorkers(String runId,JSONObject ownerReading)throws Exception{
+        if(writeHost==null)return TeamDeliveryWorkers.unavailable(runId);JSONObject workers=writeHost.finalWorkers(runId,ownerReading);
         try{JSONObject recovered=writeHost.recoveredFilesForReading(coordinator,runId,null);if(recovered!=null)workers.put("originalFileObservation",recovered);}
         catch(Exception unreadable){workers.put("originalFileObservationUnavailable",true);} // Keep the independent worker/stop evidence intact.
         return workers;

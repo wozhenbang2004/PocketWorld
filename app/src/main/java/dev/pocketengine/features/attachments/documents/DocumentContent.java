@@ -19,25 +19,32 @@ public final class DocumentContent {
         public final int startUnit, startChunk, maxUnits, maxChars, maxChunks;
         public final String extraction;
         private final boolean originalOfficeNavigation;
+        public final boolean wordExcerpt;
         public Request(int startUnit, int startChunk, int maxUnits, int maxChars, int maxChunks) {
             this(startUnit,startChunk,maxUnits,maxChars,maxChunks,"auto");
         }
         public Request(int startUnit, int startChunk, int maxUnits, int maxChars, int maxChunks,String extraction) {
-            this(startUnit,startChunk,maxUnits,maxChars,maxChunks,extraction,false);
+            this(startUnit,startChunk,maxUnits,maxChars,maxChunks,extraction,false,false);
         }
-        private Request(int startUnit, int startChunk, int maxUnits, int maxChars, int maxChunks,String extraction,boolean originalOfficeNavigation) {
+        private Request(int startUnit, int startChunk, int maxUnits, int maxChars, int maxChunks,String extraction,
+                        boolean originalOfficeNavigation,boolean wordExcerpt) {
             if (startUnit < 1 || startUnit > 1000000 || startChunk < 0 || startChunk > 1000000
                     || maxUnits < 1 || maxUnits > 32 || maxChars < 2048 || maxChars > 65536
                     || maxChunks < 1 || maxChunks > 256) throw new IllegalArgumentException("Invalid document range or limits");
             if(!"auto".equals(extraction)&&!"text".equals(extraction)&&!"ocr".equals(extraction))throw new IllegalArgumentException("Unsupported extraction mode");
             this.startUnit=startUnit; this.startChunk=startChunk; this.maxUnits=maxUnits;
             this.maxChars=maxChars; this.maxChunks=maxChunks;
-            this.extraction=extraction; this.originalOfficeNavigation=originalOfficeNavigation;
+            this.extraction=extraction; this.originalOfficeNavigation=originalOfficeNavigation; this.wordExcerpt=wordExcerpt;
         }
         public static Request defaults() { return new Request(1,0,8,12000,48); }
         /** Opt in only for the original owner reader; the actual Office parser must still confirm its format. */
         public static Request originalOfficeView(int unit,int chunk,boolean word) {
-            return new Request(unit,chunk,word?16:1,16000,128,"text",true);
+            return new Request(unit,chunk,word?16:1,16000,128,"text",true,false);
+        }
+        /** Private original reader only. The native host supplies the already shown Word fragment. */
+        public static Request originalWordExcerpt(int unit,int chunk,int parts) {
+            if(parts<1||parts>2)throw new IllegalArgumentException("Invalid original Word fragment");
+            return new Request(unit,chunk,1,2048,parts,"text",false,true);
         }
     }
     public static final class Chunk {

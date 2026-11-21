@@ -4,6 +4,12 @@ import android.os.SystemClock
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.assistant.AssistantModule
 import dev.pocketengine.features.assistant.OwnerSourceReferences
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Fields
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Format
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Pin
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.State
+import dev.pocketengine.ui.UiMessage
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -11,12 +17,18 @@ import org.json.JSONObject
 /** A Web presentation window over the existing native original-message selection transaction. */
 internal class PocketWebMessageQuotes(private val controller: PocketWorldController) {
     private data class Prior(val reader: Long, val request: String, val revision: Long, val offset: Int, val chars: Int)
+    private data class DocumentCopy(val visible: () -> Boolean, val conversationRevision: Long,
+        val memoryRevision: Long, val role: String)
     private data class Window(
         val id: String, val messageId: String, val sourceRevision: Long, val text: String,
         val locator: String, val owner: Any, val draftKey: String, val draftEpoch: Int,
-        val draftRevision: Long, val prior: Prior?, val shelfEligible: Boolean, var submitted: Boolean = false
+        val draftRevision: Long, val prior: Prior?, val shelfEligible: Boolean, val documentCopy: DocumentCopy?,
+        var submitted: Boolean = false
     )
+    private class DocumentAttempt(val original: Window, val offset: Int, val chars: Int, var pin: Pin? = null,
+        var receipt: JSONObject? = null)
     private var window: Window? = null
+    private var documentAttempt: DocumentAttempt? = null
 
     private data class Shelf(val id: String, val conversation: String, val key: String, val epoch: Int, val owner: Any, val ids: Set<String>)
     private data class Read(val id: String, val page: Shelf, val entry: String, val proof: AssistantModule.LocalShelfRead, val draft: Long, val expiry: Long)
@@ -28,14 +40,19 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
 
     companion object {
         const val READ_DRAFT_SOURCE = "composer.source.read"
+        const val OPEN_DOCUMENT_COPY = "messageQuote.document.open"
+        const val RETAIN_DOCUMENT_COPY = "messageQuote.document.retain"
+        const val CHECK_DOCUMENT_COPY = "messageQuote.document.check"
+        val DOCUMENT_COPY_COMMANDS = setOf(OPEN_DOCUMENT_COPY, RETAIN_DOCUMENT_COPY, CHECK_DOCUMENT_COPY)
         val COMMANDS = setOf("messageQuote.open", "messageQuote.stage", "messageQuote.close", "composer.source.remove", "messageQuote.pin", READ_DRAFT_SOURCE,
-            "messageShelf.list", "messageShelf.read", "messageShelf.remove", "messageShelf.close", "messageShelf.dismiss", "messageShelf.stage")
+            "messageShelf.list", "messageShelf.read", "messageShelf.remove", "messageShelf.close", "messageShelf.dismiss", "messageShelf.stage") + DOCUMENT_COPY_COMMANDS
     }
 
     fun clear() {
         invalidateShelf()
         val previous = window
         window = null
+        documentAttempt = null
         if (previous != null) controller.leaveOwnerDomain("taskMemory")
     }
 
@@ -44,9 +61,14 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
         if (stagingPage != null) { stagingPage = null; controller.leaveOwnerDomain("taskMemory") }
     }
 
-    fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+    fun dispatch(action: String, args: JSONObject, documentWindow: (() -> Boolean)? = null, done: (JSONObject?, String?) -> Unit) {
         when (action) {
-            "messageQuote.open" -> {
+            "messageQuote.open", OPEN_DOCUMENT_COPY -> {
+                val forDocument = action == OPEN_DOCUMENT_COPY
+                if (forDocument) {
+                    require(args.keys().asSequence().toSet() == setOf("messageId", "sourceRevision", "key", "epoch"))
+                    check(documentWindow?.invoke() == true) { "请回到原私人对话选择文档文字" }
+                }
                 fields(args, "messageId", "sourceRevision", "key", "epoch", "prior")
                 check(controller.webPrivateOwnerVisible()) { "请回到原私人消息引用原文" }
                 val draft = controller.composerDraft ?: error("原私聊草稿尚未读取")
@@ -59,27 +81,44 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
                     Prior(integer(it, "reader", Long.MAX_VALUE), text(it, "request"), integer(it, "revision", Long.MAX_VALUE),
                         integer(it, "offset").toInt(), integer(it, "chars").toInt())
                 } else null
+                val selected = if (forDocument) controller.state.messages.singleOrNull { it.id == id } else null
                 val (locator, content) = if (prior != null) {
                     retainedRange(prior, draft.conversationId, id, revision)
                 } else {
-                    val message = controller.state.messages.firstOrNull { it.id == id } ?: error("原消息已不在当前会话，请重新打开")
+                    val message = (if (forDocument) selected else controller.state.messages.firstOrNull { it.id == id })
+                        ?: error("原消息已不在当前会话，请重新打开")
                     check(message.sourceRevision == revision && message.content.isNotEmpty()) { "原消息已变化，请重新选择" }
                     (message.ownerOriginalLocator ?: error("这条消息没有可核对的原文身份")) to message.content
                 }
                 check(locator.optString("conversationId").isNotEmpty() && locator.optString("conversationId") == draft.conversationId) { "原消息不属于当前私人会话" }
+                if (forDocument) {
+                    check(selected != null && documentMessage(selected, locator, draft.conversationId) &&
+                        draft.key == "conversation:${draft.conversationId}" &&
+                        controller.oneMessageLearningState(draft.key)?.opt("pending") == false &&
+                        !controller.composerSaving) { "只从当前私聊已送达的原消息保留文档草稿" }
+                }
                 clear()
                 // Native domain entry advances the owner epoch. Freeze the admitted window, not its predecessor.
                 controller.enterOwnerDomain("taskMemory")
                 val original = Window(UUID.randomUUID().toString(), id, revision, content,
                     locator.toString(), controller.webWindowTicket(), draft.key, controller.composerViewEpoch, draft.revision, prior,
-                    prior == null && controller.state.messages.singleOrNull { it.id == id && it.role == "user" }?.submission?.let { ack ->
+                    !forDocument && prior == null && controller.state.messages.singleOrNull { it.id == id && it.role == "user" }?.submission?.let { ack ->
                         ack.optString("conversationId") == draft.conversationId && ack.optString("messageId") == id && ack.optString("clientMessageId").isNotBlank() &&
                             ack.optString("status") in setOf("accepted", "queued", "consumed") } == true &&
                         locator.optString("kind") == "owner_native_original" && locator.optString("recordId") == id && locator.optLong("recordVersion", -1L) == revision && draft.key == "conversation:${draft.conversationId}" &&
-                        controller.oneMessageLearningState(draft.key)?.opt("pending") == false)
+                        controller.oneMessageLearningState(draft.key)?.opt("pending") == false,
+                    if (forDocument) DocumentCopy(checkNotNull(documentWindow), controller.conversationSourceRevision,
+                        controller.state.memoryRefreshRevision, checkNotNull(selected).role) else null)
                 window = original
-                done(JSONObject().put("windowId", original.id).put("text", original.text).put("maxChars", 4000).put("draftRevision", original.draftRevision).put("registeredRangeOnly", prior != null).put("shelfEligible", original.shelfEligible), null)
+                done(JSONObject().put("windowId", original.id).put("maxChars", 4000)
+                    .put("draftRevision", original.draftRevision).put("registeredRangeOnly", prior != null)
+                    .put("shelfEligible", original.shelfEligible).also {
+                        if (forDocument) it.put("documentCopy", true).put("chars", content.length)
+                            .put("fingerprint", locator.getString("fingerprint"))
+                        else it.put("text", original.text)
+                    }, null)
             }
+            RETAIN_DOCUMENT_COPY, CHECK_DOCUMENT_COPY -> retainDocument(args, action == CHECK_DOCUMENT_COPY, done)
             "messageQuote.pin" -> {
                 fields(args, "windowId", "offset", "chars", "label")
                 val original = window?.takeIf { it.id == text(args, "windowId") && it.shelfEligible } ?: error("只能从原私聊自己的消息保留原话")
@@ -173,7 +212,8 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
             }
             "messageQuote.stage" -> {
                 fields(args, "windowId", "offset", "chars")
-                val original = window?.takeIf { it.id == text(args, "windowId") } ?: error("原引用窗口已关闭")
+                val original = window?.takeIf { it.id == text(args, "windowId") && it.documentCopy == null }
+                    ?: error("原引用窗口已关闭")
                 checkCurrent(original)
                 check(!original.submitted && pending == null) { "本次原选区已提交核对，请查看原草稿；需要调整时重新打开原消息" }
                 val offset = integer(args, "offset").toInt()
@@ -201,6 +241,93 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
                     integer(args, "epoch").toInt(), integer(args, "revision", Long.MAX_VALUE), done)
             }
             else -> error("未接入的原文引用操作")
+        }
+    }
+
+    private fun documentMessage(message: UiMessage, locator: JSONObject, conversation: String): Boolean {
+        val id = message.id ?: return false
+        if (message.content.isBlank() || message.phoneResult != null || message.taskResult != null ||
+            message.hostGoalTaskId != null || message.originalHostFinal != null || message.firstHostRequestLocal ||
+            message.readerInputWork != null || locator.opt("kind") != "owner_native_original" ||
+            locator.opt("conversationId") != conversation || locator.opt("recordId") != id ||
+            locator.optLong("recordVersion", -1L) != message.sourceRevision ||
+            !locator.optString("fingerprint").matches(Regex("sha256:[0-9a-f]{64}"))) return false
+        if (message.role == "assistant") return true
+        val receipt = message.submission ?: return false
+        return message.role == "user" && receipt.opt("conversationId") == conversation &&
+            receipt.opt("messageId") == id && receipt.optString("clientMessageId").isNotBlank() &&
+            receipt.opt("status") in setOf("accepted", "consumed")
+    }
+
+    /** A document copy uses only this explicit private review. No composer reference, task or model is started. */
+    private fun retainDocument(args: JSONObject, checking: Boolean, done: (JSONObject?, String?) -> Unit) {
+        require(args.keys().asSequence().toSet() == if (checking) setOf("windowId") else setOf("windowId", "offset", "chars"))
+        val original = window?.takeIf { it.id == text(args, "windowId") && it.documentCopy != null }
+            ?: error("原文档选区已关闭")
+        val doc = checkNotNull(original.documentCopy)
+        val locator = JSONObject(original.locator)
+        val conversation = locator.getString("conversationId")
+        fun exact(): Boolean = runCatching {
+            check(window === original && doc.visible() && controller.conversationSourceRevision == doc.conversationRevision &&
+                controller.state.memoryRefreshRevision == doc.memoryRevision && !controller.composerSaving)
+            checkCurrent(original)
+            val message = controller.state.messages.single { it.id == original.messageId }
+            documentMessage(message, locator, conversation) && message.role == doc.role
+        }.getOrDefault(false)
+        val owner = PocketWebStandaloneDraftFence.window(::exact)
+        check(owner.current()) { "原消息或窗口已变化，没有保留其他文字" }
+        fun unknown() = JSONObject().put("windowId", original.id).put("status", State.UNKNOWN.name)
+        val existing = documentAttempt?.takeIf { it.original === original }
+        val attempt = if (checking) {
+            existing?.receipt?.let { done(JSONObject(it.toString()), null); return }
+            if (existing == null || existing.pin == null || pending != null) { done(unknown(), null); return }
+            existing
+        } else {
+            if (existing != null || pending != null) { done(unknown(), null); return }
+            val offset = integer(args, "offset").toInt(); val chars = integer(args, "chars", 4000L).toInt()
+            require(chars in 1..4000 && offset <= original.text.length - chars) { "请选择 1 至 4000 个完整字符" }
+            DocumentAttempt(original, offset, chars)
+        }
+        val expected = attempt.pin
+        val picked = original.text.substring(attempt.offset, attempt.offset + attempt.chars)
+        check(picked.isNotBlank()) { "请先选择要保留的文字" }
+        // Only the native original supplies these fields. This path stores no message locator or profile in the document draft.
+        val fields = Fields(Format.WORD, "对话文稿", "", picked, 12)
+        if (!checking) documentAttempt = attempt
+        shelfWork(conversation, original.draftKey, original.draftEpoch, owner::current, { reply, error ->
+            if (reply == null || error != null || documentAttempt !== attempt || !owner.current())
+                done(null, error ?: "尚未确认已经保留；可在本机文档草稿核对")
+            else {
+                if (reply.opt("status") in setOf(State.SAVED.name, State.VERIFIED.name))
+                    attempt.receipt = JSONObject(reply.toString())
+                done(reply, null)
+            }
+        }) { native, control ->
+            val storage = OwnerStandaloneDocumentDraftStore(controller.webPresentationActivity().applicationContext)
+            val result = if (checking) storage.read(checkNotNull(expected), owner)
+            else {
+                val range = JSONObject().put("ownerLocator", locator).put("offset", attempt.offset).put("chars", attempt.chars)
+                val selected = native.selectOwnerOriginalReference(range, control)
+                check(selected.opt("selectionValidated") == true && selected.opt("bodyIncluded") == false)
+                val actual = native.readPrivateDraftSourceForOwner(conversation, selected.getJSONObject("ownerSourceRef"), control)
+                check(actual.opt("role") == doc.role && actual.opt("text") == picked) { "所选原段已变化，未保存其他文字" }
+                control.check()
+                val initial = storage.initialize(owner)
+                val pin = storage.expectedFirstPin(initial, fields)
+                PocketWebStandaloneDraftFence.onMain {
+                    check(documentAttempt === attempt && exact()); attempt.pin = pin
+                }
+                storage.firstWrite(initial, fields)
+            }
+            val saved = result.draft()
+            val status = result.state()
+            if (status == (if (checking) State.VERIFIED else State.SAVED) && saved != null &&
+                saved.metadata().pin() == attempt.pin && saved.metadata().revisionSource() == null &&
+                saved.metadata().savedAt() > 0 && saved.fields() == fields) {
+                JSONObject().put("windowId", original.id).put("status", status.name)
+                    .put("name", saved.fields().name()).put("savedAt", saved.metadata().savedAt())
+            } else if (!checking && status == State.QUOTA) JSONObject().put("windowId", original.id).put("status", status.name)
+            else unknown()
         }
     }
 

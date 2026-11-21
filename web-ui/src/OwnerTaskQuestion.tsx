@@ -2,6 +2,7 @@ import {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {Button, TextAreaField} from './forms-library';
 import {PressButton} from './library';
 import {bridge} from './bridge';
+import {ownerWorkIdentity,type WorkIdentity} from './conversation-work';
 import {isPrivateLocalPhone} from './PhonePauseInstruction';
 import {phoneConversationId, phoneRunIdentity} from './phone-start';
 import {privatePhoneSurface} from './private-phone-surface';
@@ -12,7 +13,8 @@ import {ownerQuestionSavedMessage, submitOwnerQuestion, type OwnerQuestionAnswer
 type MainPhoneAnswerSource = NonNullable<ReturnType<typeof phoneRunIdentity>> & {
   document: number; conversation: string; composerKey: string; composerEpoch: number; deadline: number;
 };
-type QuestionDraft = {key: string; text: string; phone?: MainPhoneAnswerSource; needsReview?: true};
+export type WorkAnswerSource = WorkIdentity & {conversation: string; scope: string};
+type QuestionDraft = {key: string; text: string; phone?: MainPhoneAnswerSource; work?: WorkAnswerSource; needsReview?: true; attempted?: true};
 const emptyDraft: QuestionDraft = {key: '', text: ''};
 
 function mainPhoneQuestion(task?: Record<string, any>) {
@@ -57,55 +59,89 @@ export function mainPhoneAnswerSource(task: Record<string, any> | undefined, que
   return observeMainPhoneAnswer(source,true)==='current'?source:undefined;
 }
 
-/** Keep this hook in the task surface, outside the refreshable review panel. Missing reviews
- * do not erase a failed answer. Only the same main-screen question can survive closing. */
+function sameWorkAnswer(first: WorkAnswerSource | undefined, second: WorkAnswerSource | undefined) {
+  return !!first && !!second && first.scope===second.scope && first.conversation===second.conversation &&
+    first.taskId===second.taskId && first.runId===second.runId && first.epoch===second.epoch;
+}
+
+/** Native snapshots can retire a hidden answer; only a fresh original question review can display it. */
+function observeWorkAnswer(source: WorkAnswerSource, inDrawer=false): 'current'|'unconfirmed'|'changed' {
+  const {state,view}=bridge.getState(), shown=view as {section?:string|null;taskId?:string|null}|undefined;
+  if(typeof state.conversationId==='string'&&state.conversationId!==source.conversation)return 'changed';
+  const rows=Array.isArray(state.tasks)?state.tasks.filter(row=>row?.id===source.taskId):[];
+  if(rows.length!==1||!rows[0]?.raw)return 'unconfirmed';
+  const row=rows[0],raw=row.raw,work=ownerWorkIdentity(row);
+  if(!work||work.runId!==source.runId||work.epoch!==source.epoch||raw.conversationId!==source.conversation||
+     raw.origin!=null||raw.parentTaskId!=null||raw.status!==row.status||row.status!=='awaiting_user'||
+     raw.cancelRequested===true||raw.contextAvailable===false||raw.contextWithdrawn===true)return 'changed';
+  if(document.hidden||!shown||shown.section!==null||state.conversationReader||state.attachmentWorkspace?.open||
+     (inDrawer?shown.taskId!==source.taskId:shown.taskId!=null&&shown.taskId!==source.taskId))return 'unconfirmed';
+  return 'current';
+}
+
+/** Keep this hook outside the refreshable review panel. An unsent Work answer
+ * may survive a warm read of the original input, not another task or a cold restore. */
 export function useOwnerQuestionDraft(question: OwnerQuestionView | null, phone: MainPhoneAnswerSource | undefined,
-                                      sameOwnerPage: boolean, freshReview: boolean, refreshing: boolean) {
+                                      sameOwnerPage: boolean, freshReview: boolean, refreshing: boolean,
+                                      work?: WorkAnswerSource, workScope?: string|null) {
   const questionKey=question?.questionKey;
   const lastKey = useRef('');
   const verified = useRef<{key:string;source:MainPhoneAnswerSource}|null>(null);
   if (questionKey) lastKey.current = questionKey;
   const key = questionKey || lastKey.current;
   const [draft, setDraft] = useState<QuestionDraft>(emptyDraft);
+  const sameWork=!!workScope&&questionKey===draft.key&&sameWorkAnswer(draft.work,work);
   // A refresh leaves the old question painted and editable. Its exact pin can
   // bind new local typing, but it cannot resurrect an input after closing.
   useLayoutEffect(()=>{
     if (freshReview || !sameOwnerPage) verified.current=phone && questionKey?{key:questionKey,source:phone}:null;
-    if (draft.needsReview && draft.phone && draft.key===questionKey && phone && freshReview &&
-        observeMainPhoneAnswer(draft.phone,true)==='current') {
-      // Once the exact fresh review has restored this text to the current panel,
-      // another same-window refresh should not momentarily blank it again.
+    if (draft.needsReview&&freshReview&&(draft.phone&&draft.key===questionKey&&phone&&
+        observeMainPhoneAnswer(draft.phone,true)==='current'||draft.work&&sameWork&&observeWorkAnswer(draft.work,true)==='current')) {
       setDraft(old=>old===draft?{...old,needsReview:undefined}:old);
     }
-  }, [draft,phone,questionKey,freshReview,sameOwnerPage]);
-  // Closing retires the review, not the current wait. Missing publications may
-  // preserve the hidden slot, but only a fresh match can show it again.
-  const close = useCallback(() => setDraft(old => old.phone && old.text && sameOwnerPage &&
-    observeMainPhoneAnswer(old.phone)!=='changed' ? {...old,needsReview:true} : emptyDraft), [sameOwnerPage]);
-  const saved = useCallback((receipt: OwnerQuestionReceipt) => setDraft(old => old.phone && old.key===receipt.questionKey &&
-    old.phone.taskId===receipt.taskId && old.phone.runId===receipt.runId && old.phone.epoch===receipt.coordinatorEpoch ? emptyDraft : old), []);
+  }, [draft,phone,questionKey,freshReview,sameOwnerPage,sameWork]);
+  // A temporary Android viewer can rotate the host token without remounting
+  // this React document. Keep only the text/pin, never its old review handle.
+  const close = useCallback(() => setDraft(old => old.text&&(old.phone&&sameOwnerPage&&observeMainPhoneAnswer(old.phone)!=='changed'||
+    old.work&&!old.attempted&&old.work.scope===workScope&&observeWorkAnswer(old.work)!=='changed')
+      ? {...old,needsReview:true} : emptyDraft), [sameOwnerPage,workScope]);
+  const started=()=>{if(sameWork)setDraft(old=>old.work&&old.key===key&&sameWorkAnswer(old.work,work)?{...old,attempted:true}:old);};
+  const saved = useCallback((receipt: OwnerQuestionReceipt) => setDraft(old => {
+    const source=old.phone||old.work;
+    return source&&old.key===receipt.questionKey&&source.taskId===receipt.taskId&&source.runId===receipt.runId&&
+      source.epoch===receipt.coordinatorEpoch?emptyDraft:old;
+  }), []);
   useEffect(() => {
-    if (!draft.phone) return;
-    const source=draft.phone;
+    if (!draft.phone&&!draft.work) return;
     const retire=()=>setDraft(old=>old===draft?emptyDraft:old);
-    const check=()=>{if (!sameOwnerPage || observeMainPhoneAnswer(source)==='changed' ||
-      freshReview && (questionKey!==draft.key || question?.answered===true)) retire();};
+    const check=()=>{
+      if(draft.phone&&(!sameOwnerPage||observeMainPhoneAnswer(draft.phone)==='changed')||
+         draft.work&&(workScope!==undefined&&draft.work.scope!==workScope||observeWorkAnswer(draft.work)==='changed')||
+         freshReview&&(questionKey!==draft.key||question?.answered===true))retire();
+    };
     check();
-    const unsubscribe=bridge.subscribe(check), epoch=bridge.subscribeDocumentEpoch(check);
+    const unsubscribe=bridge.subscribe(check);
+    const epoch=draft.phone?bridge.subscribeDocumentEpoch(check):undefined;
     document.addEventListener('visibilitychange',check);
-    const until=source.deadline-Date.now();
-    const timer=source.deadline && until>0 && until<2_147_483_647 ? window.setTimeout(retire,until) : undefined;
-    return ()=>{unsubscribe();epoch();document.removeEventListener('visibilitychange',check);window.clearTimeout(timer);};
-  }, [draft,sameOwnerPage,freshReview,questionKey,question?.answered]);
-  const text=draft.key===key && (!draft.phone || sameOwnerPage && observeMainPhoneAnswer(draft.phone,true)==='current' &&
-    (!draft.needsReview || phone && freshReview)) ? draft.text : '';
+    const deadline=draft.phone?.deadline||0,until=deadline-Date.now();
+    const timer=deadline&&until>0&&until<2_147_483_647 ? window.setTimeout(retire,until) : undefined;
+    return ()=>{unsubscribe();epoch?.();document.removeEventListener('visibilitychange',check);window.clearTimeout(timer);};
+  }, [draft,sameOwnerPage,freshReview,questionKey,question?.answered,workScope]);
+  const showingWork=!!draft.work&&sameWork&&(freshReview||refreshing&&!draft.needsReview)&&observeWorkAnswer(draft.work,true)==='current';
+  const text=draft.key===key&&(draft.work?showingWork:!draft.phone||sameOwnerPage&&observeMainPhoneAnswer(draft.phone,true)==='current'&&
+    (!draft.needsReview||phone&&freshReview))?draft.text:'';
   return {text,edit:(text:string)=>{
+    if(work&&questionKey&&observeWorkAnswer(work,true)==='current'&&(freshReview||refreshing&&!draft.needsReview)){
+      setDraft(text?{key,text,work,attempted:sameWork?draft.attempted:undefined}:emptyDraft);
+      return;
+    }
+    if(draft.work&&draft.key===key)return;
     const observed=verified.current;
     const capture=phone || (sameOwnerPage && refreshing && questionKey && observed?.key===questionKey?observed.source:undefined);
     const source=capture || (draft.key===key?draft.phone:undefined);
     if (source && (draft.needsReview&&!capture || observeMainPhoneAnswer(source,true)!=='current')) return;
     setDraft(text?{key,text,phone:source}:emptyDraft);
-  },close,saved};
+  },close,started,saved};
 }
 
 /** Uses the existing BoardUI controls and reviewed task surface; no parallel dialog/design. */

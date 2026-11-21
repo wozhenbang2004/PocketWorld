@@ -13,6 +13,9 @@ import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDra
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Format
 import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.ui.AttachmentPdfPageText
+import dev.pocketengine.ui.AttachmentWordExcerpt
+import dev.pocketengine.ui.AttachmentWordOrigin
+import dev.pocketengine.ui.objects
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -67,7 +70,8 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     class MarkdownDraftSeed(val viewerId: String, val source: OwnerFilePreviewSource, val fields: Fields,
         internal val decoded: JSONObject)
     private class Pin(val source: OwnerFilePreviewSource, val ticket: PocketWebWindowTicket,
-        val rememberLibraryPdf: (() -> Boolean)?, val accepts: (PocketWebWindowTicket) -> Boolean) {
+        val rememberLibraryPdf: (() -> Boolean)?, val wordOrigin: AttachmentWordOrigin?,
+        val accepts: (PocketWebWindowTicket) -> Boolean) {
         val id = UUID.randomUUID().toString()
         val kind = declaredKind(source)
         val fileId = source.metadata().optString("id")
@@ -119,12 +123,13 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         LibraryPdfResume(id, sha, identity, page)
     }.getOrNull()
     fun bind(source: OwnerFilePreviewSource?, compared: Pair<OwnerFilePreviewSource, OwnerFilePreviewSource>?,
-        ticket: PocketWebWindowTicket, rememberLibraryPdf: (() -> Boolean)? = null, accepts: (PocketWebWindowTicket) -> Boolean) {
+        ticket: PocketWebWindowTicket, rememberLibraryPdf: (() -> Boolean)? = null,
+        wordOrigin: AttachmentWordOrigin? = null, accepts: (PocketWebWindowTicket) -> Boolean) {
         val same = primary?.source === source && comparison?.first?.source === compared?.first && comparison?.second?.source === compared?.second
         if (same) return
         clear()
-        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, accepts).also { pins[it.id] = it }
-        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, accepts), Pin(compared.second, ticket, null, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
+        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, wordOrigin, accepts).also { pins[it.id] = it }
+        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, null, accepts), Pin(compared.second, ticket, null, null, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
         if (pins.isNotEmpty()) main.postDelayed(watchdog, 1500)
     }
     private fun view(pin: Pin): JSONObject = JSONObject().put("id", pin.id).put("identity", pin.source.identity)
@@ -144,6 +149,31 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         return AttachmentPdfPageText(pin.id,raster,page).takeIf {
             bookmarkFileId.matches(raster) && page in 1..info.optInt("pages",0)
         }
+    }
+    /** Only the same first actual block and, if present, its following painted fragment. */
+    fun displayedWordExcerpt(file:JSONObject?): AttachmentWordExcerpt? {
+        val pin=primary?:return null
+        val info=pin.information?:return null
+        if(pin.kind!="office"||pin.source.mimeType!=AttachmentWordOrigin.MIME||pin.sourceUnavailable||pin.busy||pin.error!=null||
+            !matchesOriginal(file)||runCatching{requireCurrent(pin)}.isFailure||
+            info.opt("format")!="docx"||info.opt("status")!="partial"||info.opt("coverage")!="body_paragraphs_and_tables"||
+            info.opt("sourceIdentity")!=pin.source.identity||info.opt("sha256")!=pin.source.sha256)return null
+        val unit=info.opt("unit") as? Int?:return null
+        val chunk=info.opt("chunk") as? Int?:return null
+        val chunks=info.optJSONArray("chunks").objects()
+        val first=chunks.firstOrNull()?:return null
+        val a=first.optJSONObject("locator")?:return null
+        val kind=first.optString("kind")
+        if(unit !in 1..1_000_000||chunk !in 0..1_000_000||first.opt("unit")!=unit||first.opt("chunk")!=chunk||
+            kind !in setOf("text","table_cell")||first.optString("text").length !in 1..1024||
+            a.opt("paragraph")!=unit.toString()||a.optString("part").isBlank())return null
+        val second=chunks.getOrNull(1)?.takeIf{block->
+            val b=block.optJSONObject("locator")?:return@takeIf false
+            block.opt("unit")==unit&&block.opt("chunk")==chunk+1&&block.opt("kind")==kind&&
+                block.optString("text").length in 1..1024&&b.opt("charStart")==a.opt("charEnd")&&
+                listOf("part","paragraph","table","row","column").all{a.opt(it)==b.opt(it)}
+        }
+        return AttachmentWordExcerpt(pin.id,unit,chunk,info,listOfNotNull(first,second))
     }
     /** Preview recovery is narrower than the file-detail external action, which also handles managed APKs. */
     fun matchesOriginal(file: JSONObject?): Boolean {
@@ -264,9 +294,15 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                         "audio", "video" -> { original.openMediaDescriptor().use { }; JSONObject().put("localMedia", true) }
                         "office" -> {
                             val resume = command == "load"
-                            val unit = (if (resume) preferences.getInt("$identity.unit", 1) else request.optInt("unit", 1)).coerceAtLeast(1)
-                            val chunk = if (resume) preferences.getInt("$identity.chunk", 0) else request.optInt("chunk", 0)
+                            val fromExcerpt=pin.wordOrigin?.takeIf{resume&&pin.information==null}
+                            val unit = fromExcerpt?.unit?: (if (resume) preferences.getInt("$identity.unit", 1) else request.optInt("unit", 1)).coerceAtLeast(1)
+                            val chunk = fromExcerpt?.chunk?: if (resume) preferences.getInt("$identity.chunk", 0) else request.optInt("chunk", 0)
                             val page = original.document(unit, chunk, pin.lifetime)
+                            if(fromExcerpt!=null)check(pin.fileId==fromExcerpt.fileId&&pin.source.sha256==fromExcerpt.sha256&&
+                                page.format=="docx"&&page.status=="partial"&&page.chunks.size>=fromExcerpt.parts&&
+                                page.chunks.take(fromExcerpt.parts).withIndex().all{(i,block)->block.unit==unit&&block.chunk==chunk+i}) {
+                                "原 Word 段落暂不可核对，没有定位到其他段落"
+                            }
                             // A long worksheet/section can span several reads within the same unit.
                             // A failed or out-of-range jump is not a new reading position.
                             if (page.status in setOf("ok", "partial") && unit <= page.totalUnits && (chunk == 0 || page.chunks.isNotEmpty()))

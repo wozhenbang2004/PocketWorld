@@ -832,7 +832,12 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebLocalSourceIntake.COMMANDS) {
-                complete(id, localSourceIntake.dispatch(action, args), null, retainValue = false)
+                val openedSource: ((JSONObject?, String?) -> Unit)? =
+                    if (action == PocketWebLocalSourceIntake.OPEN_PROJECT && args.has("sourceFiles")) { value, error ->
+                        complete(id, value, error, retainValue = false); publishState()
+                    } else null
+                val value = localSourceIntake.dispatch(action, args, openedSource)
+                if (openedSource == null) complete(id, value, null, retainValue = false)
                 publishState(); return
             }
             if (action in PocketWebProjectGitImport.COMMANDS) {
@@ -2160,10 +2165,30 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebMessageQuotes.COMMANDS) {
-                if (action == "messageQuote.open" || action == "messageQuote.stage" || action == "messageQuote.pin" || action.startsWith("messageShelf.") && action != "messageShelf.close")
-                    require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话选择引用" }
-                messageQuotes.dispatch(action, args) { result, error -> val local = action == "messageQuote.pin" || action.startsWith("messageShelf.")
-                    complete(id, result, error, retainValue = action != "messageQuote.open" && !local, replayHint = if (local) "请重新打开本对话备忘核对；没有重放上次内容或操作" else null); publishState() }; return
+                val documentCopy = action in PocketWebMessageQuotes.DOCUMENT_COPY_COMMANDS
+                if (documentCopy || action == "messageQuote.open" || action == "messageQuote.stage" || action == "messageQuote.pin" ||
+                    action.startsWith("messageShelf.") && action != "messageShelf.close")
+                    require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话选择原文" }
+                val documentWindow: (() -> Boolean)? = if (documentCopy) {
+                    val doc = documentId; val page = commandFence.ticket(); val resume = workspaceResumeRevision
+                    val conversation = controller.state.conversationId
+                    ({
+                        !closed && doc != null && documentId == doc && commandFence.accepts(page) && workspaceResumeRevision == resume &&
+                            !conversation.isNullOrBlank() && controller.state.conversationId == conversation && section == null && taskViewId == null &&
+                            controller.webPrivateOwnerVisible() && controller.conversationReader == null && controller.queuedInputsPage == null &&
+                            !controller.attachmentOutcomes.state.open && !controller.state.chatAttachmentPickerOpen && controller.state.filePath == null
+                    }).also { check(it()) { "请回到当前私人对话，再保留原文" } }
+                } else null
+                messageQuotes.dispatch(action, args, documentWindow) { result, error ->
+                    val local = action == "messageQuote.pin" || action.startsWith("messageShelf.")
+                    val hint = when {
+                        documentCopy -> "请在本机文档草稿核对；没有重放上次内容或保存动作。"
+                        local -> "请重新打开本对话备忘核对；没有重放上次内容或操作"
+                        else -> null
+                    }
+                    complete(id, result, error, retainValue = action != "messageQuote.open" && !local && !documentCopy, replayHint = hint)
+                    publishState()
+                }; return
             }
             if (action == "sources.open") {
                 val keySet = args.keys().asSequence().toSet()

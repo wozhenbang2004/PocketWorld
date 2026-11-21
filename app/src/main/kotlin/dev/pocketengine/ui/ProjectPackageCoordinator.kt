@@ -819,21 +819,24 @@ internal class ProjectPackageCoordinator(
         val pin = state.staged ?: return
         work { _, _ -> local().discardStagedProjectPackageForOwner(pin.getString("selectionId"), pin.getString("sha256")); return@work { state = state.copy(staged = null, stagedPackages = state.stagedPackages.filterNot { it.optString("selectionId") == pin.getString("selectionId") }, importPlan = null, notice = "仅移除了这份导入临时包；未删除项目、固定成果或环境。") } }
     }
-    fun continueWebSourceImport(stillSelected: () -> Boolean, opened: () -> Unit) {
+    fun continueWebSourceImport(stillSelected: (JSONObject) -> Boolean, failed: ((Exception) -> Unit)? = null, opened: () -> Unit) {
         val selected = state.imported?.takeIf(::matchesWebSourceReceipt) ?: error("没有已核对的原工作副本")
         val source = JSONObject(checkNotNull(webSourcePin).toString())
-        work { _, _ ->
+        work(onFailure = failed) { _, _ ->
             // This read checks the exact publication, its checkout directory
             // and project registration. Opening is not an export or source read.
             val now = local().queryReviewedPhoneSource(source, false)
             if (!now.optBoolean("found") || now.optString("id") != selected.optString("id") || now.optString("projectId") != selected.optString("projectId"))
-                return@work { state = state.copy(imported = null, pendingImport = source, retryImport = false, missingSourceAction = null,
-                    notice = "上次副本或项目登记已变化。请核对原创建记录，没有打开别的项目。") }
+                return@work {
+                    val message = "上次副本或项目登记已变化。请核对原创建记录，没有打开别的项目。"
+                    state = state.copy(imported = null, pendingImport = source, retryImport = false, missingSourceAction = null, notice = message)
+                    failed?.invoke(IllegalStateException(message))
+                }
             return@work {
-                if (stillSelected()) {
+                if (stillSelected(now)) {
                     importedCheckout(now)
                     opened()
-                }
+                } else failed?.invoke(IllegalStateException("原导入窗口已变化，没有打开别的项目。"))
             }
         }
     }

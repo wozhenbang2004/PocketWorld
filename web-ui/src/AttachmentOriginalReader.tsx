@@ -1,4 +1,4 @@
-import {useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useEffect,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import {Accordion,AccordionItem,Button,IconButton,RadioOptions,SelectField,TextField} from './forms-library';
 import {IconChevronLeft,IconChevronRight,IconExternalLink} from './icons';
 import {MarkdownBody} from './library';
@@ -37,7 +37,9 @@ function wordFragments(chunks:Json[]):WordFragment[]{
  }
  return fragments;
 }
-export function DocumentProjection({value,orderedOriginalWord=false,pdfPage,wordMatch}:{value:Json;orderedOriginalWord?:boolean;pdfPage?:number;wordMatch?:OriginalWordHit}) {
+export function DocumentProjection({value,orderedOriginalWord=false,pdfPage,wordMatch,wordExcerptAction}:{
+ value:Json;orderedOriginalWord?:boolean;pdfPage?:number;wordMatch?:OriginalWordHit;wordExcerptAction?:ReactNode;
+}) {
  const chunks=rows(value.chunks),tables=new Map<string,Json[]>(),paragraphs:Json[]=[];
  const orderedWord=orderedOriginalWord&&value.format==='docx'&&['ok','partial'].includes(value.status);
  const wordHeadings=new Map((orderedWord?confirmedWordHeadings(value):[]).map(heading=>[heading.unit,heading] as const));
@@ -45,15 +47,21 @@ export function DocumentProjection({value,orderedOriginalWord=false,pdfPage,word
  const paragraph=(block:Json,key:string)=>{
   const heading=wordHeadings.get(block.unit);
   const selected=orderedWord&&wordMatch&&originalWordHitBlock(block,wordMatch)?{'data-original-word-find':'true',tabIndex:-1}:undefined;
-  if(heading&&block.kind==='text'&&block.chunk===0&&block.text===heading.text)return <h4 key={key} className="pw-file-text" {...selected}><bdi>{block.text}</bdi></h4>;
-  return <div key={key} {...selected}>{!pdfPage&&<small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small>}<p className="pw-file-text">{block.text}</p></div>;
+  if(heading&&block.kind==='text'&&block.chunk===0&&block.text===heading.text){
+   const title=<h4 className="pw-file-text"><bdi>{block.text}</bdi></h4>;
+   return selected&&wordExcerptAction?<div key={key} {...selected}>{title}{wordExcerptAction}</div>:
+    <h4 key={key} className="pw-file-text" {...selected}><bdi>{block.text}</bdi></h4>;
+  }
+  return <div key={key} {...selected}>{!pdfPage&&<small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small>}<p className="pw-file-text">{block.text}</p>
+   {selected&&wordExcerptAction}</div>;
  };
  const tableFragment=(blocks:Json[],key:string)=>{
   const table=documentTable(blocks),caption=orderedWord?'原表格片段 · 当前读取范围':obj(blocks[0]?.locator).sheet||'原文档表格 · 当前范围';
   const selected=orderedWord&&wordMatch&&blocks.some(block=>originalWordHitBlock(block,wordMatch))?wordMatch:undefined;
   return <div className="pw-file-table" key={key}><table><caption>{caption}</caption><thead><tr><th>行</th>{table.columns.map(col=><th key={col}>{col}</th>)}</tr></thead><tbody>{table.rows.map(row=><tr key={row}><th>{row}</th>{table.columns.map(col=>{
    const isMatch=!!selected&&selected.row===row&&selected.column===col;
-   return <td key={col} data-original-word-find={isMatch?'true':undefined} tabIndex={isMatch?-1:undefined}>{table.text(row,col)}</td>;
+   return <td key={col} data-original-word-find={isMatch?'true':undefined} tabIndex={isMatch?-1:undefined}>{table.text(row,col)}
+    {isMatch&&wordExcerptAction}</td>;
   })}</tr>)}</tbody></table></div>;
  };
  return <section className="pw-file-projection" aria-label="当前读取范围"><p className="pw-muted">{pdfPage?
@@ -75,6 +83,8 @@ const textEncodings=['UTF-8','UTF-16LE','UTF-16BE','GB18030','ISO-8859-1'].map(i
 export type DisplayedOriginalText={windowId:string;viewerId:string;identity:string;sha256:string;encoding:string;offset:number};
 type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;findBeforeLongText?:boolean;onTextDisplayed?:(range:DisplayedOriginalText)=>void;
  onReadPdfPageText?:(viewerId:string,rasterId:string)=>void;showingPdfPageText?:boolean;
+ onReadWordExcerpt?:(viewerId:string,unit:number,chunk:number)=>void;onOpenSavedWordExcerpt?:()=>void;
+ showingWordExcerpt?:boolean;
  recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
 type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:boolean};
 type PdfFindPin={windowId:string;viewerId:string;identity:string;sha256:string;url:string};
@@ -221,7 +231,8 @@ export function AttachmentOriginalReader(props:OriginalReaderProps) {
  return <OriginalReader key={JSON.stringify([props.windowId,props.source.id])} {...props}/>;
 }
 
-function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed,onReadPdfPageText,showingPdfPageText}:OriginalReaderProps) {
+function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed,onReadPdfPageText,showingPdfPageText,
+ onReadWordExcerpt,onOpenSavedWordExcerpt,showingWordExcerpt}:OriginalReaderProps) {
  const readerSurface=useRef<HTMLElement>(null),textAdvance=useRef<TextAdvance|null>(null);
  const textBody=useRef<HTMLDivElement>(null),pdfBody=useRef<HTMLDivElement>(null),pdfView=useRef<HTMLDivElement>(null);
  const [toolsVisible,setToolsVisible]=useState(false);
@@ -557,7 +568,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   {foundInReader.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}
  </div></>}</AccordionItem></Accordion>;
  return <section ref={readerSurface} className="pw-original-file" aria-label={`原件：${source.name}`}
-  style={showingPdfPageText?{display:'none'}:undefined} onPointerDownCapture={noteReaderInteraction}
+  style={showingPdfPageText||showingWordExcerpt?{display:'none'}:undefined} onPointerDownCapture={noteReaderInteraction}
   onClickCapture={noteReaderInteraction} onInputCapture={noteReaderInteraction}
   onWheelCapture={noteReaderInteraction} onTouchMoveCapture={noteReaderInteraction} onKeyDownCapture={noteReaderInteraction}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
@@ -636,8 +647,9 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   {(!worksheets.length||worksheets.length<actual.totalUnits)&&
    <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>}
   {actual.format==='docx'?<OriginalWordFind source={source} windowId={windowId} value={actual} busy={readerBusy}
-   find={query=>invoke('find',{query})} read={(unit,chunk)=>invoke('read',{unit,chunk})}>
-   {match=><DocumentProjection value={actual} orderedOriginalWord wordMatch={match}/>}
+   find={query=>invoke('find',{query})} read={(unit,chunk)=>invoke('read',{unit,chunk})}
+   onExcerpt={onReadWordExcerpt} onSavedExcerpt={onOpenSavedWordExcerpt}>
+   {(match,action)=><DocumentProjection value={actual} orderedOriginalWord wordMatch={match} wordExcerptAction={action}/>}
   </OriginalWordFind>:<DocumentProjection value={actual} orderedOriginalWord/>}
   {Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
  </>}

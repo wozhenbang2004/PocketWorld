@@ -14,11 +14,38 @@ final class TeamIntegrationDeliveryNote {
     private TeamIntegrationDeliveryNote() {}
     static final String AWAITING = "作者已交回冻结文件。请在原成果页核对实际差异与原项目写回情况。";
     static String savedForCurrentPlan(JSONObject run){
+        JSONObject note=currentPlanObservation(run);
+        return note==null?"":note.optString("message");
+    }
+    private static JSONObject currentPlanObservation(JSONObject run){
         JSONObject note=run.optJSONObject("fileDeliveryObservation"),work=run.optJSONObject("workPlan"),review=run.optJSONObject("independentReview");
         if(note==null||work==null||review==null||review.optBoolean("stale")||!run.optString("id").equals(note.optString("teamRunId"))
                 ||run.optInt("generation",-1)!=note.optInt("generation",-2)||!work.optString("planId").equals(note.optString("workPlanId"))
-                ||work.optInt("revision",-1)!=note.optInt("workPlanRevision",-2)||!review.optString("planHash").equals(note.optString("planHash")))return "";
-        return note.optString("message");
+                ||work.optInt("revision",-1)!=note.optInt("workPlanRevision",-2)||!review.optString("planHash").equals(note.optString("planHash")))return null;
+        return note;
+    }
+    /** Navigation to a successful original write-back, not a fresh file-head or business verdict. */
+    static JSONObject settledOriginalWorker(JSONObject run,JSONArray workers){
+        JSONObject scope=run.optJSONObject("productionScope"),note=currentPlanObservation(run);
+        if(scope==null||scope.has("projectSelection")||note==null||note.has("source")
+                ||!Boolean.TRUE.equals(note.opt("settledAtObservation"))||!Boolean.TRUE.equals(note.opt("allFileHeadsMatched"))
+                ||!Boolean.FALSE.equals(note.opt("businessVerified"))||!"completed".equals(note.opt("workerStatusAtObservation"))
+                ||note.optLong("observedAt")<=0)return null;
+        int total=note.optInt("total");if(total<1||total>8||note.optInt("matched")!=total)return null;
+        JSONObject selected=null;
+        for(int i=0;i<workers.length();i++){
+            JSONObject row=workers.optJSONObject(i);
+            if(row==null||!"integrator".equals(row.opt("role"))||!Boolean.TRUE.equals(row.opt("selectedVersion"))
+                    ||!Boolean.TRUE.equals(row.opt("canOpen"))||!"completed".equals(row.opt("taskStatus"))
+                    ||!Boolean.FALSE.equals(row.opt("activeAttempt"))||!Boolean.FALSE.equals(row.opt("hasUnresolvedEffects"))
+                    ||row.optInt("epoch")<=0)continue;
+            for(String key:new String[]{"teamRunId","taskId","runId","reviewId","planHash"}){
+                String exact=note.optString(key);if(exact.isEmpty()||!exact.equals(row.opt(key)))return null;
+            }
+            if(selected!=null)return null;
+            selected=row;
+        }
+        return selected;
     }
     static JSONObject observe(JSONObject run,JSONObject actual)throws org.json.JSONException{
         String team=run.optString("id");JSONObject scope=run.optJSONObject("productionScope"),work=run.optJSONObject("workPlan"),review=run.optJSONObject("independentReview"),p=actual.optJSONObject("progress");

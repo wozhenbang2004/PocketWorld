@@ -2176,7 +2176,8 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         JSONObject saved=live.json;
         if(!id.equals(saved.opt("id"))||!id.equals(saved.opt("operationId"))||!origin.teamDefinition().equals(saved.opt("teamId"))
                 ||!RESEARCH_FORMAT.equals(saved.opt("researchExecutionFormat"))||!"collaborate".equals(saved.opt("mode"))
-                ||!"classic".equals(saved.optString("discussionFormat","classic"))||saved.has("definitionKind")||saved.has("phoneScope")
+                ||!"classic".equals(saved.optString("discussionFormat","classic"))||saved.has("phoneScope")
+                ||(origin.temporaryDefinition()?!"one_time".equals(saved.opt("definitionKind")):saved.has("definitionKind"))
                 ||saved.has("workPlan")||saved.has("productionScope")||saved.has("nativeWorkProfileModels")
                 ||!"completed".equals(saved.opt("status"))||!"completed".equals(saved.opt("phase"))
                 ||!"host_model".equals(saved.opt("summaryProducer"))||saved.opt("summaryStale")!=Boolean.FALSE

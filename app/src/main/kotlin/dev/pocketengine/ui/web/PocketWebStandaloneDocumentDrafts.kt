@@ -489,15 +489,7 @@ internal class PocketWebStandaloneDocumentDrafts(
             pending = null
             if (live) apply(result) else { retire(); apply(null) }
         }
-        val window = object : OwnerStandaloneDocumentDraftStore.OwnerWindow {
-            override fun current(): Boolean = try { onMain(::admitted) } catch (_: IOException) { false }
-            override fun atCommit(mutation: OwnerStandaloneDocumentDraftStore.Commit) {
-                onMain {
-                    check(admitted()) { "原文档草稿窗口已离开；未继续变更" }
-                    mutation.enter()
-                }
-            }
-        }
+        val window = PocketWebStandaloneDraftFence.window(::admitted)
         try {
             controller.runPluginCatalogWork(Runnable {
                 val result = try { call(storage, window) } catch (_: Exception) { fallback() }
@@ -506,13 +498,40 @@ internal class PocketWebStandaloneDocumentDrafts(
         } catch (_: RejectedExecutionException) { finish(fallback()) }
     }
 
+    private fun <T> onMain(call: () -> T): T = PocketWebStandaloneDraftFence.onMain(call)
+
+    private fun readStatus(state: State) = when (state) {
+        State.MISSING, State.CONFLICT -> state
+        else -> State.UNKNOWN
+    }
+    private fun unknown() = OwnerStandaloneDocumentDraftStore.Outcome(State.UNKNOWN, null)
+    private fun token() = UUID.randomUUID().toString()
+    private fun canonicalId(value: String) = value.length == 36 && runCatching { UUID.fromString(value).toString() == value }.getOrDefault(false)
+    private fun checkMain() { check(Looper.myLooper() == main.looper) { "必须在原生文件窗口核对草稿" } }
+}
+
+/** Shared synchronous commit fence for native private draft callers; never a window by itself. */
+internal object PocketWebStandaloneDraftFence {
+    private val main = Handler(Looper.getMainLooper())
+
+    fun window(admitted: () -> Boolean): OwnerStandaloneDocumentDraftStore.OwnerWindow =
+        object : OwnerStandaloneDocumentDraftStore.OwnerWindow {
+            override fun current(): Boolean = try { onMain(admitted) } catch (_: IOException) { false }
+            override fun atCommit(mutation: OwnerStandaloneDocumentDraftStore.Commit) {
+                onMain {
+                    check(admitted()) { "原文档草稿窗口已离开；未继续变更" }
+                    mutation.enter()
+                }
+            }
+        }
+
     /**
      * The existing owner/window computation is main-thread only. The worker may
      * await that check; main never waits for the worker, never re-enters the store,
      * and only performs its bounded final stat/atomic rename (not body IO/fsync).
      * An unentered timed-out handoff is cancelled; an entered one cannot be replayed.
      */
-    private fun <T> onMain(call: () -> T): T {
+    fun <T> onMain(call: () -> T): T {
         if (Looper.myLooper() == main.looper) return call()
         val claim = AtomicBoolean(true)
         val task = FutureTask {
@@ -545,13 +564,4 @@ internal class PocketWebStandaloneDocumentDrafts(
             }
         } finally { if (interrupted) Thread.currentThread().interrupt() }
     }
-
-    private fun readStatus(state: State) = when (state) {
-        State.MISSING, State.CONFLICT -> state
-        else -> State.UNKNOWN
-    }
-    private fun unknown() = OwnerStandaloneDocumentDraftStore.Outcome(State.UNKNOWN, null)
-    private fun token() = UUID.randomUUID().toString()
-    private fun canonicalId(value: String) = value.length == 36 && runCatching { UUID.fromString(value).toString() == value }.getOrDefault(false)
-    private fun checkMain() { check(Looper.myLooper() == main.looper) { "必须在原生文件窗口核对草稿" } }
 }

@@ -38,12 +38,15 @@ public final class AttachmentOutcomeHost {
         return snapshot(taskId,control,true);
     }
     private record PdfExcerpt(JSONObject result,JSONObject source){}
+    private record WordExcerpt(JSONObject result,JSONObject source){}
     private JSONObject snapshot(String taskId,RunControl control,boolean workFileList)throws Exception {
         control.check();JSONObject task=ownerTask(taskId);JSONArray selected=task==null?new JSONArray():tasks.ownerAttachmentReferences(taskId);
         JSONObject inventory=documents.ownerAttachmentInventoryForHost();JSONArray files=inventory.getJSONArray("attachments"),sources=new JSONArray(),results=new JSONArray(),jobs=new JSONArray();Set<String> included=new HashSet<>();
         boolean showPdfStarts=workFileList&&ordinaryCompletedWork(task);
         Map<String,String> pdfInputs=showPdfStarts?new HashMap<>():null;
         List<PdfExcerpt> excerpts=showPdfStarts?new ArrayList<>():null;
+        List<WordExcerpt> wordExcerpts=task==null?new ArrayList<>():null;
+        Map<String,String> wordInputs=task==null?new HashMap<>():null;
         var captured=new dev.pocketengine.features.remote.RemoteFileCaptureAttempt(task,tasks::remoteOwnerOperation);
         int receivedChecks=0;boolean receivedLimited=false;
         for(int i=0;i<selected.length();i++){
@@ -113,9 +116,16 @@ public final class AttachmentOutcomeHost {
                 if(excerpts!=null&&kind.equals("document_extract")&&"text/plain".equals(meta.opt("mimeType"))&&
                         !meta.optBoolean("outputSourceRetired")&&!origin.has("archiveEvidence")&&
                         origin.isNull("runId")&&origin.isNull("operationId"))excerpts.add(new PdfExcerpt(result,origin));
+                if(wordExcerpts!=null&&kind.equals("document_extract")&&"text/plain".equals(meta.opt("mimeType"))&&
+                        !meta.optBoolean("outputSourceRetired")&&AttachmentDocuments.WORD_EXCERPT.equals(origin.opt("originalWordExcerpt")))
+                    wordExcerpts.add(new WordExcerpt(result,origin));
                 results.put(result);
             }
-            else if(included.add(meta.getString("id"))){sources.put(sourceRow(meta,workFileList?task:null));rememberPdfInput(pdfInputs,meta);}
+            else if(included.add(meta.getString("id"))){
+                sources.put(sourceRow(meta,workFileList?task:null));rememberPdfInput(pdfInputs,meta);
+                if(wordInputs!=null&&ordinaryWordInput(meta,origin))
+                    wordInputs.put(meta.getString("id"),meta.getString("sha256"));
+            }
         }
         if(task!=null){
             JSONArray operations=task.getJSONArray("operations");
@@ -138,6 +148,10 @@ public final class AttachmentOutcomeHost {
                 JSONObject start=pdfExcerptStart(excerpt.source(),pdfInputs);
                 if(start!=null)excerpt.result().put("pdfExcerptStart",start);
             }
+        }
+        if(wordExcerpts!=null)for(WordExcerpt excerpt:wordExcerpts){
+            control.check();JSONObject original=wordExcerptStart(excerpt.source(),wordInputs);
+            if(original!=null)excerpt.result().put("originalWordExcerpt",original);
         }
         JSONObject result=new JSONObject().put("taskId",taskId==null?"":taskId).put("sources",sources).put("artifacts",results)
                 .put("media",jobs).put("documentCapabilities",documents.documentCapabilities()).put("indexDiagnostics",inventory.getJSONObject("indexDiagnostics")).put("verifiedBusinessSuccess",false);
@@ -176,6 +190,29 @@ public final class AttachmentOutcomeHost {
         String method="rendered_page_ocr".equals(source.opt("coverage"))&&"ocr".equals(extraction)?"ocr":
                 "pdf_text_layer".equals(source.opt("coverage"))&&("text".equals(extraction)||"auto".equals(extraction))?"text_layer":null;
         return method==null?null:new JSONObject().put("page",page).put("chunk",chunk).put("method",method);
+    }
+    private static boolean ordinaryWordInput(JSONObject meta,JSONObject origin){
+        return origin!=null&&privateFile(meta)&&"content_uri".equals(origin.opt("kind"))&&
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(meta.opt("mimeType"))&&
+                !meta.optBoolean("outputSourceRetired")&&origin.isNull("taskId")&&origin.isNull("projectId")&&
+                origin.isNull("groupSpaceId")&&origin.isNull("archiveEvidence");
+    }
+    /** Persisted native read receipt, only for the private Library. Never a reader or file grant. */
+    private static JSONObject wordExcerptStart(JSONObject origin,Map<String,String> inputs)throws Exception{
+        if(!(origin.opt("sourceAttachmentId") instanceof String id)||!id.matches("[a-f0-9-]{36}")||
+                !(origin.opt("sourceSha256") instanceof String sha)||!sha.matches("[a-f0-9]{64}")||!sha.equals(inputs.get(id))||
+                !(origin.opt("readReceiptId") instanceof String receipt)||!receipt.matches("[a-f0-9-]{36}")||
+                !"body_paragraphs_and_tables".equals(origin.opt("coverage"))||!"text".equals(origin.opt("extraction"))||
+                !DocumentContent.PARSER_VERSION.equals(origin.opt("parserVersion"))||
+                !origin.isNull("taskId")||!origin.isNull("runId")||!origin.isNull("operationId")||
+                !origin.isNull("groupSpaceId")||!origin.isNull("archiveEvidence"))return null;
+        JSONObject range=origin.optJSONObject("readRange");
+        if(range==null||!boundedInteger(range.opt("startUnit"),1,1_000_000)||
+                !boundedInteger(range.opt("startChunk"),0,1_000_000)||!boundedInteger(range.opt("maxUnits"),1,1)||
+                !boundedInteger(range.opt("maxChunks"),1,2)||!boundedInteger(range.opt("maxChars"),2048,2048)||
+                !"text".equals(range.opt("extraction")))return null;
+        return new JSONObject().put("format",AttachmentDocuments.WORD_EXCERPT).put("fileId",id).put("sha256",sha)
+                .put("unit",range.getInt("startUnit")).put("chunk",range.getInt("startChunk")).put("parts",range.getInt("maxChunks"));
     }
     private static boolean boundedInteger(Object value,int min,int max){
         return (value instanceof Long||value instanceof Integer)&&((Number)value).longValue()>=min&&((Number)value).longValue()<=max;
@@ -277,6 +314,35 @@ public final class AttachmentOutcomeHost {
                 &&action.equals(publication.opt("taskId"))&&action.equals(publication.opt("runId"))&&action.equals(publication.opt("operationId"))
                 &&"document_output".equals(publication.opt("role"))&&AttachmentBook.isOriginalPublicationId(id,action,"document_output",action,action,plan);
     }
+    /** Exact private Library relationship plus the ordinary original-file byte verification.
+     * The saved TXT's stored native locator, not the display row or name, is authoritative. */
+    public OwnerFilePreviewSource originalWordExcerptSource(String excerptId,String expectedExcerptSha,String sourceId,
+            String expectedSourceSha,int unit,int chunk,int parts,RunControl control)throws Exception {
+        control.checkpoint();
+        if(excerptId.equals(sourceId))throw new SecurityException("摘录的原 Word 路径无效");
+        String receipt=requirePersistedWordLocator(excerptId,expectedExcerptSha,sourceId,expectedSourceSha,unit,chunk,parts);
+        JSONObject selected=privateMetadata(sourceId,expectedSourceSha);
+        if(!ordinaryWordInput(selected,selected.optJSONObject("source")))
+            throw new SecurityException("摘录不再指向原私人 Word 文件");
+        OwnerFilePreviewSource verified=originalFile(null,sourceId,expectedSourceSha,control);
+        JSONObject checked=verified.metadata();
+        if(!ordinaryWordInput(checked,checked.optJSONObject("source"))||
+                !receipt.equals(requirePersistedWordLocator(excerptId,expectedExcerptSha,sourceId,expectedSourceSha,unit,chunk,parts)))
+            throw new SecurityException("摘录与原 Word 的位置已变化，未打开其他文件");
+        control.checkpoint();return verified;
+    }
+    private String requirePersistedWordLocator(String excerptId,String excerptSha,String sourceId,String sourceSha,
+            int unit,int chunk,int parts)throws Exception {
+        JSONObject excerpt=privateMetadata(excerptId,excerptSha),entry=excerpt.optJSONObject("source");
+        if(entry==null||!"text/plain".equals(excerpt.opt("mimeType"))||excerpt.optBoolean("outputSourceRetired")||
+                !"document_extract".equals(entry.opt("kind"))||!AttachmentDocuments.WORD_EXCERPT.equals(entry.opt("originalWordExcerpt")))
+            throw new SecurityException("未核对到这份已保存的 Word 摘录");
+        JSONObject actual=wordExcerptStart(entry,Map.of(sourceId,sourceSha));
+        if(actual==null||actual.getInt("unit")!=unit||actual.getInt("chunk")!=chunk||actual.getInt("parts")!=parts)
+            throw new SecurityException("未核对到这份摘录保存的原 Word 位置");
+        return entry.getString("readReceiptId");
+    }
+
     /** Actual original-format viewer; task/audience and canonical byte checks remain this host's. */
     public OwnerFilePreviewSource originalFile(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
         return originalFile(taskId,artifactId,expectedSha256,control,false);
