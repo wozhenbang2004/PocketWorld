@@ -88,6 +88,12 @@ const profileAddress = (profile: Data) => text(profile.baseUrl || `${profile.use
 const profileReadiness = (domain: 'remote' | 'ssh', profile: Data) => domain === 'remote'
   ? profile.hasToken ? '凭据已配置 · 能力待核对' : '待配置连接令牌'
   : !profile.credentialsConfigured ? '待配置凭据' : profile.hostKeyTrusted ? '已保存主机信任' : '待核对主机指纹';
+function companionProfileKey(profile: Data | null) {
+  if (!profile || profile.hasToken !== true || typeof profile.id !== 'string' || !profile.id ||
+      typeof profile.bindingHash !== 'string' || !/^[a-f0-9]{64}$/.test(profile.bindingHash) ||
+      typeof profile.serviceBase !== 'string' || !profile.serviceBase || typeof profile.baseUrl !== 'string' || !profile.baseUrl) return '';
+  return JSON.stringify([profile.id, profile.bindingHash, profile.serviceBase, profile.baseUrl]);
+}
 
 export default function ConnectionWorkspace(props:Props) {
   const source=props.domain==='remote'?props.cloudGoal:undefined;
@@ -103,12 +109,18 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
   const [workOpened, setWorkOpened] = useState(false), [query, setQuery] = useState('');
   const [guidedCloud, setGuidedCloud] = useState<{goalId:string;profileBinding:string}|null>(null);
   const [probe, setProbe] = useState<Data | null>(null), [trust, setTrust] = useState<Data | null>(null), [checked, setChecked] = useState(false), [receipt, setReceipt] = useState<Data | null>(null);
-  const { request, busy, error } = useRequest(run, state);
+  const { request, busy, error, waiting } = useRequest(run, state);
+  const [companionProbe, setCompanionProbe] = useState<{key: string; receivedAt: string | null} | null>(null);
+  const companionAttempt = useRef(0);
   const resume = Number(state.webWorkspaceResumeRevision || 0), previousResume = useRef(resume);
   const overview = !!selected && journey.view === 'profile:' + selected.id;
   const working = !!selected && journey.view === 'work:' + selected.id;
   const showingJobs = journey.view === 'all-jobs' || journey.view.startsWith('jobs:');
   const stale = selected && !profiles.some(profile => profile.id === selected.id && profile.bindingHash === selected.bindingHash);
+  const selectedCompanionKey = domain === 'remote' ? companionProfileKey(selected) : '';
+  const companionKey = selectedCompanionKey && profiles.some(profile => companionProfileKey(profile) === selectedCompanionKey) ? selectedCompanionKey : '';
+  const currentCompanionProbe = companionKey && companionProbe?.key === companionKey ? companionProbe : null;
+  const companionReceivedAt = currentCompanionProbe?.receivedAt;
   const jobs = list(data.jobs).filter(job => journey.view === 'all-jobs' || job.profileId === selected?.id);
   const unresolvedOperations = list(data.operations).filter(item => item.profileId === selected?.id && awaitingAdmission(item));
   const goBack = () => {
@@ -118,6 +130,7 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
     return journey.back();
   };
   useEffect(() => { if (previousResume.current === resume) return; previousResume.current = resume; setProbe(null); setTrust(null); setRemoving(null); setChecked(false); }, [resume]);
+  useLayoutEffect(() => { companionAttempt.current++; setCompanionProbe(null); }, [companionKey, resume]);
   useEffect(() => {
     registerTransientBack(() => {
       if (editing) return editorBack.current?.() ?? true;
@@ -128,6 +141,19 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
   }, [editing, trust, removing, busy, journey.view, selected, registerTransientBack]);
   const act = (action: string, args: Data, completed?: (value: Data) => void) => { void request(action, args).then(value => { setReceipt(value); completed?.(value); }).catch(() => {}); };
   const available = (action: string) => supported(domain + '.' + action) && !busy;
+  const checkCompanion = (profile: Data) => {
+    if (waiting.current) return;
+    const attempt = ++companionAttempt.current;
+    setCompanionProbe(null);
+    void request('remote.probe', binding(profile)).then(value => {
+      if (!companionKey || companionAttempt.current !== attempt) return;
+      setReceipt(null);
+      // The native receipt pins the configured endpoint. Its status reply is not a workspace or execution check.
+      const matched = value.profileBinding === profile.bindingHash && value.serviceBase === profile.serviceBase &&
+        value.name === 'Pocket World Companion' && value.protocolVersion === 1;
+      setCompanionProbe({ key: companionKey, receivedAt: matched ? new Date().toISOString() : null });
+    }).catch(() => {});
+  };
   const openProfile = (profile: Data) => {
     if (selected?.id !== profile.id || selected?.bindingHash !== profile.bindingHash) { setSelected({ ...profile }); setWorkOpened(false); setProbe(null); setReceipt(null); }
     journey.open('profile:' + profile.id);
@@ -171,16 +197,26 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
     {error && <p className="pw-secondary-error" role="alert">{error}</p>}
     {selected && journey.view !== 'list' && journey.view !== 'all-jobs' && stale && <div className="pw-connection-attention"><p role="alert">连接已在另一页面修改。旧目标仍显示在这里，尚未沿用它开始新工作。</p><Button variant="secondary" onClick={() => { const current = profiles.find(profile => profile.id === selected.id); setSelected(current ? { ...current } : null); setWorkOpened(false); setProbe(null); setReceipt(null); if (!current) journey.back(); else journey.open('profile:' + current.id); }}>重新读取当前连接</Button></div>}
     {selected && overview && !stale && <>
-      <div className="pw-connection-summary"><span className="pw-connection-summary-icon">{domain === 'remote' ? <IconMonitor size={22} aria-hidden /> : <IconServer size={22} aria-hidden />}</span><div><h3>{profileReadiness(domain, selected)}</h3><p>{domain === 'remote' ? '能力与账号状态以每次实际核对为准。' : '当前工作区 · ' + (selected.workspace || '尚未设置')}</p></div></div>
+      <div className="pw-connection-summary"><span className="pw-connection-summary-icon">{domain === 'remote' ? <IconMonitor size={22} aria-hidden /> : <IconServer size={22} aria-hidden />}</span>
+        <div>
+          <div role={domain === 'remote' ? 'status' : undefined}>
+            <h3>{companionReceivedAt ? '本次主机已应答' : profileReadiness(domain, selected)}</h3>
+            {companionReceivedAt ? <p><time dateTime={companionReceivedAt}>{new Date(companionReceivedAt).toLocaleString()}</time> · 本次未核对工作环境与执行器。</p>
+              : <p>{domain === 'remote' ? currentCompanionProbe ? '这次回复未能核对为当前 Companion。' : '主机应答与工作环境需分别核对。' : '当前工作区 · ' + (selected.workspace || '尚未设置')}</p>}
+          </div>
+          {domain === 'remote' && <div className="pw-form-actions"><Button variant="secondary" disabled={!available('probe')} onClick={() => checkCompanion(selected)}>核对主机应答</Button></div>}
+        </div>
+      </div>
       {domain === 'remote' && unresolvedOperations.length > 0 && <section className="pw-connection-attention" aria-label="待核对的原提交"><h3>有原提交待核对</h3><p>先读取原任务的实际结果，不会重新发送这次工作。</p>{unresolvedOperations.map(item => <ConnectionRow key={item.operationId} title={item.worker || '电脑原操作'} detail={status(item.status) + ' · ' + text(item.operationId)} icon={IconHistory} onOpen={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }} />)}</section>}
       <div className="pw-connection-list">
-        <ConnectionRow title={domain === 'remote' ? '进入电脑工作区' : '进入主机工作区'} detail={domain === 'remote' ? '继续原工作，或核对后开始下一项' : '任务、文件、命令和终端'} icon={domain === 'remote' ? IconMonitor : IconTerminal} disabled={busy} onOpen={openWork} />
+        <ConnectionRow title={domain === 'remote' ? '进入电脑工作区' : '进入主机工作区'} detail={domain === 'remote' ? companionReceivedAt ? '读取工作环境，按需核对执行器' : '继续原工作，或核对后开始下一项' : '任务、文件、命令和终端'} icon={domain === 'remote' ? IconMonitor : IconTerminal} disabled={busy} onOpen={openWork} />
         <ConnectionRow title="查看原任务" detail={domain === 'remote' ? '读取回执、处理审批，继续同一项工作' : '回到原任务，查看执行、审批与结果'} icon={IconHistory} disabled={busy} onOpen={() => journey.open('jobs:' + selected.id)} />
       </div>
 
-      <section className="pw-connection-detail-section"><h3>{domain === 'remote' ? '连接能力' : '主机身份'}</h3>
-        {domain === 'ssh' && <><Facts values={[[ '已保存指纹', selected.hostFingerprint || '尚未保存' ]]} /><p className="pw-field-hint">指纹须与这台主机的可信来源一致。普通 SSH 不保证断线后任务继续。</p></>}
-        <div className="pw-form-actions"><Button variant="secondary" disabled={!available(domain === 'remote' ? 'probe' : 'probeHostKey')} onClick={() => act(domain === 'remote' ? 'remote.probe' : 'ssh.probeHostKey', binding(selected), value => setProbe({ ...value, originalProfile: { ...selected } }))}>{domain === 'remote' ? '探测能力' : '查看主机指纹'}</Button>{domain === 'remote' && <Button variant="ghost" disabled={!available('reconnect')} onClick={() => act('remote.reconnect', binding(selected))}>同步原任务</Button>}</div>
+      <section className="pw-connection-detail-section" aria-label={domain === 'remote' ? '原任务同步' : undefined}>
+        {domain === 'ssh' ? <><h3>主机身份</h3><Facts values={[[ '已保存指纹', selected.hostFingerprint || '尚未保存' ]]} /><p className="pw-field-hint">指纹须与这台主机的可信来源一致。普通 SSH 不保证断线后任务继续。</p>
+          <div className="pw-form-actions"><Button variant="secondary" disabled={!available('probeHostKey')} onClick={() => act('ssh.probeHostKey', binding(selected), value => setProbe({ ...value, originalProfile: { ...selected } }))}>查看主机指纹</Button></div></>
+          : <div className="pw-form-actions"><Button variant="ghost" disabled={!available('reconnect')} onClick={() => act('remote.reconnect', binding(selected))}>同步原任务</Button></div>}
       </section>
       {probe && domain === 'ssh' && <section className="pw-connection-attention"><h3>本次实际主机指纹</h3><Facts values={[[ '主机', probe.originalProfile?.name ], ['指纹', probe.fingerprint ], ['密钥类型', probe.keyType ]]} /><p>请与这台主机已有可信渠道提供的指纹核对。探测没有发送登录凭据。</p>
         {probe.changed ? <><p role="alert">主机密钥已变化，当前连接不会执行。核对原因后，可先移除原信任，再重新探测。</p><Button variant="secondary" disabled={busy} onClick={() => { setTrust({ kind: 'forget', profile: probe.originalProfile }); setChecked(false); }}>核对并移除原信任</Button></> : <Button variant="secondary" disabled={busy || !probe.probeId} onClick={() => { setTrust({ kind: 'approve', ...probe }); setChecked(false); }}>核对并信任这个指纹</Button>}</section>}

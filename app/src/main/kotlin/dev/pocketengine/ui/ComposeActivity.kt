@@ -224,8 +224,11 @@ class ComposeActivity : ComponentActivity() {
         val presentation = savedInstanceState?.getString("libraryWebPresentation")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
         showWorkspace(presentation)
         controller.attach()
+        val alreadyResumed = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        // A foreground bootstrap handoff refreshes after binding its native foreground hooks.
+        if (!alreadyResumed) controller.refresh()
         engine.publish(media.state())
-        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) resumeBusiness()
+        if (alreadyResumed) resumeBusiness()
         if (crossedBootstrap) {
             // Navigation can be revalidated. Old picker/voice/import/continue mutations cannot be replayed into a fresh Controller.
             val pending = intent

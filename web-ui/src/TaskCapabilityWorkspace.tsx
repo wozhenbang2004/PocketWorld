@@ -15,6 +15,37 @@ type OriginalFileReading = { operationId: string; artifactId: string; sha256: st
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const receiptStatus = (value: string) => ({unknown:'结果待核对',pending:'等待原回执',running:'执行中',failed:'执行失败',rejected:'本次已拒绝',completed:'执行回执已返回'} as Record<string,string>)[value] || value;
 const names = (value: any) => Array.isArray(value) ? value.join('、') || '无' : '尚未取得';
+const pendingArtifactExport = new Set(['waiting', 'selected', 'writing']);
+const artifactDigest = /^[a-f0-9]{64}$/;
+
+/** A successful source write is not a verified destination. Show only the native result of this selection. */
+function artifactExportFeedback(value: Data | null | undefined, taskId: string) {
+  if (value?.taskId !== taskId || typeof value.requestId !== 'string' || !value.requestId ||
+      typeof value.operationId !== 'string' || !value.operationId || typeof value.artifactId !== 'string' || !artifactDigest.test(value.artifactId) ||
+      typeof value.sha256 !== 'string' || !artifactDigest.test(value.sha256) ||
+      typeof value.path !== 'string' || !value.path || value.path.length > 240 ||
+      !Number.isSafeInteger(value.bytes) || value.bytes < 0 || value.bytes > 65_536) return null;
+  const proof = value.targetReadback;
+  let message: string;
+  switch (value.phase) {
+    case 'waiting': message = value.launchUnknown === true ? '尚未确认系统选择器是否打开。请完成或取消原选择，不会重新打开。' : '请在系统中选择保存位置，尚未写入。'; break;
+    case 'selected': message = '已取得保存位置，尚未写入。'; break;
+    case 'writing': message = '正在写入并核对所选文档…'; break;
+    case 'verified': message = proof?.status === 'verified' && proof.sha256 === value.sha256 && proof.bytes === value.bytes
+      ? `已另存并核对所选文档：回读 ${value.bytes.toLocaleString()} 字节，SHA-256 与原件一致。请在刚选的位置查看。`
+      : '没有取得完整的目标核对证据。请检查刚选的位置，没有自动重写。'; break;
+    case 'written_unverified': message = proof?.status === 'content_mismatch'
+      ? '写入已返回，但所选文档回读与原件不符。请检查刚选的位置，没有自动重写。'
+      : '写入已返回，但没有核实所选文档的字节。请检查刚选的位置，没有自动重写。'; break;
+    case 'write_unknown': message = '没有取得完整的写入回执，目标可能已有内容。请先检查刚选的位置，没有自动重写。'; break;
+    case 'not_written': message = '本次未写入原成果。系统可能已保留选取时创建的文档。'; break;
+    case 'cancelled': message = '已取消系统保存，本次未写入原成果。'; break;
+    case 'not_started': message = '系统保存选择器未打开，本次未开始。'; break;
+    default: return null;
+  }
+  return { path: value.path as string, pending: pendingArtifactExport.has(value.phase), message };
+}
+
 const capabilityState = (state?: string): string => ({
   available: '配置已就绪，执行时仍核对本次授权', missing_installation: '尚未登记这个插件', source_unavailable: '当前来源暂不可核对',
   disabled: '这个插件已停用', missing_tool: '当前来源没有这项工具', grant_required: '这项工具尚未获准',
@@ -198,7 +229,8 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
       setFile({ operationId: value.operationId, artifactId: value.artifactId, sha256: value.sha256, preview });
     });
   };
-  const exported = exportState?.taskId === taskId ? exportState : null;
+  const nativeView = bridge.getState().view as Data | undefined;
+  const exported = nativeView?.taskId === taskId && nativeView.section == null ? artifactExportFeedback(exportState, taskId) : null;
   useLayoutEffect(() => {
     if (policyWasOpen.current === !!policy) return; policyWasOpen.current = !!policy;
     const node = root.current, scroller = node?.closest('.pw-task-body');
@@ -215,6 +247,7 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
 
   const selectedLocalSkills = expanded && !policy ? originalLocalProfileSkills(taskId, page.current, view) : [];
   return <section ref={root} aria-busy={busy} className="pw-task-capabilities pw-ecosystem-depth"><div className="pw-section-heading pw-eco-workspace-heading"><div><h3>任务脚本与工具</h3><p>核对这次执行，查看原回执与文件成果。</p></div><Button variant="secondary" disabled={busy} onClick={() => { if (expanded) { const collapse = () => { closePolicy(); close(); setExpanded(false); }; if (policyCurrent.current) leavePolicy(collapse); else collapse(); } else { setExpanded(true); load(); } }}>{expanded ? '收起' : '查看'}</Button></div>
+    {exported && <p role="status"><bdi>{exported.path}</bdi> · {exported.message}</p>}
     {expanded && <>
       {policy && <section className="pw-task-policy-editor" aria-label="原任务适用的审批规则">
         <Button variant="ghost" onClick={() => leavePolicy()}>返回本轮工具</Button>
@@ -250,7 +283,7 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
               <Button variant="ghost" disabled={busy} aria-expanded={!!saved} onClick={event => saved ? closeArtifact() : readArtifact(operation, artifact, event.currentTarget)}>
                 {saved ? '收起原件' : '预览原件'}
               </Button>
-              <Button variant="secondary" disabled={busy || !!exported && ['waiting', 'selected', 'writing'].includes(exported.phase)} onClick={() => void invoke('taskCapabilities.export', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }, () => setNotice('系统保存请求已发出，请完成或取消原文件选择。'))}>导出原成果</Button>
+              <Button variant="secondary" disabled={busy || exported?.pending} onClick={() => { setNotice(''); void invoke('taskCapabilities.export', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }); }}>导出原成果</Button>
               {saved && <section aria-label="原文件预览">
                 {saved.kind === 'plain_text' ? <>
                   {saved.text ? <pre className="pw-source-code">{saved.text}</pre> : <p>这个原文件为空。</p>}
@@ -285,7 +318,7 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
       {rows(view?.capabilityNeeds).map(need => <section className="pw-eco-tool" key={need.capability}><h4>{need.capability}</h4><p>{capabilityState(need.status)}</p><p className="pw-field-hint">所需技能：{requiredBy(need)}</p></section>)}
       </aside></div>{view && !view.reviewPending && !rows(view.executions).length && !rows(view.pluginNeeds).length && !rows(view.capabilityNeeds).length && !rows(view.skillPreparation?.unresolvedSkills).length && (!view.skillPreparation || view.skillPreparation.state === 'ready') && <p className="pw-muted">当前没有待审阅脚本、原执行记录或需要准备的技能能力。</p>}
       </div>
-    </>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}{exported && <p role="status">{exported.error || (exported.phase === "exported" && exported.receipt?.status === "exported" ? `已按原 SHA-256 导出 ${exported.receipt.bytes} 字节，请在文件应用中查看。` : exported.phase === "cancelled" ? "原保存选择已取消，没有写入其他位置。" : exported.phase === "writing" ? "正在写入所选的原文件位置…" : "等待原系统保存选择；尚未确认文件已导出。")}</p>}
+    </>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'script' ? '审阅本次脚本执行' : '审阅工具设置'}>{review && <div className="pw-ecosystem-depth pw-eco-review-body">
       {review.kind === 'script' ? <><p>本次批准只属于当前原任务、脚本版本、执行地点和参数。脚本内容与结果均需独立核对。</p><dl className="pw-facts"><div><dt>技能</dt><dd>{review.package?.name || review.package?.id} · 修订 {review.package?.revision}</dd></div><div><dt>脚本</dt><dd>{review.request?.scriptPath}</dd></div><div><dt>执行地点</dt><dd>{review.executionLocation === 'this_phone' ? '这台手机的原托管环境' : '原配置的执行端'}</dd></div><div><dt>最长时间</dt><dd>{review.request?.timeoutSeconds} 秒</dd></div><div><dt>读取范围</dt><dd>{names(review.request?.readPaths)}</dd></div><div><dt>写入范围</dt><dd>{names(review.request?.writePaths)}</dd></div><div><dt>成果范围</dt><dd>{names(review.request?.outputPaths)}</dd></div><div><dt>到期时间</dt><dd>{typeof review.expiresAt === 'number' ? new Date(review.expiresAt).toLocaleString() : '尚未取得'}</dd></div></dl><Accordion><AccordionItem title="准确参数与内容标识"><pre className="pw-source-code">{JSON.stringify({ argv: review.argv, cwd: review.cwd, planDigest: review.planDigest, scriptSha256: review.scriptSha256, resources: review.resources, request: review.request, backend: review.backend }, null, 2)}</pre></AccordionItem></Accordion><Button variant="secondary" disabled={busy} onClick={() => void invoke('taskCapabilities.script', { reviewHandle: review.reviewHandle }, value => { if (shown.current === review) setScript(value); })}>读取当前版本的脚本内容</Button>{script && <pre className="pw-source-code">{script.content}</pre>}</> : <><p>{review.pluginId} · {review.tool?.name}</p><p>{review.change === 'grant' ? review.value ? '只允许原安装的这一个工具。实际任务调用仍走原任务授权。' : '撤销原安装的这一个工具。' : review.value ? '启用此原安装；不会授予其他工具。' : '停用此原安装。'}</p><p>{review.tool?.description}</p><Accordion variant="divided"><AccordionItem title="工具参数与原始定义"><pre className="pw-source-code">{JSON.stringify(review.tool?.schema || review.tool?.inputSchema || {}, null, 2)}</pre></AccordionItem></Accordion></>}
       <CheckboxField isSelected={acknowledged} isDisabled={busy} onChange={acknowledge}>我已核对本次准确范围，确认这次决定</CheckboxField><div className="pw-form-actions pw-eco-review-confirm"><Button disabled={busy || !acknowledged || review.kind === 'script' && review.expiresAt <= Date.now()} onClick={() => decide(true)}>{review.kind === 'script' ? '批准本次执行' : '确认本次设置'}</Button>{review.kind === 'script' && <Button variant="secondary" disabled={busy} onClick={() => decide(false)}>拒绝本次执行</Button>}<Button variant="ghost" onClick={closeReview}>关闭审阅</Button></div>

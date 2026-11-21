@@ -15,6 +15,7 @@ const binding=(target:WorkSupplementTarget)=>({taskId:target.taskId,runId:target
 const expectedKey=(target:WorkSupplementTarget)=>`work:${target.taskId}:${target.runId}:${target.epoch}`;
 const failureText=(error:unknown)=>error instanceof Error?error.message:'原补充尚未确认，请保留本页文字并核对。';
 const sameContent=(a:{text:string;mode:string},b:{text:string;mode:string})=>a.text===b.text&&a.mode===b.mode;
+const queueLabel='等当前答复结束再加入',steerLabel='下个安全步骤加入';
 
 function readDraft(value:Json,target:WorkSupplementTarget):Draft{
  if(!value||value.key!==expectedKey(target)||value.taskId!==target.taskId||value.runId!==target.runId||value.epoch!==target.epoch||value.conversationId!==target.conversationId
@@ -23,7 +24,8 @@ function readDraft(value:Json,target:WorkSupplementTarget):Draft{
 }
 function receiptLabel(receipt:Json|undefined):string{
  if(!receipt)return '';
- const labels:Record<string,string>={accepted:'这条补充已接收。',queued:receipt.mode==='steer'?'已加入原工作，将在下个安全步骤采用。':'已加入原工作，将在本轮结束后处理。',consumed:'原工作已采用这条补充。',withdrawn:'这条补充已撤回。',rejected:'原工作未接收这条补充，草稿仍保留。',not_sent:'这条补充没有发送，草稿仍保留。',unconfirmed:'这条补充的接收结果仍待核对。'};
+ const timing=receipt.mode==='queue'?queueLabel:receipt.mode==='steer'?steerLabel:'';
+ const labels:Record<string,string>={accepted:'这条补充已接收。',queued:timing?`已按「${timing}」登记，尚未确认采用。`:'补充已登记，尚未确认采用。',consumed:'原工作已采用这条补充。',withdrawn:'这条补充已撤回。',rejected:'原工作未接收这条补充，草稿仍保留。',not_sent:'这条补充没有发送，草稿仍保留。',unconfirmed:'这条补充的接收结果仍待核对。'};
  return labels[String(receipt.status)]||'原补充回执待核对。';
 }
 
@@ -126,7 +128,7 @@ export function OwnerWorkSupplement({target,task,can,registerBeforeLeave,onClose
    <p className="pw-muted">{!current?'工作已进入另一轮；这份草稿仍属于原执行，请核对后决定。':draft.reason}</p>
    {!!draft.otherDrafts?.length&&<div className="pw-work-pending-links" aria-label="保留的原执行草稿">{draft.otherDrafts.filter(row=>row.taskId===target.taskId&&row.conversationId===target.conversationId&&typeof row.runId==='string'&&Number.isSafeInteger(row.epoch)).map(row=><Button key={row.key} variant="ghost" size="small" disabled={busy||saving} onClick={()=>onSelectOriginal({taskId:row.taskId,runId:row.runId,epoch:row.epoch})}>查看另一轮保留的{row.hasText?'补充草稿':'待核对输入'}</Button>)}</div>}
    <TextAreaField ref={input} label="补充内容" value={text} onChange={value=>edit(value)} placeholder="补充要求、调整重点或提供新的信息…" hint="文字单独保存；发送后会进入这件工作的原话题。" rows={3} autoResize maxRows={8} maxLength={12000} isDisabled={busy||loading}/>
-   <RadioOptions label="采用时机" value={mode} onChange={value=>edit(live.current.text,value as 'queue'|'steer')} isDisabled={busy||loading} options={[{id:'queue',label:'本轮结束后处理'},{id:'steer',label:'下个安全步骤加入'}]}/>
+   <RadioOptions label="补充何时加入这件工作" value={mode} onChange={value=>edit(live.current.text,value as 'queue'|'steer')} isDisabled={busy||loading} options={[{id:'queue',label:queueLabel},{id:'steer',label:steerLabel}]}/>
    <div className="pw-work-supplement-footer"><span role="status">{saving?'正在保存草稿':dirty?'本页修改尚未保存':'草稿已保留'}</span><div className="pw-action-row">{dirty&&<Button variant="ghost" size="small" disabled={saving||busy} onClick={()=>void flush(true)}>保存本页补充</Button>}<Button variant="primary" disabled={!canSend} onClick={()=>void submit()}>{busy?'正在核对回执':'发送到这件工作'}</Button></div></div>
    {pending.map(row=><div className="pw-work-supplement-receipt" key={row.clientMessageId}><p role="status">{receiptLabel(row.receipt)||'这条补充的接收结果仍待核对。'}</p><div className="pw-action-row"><Button variant="secondary" size="small" disabled={busy||saving} onClick={()=>void query(row.clientMessageId)}>核对原补充回执</Button>{row.canRetryLocallyUnsent===true&&<Button variant="ghost" size="small" disabled={busy||saving||dirty||!accepts} onClick={()=>void submit(row)}>重新保存并发送原补充</Button>}</div></div>)}
    {unknownOutsideList&&<div className="pw-work-supplement-receipt"><p role="status">这次补充的结果尚未确认，原输入身份仍保留。</p><Button variant="secondary" size="small" disabled={busy||saving} onClick={()=>void query(unknownOutsideList)}>查询这次原补充</Button></div>}

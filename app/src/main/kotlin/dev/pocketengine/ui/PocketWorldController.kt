@@ -2743,7 +2743,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
         modelSelectionRevision = app.settings.modelSelection().status().revision()
-        loadOwnerComposer(); refresh()
+        loadOwnerComposer()
     }
     /** Native owner action; the host resolves the existing original control, never payload authority. */
 
