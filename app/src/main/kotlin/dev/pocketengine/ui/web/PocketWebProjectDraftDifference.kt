@@ -68,7 +68,10 @@ internal class PocketWebProjectDraftDifference(private val context:Context,priva
                 val registered=local().retainedDraftCopyReferencesForOwner(task,seen.root)
                 tasks().retainedDraftWorkForOwner(task,seen.root,seen.run,seen.epoch,seen.path,registered).also{check(shown())}
             } } else null
-            workCopy.dispatch(action,args,::shown,retained,done);return
+            // Only a real OPEN from the currently held, saved non-root editor is eligible.
+            val editorOpen=if(action==PocketWebDraftWorkCopy.OPEN&&held!=null&&held.source===seen&&held.parent==revision&&revision!=seen.root)
+                PocketWebDraftWorkCopy.RetainedEditorOpen(seen.run,seen.epoch,seen.path) else null
+            workCopy.dispatch(action,args,::shown,retained,editorOpen,done);return
         }
         if(action==OFFER||action==SAVE){fileCopy(action,args,seen,done);return}
         val previous=editor

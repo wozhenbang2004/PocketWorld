@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.project.OwnerDraftWorkCopy
+import dev.pocketengine.features.local.project.ProjectSources
 import dev.pocketengine.store.TaskStore
 import java.util.UUID
 import org.json.JSONArray
@@ -19,6 +20,7 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
         const val MOVE_REVIEW="projectDraft.reviewUnusedMove";const val MOVE="projectDraft.moveUnusedCopy"
         val commands=setOf(FIND,REVIEW,CREATE,OPEN,OPEN_RETAINED,MOVE_REVIEW,MOVE)
     }
+    data class RetainedEditorOpen(val run:String,val epoch:Int,val path:String)
     private val main=Handler(Looper.getMainLooper())
     private data class Offer(val id:String,val ref:List<String>,val review:OwnerDraftWorkCopy.Review,val shown:()->Boolean,val expiry:Long)
     private data class Move(val id:String,val ref:List<String>,val status:String,val shown:()->Boolean,val expiry:Long)
@@ -26,7 +28,8 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
     private var offer:Offer?=null
     @Volatile var busy=false;private set
     fun clear(){offer=null;move=null}
-    fun dispatch(action:String,args:JSONObject,shown:()->Boolean,retained:(()->JSONArray)?,done:(JSONObject?,String?)->Unit){
+    fun dispatch(action:String,args:JSONObject,shown:()->Boolean,retained:(()->JSONArray)?,
+        editorOpen:RetainedEditorOpen?,done:(JSONObject?,String?)->Unit){
         val ref=listOf("taskId","draftId","revisionId","sha256").map(args::getString)
         require(ref.drop(1).all{it.matches(Regex("[a-f0-9]{64}"))})
         check(!busy&&shown()){"请先回到正在查看的这一份已保留稿。"}
@@ -37,7 +40,7 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
             SystemClock.elapsedRealtime()<hold.expiry){"副本审阅已变化，未创建。"}
         clear();busy=true
         try{work(Runnable{
-            var next:Offer?=null;var nextMove:Move?=null
+            var next:Offer?=null;var nextMove:Move?=null;var verifiedEditorOpen=false
             val result=runCatching{
                 fun current(){check(shown()){"原稿窗口已离开，没有自动重交。"}}
                 fun source()=tasks().ownerDraftWorkCopySeed(ref[0],ref[1],ref[2],ref[3])
@@ -57,7 +60,18 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
                         catch(unavailable:Exception) { copy.put("firstBuildUnavailable",true) } // A missing optional child never hides the real working copy.
                         if(retained!=null)try{copy.put("retainedWork",retained())}catch(unavailable:Exception){/* Preserve the directly selected draft. */}
                     }
-                    action==OPEN||action==OPEN_RETAINED->host.openDraftWorkCopy(seed){current();check(source().identity==seed.identity)}
+                    action==OPEN||action==OPEN_RETAINED->host.openDraftWorkCopy(seed){current();check(source().identity==seed.identity)}.also { opened ->
+                        if(action==OPEN&&editorOpen!=null&&shown()&&opened.opt("found")==true&&opened.opt("status")=="ready"&&
+                            opened.opt("recyclable")==false&&opened.opt("executionAuthorized")==false&&opened.opt("workIdentity")==seed.identity&&
+                            opened.opt("taskId")==ref[0]&&opened.opt("draftId")==ref[1]&&opened.opt("revisionId")==ref[2]&&opened.opt("sha256")==ref[3]&&
+                            opened.opt("runId")==editorOpen.run&&opened.optInt("epoch")==editorOpen.epoch&&opened.opt("path")==editorOpen.path) {
+                            // A legacy readable copy without an exact seal still opens, but does not get a manuscript cue.
+                            verifiedEditorOpen=runCatching {
+                                val publication=host.retainedDraftOriginForOpenCopy(seed.projectId,seed.checkoutId,seed.identity)
+                                ProjectSources.canonical(publication)==ProjectSources.canonical(seed.view())&&shown()
+                            }.getOrDefault(false)
+                        }
+                    }
                     action==MOVE_REVIEW->{
                         val from=args.getString("fromState");check(existing.opt("status")==from&&existing.opt("recyclable")==true){"这份副本已投入工作或不在原位置，没有移动。"}
                         val m=Move(UUID.randomUUID().toString(),ref,from,shown,SystemClock.elapsedRealtime()+120_000L);nextMove=m
@@ -84,7 +98,7 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
                 else result.fold({r->
                     offer=next;move=nextMove
                     next?.id?.let{token->main.postDelayed({if(offer?.id==token)offer=null},120_000L)}
-                    if(action==OPEN||action==OPEN_RETAINED)runCatching{open(r,action==OPEN_RETAINED)}.fold({done(r,null)},{done(null,it.message?:"没有打开原副本")})
+                    if(action==OPEN||action==OPEN_RETAINED)runCatching{open(r,action==OPEN_RETAINED||verifiedEditorOpen)}.fold({done(r,null)},{done(null,it.message?:"没有打开原副本")})
                     else done(r,null)
                 },{done(null,it.message?:"暂不能核对这份副本；原工程和改稿均保留。")})
             }
