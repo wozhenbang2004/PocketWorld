@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from './forms-library';
 import {bridge} from './bridge';
 import {reportedHomeWork,sameHomeReport,verifyHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
-import { IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconError, IconFolder, IconInfo, IconPauseCircle, IconPhone } from './icons';
+import { IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconError, IconFileText, IconFolder, IconInfo, IconPauseCircle, IconPhone } from './icons';
 import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { getRecentTaskProgress } from './task-presentation';
@@ -24,6 +24,7 @@ export type ButlerHomeProps = {
   modelReady: boolean;
   localDisplayDraft?: boolean;
   onTryLocal?: () => void;
+  onReadLocalFiles?: () => void;
   onImportProject?: () => void;
   stagingLocal?: boolean;
   modelSetup: ReactNode;
@@ -74,7 +75,7 @@ function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresenta
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onImportProject, stagingLocal=false, modelSetup, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onImportProject, stagingLocal=false, modelSetup, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -284,15 +285,17 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const workFirst = !firstHostSave && !stagingLocal && (work.length > 0 || hasPhone);
   const showLocal = stagingLocal || empty && !!onTryLocal;
   const showSetup = ready && !modelReady && !localDisplayDraft && !stagingLocal;
+  const showFiles = ready && active && !localDisplayDraft && !stagingLocal && !!onReadLocalFiles;
   const showProjectImport = empty && active && !localDisplayDraft && !stagingLocal && !firstHostSave && !!onImportProject;
   const nextHint=showLocal?(stagingLocal?'正在填入问题…':'只填入问题，按发送才读取。不用模型。'):
-    firstHostSave?.hint||(!workFirst?'可以先写好草稿，连接后再发送。':'');
-  const nextSteps=(showLocal||showSetup||showProjectImport)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
+    firstHostSave?.hint||(showSetup&&!workFirst?'可以先写好草稿，连接后再发送。':'');
+  const nextSteps=(showLocal||showSetup||showProjectImport||showFiles)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
     {showLocal&&<Button className="pw-butler-try" variant="ghost" leadingIcon={IconPhone} trailingIcon={IconChevronRight} disabled={stagingLocal} aria-describedby={nextNote} onClick={onTryLocal}>查这台手机的屏幕信息</Button>}
     {showProjectImport&&<Button variant="ghost" leadingIcon={IconFolder} onClick={onImportProject}>导入本机工程</Button>}
     {showSetup&&modelSetup}
     {showSetup&&firstHostSave&&<Button variant="ghost" size="small" disabled={firstHostSave.disabled} aria-busy={firstHostSave.busy||undefined}
       aria-describedby={nextNote} onClick={firstHostSave.save}>{firstHostSave.busy?'正在保存原话…':'仅保存到本机'}</Button>}
+    {showFiles&&<Button variant="ghost" size="small" leadingIcon={IconFileText} onClick={onReadLocalFiles}>在本机读文件</Button>}
     {nextHint&&<p id={nextNote} role={stagingLocal?'status':undefined}>{nextHint}</p>}
   </div>;
 

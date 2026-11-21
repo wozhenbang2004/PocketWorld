@@ -94,7 +94,8 @@ import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor,type ProjectLocalFilesIntent} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectTerminalSavedFileReturn} from './ProjectDevelopmentWorkspace';
+import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import {ContinuedProjectBinding} from './ProjectWorkBinding';
@@ -184,7 +185,8 @@ type AcknowledgedWorkVisit=TaskReviewWindow&{chatRow?:ChatWorkRowOrigin;chatRetu
 type ChatDrawerReturn=ChatWorkReturn&{taskId:string;navigation:number;resumeRevision:number};
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
-type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type TerminalSavedFileOrigin={position:CheckoutSavedPosition;navigation:number;current:(section:'local'|null)=>boolean};
+type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type LiveResultAttachment={result:TaskResult;mimeType:string;size:number;kind:string};
 type SavedAttachmentMessage={id:string;revision:number;resume:number;taskRequest:number;liveResult?:LiveResultAttachment};
@@ -415,6 +417,7 @@ export default function App(){
  const [modelSetupOpening,setModelSetupOpening]=useState(false);
  const [modelSetupFeedback,setModelSetupFeedback]=useState<{input:ModelSetupInput;choice:AIChoice;matchesDefault?:boolean;modelRevision:number;draftRevision:number;preferenceRevision:unknown}|null>(null);
  const relatedOrigin=useRef<WorkspaceOrigin|null>(null);
+ const terminalSavedFileArrival=useRef<ProjectTerminalSavedFileReturn|null>(null);
  const [localWorkspaceDraft,setLocalWorkspaceDraft]=useState<LocalWorkspaceDraft|undefined>();
  const [projectSections,setProjectSections]=useState<Record<string,'work'|'files'>>({});
  const [projectWorkDrafts,setProjectWorkDrafts]=useState<Record<string,ProjectWorkDraft>>({});
@@ -542,6 +545,11 @@ export default function App(){
  const projectWorkView=projectWorkViews[String(state.projectId||'')]||{query:'',filter:'all' as const,expanded:false,selected:''};
  const updateProjectWorkView=(patch:Partial<ProjectWorkCollectionView>)=>setProjectWorkViews(previous=>({...previous,[String(state.projectId||'')]:{...(previous[String(state.projectId||'')]||{query:'',filter:'all',expanded:false,selected:''}),...patch}}));
  const projectSection=projectSections[String(state.projectId||'')]||'work';
+ useEffect(()=>{
+  const returning=terminalSavedFileArrival.current;
+  if(returning&&(route!=='projects'||projectSection!=='work'||state.projectId!==returning.position.projectId||state.filePath||taskOpen))
+   terminalSavedFileArrival.current=null;
+ },[route,projectSection,state.projectId,state.filePath,taskOpen]);
  useEffect(()=>{
   if(!projectLocalFilesIntent)return;
   const retire=()=>handledLocalFilesIntent(projectLocalFilesIntent);
@@ -943,6 +951,7 @@ export default function App(){
    setupReturnPending.current=false;rememberChatPosition();setWorkOpen(false);setCommandOpen(false);
    if(taskOpen&&!taskClosed&&!await closeTask())return false;
    if(options?.stillCurrent&&!options.stillCurrent())return false;
+   terminalSavedFileArrival.current=null;
    navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);afterNavigate?.();return true;
   };
   if(guardTaskLeave(()=>{void navigate(requested,afterNavigate,options)}))return Promise.resolve(false);
@@ -1029,7 +1038,7 @@ export default function App(){
   relatedOrigin.current=origin;
   return navigate(destination,afterNavigate,{keepOrigin:true,taskClosed:closingTask});
  };
- const openProjectTerminal=(checkout?:LocalTerminalCheckout)=>{
+ const openProjectTerminal=(checkout?:LocalTerminalCheckout,position?:CheckoutSavedPosition)=>{
   if(!checkout){void openRelatedWorkspace('local');return;}
   const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
   const current=()=>{
@@ -1039,7 +1048,18 @@ export default function App(){
     !view.taskId&&!view.section;
   };
   if(!current())return;
-  const origin={...captureWorkspaceOrigin(),label:'返回原私人副本',focus:null,focusKey:'project-copy-terminal',terminalCheckout:checkout};
+  const start=bridge.getState(),resume=obj(start.view).resumeRevision,projectRequest=start.state.requestedProjectRevision;
+  const originalOwner=(section:'local'|null)=>{
+   const live=bridge.getState(),view=obj(live.view),owner=live.state;
+   return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&
+    view.section===section&&view.taskId===null&&view.resumeRevision===resume&&
+    owner.projectId===checkout.projectId&&owner.requestedProjectRevision===projectRequest&&
+    !owner.filePath&&!owner.fileLoading&&!owner.fileSaving&&!owner.conversationReader;
+  };
+  const terminalSavedFile=position?.projectId===checkout.projectId&&position.checkoutId===checkout.checkoutId&&
+   Number.isSafeInteger(resume)&&Number.isSafeInteger(projectRequest)&&originalOwner(null)?
+   {position,navigation:navigation+1,current:originalOwner}:undefined;
+  const origin:WorkspaceOrigin={...captureWorkspaceOrigin(),label:'返回原私人副本',focus:null,focusKey:'project-copy-terminal',terminalCheckout:checkout,terminalSavedFile};
   void navigate('local',()=>{relatedOrigin.current=origin;setLocalWorkspaceDraft(undefined);},{keepOrigin:true,stillCurrent:current});
  };
  const terminalOrigin=setupReturnPending.current
@@ -1065,6 +1085,8 @@ export default function App(){
   archiveChatCurrent?:(live:ReturnType<typeof bridge.getState>,arrived:boolean)=>boolean,
   firstHomeModelCurrent?:(live:ReturnType<typeof bridge.getState>,arrived:boolean)=>boolean)=>{
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+  const terminalFile=route==='local'&&origin.route==='projects'&&origin.terminalSavedFile?.navigation===navigation&&
+   origin.terminalSavedFile.current('local')?origin.terminalSavedFile:undefined;
   const phonePlace=origin.phonePlace?returnToPreparedPhoneDraft(origin.phonePlace):undefined;
   if(origin.phonePlace&&!phonePlace){setLocalError('原手机目标已变化或尚未恢复，没有切换到其他草稿。');return;}
   const source=origin.drawerChat,savedHost=origin.savedHostPreparation&&origin.chatWork,modelInput=origin.modelInput,projectModelInput=origin.projectModelInput,proposal=origin.phonePreparation;
@@ -1127,6 +1149,18 @@ export default function App(){
    if(teamResult){void reopenTeamResult();return;}
    if(!keepOrigin)relatedOrigin.current=origin.parent||null;
    if(origin.settingsDirectory)setSettingsRestore({...origin.settingsDirectory,revision:navigationWindow.current});
+   // Carry a location only, on the actual ordinary Back. The usual Work read
+   // decides whether this is still the saved selection; no editor is opened.
+   if(terminalFile&&navigationWindow.current===navigation+1&&(terminalFile.current('local')||terminalFile.current(null))){
+    const arrival:ProjectTerminalSavedFileReturn={position:terminalFile.position,take:()=>{
+     // The first read may answer before the native section change is projected.
+     // Leave this for the normal Work window read after connections.leave.
+     if(terminalSavedFileArrival.current!==arrival||navigationWindow.current!==navigation+1||!terminalFile.current(null))return false;
+     terminalSavedFileArrival.current=null;
+     return true;
+    }};
+    terminalSavedFileArrival.current=arrival;
+   }
   },{keepOrigin:true,...(guarded?{stillCurrent:sameChat}:{})});
   if(!closed&&guarded&&!sameChat()&&navigationWindow.current===navigation&&!document.hidden&&(!teamResult||relatedOrigin.current===origin)){setLocalError(teamResult?originalTeamWorkUnavailable:origin.pairedDevicesProject?'原项目暂不可核对，未打开其他项目。':archiveChatCurrent||projectModelInput?originalArchiveChatUnavailable:origin.savedHostPreparation?
    '无法核对保存的原话与输入窗口，没有打开其他准备。可从导航手动查看原对话。':'原对话或草稿已切换。未打开其他输入，请从导航重新选择原对话。');return;}
@@ -3125,6 +3159,35 @@ export default function App(){
   }else if(key==='setup')openSetup();
   else navigate(key);
  },[can,run,route,desktopNavigation,captureNavigationOrigin,openRelatedWorkspace,openNotifications,openSetup,navigate]);
+ const homeFilesOpening=useRef(false);
+ const privateHomeFiles=(native:ReturnType<typeof bridge.getState>)=>{
+  const owner=native.state,view=obj(native.view),draft=native.composer,phone=obj(native.phoneDraft),available=native.capabilities.commands;
+  const conversation=owner.conversationId,library=obj(obj(owner.features).attachments);
+  const ownedDraft=draft?.ready===true&&typeof draft.key==='string'&&Number.isSafeInteger(draft.epoch)&&
+   (conversation===null?draft.conversationId===''&&draft.key.startsWith('new:'):
+    typeof conversation==='string'&&!!conversation&&draft.conversationId===conversation&&draft.key===`conversation:${conversation}`);
+  return native.host?.ready===true&&ownedDraft&&view.section===null&&view.taskId===null&&Number.isSafeInteger(view.resumeRevision)&&
+   owner.filePath===null&&owner.conversationReader===null&&owner.queuedInputsPage===null&&
+   owner.chatAttachmentPickerOpen===false&&owner.chatSubmitting===false&&owner.phoneSubmitting===false&&
+   typeof obj(owner.attachmentWorkspace).open==='boolean'&&phone.phone===false&&phone.channelOrigin===false&&
+   library.scope==='owner/private'&&asArray<string>(library.commands).includes('list')&&
+   available.includes('attachmentWorkspace.open')&&available.includes('attachmentWorkspace.action');
+ };
+ const openHomeFiles=route==='butler'&&intent==='chat'&&!taskOpen&&!workOpen&&!commandOpen&&!phoneReview&&!preparationTarget&&
+  !searchReturn&&!searchOriginal&&privateHomeFiles(snapshot)?()=>{
+   const current=()=>{
+    const live=bridge.getState();
+    return !document.hidden&&!draftSwitchPending()&&navigationWindow.current===navigationRevision&&bridge.getDocumentEpoch()===personalDocumentEpoch&&
+     privateHomeFiles(live)&&obj(live.view).resumeRevision===obj(snapshot.view).resumeRevision&&
+     live.composer?.key===composer.key&&live.composer?.epoch===composer.epoch&&obj(live.state.attachmentWorkspace).open===false;
+   };
+   if(homeFilesOpening.current||!current())return;
+   homeFilesOpening.current=true;
+   // The same library as the "成果" menu. No file is selected or joined to the draft.
+   void bridge.command('attachmentWorkspace.open').catch(error=>{
+    if(current())setLocalError(error instanceof Error?error.message:'未能打开本机文件，可以重试。');
+   }).finally(()=>{homeFilesOpening.current=false});
+  }:undefined;
  const workNav:WorkNavItem[]=useMemo(()=>[
   {key:'butler',label:'管家',icon:IconSparkles,group:'主入口'},
   {key:'tasks',label:'我的工作',icon:IconCalendar,group:'工作',status:attentionTasks.length?'有工作需要处理':undefined},
@@ -4822,6 +4885,7 @@ export default function App(){
             retainedOriginalVisit={retainedCopyFirst?state.openedRetainedDraftCopy:undefined} returnTarget={projectDraftReturn?.projectId===currentProject.id?projectDraftReturn:undefined}
             importedEditor={projectImportedEditor?.projectId===currentProject.id?projectImportedEditor:undefined} onImportedEditorHandled={handledImportedEditor}
             localFilesIntent={projectLocalFilesIntent?.projectId===currentProject.id?projectLocalFilesIntent:undefined} onLocalFilesIntentHandled={handledLocalFilesIntent}
+            terminalSavedFile={terminalSavedFileArrival.current?.position.projectId===currentProject.id?terminalSavedFileArrival.current:undefined}
             buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)}
             onOpenPackageOriginal={({taskId,runId,epoch})=>{
              const projectId=currentProject.id,navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
@@ -4920,7 +4984,7 @@ export default function App(){
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
   </NavigationChrome>:workspaceNotices}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
     if(report){homeReport.current=report;homeWorkReturn.current=null;taskReading.current.delete(`${task.id}:homeReport`);
      openTask(task.id,'homeReport',alreadyOpen,undefined,undefined,undefined,()=>homeReport.current===report&&currentHomeReport(report),undefined,undefined,
       returnWorkFocus?()=>{homeWorkReturn.current={taskId:task.id,report,focus:returnWorkFocus}}:undefined);return}

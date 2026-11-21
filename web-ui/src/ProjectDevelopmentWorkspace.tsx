@@ -28,13 +28,15 @@ export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; proj
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package';
 export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean};
+export type ProjectTerminalSavedFileReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
   localFilesIntent?:ProjectLocalFilesIntent; onLocalFilesIntentHandled?:(target:ProjectLocalFilesIntent)=>void;
+  terminalSavedFile?:ProjectTerminalSavedFileReturn;
   retainedOriginalVisit?:Data;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
-  onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout) => void;
+  onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout, position?:CheckoutSavedPosition) => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
@@ -206,7 +208,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),deliverySummary=useRef<HTMLSpanElement>(null);
@@ -238,8 +240,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
   const keptNativePick=useRef(false);const [sourceConflict,setSourceConflict]=useState(false);
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
-  const latest = useRef({ run, can, active, localFilesIntent, onLocalFilesIntentHandled });
-  latest.current = { run, can, active, localFilesIntent, onLocalFilesIntentHandled }; activeReview.current = review;
+  const latest = useRef({ run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile });
+  latest.current = { run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile }; activeReview.current = review;
   const attemptedLocalFiles = useRef<ProjectLocalFilesIntent|null>(null);
   const preview=active&&buildPreview&&view?.viewHandle===buildPreview.viewHandle&&handle.current===buildPreview.viewHandle&&
     buildPreview.window===ownerWindow()&&buildPreview.value.projectId===projectId&&buildPreview.value.checkoutId===checkout&&
@@ -327,6 +329,18 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     }
     setSubmission(value.draft?.submission || null);
     if (value.draft?.submission) clearSubmittedDraft(value.draft.submission);
+    const returnedFile=latest.current.terminalSavedFile;
+    if(returnedFile?.position.projectId===projectId&&returnedFile.take()){
+      const position=returnedFile.position;
+      const copies=rows(value.checkouts).filter(copy=>copy?.projectId===projectId&&copy.checkoutId===position.checkoutId);
+      // Only this fresh page's explicit saved choice can restore the existing
+      // bookmark. The bytes/caret are still checked on the owner's later click.
+      if(!pinned&&!buildReturn&&!importedEditor&&!request&&!fileCheckout&&value.executionAuthorized===false&&
+        value.commandsAuthorized===false&&value.draftRecoveryRequired===false&&incoming.projectId===projectId&&
+        incoming.checkoutId===position.checkoutId&&draft.current.checkoutId===position.checkoutId&&!unresolved(incoming.submission)&&
+        (!incoming.copyRequestId||incoming.copyStatus==='ready')&&copies.length===1&&copies[0].draftWorkingCopy===false)
+        setLastSavedFile(previous=>previous??position);
+    }
     // The Files tap can only open the already-saved choice from this normal
     // Work read. An implicit/ambiguous choice stays in the existing chooser.
     if(openLocalFiles&&latest.current.localFilesIntent===openLocalFiles&&openLocalFiles.current()&&
@@ -521,7 +535,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const prepareTerminal = () => {
     if(disabled||entered.current||!canPrepareTerminal||draft.current.checkoutId!==checkout)return;
     const displayed={...draft.current};
-    void preserveSelectionBeforeDeparture(displayed,()=>onOpenTerminal({projectId,checkoutId:displayed.checkoutId}));
+    const position=!copyUnconfirmed&&selectedCopy?.draftWorkingCopy!==true&&savedFileHere&&sourceHash(savedFileHere.savedHash)?savedFileHere:undefined;
+    void preserveSelectionBeforeDeparture(displayed,()=>onOpenTerminal({projectId,checkoutId:displayed.checkoutId},position));
   };
   const reconcileSource=(useProject:boolean)=>{
     if(!sourceConflict||!active||busy||pending||filesOpen||!view||!view.draft?.ownerPickedConvention||document.hidden)return;

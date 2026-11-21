@@ -1,13 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { bridge } from './bridge';
 import { Button } from './forms-library';
-import type { TaskHeader } from './task-history';
+import type { AuditPage, TaskHeader } from './task-history';
 import type { TaskOperation } from './task-presentation';
 
 const record = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : undefined;
 const nativeId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
+const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const deviceId = (value: unknown): value is string => typeof value === 'string' && /^pw1_[a-f0-9]{64}$/.test(value);
 type Original = { taskId: string; runId: string; epoch: number; operationId: string; deviceId: string; instanceId: string; fingerprint: string };
 type Snapshot = { text: string; bytes: number; recordedAt: number };
+type Received = { identity: string; requestDigest: string; content: string; bytes: number; version: string };
 
 /** Visible local tool row only. Native rechecks the actual Work, wire, claim and current peer. */
 export function originalWindowsTextAt(task: TaskHeader, op: TaskOperation): Original | undefined {
@@ -22,6 +25,116 @@ export function originalWindowsTextAt(task: TaskHeader, op: TaskOperation): Orig
     || !nativeId(pin.instanceId) || typeof pin.certificateFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(pin.certificateFingerprint)) return;
   return { taskId: task.id, runId: raw.runId, epoch: raw.coordinatorEpoch, operationId: op.operationId,
     deviceId: pin.deviceId, instanceId: pin.instanceId, fingerprint: pin.certificateFingerprint };
+}
+
+function currentReceivedWorkDigest(raw: TaskHeader['raw'], original: Original): string | undefined {
+  const work = raw?.ownerDeviceWork, pin = work?.directWorkspace;
+  return raw?.id === original.taskId && raw.runId === original.runId && raw.coordinatorEpoch === original.epoch &&
+    raw.actorId === 'owner' && raw.spaceId === 'private' && raw.kind === 'assistant' && raw.executionMode === 'capabilities' &&
+    raw.conversationId === '' && raw.origin == null && raw.ownerPhoneControl == null && raw.parentTaskId == null &&
+    raw.contextAvailable !== false && raw.contextWithdrawn !== true && raw.sourceCurrentReadRequired !== true &&
+    raw.taskProjection === 'detail_window' && raw.auditBodyIncluded === true && raw.taskCoreReadLimited === false &&
+    work?.format === 'pocketworld.owner-device-work.v1' && work.requestId === original.taskId && digest(work.requestDigest) && work.directPhone == null &&
+    pin?.deviceId === original.deviceId && pin.instanceId === original.instanceId && pin.certificateFingerprint === original.fingerprint
+    ? work.requestDigest : undefined;
+}
+
+/** Consume only the already-loaded original SQL row, never the Agent's result wrapper. */
+export function receivedOriginalWindowsTextAt(task: TaskHeader, op: TaskOperation, original: Original, page?: AuditPage): Received | undefined {
+  const requestDigest = currentReceivedWorkDigest(task.raw, original);
+  if (!requestDigest || op.state !== 'receipt' || page?.taskId !== original.taskId ||
+    page.section !== 'operations' || page.executionAuthorized !== false || !page.entries.some(row =>
+      row.operationId === original.operationId && row.runId === original.runId && row.status === 'available' && row.state === 'receipt' &&
+      row.tool === 'device_invoke_tool' && row.arguments === op.arguments && row.receipt === op.receipt)) return;
+  const journal = record(op.receipt), args = record(record(op.arguments)?.arguments);
+  const send = record(journal?.nativeDeviceSend), accepted = record(journal?.nativeDeviceAcceptedBinding);
+  const result = record(accepted?.verifiedReceipt), audience = record(result?.audience), resource = record(audience?.resourceBinding);
+  const job = accepted?.jobId, wireDigest = accepted?.operationArgumentsDigest;
+  if (!result || !Number.isSafeInteger(send?.claimedAt) || send?.claimedAt <= 0 || !digest(send?.wireSha256) ||
+    typeof send?.allocationId !== 'string' || !/^ba1_[a-f0-9]{64}$/.test(send.allocationId) ||
+    accepted?.accepted !== true || accepted.acceptedObjectKind !== 'job' || typeof job !== 'string' ||
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(job) || accepted.objectId !== job ||
+    accepted.parentTaskId !== original.taskId || accepted.sourceOperationId !== original.operationId || accepted.targetOperationId !== original.operationId ||
+    accepted.executorDeviceId !== original.deviceId || accepted.instanceId !== original.instanceId || !digest(wireDigest) ||
+    !Number.isSafeInteger(accepted.acceptedAt) || accepted.acceptedAt <= 0 || result.acceptedAt !== accepted.acceptedAt ||
+    result.protocolVersion !== '1.0' || result.messageType !== 'OperationReceipt' || result.accepted !== true ||
+    result.status !== 'succeeded' || result.effectState !== 'reported' || result.operationId !== original.operationId ||
+    result.executorDeviceId !== original.deviceId || result.instanceId !== original.instanceId || result.argumentsDigest !== wireDigest || result.jobId !== job ||
+    result.localTaskId != null || result.runId != null || result.executorEpoch != null || result.cancellation != null ||
+    audience?.kind !== 'operation' || audience.objectId !== original.operationId || audience.rootTaskId !== original.taskId ||
+    audience.localTaskId !== send.allocationId || audience.requestRunId !== original.runId || audience.requestExecutorEpoch !== original.epoch ||
+    audience.targetDeviceId !== original.deviceId || audience.instanceId !== original.instanceId || audience.argumentsDigest !== wireDigest ||
+    !deviceId(audience.callerDeviceId) || audience.originDeviceId !== audience.callerDeviceId || audience.sourceShareId != null ||
+    resource?.kind !== 'workspace' || !nativeId(resource.environmentId) || !digest(resource.binding)) return;
+
+  // Exact initial Windows WorkspaceFiles read shape. revisionRetained is not a
+  // claim that the PC still has a copy; the bytes here were received by this phone.
+  const data = record(result.payload), path = args?.path;
+  if (!data || Object.keys(data).length !== 5 || typeof data.revisionRetained !== 'boolean' || typeof path !== 'string' ||
+    !path || path.length > 2048 || data.path !== path || typeof data.content !== 'string' || data.content.length > 1024 ||
+    !Number.isSafeInteger(data.bytes) || data.bytes < 0 || data.bytes > 1024 || typeof data.version !== 'string' ||
+    !/^sha256:[a-f0-9]{64}$/.test(data.version) || new TextEncoder().encode(data.content).length !== data.bytes) return;
+  // Native publishes fresh JSON objects even when the original receipt has not changed.
+  const identity = JSON.stringify([original, requestDigest, job, wireDigest, send.wireSha256, send.allocationId,
+    accepted.acceptedAt, resource.environmentId, resource.binding, path, data.version, data.bytes]);
+  return { identity, requestDigest, content: data.content, bytes: data.bytes, version: data.version };
+}
+
+const displayText = (content: string) => content.replace(/\r\n?/g, '\n').replace(/\p{C}/gu, ch => ch === '\n' || ch === '\t' ? ch : '�');
+const sameReceived = (a: Received, b: Received) => a.identity === b.identity && a.content === b.content;
+
+export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback }: {
+  original: Original; received: Received; documentEpoch: number; sourceRevision: string; fallback: ReactNode;
+}) {
+  const [check, setCheck] = useState<{ generation: number; verified: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const latest = useRef({ source: received, generation: 0 }), alive = useRef(true), sequence = useRef(0), reading = useRef(false);
+  // Keep no copy of the verified text: the display stamp follows only this loaded row.
+  const generation = latest.current.generation + (sameReceived(latest.current.source, received) ? 0 : 1);
+  latest.current = { source: received, generation };
+  const clear = () => { sequence.current++; reading.current = false; setCheck(null); setBusy(false); };
+  useEffect(() => {
+    alive.current = true;
+    const visibility = () => { if (document.hidden) clear(); };
+    document.addEventListener('visibilitychange', visibility);
+    return () => { alive.current = false; sequence.current++; document.removeEventListener('visibilitychange', visibility); };
+  }, []);
+  const current = () => {
+    const live = bridge.getState(), view = record(live.view);
+    const raw = live.state.tasks?.find((row: {id: string}) => row.id === original.taskId)?.raw;
+    return alive.current && !document.hidden && bridge.getDocumentEpoch() === documentEpoch &&
+      String(live.state.traceSourceRevision ?? 0) === sourceRevision && live.capabilities.commands.includes('history.read') &&
+      !view?.section && view?.taskId === original.taskId && currentReceivedWorkDigest(raw, original) === received.requestDigest;
+  };
+  const read = async () => {
+    if (reading.current || !current()) return;
+    reading.current = true; const attempt = ++sequence.current;
+    setBusy(true); setCheck(null);
+    const eligible = () => sequence.current === attempt && latest.current.generation === generation && current();
+    try {
+      const bytes = new TextEncoder().encode(received.content);
+      const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+      const version = 'sha256:' + Array.from(hash, b => b.toString(16).padStart(2, '0')).join('');
+      if (eligible()) setCheck({ generation, verified: version === received.version &&
+        new TextEncoder().encode(displayText(received.content)).length <= 1024 });
+    } catch {
+      if (eligible()) setCheck({ generation, verified: false });
+    } finally {
+      if (sequence.current === attempt && alive.current) { reading.current = false; setBusy(false); }
+    }
+  };
+  const checked = current() && check?.generation === generation ? check : null;
+  if (checked?.verified === false) return <><p role="status">本机收到的原文本无法核对或超过显示范围，未显示正文。</p>{fallback}</>;
+  return <section className="pw-operation-entry" aria-label="本机收到的原电脑文本">
+    {checked ? <>
+      <h4>当时读到的文本</h4>
+      <p className="pw-muted">本机已收到这次读取的结果 · 原文件 {received.bytes} 字节。不是当前文件。</p>
+      {received.bytes === 0 ? <p>原回执已核对：当时文件为 0 字节。</p> : <pre className="pw-source-copy" dir="auto">{displayText(received.content)}</pre>}
+      <Button variant="ghost" onClick={clear}>关闭原文本</Button>
+    </> : <Button variant="secondary" disabled={busy || !current()} onClick={() => void read()}>
+      {busy ? '正在核对本机原文本…' : '查看本机收到的原文本'}
+    </Button>}
+  </section>;
 }
 
 function snapshotOf(value: unknown, original: Original): Snapshot {
