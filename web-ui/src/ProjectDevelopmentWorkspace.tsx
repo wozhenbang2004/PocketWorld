@@ -27,9 +27,11 @@ const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === or
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string };
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package';
 export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
+export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
+  localFilesIntent?:ProjectLocalFilesIntent; onLocalFilesIntentHandled?:(target:ProjectLocalFilesIntent)=>void;
   retainedOriginalVisit?:Data;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
   onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout) => void;
@@ -204,7 +206,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),noticeArea=useRef<HTMLDivElement>(null);
@@ -236,7 +238,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
   const keptNativePick=useRef(false);const [sourceConflict,setSourceConflict]=useState(false);
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
-  const latest = useRef({ run, can, active }); latest.current = { run, can, active }; activeReview.current = review;
+  const latest = useRef({ run, can, active, localFilesIntent, onLocalFilesIntentHandled });
+  latest.current = { run, can, active, localFilesIntent, onLocalFilesIntentHandled }; activeReview.current = review;
+  const attemptedLocalFiles = useRef<ProjectLocalFilesIntent|null>(null);
   const preview=active&&buildPreview&&view?.viewHandle===buildPreview.viewHandle&&handle.current===buildPreview.viewHandle&&
     buildPreview.window===ownerWindow()&&buildPreview.value.projectId===projectId&&buildPreview.value.checkoutId===checkout&&
     source?.projectId===projectId&&source.checkoutId===checkout&&source.sourceDigest===buildPreview.value.sourceDigest&&
@@ -285,9 +289,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     finally { if (entered.current === token) { entered.current = null; if (alive.current) setBusy(false); } }
   };
   const read = () => {
-    if (latest.current.active && !entered.current && !document.hidden && latest.current.can('projects.development.read')) readAttempt.current = ownerWindow();
+    const readableNow = latest.current.active && !entered.current && !document.hidden && latest.current.can('projects.development.read');
+    if (readableNow) readAttempt.current = ownerWindow();
+    const request=latest.current.localFilesIntent;
+    const openLocalFiles=readableNow&&request&&request!==attemptedLocalFiles.current&&request.projectId===projectId&&request.current()?request:null;
+    if(openLocalFiles)attemptedLocalFiles.current=openLocalFiles;
     const pinned=returnTarget&&returned.current!==returnTarget.handle?returnTarget:null;
-    return invoke('projects.development.read', {projectId,...(pinned?{draftReturnHandle:pinned.handle}:{})}, value => {
+    const reading=invoke('projects.development.read', {projectId,...(pinned?{draftReturnHandle:pinned.handle}:{})}, value => {
     if (value.projectId !== projectId || typeof value.viewHandle !== 'string') throw new Error('没有取得这个原项目的页面，请重新读取。');
     if(pinned){
       if(value.openedDraftReturn!==pinned.handle||value.draft?.projectId!==pinned.projectId||value.draft?.checkoutId!==pinned.checkoutId||
@@ -305,7 +313,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     setSourceConflict(false);
     if (!touched.current || selectedCopy) {
       const retained = incoming, available = rows(value.checkouts);
-      const selected = retained.checkoutId || (available.length === 1 ? available[0].checkoutId : '');
+      const selected = retained.checkoutId || (!openLocalFiles && available.length === 1 ? available[0].checkoutId : '');
       draft.current = { goal: retained.goal || '', checkoutId: selected, ...deliveryRequirements(retained) };
       keptNativePick.current=!!incoming.ownerPickedConvention;
       setGoal(draft.current.goal); setCheckout(selected); setRequirements(deliveryRequirements(retained));
@@ -319,7 +327,21 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     }
     setSubmission(value.draft?.submission || null);
     if (value.draft?.submission) clearSubmittedDraft(value.draft.submission);
+    // The Files tap can only open the already-saved choice from this normal
+    // Work read. An implicit/ambiguous choice stays in the existing chooser.
+    if(openLocalFiles&&latest.current.localFilesIntent===openLocalFiles&&openLocalFiles.current()&&
+      !pinned&&!buildReturn&&!importedEditor&&!fileCheckout&&value.executionAuthorized===false&&value.commandsAuthorized===false&&
+      value.draftRecoveryRequired===false&&incoming.projectId===projectId&&!incoming.ownerPickedConvention&&!unresolved(incoming.submission)&&
+      incoming.copyStatus==='ready'&&copyIdentity(incoming.copyRequestId)&&copyIdentity(incoming.checkoutId)&&
+      draft.current.checkoutId===incoming.checkoutId&&canEditImportedCheckout(latest.current.can)){
+      const checkouts=rows(value.checkouts), copy=checkouts[0];
+      if(checkouts.length===1&&copy?.projectId===projectId&&copy.checkoutId===incoming.checkoutId&&
+        copy.draftWorkingCopy===false&&copy.taskPackageSource===false&&copy.hostSource===false){
+        setFileWindow({checkoutId:incoming.checkoutId});
+      }
+    }
     });
+    return openLocalFiles?reading.finally(()=>latest.current.onLocalFilesIntentHandled?.(openLocalFiles)):reading;
   };
   const readRef = useRef(read); readRef.current = read;
   const retain = (next: DevelopmentDraft) => {

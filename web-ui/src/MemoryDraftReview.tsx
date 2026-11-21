@@ -13,14 +13,16 @@ import { OriginalSavedMemory, originalMemoryWindow } from './OriginalSavedMemory
 import { usePendingCandidateDeadline } from './usePendingCandidateDeadline';
 
 type Data = Record<string, any>;
+export type SavedMemoryConversationPin = ConversationDraftTarget & { conversationId: string };
 const proposalWindow = () => {
   const s = bridge.getState().state;
   return JSON.stringify([bridge.getDocumentEpoch(), s.conversationId, s.memoryRefreshRevision, s.traceSourceRevision]);
 };
-export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
+export function MemoryDraftReview({ target, onClose, onOpenMemory, originalWorkReturn }: {
   target: ConversationDraftTarget;
   onClose: () => void;
   onOpenMemory?: (target: { id: string; candidate: boolean }) => void;
+  originalWorkReturn?: (pin: SavedMemoryConversationPin) => { open?: () => void } | undefined;
 }) {
   const [value, setValue] = useState<Data | null>(null), [reviewClosed, setReviewClosed] = useState(false);
   const [error, setError] = useState(''), [busy, setBusy] = useState(true), [attempted, setAttempted] = useState(false), [undoUncertain, setUndoUncertain] = useState(false);
@@ -82,6 +84,18 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
   const displayedRecord = receiptRecord || (duplicate ? candidate : null);
   const canReadSaved = (saved || duplicate) && action !== 'forget' && typeof receiptRecord?.id === 'string' &&
     Number.isSafeInteger(receiptRecord.revision) && receiptRecord.revision > 0;
+  const savedReceipt = value?.receipt || apply.receipt || apply;
+  // This immutable receipt can identify its original conversation, not the record's current state.
+  const returnToSource = canReadSaved && saved && !undoPending && value?.queryOriginalReceipt !== true &&
+    (action === 'create' || action === 'update') && proposal.format === 'pocketworld.conversation-memory-draft.v1' &&
+    typeof proposal.conversationId === 'string' && proposal.conversationId.trim() && proposal.conversationId.length <= 240 &&
+    savedReceipt.status === 'saved' && savedReceipt.action === action && savedReceipt.journalRecorded !== false &&
+    savedReceipt.accepted === true && savedReceipt.mutationApplied === true && savedReceipt.formalMemorySaved === true &&
+    savedReceipt.executionAuthorized === false && savedReceipt.record?.id === receiptRecord.id &&
+    savedReceipt.record.revision === receiptRecord.revision && /^[a-f0-9-]{36}$/.test(receiptRecord.id) &&
+    receiptRecord.ownerId === 'owner' && receiptRecord.spaceId === 'private' &&
+    Object.entries(original).every(([key, field]) => proposal[key] === field && savedReceipt[key] === field)
+    ? originalWorkReturn?.({ ...original, conversationId: proposal.conversationId }) : undefined;
   const expiry = review?.after?.expiresAt;
   const candidatePin = action === 'create' ? proposal.candidate : undefined;
   const candidateUntil = pending && review?.after?.status === 'pending' && typeof candidatePin?.id === 'string' && Number.isSafeInteger(candidatePin.revision) && candidatePin.revision > 0 && candidatePin.id === review.after.id && candidatePin?.revision === review.after.revision && Number.isSafeInteger(expiry) && expiry > 0 ? expiry : 0;
@@ -125,7 +139,10 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory }: {
           {typeof displayedRecord?.text === 'string' && <p className="pw-reading-copy">{displayedRecord.text}</p>}
           {typeof undoReason === 'string' && <p className="pw-muted">{undoReason}</p>}
           <div className="pw-action-row">
-            {canReadSaved && <Button variant="secondary" disabled={busy} onClick={() => { setFocused({ id: receiptRecord.id, revision: receiptRecord.revision, duplicate, windowKey: originalMemoryWindow() }); setValue(null); }}>只看这条记忆</Button>}
+            {canReadSaved && (returnToSource
+              ? returnToSource.open ? <Button variant="secondary" disabled={busy} onClick={returnToSource.open}>前往原对话核对</Button>
+                : <span className="pw-muted" role="status">请在原对话核对这条记忆。当前不能切换。</span>
+              : <Button variant="secondary" disabled={busy} onClick={() => { setFocused({ id: receiptRecord.id, revision: receiptRecord.revision, duplicate, windowKey: originalMemoryWindow() }); setValue(null); }}>只看这条记忆</Button>)}
             {duplicate && !receiptRecord && typeof candidate?.id === 'string' && onOpenMemory && <Button variant="secondary" disabled={busy} onClick={() => { onOpenMemory({ id: candidate.id, candidate: true }); onClose(); }}>查看待确认内容</Button>}
             {saved && action === 'create' && undoAvailable && !undoPending && <Button variant="ghost" leadingIcon={IconUndo} disabled={busy} onClick={() => { void request('memoryDraft.undo', original, acceptOutcome, () => setUndoUncertain(true)); }}>撤销这次保存</Button>}
           </div>
