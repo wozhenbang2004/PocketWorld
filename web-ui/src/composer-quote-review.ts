@@ -34,7 +34,30 @@ export function loadedQuoteReceipt(snapshot:PocketSnapshot,conversation:string):
     recent?.conversationId!==conversation||input?.conversationId!==conversation||!identifier(input._requestId))return '';
   return input._requestId;
 }
-type QuoteView = {kind:'selected';text:string;author:string}|{kind:'not_loaded'|'unverified'|'changed'};
+export type SelectedDraftQuote = {kind:'selected';text:string;author:string};
+type QuoteView = SelectedDraftQuote|{kind:'not_loaded'|'unverified'|'changed'};
+export type StoredDraftQuoteRead = {owner:QuoteDraftOwner;pin:DraftQuotePin;revision:number;index:number;resumeRevision:number;sourceRevision:number;memoryRevision:number};
+
+/** The explicit fallback is not a way to obtain an ordinary history window. */
+export function storedDraftQuoteCurrent(snapshot:PocketSnapshot,expected:StoredDraftQuoteRead) {
+  const view=object(snapshot.view), phone=object(snapshot.phoneDraft), composer=snapshot.composer, state=snapshot.state;
+  const refs=composer?.sourceRefs;
+  if(!view||view.section!==null||view.taskId!==null||view.resumeRevision!==expected.resumeRevision||phone?.phone!==false||phone.channelOrigin!==false||
+    !expected.owner.conversation||expected.owner.key!==`conversation:${expected.owner.conversation}`||!sameQuoteOwner(snapshot,expected.owner)||composer?.revision!==expected.revision||composer.saving!==false||
+    state.traceSourceRevision!==expected.sourceRevision||state.memoryRefreshRevision!==expected.memoryRevision||state.loadingFirstConversationMessages===true||
+    state.queuedInputsPage||state.chatAttachmentPickerOpen===true||!Array.isArray(refs)||refs.length>4)return false;
+  const attached=draftQuotePin(refs[expected.index]);
+  return !!attached&&draftQuoteKey(attached)===draftQuoteKey(expected.pin)&&draftQuoteView(snapshot,expected.owner,expected.pin,'').kind==='not_loaded';
+}
+export function storedDraftQuote(value:unknown,expected:StoredDraftQuoteRead):SelectedDraftQuote|null {
+  const receipt=object(value), pin=draftQuotePin(receipt?.reference);
+  if(!receipt||Object.keys(receipt).length!==12||receipt.format!=='pocketworld.draft-source-read.v1'||
+    receipt.key!==expected.owner.key||receipt.epoch!==expected.owner.epoch||receipt.revision!==expected.revision||
+    receipt.index!==expected.index||!pin||draftQuoteKey(pin)!==draftQuoteKey(expected.pin)||
+    receipt.readOnly!==true||receipt.modelCalled!==false||receipt.formalMemorySaved!==false||receipt.executionAuthorized!==false||
+    !['user','assistant'].includes(String(receipt.role))||typeof receipt.text!=='string'||receipt.text.length!==pin.chars)return null;
+  return {kind:'selected',text:receipt.text,author:receipt.role==='user'?'你的消息':'助手回复'};
+}
 
 /** Inspect only the already published original conversation and its native original locator.
  * The module receipt never supplies body text by itself, and this code performs no read.

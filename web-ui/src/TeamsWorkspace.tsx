@@ -28,7 +28,7 @@ import { classicAnswerOwner, exactClassicAnswer, teamResearchDeliveries, TeamRes
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { finalPackage, TeamFinalPackageReading } from './TeamFinalPackageReading';
 import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
-import { ownerPublishedOrdinaryTeamResult, settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamMemberProgress, teamMemberStopRequested, teamPartialReading, teamRemainingMember, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
+import { ownerPublishedOrdinaryTeamResult, passiveTeamDependency, settledTeamResultEntry, teamFollowUpFocus, teamFollowUps, teamMemberProgress, teamMemberStopRequested, teamPartialReading, teamRemainingMember, teamResultReading, teamRunEntrySection, type AttentionFocus, type TeamFollowUp } from './team-result-reading';
 import { ownerWorkPresentation } from './owner-work-presentation';
 import { ReadingContext } from './reading-context';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
@@ -874,7 +874,21 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     !!label(current.teamId).trim() && current.definitionKind == null && !current.nativeWorkProfileModels && current.archived !== true &&
     ['running', 'paused'].includes(current.status) && members.length > 0 &&
     members.every(member => (member.runner || 'model') === 'model' && (!member.device || member.device === 'phone'));
-  const scopedFollowUps = followUps.map(item => {
+  const progressByMember = new Map(current ? members.map(member => [String(member.id), teamMemberProgress(current, member, followUps, true)]) : []);
+  const showPrerequisites = ordinaryAnswers && workspaceActive && !!reading?.viewHandle && !changed &&
+    !!label(current.teamId).trim() && current.definitionKind == null && (current.discussionFormat ?? 'classic') === 'classic' &&
+    !current.discussion && !current.nativeWorkProfileModels && current.archived !== true &&
+    Array.isArray(catalog.history) && !rows(catalog.history).some(row => row.id === current.id) &&
+    ownerWorkLink?.readOnly === true && ownerWorkLink.currentRun === true && ownerWorkLink.stopping === false &&
+    ownerWorkLink.teamRunId === current.id && !!label(ownerWorkLink.teamTaskId) && ownerWorkLink.teamTaskId === reading.taskId &&
+    members.length > 0 && members.length <= 4 && new Set(members.map(member => member.id)).size === members.length &&
+    members.every(member => (member.runner || 'model') === 'model' && (!member.device || member.device === 'phone'));
+  const prerequisiteDocument = bridge.getDocumentEpoch(), prerequisiteResume = object(bridge.getState().view).resumeRevision;
+  const actionableFollowUps = showPrerequisites ? followUps.filter(item => {
+    const member = members.find(row => row.id === item.locator.memberId);
+    return !member || !passiveTeamDependency(item, member, progressByMember);
+  }) : followUps;
+  const scopedFollowUps = actionableFollowUps.map(item => {
     const question = showOriginalQuestions && current ? originalResearchQuestion(current, item) : '';
     if (question) return { ...item, title: question, detail: name(item.locator.memberId) + ' · 第 ' + item.locator.round + ' 阶段提问', originalQuestion: true };
     return remainingMember?.canReview && !uncertain && item.key === remainingMember.item.key
@@ -929,11 +943,22 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const resultOrigin = (key = '', member?: ResultOrigin['member']): ResultOrigin | null => current
     ? { runId: String(current.id), key, member, scroll: root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0 } : null;
-  const memberStage = (member: ResultMember) => {
+  const memberStage = (member: Pick<ResultMember, 'id' | 'round'>) => {
     const candidates = root.current?.querySelectorAll<HTMLElement>(
       `[data-team-member-id="${CSS.escape(member.id)}"] [data-team-progress-round="${member.round}"]`);
     const node = candidates?.length === 1 ? candidates[0] : undefined;
     return node?.closest('[hidden],[inert]') ? undefined : node;
+  };
+  const locatePrerequisite = (id: string, round: number) => {
+    // The target is in the same held reading. Do not open a task, read another run or use a newer member with the same name.
+    const shown = currentReading.current, live = bridge.getState();
+    if (!showPrerequisites || !canRead || materialBusy || backgrounded.current || document.hidden || !ownsNativeWindow() ||
+        !shown || shown !== reading || shownRunSection.current !== 'progress' ||
+        bridge.getDocumentEpoch() !== prerequisiteDocument || object(live.view).resumeRevision !== prerequisiteResume ||
+        newerTeamReading(shown.run, object(object(live.state.teamRuns)[shown.run.id]))) return;
+    const target = memberStage({ id, round });
+    if (!target) { setNotice('当前无法定位这项原前置分工，没有转到其他阶段。'); return; }
+    target.focus({ preventScroll: true }); target.scrollIntoView({ block: 'center' });
   };
   resultBack.current = () => {
     if (!resultSource || runSection === 'result' || resultSource.runId !== current?.id || !workspaceActive || !ownsNativeWindow()) return false;
@@ -1349,7 +1374,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           已交回的答复可单独打开，不用等其他成员。在原任务核对后可手动复制；用于新问题或项目时，先确认资料仍可使用。</p>}
         <div className="pw-team-member-board">
           {members.map(member => {
-            const model = memberModelLabel(member), progress = teamMemberProgress(current, member, followUps, true);
+            const model = memberModelLabel(member), progress = progressByMember.get(member.id) ?? [];
             const researchMember = !hasWorkPlan && current.researchExecutionFormat === 'pocketworld.team-research-agent.v1' && (member.runner || 'model') === 'model';
             const observed = researchMember && reading?.viewHandle ? teamResearchReplyExecution(current.id, member, reading.researchAnswerRoutes) : null;
             const supplement = !hasWorkPlan && reading?.viewHandle ? teamDirectedSupplement(current, messages, member.id,
@@ -1397,8 +1422,15 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                     {resultPhaseLink && resultSource?.member?.id === member.id && String(resultSource?.member?.round) === fact.key &&
                       <Button className="pw-team-progress-read" size="small" variant="ghost" leadingIcon={IconArrowLeft}
                         disabled={!canRead || materialBusy} onClick={() => resultBack.current()}>返回该份成果</Button>}
-                    {fact.blockers && <small className="pw-team-progress-source">前置阶段：{fact.blockers.map((blocker, index) =>
-                      <span key={blocker.memberId}>{index > 0 ? '；' : ''}{blocker.sameMember ? '本成员' : <bdi>{name(blocker.memberId)}</bdi>}第 {blocker.round} 阶段（{blocker.detail}）</span>)}</small>}
+                    {fact.blockers && <small className="pw-team-progress-source">前置阶段：{fact.blockers.map((blocker, index) => {
+                      const stage = <>{blocker.sameMember ? '本成员' : <bdi>{name(blocker.memberId)}</bdi>}第 {blocker.round} 阶段（{blocker.detail}）</>;
+                      const target = progressByMember.get(blocker.memberId)?.some(row => row.key === String(blocker.round));
+                      return <span key={blocker.memberId}>{index > 0 ? '；' : ''}{showPrerequisites && blocker.current && target
+                        ? <Button size="small" variant="ghost" className="pw-team-result-link" trailingIcon={IconChevronRight}
+                            aria-label={`定位${name(blocker.memberId)}第 ${blocker.round} 阶段的原前置分工`}
+                            disabled={!canRead || materialBusy} onClick={() => locatePrerequisite(blocker.memberId, blocker.round)}>{stage}</Button>
+                        : stage}</span>;
+                    })}</small>}
                     {execution && <small className="pw-team-progress-source">{execution.reportedModel ? <>答复模型：<bdi>{execution.reportedModel}</bdi></> :
                       execution.requestedModel ? <>请求模型：<bdi>{execution.requestedModel}</bdi>（答复型号未确认）</> : '答复型号未确认'}。{execution.location}</small>}
                   </li>;

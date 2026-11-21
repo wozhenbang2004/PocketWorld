@@ -3,6 +3,7 @@ package dev.pocketengine.ui.web
 import android.os.SystemClock
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.assistant.AssistantModule
+import dev.pocketengine.features.assistant.OwnerSourceReferences
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -26,7 +27,8 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
     @Volatile private var pending: RunControl? = null
 
     companion object {
-        val COMMANDS = setOf("messageQuote.open", "messageQuote.stage", "messageQuote.close", "composer.source.remove", "messageQuote.pin",
+        const val READ_DRAFT_SOURCE = "composer.source.read"
+        val COMMANDS = setOf("messageQuote.open", "messageQuote.stage", "messageQuote.close", "composer.source.remove", "messageQuote.pin", READ_DRAFT_SOURCE,
             "messageShelf.list", "messageShelf.read", "messageShelf.remove", "messageShelf.close", "messageShelf.dismiss", "messageShelf.stage")
     }
 
@@ -200,6 +202,44 @@ internal class PocketWebMessageQuotes(private val controller: PocketWorldControl
             }
             else -> error("未接入的原文引用操作")
         }
+    }
+
+    /** Exact cold-draft preview. The active native revision selects the sole stored source;
+     * this path never opens the ordinary quote selection window or enters its write domain. */
+    fun readDraftSource(args: JSONObject, ownerWindow: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        fields(args, "key", "epoch", "revision", "index")
+        val key = text(args, "key"); val epoch = integer(args, "epoch").toInt()
+        val revision = integer(args, "revision", Long.MAX_VALUE); val index = integer(args, "index", 3).toInt()
+        val original = controller.composerDraft ?: error("原私聊草稿尚未读取")
+        val conversation = original.conversationId
+        check(ownerWindow() && conversation.isNotBlank() && key == "conversation:$conversation" &&
+            original.key == key && original.revision == revision && controller.composerViewEpoch == epoch &&
+            controller.state.conversationId == conversation && !controller.state.chatSubmitting &&
+            window == null && shelf == null && stagingPage == null) { "请回到原私人草稿查看所附原话" }
+        val checked = OwnerSourceReferences.checked(original.sourceRefs())
+        val reference = checked.optJSONObject(index) ?: error("此选段不在当前草稿")
+        val canonical = reference.toString()
+        val message = reference.getJSONObject("sourceRef").getString("sourceId")
+        val sourceRevision = controller.conversationSourceRevision
+        val memoryRevision = controller.state.memoryRefreshRevision
+        fun current(): Boolean {
+            val draft = controller.composerDraft ?: return false
+            return ownerWindow() && controller.conversationSourceRevision == sourceRevision &&
+                controller.state.memoryRefreshRevision == memoryRevision &&
+                controller.composerViewEpoch == epoch && draft.key == key && draft.revision == revision &&
+                draft.conversationId == conversation && controller.state.conversationId == conversation &&
+                !controller.state.chatSubmitting && !controller.composerSaving && controller.conversationReader == null &&
+                !controller.loadingFirstConversationMessages() && controller.state.messages.none { it.id == message } &&
+                window == null && shelf == null && stagingPage == null &&
+                runCatching { OwnerSourceReferences.checked(draft.sourceRefs()).optJSONObject(index)?.toString() == canonical }.getOrDefault(false)
+        }
+        check(reference.getString("sourceConversationId") == conversation && current()) { "原草稿或已附选段已变化，没有读取其他消息" }
+        shelfWork(conversation, key, epoch, ::current, { result, error ->
+            if (!current() || result == null || error != null) done(null, error ?: "原草稿已变化，没有显示此前的原话")
+            else done(result.put("format", "pocketworld.draft-source-read.v1").put("key", key).put("epoch", epoch)
+                .put("revision", revision).put("index", index).put("reference", reference).put("readOnly", true)
+                .put("modelCalled", false).put("formalMemorySaved", false).put("executionAuthorized", false), null)
+        }) { native, control -> native.readPrivateDraftSourceForOwner(conversation, reference, control) }
     }
 
     private fun shelfWork(conversation: String, key: String, epoch: Int, current: () -> Boolean, done: (JSONObject?, String?) -> Unit,

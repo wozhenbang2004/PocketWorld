@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconQuote } from './icons';
-import { ComposerQuoteReview, type ComposerQuoteSelection } from './ComposerQuoteReview';
-import { draftQuoteKey, draftQuotePin, draftQuoteView, loadedQuoteReceipt, type DraftQuotePin } from './composer-quote-review';
+import { ComposerQuoteReview, type ComposerQuoteSelection, type StoredQuoteReview } from './ComposerQuoteReview';
+import { draftQuoteKey, draftQuotePin, draftQuoteView, loadedQuoteReceipt, storedDraftQuote, storedDraftQuoteCurrent, type DraftQuotePin, type StoredDraftQuoteRead } from './composer-quote-review';
 import './composer-context.css';
 
 type Data = Record<string, any>;
@@ -111,16 +111,39 @@ export function ComposerSourceReferences({ composer, disabled }: { composer: Dat
   const refs: Data[] = Array.isArray(composer.sourceRefs) ? composer.sourceRefs : [];
   const removal = useComposerReferenceRemoval(composer, disabled, 'source');
   const [selection,setSelection] = useState<ComposerQuoteSelection|null>(null);
-  const close = useCallback(()=>setSelection(null),[]);
-  const open = (pin:DraftQuotePin,trigger:HTMLButtonElement)=>{
-    if(document.hidden||!trigger.isConnected)return;
+  const [stored,setStored] = useState<StoredQuoteReview|null>(null);
+  const storedOwner=useRef<ComposerQuoteSelection|null>(null);
+  useEffect(()=>()=>{storedOwner.current=null},[]);
+  const retireStored=useCallback((scope:ComposerQuoteSelection)=>{
+    if(storedOwner.current===scope)storedOwner.current=null;
+    setStored(value=>value?.selection===scope?null:value);
+  },[]);
+  const close=useCallback(()=>{storedOwner.current=null;setSelection(null);setStored(null)},[]);
+  const open = (pin:DraftQuotePin,index:number,trigger:HTMLButtonElement)=>{
+    if(document.hidden||!trigger.isConnected||storedOwner.current)return;
     const native=bridge.getState(),owner={key:String(composer.key||''),epoch:Number(composer.epoch),conversation:String(composer.conversationId||'')};
-    const receipt=loadedQuoteReceipt(native,owner.conversation),sourceRevision=native.state.traceSourceRevision;
+    const receipt=loadedQuoteReceipt(native,owner.conversation),sourceRevision=native.state.traceSourceRevision,documentEpoch=bridge.getDocumentEpoch();
     const form=trigger.closest('.pw-composer-region'),editors=form?.querySelectorAll<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)');
-    const input=editors?.length===1?editors[0]:null;
-    setSelection({owner,pin,receipt,documentEpoch:bridge.getDocumentEpoch(),sourceRevision,
-      confirmedAtOpen:Number.isSafeInteger(sourceRevision)&&draftQuoteView(native,owner,pin,receipt).kind==='selected',trigger,
-      caret:input?{input,length:input.value.length,revision:Number(composer.revision),start:input.selectionStart,end:input.selectionEnd,direction:input.selectionDirection,top:input.scrollTop}:undefined});
+    const input=editors?.length===1?editors[0]:null,view=draftQuoteView(native,owner,pin,receipt);
+    const selection:ComposerQuoteSelection={owner,pin,receipt,documentEpoch,sourceRevision,
+      confirmedAtOpen:Number.isSafeInteger(sourceRevision)&&view.kind==='selected',trigger,
+      caret:input?{input,length:input.value.length,revision:Number(composer.revision),start:input.selectionStart,end:input.selectionEnd,direction:input.selectionDirection,top:input.scrollTop}:undefined};
+    setSelection(selection);
+    const resumeRevision=(native.view as {resumeRevision?:number}|undefined)?.resumeRevision,memoryRevision=native.state.memoryRefreshRevision;
+    if(view.kind!=='not_loaded'||!native.capabilities.commands.includes('composer.source.read')||
+      typeof resumeRevision!=='number'||!Number.isSafeInteger(resumeRevision)||!Number.isSafeInteger(sourceRevision)||
+      !Number.isSafeInteger(owner.epoch)||!Number.isSafeInteger(memoryRevision)||!Number.isSafeInteger(composer.revision)||composer.revision<1)return;
+    const request:StoredDraftQuoteRead={owner,pin,index,revision:composer.revision,resumeRevision,sourceRevision,memoryRevision};
+    if(!storedDraftQuoteCurrent(native,request))return;
+    storedOwner.current=selection;
+    setStored({selection,request,state:'reading'});
+    const current=()=>storedOwner.current===selection&&!document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&
+      storedDraftQuoteCurrent(bridge.getState(),request);
+    void bridge.command<unknown>('composer.source.read',{key:owner.key,epoch:owner.epoch,revision:request.revision,index}).then(value=>{
+      if(!current())return;
+      const quote=storedDraftQuote(value,request);
+      setStored(quote?{selection,request,state:'verified',quote}:{selection,request,state:'unavailable'});
+    },()=>{if(current())setStored({selection,request,state:'unavailable'})});
   };
   if (!refs.length && !removal.error && !removal.busy && !removal.removed && !selection) return null;
   return <section className="pw-composer-context" aria-label="草稿中的原文引用">
@@ -131,7 +154,7 @@ export function ComposerSourceReferences({ composer, disabled }: { composer: Dat
           const pin = draftQuotePin(ref), id = pin ? draftQuoteKey(pin) : `unverified:${index}`;
           return <div className="pw-composer-context-row" key={id}>
             {pin?<Button variant="ghost" size="small" className="pw-composer-context-object pw-composer-context-read" leadingIcon={IconQuote}
-              disabled={removal.busy} onClick={event=>open(pin,event.currentTarget)}>查看引用 {index+1} · {pin.chars} 位</Button>:
+              disabled={removal.busy} onClick={event=>open(pin,index,event.currentTarget)}>查看引用 {index+1} · {pin.chars} 位</Button>:
               <p className="pw-composer-context-object pw-composer-context-hint">引用 {index+1} · 原范围待核对</p>}
             <Button variant="ghost" size="small" className="pw-composer-context-remove" disabled={disabled || removal.busy || removal.unknown} onClick={() => removal.remove(index)} aria-label={`取消原文引用 ${index + 1}`}>取消引用</Button>
           </div>;
@@ -142,6 +165,6 @@ export function ComposerSourceReferences({ composer, disabled }: { composer: Dat
     {removal.error && <p className="pw-composer-context-feedback pw-error" role="alert">{removal.error}</p>}
     {removal.unknown && <p className="pw-composer-context-hint">结果待核对，暂不再次移除。</p>}
     {removal.removed && <p className="pw-composer-context-feedback" role="status">已取消这条引用。输入和原消息都保留。</p>}
-    <ComposerQuoteReview selection={selection} onClose={close}/>
+    <ComposerQuoteReview selection={selection} stored={stored} retireStored={retireStored} onClose={close}/>
   </section>;
 }

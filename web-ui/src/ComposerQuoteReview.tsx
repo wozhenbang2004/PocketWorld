@@ -4,13 +4,14 @@ import {Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
 import {IconClose} from './icons';
 import {registerOverlayBack} from './overlay-back';
-import {draftQuoteView,sameQuoteOwner,type DraftQuotePin,type QuoteDraftOwner} from './composer-quote-review';
+import {draftQuoteView,sameQuoteOwner,storedDraftQuoteCurrent,type DraftQuotePin,type QuoteDraftOwner,type SelectedDraftQuote,type StoredDraftQuoteRead} from './composer-quote-review';
 
 export type ComposerQuoteSelection={
   owner:QuoteDraftOwner; pin:DraftQuotePin; documentEpoch:number; sourceRevision:number;
   receipt:string; confirmedAtOpen:boolean; trigger:HTMLButtonElement;
   caret?:{input:HTMLTextAreaElement; length:number; revision:number; start:number; end:number; direction:'forward'|'backward'|'none'; top:number};
 };
+export type StoredQuoteReview={selection:ComposerQuoteSelection;request:StoredDraftQuoteRead;state:'reading'|'unavailable'|'verified';quote?:SelectedDraftQuote};
 const notes={
   not_loaded:'当前对话还没读到这条原消息。这里只核对已经显示的记录，不会自动翻阅历史。',
   unverified:'目前不能核对这一版原话。引用未改变，也没有用其他消息替代。',
@@ -19,7 +20,8 @@ const notes={
 
 /** Keep the editor mounted. Close normally to return focus to the invoking row,
  * or explicitly resume the same editor and its still-existing selection. */
-export function ComposerQuoteReview({selection,onClose}:{selection:ComposerQuoteSelection|null;onClose:()=>void}) {
+export function ComposerQuoteReview({selection,stored,retireStored,onClose}:{selection:ComposerQuoteSelection|null;stored:StoredQuoteReview|null;
+  retireStored:(selection:ComposerQuoteSelection)=>void;onClose:()=>void}) {
   const native=useSyncExternalStore(bridge.subscribe,bridge.getState,bridge.getState);
   const landing=useRef<{selection:ComposerQuoteSelection;edit:boolean}|null>(null);
   const visible=!!selection;
@@ -34,12 +36,21 @@ export function ComposerQuoteReview({selection,onClose}:{selection:ComposerQuote
   },[visible,onClose]);
   const sameWindow=selection&&!document.hidden&&bridge.getDocumentEpoch()===selection.documentEpoch&&native.state.traceSourceRevision===selection.sourceRevision;
   const current=sameWindow?draftQuoteView(native,selection.owner,selection.pin,selection.receipt):{kind:'changed' as const};
+  const showing=stored&&stored.selection===selection?stored:null;
+  const exactStored=!!showing&&!!sameWindow&&storedDraftQuoteCurrent(native,showing.request);
+  useEffect(()=>{
+    if(showing&&!exactStored)retireStored(showing.selection);
+  },[showing,exactStored,retireStored]);
+  const quote=current.kind==='selected'&&selection?.confirmedAtOpen?current:
+    exactStored&&showing?.state==='verified'?showing.quote:undefined;
   let content: ReactNode;
-  if(current.kind==='selected'&&selection?.confirmedAtOpen) content=<>
-    <p className="pw-muted">{current.author} · 原消息第 {selection.pin.revision} 版 · 第 {selection.pin.offset+1} 至 {selection.pin.offset+selection.pin.chars} 位</p>
-    <blockquote className="pw-composer-context-quote" dir="auto">{current.text}</blockquote>
+  if(quote&&selection)content=<>
+    <p className="pw-muted">{quote.author} · 原消息第 {selection.pin.revision} 版 · 第 {selection.pin.offset+1} 至 {selection.pin.offset+selection.pin.chars} 位</p>
+    <blockquote className="pw-composer-context-quote" dir="auto">{quote.text}</blockquote>
   </>;
-  else content=<p role="status">{notes[current.kind==='selected'?'unverified':current.kind]}</p>;
+  else content=<p role="status">{exactStored&&showing?.state==='reading'?'正在核对草稿里已附的这段原话…':
+    exactStored&&showing?.state==='unavailable'?'暂时无法核对这段已附原话。你仍可只取消这条草稿引用。':
+    notes[current.kind==='selected'?'unverified':current.kind]}</p>;
   const close=(edit=false)=>{
     if(selection)landing.current={selection,edit};
     onClose();

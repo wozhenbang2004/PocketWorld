@@ -1801,6 +1801,28 @@ internal class PocketWebBridge(
                 complete(id, result, null); publishState(); return
             }
             if (action in setOf("accounts.models", "accounts.model.review", "accounts.logout.review", "accounts.model.select", "accounts.logout.confirm")) { accountCommand(id, action, args); return }
+            if (action == PocketWebMessageQuotes.READ_DRAFT_SOURCE) {
+                val window = captureWindow(); val document = documentId
+                val replay = "请在原私人草稿重新核对这段引用"
+                fun currentDocument() = !closed && document != null && document == documentId
+                fun current() = currentDocument() && acceptsWindow(window) && section == null && taskViewId == null &&
+                    !phoneComposer.intent && !controller.hasChannelPhoneOrigin && controller.webPrivateOwnerVisible() &&
+                    controller.conversationReader == null && controller.queuedInputsPage == null &&
+                    !controller.state.chatAttachmentPickerOpen && !controller.attachmentOutcomes.state.open
+                fun unavailable() {
+                    if (currentDocument()) complete(id, null, "这段已附原话暂不可核对，未显示其他内容", retainValue = false, replayHint = replay)
+                    else pendingCommands.remove(id)
+                }
+                if (!current()) { unavailable(); return }
+                try {
+                    messageQuotes.readDraftSource(args, ::current) { value, error ->
+                        if (current() && value != null && error == null)
+                            complete(id, value, null, retainValue = false, replayHint = replay)
+                        else unavailable()
+                    }
+                } catch (_: Exception) { unavailable() }
+                return
+            }
             if (action in PocketWebMessageQuotes.COMMANDS) {
                 if (action == "messageQuote.open" || action == "messageQuote.stage" || action == "messageQuote.pin" || action.startsWith("messageShelf.") && action != "messageShelf.close")
                     require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原私人对话选择引用" }

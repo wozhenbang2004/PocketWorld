@@ -253,6 +253,31 @@ public final class AssistantModule implements EngineModule {
         if(!historyRepository.ownerShelfReference(conversation,id).toString().equals(r.toString()))throw new SecurityException("这条备忘已变化");
         owner.check();checked.accept(new LocalShelfRead(this,conversation,id,r));return new JSONObject().put("id",id).put("conversationId",conversation).put("chars",chars).put("text",body.substring(0,chars)).put("formalMemorySaved",false).put("modelCalled",false);
     }
+    /** Read one native range already selected in the current owner's draft. The UI host supplies
+     * the stored ref, not a Web locator; no model source, formal memory or edit handle is issued. */
+    public JSONObject readPrivateDraftSourceForOwner(String conversation,JSONObject supplied,RunControl owner)throws Exception{
+        requireLocalShelfOwner(owner);
+        JSONObject ref=OwnerSourceReferences.checked(new JSONArray().put(supplied)).getJSONObject(0);
+        if(!conversation.equals(ref.getString("sourceConversationId")))throw new SecurityException("这段引用不属于当前私聊");
+        SourceRef source=SourceRef.fromJson(ref.getJSONObject("sourceRef"));
+        JSONObject locator=shelfLocator(conversation,ref);
+        int offset=ref.getInt("offset"),chars=ref.getInt("chars");
+        requireOwnerSourceNotForgotten(source);
+        try(var inspection=inspectOwnerSources()){inspection.requireSource(ref);}
+        JSONObject page=readOwnerSearchHit(new JSONObject().put("ownerLocator",locator).put("offset",offset).put("maxChars",Math.max(64,chars)),owner);
+        if(!"current".equals(page.optString("status"))||"retired_for_derived_context".equals(page.optString("derivedUseStatus")))
+            throw new IllegalStateException("这段已附原话目前无法核对");
+        String role=page.getString("role"),body=page.getString("body");
+        JSONObject span=page.getJSONObject("readRange");
+        if(!Set.of("user","assistant").contains(role)||!conversation.equals(page.get("conversationId"))||
+                !source.sourceId.equals(page.get("recordId"))||source.revision!=page.getLong("recordVersion")||
+                span.getInt("offset")!=offset||body.length()<chars||
+                chars<body.length()&&Character.isHighSurrogate(body.charAt(chars-1))&&Character.isLowSurrogate(body.charAt(chars)))
+            throw new SecurityException("原话或所选范围已变化，没有显示其他内容");
+        try(var inspection=inspectOwnerSources()){inspection.requireSource(ref);}
+        requireOwnerSourceNotForgotten(source);owner.check();
+        return new JSONObject().put("role",role).put("text",body.substring(0,chars));
+    }
     ConversationRepository.OwnerSourceInspection inspectOwnerSources(){if(!durable())throw new IllegalStateException("原DB来源权威未激活，未提升旧引用");return historyRepository.inspectOwnerSources();}
     ConversationRepository.OwnerSourceInspection inspectOwnerSources(dev.pocketengine.features.memory.ConversationHistory.SourceBytes bytes){if(!durable())throw new IllegalStateException("原DB来源权威未激活，未提升旧引用");return historyRepository.inspectOwnerSources(bytes);}
     void requireOwnerSourceNotForgotten(SourceRef ref)throws Exception{

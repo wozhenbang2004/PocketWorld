@@ -97,8 +97,39 @@ export function teamFollowUps(run: Data | null, attention: unknown): TeamFollowU
   return result.sort((a, b) => Number(!!b.locator.questionId) - Number(!!a.locator.questionId));
 }
 
-type TeamPhaseBlocker = { memberId: string; round: number; sameMember: boolean; detail: string };
+type TeamPhaseBlocker = { memberId: string; round: number; sameMember: boolean; detail: string; current?: true };
 type TeamMemberProgressFact = { key: string; title: string; state: string; blockers?: TeamPhaseBlocker[] };
+
+function currentMemberPhase(run: Data, member: Data, phase: Data): boolean {
+  if (!Number.isSafeInteger(run.generation) || run.generation < 0 ||
+      !Number.isSafeInteger(member.generation) || member.generation < 0) return false;
+  if (phase.generation == null) {
+    // The coordinator records blockedBy for approved stages before they have a turn or child.
+    return ['queued','waiting_dependency','blocked_dependency'].includes(phase.status) &&
+      ['turnId','startedAt','finishedAt','researchTaskId','researchTask','researchHistory','phoneTask']
+        .every(key => phase[key] == null);
+  }
+  if (phase.generation !== member.generation) return false;
+  const child = phase.researchTask;
+  return child == null || child.teamRunId === run.id && child.runGeneration === run.generation &&
+    child.memberId === member.id && child.memberGeneration === member.generation &&
+    child.round === phase.round && child.taskId === phase.researchTaskId &&
+    child.executionAuthorized === false && child.executionTurnId === phase.turnId &&
+    child.identityRevision === (member.identityRevision ?? 1);
+}
+
+/** This particular attention row has no child or owner decision of its own. */
+export function passiveTeamDependency(item: TeamFollowUp, member: Data, visible: ReadonlyMap<string, TeamMemberProgressFact[]>): boolean {
+  const progress = visible.get(member.id) ?? [];
+  const at = item.locator, first = progress.find(phase => phase.state !== 'completed');
+  return item.status === 'blocked_dependency' && member.status === 'blocked_dependency' &&
+    at.memberId === member.id && at.memberGeneration === member.generation && at.identityRevision === (member.identityRevision ?? 1) &&
+    !at.childKind && !at.taskId && !at.questionId && !at.assignmentId && !at.workItemId && at.round == null &&
+    first?.state === 'blocked_dependency' && !!first.blockers?.length &&
+    first.blockers.every(blocker => blocker.current === true &&
+      visible.get(blocker.memberId)?.some(stage => stage.key === String(blocker.round))) &&
+    progress.every(phase => ['completed','queued','waiting_dependency','blocked_dependency'].includes(phase.state));
+}
 
 /** The coordinator's stop request is distinct from exiting or proving a
  * child/external effect has finished. Don't apply a retired pause record. */
@@ -132,7 +163,11 @@ function ordinaryPhaseBlockers(run: Data, member: Data, phase: Data, state: stri
       : source.paused === true ? '成员已暂停'
       : status === 'running' && (!activeProgress(run.status) || !Number.isSafeInteger(upstream.generation) || upstream.generation !== source.generation)
         ? '原进展待核对' : teamStatusLabel(status);
-    result.push({ memberId: id, round, sameMember, detail });
+    const current = ['queued','running','waiting_dependency','blocked_dependency','awaiting_input','awaiting_user',
+      'awaiting_approval','needs_confirmation','failed','interrupted','paused','unsupported','cancelled','exited'].includes(status) &&
+      (status !== 'running' || activeProgress(run.status)) &&
+      currentMemberPhase(run, member, phase) && currentMemberPhase(run, source, upstream);
+    result.push({ memberId: id, round, sameMember, detail, ...(current ? { current: true } : {}) });
   }
   return result;
 }

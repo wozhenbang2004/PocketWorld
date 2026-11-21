@@ -27,10 +27,12 @@ type Props={
  onVerifyReportFileWork?:(taskId:string,windowId:string)=>Promise<void>;
  onChooseAttachment?:(file:OriginalAttachmentChoice,target:FileDraftTarget,stillCurrent:()=>boolean,closeOriginal:()=>Promise<void>)=>Promise<void>;
  canChooseStandaloneDocument?:boolean;
+ readWorkTextVisit?:(taskId:string)=>WorkTextVisit|undefined;
 };
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
-type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;reopening?:true;start?:{viewerId:string;top:number}};
+type WorkTextVisit={taskId:string;runId:string;epoch:number;visit:string};
+type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit};
 function privateTxtPositionScope(view:Json){
  const file=obj(view.file),version=exactFileTarget(file);
  return view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&
@@ -39,6 +41,22 @@ function privateTxtPositionScope(view:Json){
   view.historyResultOnly===false&&view.reportResultOnly===false&&view.choosingSource===false&&
   typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
   JSON.stringify([view.windowId,version.fileId,version.sha256]):'';
+}
+function workTxtFrame(view:Json,taskId:string){
+ return view.taskId===taskId&&view.fromWorkResult===true&&view.originalReturn==='entry'&&view.restoredWorkReturn===false&&
+  view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.resultFilesOnly===false&&
+  view.historyResultOnly===false&&view.reportResultOnly===false&&view.choosingSource===false&&
+  !view.documentDraft&&!view.documentOpen&&!view.processingOpen&&!view.comparison;
+}
+function workTxtPositionScope(view:Json,work?:WorkTextVisit){
+ const file=obj(view.file),snapshot=obj(view.snapshot),version=exactFileTarget(file);
+ return work&&view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&workTxtFrame(view,work.taskId)&&
+  snapshot.taskId===work.taskId&&snapshot.taskRunId===work.runId&&snapshot.coordinatorEpoch===work.epoch&&
+  file.role==='result'&&file.availability==='available'&&file.runProvenance==='current'&&
+  file.sourceKind==='device_received_file'&&file.sourceRunEvidence==='original_device_file_receive'&&
+  file.sourceTaskId===work.taskId&&file.sourceTaskRunId===work.runId&&file.sourceCoordinatorEpoch===work.epoch&&
+  typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
+  JSON.stringify(['work',work.visit,version.fileId,version.sha256]):'';
 }
 function matchesTextViewer(view:Json,range:DisplayedOriginalText){
  const original=obj(view.originalFile);
@@ -106,7 +124,7 @@ function documentSourceKey(record:Json,source:Json=record){
  return file&&scope.every(key=>typeof key==='string'&&key)?JSON.stringify([...scope,file.fileId,file.sha256]):'';
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,canChooseStandaloneDocument}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,canChooseStandaloneDocument,readWorkTextVisit}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -140,15 +158,21 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const handoff=!topic&&((currentHandoff?.phase==='added'&&!draftHasFile)||(currentHandoff?.phase==='failed'&&draftHasFile))?null:currentHandoff;
  const draftBusy=draftHandoff?.phase==='adding'||draftHandoff?.phase==='opening';
  const displayedText=useRef<DisplayedOriginalText|null>(null),textReturn=useRef<TextReturn|null>(null);
- const textScope=!onReturnToSearch&&state.chatAttachmentPickerOpen===false?privateTxtPositionScope(incoming):'';
+ const workTextReader=useRef(readWorkTextVisit);workTextReader.current=readWorkTextVisit;
+ const mayRestoreText=!onReturnToSearch&&state.chatAttachmentPickerOpen===false;
+ const libraryTextScope=mayRestoreText?privateTxtPositionScope(incoming):'';
+ const workTextVisit=mayRestoreText&&openTaskId?readWorkTextVisit?.(openTaskId):undefined;
+ const workTextScope=workTxtPositionScope(incoming,workTextVisit);
+ const textScope=libraryTextScope||workTextScope;
  const textDisplayed=useCallback((range:DisplayedOriginalText)=>{
   displayedText.current=range;
   const pin=textReturn.current,body=scroller.current;
   if(!pin?.start||pin.start.viewerId!==range.viewerId||!body)return;
   textReturn.current=null; // The newly painted reader gets one chance; later reads never retarget it.
   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace);
+  const scope=pin.work?workTxtPositionScope(live,workTextReader.current?.(pin.work.taskId)):privateTxtPositionScope(live);
   if(document.hidden||bridge.getDocumentEpoch()!==pin.document||native.state.chatAttachmentPickerOpen!==false||
-     privateTxtPositionScope(live)!==pin.scope||!matchesTextViewer(live,range)||obj(live.originalFile).busy!==false||
+     scope!==pin.scope||!matchesTextViewer(live,range)||obj(live.originalFile).busy!==false||
      range.encoding!==pin.range.encoding||
      range.offset!==pin.range.offset||range.identity!==pin.range.identity||body.scrollTop!==pin.start.top)return;
   body.scrollTop=pin.top;
@@ -160,12 +184,20 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   positions.current.set(location,top);
  };
  useLayoutEffect(()=>{
+  const retainedText=textReturn.current;
+  // The overlay can be empty while this same Work reads the file selected by
+  // the owner. Do not carry its position to any other Work visit or original.
+  if(retainedText?.work&&(workTextVisit?.visit!==retainedText.work.visit||bridge.getDocumentEpoch()!==retainedText.document||
+     view.open&&view.ready&&(!workTxtFrame(view,retainedText.work.taskId)||!!file.id&&workTextScope!==retainedText.scope)))
+   textReturn.current=null;
+ },[view.open,view.ready,location,workTextVisit?.visit,workTextScope]);
+ useLayoutEffect(()=>{
   if(!view.open)positions.current.clear();
-  if(!view.open||!view.ready){textReturn.current=null;displayedText.current=null;return;}
-  if(textReturn.current?.scope!==textScope)textReturn.current=null;
+  if(!textReturn.current?.work&&(!view.open||!view.ready||textReturn.current?.scope!==libraryTextScope))textReturn.current=null;
+  if(!view.open||!view.ready){displayedText.current=null;return;}
   const pin=textReturn.current,body=scroller.current;
   if(body){
-   if(mode==='original'&&pin?.reopening){
+   if(mode==='original'&&pin?.reopening&&(!pin.work||view.windowId!==pin.range.windowId)){
     const now=obj(view.originalFile);
     // Native has admitted a new viewer for the same file, but its text may not have been laid out yet.
     body.scrollTop=0;
@@ -198,9 +230,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  },[view.windowId,view.frameId,view.ready]);
  const run=(command:string,args:Json={})=>{
   const pin=textReturn.current;
-  if(textScope&&(command==='originalDetails'||command==='openOriginal'&&pin)){
+  if(libraryTextScope&&(command==='originalDetails'||command==='openOriginal'&&pin)){
    const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),scope=privateTxtPositionScope(live),documentEpoch=bridge.getDocumentEpoch();
-   const same=!document.hidden&&scope===textScope&&native.state.chatAttachmentPickerOpen===false;
+   const same=!document.hidden&&scope===libraryTextScope&&native.state.chatAttachmentPickerOpen===false;
    if(command==='originalDetails'){
     const range=displayedText.current,body=scroller.current;
     textReturn.current=same&&mode==='original'&&range&&body&&body.scrollTop>0&&body.querySelector('.pw-original-text')&&
@@ -216,10 +248,20 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   const current=latest.current,transfer=draftFlight.current;
   if(!current.open)return false;
   if(backFlight.current||current.busy||!current.ready||transfer&&(transfer.phase==='opening'||!current.originalFile))return true;
-  textReturn.current=null;
-  if(scroller.current)positions.current.set(location,scroller.current.scrollTop);
+  const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),range=displayedText.current,body=scroller.current;
+  const work=native.state.chatAttachmentPickerOpen===false&&!document.hidden&&live.windowId===current.windowId&&typeof live.taskId==='string'
+   ?workTextReader.current?.(live.taskId):undefined;
+  const scope=workTxtPositionScope(live,work);
+  const pin:TextReturn|null=work&&scope&&range&&body&&body.scrollTop>0&&body.querySelector('.pw-original-text')&&
+   matchesTextViewer(live,range)&&obj(live.originalFile).busy===false?
+   {scope,work,range,document:bridge.getDocumentEpoch(),top:body.scrollTop,reopening:true}:null;
+  textReturn.current=pin;
+  if(body)positions.current.set(location,body.scrollTop);
   backFlight.current=true;
-  void Promise.resolve().then(()=>beforeBack.current?.()).then(frame=>act('back',{},frame)).catch(()=>{}).finally(()=>{backFlight.current=false});
+  const retirePin=()=>{if(pin&&textReturn.current===pin)textReturn.current=null;};
+  void Promise.resolve().then(()=>beforeBack.current?.()).then(frame=>act('back',{},frame)).then(result=>{
+   if(result.accepted!==true||obj(result.workspace).open!==false)retirePin();
+  }).catch(retirePin).finally(()=>{backFlight.current=false});
   return true;
  },[act,location]);
  const registerBeforeBack=useCallback((handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>{beforeBack.current=handler},[]);

@@ -58,13 +58,27 @@ function current(t:PhoneReportTarget){
   });
 }
 export {current as phoneReportInSource};
+/** A different publication may invalidate the read seal without moving this owner or original result. */
+function recheckSource(t:PhoneReportTarget):PhoneReportTarget|null{
+  const {state}=bridge.getState(),v=view(),changes=state.traceSourceRevision,h=state.conversationReader;
+  if(t.noticeOrigin||!Number.isSafeInteger(changes)||changes<=t.changes||v.section!==null||v.taskId!==null||
+    state.filePath||state.queuedInputsPage||state.chatAttachmentPickerOpen||state.attachmentWorkspace?.open||
+    t.readerWindow>0&&(h?.limited!==false||h.workRequest))return null;
+  const rows=t.readerWindow>0?h?.messages:state.messages;
+  const next={...t,changes};
+  return Array.isArray(rows)&&rows.filter(row=>row?.id===t.messageId).length===1&&current(next)?next:null;
+}
 const states:Record<string,string>={completed:'执行结束',failed:'执行失败',cancelled:'已停止',interrupted:'已中断',
   paused:'已暂停',awaiting_user:'等待你处理',needs_confirmation:'等待确认',reconciling:'结果待核对'};
 type Page={text:string;offset:number;next:number;more:boolean;finalScreen:string|null};
-export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget;onClose:()=>void}){
+type CheckedPage={offset:number;resultDigest:string;summaryDigest:string};
+export function PhoneReturnedReport({target:opening,onClose}:{target:PhoneReportTarget;onClose:()=>void}){
   useSyncExternalStore(bridge.subscribe,bridge.getState);
+  const [rechecked,setRechecked]=useState<{opening:PhoneReportTarget;target:PhoneReportTarget}|null>(null);
+  const t=rechecked?.opening===opening?rechecked.target:opening;
   const [expired,setExpired]=useState(false),[page,setPage]=useState<Page|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(true);
-  const attempts=useRef(0),inFlight=useRef(false),digest=useRef(''),previous=useRef<number[]>([]),request=useRef(0);
+  const attempts=useRef(0),inFlight=useRef(false),confirmed=useRef<CheckedPage|null>(null),previous=useRef<number[]>([]),request=useRef(0);
+  const visit=useRef(opening),closedForRecheck=useRef(false);
   const original=t.phoneResult,valid=current(t),available=!expired&&valid;
   const [quote,setQuote]=useState<MessageQuoteTarget|null>(null),[asking,setAsking]=useState(false),[questionError,setQuestionError]=useState('');
   const source=useRef<PhoneReportTarget|null>(t),flight=useRef(false),replace=useRef(false),backToButton=useRef(false),button=useRef<HTMLButtonElement>(null);
@@ -100,36 +114,54 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
   const back=useRef(()=>{});back.current=()=>{if(sameQuote)returnToReport();else leave()};
   useEffect(()=>registerOverlayBack(()=>back.current()),[]);
   useEffect(()=>{if(quote&&!sameQuote){returnToReport();if(available)setQuestionError('原输入已切换，请先核对原聊天的草稿。');}},[quote,sameQuote,available]);
-  useEffect(()=>{if(!valid){source.current=null;++attempts.current;inFlight.current=false;setPage(null);setExpired(true);}},[valid]);
-  async function read(offset:number,manual=true){
-    if(inFlight.current||!current(t))return;
+  async function read(offset:number,manual=true,target=t){
+    const stillHere=()=>source.current===target&&current(target);
+    if(inFlight.current||!stillHere())return;
     if(manual)reading.leaving(offset);
+    const expected=confirmed.current;
     const attempt=++attempts.current;inFlight.current=true;request.current=offset;setBusy(true);setPage(null);setError('');
     try{
-      const p=await bridge.command('phone.result.original',{conversationId:t.conversationId,messageId:t.messageId,sourceRevision:t.sourceRevision,
-        taskId:original.taskId,runId:original.runId,epoch:original.epoch,deliveryId:original.deliveryId,offset,readerWindow:t.readerWindow,expectedDigest:digest.current});
-      if(attempt!==attempts.current||!current(t))return;
-      if(!p||p.conversationId!==t.conversationId||p.messageId!==t.messageId||p.sourceRevision!==t.sourceRevision||p.readerWindow!==t.readerWindow
+      const p=await bridge.command('phone.result.original',{conversationId:target.conversationId,messageId:target.messageId,sourceRevision:target.sourceRevision,
+        taskId:original.taskId,runId:original.runId,epoch:original.epoch,deliveryId:original.deliveryId,offset,readerWindow:target.readerWindow,expectedDigest:expected?.resultDigest||''});
+      if(attempt!==attempts.current||!stillHere())return;
+      if(!p||p.conversationId!==target.conversationId||p.messageId!==target.messageId||p.sourceRevision!==target.sourceRevision||p.readerWindow!==target.readerWindow
         ||p.taskId!==original.taskId||p.runId!==original.runId||p.epoch!==original.epoch||p.deliveryId!==original.deliveryId||p.status!==original.status
         ||p.endedAt!==original.endedAt||p.summaryChars!==original.summaryChars||p.summaryTruncated!==original.summaryTruncated
         ||p.executionAuthorized!==false||p.resultVerified!==false||typeof p.resultDigest!=='string'||!/^[a-f0-9]{64}$/.test(p.resultDigest)
-        ||typeof p.summaryDigest!=='string'||!/^[a-f0-9]{64}$/.test(p.summaryDigest)||digest.current!==''&&p.resultDigest!==digest.current
+        ||typeof p.summaryDigest!=='string'||!/^[a-f0-9]{64}$/.test(p.summaryDigest)
+        ||expected&&(p.resultDigest!==expected.resultDigest||p.summaryDigest!==expected.summaryDigest)
         ||p.offset!==offset||typeof p.text!=='string'||p.text.length>8000||p.nextOffset!==offset+p.text.length
         ||p.nextOffset>original.summaryChars||p.hasMore!==(p.nextOffset<original.summaryChars)||p.hasMore&&!p.text.length)
         throw new Error('这段原文与所选回执不一致，没有改读其他结果。');
-      digest.current=p.resultDigest;
+      confirmed.current={offset,resultDigest:p.resultDigest,summaryDigest:p.summaryDigest};
       const index=previous.current.indexOf(offset);previous.current=index<0?[...previous.current,offset]:previous.current.slice(0,index+1);
       const finalScreen=finalScreenLine(p.finalScreenReceipt,original);
       setPage({text:p.text,offset,next:p.nextOffset,more:p.hasMore,finalScreen});
-    }catch(e){if(attempt===attempts.current&&current(t))setError(e instanceof Error?e.message:'原文未读到，可以重读这段。');}
+    }catch(e){if(attempt===attempts.current&&stillHere())setError(e instanceof Error?e.message:'原文未读到，可以重读这段。');}
     finally{if(attempt===attempts.current){inFlight.current=false;setBusy(false);}}
   }
   useEffect(()=>{
-    source.current=t;
-    const obscure=()=>{if(document.hidden){source.current=null;++attempts.current;setExpired(true);setPage(null);}};
-    document.addEventListener('visibilitychange',obscure);void read(0,false);
-    return()=>{source.current=null;document.removeEventListener('visibilitychange',obscure);++attempts.current;inFlight.current=false;};
-  },[t]);
+    visit.current=source.current=opening;
+    confirmed.current=null;previous.current=[];closedForRecheck.current=false;setExpired(false);
+    const expire=()=>{source.current=null;++attempts.current;inFlight.current=false;setPage(null);setExpired(true)};
+    const reconcile=()=>{
+      if(current(visit.current))return;
+      if(!recheckSource(visit.current))closedForRecheck.current=true;
+      if(source.current)expire();
+    };
+    const obscure=()=>{if(document.hidden){closedForRecheck.current=true;expire();}};
+    const off=bridge.subscribe(reconcile),offDocument=bridge.subscribeDocumentEpoch(reconcile);
+    document.addEventListener('visibilitychange',obscure);reconcile();void read(0,false,opening);
+    return()=>{source.current=null;off();offDocument();document.removeEventListener('visibilitychange',obscure);++attempts.current;inFlight.current=false;};
+  },[opening]);
+  const canRecheck=!available&&visit.current===t&&!closedForRecheck.current&&!!confirmed.current&&!!recheckSource(t);
+  function recheck(){
+    const prior=confirmed.current,next=recheckSource(visit.current);
+    if(visit.current!==t||!prior||!next||closedForRecheck.current||source.current||inFlight.current)return;
+    visit.current=source.current=next;
+    setRechecked({opening,target:next});setExpired(false);setQuestionError('');setAsking(false);
+    void read(prior.offset,false,next);
+  }
   if(quote&&sameQuote)return <MessageQuote target={quote} phoneReceipt={original.summaryTruncated?'excerpt':'full'} onClose={returnToReport} onStaged={()=>staged(quote)}/>;
   return <Sheet open onOpenChange={open=>{if(!open)leave();}}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/>
     <Drawer.Content className="pw-drawer" onOpenAutoFocus={e=>{if(backToButton.current&&button.current){e.preventDefault();backToButton.current=false;button.current.focus({preventScroll:true});}}}
@@ -138,7 +170,8 @@ export function PhoneReturnedReport({target:t,onClose}:{target:PhoneReportTarget
       <div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>这轮手机任务的原文</Drawer.Title>
         <Drawer.Description>第 {original.epoch} 轮 · {states[original.status]}。这里保留的是当时的文字总结，不会继续操作手机。</Drawer.Description></div>
         <IconButton icon={IconClose} aria-label="返回原回执" onClick={leave}/></header>
-      <div className="pw-drawer-body">{!available?<p role="status">原回执或私人窗口已变化。请返回对话，从原回执重新打开。</p>:<>
+      <div className="pw-drawer-body">{!available?<>{canRecheck?<><p role="status">本机记录有更新，刚才那段原文需要重新核对。</p>
+        <Button variant="secondary" onClick={recheck}>重新核对刚才那段</Button></>:<p role="status">原回执或私人窗口已变化。请返回对话，从原回执重新打开。</p>}</>:<>
         {busy&&<ShimmerText>正在核对这轮原文…</ShimmerText>}{error&&<p role="alert">{error}</p>}
         {page&&<>{page.finalScreen?<p className="pw-field-hint"><strong>收尾时的屏幕：</strong>{page.finalScreen}</p>:
           original.status==='needs_confirmation'||original.status==='completed'?<p className="pw-muted">这份原报告没有独立的终屏回执，不能据此确认当时的页面。</p>:null}

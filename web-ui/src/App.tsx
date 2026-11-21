@@ -2176,6 +2176,13 @@ export default function App(){
    raw.memberId!=null||raw.parentTaskId!=null||raw.ownerPhoneControl||raw.ownerDeviceWork)return null;
   return {owner,work,layer:screen.layer,navigation:navigationWindow.current,taskRequest:Number(taskRequest)};
  };
+ const readWorkTextVisit=(id:string)=>{
+  const native=bridge.getState(),conversation=native.state.conversationId,parent=readFileWorkParent(id,native);
+  if(route!=='chat'||!parent||parent.layer!=='overview'||typeof conversation!=='string'||!conversation||
+     !ordinaryChatWorkRow(asArray<Task>(native.state.tasks).find(row=>row.id===id),conversation,true))return;
+  return {...parent.work,visit:JSON.stringify([parent.owner.request,parent.owner.documentEpoch,parent.owner.resumeRevision,
+   parent.navigation,parent.taskRequest,workIdentityKey(parent.work),conversation])};
+ };
  const stillFileWorkParent=(pin:WorkFileVisit,live=bridge.getState())=>{
   const parent=readFileWorkParent(pin.work.taskId,live);
   return parent?.owner===pin.owner&&parent.layer===pin.layer&&parent.navigation===pin.navigation&&parent.taskRequest===pin.taskRequest&&
@@ -5176,7 +5183,7 @@ export default function App(){
    onAdoptFileNote={fileResultTopic&&fileNoteTarget(snapshot,fileResultTopic)?(note,frame,close)=>adoptFileNote(fileResultTopic,note,frame,close):undefined}
    onVerifyReportFileWork={taskLayer==='homeReport'&&can('ownerWork.report.read')?verifyReportFileWork:undefined}
    canChooseStandaloneDocument={!!existingPrivateAttachmentDraft}
-   onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined}/>
+   onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined} readWorkTextVisit={readWorkTextVisit}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement())closeTask(true)}else setTaskOpen(true)}} direction="right" handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
