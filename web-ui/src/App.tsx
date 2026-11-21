@@ -207,8 +207,8 @@ type ChatWorkRowOrigin={work:WorkIdentity;conversation:string;draftEpoch:number;
 type ChatWorkTaskOpen={beforeTaskRequest:number;navigation:number}&({returnTo:ChatWorkReturn;row?:never}|{row:ChatWorkRowOrigin;returnTo?:never});
 type AcknowledgedWorkVisit=TaskReviewWindow&{chatRow?:ChatWorkRowOrigin;chatReturnRequest?:number};
 type ChatDrawerReturn=ChatWorkReturn&{taskId:string;navigation:number;resumeRevision:number};
-type DeliveredFileVisit={conversation:string;document:number;navigation:number;resume:number;trigger:HTMLButtonElement;sources:DeliveredFileSource[];more:boolean};
-type PreferredChatFile={file:Pick<TaskResultFile,'id'|'sha256'>;returnFocus:HTMLButtonElement;current:()=>boolean;opened:()=>void};
+type DeliveredFileVisit={conversation:string;document:number;navigation:number;resume:number;taskRequest:number;trigger:HTMLButtonElement;sources:DeliveredFileSource[]};
+type PreferredChatFile={visit:DeliveredFileVisit;source:DeliveredFileSource;file:Pick<TaskResultFile,'id'|'sha256'>;current:()=>boolean;windowId?:string};
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
 type TerminalSavedFileOrigin={position:CheckoutSavedPosition;navigation:number;current:(section:'local'|null)=>boolean};
@@ -670,6 +670,7 @@ export default function App(){
  useEffect(()=>{const invalidate=()=>{if(document.hidden)searchOpenRequest.current++};document.addEventListener('visibilitychange',invalidate);return()=>document.removeEventListener('visibilitychange',invalidate)},[]);
  const [chatMenuOpen,setChatMenuOpen]=useState(false);const chatMenuTrigger=useRef<HTMLButtonElement>(null);
  const [deliveredFileVisit,setDeliveredFileVisit]=useState<DeliveredFileVisit|null>(null),deliveredFileRef=useRef<DeliveredFileVisit|null>(null);
+ const [deliveredFileReader,setDeliveredFileReader]=useState<PreferredChatFile|null>(null);
  const navigationReturnFocus=useRef<HTMLElement|null>(null);
  const [navigationMoreOpen,setNavigationMoreOpen]=useState(false);
  const ownerNavMemory=useRef<OwnerNavigationMemory>({});
@@ -842,7 +843,7 @@ export default function App(){
  const registerOriginalPhoneTool=useCallback((handler:((pin:OriginalPhoneToolRecord)=>boolean)|null)=>{originalPhoneToolOpen.current=handler},[]);
  const registerMainPhoneRead=useCallback((handler:((visit:MainPhoneReadVisit)=>boolean)|null)=>{mainPhoneReadOpen.current=handler},[]);
  const attachmentBack=useRef<(()=>boolean)|null>(null);
- const resultFileReturnFocus=useRef<({taskId:string;report?:VerifiedHomeReport}|{conversationId:string;resultMessageId:string;result:TaskResult;revision:number;document:number;navigation:number;resume:number;taskRequest:number;reader?:HistoryResultOrigin;historySourceGeneration?:number;chatReading?:ChatWorkReturn})&{target:HTMLButtonElement}|null>(null);
+ const resultFileReturnFocus=useRef<({taskId:string;report?:VerifiedHomeReport}|{conversationId:string;resultMessageId:string;result:TaskResult;revision:number;document:number;navigation:number;resume:number;taskRequest:number;reader?:HistoryResultOrigin;historySourceGeneration?:number;chatReading?:ChatWorkReturn;shelf?:PreferredChatFile})&{target:HTMLButtonElement}|null>(null);
  const [fileAttachmentPicker,setFileAttachmentPicker]=useState<FileAttachmentPickerOrigin|null>(null);
  const fileAttachmentPickerLaunch=useRef<FileAttachmentPickerLaunch|null>(null);
  const [reopenedAttachmentPicker,setReopenedAttachmentPicker]=useState<ReopenedAttachmentPicker|null>(null);
@@ -2807,7 +2808,15 @@ export default function App(){
  const reminderNotice=route==='automation'&&reminderNoticeVisit.current?.navigation===navigationRevision&&
   reminderNoticeVisit.current.documentEpoch===personalDocumentEpoch?reminderNoticeVisit.current:undefined;
  useEffect(()=>{bridge.setBackHandler(()=>{if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
-  if(deliveredFileRef.current&&!bridge.getState().state.attachmentWorkspace?.open){closeDeliveredFiles();return true;}
+  if(deliveredFileRef.current){
+   const origin=resultFileReturnFocus.current,frame=bridge.getState().state.attachmentWorkspace;
+   const reader=origin&&!('taskId' in origin)?origin.shelf:undefined;
+   if(reader?.visit===deliveredFileRef.current&&(!frame?.open||matchesDeliveredFileFrame(reader,frame))){
+    if(frame?.open)attachmentBack.current?.();
+    return true;
+   }
+   if(!frame?.open){closeDeliveredFiles();return true;}
+  }
   if(taskLayer==='homeReport'||route==='chat'&&!taskOpen){
    const owner=bridge.getState().state;
    // The file layer covers its original reader, even while its Back handler is rebinding.
@@ -2973,13 +2982,14 @@ export default function App(){
   }
   phoneExit.onCloseAutoFocus(event);
  };
- const startReviewedPhone=(manualFirstMain=false)=>{
+ const startReviewedPhone=(manualFirstMain=false,watchReviewedHandle?:string)=>{
   const reviewed=phoneReviewLive.current;
   if(document.hidden||phoneAction.current||!reviewed||phoneReviewPending||phoneStart?.status==='unknown')return;
   if(manualFirstMain&&reviewed.manualFirstMainAvailable!==true)return;
+  if(watchReviewedHandle&&(!manualFirstMain||watchReviewedHandle!==reviewed.reviewHandle))return;
   const startWindow=phoneWindow.current,startDoc=bridge.getDocumentEpoch();const here=()=>!document.hidden&&phoneWindow.current===startWindow&&bridge.getDocumentEpoch()===startDoc;
   phoneAction.current=true;phoneText.markSent();setPhoneReviewPending(true);
-  void act('phone.start',{reviewHandle:reviewed.reviewHandle,...(manualFirstMain?{manualFirstMain:true}:{})}).then(value=>{
+  void act('phone.start',{reviewHandle:reviewed.reviewHandle,...(manualFirstMain?{manualFirstMain:true}:{}),...(watchReviewedHandle?{watchFirstMainResult:true}:{})}).then(value=>{
     if(!here())return;const receipt=phoneStartReceipt(value,reviewed);setPhoneStart(receipt);
     if(reviewed.conditions&&receipt.status==='rejected'&&value?.recheckReview===reviewed.reviewHandle){
       setPhoneReview(current=>current?.reviewHandle===reviewed.reviewHandle?{...current,documentEpoch:undefined}:current);
@@ -3198,6 +3208,14 @@ export default function App(){
   if(bridge.getState().state.attachmentWorkspace?.open!==true)workFileVisit.current=null;
   const origin=resultFileReturnFocus.current;
   resultFileReturnFocus.current=null;
+  if(origin&&!('taskId' in origin)&&origin.shelf){
+   const reader=origin.shelf,native=bridge.getState().state;
+   if(event.defaultPrevented||!reader.windowId||native.attachmentWorkspace?.open!==false||!deliveredFilesCurrent(reader.visit)||
+      !resultMessageIn(native.messages,reader.source.messageId,reader.source.result,reader.source.revision)){
+    closeDeliveredFiles(false,reader.visit);return;
+   }
+   event.preventDefault();setDeliveredFileReader(current=>current===reader?null:current);return;
+  }
   if(!origin||event.defaultPrevented||document.hidden)return;
   const native=bridge.getState().state;
   if('taskId' in origin){
@@ -3268,7 +3286,7 @@ export default function App(){
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
   const beforeTaskRequest=reviewRequest.current,beforeSearchRequest=searchOpenRequest.current;
   const source=(native:Json,revision?:number)=>resultMessageIn(reader?fileResultReader(native,reader)?.messages:
-   native.conversationId===conversationId&&!native.conversationReader?native.messages:null,resultMessageId,result,reader?.sourceRevision??revision);
+   native.conversationId===conversationId&&!native.conversationReader?native.messages:null,resultMessageId,result,reader?.sourceRevision??preferred?.source.revision??revision);
   const entry=bridge.getState(),selected=source(entry.state);
   if(!target.isConnected||document.hidden)return;
   if(!selected){
@@ -3306,8 +3324,8 @@ export default function App(){
   if(!canReadFiles){fallback();return;}
   openingChatResult.current=resultMessageId;setOpeningChatResultId(resultMessageId);setLocalError('');
   const locator={taskId:result.taskId,resultMessageId,conversationId,...(reader?{resultReaderWindow:reader.window,resultSourceRevision:reader.sourceRevision}:{})};
-  const origin={conversationId,resultMessageId,result,target:preferred?.returnFocus||target,reader,historySourceGeneration:reader?entry.state.traceSourceRevision:undefined,
-   document:documentEpoch,revision:selected.sourceRevision,chatReading,
+  const origin={conversationId,resultMessageId,result,target:preferred?.visit.trigger||target,reader,historySourceGeneration:reader?entry.state.traceSourceRevision:undefined,
+   document:documentEpoch,revision:selected.sourceRevision,chatReading,shelf:preferred,
    navigation,resume:obj(bridge.getState().view).resumeRevision,taskRequest:beforeTaskRequest};
   let opening=false;
   try{
@@ -3321,11 +3339,14 @@ export default function App(){
    if(exact&&exact.length!==1)throw new Error('这份文件的原版本已变化，没有打开其他文件。');
    const single=exact?exact[0]:listed.files.length===1&&!listed.readLimited?listed.files[0] as TaskResultFile:null;
    resultFileReturnFocus.current=origin;opening=true;
+   if(preferred)setDeliveredFileReader(preferred);
    const opened=await bridge.command('attachmentWorkspace.open',{...locator,...(single?{fileId:single.id,sha256:single.sha256,openOriginal:true}:{})});
    if(opened?.opened!==true)throw new Error('未确认打开这份原结果，请从原消息核对。');
-   preferred?.opened();
   }catch(error){
-   if(resultFileReturnFocus.current===origin)resultFileReturnFocus.current=null;
+   if(!preferred||!matchesDeliveredFileFrame(preferred,bridge.getState().state.attachmentWorkspace)){
+    if(resultFileReturnFocus.current===origin)resultFileReturnFocus.current=null;
+    if(preferred)setDeliveredFileReader(current=>current===preferred?null:current);
+   }
    if(reader||preferred)throw error;
    if(opening){
     if(stillCurrent())setLocalError(error instanceof Error?error.message:'暂时无法打开工作文件。');
@@ -4863,8 +4884,25 @@ export default function App(){
    return work;
   };
   if(!original(before))return;
+  const readyToLeave=(native:ReturnType<typeof bridge.getState>)=>{
+   const work=original(native),offered=obj(obj(native.view).mainPausePageReturn);
+   return !!work&&native.capabilities.commands.includes('phone.pause.leavePage')&&
+    offered.taskId===id.taskId&&offered.runId===id.runId&&offered.epoch===id.epoch&&offered.pauseRevision===pause.pauseRevision&&
+    offered.scopeRevision===pause.scopeRevision&&offered.displayHandle===pause.displayHandle&&
+    sameDisplayedPause(pause,plainMainPhonePause(work,native.state.livePrivatePhones)?.pause);
+  };
   return {
    key:JSON.stringify([id.taskId,id.runId,id.epoch,pause.displayHandle]),
+   leavePage:readyToLeave(before)?trigger=>{
+    if(!trigger.isConnected||trigger.disabled||!trigger.getClientRects().length||trigger.closest('[hidden],[inert],[aria-hidden="true"]')||
+       trigger.closest<HTMLElement>('.pw-task-drawer')?.dataset.taskLayer!=='overview'||!readyToLeave(bridge.getState()))return;
+    return bridge.command('phone.pause.leavePage',{...id,...pause}).then(value=>{
+     const receipt=obj(value);
+     if(receipt.pauseRevision!==pause.pauseRevision||receipt.scopeRevision!==pause.scopeRevision||receipt.displayHandle!==pause.displayHandle)
+      throw Error('未确认同一次页面切换。没有从这里继续。');
+     return value;
+    });
+   }:undefined,
    current:()=>{
     const latest=bridge.getState(),work=original(latest);
     return !!work&&(work.status!=='paused'||sameDisplayedPause(pause,privatePhoneSurface(work,latest.state.livePrivatePhones)?.displayedPause));
@@ -6332,31 +6370,60 @@ export default function App(){
  const deliveredFilesWindow=(visit:DeliveredFileVisit|null)=>{
   const live=bridge.getState(),view=obj(live.view),owner=live.state;
   return !!visit&&!document.hidden&&route==='chat'&&intent==='chat'&&!taskOpen&&visit.navigation===navigationWindow.current&&
-   visit.document===bridge.getDocumentEpoch()&&visit.resume===view.resumeRevision&&owner.conversationId===visit.conversation&&
-   !view.taskId&&!view.section&&!owner.conversationReader&&!owner.queuedInputsPage&&!owner.attachmentWorkspace?.open;
+   visit.document===bridge.getDocumentEpoch()&&visit.resume===view.resumeRevision&&Number.isSafeInteger(visit.resume)&&
+   visit.taskRequest===reviewRequest.current&&owner.conversationId===visit.conversation&&view.taskId===null&&view.section===null&&
+   !owner.conversationReader&&!owner.loadingFirstConversationMessages&&!owner.queuedInputsPage&&!owner.filePath&&!owner.chatAttachmentPickerOpen;
  };
- const deliveredFilesCurrent=(visit:DeliveredFileVisit|null)=>deliveredFileRef.current===visit&&deliveredFilesWindow(visit);
+ const deliveredFilesCurrent=(visit:DeliveredFileVisit|null)=>deliveredFileRef.current===visit&&deliveredFilesWindow(visit)&&
+  bridge.getState().state.attachmentWorkspace?.open!==true;
+ const matchesDeliveredFileFrame=(pin:PreferredChatFile,attachment:unknown)=>{
+  const frame=obj(attachment),listing=obj(frame.snapshot),selected=obj(frame.file),task=pin.source.result;
+  return frame.open===true&&frame.ready===true&&frame.resultFilesOnly===true&&frame.fromWorkResult===false&&
+   frame.historyResultOnly===false&&frame.reportResultOnly===false&&frame.group===false&&frame.team===false&&frame.deviceOriginalOnly===false&&
+   frame.taskId===task.taskId&&typeof frame.windowId==='string'&&!!frame.windowId&&
+   (!pin.windowId||frame.windowId===pin.windowId)&&
+   (frame.snapshot==null||listing.taskId===task.taskId&&listing.taskRunId===task.runId&&listing.coordinatorEpoch===task.epoch)&&
+   (!!pin.windowId||frame.file==null||selected.id===pin.file.id&&selected.sha256===pin.file.sha256);
+ };
  const closeDeliveredFiles=(restore=true,visit=deliveredFileRef.current)=>{
   if(!visit||deliveredFileRef.current!==visit)return;
   deliveredFileRef.current=null;setDeliveredFileVisit(null);
+  setDeliveredFileReader(current=>current?.visit===visit?null:current);
   if(restore&&deliveredFilesWindow(visit)&&visit.trigger.isConnected)
    requestAnimationFrame(()=>{if(!deliveredFileRef.current&&deliveredFilesWindow(visit)&&visit.trigger.isConnected)visit.trigger.focus({preventScroll:true});});
  };
  const showDeliveredFiles=(trigger:HTMLButtonElement)=>{
   const live=bridge.getState(),view=obj(live.view),conversation=String(live.state.conversationId||'');
   const visit:DeliveredFileVisit={conversation,document:bridge.getDocumentEpoch(),navigation:navigationWindow.current,resume:view.resumeRevision,
-   trigger,sources:[],more:false};
-  if(deliveredFileRef.current||!conversation||!deliveredFilesWindow(visit))return;
-  const ordered=asArray<Message>(live.state.messages).flatMap(message=>{
+   taskRequest:reviewRequest.current,trigger,sources:[]};
+  if(deliveredFileRef.current||resultFileReturnFocus.current||!conversation||live.state.attachmentWorkspace?.open===true||!deliveredFilesWindow(visit))return;
+  visit.sources=asArray<Message>(live.state.messages).flatMap(message=>{
    const result=messageTaskResult(message);
-   return message.role==='assistant'&&message.id&&Number.isSafeInteger(message.sourceRevision)&&
+   return message.role==='assistant'&&message.id&&Number.isSafeInteger(message.sourceRevision)&&Number(message.sourceRevision)>0&&
     result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind&&message.taskId===result.taskId
     ?[{messageId:message.id,revision:message.sourceRevision!,result}]:[];
   }).sort((a,b)=>b.result.endedAt-a.result.endedAt);
-  visit.sources=ordered.slice(0,4);visit.more=ordered.length>4;deliveredFileRef.current=visit;setDeliveredFileVisit(visit);
+  deliveredFileRef.current=visit;setDeliveredFileVisit(visit);
  };
- const deliveredFileCurrent=deliveredFilesCurrent(deliveredFileVisit);
+ const deliveredFileCover=deliveredFileReader&&deliveredFileReader.visit===deliveredFileVisit?deliveredFileReader:null;
+ const deliveredFileFrame=state.attachmentWorkspace;
+ const deliveredFileOrigin=resultFileReturnFocus.current;
+ const deliveredFileOwnsFrame=!!deliveredFileCover&&!!deliveredFileOrigin&&!('taskId' in deliveredFileOrigin)&&
+  deliveredFileOrigin.shelf===deliveredFileCover&&matchesDeliveredFileFrame(deliveredFileCover,deliveredFileFrame);
+ const deliveredFileCurrent=deliveredFileRef.current===deliveredFileVisit&&deliveredFilesWindow(deliveredFileVisit)&&
+  (deliveredFileFrame?.open!==true||deliveredFileOwnsFrame);
+ useLayoutEffect(()=>{
+  if(deliveredFileCover&&deliveredFileCurrent&&deliveredFileOwnsFrame)
+   deliveredFileCover.windowId=deliveredFileFrame.windowId;
+ },[deliveredFileCover,deliveredFileCurrent,deliveredFileOwnsFrame,deliveredFileFrame]);
  useEffect(()=>{if(deliveredFileVisit&&!deliveredFileCurrent)closeDeliveredFiles(false,deliveredFileVisit)},[deliveredFileVisit,deliveredFileCurrent]);
+ useEffect(()=>{
+  if(!deliveredFileVisit)return;
+  const leave=()=>closeDeliveredFiles(false,deliveredFileVisit);
+  const hide=()=>{if(document.hidden)leave()};
+  document.addEventListener('visibilitychange',hide);window.addEventListener('pagehide',leave);
+  return()=>{document.removeEventListener('visibilitychange',hide);window.removeEventListener('pagehide',leave)};
+ },[deliveredFileVisit]);
  const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} onDeliveredFiles={currentConversation&&intent==='chat'&&can('tasks.resultFiles')&&can('attachmentWorkspace.open')?showDeliveredFiles:undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}/>;
  const latestSavedMessage=messages.at(-1),latestSavedWork=savedReplyDetails.at(-1);
  const messageWork=(()=>{
@@ -6960,16 +7027,19 @@ export default function App(){
    onOpenResultFiles={can('tasks.resultFiles')&&can('attachmentWorkspace.open')?openChatResult:undefined}/>
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
   {deliveredFileCurrent&&deliveredFileVisit&&<ConversationDeliveredFiles conversation={deliveredFileVisit.conversation}
-   sources={deliveredFileVisit.sources} more={deliveredFileVisit.more} isCurrent={()=>deliveredFilesCurrent(deliveredFileVisit)}
+   sources={deliveredFileVisit.sources} covered={!!deliveredFileCover} isCurrent={()=>deliveredFilesCurrent(deliveredFileVisit)}
    isSourceCurrent={source=>!!resultMessageIn(bridge.getState().state.messages,source.messageId,source.result,source.revision)}
-   onClose={closeDeliveredFiles} onOpen={({source,file},target)=>openChatResult(source.messageId,source.result,target,undefined,
-    {file,returnFocus:deliveredFileVisit.trigger,current:()=>deliveredFilesCurrent(deliveredFileVisit),opened:()=>closeDeliveredFiles(false,deliveredFileVisit)})}/>}
+   onClose={closeDeliveredFiles} onHistory={can('conversation.reader.open')?()=>{
+    if(!deliveredFilesCurrent(deliveredFileVisit))return;
+    closeDeliveredFiles(false,deliveredFileVisit);void openChatHistory(deliveredFileVisit.trigger);
+   }:undefined} onOpen={({source,file},target)=>openChatResult(source.messageId,source.result,target,undefined,
+    {visit:deliveredFileVisit,source,file,current:()=>deliveredFilesCurrent(deliveredFileVisit)})}/>}
   {shownOriginalReminder&&<OriginalChatReminderReview key={shownOriginalReminder.source.messageId+':'+shownOriginalReminder.source.sourceRevision}
     source={shownOriginalReminder.source} isCurrent={()=>originalReminderChatCurrent(shownOriginalReminder)}
     onClose={()=>closeOriginalReminder(shownOriginalReminder)} onOpenSavedRule={pin=>openSavedOriginalReminder(shownOriginalReminder,pin)}
     registerBack={registerOriginalReminderBack}/>}
   {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
-  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined}
+  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} returnToDeliveredFiles={deliveredFileCurrent&&deliveredFileOwnsFrame} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined}
    canReturnToOpenWork={continueFromWorkFiles}
    draftTarget={fileDraftTarget} resultTopic={fileResultTopic} keepResultReadingDraft={keepResultReadingDraft} onStageFile={can('composer.object.add')?stageFileInDraft:undefined} onOpenDraft={showFileDraft} onUseResult={useFileInOriginalTopic}
    onChooseResultAttachment={resultAttachmentAvailable?chooseFileInOriginalTopic:liveChatResultAttachmentAvailable?chooseLiveChatResultAttachment:

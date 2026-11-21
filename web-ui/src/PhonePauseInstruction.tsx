@@ -9,7 +9,8 @@ type Original = { taskId: string; runId: string; epoch: number };
 type Pause = Original & { pauseRevision: number; scopeRevision: number };
 type Review = Pause & { reviewHandle: string; noteRecorded: boolean };
 type Draft = { target: Original; pause?: Pause; text: string };
-export type MainPauseResume = {key:string;current:()=>boolean;submit:(trigger:HTMLButtonElement)=>Promise<unknown>|undefined};
+export type MainPauseResume = {key:string;current:()=>boolean;submit:(trigger:HTMLButtonElement)=>Promise<unknown>|undefined;
+  leavePage?:(trigger:HTMLButtonElement)=>Promise<unknown>|undefined};
 type ResumeFeedback = {current:()=>boolean;phase:'pending'|'accepted'|'unknown'};
 const same = (a?: Original | null, b?: Original | null) => !!a && !!b && a.taskId === b.taskId && a.runId === b.runId && a.epoch === b.epoch;
 const samePause = (a: Pause, b: Pause) => same(a,b) && a.pauseRevision === b.pauseRevision && a.scopeRevision === b.scopeRevision;
@@ -114,6 +115,23 @@ export function PhonePauseInstruction({ task, visible, livePause, interrupted, p
       if(accepts())setResumeFeedback({current:offered.current,phase:'unknown'});
     }finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
   };
+  const leaveBeforeContinuing=async(trigger:HTMLButtonElement)=>{
+    const shown=plainMainResume;
+    if(!shown?.leavePage||!id||!origin(id)||!info.current.paused||expanded||flight.current||input.current?.text||
+       attemptedPlainPause.current===shown.key)return;
+    const pending=shown.leavePage(trigger);
+    if(!pending){if(shown.current())setError('原暂停或任务控制条已变化，没有切换或继续。');return}
+    const serial=++ticket.current,scope=bridge.getDocumentEpoch();
+    flight.current=true;setBusy(true);setError('');setNotice('');
+    const accepts=()=>serial===ticket.current&&origin(id)&&shown.current()&&bridge.getDocumentEpoch()===scope;
+    try {
+      const receipt=await pending as Row;
+      if(!accepts())return;
+      if(!same(receipt,id)||receipt.leftPocketWorld!==true||receipt.resumeRequested!==false)
+        throw Error('未确认页面切换；没有从这里继续原任务。');
+    }catch(failure){if(accepts())setError(failure instanceof Error?failure.message:'未确认页面切换；没有从这里继续。')}
+    finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
+  };
   const discard=()=>{if(busy)return;input.current=null;setDraft(null);setReview(null);setError('');setNotice('');setExpanded(false)};
   const plainFeedback=visible&&resumeFeedback?.current()?resumeFeedback.phase:undefined;
   const offerPlain=paused&&visible&&plainMainResume&&!draft?.text&&attemptedPlainPause.current!==plainMainResume.key;
@@ -121,6 +139,10 @@ export function PhonePauseInstruction({ task, visible, livePause, interrupted, p
   return <section className="pw-work-supplement" aria-label={plainMainResume||plainFeedback?'本次手机任务的暂停操作':'本次本机任务补充'}>
     {!expanded?<>
       {offerPlain&&<Button variant="primary" disabled={busy} aria-description="仍使用手机主屏，不会替你打开应用或另开一轮。" onClick={event=>void continueWithoutNote(event.currentTarget)}>继续这次暂停</Button>}
+      {offerPlain&&plainMainResume?.leavePage&&<>
+        <Button variant="secondary" disabled={busy} onClick={event=>void leaveBeforeContinuing(event.currentTarget)}>先切回手机页面</Button>
+        <p className="pw-field-hint">先离开 PocketWorld，不继续执行。到你要用的页面后，再点任务控制条的「继续这次暂停」。</p>
+      </>}
       {paused&&<Button variant="secondary" leadingIcon={IconEdit} disabled={!visible||busy} onClick={()=>{setExpanded(true);if(!draftElsewhere)void read()}}>{draft?.text?'打开本次补充草稿':'补充后继续…'}</Button>}
       {!paused&&draft&&<Button variant="ghost" onClick={()=>setExpanded(true)}>查看未确认的补充草稿</Button>}
     </>:<>

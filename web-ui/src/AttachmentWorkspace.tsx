@@ -17,7 +17,7 @@ export type FileResultTopic={taskId:string;conversationId:string;label:string};
 type StandaloneDocument={taskId:string;mimeType:string;size:number};
 export type OriginalAttachmentChoice={fileId:string;sha256:string;name:string;standaloneDocument?:StandaloneDocument};
 type Props={
- state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event)=>void;openTaskId?:string;
+ state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event)=>void;returnToDeliveredFiles?:boolean;openTaskId?:string;
  canReturnToOpenWork?:(current:Json)=>boolean;
  draftTarget?:FileDraftTarget;resultTopic?:FileResultTopic;keepResultReadingDraft?:FileDraftTarget;
  onStageFile?:(reference:Json,target:FileDraftTarget,stillCurrent:()=>boolean)=>Promise<boolean>;
@@ -262,7 +262,7 @@ function justSavedWorkPdfSource(native:ReturnType<typeof bridge.getState>,view:J
  return excerptPdfSource(view,taskId);
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,canChooseStandaloneDocument,readWorkTextVisit}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,canChooseStandaloneDocument,readWorkTextVisit}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -847,7 +847,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   </ContextMenu>
  </>}</ContextMenuTrigger>;
  const sourceReturnLabel=reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':
-  view.resultFilesOnly===true&&!view.fromWorkResult&&view.taskId!==openTaskId?'返回原消息':view.taskId?'返回原工作':'返回原工作区';
+  view.resultFilesOnly===true&&!view.fromWorkResult&&view.taskId!==openTaskId?returnToDeliveredFiles?'返回文件成果':'返回原消息':view.taskId?'返回原工作':'返回原工作区';
  const entryBack=(mode==='original'||mode==='detail')&&view.originalReturn==='entry';
  const mayDismissRestored=view.restoredWorkReturn===true&&!!(error||view.error);
  const originalHasDirectBack=mode==='original'&&(view.originalReturn==='entry'||view.originalReturn==='list');

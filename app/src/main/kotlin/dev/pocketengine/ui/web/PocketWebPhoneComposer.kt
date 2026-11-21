@@ -574,7 +574,7 @@ internal class PocketWebPhoneComposer(
         (next==null || !knownBlankSystemResult(next) || listOf("draftRequestId","taskId","runId","admissionState").any { saved.optString(it)!=next.optString(it) })
 
     fun start(id: String, args: JSONObject) {
-        checkedPayload(args, setOf("reviewHandle", "manualFirstMain"))
+        checkedPayload(args, setOf("reviewHandle", "manualFirstMain", "watchFirstMainResult"))
         val handle = requiredString(args, "reviewHandle")
         val review = phoneReviews[handle] ?: error("原手机目标审阅已关闭或已使用")
         require(phoneReviewCurrent(review)) { "原对话、目标窗口或执行范围已变化，请重新核对" }
@@ -585,6 +585,10 @@ internal class PocketWebPhoneComposer(
             }
             review.firstMainPolicyRevision
         } else -1L
+        val watchFirstMainResult = args.has("watchFirstMainResult")
+        if(watchFirstMainResult) require(firstMainPolicy >= 0 && requiredBoolean(args,"watchFirstMainResult")) {
+            "只能为这次手动开始的主屏任务选择提醒"
+        }
         val privateRequest = review.privateOwner && (review.linked != null || review.draft != null)
         require(!controller.state.phoneSubmitting && (privateRequest || controller.state.activeTaskId == null)) { "原输入仍在提交或渠道工作正占用，未重复开始" }
         val original = phoneReceiptIdentity(handle, review)
@@ -611,7 +615,7 @@ internal class PocketWebPhoneComposer(
                 publishState()
             } else complete(id,null,"原启动窗口已变化，未覆盖已核对的回执")
         }
-        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, firstMainPolicy, completed) }
+        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, firstMainPolicy, watchFirstMainResult, completed) }
             ?: review.draft?.let { controller.startDraftPhone(it, { phoneReviewCurrent(review) }, capacity, completed) }
             ?: controller.startReviewedPhone(review.goal, review.mode, { phoneReviewCurrent(review) }, completed)
         if (admitted) {

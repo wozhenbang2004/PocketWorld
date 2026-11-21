@@ -9,6 +9,7 @@ internal interface PocketWebEndpoint {
     fun canInteract(): Boolean
     fun start()
     fun foreground(value: Boolean) {}
+    fun refreshMainPausePageReturn() {}
     fun attachProjectPreview(container: android.widget.FrameLayout) {}
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = null
     fun captureDispatch(raw: String, stale: () -> Unit): () -> Unit
@@ -27,6 +28,7 @@ internal class PocketWebWorkspaceEndpoint(
     override fun canInteract() = (controller.webPresentationActivity().application as dev.pocketengine.EngineApplication).businessReady() && controller.webUiCanInteract()
     override fun start() = bridge.start()
     override fun foreground(value: Boolean) = bridge.foreground(value)
+    override fun refreshMainPausePageReturn() = bridge.refreshMainPausePageReturn()
     override fun attachProjectPreview(container: android.widget.FrameLayout) = bridge.attachProjectPreview(container)
     override fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>) = bridge.resource(uri, method, headers)
     override fun captureDispatch(raw: String, stale: () -> Unit): () -> Unit {

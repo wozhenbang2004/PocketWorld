@@ -206,6 +206,7 @@ internal class PocketWebBridge(
     @Volatile private var closed = false
     private var revision = 0L
     private var lastState: String? = null
+    private var publishedMainPausePageReturn: PocketWorldController.MainPausePageReturn? = null
     private val phoneObservationExpiry = PocketWebPhoneObservationExpiry(main) { original, rows ->
         if (!closed && started && original == revision) {
             // A subsequent genuine observation may look identical after the old fact was retired.
@@ -499,7 +500,7 @@ internal class PocketWebBridge(
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
-            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.recentStarts", "phone.draft.retireUncreated", "phone.draft.edit", "phone.draft.fromMessage", "phone.draft.saveOriginal", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
+            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.recentStarts", "phone.draft.retireUncreated", "phone.draft.edit", "phone.draft.fromMessage", "phone.draft.saveOriginal", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.pause.leavePage", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
             "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
@@ -637,6 +638,17 @@ internal class PocketWebBridge(
         statePublicationScheduled = false
     }
 
+    private fun mainPausePageWindow(id: String) = !closed && started && documentId != null && section == null &&
+        taskViewId == id && projectPreview?.snapshot()?.optBoolean("visible") != true &&
+        projectLivePreview?.snapshot()?.optBoolean("mounted") != true && !attachmentPages.hasOpenWorkspace
+    private fun mainPausePageReturn() = taskViewId?.takeIf(::mainPausePageWindow)?.let(controller::mainPausePageReturn)
+
+    /** The host's existing Stop-surface pass notices the native pause button settling after a task snapshot.
+     * This adds no timer, platform read or task work. Emit only a changed, exact presentation. */
+    internal fun refreshMainPausePageReturn() {
+        if (publishedMainPausePageReturn != mainPausePageReturn()) publishState()
+    }
+
     private fun publishStateNow(force: Boolean = false) {
         if (closed || !started) return
         var projection: JSONObject? = null
@@ -692,9 +704,11 @@ internal class PocketWebBridge(
             if (domain == "devices") projectedState.put("deviceWorkspace", public)
         }
         domainErrors.forEach { (domain, error) -> projectedState.getJSONObject("ownerErrors").put(domain, error) }
+        publishedMainPausePageReturn = mainPausePageReturn()
         snapshot.put("capabilities", JSONObject().put("commands", JSONArray(commands.toList())))
             .put("view", JSONObject().put("section", section ?: JSONObject.NULL).put("resumeRevision", workspaceResumeRevision).put("taskId", taskViewId ?: JSONObject.NULL).also { view ->
                 if (section == null) taskViewId?.let { task -> controller.heldPrivatePhoneImage(task)?.let { view.put("heldPrivatePhoneImage", it.descriptor()) } }
+                publishedMainPausePageReturn?.let { view.put("mainPausePageReturn", it.view()) }
             })
             .put("phoneDraft", phoneComposer.snapshot())
         val bounds = phoneObservationExpiry.take(snapshot)
@@ -2385,6 +2399,18 @@ internal class PocketWebBridge(
                 phoneComposer.openFirstDraftRun(id,args,::current);return
             }
             if (action == "phone.draft.retireUncreated") { phoneComposer.query(id,args,true); return }
+            if (action == "phone.pause.leavePage") {
+                require(args.keys().asSequence().toSet() == setOf("taskId", "runId", "epoch", "pauseRevision", "scopeRevision", "displayHandle"))
+                val target = PocketWorldController.MainPausePageReturn(requiredString(args, "taskId"), requiredString(args, "runId"),
+                    requiredInt(args, "epoch"), requiredLong(args, "pauseRevision"), requiredLong(args, "scopeRevision"), requiredString(args, "displayHandle"))
+                val window = captureWindow(); val document = documentId; val resume = workspaceResumeRevision
+                fun current() = mainPausePageWindow(target.taskId) && documentId == document &&
+                    resume == workspaceResumeRevision && acceptsWindow(window)
+                require(target == publishedMainPausePageReturn && current()) { "请在原工作重新核对这次主屏暂停，未切换或继续。" }
+                complete(id, controller.leaveOriginalMainPausedPage(target, ::current), null,
+                    retainValue = false, replayHint = "请回这次原暂停手动核对页面切换")
+                return
+            }
             if (action == "phone.ownerStep.review" || action == "phone.ownerStep.leave") {
                 val leaving = action == "phone.ownerStep.leave"
                 checkedPayload(args, if (leaving) setOf("taskId","runId","epoch","operationId","confirmed") else setOf("taskId","runId","epoch","operationId"))

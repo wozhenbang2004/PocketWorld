@@ -434,6 +434,7 @@ internal class PocketWebHost private constructor(
      * One in-flight read and an expiring service lease restore the overlay if
      * the renderer hangs. No task, permission or control state is changed. */
     private fun observeOwnerStopSurface() {
+        bridge.refreshMainPausePageReturn()
         val service = PhoneAccessibilityService.get()
         val identity = service?.ownerStopSurfaceIdentity()
         if (service == null || identity == null) {

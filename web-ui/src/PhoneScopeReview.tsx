@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {bridge} from './bridge';
 import type {ReviewedPlace} from './phone-review-place';
-import {Accordion, AccordionItem, Button} from './forms-library';
+import {Accordion, AccordionItem, Button, CheckboxField} from './forms-library';
 import {PermissionReview} from './shell-library';
 import './phone-scope-review.css';
 
@@ -66,11 +66,12 @@ function PrivateReviewDetails({shown,live,past=false}:{shown:PhoneReviewDisplay;
 
 // Exit retains the original description only. Re-checking prepares a review, never a task.
 export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onCheck,onSettings,onPlace,error,terms}:{
-  shown:PhoneReviewDisplay;live:Live|null;pending:boolean;unknown:boolean;onStart?:(manualFirstMain?:true)=>void;onClose:()=>void;
+  shown:PhoneReviewDisplay;live:Live|null;pending:boolean;unknown:boolean;onStart?:(manualFirstMain?:true,watchReviewedHandle?:string)=>void;onClose:()=>void;
   onCheck?:(handle:string)=>void;onSettings?:(handle:string,target:Remedy)=>void;onPlace?:(handle:string,place:ReviewedPlace)=>void;error?:string;terms?:{constraints?:string;deliverable?:string;completionCriteria?:string};
 }){
   const conditions=shown.conditions,handle=live?.reviewHandle,epoch=live?.documentEpoch;
   const [invalid,setInvalid]=useState(''),invalidNow=useRef('');
+  const [watchHandle,setWatchHandle]=useState(''),watchNow=useRef('');
   function invalidate(id:string){invalidNow.current=id;setInvalid(id)}
   useEffect(()=>{
     if(!conditions||!handle)return;
@@ -132,7 +133,11 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
       {place&&onPlace&&<p className="pw-field-hint">{place==='background_setup'?'在准备页选「后台独立屏 → 连接与检查」。回来后再核对原目标，不会自动连接或提交。':'主屏会占用手中的屏幕。只有你在原草稿选择后才会更换位置；仍需重新核对。'}</p>}
       {shown.mode==='main_screen'&&live?.manualFirstMainAvailable===true&&canSubmit&&screen?.state==='ready'&&!expired&&onStart&&
         <div className="pw-phone-review-remedies">
-          <Button variant="secondary" disabled={pending} onClick={()=>{if(current())onStart(true)}}>到目标页面后手动开始</Button>
+          <CheckboxField isDisabled={pending} isSelected={!!handle&&watchHandle===handle} onChange={checked=>{
+            if(!handle||!current())return;watchNow.current=checked?handle:'';setWatchHandle(watchNow.current);
+          }}>手动开始的这轮结束时提醒我</CheckboxField>
+          <p className="pw-field-hint">只在这台手机提醒。点通知回原工作；若没有收到，也可回原私聊查看。</p>
+          <Button variant="secondary" disabled={pending} onClick={()=>{if(current())onStart(true,watchNow.current===handle?handle:undefined)}}>到目标页面后手动开始</Button>
           <p className="pw-field-hint">切到你要用的页面，再从任务控制条确认。首次只读取当前窗口的界面结构，不截图，也不锁定某个 App。可读文字仍按本次模型范围处理。</p>
         </div>}
     </div>

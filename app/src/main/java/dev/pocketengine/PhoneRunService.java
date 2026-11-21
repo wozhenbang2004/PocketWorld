@@ -285,6 +285,14 @@ public final class PhoneRunService extends Service {
                 waitingForUser=true;
                 FirstMainWait hold=new FirstMainWait(id,runId,epoch,control,config,runningGoal,startId,policy,new AtomicBoolean());firstMainWait=hold;
                 startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
+                // The ordinary Service already created its task channel. Queue this once before
+                // presenting the owner's first-screen control, without blocking that control on success.
+                if(policy>=0&&ownsFirstMain(hold)&&app.takeFirstMainResultWatch(id,runId,epoch,control)){
+                    try{worker.execute(()->{
+                        try{if(ownsFirstMain(hold))app.privatePhoneResultWatch(id,runId,epoch,true,()->ownsFirstMain(hold));}
+                        catch(Exception unavailable){/* No OS prompt, retry, or claim that a reminder was saved. */}
+                    });}catch(java.util.concurrent.RejectedExecutionException closed){/* This optional choice never changes the start. */}
+                }
                 var overlay=PhoneAccessibilityService.get();
                 if(overlay!=null&&policy>=0)overlay.showFirstMainControls(id,runningGoal,control,()->ownsFirstMain(hold),page->confirmFirstMain(hold,page));
                 return START_NOT_STICKY;

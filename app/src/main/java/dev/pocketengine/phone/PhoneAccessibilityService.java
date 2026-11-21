@@ -654,6 +654,22 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         if(control==original)removeInstalledControls();
     }); }
     public boolean hasVisibleControls() { return visible; }
+    /** The button already installed for this pause, not a new observation or an input grant.
+     * The current in-app Stop can temporarily conceal it while preserving the mounted overlay. */
+    public String mountedMainPauseHandle(RunControl original,long revision,long scope) {
+        if(Looper.myLooper()!=Looper.getMainLooper()||instance!=this||original==null||control!=original||
+                ownerControls==null||!ownerControls.retained()||!original.phoneSurfaceActive()||!original.ownerPausedAt(revision)||
+                controls==null||!controls.isAttachedToWindow()||controls.getDisplay()==null||controls.getDisplay().getDisplayId()!=0||
+                firstMainControl!=null||quickPanel!=null||!captureHides.isEmpty()||submittingOwnerAction!=null)return null;
+        RenderedOwnerAction shown=renderedOwnerAction;Button button=pause;
+        if(shown==null||shown.owner()!=ownerControls||shown.hand()!=null||shown.state().action()!=PhoneOwnerControls.Action.RESUME_LOCAL||
+                !shown.state().current()||shown.state().pause()!=revision||shown.state().scope()!=scope||
+                button==null||ownerActionSlot==null||button.getParent()!=ownerActionSlot||!button.isAttachedToWindow()||
+                button.getVisibility()!=View.VISIBLE||!button.isEnabled())return null;
+        boolean mountedForReturn=visible&&button.isShown()||!visible&&controls.getVisibility()==View.INVISIBLE&&
+                inAppStopOwner!=null&&SystemClock.uptimeMillis()<inAppStopUntil;
+        return mountedForReturn&&original.ownerPausedAt(revision)?shown.state().displayHandle():null;
+    }
     /** The Web host may replace the overlay only after observing an actionable
      * stop button for this exact run. This identity grants no control authority. */
     public RunControl.HostRunIdentity ownerStopSurfaceIdentity() {

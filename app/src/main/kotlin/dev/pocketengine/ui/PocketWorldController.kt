@@ -581,6 +581,50 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val handle=activityHandle(Triple(task.id,run,epoch),owner) ?: return null
         return JSONObject(row.toString()).put("activityHandle",handle)
     }
+    internal data class MainPausePageReturn(val taskId: String, val runId: String, val epoch: Int,
+        val pauseRevision: Long, val scopeRevision: Long, val displayHandle: String) {
+        fun view() = JSONObject().put("taskId", taskId).put("runId", runId).put("epoch", epoch)
+            .put("pauseRevision", pauseRevision).put("scopeRevision", scopeRevision).put("displayHandle", displayHandle)
+    }
+    /** Positive presentation only. Reuse the already selected full Work, resident port and installed original button. */
+    internal fun mainPausePageReturn(id: String): MainPausePageReturn? {
+        if (Looper.myLooper() != Looper.getMainLooper() || !webPrivateOwnerVisible() || !activity.hasWindowFocus() ||
+            webTaskViewId != id || conversationReader != null || attachmentOutcomes.state.open ||
+            state.filePath != null || state.chatAttachmentPickerOpen) return null
+        val task = state.tasks.singleOrNull { it.id == id } ?: return null
+        val raw = task.raw
+        if (raw.opt("id") != id || !dev.pocketengine.store.PhoneActionRecovery.local(raw) || task.status != "paused" || raw.opt("status") != "paused" ||
+            task.executionMode != "main_screen" || raw.opt("executionMode") != "main_screen" ||
+            raw.opt("taskProjection") != "detail_window" || raw.opt("taskCoreReadLimited") != false ||
+            raw.opt("contextAvailable") == false || raw.opt("contextWithdrawn") == true || raw.opt("sourceCurrentReadRequired") == true ||
+            raw.opt("metadataLimited") == true || raw.opt("cancelRequested") == true ||
+            raw.opt("hasUnresolvedOperations") != false || raw.opt("historyHasUnconfirmedOperations") != false ||
+            !listOf("mainPhoneOwnerStep", "ownerPhoneQuestionHold", "teamRunId", "teamAssignment", "memberId").all(raw::isNull)) return null
+        val run = (raw.opt("runId") as? String)?.takeIf(String::isNotBlank) ?: return null
+        val first = raw.optJSONObject(TaskStore.FIRST_MAIN_SCREEN) ?: return null
+        val read = first.optJSONObject("observation") ?: return null
+        if (raw.opt("coordinatorEpoch") != 1 || first.opt("format") != "pocketworld.owner-first-current-main.v1" ||
+            first.opt("taskId") != id || first.opt("runId") != run || first.opt("epoch") != 1 || first.opt("phase") != "observed" ||
+            read.opt("runId") != run || read.opt("displayId") != 0 || read.opt("structureOnly") != true ||
+            !read.optString("observationId").matches(Regex("[a-f0-9-]{36}"))) return null
+        val scopeValue = raw.optJSONObject("executionScope")?.opt("revision")
+        val scope = (scopeValue as? Number)?.toLong()?.takeIf { it > 0 && (scopeValue is Int || scopeValue is Long) } ?: return null
+        val original = app.retainedMainPauseForPageReturn(id, run, 1) ?: return null
+        val pause = original.pauseRevision()
+        val overlay = dev.pocketengine.phone.PhoneAccessibilityService.get() ?: return null
+        val handle = overlay.mountedMainPauseHandle(original, pause, scope) ?: return null
+        return MainPausePageReturn(id, run, 1, pause, scope, handle)
+    }
+
+    internal fun leaveOriginalMainPausedPage(expected: MainPausePageReturn, current: () -> Boolean): JSONObject {
+        check(current() && mainPausePageReturn(expected.taskId) == expected && current()) {
+            "没有核对到同一次原主屏暂停和任务控制条，未切换页面或继续任务。"
+        }
+        // Only leave PocketWorld. Do not pick an app, call resume or request any phone contents.
+        check(activity.moveTaskToBack(true)) { "PocketWorld 未切回。可用安卓最近任务手动切换；没有从这里继续。" }
+        return expected.view().put("leftPocketWorld", true).put("resumeRequested", false)
+    }
+
     /** The task journal is owner-private, not searchable through a selected project memory namespace. */
     internal fun webPrivateTaskJournalSelected() = webPrivateOwnerVisible() && ownerDomain == "memoryReview" && memoryReviewScope == MemoryReviewScope.Private
     internal fun webMemoryScopeTicket(): Any = Pair(ownerEpochs["memoryReview"] ?: 0, memoryReviewScope)
@@ -4452,7 +4496,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun firstMainScreenPolicyRevision(): Long = app.firstMainScreenPolicyRevision()
 
     internal fun startConversationPhone(review: EngineApplication.ConversationPhoneStartReview, ownerCurrent: () -> Boolean, capacity: JSONObject? = null,
-                                        firstMainPolicyRevision: Long = -1, completed: (JSONObject?, String?) -> Unit): Boolean {
+                                        firstMainPolicyRevision: Long = -1, watchFirstMainResult: Boolean = false, completed: (JSONObject?, String?) -> Unit): Boolean {
         val shown = review.view()
         if (!webPrivateOwnerVisible() || !ownerCurrent() || hasChannelPhoneOrigin) { state = state.copy(error = "原私人手机任务审阅已变化，请重新核对"); return false }
         if (!preparePhoneSubmission(shown.getString("goal"), shown.getString("mode"))) return false
@@ -4460,7 +4504,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return try {
             io.execute {
                 var allocated: String? = null
-                val result = runCatching { withReviewedPhoneCapacity(shown.getString("mode"), capacity, ownerCurrent) { app.startConversationPhone(review, true, firstMainPolicyRevision,
+                val result = runCatching { withReviewedPhoneCapacity(shown.getString("mode"), capacity, ownerCurrent) { app.startConversationPhone(review, true, firstMainPolicyRevision, watchFirstMainResult,
                     java.util.function.BooleanSupplier { webPrivateOwnerVisible() && ownerCurrent() },
                     java.util.function.Consumer { allocated = it }) } }
                 main.post {

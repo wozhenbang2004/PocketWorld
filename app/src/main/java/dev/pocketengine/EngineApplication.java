@@ -410,6 +410,8 @@ public final class EngineApplication extends Application implements dev.pocketen
     private volatile RunControl activeControl;
     /** Warm hold exists even between the durable first observation and the native service handoff. */
     private final java.util.concurrent.atomic.AtomicReference<RunControl> firstMainDispatchBlocked=new java.util.concurrent.atomic.AtomicReference<>();
+    /** One opt-in from the initial owner review, carried only to the admitted original Service. */
+    private final java.util.concurrent.atomic.AtomicReference<RunControl> firstMainResultWatch=new java.util.concurrent.atomic.AtomicReference<>();
     private volatile ModelConfig activeConfig;
     private String activeMode;
     private PhonePort activePort;
@@ -460,6 +462,25 @@ public final class EngineApplication extends Application implements dev.pocketen
                 !run.equals(retainedDisplay.opt("runId"))||retainedDisplay.optInt("coordinatorEpoch",-1)!=epoch||
                 !current.getAsBoolean())return null;
         return new RetainedRunningPhonePreview(sessionId,display,current);
+    }
+    /** Navigation witness only. Look at the resident main-screen port and its original control, never its content. */
+    public RunControl retainedMainPauseForPageReturn(String id,String run,int epoch) {
+        RunControl original;
+        PhonePort port;
+        synchronized(this){
+            original=currentPhoneControl(id);port=activePort;
+            if(original==null||original!=activeControl||!id.equals(activeTaskId)||!"main_screen".equals(activeMode)||ownerActionActive||
+                    !(port instanceof dev.pocketengine.phone.AndroidPhonePort)||!original.matchesHostRun(id,run,epoch))return null;
+        }
+        var session=deferredPhoneSessions.get(original);
+        if(session==null||session.originalControl()!=original||!session.matchesHostScope(id,run,epoch)||
+                !"main_screen".equals(session.executionMode())||!session.holdsObservationBinding()||
+                session.physicalPort()!=port||session.readyAdapter()==null||
+                !original.phoneSurfaceActive()||!original.ownerPausedAt(original.pauseRevision()))return null;
+        synchronized(this){
+            return original==activeControl&&id.equals(activeTaskId)&&port==activePort&&"main_screen".equals(activeMode)&&!ownerActionActive&&
+                    deferredPhoneSessions.get(original)==session&&session.holdsObservationBinding()&&session.physicalPort()==port?original:null;
+        }
     }
     /** Snapshot for an already visible private task. Retained registry and local policy only: no TaskStore, service, PackageManager, helper, or physical phone call. */
     public JSONObject retainedPhoneSurface(String id,String run,int epoch,String requested,long displayedScopeRevision)throws Exception {
@@ -1614,6 +1635,10 @@ public final class EngineApplication extends Application implements dev.pocketen
     boolean releaseVerifiedFirstMainHold(String id,RunControl original){
         return retainsShownPhoneControl(id,original)&&!original.isCancelled()&&firstMainDispatchBlocked.compareAndSet(original,null);
     }
+    boolean takeFirstMainResultWatch(String id,String run,int epoch,RunControl original){
+        return epoch==1&&blocksOrdinaryFirstMainControl(original)&&retainsShownPhoneControl(id,original)&&
+                original.matchesHostRun(id,run,epoch)&&!original.isCancelled()&&firstMainResultWatch.compareAndSet(original,null);
+    }
     public synchronized RunControl control(String id){return currentPhoneControl(id);}
     /** Native task-sheet scope page only; never exposed through feature/model JSON. */
     public dev.pocketengine.features.local.project.OwnerProjectEditScope.Page openOwnerEditScopePage(String id)throws Exception {
@@ -1845,6 +1870,11 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     public synchronized JSONObject startConversationPhone(ConversationPhoneStartReview review,boolean screenConsent,long firstMainPolicyRevision,
                                                           java.util.function.BooleanSupplier ownerCurrent,java.util.function.Consumer<String> allocated)throws Exception {
+        return startConversationPhone(review,screenConsent,firstMainPolicyRevision,false,ownerCurrent,allocated);
+    }
+    public synchronized JSONObject startConversationPhone(ConversationPhoneStartReview review,boolean screenConsent,long firstMainPolicyRevision,
+                                                          boolean watchFirstMainResult,java.util.function.BooleanSupplier ownerCurrent,
+                                                          java.util.function.Consumer<String> allocated)throws Exception {
         if(review==null||review.issuer!=this||review.store!=tasks)throw new SecurityException("原手机任务审阅不可核对");
         JSONObject previous=queryConversationPhoneStart(review.requestId,review.conversationId);
         if(review.attempted||previous.optBoolean("accepted"))return previous.put("duplicate",true);
@@ -1854,6 +1884,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             SettingsStore.validate(review.config);dev.pocketengine.runtime.ModelGateway.validate(review.config);
             if(firstMainPolicyRevision>=0&&(!"main_screen".equals(review.mode)||firstMainScreenPolicyRevision()!=firstMainPolicyRevision))
                 throw new SecurityException("原主屏或本机应用规则已变化，原目标仍保留，请重新核对");
+            if(watchFirstMainResult&&firstMainPolicyRevision<0)throw new SecurityException("只能为这次手动开始的主屏任务选择提醒");
             requireConversationPhoneReviewCurrent(review,ownerCurrent);
             java.util.Objects.requireNonNull(allocated);
         }catch(Exception rejected){throw new ConversationPhoneStartRejected(rejected);}
@@ -1868,7 +1899,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             admit(id,review.mode,review.config,false,null,0,"",new NewDraftPhoneAdmission(control->{
                 control.check();return tasks.beginReviewedConversationPhone(review.creation,confirmedAt,review.config.maxSteps,firstMainPolicyRevision,
                         assigned->{writeEntered[0]=true;allocated.accept(assigned);},()->{control.check();return current.call();});
-            },current,state->tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),state)));
+            },current,state->tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),state),watchFirstMainResult));
             tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),"admitted");
             return queryConversationPhoneStart(id,review.conversationId).put("duplicate",false).put("budgetIncreased",false);
         }catch(Exception failure){
@@ -1959,7 +1990,8 @@ public final class EngineApplication extends Application implements dev.pocketen
     private String admit(String taskId,String executionMode,ModelConfig c,boolean manualOnly,String expectedRun,int expectedEpoch)throws Exception {return admit(taskId,executionMode,c,manualOnly,expectedRun,expectedEpoch,"");}
     @FunctionalInterface private interface NewDraftPhoneWrite { JSONObject begin(RunControl original)throws Exception; }
     @FunctionalInterface private interface FirstServiceOutcome { void record(String state)throws Exception; }
-    private record NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current,FirstServiceOutcome outcome){
+    private record NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current,FirstServiceOutcome outcome,boolean watchFirstMainResult){
+        private NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current,FirstServiceOutcome outcome){this(write,current,outcome,false);}
         private NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current){this(write,current,null);}
         void noteRefusal(String state,RuntimeException original){if(outcome!=null)try{outcome.record(state);}catch(Exception storage){original.addSuppressed(storage);}}
     }
@@ -1984,7 +2016,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             }
         }catch(Exception failure){resources.releasePhone(token);throw failure;}
         ModelConfig captured=c.withStepCeiling(t.getInt("stepCeiling"));
-        if(TaskStore.firstMainScreenPending(t))firstMainDispatchBlocked.set(nextControl);
+        boolean firstMain=TaskStore.firstMainScreenPending(t);
+        if(firstMain)firstMainDispatchBlocked.set(nextControl);
         if(background)backgroundRuns.put(taskId,new BackgroundRun(nextControl,captured,token));
         else{activeResourceToken=token;activeTaskId=taskId;activeControl=nextControl;activeConfig=captured;activeMode=executionMode;activePort=null;}
         try{
@@ -2003,7 +2036,10 @@ public final class EngineApplication extends Application implements dev.pocketen
                 nextControl.check();
             }
             Intent start=new Intent(this,PhoneRunService.class).setAction(PhoneRunService.START).putExtra("taskId",taskId).putExtra("phoneRunId",t.getString("runId")).putExtra("phoneEpoch",t.getInt("coordinatorEpoch")).putExtra("manualOnly",manualOnly);
-            if(TaskStore.firstMainScreenPending(t))start.putExtra(TaskStore.FIRST_MAIN_SCREEN,true);
+            if(firstMain){
+                start.putExtra(TaskStore.FIRST_MAIN_SCREEN,true);
+                if(firstDraft!=null&&firstDraft.watchFirstMainResult())firstMainResultWatch.set(nextControl);
+            }
             android.content.ComponentName requested;
             try{requested=startForegroundService(start);}
             catch(RuntimeException failure){
@@ -5016,6 +5052,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     public synchronized void released(String id,RunControl owner){
         var questions=phoneQuestions(id,owner);if(questions!=null)questions.released(id,owner);if(deviceOwnerInputs!=null)deviceOwnerInputs.released(id,owner);
         if(id==null||owner==null||owner!=control(id))return;
+        firstMainResultWatch.compareAndSet(owner,null);
         privatePhoneStopOrigins.remove(owner);
         deferredPhoneSessions.remove(owner);
         var teamAdmission=teamPhoneRuns.get(id);if(teamAdmission!=null&&teamAdmission.originalControl()==owner)teamPhoneRuns.remove(id,teamAdmission);
