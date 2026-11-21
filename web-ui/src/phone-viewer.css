@@ -115,3 +115,9 @@
 .pw-phone-viewer-frame[data-compact-empty] .pw-phone-viewer-placeholder { min-height: 132px; padding: 20px; }
 .pw-phone-viewer-frame[data-compact-empty] figcaption[data-empty] { display: none; }
 .pw-phone-viewer-placeholder p { overflow-wrap: anywhere; }
+
+/* Keep the optional original-chat view small enough to leave the composer usable. */
+.pw-phone-viewer-frame-inline { width: min(calc(100% - 32px), 360px); margin: 0 auto 8px; }
+.pw-phone-viewer-frame-inline .pw-phone-viewer-image { height: min(152px, 24vh); height: min(152px, 24dvh); }
+.pw-phone-viewer-frame-inline .pw-phone-viewer-placeholder { padding: 8px; }
+[data-pocket-keyboard='true'] .pw-phone-viewer-frame-inline .pw-phone-viewer-image { height: min(112px, 18dvh); }

@@ -36,6 +36,17 @@ export type PhoneViewerProps = {
 const empty: PhoneViewerState = { phase: 'idle', frame: null, error: '', verifiedAt: 0 };
 const terminal = (task: PhoneViewerTask) => task.status === 'ended' || task.status === 'error';
 const identityOf = ({ taskId, runId, epoch }: PhoneViewerIdentity): PhoneViewerIdentity => ({ taskId, runId, epoch });
+type OriginalActivityScope = { originalActivityHandle: string; isCurrent(): boolean };
+
+function currentOriginalActivity(scope: OriginalActivityScope) {
+  return !document.hidden && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(scope.originalActivityHandle) && scope.isCurrent();
+}
+
+function samePreviewSurface(a: PhonePreviewFrame, b: PhonePreviewFrame) {
+  return a.taskId === b.taskId && a.runId === b.runId && a.epoch === b.epoch &&
+    a.sessionId === b.sessionId && a.displayId === b.displayId && a.sourceWidth === b.sourceWidth &&
+    a.sourceHeight === b.sourceHeight && a.previewWidth === b.previewWidth && a.previewHeight === b.previewHeight;
+}
 
 // The viewer only describes a Stop clicked in the currently opened private task.
 // The task can become terminal before its control reply, so do not require a live port here.
@@ -77,49 +88,120 @@ function useInView(ref: RefObject<HTMLElement | null>, enabled: boolean) {
 }
 
 /** Exactly one native handle and timer; neither the card nor the sheet starts a feed. */
-export function usePhoneViewerFeed(task: PhoneViewerTask, enabled: boolean, nativeVisible = true) {
-  const key = phoneViewerKey(task);
+export function usePhoneViewerFeed(task: PhoneViewerTask, enabled: boolean, nativeVisible = true, originalActivity?: OriginalActivityScope) {
+  const inline = originalActivity !== undefined;
+  const activityHandle = originalActivity?.originalActivityHandle ?? '';
+  const key = inline ? JSON.stringify([phoneViewerKey(task), activityHandle]) : phoneViewerKey(task);
   const [published, setPublished] = useState<{ key: string; value: PhoneViewerState }>({ key, value: empty });
   const [decoded, setDecoded] = useState<{ key: string; frame: PhonePreviewFrame } | null>(null);
-  const [decodeError, setDecodeError] = useState<{ key: string; message: string } | null>(null);
+  const [decodeError, setDecodeError] = useState<{ key: string; frame: PhonePreviewFrame; message: string } | null>(null);
   const connection = useRef<PhoneViewerConnection | null>(null);
+  const latestActivity = useRef(originalActivity);
+  const inlineProof = useRef<{ key: string; frame: PhonePreviewFrame; verifiedAt: number } | null>(null);
   const documentVisible = useDocumentVisible();
   const documentEpoch = useSyncExternalStore(bridge.subscribe, bridge.getDocumentEpoch, () => 0);
-  const visible = enabled && nativeVisible && documentVisible;
+  const visible = enabled && nativeVisible && documentVisible && (!originalActivity || currentOriginalActivity(originalActivity));
   const state = published.key === key ? published.value : empty;
+  useLayoutEffect(() => { latestActivity.current = originalActivity; }, [originalActivity]);
   useLayoutEffect(() => {
-    const owner = new PhoneViewerConnection(identityOf(task), (action, args) => bridge.command(action, args), value => setPublished({ key, value }), { documentEpoch: bridge.getDocumentEpoch });
+    const owner = new PhoneViewerConnection(identityOf(task), (action, args) => bridge.command(action, args), value => {
+      const previous = inlineProof.current;
+      if (inline && previous?.key === key) {
+        if (value.phase !== 'live' || !value.frame || !samePreviewSurface(previous.frame, value.frame))
+          inlineProof.current = { ...previous, verifiedAt: 0 };
+        // An unchanged receipt may renew these exact pixels; a newer receipt being decoded may not.
+        else if (value.frame === previous.frame) inlineProof.current = { ...previous, verifiedAt: value.verifiedAt };
+      }
+      setPublished({ key, value });
+    }, {
+      documentEpoch: bridge.getDocumentEpoch,
+      originalActivity: inline ? {
+        handle: activityHandle,
+        isCurrent: () => {
+          const scope = latestActivity.current;
+          return !!scope && scope.originalActivityHandle === activityHandle && currentOriginalActivity(scope);
+        },
+      } : undefined,
+    });
     connection.current = owner;
     setPublished({ key, value: owner.getState() });
-    return () => { owner.dispose(); if (connection.current === owner) connection.current = null; };
-  }, [key]);
+    return () => {
+      owner.dispose();
+      if (connection.current === owner) { connection.current = null; if (inline) inlineProof.current = null; }
+    };
+  }, [key, inline, activityHandle]);
   useEffect(() => { connection.current?.setVisible(visible && task.preparation !== 'blocked', terminal(task)); }, [key, visible, task.status, task.preparation, documentEpoch]);
 
-  // Decode a candidate once for both surfaces. Keep the prior displayed frame on failure.
+  // Work keeps its existing last-frame behavior. Inline buffers only during a healthy same-surface decode.
+  const inlineLive = inline ? visible && state.phase === 'live' : undefined;
   useEffect(() => {
-    if (!state.frame) return;
+    if (!state.frame || inlineLive === false) return;
     const candidate = state.frame;
     let alive = true;
+    const current = (): PhoneViewerState | undefined => {
+      if (!alive) return;
+      if (!inline) return state;
+      const scope = latestActivity.current;
+      const live = connection.current?.getState();
+      if (scope && scope.originalActivityHandle === activityHandle && currentOriginalActivity(scope) && live?.phase === 'live' && live.frame === candidate) return live;
+    };
+    const failed = (message: string) => {
+      if (inline && inlineProof.current?.key === key) inlineProof.current = { ...inlineProof.current, verifiedAt: 0 };
+      setDecodeError({ key, frame: candidate, message });
+    };
     const image = new Image();
     image.onload = () => {
-      if (!alive) return;
+      const live = current();
+      if (!live) return;
       if (image.naturalWidth !== candidate.previewWidth || image.naturalHeight !== candidate.previewHeight) {
-        setDecodeError({ key, message: '画面尺寸未能核对，保留上一帧。' }); return;
+        failed(inline ? '画面尺寸未能核对。' : '画面尺寸未能核对，保留上一帧。'); return;
       }
+      if (inline) inlineProof.current = { key, frame: candidate, verifiedAt: live.verifiedAt };
       setDecoded({ key, frame: candidate }); setDecodeError(null);
     };
-    image.onerror = () => { if (alive) setDecodeError({ key, message: '这帧画面暂时无法显示，保留上一帧。' }); };
+    image.onerror = () => { if (current()) failed(inline ? '这帧画面暂时无法显示。' : '这帧画面暂时无法显示，保留上一帧。'); };
     image.src = candidate.src;
     return () => { alive = false; image.onload = null; image.onerror = null; };
-  }, [key, state.frame]);
-  const frame = decoded?.key === key ? decoded.frame : null;
-  const decodeIssue = decodeError?.key === key ? decodeError.message : '';
+  }, [key, state.frame, activityHandle, inline, inlineLive]);
+  const decodedFrame = decoded?.key === key ? decoded.frame : null;
+  const decodeIssue = decodeError?.key === key && (!inline || state.phase === 'live' && decodeError.frame === state.frame) ? decodeError.message : '';
+  const proof = inlineProof.current;
+  const inlineFrame = inlineLive && !decodeIssue && decodedFrame && state.frame && proof && proof.key === key && proof.frame === decodedFrame &&
+    proof.verifiedAt > 0 && (state.frame === decodedFrame || state.frame.frameGeneration > decodedFrame.frameGeneration && samePreviewSurface(decodedFrame, state.frame))
+    ? decodedFrame : null;
+  const frame = inline ? inlineFrame : decodedFrame;
   const value: PhoneViewerState = {
     ...state, frame,
+    verifiedAt: inline ? inlineFrame && proof ? proof.verifiedAt : 0 : state.verifiedAt,
     phase: decodeIssue && state.phase !== 'ended' && state.phase !== 'hidden' ? 'error' : state.phase === 'live' && !frame ? 'opening' : state.phase,
     error: decodeIssue || state.error,
   };
   return { ...value, visible, retry: () => connection.current?.retry() };
+}
+
+/** Mounted only for an explicit disclosure in its original private chat. No task controls or output. */
+export function InlineOriginalPhoneViewer({ task, originalActivityHandle, isCurrent, id }: OriginalActivityScope & { task: PhoneViewerTask; id?: string }) {
+  const feed = usePhoneViewerFeed(task, task.status === 'running' && task.preparation !== 'blocked', true, { originalActivityHandle, isCurrent });
+  const [expiredAt, setExpiredAt] = useState(0);
+  useEffect(() => {
+    const verifiedAt = feed.verifiedAt;
+    if (!feed.visible || !feed.frame || !verifiedAt) return;
+    const timer = window.setTimeout(() => setExpiredAt(old => Math.max(old, verifiedAt)), Math.max(0, verifiedAt + 3000 - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [feed.visible, feed.frame, feed.verifiedAt]);
+  const frame = feed.visible && feed.verifiedAt > expiredAt && Date.now() < feed.verifiedAt + 3000 ? feed.frame : null;
+  const status = terminal(task) || feed.phase === 'ended' ? '这次独立屏已结束' :
+    !feed.visible || feed.phase === 'hidden' ? '这次画面暂不可查看' : feed.phase === 'error' ? '暂时无法读取独立屏' : '等待这次独立屏的画面';
+  const received = frame ? new Date(frame.receivedAt) : null;
+  return <figure id={id} className="pw-phone-viewer-frame pw-phone-viewer-frame-inline" aria-label="这次独立屏的只读画面">
+    <div className="pw-phone-viewer-image">
+      {frame ? <img src={frame.src} width={frame.previewWidth} height={frame.previewHeight} alt="这次独立屏的画面" draggable={false} /> :
+        <div className="pw-phone-viewer-placeholder" role="status"><strong>{status}</strong></div>}
+    </div>
+    <figcaption aria-hidden={!received} data-empty={!received || undefined}>{received && <>
+      <span>只读画面</span><time dateTime={received.toISOString()}>收到于 {received.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
+    </>}</figcaption>
+  </figure>;
 }
 
 type Feed = ReturnType<typeof usePhoneViewerFeed>;

@@ -409,7 +409,14 @@ internal class PocketWebBridge(
     private val phoneViewer = PocketWebPhoneViewer(controller::webPrivateOwnerVisible,
         { PocketWebWindowTicket(commandFence.ticket(), controller.webPhoneViewerWindowTicket()) },
         { ticket -> ticket.accepts(commandFence.ticket(), controller.webPhoneViewerWindowTicket()) },
-        { id -> controller.state.tasks.firstOrNull { it.id == id } }, controller::readPhonePreview)
+        { id -> controller.state.tasks.firstOrNull { it.id == id } }, controller::readPhonePreview,
+        originalActivity = { task, run, epoch, handle ->
+            val document = documentId
+            val ticket = commandFence.ticket()
+            fun current() = !closed && document != null && documentId == document && commandFence.accepts(ticket) &&
+                section == null && taskViewId == null && taskReturnSection == null
+            controller.retainOriginalChatPhonePreview(task, run, epoch, handle, ::current)
+        })
     private val commandReceipts = linkedMapOf<String, Pair<String, JSONObject>>()
     private val pendingCommands = mutableMapOf<String, String>()
     @Volatile private var documentId: String? = null
@@ -789,8 +796,10 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebPhoneViewer.COMMANDS) {
+                val originalChat = action == "phone.viewer.open" && args.has("originalActivityHandle")
                 phoneViewer.dispatch(action, args) { result, error, code ->
-                    complete(id, result, error, code.ifEmpty { "preview_unavailable" }, retainValue = action != "phone.viewer.frame")
+                    complete(id, result, error, code.ifEmpty { "preview_unavailable" }, retainValue = action != "phone.viewer.frame" && !originalChat,
+                        replayHint = if (originalChat) "请回原对话重新打开这轮独立屏" else null)
                 }
                 return
             }

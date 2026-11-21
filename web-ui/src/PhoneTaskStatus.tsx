@@ -18,12 +18,13 @@ type Props = {
   surface?: PrivatePhoneSurface;
   can: (action: string) => boolean;
   onOpen: () => void;
+  inlineView?: {open:boolean;controls:string;onToggle:()=>void};
   onControl: (action: string, identity: { taskId: string; runId: string; epoch: number }, shownPause?: DisplayedPhonePause) => void;
 };
 
 /** One current-task row, using the retained BoardUI controls and anchored menu.
  * The host can acknowledge the actual stop button before yielding its overlay. */
-export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props) {
+export function PhoneTaskStatus({ task, surface, can, onOpen, onControl, inlineView }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPause, setMenuPause] = useState<DisplayedPhonePause>();
   const identity = phoneRunIdentity(task), local = isPrivateLocalPhone(task);
@@ -47,6 +48,9 @@ export function PhoneTaskStatus({ task, surface, can, onOpen, onControl }: Props
       <span className="pw-phone-activity-copy"><strong dir="auto">{task.goal || '手机任务'}</strong><span>{[stage,compactSurface].filter(Boolean).join(' · ')}</span></span>
       <IconChevronRight size={15} aria-hidden="true" />
     </Button>
+    {inlineView&&<IconButton icon={IconMonitor} aria-label={inlineView.open?'收起这次独立屏':'看这次独立屏'}
+      title={inlineView.open?'收起这次独立屏':'看这次独立屏'} aria-expanded={inlineView.open}
+      aria-controls={inlineView.open?inlineView.controls:undefined} onClick={inlineView.onToggle}/>}
     {(canPause || canResume || canWatch) && <PopoverTrigger isOpen={menuOpen} onOpenChange={open=>{setMenuPause(open?surface?.displayedPause:undefined);setMenuOpen(open)}}>
       <IconButton icon={IconMore} aria-label="手机任务操作" title="手机任务操作" />
       <Popover aria-label="手机任务操作" className="pw-phone-activity-menu" placement="bottom end">

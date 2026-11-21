@@ -8,7 +8,7 @@ import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
  * Real source components are imported below. Native task/draft/version authorities
  * remain in the host; a bridge acceptance never becomes a fabricated success.
  */
-import {lazy,Suspense,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {Fragment,lazy,Suspense,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type ReactNode} from 'react';
 import {motion} from 'motion/react';
 import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconMonitor, IconMore, IconNewChat, IconNotification, IconPlay, IconQuote, IconRefresh, IconSearch, IconServer, IconSettings, IconShieldCheck, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
 import {WorkspaceNavigator,type OwnerNavigationMemory} from './WorkspaceNavigator';
@@ -166,7 +166,7 @@ import {ConversationModelPickerProvider,ConversationModelPickerControls,Conversa
 import {workspaceNavigationKey} from './workspace-directory';
 import type {OwnerQuestionView} from './owner-task-question';
 import {phoneStartReceipt,phoneStartFailure,phoneRunIdentity,messagePhoneResult,phoneConversationId,type PhoneStartReceipt,type PhoneResult} from './phone-start';
-import {PhoneViewer,type PhoneViewerTask} from './phone-viewer';
+import {InlineOriginalPhoneViewer,PhoneViewer,type PhoneViewerTask} from './phone-viewer';
 import './app.css';
 import './nav-settings-manga.css';
 import './task-surface.css';
@@ -428,6 +428,11 @@ function Receipt({receipt}:{receipt:Json}){
  return <MotionFeedback identity={`${status}:${detail||''}`} className="pw-input-receipt" role="status"><span>{localPending?'原问题已保存，暂无可核对的主屏读数':labels[status]}</span>{detail&&<small>{detail}</small>}</MotionFeedback>;
 }
 
+function ChatPhonePickerGate({covered,retire,children}:{covered:boolean;retire:()=>void;children:ReactNode}){
+ useLayoutEffect(()=>{if(covered)retire()},[covered,retire]);
+ return covered?null:children;
+}
+
 export default function App(){
  const navigationMenuGlass=useNavigationGlass<HTMLButtonElement>();
  const navigationBackGlass=useNavigationGlass<HTMLButtonElement>();
@@ -582,6 +587,18 @@ export default function App(){
  const [taskLayer,setTaskLayer]=useState<TaskLayer>('overview'),[projectPickerOpen,setProjectPickerOpen]=useState(false),[fileDisplayOpen,setFileDisplayOpen]=useState(false);
  const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedScopeOrigin,setEndedScopeOrigin]=useState<{filter:WorkCollectionFilter;query:string}|null>(null);
  const [phoneViewerExpanded,setPhoneViewerExpanded]=useState(false);
+ const [inlinePhoneVisit,setInlinePhoneVisit]=useState<string|null>(null);
+ const inlinePhoneSelection=useRef<string|null>(null);
+ const chooseInlinePhoneVisit=useCallback((key:string|null)=>{
+  inlinePhoneSelection.current=key;setInlinePhoneVisit(key);
+ },[]);
+ useEffect(()=>{
+  const retire=()=>{chooseInlinePhoneVisit(null)};
+  const hidden=()=>{if(document.hidden)retire()};
+  const off=bridge.subscribeDocumentEpoch(retire);
+  document.addEventListener('visibilitychange',hidden);
+  return()=>{off();document.removeEventListener('visibilitychange',hidden)};
+ },[chooseInlinePhoneVisit]);
  const phoneNotification=originalPhoneNotice(state.originalPhoneNotification);
  const [phoneNoticePin,setPhoneNoticePin]=useState<PhoneNotice|null>(null),[phoneNoticePanel,setPhoneNoticePanel]=useState<string|null>(null);
  const phoneNoticeRef=useRef<PhoneNotice|null>(null),phoneNoticeSeen=useRef('');
@@ -2268,7 +2285,7 @@ export default function App(){
    }
   }
   if(route==='chat'&&savedHostSession.current){closeSavedHost();return true}
-  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,navigationMoreOpen,chatMenuOpen,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker]);
+  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,navigationMoreOpen,chatMenuOpen,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{
@@ -4821,13 +4838,41 @@ export default function App(){
    phoneActivityPick.current={kind:'activity',handle:activityHandle,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),resume:Number(obj(bridge.getState().view).resumeRevision||0),entry};
    run('phone.activity.original',{taskId,runId,epoch,activityHandle});
  };
+ const inlinePhoneAllowed=route==='chat'&&!taskOpen&&!taskOpening&&!phoneViewerObscured&&!phoneViewerExpanded&&
+   ['phone.viewer.open','phone.viewer.frame','phone.viewer.close'].every(can);
+ const visibleInlinePhone=(native:ReturnType<typeof bridge.getState>,id:string)=>{
+   const floor=obj(native.view),owner=native.state,conversation=owner.conversationId;
+   if(!inlinePhoneAllowed||document.hidden||typeof conversation!=='string'||!conversation||
+      floor.section!==null||floor.taskId!==null||owner.conversationReader!==null||owner.filePath!==null||
+      owner.attachmentWorkspace?.open!==false||obj(native.phoneDraft).channelOrigin!==false)return;
+   const matches=asArray<Task>(owner.tasks).filter(row=>row.id===id);
+   const task=matches.length===1?matches[0]:undefined;
+   if(!task||task.status!=='running'||!isPrivateLocalPhone(task)||phoneConversationId(task)!==conversation)return;
+   const surface=privatePhoneSurface(task,owner.livePrivatePhones),target=phoneViewerTask(task);
+   if(!surface?.activityHandle||surface.requestedMode!=='background'||surface.surfaceState!=='bound'||
+      surface.paused||surface.stopRequested||!target)return;
+   const key=JSON.stringify([bridge.getDocumentEpoch(),floor.resumeRevision,navigationWindow.current,
+     conversation,surface.taskId,surface.runId,surface.epoch,surface.activityHandle]);
+   return {key,task:target,activityHandle:surface.activityHandle};
+ };
+ const activeInlinePhoneRow=inlinePhoneVisit!==null&&phoneRows.some(({task})=>
+   visibleInlinePhone(bridge.getState(),task.id)?.key===inlinePhoneVisit);
+ useEffect(()=>{if(inlinePhoneVisit!==null&&!activeInlinePhoneRow)chooseInlinePhoneVisit(null)},[inlinePhoneVisit,activeInlinePhoneRow,chooseInlinePhoneVisit]);
  const homePhoneAttention:NonNullable<ButlerHomeProps['phoneAttention']>=[];
  const phoneActivityRows=phoneRows.map(({task,surface})=>{
    const held=stopReceipts.rows.find(x=>surface?.activityHandle===x.activityHandle);
    if((held?.phase==='requested'||held?.phase==='local_only')&&surface?.stopRequested)return null;
    const key=JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch]);
-   const row=<PhoneTaskStatus key={key} task={task} surface={surface||undefined} can={can}
-     onOpen={()=>{const entry=attention(task)&&can('tasks.review')?'review':'overview';
+   const view=visibleInlinePhone(bridge.getState(),task.id);
+   const watching=!!view&&view.key===inlinePhoneVisit;
+   const region='pw-original-phone-inline-'+task.id;
+   const viewStillCurrent=()=>!!view&&inlinePhoneSelection.current===view.key&&visibleInlinePhone(bridge.getState(),task.id)?.key===view.key;
+   const toggle=view?{open:watching,controls:region,onToggle:()=>{
+     if(inlinePhoneSelection.current===view.key)chooseInlinePhoneVisit(null);
+     else if(visibleInlinePhone(bridge.getState(),task.id)?.key===view.key)chooseInlinePhoneVisit(view.key);
+   }}:undefined;
+   const row=<PhoneTaskStatus key={key} task={task} surface={surface||undefined} can={can} inlineView={toggle}
+     onOpen={()=>{if(inlinePhoneSelection.current)chooseInlinePhoneVisit(null);const entry=attention(task)&&can('tasks.review')?'review':'overview';
        if(!isPrivateLocalPhone(task)){openTask(task.id,entry);return}
        if(surface?.activityHandle)openOriginalActivity({...surface,activityHandle:surface.activityHandle},entry)}}
      onControl={(action,identity,shownPause)=>{
@@ -4842,7 +4887,11 @@ export default function App(){
        homePhoneAttention.push({key,row});return null;
      }
    }
-   return row;
+   return <Fragment key={key}>{row}{watching&&view&&<ConversationModelPickerVisibility key={view.key}>{covered=>
+     <ChatPhonePickerGate covered={covered} retire={()=>{if(inlinePhoneSelection.current===view.key)chooseInlinePhoneVisit(null)}}>
+       <InlineOriginalPhoneViewer id={region} task={view.task} originalActivityHandle={view.activityHandle} isCurrent={viewStillCurrent}/>
+     </ChatPhonePickerGate>}
+   </ConversationModelPickerVisibility>}</Fragment>;
  });
  const phoneActivity=phoneActivityRows.some(Boolean)||stopReceipts.rows.length?<>{phoneActivityRows}{stopReceipts.rows.map(item=>{const row=stoppedSource(item,tasks);if(!row)return null;
    return <PhoneInlineStopReceipt key={item.ticket} item={item} goal={row.goal} recordedStatus={row.status}

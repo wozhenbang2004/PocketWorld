@@ -520,11 +520,47 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             shownPhoneActivity[key] = it
         }
     }
+    private fun shownPhoneActivityMatches(key: Triple<String,String,Int>, owner: Long, handle: String): Boolean =
+        synchronized(shownPhoneActivity) { shownActivityWindow == owner && shownPhoneActivity[key] == handle }
+
+    internal fun retainOriginalChatPhonePreview(id: String, run: String, epoch: Int, handle: String, visible: () -> Boolean):
+        dev.pocketengine.ui.web.PocketWebPhoneViewer.OriginalActivity? {
+        val conversation = state.conversationId?.takeIf(String::isNotBlank) ?: return null
+        val owner = displayedPhoneWindowVersion()
+        val draftEpoch = chatViewEpoch
+        val readerVersion = conversationReaderRevision
+        val channelVersion = phoneOriginRevision
+        val key = Triple(id, run, epoch)
+        fun currentChat(): Boolean {
+            val shown = state
+            if (!visible() || !displayedPhoneWindowAlive(owner) || !webPrivateOwnerVisible() || chatViewEpoch != draftEpoch ||
+                conversationReader != null || conversationReaderRevision != readerVersion || phoneOriginRevision != channelVersion ||
+                hasChannelPhoneOrigin || shown.conversationId != conversation || shown.filePath != null || queuedInputsPage != null ||
+                attachmentOutcomes.state.open || shown.chatAttachmentPickerOpen ||
+                composerDraft?.let { it.key == "conversation:$conversation" && it.conversationId == conversation } != true ||
+                !shownPhoneActivityMatches(key, owner, handle)) return false
+            val task = shown.tasks.singleOrNull { it.id == id } ?: return false
+            val raw = task.raw
+            val link = raw.optJSONObject("conversationPhoneLink") ?: return false
+            return task.status == "running" && task.executionMode == "background" &&
+                raw.opt("id") == id && raw.opt("status") == "running" && raw.opt("kind") == "phone" &&
+                raw.opt("executionMode") == "background" && raw.opt("actorId") == "owner" && raw.opt("spaceId") == "private" &&
+                raw.opt("runId") == run && raw.opt("coordinatorEpoch") == epoch && raw.opt("cancelRequested") == false &&
+                raw.opt("taskCoreReadLimited") != true && raw.opt("contextAvailable") != false && raw.opt("contextWithdrawn") != true &&
+                raw.opt("sourceCurrentReadRequired") != true && raw.opt("taskProjection") != "source_unavailable" &&
+                listOf("origin", "parentTaskId", "teamRunId", "teamAssignment", "memberId", "ownerPhoneControl", "ownerDeviceWork").all(raw::isNull) &&
+                link.length() == 2 && link.opt("taskId") == id && link.opt("conversationId") == conversation
+        }
+        if (!currentChat()) return null
+        val retained = app.retainedRunningPhonePreview(id, run, epoch) ?: return null
+        fun current() = currentChat() && retained.current().asBoolean
+        return if (current()) dev.pocketengine.ui.web.PocketWebPhoneViewer.OriginalActivity(retained.sessionId(), retained.displayId(), ::current) else null
+    }
+
     internal fun openShownPhoneActivity(id: String, run: String, epoch: Int, handle: String, current: () -> Boolean) {
         val owner = displayedPhoneWindowVersion()
-        require(current() && webPrivateOwnerVisible() && handle.isNotBlank() && synchronized(shownPhoneActivity) {
-            shownActivityWindow == owner && shownPhoneActivity[Triple(id,run,epoch)] == handle
-        }) { "请回原手机任务卡重新查看，没有打开后继轮次" }
+        require(current() && webPrivateOwnerVisible() && handle.isNotBlank() &&
+            shownPhoneActivityMatches(Triple(id, run, epoch), owner, handle)) { "请回原手机任务卡重新查看，没有打开后继轮次" }
         val locator=JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("activityHandle",handle)
         readPhoneNotification(locator, activityWindow={ current() && webPrivateOwnerVisible() && displayedPhoneWindowAlive(owner) })
     }
@@ -3437,7 +3473,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     var conversationReader by mutableStateOf<ConversationReadPage?>(null)
         private set
-    private var conversationReadSequence=0L
+    @Volatile private var conversationReadSequence=0L
     private var openingOwnerWorkRequest: dev.pocketengine.core.RunControl? = null
     internal val conversationReaderRevision get() = conversationReadSequence
     // The one-row request view is not a regular conversation reader authority.

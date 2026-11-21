@@ -30,6 +30,7 @@ export type PhoneViewerState = {
   verifiedAt: number;
 };
 export type PhoneViewerCommand = (action: string, args: Record<string, unknown>) => Promise<unknown>;
+type OriginalActivityView = { handle: string; isCurrent(): boolean };
 
 const staleMessage = '原任务或独立屏已变化，请重新核对这次任务。';
 const integer = (value: unknown, minimum = 0): value is number => Number.isSafeInteger(value) && (value as number) >= minimum;
@@ -99,6 +100,8 @@ export class PhoneViewerConnection {
   private readonly documentEpoch: () => number;
   private readonly now: () => number;
   private readonly intervalMs: number;
+  private readonly originalActivity?: OriginalActivityView;
+  private originalActivityRetired = false;
   private state = emptyState();
   private session: PhoneViewerSession | null = null;
   private display: PhoneDisplayIdentity | null = null;
@@ -115,20 +118,21 @@ export class PhoneViewerConnection {
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(identity: PhoneViewerIdentity, command: PhoneViewerCommand, publish: (state: PhoneViewerState) => void,
-    options: { documentEpoch?: () => number; now?: () => number; intervalMs?: number } = {}) {
+    options: { documentEpoch?: () => number; now?: () => number; intervalMs?: number; originalActivity?: OriginalActivityView } = {}) {
     this.identity = phoneViewerIdentity(identity);
     this.command = command;
     this.publish = publish;
     this.documentEpoch = options.documentEpoch ?? (() => 0);
     this.now = options.now ?? Date.now;
     this.intervalMs = Math.max(200, options.intervalMs ?? 200);
+    this.originalActivity = options.originalActivity;
     this.document = this.documentEpoch();
   }
 
   getState(): PhoneViewerState { return this.state; }
 
   setVisible(visible: boolean, terminal = false): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.originalActivityCurrent(visible)) return;
     const changed = this.visible !== visible || this.terminal !== terminal;
     this.visible = visible; this.terminal = terminal;
     if (terminal) { this.stop(); this.emit({ phase: 'ended', error: '' }); return; }
@@ -139,11 +143,14 @@ export class PhoneViewerConnection {
   }
 
   retry(): void {
-    if (this.disposed || !this.visible || this.terminal) return;
+    if (this.disposed || !this.visible || this.terminal || !this.originalActivityCurrent()) return;
     this.stop(); this.blocked = null; this.document = this.documentEpoch(); this.start();
   }
 
-  dispose(): void { this.disposed = true; this.visible = false; this.stop(); }
+  dispose(): void {
+    this.disposed = true; this.visible = false; this.stop();
+    if (this.originalActivity) this.state = emptyState();
+  }
 
   private emit(patch: Partial<PhoneViewerState>): void {
     this.state = { ...this.state, ...patch };
@@ -162,16 +169,28 @@ export class PhoneViewerConnection {
     if (session) this.release(session.viewerId);
   }
 
+  private originalActivityCurrent(visible = true): boolean {
+    if (!this.originalActivity) return true;
+    if (this.originalActivityRetired) return false;
+    if (visible && this.originalActivity.isCurrent()) return true;
+    // An expired chat disclosure may not reopen itself on a later foreground or route render.
+    this.originalActivityRetired = true;
+    this.visible = false;
+    this.stop();
+    this.emit({ phase: 'hidden', error: '', frame: null, verifiedAt: 0 });
+    return false;
+  }
+
   private current(token: number): boolean {
     if (this.disposed || !this.active || token !== this.token || !this.visible || this.terminal) return false;
     if (this.document !== this.documentEpoch()) { this.fail(new PhoneViewerProtocolError('原页面已变化，请重新打开这次任务的画面。')); return false; }
-    return true;
+    return this.originalActivityCurrent();
   }
 
   private fail(error: unknown): void {
     this.stop();
     this.blocked = { phase: errorCode(error) === 'phone_viewer_ended' ? 'ended' : errorCode(error) === 'phone_viewer_hidden' ? 'hidden' : 'error', error: errorText(error) };
-    this.emit(this.blocked);
+    this.emit(this.originalActivity ? { ...this.blocked, frame: null, verifiedAt: 0 } : this.blocked);
   }
 
   private start(): void {
@@ -186,7 +205,9 @@ export class PhoneViewerConnection {
 
   private async open(token: number): Promise<void> {
     try {
-      const value = await this.command('phone.viewer.open', { ...this.identity });
+      if (this.originalActivity && !this.current(token)) return;
+      const value = await this.command('phone.viewer.open', this.originalActivity
+        ? { ...this.identity, originalActivityHandle: this.originalActivity.handle } : { ...this.identity });
       // Even an obsolete successful open must release its own returned handle.
       const opened = record(value);
       if (!this.current(token)) { if (identifier(opened.viewerId)) this.release(opened.viewerId); return; }

@@ -384,6 +384,31 @@ public final class EngineApplication extends Application implements dev.pocketen
     // The system notice remains independently usable if all in-app stop slots are occupied; no queued or automatic work.
     private final dev.pocketengine.phone.OwnerPhoneStopInputs systemNoticeStopInputs=new dev.pocketengine.phone.OwnerPhoneStopInputs();
     private RunControl currentPhoneControl(String id){BackgroundRun run=id==null?null:backgroundRuns.get(id);return run!=null?run.control:id!=null&&id.equals(activeTaskId)?activeControl:null;}
+    /** Resident preview identity only. Never opens a port, consults a source body or requests a frame. */
+    public record RetainedRunningPhonePreview(String sessionId,int displayId,java.util.function.BooleanSupplier current) {}
+    public RetainedRunningPhonePreview retainedRunningPhonePreview(String id,String run,int epoch)throws Exception {
+        BackgroundRun retained=backgroundRuns.get(id);
+        if(retained==null||!(retained.port instanceof dev.pocketengine.phone.display.BackgroundPhonePort port))return null;
+        RunControl original=retained.control;
+        var session=deferredPhoneSessions.get(original);
+        if(session==null)return null;
+        long pause=original.pauseRevision(), surface=original.surfaceRevision();
+        java.util.function.BooleanSupplier current=()->backgroundRuns.get(id)==retained&&retained.port==port&&
+                original.matchesHostRun(id,run,epoch)&&original.phoneSurfaceActive()&&original.surfaceRevision()==surface&&
+                !original.isPaused()&&!original.isCancelled()&&original.pauseRevision()==pause&&
+                deferredPhoneSessions.get(original)==session&&session.originalControl()==original&&
+                session.matchesHostScope(id,run,epoch)&&"background".equals(session.executionMode())&&
+                session.holdsObservationBinding()&&session.physicalPort()==port&&session.readyAdapter()!=null&&
+                !port.ownerHandoffActive()&&resources.ownsBackgroundPhone(retained.resourceToken);
+        if(!current.getAsBoolean())return null;
+        JSONObject retainedDisplay=port.executionIdentity();
+        String sessionId=retainedDisplay.optString("sessionId");
+        int display=retainedDisplay.optInt("displayId",-1);
+        if(sessionId.isBlank()||display<=0||!id.equals(retainedDisplay.opt("taskId"))||
+                !run.equals(retainedDisplay.opt("runId"))||retainedDisplay.optInt("coordinatorEpoch",-1)!=epoch||
+                !current.getAsBoolean())return null;
+        return new RetainedRunningPhonePreview(sessionId,display,current);
+    }
     /** Snapshot for an already visible private task. Retained registry and local policy only: no TaskStore, service, PackageManager, helper, or physical phone call. */
     public JSONObject retainedPhoneSurface(String id,String run,int epoch,String requested,long displayedScopeRevision)throws Exception {
         if(id==null||run==null||epoch<1||!("main_screen".equals(requested)||"background".equals(requested)))return null;

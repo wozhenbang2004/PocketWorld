@@ -12,11 +12,14 @@ internal class PocketWebPhoneViewer(
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val findTask: (String) -> UiTask?,
     private val read: (JSONObject, () -> Boolean, (JSONObject?, String?, String) -> Unit) -> Unit,
-    private val now: () -> Long = SystemClock::elapsedRealtime
+    private val now: () -> Long = SystemClock::elapsedRealtime,
+    private val originalActivity: (String, String, Int, String) -> OriginalActivity? = { _, _, _, _ -> null }
 ) {
-    private class Viewer(val id: String, val task: String, val run: String, val epoch: Int, val window: PocketWebWindowTicket) {
-        var session: String? = null
-        var display: Int? = null
+    data class OriginalActivity(val session: String, val display: Int, val current: () -> Boolean)
+    private class Viewer(val id: String, val task: String, val run: String, val epoch: Int, val window: PocketWebWindowTicket,
+                         val activity: OriginalActivity?) {
+        var session: String? = activity?.session
+        var display: Int? = activity?.display
         var generation = -1L
         var capturedAt = -1L
     }
@@ -53,7 +56,8 @@ internal class PocketWebPhoneViewer(
             raw.optString("id") == value.task && raw.optString("runId") == value.run &&
             raw.optInt("coordinatorEpoch", -1) == value.epoch
     }
-    private fun current(value: Viewer) = viewer === value && foreground && visible() && acceptsWindow(value.window) && identity(value)
+    private fun current(value: Viewer) = viewer === value && foreground && visible() && acceptsWindow(value.window) &&
+        identity(value) && value.activity?.current?.invoke() != false
 
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?, String) -> Unit) {
         if (action == "phone.viewer.close") {
@@ -64,9 +68,15 @@ internal class PocketWebPhoneViewer(
         }
         if (!foreground || !visible()) { clear(); done(null, "回到应用后可继续查看画面", "phone_viewer_hidden"); return }
         if (action == "phone.viewer.open") {
-            fields(args, "taskId", "runId", "epoch")
+            fields(args, "taskId", "runId", "epoch", "originalActivityHandle")
             val epoch = number(args, "epoch", 1).also { require(it <= Int.MAX_VALUE) }.toInt()
-            val next = Viewer(UUID.randomUUID().toString(), text(args, "taskId"), text(args, "runId"), epoch, captureWindow())
+            val task = text(args, "taskId")
+            val run = text(args, "runId")
+            val activity = if (args.has("originalActivityHandle")) {
+                originalActivity(task, run, epoch, text(args, "originalActivityHandle"))?.takeIf { it.current() }
+                    ?: return done(null, "原对话或本轮独立屏已变化，没有打开其他画面", "phone_viewer_stale")
+            } else null
+            val next = Viewer(UUID.randomUUID().toString(), task, run, epoch, captureWindow(), activity)
             if (!identity(next)) { done(null, "原手机任务已变化，请重新打开", "phone_viewer_stale"); return }
             if (findTask(next.task)?.status in ended) { done(null, "这次手机任务已结束", "phone_viewer_ended"); return }
             viewer = next
@@ -76,7 +86,11 @@ internal class PocketWebPhoneViewer(
         require(action == "phone.viewer.frame")
         fields(args, "viewerId", "afterFrameGeneration")
         val original = viewer
-        if (original == null || original.id != text(args, "viewerId") || !current(original)) {
+        if (original == null || original.id != text(args, "viewerId")) {
+            done(null, "原画面窗口已变化，请重新打开", "phone_viewer_stale"); return
+        }
+        if (!current(original)) {
+            if (original.activity != null && viewer === original) clear()
             done(null, "原画面窗口已变化，请重新打开", "phone_viewer_stale"); return
         }
         if (findTask(original.task)?.status in ended) { clear(); done(null, "这次手机任务已结束", "phone_viewer_ended"); return }
@@ -91,7 +105,10 @@ internal class PocketWebPhoneViewer(
         try {
             read(input, { current(original) }) { result, error, code ->
                 reading = false
-                if (!current(original)) { done(null, "原画面窗口已变化，未显示迟到的画面", "phone_viewer_stale") }
+                if (!current(original)) {
+                    if (original.activity != null && viewer === original) clear()
+                    done(null, "原画面窗口已变化，未显示迟到的画面", "phone_viewer_stale")
+                }
                 else if (error != null || result == null) {
                     if (code in setOf("phone_viewer_stale", "phone_viewer_ended", "phone_viewer_hidden")) clear()
                     done(null, error ?: "画面暂不可读取", code.ifEmpty { "preview_unavailable" })
@@ -112,9 +129,14 @@ internal class PocketWebPhoneViewer(
                         require(number(result, "sourceWidth", 1) > 0 && number(result, "sourceHeight", 1) > 0)
                         require(number(result, "previewWidth", 1) <= 960 && number(result, "previewHeight", 1) <= 960)
                     } else require(!result.has("imageBase64"))
-                    original.session = session; original.display = display
-                    original.generation = generation; original.capturedAt = maxOf(original.capturedAt, capturedAt)
-                    done(result, null, "")
+                    if (original.activity != null && !current(original)) {
+                        if (viewer === original) clear()
+                        done(null, "原对话或本轮独立屏已变化，未显示迟到的画面", "phone_viewer_stale")
+                    } else {
+                        original.session = session; original.display = display
+                        original.generation = generation; original.capturedAt = maxOf(original.capturedAt, capturedAt)
+                        done(result, null, "")
+                    }
                 } catch (_: Exception) {
                     clear(); done(null, "原手机画面身份无法核对，请重新打开", "phone_viewer_stale")
                 }
