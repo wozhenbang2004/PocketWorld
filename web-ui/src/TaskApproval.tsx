@@ -54,6 +54,26 @@ function originalModelTeamStart(capability:Json,args:Json,oneTime:boolean){
  }))};
 }
 
+/** Original Work expectations from this exact full native review, not the team's proposed result. */
+function firstTeamWorkDeliverables(task:unknown,approval:Json){
+ const identity=ownerWorkIdentity(task),raw=object(object(task).raw),work=object(raw.ownerWork),contract=object(work.contract);
+ if(!identity?.runId||identity.epoch!==1||raw.kind!=='assistant'||raw.executionMode!=='capabilities'||
+    raw.origin!=null||raw.parentTaskId!=null||raw.teamRunId!=null||raw.memberId!=null||raw.developmentContext!=null||
+    raw.workProfileRef!=null||raw.workProfileIntent!=null||raw.ownerPhoneControl!=null||raw.ownerDeviceWork!=null||raw.cancelRequested===true||
+    raw.contextAvailable!==true||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||
+    raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||
+    raw.ownerWorkTeamsUnavailable===true||!Array.isArray(raw.ownerWorkTeams)||raw.ownerWorkTeams.length!==0||
+    work.format!=='pocketworld.owner-work.v1'||work.workTaskId!==identity.taskId||!nonEmptyText(raw.conversationId)||
+    work.conversationId!==raw.conversationId||contract.format!=='pocketworld.owner-work-contract.v1'||
+    !Number.isSafeInteger(contract.revision)||contract.revision<1||!nonEmptyText(contract.goal)||contract.goal!==raw.goal)return null;
+ const pending=list(raw.approvals).filter(row=>row?.tool==='teams_start'&&row.state==='pending'&&row.runId===identity.runId);
+ if(pending.length!==1||!nonEmptyText(approval.id)||pending[0].id!==approval.id||
+    approval.state!=='pending'||approval.runId!==identity.runId)return null;
+ const deliverable=nonEmptyText(contract.deliverable)?contract.deliverable:undefined;
+ const completionCriteria=nonEmptyText(contract.completionCriteria)?contract.completionCriteria:undefined;
+ return deliverable||completionCriteria?{deliverable,completionCriteria}:null;
+}
+
 type ModelTeamRoster=NonNullable<ReturnType<typeof originalModelTeamStart>>;
 type ApprovedSavedTeamPlan={approvalId:string;goal:string;roster:ModelTeamRoster};
 
@@ -171,7 +191,7 @@ export function originalPendingNodeCommand(task?:Json):NodeCommandReview|null {
 
 /** Composes the adopted BoardUI disclosure/checkbox and Josh press button sources.
  * Decision facts stay visible; only exact technical identities and raw payloads fold away. */
-export function TaskApproval({approval,executionScope={},disabled,onDecision}:{approval:Json;executionScope?:Json;disabled:boolean;onDecision:(args:Json)=>void}) {
+export function TaskApproval({approval,reviewTask,executionScope={},disabled,onDecision}:{approval:Json;reviewTask?:unknown;executionScope?:Json;disabled:boolean;onDecision:(args:Json)=>void}) {
  const [scopeReviewed,setScopeReviewed]=useState(false);
  const id=String(approval.approvalId||approval.id||''),capability=object(approval.capability),args=object(approval.arguments),view=object(approval.webReview);
  const team=view.kind==='team_plan',live=view.kind==='live_scope',execution=view.kind==='execution_plan',scope=object(capability.ownedService);
@@ -179,6 +199,8 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
  const oneTimeStart=rosterStart==='one_time';
  const plannedTeam=rosterStart?originalModelTeamStart(capability,args,oneTimeStart):null;
  const frozenTeam=object(capability.teamDefinition),frozenMembers=list(frozenTeam.members).map(object);
+ const deliverables=plannedTeam&&view.canApprove===true&&(plannedTeam.savedClassic||oneTimeStart&&frozenTeam.mode==='collaborate')
+   ?firstTeamWorkDeliverables(reviewTask,approval):null;
  const affectedPhoneIds=Array.isArray(view.savedTeamPhoneScopeMemberIds)?view.savedTeamPhoneScopeMemberIds:[];
  const affectedPhoneNames=rosterStart==='saved'&&view.canApprove===false?frozenMembers.flatMap((member,index)=>
   member.runner==='phone_agent'&&affectedPhoneIds.includes(member.id)&&nonEmptyText(member.name)?
@@ -235,6 +257,11 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
   </div>}
   {oneTimeStart&&!plannedTeam&&<div className="pw-decision-notice" role="alert"><h5>原分工暂不可审阅</h5>
    <p>{missingOneTimeTeamReview(object(capability.teamDefinition),args)}请重新打开原待审事项，或拒绝这次申请。这里不会另起分工。</p></div>}
+  {deliverables&&<section className="pw-decision-section" aria-label="原工作的交付要求">
+   <h5>原工作的交付要求</h5>
+   <dl className="pw-decision-facts">{deliverables.deliverable&&<div><dt>要交付</dt><dd className="pw-approval-copy" dir="auto">{deliverables.deliverable}</dd></div>}
+    {deliverables.completionCriteria&&<div><dt>怎样算完成</dt><dd className="pw-approval-copy" dir="auto">{deliverables.completionCriteria}</dd></div>}</dl>
+  </section>}
   {plannedTeam&&<section className="pw-decision-section" aria-label="这次申请的成员与分工">
    <h5>这次由谁负责 · {plannedTeam.members.length} 名成员</h5>
    <p className="pw-decision-meta">{view.canApprove===true&&!disabled?'已读到原分工，等待你作决定。':'原分工可查看，目前不能提交决定。'}计划模型不代表成员已接单或已执行。</p>

@@ -72,6 +72,19 @@ function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresenta
     typeof runId === 'string' && runId.trim() && Number.isSafeInteger(epoch) && (epoch > 0 || epoch === 0 && !!identity?.direct) ? {runId, epoch, label} : null;
 }
 
+/** A non-completed run may still have a real report. Move only a settled failure
+ * whose attention classification is for optional continuation, not an unresolved decision. */
+function partialFailureReport(task: ButlerHomeTask, view = workCollectionPresentation(task), exact = homeWorkIdentity(task)) {
+  const raw=task.raw, work=raw?.ownerWork, handling=view.handling;
+  if(task.status!=='failed'||view.group!=='attention'||view.reconciliation||view.pendingApproval||!handling||
+    handling.needsAttention||handling.waitingForChildren||handling.teamsUnavailable||
+    exact?.domain!=='butler'||raw?.kind!=='assistant'||raw.executionMode!=='capabilities'||raw.executionRole!=='owner_work'||
+    raw.status!==task.status||raw.contextAvailable!==true||raw.contextWithdrawn===true||raw.taskCoreReadLimited===true||
+    raw.cancelRequested!==false||raw.hasUnresolvedOperations!==false||raw.controls?.canContinue!==true||
+    work?.format!=='pocketworld.owner-work.v1'||work.workTaskId!==task.id||work.phase!=='ended'||work.conversationId!==raw.conversationId)return null;
+  return reportedHomeWork(task,handling);
+}
+
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
@@ -112,11 +125,12 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
       const detail = !contextAvailable ? task.summary?.trim() || '' : unknown ? progress.detail : handling?.waitingForButler || handling?.waitingForChildren || handling?.needsAttention ? handling.reason : task.summary?.trim() || (progress && progress.source !== 'task' ? progress.detail || progress.title : '');
       const runId=task.raw?.runId,epoch=task.raw?.coordinatorEpoch;
       const decision=handling?.ownerDecision&&typeof runId==='string'&&runId.trim()&&Number.isSafeInteger(epoch)&&epoch>0?{runId,epoch}:null;
+      const needsOwner = !!decision || needsOwnerOnHome(task,presentation,exact);
+      const partialReport=canReadReports&&!needsOwner?partialFailureReport(task,presentation,exact):null;
       // The butler may have filed its report before the owner accepts the work.
       // Keep that decision in place; the saved report is something to read, not a verdict.
-      const report=presentation.group==='ended'||decision?reportedHomeWork(task,handling):null;
-      const needsOwner = !!decision || needsOwnerOnHome(task,presentation,exact);
-      return { task, decision, needsOwner, report, saved, exact, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
+      const report=presentation.group==='ended'||decision?reportedHomeWork(task,handling):partialReport;
+      return { task, decision, needsOwner, report, partialReport, saved, exact, attention, status, detail: detail === status || detail === task.goal ? '' : detail,
         group: presentation.group, busy: presentation.busy, completed: presentation.completed, action: presentation.actionLabel };
     });
   // An older request must not be displaced by a newer pause or unknown receipt.
@@ -136,13 +150,14 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const decisions=work.filter(item=>item.needsOwner);
   const decisionCount=decisions.length+phoneAttention.length, hasPhone=!!phoneActivity||phoneAttention.length>0;
   const shownDecisions=showDecisions?decisions:recent(decisions,2);
-  const checking=work.filter(item=>!item.needsOwner&&item.group==='attention');
+  const checking=work.filter(item=>!item.needsOwner&&item.group==='attention'&&!item.partialReport);
   const running=work.filter(item=>item.group==='running');
-  const results=work.filter(item=>item.group==='ended'&&(item.report||item.saved));
+  const results=work.filter(item=>item.partialReport||item.group==='ended'&&(item.report||item.saved));
   const ended=work.filter(item=>item.group==='ended'&&!item.report&&!item.saved);
+  const hasEndedResults=results.some(item=>item.group==='ended');
   const shownRunning=recent(running,2), shownResults=allResults?results:recent(results,2);
   const decisionsExpanded=shownDecisions.length===decisions.length, resultsExpanded=shownResults.length===results.length;
-  const showChecking=(!!returned&&checking.includes(returned))||(checkingExpanded??(!decisionCount&&!running.length&&!results.length&&!hasPhone));
+  const showChecking=(!!returned&&checking.includes(returned))||(checkingExpanded??(!decisionCount&&!running.length&&!hasEndedResults&&!hasPhone));
   const shownEnded=recent(ended,1), shownChecking=showChecking?recent(checking,2):[];
   const homeNotice=notice||(ready&&retained&&!returned?'首页暂不能定位这轮原工作，可到「全部工作」核对。':'');
   // Present each job once under the human question it answers. Fold only
@@ -214,7 +229,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
       const native=bridge.getState().state;
       const rows=reportTarget||item.decision?native.ownerWork:native.tasks;
       return Array.isArray(rows)?rows.find((row:ButlerHomeTask)=>row?.id===id&&row.raw?.runId===runId&&row.raw?.coordinatorEpoch===epoch&&
-        (reportTarget?sameHomeReport(reportedHomeWork(row),reportTarget):item.saved?!!originalSavedResult(row):
+        (reportTarget?sameHomeReport(item.partialReport?partialFailureReport(row):reportedHomeWork(row),reportTarget):item.saved?!!originalSavedResult(row):
           item.decision?row.status===item.task.status&&workCollectionPresentation(row).handling?.ownerDecision:
             !!item.exact&&homeWorkIdentity(row)?.domain===item.exact.domain)):undefined;
     };
@@ -295,7 +310,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
     {showSetup&&modelSetup}
     {showSetup&&firstHostSave&&<Button variant="ghost" size="small" disabled={firstHostSave.disabled} aria-busy={firstHostSave.busy||undefined}
       aria-describedby={nextNote} onClick={firstHostSave.save}>{firstHostSave.busy?'正在保存原话…':'仅保存到本机'}</Button>}
-    {showFiles&&<Button variant="ghost" size="small" leadingIcon={IconFileText} onClick={onReadLocalFiles}>在本机读文件</Button>}
+    {showFiles&&<Button variant="ghost" size="small" leadingIcon={IconFileText} onClick={onReadLocalFiles}>本机文件与草稿</Button>}
     {nextHint&&<p id={nextNote} role={stagingLocal?'status':undefined}>{nextHint}</p>}
   </div>;
 
@@ -325,7 +340,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
               {shownRunning.length>0&&<ol className="pw-butler-work-list">{shownRunning.map(renderTask)}</ol>}
             </section>}
             {shownResults.length>0&&<section className="pw-butler-work-group" aria-label="成果">
-              <header className="pw-butler-group-heading"><h3>成果</h3>{moreWork&&
+              <header className="pw-butler-group-heading"><h3>成果</h3>{moreWork&&hasEndedResults&&
                 <Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('ended')}>找更早的成果</Button>}</header>
               <ol id={returnedList} className="pw-butler-work-list">{shownResults.map(renderTask)}</ol>
               {results.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-expanded={resultsExpanded} aria-controls={returnedList} onClick={()=>{setWorkReturn(null);setAllResults(!resultsExpanded)}}>{resultsExpanded?'收起成果':`再看 ${results.length-shownResults.length} 项成果`}</Button>}

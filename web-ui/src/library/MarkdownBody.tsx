@@ -1,7 +1,7 @@
 // Product content adapter: react-markdown 10.1.0 + remark-gfm 4.0.1 (MIT).
 // Parsing is delegated to those established libraries. The small remark plugin only
 // links citation markers in already-parsed text nodes to the provided source IDs.
-import {createContext,memo,useContext,useEffect,useMemo,useState,type ContextType,type ReactNode} from 'react';
+import {Component,createContext,memo,useContext,useEffect,useMemo,useState,type ContextType,type ReactNode} from 'react';
 import { IconExpand } from '../icons';
 import {ReadingContext} from '../reading-context';
 import ReactMarkdown,{defaultUrlTransform,type Components} from 'react-markdown';
@@ -50,5 +50,31 @@ export function MarkdownBody({text,className='',onlyTableAt,sources=[],onCitatio
  const openReading=useContext(ReadingContext);
  const presentation:MarkdownPresentation={text,sources,onCitation,onOpenLink,onCopyCode,resolveImage,openReading};
  return <div className={`pw-markdown ${className}`}><MarkdownPresentationContext.Provider value={presentation}><ParsedMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} skipHtml urlTransform={safeMarkdownUrl} components={components}>{text}</ParsedMarkdown></MarkdownPresentationContext.Provider></div>
+}
+
+// A saved Project file is data, not a page or a chat document with actions.
+// Reuse the parser and styles, not the link/image/clipboard/reading handlers.
+const savedElements = ['h1','h2','h3','h4','h5','h6','p','br','hr','ul','ol','li','em','strong','del','blockquote',
+  'code','pre','table','thead','tbody','tr','th','td','input','a','img'];
+const savedComponents:Components = {
+  a:({children})=><span>{children}</span>,
+  img:({alt})=><span className="pw-markdown-image">图片：{alt||'未命名'}</span>,
+  pre:({children})=><div className="pw-markdown-code"><pre tabIndex={0}>{children}</pre></div>,
+  table:({children})=><div className="pw-markdown-table" tabIndex={0} role="region" aria-label="表格，可横向滚动"><table>{children}</table></div>,
+  input:components.input,
+};
+const savedPlugins = [remarkGfm];
+const ignoreUrl = () => '';
+
+class SavedMarkdownBoundary extends Component<{children:ReactNode},{failed:boolean}> {
+  state = {failed:false};
+  static getDerivedStateFromError() { return {failed:true}; }
+  render() { return this.state.failed ? <p role="alert">无法显示这份 Markdown。可以返回编辑，已保存文件不变。</p> : this.props.children; }
+}
+
+export function SavedMarkdownBody({text}:{text:string}) {
+  return text.trim() ? <div className="pw-markdown"><SavedMarkdownBoundary>
+    <ParsedMarkdown remarkPlugins={savedPlugins} allowedElements={savedElements} skipHtml urlTransform={ignoreUrl} components={savedComponents}>{text}</ParsedMarkdown>
+  </SavedMarkdownBoundary></div> : <p className="pw-muted">这个文件没有可预览的内容。</p>;
 }
 

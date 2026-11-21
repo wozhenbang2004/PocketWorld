@@ -394,6 +394,15 @@ internal class AttachmentOutcomeCoordinator(
             else state.taskId==action&&state.documentDraft==null&&!state.fromWorkResult&&state.resultRun==null&&
                 file.opt("found")==true&&originalDocumentAction(action,it)==action
         }
+        // Rechecking the exact saved file must not discard the still-live way back to its Library details.
+        val retainedReturn=catalog?.takeUnless{inLibrary}?.let{record->
+            currentLibraryDocumentReturn()?.takeIf{origin->
+                origin.action==action&&file.opt("originalPublication")==true&&
+                    file.opt("principalId")=="owner"&&file.opt("spaceId")=="private"&&!file.optBoolean("outputSourceRetired")&&
+                    matchesLibraryDocument(origin.file,file,action)&&
+                    record.optJSONArray("artifacts").objects().count{matchesLibraryDocument(it,file,action)}==1
+            }
+        }
         val retainedImport=state.libraryImport.takeIf{inLibrary}
         val published=if(inLibrary)JSONObject(file.toString()).put("role","result")
             .put("sourceKind","created_document").put("sourceTaskId",action) else file
@@ -402,7 +411,8 @@ internal class AttachmentOutcomeCoordinator(
         // Show only this operation's Book file; a separate pending save still needs its own receipt.
         // The creation task is the file's provenance, not the library's navigation scope.
         state=AttachmentOutcomeState(open=true,taskId=action.takeUnless{inLibrary},snapshot=catalog,file=published,
-            pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,notice=notice,libraryImport=retainedImport)
+            pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,notice=notice,
+            libraryImport=retainedImport,libraryDocumentReturn=retainedReturn)
     }
     private fun isPublishedDocument(action:String,file:JSONObject):Boolean{
         val source=file.optJSONObject("source")?:return false

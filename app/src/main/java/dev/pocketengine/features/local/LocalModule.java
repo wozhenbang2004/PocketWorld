@@ -1,5 +1,7 @@
 package dev.pocketengine.features.local;
 
+import android.system.Os;
+import android.system.OsConstants;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
@@ -1547,11 +1549,11 @@ public final class LocalModule implements EngineModule {
     /** Reuses the original manual SHA-CAS writer, with the native page fenced
      * again immediately before the atomic move. Never grants live-edit rights. */
     public synchronized JSONObject saveDevelopmentFileForOwner(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {
-        return readBackEditorSave(intent,current).file();
+        return readBackEditorSave(intent,false,current).file();
     }
     private record EditorSaveReadback(JSONObject file,JSONObject checkout){}
     private EditorSaveReadback readBackEditorSave(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,
-            java.util.function.BooleanSupplier current)throws Exception {
+            boolean createEmpty,java.util.function.BooleanSupplier current)throws Exception {
         java.util.Objects.requireNonNull(intent);java.util.Objects.requireNonNull(current);
         dev.pocketengine.features.local.project.ProjectBinaryImport.Current live=()->{if(closed||!current.getAsBoolean()||!intent.projectId.equals(checkout(intent.checkoutId).getString("projectId")))throw new SecurityException("原文件编辑窗口已变化，未写入替代目标");};
         live.check();if(!ProjectSources.sourcePath(VersionedWorkspace.path(intent.path)))throw new SecurityException("不能编辑运行缓存或Git内部文件");
@@ -1559,8 +1561,47 @@ public final class LocalModule implements EngineModule {
         if(bytes.length>262144)throw new IllegalArgumentException("单文件保存上限256KiB");
         JSONObject source=export(intent.checkoutId),selected=source.getJSONObject("checkout"),facts=ProjectSources.describe(source),before=localFile(intent.checkoutId,intent.path);
         if(facts.getLong("bytes")-before.getLong("bytes")+bytes.length>ProjectSources.MAX_TOTAL_BYTES||before.optBoolean("deleted")&&facts.getInt("fileCount")>=ProjectSources.MAX_FILES)throw new IllegalArgumentException("保存后超过项目源码2000文件/16MiB范围，原文件未改写");
+        if(createEmpty){
+            if(bytes.length!=0||!"absent".equals(intent.expectedHash)||before.opt("deleted")!=Boolean.TRUE||!"absent".equals(before.opt("sha256")))
+                throw new SecurityException("原空文件目标已变化，未覆盖现有文件");
+            return new EditorSaveReadback(createEmptyEditorFile(intent.checkoutId,intent.path,live),selected);
+        }
         manualWriteBytes(intent.checkoutId,intent.path,bytes,intent.expectedHash,true,live);
         return new EditorSaveReadback(read(intent.checkoutId,intent.path),selected);
+    }
+
+    private File emptyEditorTarget(String checkout,String path)throws Exception {
+        File tree=content(checkout);
+        if(!tree.getAbsoluteFile().equals(tree.getCanonicalFile())||!Files.isDirectory(tree.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))
+            throw new SecurityException("原副本目录已变化，未创建空文件");
+        return NativeCommandExecutor.within(tree,path);
+    }
+    /** Only explicit creation of a zero-byte ordinary file. The existence check
+     * is part of opening the leaf; the shared replacing writer is never used. */
+    private JSONObject createEmptyEditorFile(String checkout,String path,dev.pocketengine.features.local.project.ProjectBinaryImport.Current current)throws Exception {
+        requireIdle(checkout);requireCheckoutWritable(checkout);current.check();
+        File parent=emptyEditorTarget(checkout,path).getParentFile();
+        if(!parent.isDirectory()&&!parent.mkdirs())throw new IllegalStateException("无法建立文件目录");
+        requireIdle(checkout);requireCheckoutWritable(checkout);current.check();
+        File target=emptyEditorTarget(checkout,path);
+        var directory=Os.lstat(parent.getPath());
+        if(!target.getParentFile().equals(parent)||!OsConstants.S_ISDIR(directory.st_mode))
+            throw new SecurityException("原文件目录已变化，未创建空文件");
+        var created=Os.open(target.getPath(),OsConstants.O_CREAT|OsConstants.O_EXCL|OsConstants.O_RDWR|OsConstants.O_NOFOLLOW|OsConstants.O_CLOEXEC,0600);
+        try{
+            var original=Os.fstat(created);
+            if(!OsConstants.S_ISREG(original.st_mode)||original.st_nlink!=1||original.st_size!=0)
+                throw new SecurityException("没有核对到本次创建的普通空文件");
+            Os.fsync(created);
+            if(Os.read(created,new byte[1],0,1)!=0)throw new SecurityException("原空文件回读不是零字节");
+            current.check();File observed=emptyEditorTarget(checkout,path);
+            var actualDirectory=Os.lstat(observed.getParentFile().getPath());var actual=Os.lstat(observed.getPath());
+            if(!observed.equals(target)||directory.st_dev!=actualDirectory.st_dev||directory.st_ino!=actualDirectory.st_ino||
+                !OsConstants.S_ISDIR(actualDirectory.st_mode)||original.st_dev!=actual.st_dev||original.st_ino!=actual.st_ino||
+                !OsConstants.S_ISREG(actual.st_mode)||actual.st_nlink!=1||actual.st_size!=0)
+                throw new SecurityException("原空文件的回读身份已变化；没有替换或清理其他文件");
+            return new JSONObject().put("checkoutId",checkout).put("path",path).put("content","").put("sha256",hash(new byte[0])).put("bytes",0);
+        }finally{Os.close(created);}
     }
 
     private static boolean originalPreparedOwnerCopy(JSONObject row,String project,String id){
@@ -1575,8 +1616,8 @@ public final class LocalModule implements EngineModule {
     /** The ordinary native editor only, after its existing real save and readback.
      * This same checkout lock also orders the optional locator writes. */
     public synchronized JSONObject saveOrdinaryEditorFileForOwner(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,
-            java.util.function.BooleanSupplier current)throws Exception {
-        EditorSaveReadback committed=readBackEditorSave(intent,current);
+            boolean createEmpty,java.util.function.BooleanSupplier current)throws Exception {
+        EditorSaveReadback committed=readBackEditorSave(intent,createEmpty,current);
         JSONObject observed=committed.file();
         try{
             if(!closed&&current.getAsBoolean()&&originalPreparedOwnerCopy(committed.checkout(),intent.projectId,intent.checkoutId)&&

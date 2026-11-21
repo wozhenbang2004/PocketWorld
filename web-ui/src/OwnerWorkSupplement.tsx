@@ -5,6 +5,7 @@ import {ThinkingLoader} from './library';
 import {MotionFeedback} from './library/journey-motion';
 import {bridge} from './bridge';
 import {ownerWorkIdentity,workIdentityKey,type WorkIdentity} from './conversation-work';
+import {ownerWorkPresentation} from './owner-work-presentation';
 
 type Json=Record<string,any>;
 export type WorkSupplementTarget=WorkIdentity&{conversationId:string;goal:string};
@@ -133,14 +134,26 @@ export function OwnerWorkSupplement({target,task,can,registerBeforeLeave,onClose
  const dirty=!!draft&&!sameContent({text,mode},draft),pending=draft?.pending||[];
  const unknownOutsideList=unknownClient&&!pending.some(row=>row.clientMessageId===unknownClient)?unknownClient:null;
  const canSend=can('ownerWork.supplement.send')&&!!draft&&accepts&&draft.current&&(mode==='queue'?draft.canQueue:draft.canSteer)&&!pending.length&&!unknownClient&&!loading&&!busy&&!!text.trim();
- return <section ref={panel} className="pw-work-supplement" aria-label={`补充给：${target.goal}`}>
-  <header className="pw-work-supplement-heading"><div><small>补充给这件工作</small><h3>{target.goal}</h3></div><div className="pw-action-row"><IconButton icon={IconRefresh} aria-label="重新读取原工作补充" disabled={loading||busy||saving} onClick={()=>void refresh()}/><IconButton icon={IconClose} aria-label="收起补充，保留草稿" disabled={saving} onClick={()=>onClose(()=>flush())}/></div></header>
+ // Only the native current draft plus a settled original Work can remove live delivery choices.
+ // Saving text keeps the existing mode and never moves this draft to a later run.
+ const raw=task.raw,work=raw?.ownerWork,ended=['completed','failed','cancelled'].includes(task.status);
+ const handling=ended?ownerWorkPresentation(task):null;
+ const keepLocal=current&&draft?.current===true&&draft.canQueue===false&&draft.canSteer===false&&
+   raw?.kind==='assistant'&&raw.executionMode==='capabilities'&&raw.status===task.status&&ended&&
+   raw.taskProjection==='detail_window'&&raw.taskCoreReadLimited===false&&raw.contextAvailable===true&&raw.contextWithdrawn!==true&&
+   raw.sourceCurrentReadRequired!==true&&raw.hasUnresolvedOperations===false&&raw.controls?.canInput===false&&
+   raw.origin==null&&raw.parentTaskId==null&&raw.teamRunId==null&&raw.teamAssignment==null&&raw.memberId==null&&
+   raw.developmentContext==null&&raw.ownerPhoneControl==null&&raw.ownerDeviceWork==null&&
+   work?.format==='pocketworld.owner-work.v1'&&work.workTaskId===target.taskId&&work.conversationId===target.conversationId&&
+   !!handling&&!handling.waitingForChildren&&!handling.waitingForButler&&!handling.needsAttention&&!handling.teamsUnavailable;
+ return <section ref={panel} className="pw-work-supplement" aria-label={`${keepLocal?'本机补充草稿':'补充给'}：${target.goal}`}>
+  <header className="pw-work-supplement-heading"><div><small>{keepLocal?'本机补充草稿':'补充给这件工作'}</small><h3>{target.goal}</h3></div><div className="pw-action-row"><IconButton icon={IconRefresh} aria-label="重新读取原工作补充" disabled={loading||busy||saving} onClick={()=>void refresh()}/><IconButton icon={IconClose} aria-label="收起补充，保留草稿" disabled={saving} onClick={()=>onClose(()=>flush())}/></div></header>
   {loading&&!draft?<ThinkingLoader phase="正在读取这件工作的独立草稿"/>:draft?<>
-   <p className="pw-muted">{!current?'工作已进入另一轮；这份草稿仍属于原执行，请核对后决定。':draft.reason}</p>
+   <p className="pw-muted">{!current?'工作已进入另一轮；这份草稿仍属于原执行，请核对后决定。':keepLocal?'修改只保存在本机，不会发送或开始新一轮。':draft.reason}</p>
    {!!draft.otherDrafts?.length&&<div className="pw-work-pending-links" aria-label="保留的原执行草稿">{draft.otherDrafts.filter(row=>row.taskId===target.taskId&&row.conversationId===target.conversationId&&typeof row.runId==='string'&&Number.isSafeInteger(row.epoch)).map(row=><Button key={row.key} variant="ghost" size="small" disabled={busy||saving} onClick={()=>onSelectOriginal({taskId:row.taskId,runId:row.runId,epoch:row.epoch})}>查看另一轮保留的{row.hasText?'补充草稿':'待核对输入'}</Button>)}</div>}
-   <TextAreaField ref={input} label="补充内容" value={text} onChange={value=>edit(value)} placeholder="补充要求、调整重点或提供新的信息…" hint="文字单独保存；发送后会进入这件工作的原话题。" rows={3} autoResize maxRows={8} maxLength={12000} isDisabled={busy||loading}/>
-   <RadioOptions label="补充何时加入这件工作" value={mode} onChange={value=>edit(live.current.text,value as 'queue'|'steer')} isDisabled={busy||loading} options={[{id:'queue',label:queueLabel},{id:'steer',label:steerLabel}]}/>
-   <div className="pw-work-supplement-footer"><span role="status">{saving?'正在保存草稿':dirty?'本页修改尚未保存':'草稿已保留'}</span><div className="pw-action-row">{dirty&&<Button variant="ghost" size="small" disabled={saving||busy} onClick={()=>void flush(true)}>保存本页补充</Button>}<Button variant="primary" disabled={!canSend} onClick={()=>void submit()}>{busy?'正在核对回执':'发送到这件工作'}</Button></div></div>
+   <TextAreaField ref={input} label="补充内容" value={text} onChange={value=>edit(value)} placeholder="补充要求、调整重点或提供新的信息…" hint={keepLocal?undefined:'文字单独保存；发送后会进入这件工作的原话题。'} rows={3} autoResize maxRows={8} maxLength={12000} isDisabled={busy||loading}/>
+   {!keepLocal&&<RadioOptions label="补充何时加入这件工作" value={mode} onChange={value=>edit(live.current.text,value as 'queue'|'steer')} isDisabled={busy||loading} options={[{id:'queue',label:queueLabel},{id:'steer',label:steerLabel}]}/>}
+   <div className="pw-work-supplement-footer"><span role="status">{saving?'正在保存草稿':dirty?'本页修改尚未保存':'草稿已保留'}</span><div className="pw-action-row">{dirty&&<Button variant="ghost" size="small" disabled={saving||busy} onClick={()=>void flush(true)}>保存本页补充</Button>}{!keepLocal&&<Button variant="primary" disabled={!canSend} onClick={()=>void submit()}>{busy?'正在核对回执':'发送到这件工作'}</Button>}</div></div>
    {pending.map(row=><div className="pw-work-supplement-receipt" key={row.clientMessageId}><p role="status">{receiptLabel(row.receipt)||'这条补充的接收结果仍待核对。'}</p><div className="pw-action-row"><Button variant="secondary" size="small" disabled={busy||saving} onClick={()=>void query(row.clientMessageId)}>核对原补充回执</Button>{row.canRetryLocallyUnsent===true&&<Button variant="ghost" size="small" disabled={busy||saving||dirty||!accepts} onClick={()=>void submit(row)}>重新保存并发送原补充</Button>}</div></div>)}
    {unknownOutsideList&&<div className="pw-work-supplement-receipt"><p role="status">这次补充的结果尚未确认，原输入身份仍保留。</p><Button variant="secondary" size="small" disabled={busy||saving} onClick={()=>void query(unknownOutsideList)}>查询这次原补充</Button></div>}
    {receipt&&!pending.length&&<MotionFeedback identity={`${receipt.clientMessageId}:${receipt.status}`} className="pw-muted" role="status">{receiptLabel(receipt)}</MotionFeedback>}

@@ -210,8 +210,8 @@ public final class ProjectOwnerWorkflows {
     }
     public JSONObject fileForOwner(String project,String checkout,String path)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.readDevelopmentFileForOwner(project,checkout,path);}
     public JSONObject saveFileForOwner(ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {requireOrdinaryFileOwner(intent.projectId,intent.checkoutId);return local.saveDevelopmentFileForOwner(intent,current);}
-    public JSONObject saveOrdinaryEditorFileForOwner(ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {
-        requireOrdinaryFileOwner(intent.projectId,intent.checkoutId);return local.saveOrdinaryEditorFileForOwner(intent,current);
+    public JSONObject saveOrdinaryEditorFileForOwner(ProjectFileDraft.SaveIntent intent,boolean createEmpty,java.util.function.BooleanSupplier current)throws Exception {
+        requireOrdinaryFileOwner(intent.projectId,intent.checkoutId);return local.saveOrdinaryEditorFileForOwner(intent,createEmpty,current);
     }
     public JSONObject reviewFileImportForOwner(String project,String checkout,String path)throws Exception {
         requireOrdinaryFileOwner(project,checkout);JSONObject result=local.handle("reviewFile",new JSONObject().put("checkoutId",checkout).put("path",path));

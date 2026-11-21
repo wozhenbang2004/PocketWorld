@@ -55,6 +55,21 @@ type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:bool
 type PdfFindReceipt={value:Json;epoch:number};
 type PdfFindInput={text:string;receipt?:PdfFindReceipt};
 type PdfMatchTarget={page:number;input:PdfFindInput;receipt:PdfFindReceipt;interaction:number;focus:Element|null};
+type TextAdvance={range:DisplayedOriginalText;epoch:number;interaction:number;focus:Element|null;pane:HTMLElement};
+function textRangeMatches(value:Json,range:DisplayedOriginalText){
+ return value.sourceIdentity===range.identity&&value.sha256===range.sha256&&value.encoding===range.encoding&&
+  value.offset===range.offset&&typeof value.content==='string'&&!!value.content;
+}
+function currentTextRange(range:DisplayedOriginalText):Json {
+ const {state}=bridge.getState(),view=obj(state.attachmentWorkspace),original=obj(view.originalFile);
+ return state.chatAttachmentPickerOpen===false&&view.open===true&&view.ready===true&&view.windowId===range.windowId&&
+  view.group===false&&view.team===false&&view.choosingSource===false&&view.deviceOriginalOnly===false&&
+  view.historyResultOnly===false&&view.reportResultOnly===false&&
+  typeof range.identity==='string'&&/^[a-f0-9]{64}$/.test(range.identity)&&typeof range.sha256==='string'&&/^[a-f0-9]{64}$/.test(range.sha256)&&
+  view.canSaveOriginal===true&&view.file?.sha256===range.sha256&&original.kind==='text'&&original.id===range.viewerId&&
+  original.identity===range.identity&&original.sha256===range.sha256&&original.sourceUnavailable===false&&original.busy===false?
+  obj(original.information):{};
+}
 function verifiedPdfFind(value:Json,sha:string,query:string,first:number,pages:number){
  const through=value.scannedThrough;
  return value.textLayerOnly===true&&value.sha256===sha&&value.query===query&&value.firstPage===first&&
@@ -86,6 +101,7 @@ export function AttachmentOriginalReader(props:OriginalReaderProps) {
 }
 
 function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed}:OriginalReaderProps) {
+ const readerSurface=useRef<HTMLElement>(null),textAdvance=useRef<TextAdvance|null>(null);
  const textBody=useRef<HTMLDivElement>(null),pdfBody=useRef<HTMLDivElement>(null);
  const [toolsVisible,setToolsVisible]=useState(false);
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
@@ -98,6 +114,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const retired=source.sourceUnavailable===true;
  const live=useRef({id:source.id,windowId,retired}),sequence=useRef(0),pending=useRef(false);live.current={id:source.id,windowId,retired};
  const type=String(source.kind),details=obj(source.information);
+ const trackTextAdvance=type==='text'&&!!onTextDisplayed;
  const retirePdfInput=(text:string)=>{
   pdfInput.current.receipt=undefined;
   pdfInput.current={text}; // Editing away and back is still a new, unsubmitted search.
@@ -125,14 +142,14 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    setPdfShown(raster);clearPdfAttempt();
   } catch {failRaster(raster)}
  };
- const invoke=async(command:string,args:Json={},match?:PdfMatchTarget)=>{
+ const invoke=async(command:string,args:Json={},match?:PdfMatchTarget,advance?:TextAdvance)=>{
   if(pending.current||pdfPending.current||live.current.retired)return null;
   const pdfFind=command==='find'&&type==='pdf'?pdfInput.current:undefined;
   const start=args.cursor,pdfPages=pdfShown?.pages??0,sha=source.sha256,epoch=bridge.getDocumentEpoch();
   if(pdfFind&&(!pdfShown?.searchAvailable||!pdfFind.text||args.query!==pdfFind.text||
       !Number.isSafeInteger(start)||start<1||start>pdfPages||typeof sha!=='string'||!/^[a-f0-9]{64}$/.test(sha)||
       (start!==1&&(pdfFind.receipt?.epoch!==epoch||pdfFind.receipt.value.nextPage!==start))))return null;
-  const owner={...live.current},request=++sequence.current;pending.current=true;setBusy(true);setFailedRead(null);setError('');
+  const owner={...live.current},request=++sequence.current;pending.current=true;textAdvance.current=null;setBusy(true);setFailedRead(null);setError('');
   try{
    const result=await bridge.command<Json>('attachmentWorkspace.viewer',{windowId:owner.windowId,viewerId:owner.id,command,...args});
    if(request!==sequence.current||live.current.id!==owner.id||live.current.windowId!==owner.windowId||live.current.retired||document.visibilityState==='hidden')return null;
@@ -151,7 +168,11 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
     const raster=pdfRaster(obj(result));
     if(!raster||match&&raster.page!==match.page)throw new Error('这次 PDF 页面显示未确认');
     pdfPending.current={raster,acknowledging:false,match};setPdfAttempt(raster);
-   }else setValue(result);
+   }else{
+    if(advance&&advance.epoch===bridge.getDocumentEpoch()&&advance.interaction===readerInteraction.current&&
+       textRangeMatches(obj(result),advance.range))textAdvance.current=advance;
+    setValue(result);
+   }
    return result;
   }
   catch(cause){if(request===sequence.current&&!live.current.retired&&(!pdfFind||bridge.getDocumentEpoch()===epoch)){
@@ -160,7 +181,15 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   finally{if(request===sequence.current){pending.current=false;setBusy(false)}}
  };
  useEffect(()=>{setValue(obj(source.information));setError('');setFound(null);setZoom(1);setTurn(0);pending.current=false;void invoke('load');return()=>{sequence.current++;pending.current=false;pdfPending.current=null}},[source.id,windowId]);
- useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;clearPdfAttempt();setBusy(false);if(type==='pdf')retirePdfInput(pdfInput.current.text);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
+ useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;textAdvance.current=null;clearPdfAttempt();setBusy(false);if(type==='pdf')retirePdfInput(pdfInput.current.text);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
+ useLayoutEffect(()=>{
+  const pane=trackTextAdvance?readerSurface.current?.closest<HTMLElement>('.pw-file-page-scroll'):null;
+  if(!pane)return;
+  const markInteraction=()=>{readerInteraction.current++;textAdvance.current=null};
+  const events=['pointerdown','wheel','touchmove','keydown'];
+  events.forEach(event=>pane.addEventListener(event,markInteraction,{capture:true,passive:true}));
+  return()=>events.forEach(event=>pane.removeEventListener(event,markInteraction,true));
+ },[trackTextAdvance]);
  useEffect(()=>{if(type!=='pdf'&&!retired&&Object.keys(details).length)setValue(details)},[source.information,retired]);
  useEffect(()=>{if(retired){sequence.current++;pending.current=false;clearPdfAttempt();setPdfShown(null);setBusy(false);setValue({});changeQuery('');setFailedRead(null)}},[retired]);
  const nativeError=typeof source.error==='string'?source.error:'';
@@ -183,9 +212,33 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   if(!onTextDisplayed||!shownText||!textBody.current?.isConnected)return;
   onTextDisplayed({windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,encoding:actual.encoding,offset:actual.offset});
  },[onTextDisplayed,shownText,windowId,source.id,source.identity,source.sha256,actual.encoding,actual.offset]);
+ useLayoutEffect(()=>{
+  const advance=textAdvance.current,active=document.activeElement;
+  if(!advance)return;
+  if(!trackTextAdvance||retired||document.hidden||bridge.getDocumentEpoch()!==advance.epoch||
+     advance.interaction!==readerInteraction.current||(active!==advance.focus&&active!==document.body)){
+   textAdvance.current=null;return;
+  }
+  if(!shownText||!textRangeMatches(actual,advance.range)||!textRangeMatches(currentTextRange(advance.range),advance.range))return;
+  textAdvance.current=null;
+  const start=textBody.current?.querySelector<HTMLElement>(':scope > .pw-file-text');
+  if(!start?.isConnected||start.closest('.pw-file-page-scroll')!==advance.pane)return;
+  // Only the deliberate in-place advance moves this viewport; reopen still uses the existing resume position.
+  advance.pane.scrollTop+=start.getBoundingClientRect().top-advance.pane.getBoundingClientRect().top;
+  start.focus({preventScroll:true});
+ },[actual,source.information,retired,shownText,trackTextAdvance]);
  const imageTools=(type==='pdf'||type==='image')&&ready;
  const isMarkdown=String(source.name||'').toLowerCase().endsWith('.md');
  const read=(args:Json)=>void invoke('read',args);
+ const readNextText=()=>{
+  const args={encoding:actual.encoding,offset:actual.nextOffset};
+  const pane=textBody.current?.closest<HTMLElement>('.pw-file-page-scroll');
+  const range={windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,encoding:actual.encoding,offset:actual.offset};
+  const native=trackTextAdvance&&shownText&&pane&&!document.hidden?currentTextRange(range):{};
+  const advance=pane&&Number.isSafeInteger(args.offset)&&args.offset>range.offset&&native.nextOffset===args.offset&&textRangeMatches(native,range)?
+   {range:{...range,offset:args.offset},epoch:bridge.getDocumentEpoch(),interaction:readerInteraction.current,focus:document.activeElement,pane}:undefined;
+  void invoke('read',args,undefined,advance);
+ };
  const retry=()=>{
   if(failedRead?.pdfFind&&failedRead.pdfFind!==pdfInput.current)return;
   void invoke(failedRead?.command||'load',failedRead?.args);
@@ -249,7 +302,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    '本次还没有查到页面。':'当前查找范围内没有匹配文字。'}</p>}
   {foundInReader.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}
  </div>}</AccordionItem></Accordion>;
- return <section className="pw-original-file" aria-label={`原件：${source.name}`} onPointerDownCapture={noteReaderInteraction}
+ return <section ref={readerSurface} className="pw-original-file" aria-label={`原件：${source.name}`} onPointerDownCapture={noteReaderInteraction}
   onWheelCapture={noteReaderInteraction} onTouchMoveCapture={noteReaderInteraction} onKeyDownCapture={noteReaderInteraction}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
  {!retired&&readerBusy&&<p role="status">正在读取原件…</p>}
@@ -273,9 +326,9 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  </div>}
  {type==='pdf'&&ready&&<div hidden={!toolsVisible} className="pw-action-row pw-original-pagination pw-material-navigation"><TextField label="页码" value={position} onChange={setPosition}/><Button variant="secondary" disabled={readerBusy||!/^\d+$/.test(position)||Number(position)<1||Number(position)>pages} onClick={()=>read({page:Number(position)})}>跳转</Button></div>}
  {findBeforeBody&&findOriginal}
- {ready&&type==='text'&&<div ref={textBody} className="pw-original-text" data-find-before={findBeforeBody?true:undefined}>{markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text">{actual.content}</pre>}
+ {ready&&type==='text'&&<div ref={textBody} className="pw-original-text" data-find-before={findBeforeBody?true:undefined}>{markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text" tabIndex={trackTextAdvance?-1:undefined}>{actual.content}</pre>}
   <div className="pw-action-row">{!!actual.offset&&<Button variant="ghost" disabled={busy} onClick={()=>read({encoding:actual.encoding,offset:0})}>从开头</Button>}
-   {actual.nextOffset!=null&&<Button variant="secondary" disabled={busy} onClick={()=>read({encoding:actual.encoding,offset:actual.nextOffset})}>读取后续</Button>}
+   {actual.nextOffset!=null&&<Button variant="secondary" disabled={busy} onClick={readNextText}>读取后续</Button>}
    {(!!actual.offset||actual.nextOffset!=null)&&<small>字符位置 {Number(actual.offset||0)+1}</small>}</div>
  </div>}
  {!findBeforeBody&&findOriginal}

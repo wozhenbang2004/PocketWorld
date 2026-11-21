@@ -436,23 +436,40 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 done(info(original, file, true), null)
             }
             "projects.development.files.save" -> {
-                fields(args, "viewHandle", "filesHandle", "fileHandle", "revision", "editSequence"); val file = opened(original, args)
+                fields(args, "viewHandle", "filesHandle", "fileHandle", "revision", "editSequence", "createEmpty")
+                val createEmpty=args.has("createEmpty")
+                require(!createEmpty||args.opt("createEmpty")==true) { "需要明确选择创建空文件" }
+                val file = opened(original, args)
                 val submitted = synchronized(store) {
                     requireDraft(file); check(!file.saveUnknown && number(args, "revision") == file.draft.revision && number(args, "editSequence") == file.sequence) { "编辑或保存状态已变化，请读取原文件核对" }
-                    check(file.draft.dirty()) { "没有待保存的修改" }; file.draft.saveIntent()
+                    if(createEmpty){
+                        val draft=file.draft;val latest=draft.latestReview()
+                        // A clean empty buffer is not evidence of absence.
+                        // Only the original ordinary read may enable this intent.
+                        check(original.sourcePath==null && draft.baseHash=="absent" && draft.baseContent.isEmpty() &&
+                            draft.text.isEmpty() && !draft.dirty() && !draft.conflict() && latest!=null &&
+                            latest.opt("projectId")==original.project && latest.opt("checkoutId")==original.checkout &&
+                            latest.opt("path")==draft.path && latest.opt("deleted")==true && latest.opt("sha256")=="absent" &&
+                            latest.opt("expectedHash")=="absent" && latest.optLong("bytes",-1)==0L && latest.opt("content")=="") {
+                            "这份副本没有核对到原路径确实不存在，未创建空文件。"
+                        }
+                    }else check(file.draft.dirty()) { "没有待保存的修改" }
+                    file.draft.saveIntent()
                 }
                 work(original, done) {
                     try {
                         val host = controller.projectDevelopmentForWeb()
                         fun stillFile() = current(original) && original.opened === file
-                        val result = if (original.sourcePath == null) host.saveOrdinaryEditorFileForOwner(submitted) { stillFile() }
+                        val result = if (original.sourcePath == null) host.saveOrdinaryEditorFileForOwner(submitted,createEmpty) { stillFile() }
                             else host.saveFileForOwner(submitted) { stillFile() }
                         synchronized(store) {
                             val latest = store.open(original.project, original.checkout, submitted.path, false)
                             val observed = JSONObject(result.toString()).put("projectId", original.project).put("expectedHash", result.getString("sha256")).put("deleted",false)
                             val saved = latest.saved(submitted, result).observe(observed); store.retain(saved); file.draft = saved
                         }
-                        info(original, file, true).put("saveStatus", "observed").put("message", "已按原SHA保存到这个私人副本并回读；没有导回正式项目，也没有运行代码")
+                        info(original, file, true).put("saveStatus", "observed").put("message", if(createEmpty)
+                            "已创建并回读这份私人副本的空文件；没有导回正式项目，也没有运行代码"
+                            else "已按原SHA保存到这个私人副本并回读；没有导回正式项目，也没有运行代码")
                             .also { reply ->
                                 if(original.sourcePath==null){
                                     val receipt=SavedEdit(UUID.randomUUID().toString(),submitted.path,submitted.expectedHash,result.getString("sha256"))

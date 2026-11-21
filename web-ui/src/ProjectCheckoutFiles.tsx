@@ -1,5 +1,5 @@
 import type { HostEditorFile } from './ProjectHostFileComparison';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { InlineDiff } from './shell-library';
 import { IconSearch } from './icons';
@@ -7,6 +7,7 @@ import {checkoutEditorSelection,ProjectCheckoutTextSearch} from './ProjectChecko
 import {ProjectCheckoutPathSearch} from './ProjectCheckoutPathSearch';
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
 import { bridge } from './bridge';
+import { SavedMarkdownBody } from './library/MarkdownBody';
 import type { SourceMember } from './project-preview';
 import './project-development.css';
 import './project-workspace-manga.css';
@@ -14,6 +15,8 @@ import './project-workspace-manga.css';
 type Data = Record<string, any>;
 type SavedEdit = { id: string; filesHandle: string; path: string; beforeHash: string; savedHash: string; before: string; after: string };
 type EditorPosition = { start: number; end: number; scrollTop: number; scrollLeft: number };
+type SavedMarkdownFile = { fileHandle: string; path: string; sha256: string; content: string };
+type MarkdownVisit = Omit<SavedMarkdownFile,'content'> & { caret: EditorPosition; drawerScroll: number };
 type FileFind = { fileHandle: string; query: string; result?: { text: string; at: number; line: number; wrapped: boolean } };
 // A UI bookmark, not a reusable native save handle or a copy of the file.
 export type CheckoutSavedPosition = { projectId: string; checkoutId: string; path: string; savedHash: string; caret?: EditorPosition };
@@ -30,6 +33,17 @@ const command = 'projects.development.files.';
 const windowKey = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.section, view.taskId, view.resumeRevision].join('|'); };
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const fileHash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+function savedMarkdownFile(file:Data|null,text:string,project:string,checkout:string,filesHandle:string):SavedMarkdownFile|null {
+  const actual = file?.latest, sha256 = actual?.expectedHash;
+  if (!file || !filesHandle || file.filesHandle!==filesHandle || file.projectId!==project || file.checkoutId!==checkout ||
+      typeof file.fileHandle!=='string' || !file.fileHandle || typeof file.path!=='string' || !/\.(?:md|markdown)$/i.test(file.path) ||
+      file.dirty!==false || file.conflict!==false || file.saveUnknown!==false || actual?.deleted!==false ||
+      actual.projectId!==project || actual.checkoutId!==checkout || actual.path!==file.path || !fileHash(sha256) || actual.sha256!==sha256 ||
+      !Number.isSafeInteger(actual.bytes) || actual.bytes<0 || actual.bytes>65536 || typeof actual.content!=='string' ||
+      file.baseHash!==sha256 || file.baseContent!==actual.content || file.text!==actual.content || text!==actual.content) return null;
+  return {fileHandle:file.fileHandle,path:file.path,sha256,content:actual.content};
+}
+const sameMarkdown = (a:MarkdownVisit,b:SavedMarkdownFile|null) => !!b && a.fileHandle===b.fileHandle && a.path===b.path && a.sha256===b.sha256;
 export function checkoutWebEntry(source:Data|null,projectId:string,checkoutId:string):CheckoutWebEntry|null {
   const pin=source?.firstImportedWebFile,root=source?.retainedArchiveRoot?.directory??'';
   if(!pin||source?.projectId!==projectId||source.checkoutId!==checkoutId||pin.projectId!==projectId||pin.checkoutId!==checkoutId||
@@ -70,6 +84,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const editorContainer=useRef<HTMLElement>(null), editorInput=useRef<HTMLTextAreaElement>(null);
   const [fileFind,setFileFind]=useState<FileFind|null>(null);
   const findId=useId(), findTrigger=useRef<HTMLButtonElement>(null);
+  const [markdownVisit,setMarkdownVisit]=useState<MarkdownVisit|null>(null), activeMarkdown=useRef<MarkdownVisit|null>(null);
+  const visibleMarkdown=useRef<MarkdownVisit|null>(null);
+  const markdownTrigger=useRef<HTMLButtonElement>(null), markdownHeading=useRef<HTMLHeadingElement>(null);
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
   const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
   const [checkingSavedSource, setCheckingSavedSource] = useState(false);
@@ -92,9 +109,47 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const priorSaveRow=priorSave?rows(listing?.files).find(row=>row.path===priorSave.path&&row.sha256===priorSave.savedHash):null;
   const showingSavedFile = !!recentSave && !!file && !file.dirty && !file.conflict && !file.saveUnknown &&
     orphan===null && !blockedEdit.current && file.path===recentSave.path && file.latest?.expectedHash===recentSave.savedHash && text===recentSave.after;
+  const canCreateEmpty = !sourceMember && !hostFile && !!file && file.filesHandle===handle.current &&
+    file.projectId===projectId && file.checkoutId===checkoutId && file.dirty===false &&
+    file.conflict===false && file.saveUnknown===false && orphan===null && !blockedEdit.current &&
+    file.baseHash==='absent' && file.baseContent==='' && file.text==='' && text==='' &&
+    file.latest?.projectId===projectId && file.latest.checkoutId===checkoutId && file.latest.path===file.path &&
+    file.latest.deleted===true && file.latest.sha256==='absent' && file.latest.expectedHash==='absent' &&
+    file.latest.bytes===0 && file.latest.content==='';
   const canCheckSavedBuild = !!onPrepareBuild && (!prepareBuildAfterPath || recentSave?.path===prepareBuildAfterPath);
   const keyFor = (path: string) => `${projectId}|${checkoutId}|${path}`;
   const live = (sequence: number) => alive.current && generation.current === sequence && originalWindow.current === windowKey() && !document.hidden;
+  const knownMarkdown = !sourceMember && !hostFile && !adoption && !choice && orphan===null && !blockedEdit.current ?
+    savedMarkdownFile(file,text,projectId,checkoutId,handle.current) : null;
+  const readingMarkdown = markdownVisit && sameMarkdown(markdownVisit,knownMarkdown) ? knownMarkdown : null;
+  const markdownVisible = !!readingMarkdown;
+  const showMarkdown = () => {
+    const area=editorInput.current;
+    if (!knownMarkdown || !live(generation.current) || entered.current || edits.current || activeAdoption.current || activeMarkdown.current ||
+        currentFile.current!==file || interfaceDrafts.has(keyFor(knownMarkdown.path)) || !area?.isConnected ||
+        currentText.current!==knownMarkdown.content || area.value!==textareaText(knownMarkdown.content)) return;
+    const {fileHandle,path,sha256}=knownMarkdown;
+    const visit={fileHandle,path,sha256,drawerScroll:area.closest('.pw-settings-dialog-content')?.scrollTop??0,
+      caret:{start:area.selectionStart,end:area.selectionEnd,scrollTop:area.scrollTop,scrollLeft:area.scrollLeft}};
+    activeMarkdown.current=visit; setMarkdownVisit(visit);
+  };
+  const closeMarkdown = () => { activeMarkdown.current=null; setMarkdownVisit(null); };
+  useLayoutEffect(() => {
+    if (markdownVisible && live(generation.current)) {
+      if (visibleMarkdown.current!==markdownVisit) markdownHeading.current?.focus();
+      visibleMarkdown.current=markdownVisit;
+      return;
+    }
+    const visit=visibleMarkdown.current, area=editorInput.current;
+    visibleMarkdown.current=null;
+    if (markdownVisit) closeMarkdown();
+    if (!visit || !knownMarkdown || !sameMarkdown(visit,knownMarkdown) || !live(generation.current) ||
+        currentFile.current!==file || !area?.isConnected || area.value!==textareaText(knownMarkdown.content)) return;
+    markdownTrigger.current?.focus({preventScroll:true});
+    area.setSelectionRange(visit.caret.start,visit.caret.end);
+    area.scrollTop=visit.caret.scrollTop; area.scrollLeft=visit.caret.scrollLeft;
+    const drawer=area.closest('.pw-settings-dialog-content'); if(drawer)drawer.scrollTop=visit.drawerScroll;
+  }, [markdownVisit,markdownVisible]);
   const canFindInFile = !sourceMember && !hostFile && !!file?.fileHandle;
   const localFind = canFindInFile && fileFind?.fileHandle===file?.fileHandle ? fileFind : null;
   const localMatch = localFind?.result?.text===text ? localFind?.result : undefined;
@@ -261,7 +316,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const closeCurrent = useRef(close);
   closeCurrent.current = () => {
-    if (localFind && !entered.current && !edits.current && !activeAdoption.current && !choice) closeFileFind();
+    if (activeMarkdown.current) closeMarkdown();
+    else if (localFind && !entered.current && !edits.current && !activeAdoption.current && !choice) closeFileFind();
     else close();
   };
   useEffect(() => {
@@ -280,20 +336,25 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     return () => registerBack(null);
   }, [registerBack]);
   useEffect(() => {
-    if (adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
-    const timer = window.setTimeout(() => { void invoke('cache', { fileHandle: file.fileHandle, retry: false }, value => apply(value, false)); }, 600);
+    if (markdownVisit || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
+    const timer = window.setTimeout(() => {
+      if (!activeMarkdown.current) void invoke('cache', { fileHandle: file.fileHandle, retry: false }, value => apply(value, false));
+    }, 600);
     return () => window.clearTimeout(timer);
-  }, [file, busy, editing, orphan, adoption]);
+  }, [file, busy, editing, orphan, adoption, markdownVisit]);
   useEffect(() => {
     setAdoptionExpired(false); if (!adoption) return; adoptionHeading.current?.focus();
     const remaining = Number(adoption.expiresAt) - Date.now();
     if (!Number.isFinite(remaining) || remaining <= 0) { setAdoptionExpired(true); return; }
     const timer = window.setTimeout(() => setAdoptionExpired(true), remaining); return () => window.clearTimeout(timer);
   }, [adoption]);
-  const saveFile = () => {
+  const saveFile = (createEmpty = false) => {
     const submitted = currentFile.current;
     if (!submitted) return;
-    void invoke('save', {fileHandle:submitted.fileHandle,revision:submitted.revision,editSequence:submitted.editSequence},value=>{
+    if(createEmpty&&(!canCreateEmpty||submitted!==file||currentText.current!==''||
+      !editorInput.current?.isConnected||editorInput.current.value!==''))return;
+    void invoke('save', {fileHandle:submitted.fileHandle,revision:submitted.revision,editSequence:submitted.editSequence,
+      ...(createEmpty?{createEmpty:true}:{})},value=>{
       if (value.fileHandle!==submitted.fileHandle || value.path!==submitted.path) throw new Error('不属于这次保存的文件回执，草稿仍保留。');
       const known = observedSave(submitted,value);
       apply(value);
@@ -344,7 +405,15 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       {evidence === 'equal_content' ? '查看内容相同的正式版本' : '打开已核对的正式文件'} v{pin.version}
     </Button></div>;
   };
-  return <SettingsDialog isOpen title={sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'} onClose={close} closeLabel={backLabel}><div className="pw-checkout-files">
+  return <SettingsDialog isOpen title={readingMarkdown ? 'Markdown 预览' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'}
+    onClose={() => activeMarkdown.current ? closeMarkdown() : close()} closeLabel={readingMarkdown?'返回编辑':backLabel}>
+    {readingMarkdown && <section className="pw-checkout-files">
+      <header><h3 ref={markdownHeading} tabIndex={-1} dir="auto">{readingMarkdown.path}</h3>
+        <small>已核对保存版本 · <code>{readingMarkdown.sha256.slice(0,8)}</code> · 不加载图片，不打开链接</small></header>
+      <SavedMarkdownBody text={readingMarkdown.content} />
+      <Button variant="secondary" onClick={closeMarkdown}>返回编辑</Button>
+    </section>}
+    <div hidden={markdownVisible}><div className="pw-checkout-files">
     <p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : hostFile ? '这是刚核对的手机副本。已有草稿会单独提示；保存只修改手机文件，采纳到本机正式项目仍须另行审阅，不会连回或改写主机。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small>
     {error && <p role="alert">{error}</p>}
@@ -426,7 +495,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
             disabled={findBlocked} aria-expanded={!!localFind} aria-controls={localFind ? findId : undefined}
             onClick={()=>localFind ? closeFileFind() : setFileFind({fileHandle:file.fileHandle,query:''})}>
             {localFind?'收起查找':'在此文件查找'}
-          </Button></div>
+          </Button>{knownMarkdown && <Button ref={markdownTrigger} variant="ghost" size="small" disabled={locked}
+            onClick={showMarkdown}>预览保存的 Markdown</Button>}</div>
           {localFind && <section id={findId} aria-label="在此文件查找">
             <TextField label="查找当前编辑框中的文字" value={localFind.query} maxLength={128} autoFocus
               isDisabled={findBlocked} inputDir="auto" hint="区分大小写，包含尚未保存的文字。"
@@ -458,7 +528,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           {showingSavedFile ? <Button disabled={locked} onClick={() => close(canCheckSavedBuild ? 'prepare-build' : undefined)}>
             {checkingSavedSource ? '正在核对这次保存…' : canCheckSavedBuild ? '接下来：核对构建条件' : '已保存，回到项目工作区'}
           </Button> :
-            <Button disabled={locked || orphan !== null || blockedEdit.current || !file.dirty || file.conflict || file.saveUnknown} onClick={saveFile}>保存到这个副本</Button>}
+            <Button disabled={locked || orphan !== null || blockedEdit.current || (!file.dirty && !canCreateEmpty) || file.conflict || file.saveUnknown}
+              onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
         </div>}
         <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null || blockedEdit.current || file.dirty || file.saveUnknown} onClick={() => void invoke('reviewImport', { fileHandle: file.fileHandle }, value => {
           if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.fileHandle !== file.fileHandle || value.path !== file.path || value.filesHandle !== handle.current || !value.importHandle) throw new Error('采纳审阅不属于原文件。');
@@ -483,5 +554,5 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       </section>}
     </>}
     <Button variant="secondary" disabled={busy || editing} onClick={() => close()}>{adoption || choice ? '返回文件' : backLabel}</Button>
-  </div></SettingsDialog>;
+  </div></div></SettingsDialog>;
 }
