@@ -18,7 +18,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     private final RuntimeEnvironment environments;
     private final RuntimeEnvironment.Package selected;
     private final Map<String,RuntimeTool> tools;
-    private final File home,tmp;
+    private final File home,tmp,privateRuntime;
     private final String identity;
     private AndroidRuntimePreparation androidRuntime;
     private dev.pocketengine.features.local.runtime.android.AndroidRuntimeThermalObservation logObservation;
@@ -26,6 +26,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     private String configurationProblem="";
     private ManagedProjectRuntime(File privateDirectory,RuntimeEnvironment.Package approvedPackage,Map<String,RuntimeTool> approvedTools) throws Exception {
         File directory=RuntimeFiles.directory(privateDirectory,"managed-process");
+        privateRuntime=directory;
         jobs=new ManagedProcessJobs(directory,new NativeProcessSupervisor());
         environments=new RuntimeEnvironment(directory,jobs::requireEnvironmentIdle);
         selected=approvedPackage;tools=Collections.unmodifiableMap(new TreeMap<>(approvedTools));
@@ -210,9 +211,70 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         if(!toolReady)throw new IllegalStateException("runtime_pipe_registered_tool_not_ready");
     }
     @Override public RuntimeReceipt dispatch(RuntimeInvocation invocation) throws Exception {
+        if(OwnerPythonRun.claims(invocation.exact()))throw new SecurityException("runtime_owner_python_original_admission_required");
         if(RuntimeSetupHost.exact(invocation.exact()))throw new SecurityException("runtime_setup_native_owner_review_required");
         if(NativePipeAdmission.exact(invocation.exact()))throw new SecurityException("runtime_mcp_native_pipe_admission_required");
         if(dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact()))throw new SecurityException("Git网络导入需要原生主人一次性租约；普通项目命令不能自报该intent");return dispatchOriginal(invocation,null);
+    }
+    public OwnerPythonRun.Review reviewOwnerPython(dev.pocketengine.features.local.project.ProjectFileDraft draft,byte[] observed,
+            LiveGate current)throws Exception {
+        return OwnerPythonRun.review(this,draft,observed,current);
+    }
+    public OwnerPythonRun.Retained retainedOwnerPython(dev.pocketengine.store.TaskStore.OwnerPythonOriginal original,
+            dev.pocketengine.core.RunControl reader,java.util.function.BooleanSupplier window)throws Exception {
+        return OwnerPythonRun.retainedExit(this,original.plan(),original.route(),reader,window);
+    }
+    public JSONObject openOwnerPythonOutput(dev.pocketengine.store.TaskStore.OwnerPythonOriginal original,
+            dev.pocketengine.core.RunControl reader,java.util.function.BooleanSupplier window)throws Exception {
+        return OwnerPythonRun.openOutput(this,original.plan(),original.route(),reader,window);
+    }
+    OwnerPythonRun.Tool ownerPythonTool()throws Exception {
+        AndroidRuntimePreparation profile=androidRuntime;
+        if(profile==null||!jobs.available())throw new IllegalStateException("请先核对这台手机已准备的托管开发工具");
+        synchronized(profile){
+            String generation=profile.identity();
+            return new OwnerPythonRun.Tool(generation,profile.ownerPythonInterpreterHash(generation));
+        }
+    }
+    OwnerPythonRun.Stage materializeOwnerPython(String id,String path,String sha,byte[] bytes)throws Exception {
+        return OwnerPythonRun.materialize(privateRuntime,id,path,sha,bytes);
+    }
+    /** No generic dispatch, shell, model parameters, or interactive handles. Transfers the staging lease once. */
+    RuntimeReceipt startOwnerPython(RuntimeInvocation invocation,OwnerPythonRun.Tool tool,OwnerPythonRun.Stage stage)throws Exception {
+        boolean transferred=false;AutoCloseable generation=null;
+        try{
+            requireProvider(invocation.executionRef());invocation.checkCurrent();
+            if(!OwnerPythonRun.claims(invocation.exact())||!tool.generation().equals(invocation.exact().opt("runtimeIdentity"))||
+                    !stage.directory().equals(invocation.workspace().directory()))
+                throw new SecurityException("原脚本派发与已核对的私有暂存不符");
+            AndroidRuntimePreparation profile=androidRuntime;
+            if(profile==null||!jobs.available())throw new IllegalStateException("本机托管开发工具不可用");
+            List<String> command;Map<String,String> environment;
+            synchronized(profile){
+                if(!tool.sha256().equals(profile.ownerPythonInterpreterHash(tool.generation())))
+                    throw new SecurityException("原 Python 解释器已变化，未启动脚本");
+                command=profile.command(invocation.workspace(),".",stage.command());
+                environment=profile.hostEnvironment(tool.generation());
+                generation=profile.acquire();
+            }
+            stage.requireReady();invocation.checkCurrent();
+            AutoCloseable held=generation;
+            transferred=true;
+            return jobs.start(invocation,command,environment,stage.directory(),OwnerPythonRun.TIMEOUT_MILLIS,
+                    ()->{try{held.close();}finally{stage.close();}});
+        }finally{
+            if(!transferred)try{if(generation!=null)generation.close();}finally{stage.close();}
+        }
+    }
+    RuntimeReceipt ownerPythonTerminal(RuntimeExecutionRef original,java.util.function.BooleanSupplier window)throws Exception {
+        requireProvider(original);
+        if(!OwnerPythonRun.claims(original.exact()))throw new SecurityException("不是这次原本机 Python 运行");
+        return jobs.retainedTerminalReceipt(original,window);
+    }
+    JSONObject ownerPythonLog(RuntimeExecutionRef original,int maxBytes,java.util.function.BooleanSupplier window)throws Exception {
+        requireProvider(original);
+        if(!OwnerPythonRun.claims(original.exact()))throw new SecurityException("不是这次原本机 Python 运行");
+        return jobs.readLog(original,0,maxBytes,window);
     }
     public RuntimeReceipt dispatchGitImport(RuntimeInvocation invocation,dev.pocketengine.features.local.project.ProjectGitImport.ProcessGrant originalGrant)throws Exception {
         java.util.Objects.requireNonNull(originalGrant);boolean entered=false;try{originalGrant.claim(this,invocation);entered=true;return dispatchOriginal(invocation,originalGrant);}finally{if(!entered)originalGrant.close();}

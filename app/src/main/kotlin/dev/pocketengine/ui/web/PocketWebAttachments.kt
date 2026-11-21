@@ -12,6 +12,7 @@ import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.processing.NativeFileProcess
 import dev.pocketengine.features.attachments.processing.NativeMediaTrim
 import dev.pocketengine.features.local.project.ProjectApkInstallActivity
+import dev.pocketengine.ui.AttachmentOriginalReturn
 import dev.pocketengine.ui.AttachmentOutcomeState
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.AttachmentWorkReturn
@@ -40,7 +41,8 @@ internal class PocketWebAttachments(
     }
     private val flow get() = controller.attachmentOutcomes
     private data class Window(val id: String, val ticket: PocketWebWindowTicket)
-    private data class Frame(val location: String, val files: List<JSONObject>)
+    private data class Frame(val location: String, val files: List<JSONObject>,
+        val libraryPdfResume: PocketWebOriginalFiles.LibraryPdfResume?)
     private data class Review(val id: String, val location: String, val draft: JSONObject, val expires: Long)
     private data class ProcessingReview(val id: String, val value: NativeFileProcess.Review)
     private data class DraftLibraryVisit(val id: String, val current: () -> Boolean)
@@ -78,6 +80,20 @@ internal class PocketWebAttachments(
     private var scopedResultCurrent: (() -> Boolean)? = null
     val hasScopedResult: Boolean get() = scopedResultCurrent != null
     private fun ordinaryLibrary()=flow.privateLibrary()&&scopedResultCurrent==null&&!controller.state.chatAttachmentPickerOpen&&controller.webPrivateOwnerVisible()
+    private fun libraryPdfSurface(state: AttachmentOutcomeState) =
+        // The no-locator Library's native presentation survives a normal system picker pause.
+        // This does not reuse or renew the retired draft permission or an old file window.
+        state.globalStandaloneDraftVisit != null && ordinaryLibrary() && controller.conversationReader == null &&
+            controller.state.filePath == null && !state.fromWorkResult && !state.restoredWorkReturn &&
+            state.libraryDocumentReturn == null && state.snapshot?.opt("taskId") == "" &&
+            state.documentDraft == null && !state.documentOpen && state.processingSource == null && state.comparison == null
+
+    private fun listedLibraryPdf(files: List<JSONObject>, id: Any?, sha: Any?) =
+        id is String && sha is String && files.singleOrNull { it.opt("id") == id }?.let {
+            it.opt("sha256") == sha && it.opt("role") == "source" && it.opt("availability") == "available" &&
+                it.opt("mimeType") == "application/pdf" && it.optLong("size", 0) > 0
+        } == true
+
     private fun ordinaryDraftLibrarySurface(): Boolean {
         val state = flow.state
         val catalog = state.snapshot
@@ -174,10 +190,23 @@ internal class PocketWebAttachments(
         }
         val files = (scopedSnapshot?.optJSONArray("sources").objects() + scopedSnapshot?.optJSONArray("artifacts").objects())
             .map { JSONObject(it.toString()) }
+        val ordinaryPdf = draftPresentation && libraryPdfSurface(state)
+        val libraryPdfResume = if (ordinaryPdf && !state.busy && !flow.exportPending &&
+            state.file == null && state.originalFile == null)
+            viewer.libraryPdfResume()?.takeIf { listedLibraryPdf(files, it.fileId, it.sha256) } else null
         val frameId = UUID.randomUUID().toString()
-        frames[frameId] = Frame(location(state), files)
+        frames[frameId] = Frame(location(state), files, libraryPdfResume)
         while (frames.size > 16) frames.remove(frames.keys.first())
-        viewer.bind(state.originalFile, state.comparison, current.ticket) { ticket ->
+        val source = state.originalFile
+        val libraryPdf = source != null && ordinaryPdf && state.originalReturn == AttachmentOriginalReturn.LIST &&
+            source.mimeType == "application/pdf" && state.file?.opt("sha256") == source.sha256 &&
+            listedLibraryPdf(files, state.file?.opt("id"), source.sha256)
+        val rememberPdf: (() -> Boolean)? = if (libraryPdf) ({
+            val live = flow.state
+            window === current && libraryPdfSurface(live) && live.originalFile === source &&
+                live.globalStandaloneDraftVisit == state.globalStandaloneDraftVisit && live.originalReturn == AttachmentOriginalReturn.LIST
+        }) else null
+        viewer.bind(source, state.comparison, current.ticket, rememberPdf) { ticket ->
             acceptsWindow(ticket) && (!state.deviceOriginalOnly || deviceTaskCurrent?.invoke()==true) && scoped?.invoke()!=false
         }
         val originalReview = state.processingReview
@@ -208,6 +237,7 @@ internal class PocketWebAttachments(
             })
             .put("canOpenReportOriginalWork", canNavigateFromReport(state))
             .put("libraryDocumentActionId", if(ordinaryLibrary)flow.libraryDocumentActionId() else null)
+            .put("libraryPdfResume", libraryPdfResume?.view())
             .put("returnToLibraryDocument", ownedCopy && flow.canReturnToLibraryDocument())
             .put("canReferenceHistoryOriginal", !selectedCompiler && scoped != null && !report && privateOriginal)
             .put("canSaveOriginal", scoped == null && privateOriginal).put("canOpenInReader", !selectedCompiler && scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
@@ -385,11 +415,27 @@ internal class PocketWebAttachments(
                 "saveRead" -> flow.saveReadAsFile()
                 "originalDetails" -> { flow.showOriginalDetails(); viewer.clear() }
                 "openOriginal" -> {
+                    val requestedResume = args.has("resumeLibraryPdf")
+                    val unavailable = "上次阅读的原 PDF 尚未核对，没有打开其他文件"
+                    if (requestedResume) check(args.opt("resumeLibraryPdf") == true && args.length() == 6 &&
+                        args.has("fileId") && args.has("sha256")) { unavailable }
                     if (args.has("fileId") || args.has("sha256")) {
                         val file = selected()
                         val librarySource=ordinaryLibrary()&&PocketWebOriginalFiles.libraryDocument(file)
-                        flow.openListedOriginal(file.getString("id"), file.getString("sha256"), librarySource=librarySource) {
-                            window === current && acceptsWindow(current.ticket) && controller.webPrivateOwnerVisible() && scopedResultCurrent?.invoke()!=false
+                        val visit = flow.state.globalStandaloneDraftVisit
+                        val resume = if (requestedResume) checkNotNull(frame.libraryPdfResume) { unavailable } else null
+                        fun resumeCurrent():Boolean {
+                            if (resume == null) return true
+                            val live = flow.state
+                            return librarySource && libraryPdfSurface(live) && live.globalStandaloneDraftVisit == visit &&
+                                live.file == null && live.originalFile == null && viewer.libraryPdfResume() == resume &&
+                                file.opt("id") == resume.fileId && file.opt("sha256") == resume.sha256
+                        }
+                        check(resumeCurrent()) { unavailable }
+                        flow.openListedOriginal(file.getString("id"), file.getString("sha256"),
+                            librarySource=librarySource, expectedLibraryPdfIdentity=resume?.identity) {
+                            window === current && acceptsWindow(current.ticket) && controller.webPrivateOwnerVisible() &&
+                                scopedResultCurrent?.invoke()!=false && resumeCurrent()
                         }
                     } else flow.openOriginalFile()
                 }

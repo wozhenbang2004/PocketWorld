@@ -123,6 +123,12 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, onSavedHostSetup, dom
   const stale = selected && !profiles.some(profile => profile.id === selected.id && profile.bindingHash === selected.bindingHash);
   const selectedCompanionKey = domain === 'remote' ? companionProfileKey(selected) : '';
   const companionKey = selectedCompanionKey && profiles.some(profile => companionProfileKey(profile) === selectedCompanionKey) ? selectedCompanionKey : '';
+  // The selected-host history belongs to the phone's saved workspace, not a live probe or a draft.
+  const rememberedWorkspace = domain === 'remote' ? cloudChoice(object(object(state.features).remote).cloudWorkspace)?.target : undefined;
+  const historyScope = selected && !stale && companionKey && rememberedWorkspace && rememberedWorkspace.profileId === selected.id &&
+    rememberedWorkspace.profileBinding === selected.bindingHash && supported('remote.workspaceJobs') && supported('remote.openWorkspaceJob')
+    ? rememberedWorkspace : undefined;
+  const scopedHistory = selected && journey.view === 'jobs:' + selected.id ? historyScope : undefined;
   const currentCompanionProbe = companionKey && companionProbe?.key === companionKey ? companionProbe : null;
   const companionReceivedAt = currentCompanionProbe?.receivedAt;
   const jobs = list(data.jobs).filter(job => journey.view === 'all-jobs' || job.profileId === selected?.id);
@@ -165,6 +171,9 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, onSavedHostSetup, dom
     journey.open('profile:' + profile.id);
   };
   const openWork = () => { setWorkOpened(true); journey.open('work:' + selected!.id); };
+  const historyRow = selected && <ConnectionRow title="查看原任务" detail={historyScope ? '从手机记录打开原工作和已存成果，不联系主机' :
+    domain === 'remote' ? '读取回执、处理审批，继续同一项工作' : '回到原任务，查看执行、审批与结果'}
+    icon={IconHistory} disabled={busy} onOpen={() => journey.open('jobs:' + selected.id)} />;
   const cloudSelection = object(data.cloudWorkspace), savedCloud = object(cloudSelection.target);
   const savedCloudProfile = domain === 'remote' && cloudGoal && cloudSelection.selectionOnly === true &&
     cloudSelection.liveState === 'not_checked' && typeof savedCloud.environmentId === 'string' && savedCloud.environmentId &&
@@ -223,6 +232,8 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, onSavedHostSetup, dom
     document.addEventListener('visibilitychange',hide);window.addEventListener('pagehide',leave);
     return()=>{document.removeEventListener('visibilitychange',hide);window.removeEventListener('pagehide',leave)};
   },[newHost]);
+  const remoteJobHistory = showingJobs && domain === 'remote' && <div className="pw-connection-jobs">{jobs.length === 0 && <p className="pw-secondary-empty">{scopedHistory ? '没有上次同步的回执。如需联系主机同步，可返回连接概览。' : '这项连接暂时没有已读取的原任务。可返回概览同步。'}</p>}
+    {jobs.map(job => <article className="pw-connection-job" key={job.id}><header><div><h3>{job.worker || '电脑任务'}</h3><p>{profiles.find(profile => profile.id === job.profileId)?.name || job.serviceBase || '原连接'}</p></div><span>{status(job.status)}</span></header>{job.message && <p>{job.message}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => act('remote.getJob', originalJob(job))}>读取原回执</Button>{list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId)?.id && <Button variant="ghost" onClick={() => { const task = list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId); void run('tasks.open', { id: task!.id }).catch(() => {}); }}>打开本机原任务</Button>}{['queued', 'running', 'stopping', 'awaiting_approval', 'awaiting_input'].includes(job.status) && <Button variant="ghost" disabled={busy} onClick={() => act('remote.cancelJob', originalJob(job))}>请求停止原任务</Button>}</div></article>)}<Receipt value={receipt} run={run} /></div>;
   return <div className="pw-connection-workspace" ref={journey.root} tabIndex={-1} data-connection-view={journey.view}>
     <div hidden={journey.view !== 'list'}>
       {cloudGoal&&<section className="pw-connection-attention" aria-label="从管家带来的目标"><h3>选择接这项工作的主机</h3>
@@ -241,6 +252,7 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, onSavedHostSetup, dom
     {error && <p className="pw-secondary-error" role="alert">{error}</p>}
     {selected && journey.view !== 'list' && journey.view !== 'all-jobs' && stale && <div className="pw-connection-attention"><p role="alert">连接已在另一页面修改。旧目标仍显示在这里，尚未沿用它开始新工作。</p><Button variant="secondary" onClick={() => { const current = profiles.find(profile => profile.id === selected.id); setSelected(current ? { ...current } : null); setWorkOpened(false); setProbe(null); setReceipt(null); if (!current) journey.back(); else journey.open('profile:' + current.id); }}>重新读取当前连接</Button></div>}
     {selected && overview && !stale && <>
+      {historyScope && <div className="pw-connection-list">{historyRow}</div>}
       <div className="pw-connection-summary"><span className="pw-connection-summary-icon">{domain === 'remote' ? <IconMonitor size={22} aria-hidden /> : <IconServer size={22} aria-hidden />}</span>
         <div>
           <div role={domain === 'remote' ? 'status' : undefined}>
@@ -253,8 +265,8 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, onSavedHostSetup, dom
       </div>
       {domain === 'remote' && unresolvedOperations.length > 0 && <section className="pw-connection-attention" aria-label="待核对的原提交"><h3>有原提交待核对</h3><p>先读取原任务的实际结果，不会重新发送这次工作。</p>{unresolvedOperations.map(item => <ConnectionRow key={item.operationId} title={item.worker || '电脑原操作'} detail={status(item.status) + ' · ' + text(item.operationId)} icon={IconHistory} onOpen={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }} />)}</section>}
       <div className="pw-connection-list">
-        <ConnectionRow title={domain === 'remote' ? '进入电脑工作区' : '进入主机工作区'} detail={domain === 'remote' ? companionReceivedAt ? '读取工作环境，按需核对执行器' : '继续原工作，或核对后开始下一项' : '任务、文件、命令和终端'} icon={domain === 'remote' ? IconMonitor : IconTerminal} disabled={busy} onOpen={openWork} />
-        <ConnectionRow title="查看原任务" detail={domain === 'remote' ? '读取回执、处理审批，继续同一项工作' : '回到原任务，查看执行、审批与结果'} icon={IconHistory} disabled={busy} onOpen={() => journey.open('jobs:' + selected.id)} />
+        <ConnectionRow title={domain === 'remote' ? '进入电脑工作区' : '进入主机工作区'} detail={domain === 'remote' ? companionReceivedAt || historyScope ? '读取工作环境，按需核对执行器' : '继续原工作，或核对后开始下一项' : '任务、文件、命令和终端'} icon={domain === 'remote' ? IconMonitor : IconTerminal} disabled={busy} onOpen={openWork} />
+        {!historyScope && historyRow}
       </div>
 
       <section className="pw-connection-detail-section" aria-label={domain === 'remote' ? '原任务同步' : undefined}>
@@ -268,7 +280,13 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, onSavedHostSetup, dom
       <Accordion><AccordionItem id="connection-settings" title="连接设置" description="地址、凭据与本机配置"><Facts values={[[ '工作区', selected.workspace ], ['凭据', selected.hasToken || selected.credentialsConfigured ? '已配置' : '未配置' ]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => openEditor({ ...selected })}>编辑连接</Button><Button variant="ghost" disabled={busy} onClick={() => setRemoving({ ...selected })}>移除</Button></div></AccordionItem></Accordion>
     </>}
     {selected && workOpened && !stale && <div hidden={!working} className="pw-connection-work-body">{domain === 'remote' ? <RemoteWork cloudGoal={cloudGoal} onCloudGoalUsed={onCloudGoalUsed} guidedGoalId={guidedCloud?.profileBinding===selected.bindingHash?guidedCloud?.goalId:undefined} key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} visible={working} /> : <SshWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} openHistory={() => journey.open('jobs:' + selected.id)} visible={working} />}</div>}
-    {showingJobs && (domain === 'remote' ? <div className="pw-connection-jobs">{jobs.length === 0 && <p className="pw-secondary-empty">这项连接暂时没有已读取的原任务。可返回概览同步。</p>}{jobs.map(job => <article className="pw-connection-job" key={job.id}><header><div><h3>{job.worker || '电脑任务'}</h3><p>{profiles.find(profile => profile.id === job.profileId)?.name || job.serviceBase || '原连接'}</p></div><span>{status(job.status)}</span></header>{job.message && <p>{job.message}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => act('remote.getJob', originalJob(job))}>读取原回执</Button>{list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId)?.id && <Button variant="ghost" onClick={() => { const task = list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId); void run('tasks.open', { id: task!.id }).catch(() => {}); }}>打开本机原任务</Button>}{['queued', 'running', 'stopping', 'awaiting_approval', 'awaiting_input'].includes(job.status) && <Button variant="ghost" disabled={busy} onClick={() => act('remote.cancelJob', originalJob(job))}>请求停止原任务</Button>}</div></article>)}<Receipt value={receipt} run={run} /></div> : selected && !stale ? <SshOriginalWork key={selected.id + ':' + selected.bindingHash} profile={selected} supported={supported('ssh.workHistory') && supported('ssh.openOriginalWork')} run={run} /> : null)}
+    {showingJobs && (domain === 'remote' ? scopedHistory ? <>
+      {state.webWorkspaceSection === 'remote' && !state.webWorkspaceTaskOpen &&
+        <CloudWorkspaceJobs key={JSON.stringify([scopedHistory, resume])} scope={scopedHistory} run={run} />}
+      <Accordion><AccordionItem id="remote-history-synced" title="主机同步记录" description="读取主机回执或请求停止会联网">
+        {remoteJobHistory}
+      </AccordionItem></Accordion>
+    </> : remoteJobHistory : selected && !stale ? <SshOriginalWork key={selected.id + ':' + selected.bindingHash} profile={selected} supported={supported('ssh.workHistory') && supported('ssh.openOriginalWork')} run={run} /> : null)}
     {editing && <ProfileEditor key={editing.id || 'new'} domain={domain} original={editing} current={profiles.find(profile => profile.id === editing.id)} state={state} run={run} back={editorBack} close={closeEditor}
       onCreatedForGoal={hostFromOriginalGoal||newHostFromSavedMessage?value=>takeNewHost(value,hostFromOriginalGoal):undefined}
       returnToSavedMessage={!!newHostFromSavedMessage} />}
@@ -570,7 +588,6 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
   return <div className="pw-remote-work">
     <header className="pw-connection-work-title"><h3>{operation ? '这次电脑工作' : '开始新工作'}</h3><p>{operation ? '结果与后续操作都保留在同一项原任务中。' : '先选择实际环境，再说明这次要完成的事情。'}</p></header>
     {unresolved.map(item => <div className="pw-selected-object" key={item.operationId}><p>此连接有原提交待核对。</p><Button variant="secondary" disabled={busy || !active} onClick={() => { void request('remote.reconcileOperation', { profileId: profile.id, operationId: item.operationId }).then(setReceipt).catch(() => {}); }}>只读核对原提交</Button><Button variant="secondary" onClick={() => { void run('tasks.open', { id: item.operationId }).catch(() => {}); }}>打开原任务</Button></div>)}
-    {visible && active && sameHost && supported('remote.workspaceJobs') && supported('remote.openWorkspaceJob') && <CloudWorkspaceJobs key={JSON.stringify(sameHost)} scope={sameHost} run={run}/>}
     <div ref={composer} hidden={!!operation} className="pw-remote-composer">
     {fromComposer&&!operation&&<div className="pw-field-hint" role="status">{returnOrigin&&worker!=='command'&&goal.trim()===returnOrigin.text?'直接交办后，手机会在原私人对话留一个原任务入口。':returnOrigin?'当前参数已改变。恢复原请求，或明确改为独立委托。':'这次是独立主机工作，不会在聊天里补建关联。'} {returnOrigin&&<Button variant="ghost" size="small" disabled={locked||!!review} onClick={()=>changed(()=>setReturnOrigin(null))}>改为独立委托</Button>}</div>}
     {carriedTextOnly&&<p className="pw-field-hint">已带入目标文字；附件与引用仍在原对话。要使用远端原件，请在本次审阅中单独选择。</p>}

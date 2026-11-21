@@ -689,11 +689,11 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const detailsLabel=scopedResultOnly?'文件来源':'来源与操作';
  const backLabel=draftDesk?'返回成果':mode==='list'&&returnToLibraryDocument?'返回文件来源':view.deviceOriginalOnly?'返回原工作':entryBack||mode==='list'?sourceReturnLabel:
   mode==='detail'||originalHasDirectBack?'返回文件列表':mode==='edit'&&hasOriginal?'返回这份原件':'返回文件详情';
- const fileList=(label:string,files:Json[],opensOriginal:boolean|((file:Json)=>boolean)=false)=><AttachmentFileCollection label={label} files={files} busy={busy||selectionPending} choosing={!!view.choosingSource} opensOriginal={opensOriginal} versions={documentVersions} origins={catalogOrigins}
+ const fileList=(label:string,files:Json[],opensOriginal:boolean|((file:Json)=>boolean)=false,resumePdf=false)=><AttachmentFileCollection label={label} files={files} busy={busy||selectionPending} choosing={!!view.choosingSource} opensOriginal={opensOriginal} versions={documentVersions} origins={catalogOrigins}
   onSelect={(target,row,direct)=>{
    const body=scroller.current;
    if(listScope&&body)listOrigin.current={scope:listScope,collection:label,inset:row.getBoundingClientRect().top-body.getBoundingClientRect().top};
-   run(view.choosingSource?'attach':direct?'openOriginal':'selectFile',target);
+   run(view.choosingSource?'attach':direct?'openOriginal':'selectFile',resumePdf&&direct?{...target,resumeLibraryPdf:true}:target);
   }}/>;
  // A source picker reads the private library, not the task it will return to.
  // Do not show retained rows from the preceding location while the new read settles.
@@ -843,6 +843,12 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const catalogUnconfirmed=catalogIncomplete||catalogUnread;
  const refreshList=()=>run(view.choosingSource?'chooseSource':'refresh');
  const sourcesList=fileList(view.choosingSource?'可用文件':'来源文件',listedSources,opensSource);
+ const pdfResume=obj(view.libraryPdfResume),pdfResumeTarget=exactFileTarget({id:pdfResume.fileId,sha256:pdfResume.sha256});
+ const resumeRows=privateLibrary&&mode==='list'&&view.ready===true&&!filterActive&&ordinaryLibraryOwner(currentNative)&&pdfResumeTarget?
+  allSources.filter(row=>row.id===pdfResumeTarget.fileId):[];
+ const recentPdf=resumeRows.length===1&&resumeRows[0].sha256===pdfResumeTarget?.sha256&&
+  resumeRows[0].mimeType==='application/pdf'&&resumeRows[0].role==='source'&&resumeRows[0].availability==='available'&&opensSource(resumeRows[0])?
+  resumeRows[0]:undefined;
  const recentSourcesList=fileList('本次已登记的文件',listedRecent,opensSource);
  const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存的文件成果',listedOutputs,privateLibrary||resultFilesOnly||
   (row=>documentRecord&&view.fromWorkResult===false&&row.recordedDocumentOriginal===true));
@@ -912,6 +918,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {!workSourcePicker&&<SelectField label="文件类别" compactValue options={catalogFormats} value={formatFilter} onChange={format=>updateFilter(nameFilter,format)}/>}
  </div>}
  {filterActive&&!busy&&<div className="pw-action-row"><p className="pw-muted" role="status">{matchingCount?`已读取的文件中有 ${matchingCount} 项匹配。`:'当前已读取的文件没有匹配项。'}{catalogIncomplete&&' 文件清单尚未读全。'}</p><Button variant="ghost" onClick={()=>updateFilter('','all')}>清除筛选</Button></div>}
+ {recentPdf&&fileList('继续上次阅读',[recentPdf],true,true)}
  {privateLibrary&&recentSourcesList}
  {hasLibraryFiles?privateLibrary?<>{outputsList}{sourcesList}{editableSourceList}</>:view.taskId&&!view.choosingSource?<>{outputsList}{sourcesList}{libraryActions}</>:<>{libraryActions}{sourcesList}{outputsList}</>
  :!busy&&!catalogUnconfirmed&&!error&&!view.error?<div className="pw-file-library-empty"><IconFolder size={28} aria-hidden="true"/><h2>{view.choosingSource?'还没有可关联的文件':resultFilesOnly?'本轮暂无可读取的文件':view.taskId?'这个任务还没有文件':'资料库还没有文件'}</h2><p>{view.choosingSource?'导入文件后，就可以把它关联到当前任务。':view.taskId?resultFilesOnly?(scopedResultOnly?'没有用其他轮次或同名文件替代。':'本轮文件将在这里显示，也可回原工作核对已保存的文件。'):'任务中使用的文件和生成的成果会出现在这里。':'从手机选择文件。支持的 PDF、Word（.docx）、Excel（.xlsx）和文本可在本机查看，不用模型。'}</p>{!privateLibrary&&libraryActions}</div>:!privateLibrary&&!catalogUnconfirmed&&libraryActions}

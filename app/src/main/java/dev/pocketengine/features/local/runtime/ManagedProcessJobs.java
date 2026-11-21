@@ -452,7 +452,10 @@ public final class ManagedProcessJobs implements AutoCloseable {
             // receipt for the original operation, not a new Task/Run or a retry dispatch.
             try {
                 JSONObject actual;synchronized(job){actual=ProjectSources.copy(job.receipt);}
-                deliverReceipt(job,summary(job.invocation.executionRef(),actual));
+                if(OwnerPythonRun.claims(job.invocation.exact())){
+                    // Opening original pipe bodies belongs to a separate explicit owner read.
+                    actual.remove("stdout");actual.remove("stderr");deliverReceipt(job,actual);
+                }else deliverReceipt(job,summary(job.invocation.executionRef(),actual));
             } catch(Exception error) {
                 synchronized(job) {try {
                     job.receipt.put("hostReceiptDelivery","failed");

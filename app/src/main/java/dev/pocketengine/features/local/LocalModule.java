@@ -1358,6 +1358,62 @@ public final class LocalModule implements EngineModule {
         return OwnerDirectNodeBuild.ordinaryCheckout(metadata)&&!metadata.has(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD)&&
                 !metadata.has("collectedFromCheckoutId")&&!metadata.has("collectionOperationId");
     }
+    /** Capture only this selected saved UTF-8 file, not the checkout tree or a host source.
+     * The typed reviewed bytes live only until this one native owner confirmation or dismissal. */
+    public synchronized dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(
+            dev.pocketengine.features.local.project.ProjectFileDraft file, ProjectRuntime.LiveGate window)throws Exception{
+        var runtime=ownerPythonRuntime();
+        window.check();
+        if(file==null||!dev.pocketengine.features.local.runtime.OwnerPythonRun.supportsPath(file.path))
+            throw new SecurityException("请选择原副本根目录中已保存的 Python 文件");
+        File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),file.checkoutId,false),files=new File(home,"files"),
+                record=new File(home,"checkout.json");
+        if(!root.getAbsoluteFile().equals(root.getCanonicalFile())||!record.equals(record.getCanonicalFile())||
+                !Files.isRegularFile(record.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))
+            throw new SecurityException("无法核对原私人副本目录");
+        OwnerDraftCopyShelf.requireOpenedForContent(home);
+        JSONObject scope=JsonFiles.read(record),imported=scope.optJSONObject("sourceImport");
+        if(!file.projectId.equals(scope.opt("projectId"))||!file.checkoutId.equals(scope.opt("id"))||
+                !ordinaryDirectNodeCheckout(scope)||
+                scope.has("sourceImport")&&(imported==null||imported.has("deviceSource")||
+                        (imported.optJSONObject("gitOriginal")==null&&
+                         !java.util.Set.of("external_zip","saf_tree").contains(imported.optString("sourceKind")))))
+            throw new SecurityException("这不是所选的普通私人开发副本");
+        Object checkoutKey=pythonDirectoryKey(home.getParentFile()),homeKey=pythonDirectoryKey(home),filesKey=pythonDirectoryKey(files);
+        var target=NativeCommandExecutor.within(files,file.path).toPath();
+        var basic=java.nio.file.attribute.BasicFileAttributes.class;
+        var noFollow=java.nio.file.LinkOption.NOFOLLOW_LINKS;
+        var before=Files.readAttributes(target,basic,noFollow);
+        if(before.fileKey()==null||!pythonSingleLink(target))
+            throw new SecurityException("原脚本不是副本内的独立普通文件");
+        byte[] observed=ProjectFileBytes.read(target,before,dev.pocketengine.features.local.runtime.OwnerPythonRun.MAX_SOURCE);
+        try{
+            window.check();
+            var after=Files.readAttributes(target,basic,noFollow);
+            if(!target.equals(NativeCommandExecutor.within(files,file.path).toPath())||
+                    !checkoutKey.equals(pythonDirectoryKey(home.getParentFile()))||!homeKey.equals(pythonDirectoryKey(home))||
+                    !filesKey.equals(pythonDirectoryKey(files))||!before.fileKey().equals(after.fileKey())||!pythonSingleLink(target)||
+                    !before.lastModifiedTime().equals(after.lastModifiedTime())||before.size()!=after.size()||
+                    !record.equals(record.getCanonicalFile())||!Files.isRegularFile(record.toPath(),noFollow)||
+                    !ProjectSources.canonical(scope).equals(ProjectSources.canonical(JsonFiles.read(record))))
+                throw new SecurityException("原文件读取期间身份变化，未采用替代脚本");
+            return runtime.reviewOwnerPython(file,observed,()->{window.check();if(closed)throw new SecurityException("原本机项目已关闭");});
+        }finally{Arrays.fill(observed,(byte)0);}
+    }
+    private static Object pythonDirectoryKey(File directory)throws Exception{
+        var attrs=Files.readAttributes(directory.toPath(),java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        if(!directory.equals(directory.getCanonicalFile())||!attrs.isDirectory()||attrs.isSymbolicLink()||attrs.fileKey()==null)
+            throw new SecurityException("原脚本目录无法核对");
+        return attrs.fileKey();
+    }
+    private static boolean pythonSingleLink(java.nio.file.Path leaf)throws Exception{
+        Object links=Files.getAttribute(leaf,"unix:nlink",java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        return links instanceof Number&&((Number)links).longValue()==1L;
+    }
+    public ManagedProjectRuntime ownerPythonRuntime(){
+        if(closed||!(projectRuntime instanceof ManagedProjectRuntime managed))throw new IllegalStateException("原本机托管开发工具不可用");
+        return managed;
+    }
     /** Native original-operation port. Raw feature requests cannot supply its retained authority. */
     public synchronized JSONObject executeProjectForHost(JSONObject exact,JSONObject binding,RunControl original,ProjectAdmission admission)throws Exception {
         return executeProjectForHost(exact,binding,original,admission,null);

@@ -80,6 +80,8 @@ import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
 import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
 import {bareManagedNodeCheck,currentManagedNodeOperation,originalDirectViteEditorReturn,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
+import { OwnerPythonRun } from './OwnerPythonRun';
+import { originalPythonExit, originalPythonRun, ownerPythonRead, samePythonRun, type OriginalPythonRun } from './owner-python-run';
 import {failedBuildFeedback,nodeBuildContinuationText,originalNodeBuildAfterDependencies,projectFeedbackKey,type ExecutionExit} from './project-execution-exit';
 import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWorkspace';
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
@@ -2131,6 +2133,23 @@ export default function App(){
   const navigation=navigationWindow.current;
   if(await openRelatedWorkspace('projects')&&navigationWindow.current===navigation+1)run('projects.select',{id:projectId});
  };
+ const currentPythonEditorVisit=(work:OriginalPythonRun,live:ReturnType<typeof bridge.getState>)=>{
+  const view=obj(live.view), owner=live.state;
+  const supports=(action:string)=>live.capabilities.commands.includes(action);
+  if (!taskOpen || taskOpening || openedTaskId.current!==work.taskId || document.hidden ||
+      view.taskId!==work.taskId || view.section!==null || view.resumeRevision!==openedTaskResumeRevision.current ||
+      route!=='tasks' && (route!=='projects' || owner.projectId!==work.projectId) ||
+      owner.filePath || owner.conversationReader || owner.attachmentWorkspace?.open || owner.localSourceIntake?.window ||
+      owner.projectPreview?.localWebWork===true || projectPreview.expanded || projectWorkReviewOpen ||
+      projectWorkDrafts[work.projectId]?.operation || !supports('projects.development.files.read') ||
+      !supports('projects.development.files.open') || !supports('projects.development.read') || !supports('tasks.close') ||
+      owner.projectId!==work.projectId && !supports('projects.select')) return false;
+  const rows=asArray<Task>(owner.tasks).filter(row=>row.id===work.taskId), raw=rows.length===1?rows[0].raw:undefined;
+  return raw?.actorId==='owner' && raw.spaceId==='private' && raw.contextAvailable!==false &&
+    raw.contextWithdrawn!==true && raw.sourceCurrentReadRequired!==true && raw.runId===work.runId &&
+    raw.coordinatorEpoch===work.epoch && samePythonRun(work,originalPythonRun(raw.ownerPythonScriptRun)) &&
+    !!originalPythonExit(raw.ownerPythonScriptExit,work) && asArray<Project>(owner.projects).filter(row=>row.id===work.projectId).length===1;
+ };
  const currentViteEditorVisit=(target:ProjectBuildCopy,live:ReturnType<typeof bridge.getState>)=>{
   const desired=target.editorResume,owner=live.state,view=obj(live.view);
   const inProject=route==='projects'&&owner.projectId===target.projectId;
@@ -2150,8 +2169,9 @@ export default function App(){
  };
  const openOriginalBuildCopy=async(target:ProjectBuildCopy)=>{
   const first=bridge.getState(),nativeTask=obj(first.view),row=asArray<Task>(first.state.tasks).find(item=>item.id===target.taskId);
-  const direct=!!target.editorResume;
-  const current=direct?(currentViteEditorVisit(target,first)?target:null):originalNodeBuildCopy(row);
+  const direct=!!(target.editorResume||target.pythonEditor);
+  const exact=target.pythonEditor?currentPythonEditorVisit(target.pythonEditor,first):currentViteEditorVisit(target,first);
+  const current=direct?(exact?target:null):originalNodeBuildCopy(row);
   const inProject=route==='projects'&&first.state.projectId===target.projectId;
   const fromOtherPage=direct?route==='tasks':['tasks','chat','butler'].includes(route)&&!!row&&!!originalFirstBuildFailure(row);
   if(openingBuildCopy.current||!taskOpen||taskOpening||openedTaskId.current!==target.taskId)return;
@@ -2160,7 +2180,7 @@ export default function App(){
      first.state.projectId!==target.projectId&&!can('projects.select')||
      !current||current.runId!==target.runId||current.epoch!==target.epoch||current.projectId!==target.projectId||
      current.checkoutId!==target.checkoutId||current.sourceDigest!==target.sourceDigest){
-   setTaskErrors(previous=>({...previous,[target.taskId]:'原构建或项目窗口已变化，没有打开其他副本。'}));return;
+   setTaskErrors(previous=>({...previous,[target.taskId]:target.pythonEditor?'原脚本或项目窗口已变化，没有打开其他副本。':'原构建或项目窗口已变化，没有打开其他副本。'}));return;
   }
   const navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch(),request=reviewRequest.current;
   const origin=captureNavigationOrigin();
@@ -4321,6 +4341,31 @@ export default function App(){
     done={mode.done} pending={mode.pending===true} disabled={!can('tasks.confirm')} note={reviewNote} edit={setReviewNote}
     decide={completed=>decideTeamReport(mode,completed)} leave={leaveTeamReport}/>;
   }
+  if (task.raw?.ownerPythonScriptRun) {
+   const work=originalPythonRun(task.raw.ownerPythonScriptRun);
+   if (!work || task.raw.actorId!=='owner' || task.raw.spaceId!=='private' ||
+       task.raw.contextAvailable===false || task.raw.contextWithdrawn===true || task.raw.sourceCurrentReadRequired===true ||
+       task.id!==work.taskId || task.raw.runId!==work.runId || task.raw.coordinatorEpoch!==work.epoch)
+    return <p className="pw-muted">暂时无法核对这次本机运行，没有打开其他结果。</p>;
+   const visit=bridge.getDocumentEpoch(), viewRevision=obj(snapshot?.view).resumeRevision;
+   const live=()=>{
+    const current=bridge.getState(), nativeView=obj(current.view);
+    const originals=asArray<Task>(current.state.tasks).filter(row=>row.id===work.taskId);
+    const row=originals.length===1?originals[0]:undefined, raw=row?.raw;
+    return !document.hidden && taskOpen && !taskOpening && openedTaskId.current===work.taskId &&
+      bridge.getDocumentEpoch()===visit && nativeView.taskId===work.taskId && nativeView.section==null &&
+      nativeView.resumeRevision===viewRevision && raw?.actorId==='owner' && raw.spaceId==='private' &&
+      raw.contextAvailable!==false && raw.contextWithdrawn!==true && raw.sourceCurrentReadRequired!==true &&
+      raw.runId===work.runId && raw.coordinatorEpoch===work.epoch && samePythonRun(work,originalPythonRun(raw.ownerPythonScriptRun));
+   };
+   const exit=originalPythonExit(task.raw.ownerPythonScriptExit,work);
+   return <OwnerPythonRun key={JSON.stringify([work.taskId,work.runId,work.operationId,visit,viewRevision])}
+    work={work} released={exit} canRead={can(ownerPythonRead)} live={live}
+    reopen={exit&&currentPythonEditorVisit(work,bridge.getState())?()=>void openOriginalBuildCopy({
+      taskId:work.taskId,runId:work.runId,epoch:work.epoch,projectId:work.projectId,checkoutId:work.checkoutId,
+      sourceDigest:work.sha256,pythonEditor:work,
+    }):undefined}/>;
+  }
   const canFollowOriginal=privateTaskConversationId(task)&&task.raw?.contextAvailable!==false&&
     (task.raw?.executionRole==='owner_work'||task.raw?.nativeResultHandling===true||task.raw?.ownerWorkPreparation)&&
     typeof task.raw?.runId==='string'&&!!task.raw.runId&&Number.isSafeInteger(task.raw.coordinatorEpoch)&&task.raw.coordinatorEpoch>0&&
@@ -4739,7 +4784,7 @@ export default function App(){
   </section>;
  };
  const taskFooter=(task:Task)=>{
-  if(teamReportInOverview?.visit.parent.taskId===task.id)return null;
+  if(teamReportInOverview?.visit.parent.taskId===task.id||task.raw?.ownerPythonScriptRun)return null;
   if(taskLayer==='process'||taskLayer==='homeReport'||openedTaskId.current!==task.id||!review||reviewStale)return null;
   const actions=asArray<{action:string}>(review.actions).map(x=>x.action),disabled=taskOpening||reviewSubmitted||reviewPending;
   if(taskLayer==='scope'&&actions.includes('tasks.scope'))return <footer className="pw-task-footer"><PressButton label="确认本次范围修订" disabled={disabled||!/^\d+$/.test(scopeTools)||!/^\d+$/.test(scopeModels)||Number(scopeTools)<1||Number(scopeTools)>400||Number(scopeModels)<1||Number(scopeModels)>512} onClick={()=>reviewedAction('tasks.scope',{minutes:Number(scopeMinutes),tools:Number(scopeTools),models:Number(scopeModels)})}/></footer>;
@@ -4763,7 +4808,7 @@ export default function App(){
  const selectedLocalPhone=!!selectedTask&&isPrivateLocalPhone(selectedTask);
  const selectedPhoneSurface=privatePhoneSurface(selectedTask,state.livePrivatePhones);
  const selectedPhoneStop=selectedTask&&!terminal(selectedTask)&&can('phone.stop')&&(selectedLocalPhone?!!selectedPhoneSurface:selectedTask.id===activeTask?.id)?phoneRunIdentity(selectedTask):null;
- const selectedTaskStop=selectedTask&&!selectedTask.raw?.ownerDirectNodeDependencies&&!selectedTask.raw?.ownerDirectViteBuild&&(selectedPhoneStop||(selectedWorkIdentity
+ const selectedTaskStop=selectedTask&&!selectedTask.raw?.ownerPythonScriptRun&&!selectedTask.raw?.ownerDirectNodeDependencies&&!selectedTask.raw?.ownerDirectViteBuild&&(selectedPhoneStop||(selectedWorkIdentity
   ?selectedTask.raw?.controls?.canStop===true&&can('ownerWork.control')
   :!selectedLocalPhone&&selectedTask.raw?.executionRole!=='owner_work'&&!terminal(selectedTask)&&can('tasks.stop')));
  const selectedWorkPresentation=selectedTask?workCollectionPresentation(selectedTask):null;
@@ -6253,11 +6298,11 @@ export default function App(){
     {selectedTask&&<WorkObjectMenu isOpen={taskMenuOpen} onOpenChange={setTaskMenuOpen} disabled={selectedTaskUnavailable} conversationPending={!!state.chatSubmitting||!!returningConversation} scopeDisabled={reviewPending||questionPending}
      onConversation={originatingRequestConversation(selectedTask)&&can('conversation.select')?()=>{void returnToTaskConversation(selectedTask)}:undefined}
      onProject={projects.some(project=>project.id===selectedTask.raw?.developmentContext?.projectId)&&can('projects.select')?()=>{void openTaskProject(selectedTask)}:undefined}
-     onFiles={can('attachmentWorkspace.open')&&selectedTask.raw?.actorId==='owner'&&selectedTask.raw?.spaceId==='private'?()=>{
+     onFiles={!selectedTask.raw?.ownerPythonScriptRun&&can('attachmentWorkspace.open')&&selectedTask.raw?.actorId==='owner'&&selectedTask.raw?.spaceId==='private'?()=>{
       const open=()=>{void openWorkFiles(selectedTask.id).catch(error=>setLocalError(error instanceof Error?error.message:String(error)));};
       if(!guardTaskLeave(open))open();
      }:undefined}
-     onScope={can('tasks.review')?()=>{showTaskLayer('scope');if(!review||reviewStale)refreshReview()}:undefined}/>}
+     onScope={!selectedTask.raw?.ownerPythonScriptRun&&can('tasks.review')?()=>{showTaskLayer('scope');if(!review||reviewStale)refreshReview()}:undefined}/>}
    </div>}
   </header>{drawerStop&&drawerStopCopy&&<div className="pw-task-control-feedback">
    <p role="status"><strong>{drawerStopCopy.title}</strong>{drawerStop.phase!=='checking'&&<>。{drawerStopCopy.note}</>}</p>

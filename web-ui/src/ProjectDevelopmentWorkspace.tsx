@@ -5,6 +5,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import {ProjectTaskPackageOrigin,type TaskPackageOriginalWork} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
+import type { OriginalPythonRun } from './owner-python-run';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
@@ -25,7 +26,7 @@ const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
 const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
   deliveryFields.every(key => draft[key] === (original[key] || ''));
 export type ProjectBuildEditorResume = CheckoutBuildEditorResume & { taskId:string; runId:string; epoch:number; buildOperationId:string };
-export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string; editorResume?:ProjectBuildEditorResume };
+export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string; editorResume?:ProjectBuildEditorResume; pythonEditor?:OriginalPythonRun };
 const builtinViteStarter='builtin_vite_starter';
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https'|typeof builtinViteStarter;
 export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
@@ -343,7 +344,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [retainedRead,setRetainedRead]=useState<RetainedOriginalRead|null>(null), retainedOriginalOpen=useRef(false);
   const activeRetainedVisit=useRef<RetainedOriginalVisit|null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
-  const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;buildResume?:CheckoutBuildEditorResume;
+  const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;buildResume?:CheckoutBuildEditorResume;pythonResume?:OriginalPythonRun;
     originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   const [importEditChoice,setImportEditChoice]=useState<{original:ProjectImportedEditor;viewHandle:string}|null>(null);
@@ -759,8 +760,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const buildResume=copies.length===1&&copies[0].draftWorkingCopy===false&&view.commandsAuthorized===false&&
       nativeView?.taskId===null&&nativeView.section===null&&latest.current.can('projects.development.files.read')?
       projectBuildEditorResume(buildReturn.editorResume,buildReturn):undefined;
-    sourceAttempt.current='';setSource(null);setHostEditor(null);setBuildOrigin(buildReturn);
-    setFileWindow({checkoutId:buildReturn.checkoutId,buildResume});
+    const pythonResume=buildReturn.pythonEditor;
+    if (pythonResume && (copies.length!==1 || copies[0].draftWorkingCopy!==false || view.commandsAuthorized!==false ||
+        !latest.current.can('projects.development.files.read')||pythonResume.projectId!==projectId||
+        pythonResume.checkoutId!==buildReturn.checkoutId||pythonResume.sha256!==buildReturn.sourceDigest)) {
+      setBuildCopyMissing(true);return;
+    }
+    sourceAttempt.current='';setSource(null);setHostEditor(null);setBuildOrigin(pythonResume?null:buildReturn);
+    setFileWindow({checkoutId:buildReturn.checkoutId,buildResume,pythonResume});
   },[buildReturn,onBuildReturnHandled,active,view,busy,review,fileCheckout,projectId]);
   const unfinishedInput=!!(goal||view?.draft?.goal||view?.draft?.ownerPickedConvention||deliveryFields.some(k=>requirements[k]||view?.draft?.[k]));
   const protectModelDraft=unfinishedInput||touched.current;
@@ -1411,7 +1418,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       closeHostDiff(); setFileWindow({checkoutId:checkout});
     } : undefined}/>}
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
-      resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} onClose={closeFiles}
+      resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume} onClose={closeFiles}
+      onOpenPythonWork={!hostEditor&&can('tasks.open')?work=>{
+        if (work.projectId!==projectId || work.checkoutId!==fileCheckout || !active) return;
+        onTaskRegistered();onOpenTask(work.taskId,work.checkoutId,{runId:work.runId,epoch:work.epoch});
+      }:undefined}
       onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined}
       prepareBuildLabel={showViteSaveLabel?'从这次保存核对网页构建':directImportedSave?'核对已保存源码':undefined} registerBack={registerFilesBack} />}
     {originalDifference&&<SettingsDialog isOpen title="本轮原改稿" closeLabel="返回当前工作副本" onClose={closeRetainedOriginal}>

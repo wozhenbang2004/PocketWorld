@@ -854,10 +854,12 @@ internal class AttachmentOutcomeCoordinator(
         }, current = current)
     }
     /** Read a saved item from its displayed library, native generation record or exact result run. */
-    fun openListedOriginal(id: String, sha256: String, onOpened: (() -> Unit)? = null, librarySource: Boolean = false, current: () -> Boolean) {
+    fun openListedOriginal(id: String, sha256: String, onOpened: (() -> Unit)? = null, librarySource: Boolean = false,
+                           expectedLibraryPdfIdentity: String? = null, current: () -> Boolean) {
         val run = state.resultRun
         val listed = state.snapshot ?: error("文件清单尚未读取")
         val library = run == null && state.taskId == null && state.file == null && onOpened == null && listed.opt("taskId") == ""
+        check(expectedLibraryPdfIdentity == null || library && librarySource) { "请从原私人文件库继续阅读" }
         val recordedDocument = if (run == null && state.file == null && onOpened == null && !state.fromWorkResult && !librarySource)
             originalDocumentAction(state.taskId, listed) else null
         check(library || recordedDocument != null || run != null && run.taskId == state.taskId) { "请在原文件清单中打开这份原件" }
@@ -882,8 +884,12 @@ internal class AttachmentOutcomeCoordinator(
             if (current() && state.resultRun == run && sameRecord()) original?.let { source ->
                 restoreFile = null
                 val same = state.file?.let(::copySource) == copySource(selected)
+                // The recorded-document reader just rechecked this exact published Word/PDF and its original operation.
+                val checkedPending = recordedDocument != null && pendingDocumentAction == recordedDocument && state.pendingDocumentTask == recordedDocument
+                if (checkedPending) pendingDocumentAction = null
                 state = state.copy(file = selected, originalFile = source, originalReturn = originalReturn, thumbnail = null, document = null,
-                    copyReceipt = state.copyReceipt.takeIf { same }, previousCopyInFile = state.previousCopyInFile.takeIf { same })
+                    copyReceipt = state.copyReceipt.takeIf { same }, previousCopyInFile = state.previousCopyInFile.takeIf { same },
+                    pendingDocumentTask = if (checkedPending) null else state.pendingDocumentTask)
                 onOpened?.invoke()
             }
         }) { control, _ ->
@@ -896,6 +902,10 @@ internal class AttachmentOutcomeCoordinator(
                 }
             check(source.name == selected.getString("name") && source.mimeType == selected.getString("mimeType") &&
                 source.sizeBytes == selected.getLong("size")) { "原文件信息已变化，请重新读取文件清单" }
+            check(expectedLibraryPdfIdentity == null ||
+                source.mimeType == "application/pdf" && source.identity == expectedLibraryPdfIdentity) {
+                "上次阅读的原 PDF 版本已变化，没有打开其他文件"
+            }
             if (run != null) requireConversationResult(run, control)
             original = source
             JSONObject() to null

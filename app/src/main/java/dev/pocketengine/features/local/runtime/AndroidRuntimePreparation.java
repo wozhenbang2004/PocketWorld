@@ -297,6 +297,50 @@ final class AndroidRuntimePreparation {
     synchronized List<String> command(RuntimeWorkspace workspace,String relative,List<String> guestCommand) throws Exception {if(active==null)throw new IllegalStateException("runtime_environment_not_prepared");return command(rootfs(active),workspace,relative,guestCommand);}
     synchronized List<String> command(RuntimeWorkspace workspace,String relative,List<String> guestCommand,Map<String,String> ordinaryEnvironment)throws Exception {if(active==null)throw new IllegalStateException("runtime_environment_not_prepared");return command(rootfs(active),workspace,relative,guestCommand,ordinaryEnvironment);}
     synchronized String guestTool(String name) throws Exception {if(active==null)throw new IllegalStateException("runtime_environment_not_prepared");JSONArray tools=active.getJSONArray("tools");for(int i=0;i<tools.length();i++)if(name.equals(tools.getJSONObject(i).getString("name")))return tools.getJSONObject(i).getString("path");throw new IllegalArgumentException("runtime_tool_not_installed");}
+    /** The manual script route verifies only its actual installed interpreter, without invoking it. */
+    synchronized String ownerPythonInterpreterHash(String generation)throws Exception {
+        if(active==null||!identity().equals(generation)||!catalog.identity.equals(active.optString("catalogIdentity"))||!engineVerified())
+            throw new IllegalStateException("请先确认这台手机已准备好原开发工具");
+        JSONArray tools=active.getJSONArray("tools");JSONObject selected=null;
+        for(int i=0;i<tools.length();i++){
+            JSONObject entry=tools.getJSONObject(i);
+            if(!"python3".equals(entry.opt("name")))continue;
+            if(selected!=null)throw new SecurityException("原 Python 解释器登记不唯一");
+            selected=entry;
+        }
+        File filesystem=rootfs(active);
+        if(selected==null||!OwnerPythonRun.INTERPRETER.equals(selected.opt("path"))||!toolUnchanged(filesystem,selected))
+            throw new SecurityException("原 Python 解释器不在已准备的工具中");
+        File actual=resolveGuest(filesystem,OwnerPythonRun.INTERPRETER);
+        String hash=selected.getString("sha256");
+        if(!hash.matches("[a-f0-9]{64}")||!boundedPythonHash(actual,selected.getLong("bytes")).equals(hash)||!toolUnchanged(filesystem,selected)||
+                !actual.equals(resolveGuest(filesystem,OwnerPythonRun.INTERPRETER)))
+            throw new SecurityException("原 Python 解释器内容不能核对，请修复本机工具");
+        return hash;
+    }
+    private static String boundedPythonHash(File tool,long size)throws Exception {
+        if(size<1||size>32L*1024*1024)throw new SecurityException("原 Python 解释器大小不可核对");
+        var path=tool.toPath();var type=java.nio.file.attribute.BasicFileAttributes.class;
+        var before=Files.readAttributes(path,type,LinkOption.NOFOLLOW_LINKS);
+        if(!before.isRegularFile()||before.isSymbolicLink()||before.fileKey()==null||before.size()!=size)
+            throw new SecurityException("原 Python 解释器身份不可核对");
+        var hash=java.security.MessageDigest.getInstance("SHA-256");
+        try(InputStream in=Files.newInputStream(path,LinkOption.NOFOLLOW_LINKS)){
+            byte[] block=new byte[65536];long count=0;
+            while(count<size){
+                int n=in.read(block,0,(int)Math.min(block.length,size-count));
+                if(n<=0)throw new java.io.IOException("原 Python 解释器字节不完整");
+                hash.update(block,0,n);count+=n;
+            }
+            if(in.read()!=-1)throw new SecurityException("原 Python 解释器长度已变化");
+        }
+        var after=Files.readAttributes(path,type,LinkOption.NOFOLLOW_LINKS);
+        if(!after.isRegularFile()||after.isSymbolicLink()||!before.fileKey().equals(after.fileKey())||after.size()!=size||
+                !before.lastModifiedTime().equals(after.lastModifiedTime()))throw new SecurityException("原 Python 解释器已变化");
+        StringBuilder observed=new StringBuilder();
+        for(byte value:hash.digest())observed.append(String.format(java.util.Locale.ROOT,"%02x",value&255));
+        return observed.toString();
+    }
     synchronized List<List<String>> probeCommands() throws Exception {List<List<String>> result=new ArrayList<>();JSONArray tools=active.getJSONArray("tools");for(int i=0;i<tools.length();i++){JSONObject tool=tools.getJSONObject(i);List<String> command=new ArrayList<>();command.add(tool.getString("path"));JSONArray args=tool.getJSONArray("versionArguments");for(int j=0;j<args.length();j++)command.add(args.getString(j));result.add(command);}return result;}
     synchronized Map<String,String> hostEnvironment(String environmentIdentity) throws Exception {
         if(active==null||!environmentIdentity.equals(active.getString("generationIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");

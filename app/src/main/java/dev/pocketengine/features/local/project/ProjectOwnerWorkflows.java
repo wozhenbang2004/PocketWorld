@@ -265,6 +265,15 @@ public final class ProjectOwnerWorkflows {
         requireOrdinaryFileOwner(project,checkout);return found;
     }
     public JSONObject fileForOwner(String project,String checkout,String path)throws Exception {requireOrdinaryFileOwner(project,checkout);return local.readDevelopmentFileForOwner(project,checkout,path);}
+    public dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(ProjectFileDraft file,
+            java.util.function.BooleanSupplier window)throws Exception{
+        if(!window.getAsBoolean())throw new SecurityException("原副本文件窗口已关闭");
+        requireOrdinaryFileOwner(file.projectId,file.checkoutId);
+        return local.reviewOwnerPythonForOwner(file,()->{
+            if(!window.getAsBoolean())throw new SecurityException("原副本文件窗口已变化，未使用其他代码");
+        });
+    }
+
     public JSONObject saveFileForOwner(ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {requireOrdinaryFileOwner(intent.projectId,intent.checkoutId);return local.saveDevelopmentFileForOwner(intent,current);}
     public JSONObject saveOrdinaryEditorFileForOwner(ProjectFileDraft.SaveIntent intent,boolean createEmpty,java.util.function.BooleanSupplier current)throws Exception {
         requireOrdinaryFileOwner(intent.projectId,intent.checkoutId);return local.saveOrdinaryEditorFileForOwner(intent,createEmpty,current);

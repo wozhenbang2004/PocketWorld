@@ -349,6 +349,68 @@ public final class FeatureHost implements AutoCloseable {
     public boolean ownsGitImportTask(String id)throws Exception{JSONObject task=tasks==null?null:tasks.get(id,false);return task!=null&&(task.has("ownerGitImport")||task.has("ownerGitPublication"));}
     public dev.pocketengine.features.local.project.ProjectGitImport.Result gitImportResultForOwner(String id,dev.pocketengine.core.RunControl observation)throws Exception{JSONObject row=tasks.ownerGitImportForOwner(id);if(row.optBoolean("sourceRetired")||!"completed".equals(row.getString("status")))throw new SecurityException("请先取得未撤回的原Git读取与退出结果，再审阅发布");return ((dev.pocketengine.features.local.LocalModule)module("local")).gitImportsForOwner().result(row.getJSONObject("scope"),row.getJSONObject("nativeJob"),observation);}
 
+    /** The explicit current native file review, not a generic FeatureHost command. */
+    public JSONObject submitOwnerPythonForOwner(dev.pocketengine.features.local.runtime.OwnerPythonRun.Confirmed confirmed)throws Exception{
+        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))
+            throw new IllegalStateException("原本机项目宿主不可用");
+        try(confirmed){
+            confirmed.requireHost(local.ownerPythonRuntime());
+            var claim=tasks.beginOwnerPythonForOwner(confirmed);
+            String id=claim.id();
+            RunControl original=new RunControl();original.bindHostRun(id,id,1);
+            original.setAuthorityCheck(()->tasks.requireOwnerPythonCurrent(claim,original));
+            try{
+                // A true native job admission does not settle any process outcome.
+                // Only the exact provider exit callback or an explicit retained read may do so.
+                confirmed.startApproved(claim,original,()->tasks.requireOwnerPythonCurrent(claim,original));
+            }catch(Exception uncertain){
+                synchronized(tasks){
+                    if(tasks.hasUnresolved(id))tasks.status(id,"reconciling","原脚本结果仍待核对；没有再次运行。");
+                }
+            }
+            emitTask(id);sendState();return tasks.ownerPythonStatusForOwner(claim);
+        }
+    }
+
+    /** Same original owner Work, separate read-only native pipe channels. No effect/retry on absence. */
+    public JSONObject readOwnerPythonForOwner(String id,String run,int epoch,String operation,BooleanSupplier window)throws Exception{
+        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local)||!window.getAsBoolean())
+            throw new IllegalStateException("原本机脚本工作未打开");
+        var original=tasks.ownerPythonOriginalForOwner(id,run,epoch,operation);
+        RunControl read=new RunControl();read.bindHostRun(id,run,epoch);
+        read.setAuthorityCheck(()->{
+            if(!window.getAsBoolean())throw new SecurityException("原脚本工作窗口已关闭");
+            tasks.ownerPythonStatusForOwner(original);
+        });
+        JSONObject result=tasks.ownerPythonStatusForOwner(original);
+        if(!"settled".equals(result.opt("state"))){
+            dev.pocketengine.features.local.runtime.OwnerPythonRun.Retained retained;
+            try{retained=local.ownerPythonRuntime().retainedOwnerPython(original,read,window);}
+            catch(Exception unavailable){if(Thread.currentThread().isInterrupted()||!window.getAsBoolean())throw unavailable;retained=null;}
+            if(retained!=null&&tasks.recordOwnerPythonBackendReceipt(original.route(),retained.nativeReceipt().json(),window)){
+                emitTask(id);sendState();
+            }
+            result=tasks.ownerPythonStatusForOwner(original);
+        }
+        if("settled".equals(result.opt("state"))){
+            result.put("outputState","unavailable");
+            JSONObject output;
+            try{output=local.ownerPythonRuntime().openOwnerPythonOutput(original,read,window);}
+            catch(Exception unavailable){if(Thread.currentThread().isInterrupted()||!window.getAsBoolean())throw unavailable;output=null;}
+            if(output!=null){
+                String[] fields={"stdout","stderr","stdoutBytesShown","stderrBytesShown","truncated","encoding"};
+                JSONObject payload=new JSONObject(),scalar=new JSONObject(output.toString());
+                for(String field:fields)payload.put(field,scalar.remove(field));
+                if(dev.pocketengine.features.local.project.ProjectSources.canonical(result.getJSONObject("exit"))
+                        .equals(dev.pocketengine.features.local.project.ProjectSources.canonical(scalar))){
+                    for(String field:fields)result.put(field,payload.get(field));
+                    result.put("outputState","available");
+                }
+            }
+        }
+        read.check();return result;
+    }
+
     /** Explicit same-window native owner build confirmation. No Assistant send, queue or tool grant. */
     public JSONObject submitDirectNodeBuildForOwner(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.Confirmed confirmed)throws Exception{
         if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))

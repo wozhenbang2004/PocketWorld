@@ -21,6 +21,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Original native decoders supply bounded content to the same React document. No file URI or network route is exposed. */
 internal class PocketWebOriginalFiles(private val context: Context, private val visible: () -> Boolean, private val changed: () -> Unit) {
     companion object {
+        private const val LAST_LIBRARY_PDF = "last-ordinary-library-pdf"
+        private val bookmarkFileId = Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
+        private val bookmarkDigest = Regex("[a-f0-9]{64}")
         val office = setOf("docx", "xlsx", "pptx")
         val officeMime = setOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -54,8 +57,11 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             }
         }
     }
+    data class LibraryPdfResume(val fileId: String, val sha256: String, val identity: String, val page: Int) {
+        fun view() = JSONObject().put("fileId", fileId).put("sha256", sha256)
+    }
     private class Pin(val source: OwnerFilePreviewSource, val ticket: PocketWebWindowTicket,
-        val accepts: (PocketWebWindowTicket) -> Boolean) {
+        val rememberLibraryPdf: (() -> Boolean)?, val accepts: (PocketWebWindowTicket) -> Boolean) {
         val id = UUID.randomUUID().toString()
         val kind = declaredKind(source)
         val fileId = source.metadata().optString("id")
@@ -93,13 +99,25 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             main.postDelayed(this, 1500)
         }
     }
+    fun libraryPdfResume(): LibraryPdfResume? = runCatching {
+        val saved = preferences.getString(LAST_LIBRARY_PDF, null) ?: return@runCatching null
+        if (saved.length > 320) return@runCatching null
+        val item = JSONObject(saved)
+        val id = item.getString("fileId")
+        val sha = item.getString("sha256")
+        val identity = item.getString("identity")
+        val page = item.opt("page") as? Int ?: return@runCatching null
+        if (item.length() != 4 || !bookmarkFileId.matches(id) || !bookmarkDigest.matches(sha) ||
+            !bookmarkDigest.matches(identity) || page < 1 || preferences.getInt("$identity.page", 0) != page) return@runCatching null
+        LibraryPdfResume(id, sha, identity, page)
+    }.getOrNull()
     fun bind(source: OwnerFilePreviewSource?, compared: Pair<OwnerFilePreviewSource, OwnerFilePreviewSource>?,
-        ticket: PocketWebWindowTicket, accepts: (PocketWebWindowTicket) -> Boolean) {
+        ticket: PocketWebWindowTicket, rememberLibraryPdf: (() -> Boolean)? = null, accepts: (PocketWebWindowTicket) -> Boolean) {
         val same = primary?.source === source && comparison?.first?.source === compared?.first && comparison?.second?.source === compared?.second
         if (same) return
         clear()
-        if (source != null) primary = Pin(source, ticket, accepts).also { pins[it.id] = it }
-        if (compared != null) comparison = Pair(Pin(compared.first, ticket, accepts), Pin(compared.second, ticket, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
+        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, accepts).also { pins[it.id] = it }
+        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, accepts), Pin(compared.second, ticket, null, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
         if (pins.isNotEmpty()) main.postDelayed(watchdog, 1500)
     }
     private fun view(pin: Pin): JSONObject = JSONObject().put("id", pin.id).put("identity", pin.source.identity)
@@ -141,7 +159,14 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             pin.pdfRaster = null
             val confirmed = raster.view()
             pin.information = confirmed
-            preferences.edit().putInt("${pin.source.identity}.page", raster.page).apply()
+            val position = preferences.edit().putInt("${pin.source.identity}.page", raster.page)
+            if (pin.rememberLibraryPdf?.invoke() == true && bookmarkFileId.matches(pin.fileId)) {
+                // Same displayed native raster acknowledgement and write as the actual page resume.
+                // Only an immutable locator, never a filename, path, file body or a new grant.
+                position.putString(LAST_LIBRARY_PDF, JSONObject().put("fileId", pin.fileId).put("sha256", pin.source.sha256)
+                    .put("identity", pin.source.identity).put("page", raster.page).toString())
+            }
+            position.apply()
             done(confirmed, null); changed(); return
         }
         if (pin.kind == "pdf" && command in setOf("load", "read")) pin.pdfRaster = null
