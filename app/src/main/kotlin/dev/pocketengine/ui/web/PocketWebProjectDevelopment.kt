@@ -346,7 +346,15 @@ internal class PocketWebProjectDevelopment(
                 }
             }
             "projects.development.reviewDraftBuild" -> {
-                fields(args,"viewHandle","checkoutId","retainedDraft")
+                val previewDigest=if(args.has("previewOnly")){
+                    fields(args,"viewHandle","checkoutId","retainedDraft","previewOnly","expectedSourceDigest")
+                    require(args.opt("previewOnly")==true) { "只读构建方案须明确选择" }
+                    check(review==null) { "请先关闭原构建审阅" }
+                    text(args,"expectedSourceDigest",64).also { require(it.matches(Regex("[a-f0-9]{64}"))) }
+                }else{
+                    fields(args,"viewHandle","checkoutId","retainedDraft")
+                    null
+                }
                 val checkout=text(args,"checkoutId")
                 val shown=args.getJSONObject("retainedDraft")
                 fields(shown,"checkoutId","goal",*deliveryFields)
@@ -360,18 +368,47 @@ internal class PocketWebProjectDevelopment(
                     }
                     d
                 }
-                val retained=heldDraft();val heldDigest=buildDraftDigest(retained);review=null
+                val retained=heldDraft();val heldDigest=buildDraftDigest(retained)
+                if(previewDigest==null)review=null
                 working(original,done){
                     val host=controller.projectDevelopmentForWeb()
                     val preparation=host.reviewNodeBuildForOwner(original.project,checkout);val pin=preparation.getJSONObject("pin")
-                    val actual=source(original,checkout);val selectedModel=model();val edited=OwnerDraftFirstBuild.edited(pin);val existing=OwnerDraftFirstBuild.existingCheckout(pin)
+                    val actual=source(original,checkout);val selectedModel=if(previewDigest==null)model() else null
+                    val edited=OwnerDraftFirstBuild.edited(pin);val existing=OwnerDraftFirstBuild.existingCheckout(pin)
                     check(existing || untouchedBuildDraft(retained,checkout)) { "请保留或清空当前未交办的目标；未提交改稿构建。" }
-                    check(pin.getString("sourceDigest")==actual.getString("sourceDigest") && edited==actual.optBoolean("editedDraftCopy") &&
-                        existing==actual.optBoolean("existingNodeBuild") && selectedModel.value().optBoolean("configured")) { "所选版本或默认模型未就绪，未开始。" }
+                    val sourceDigest=actual.getString("sourceDigest")
+                    val sameSource=pin.getString("sourceDigest")==sourceDigest && edited==actual.optBoolean("editedDraftCopy") &&
+                        existing==actual.optBoolean("existingNodeBuild")
+                    if(previewDigest==null)check(sameSource && selectedModel?.value()?.optBoolean("configured")==true) {
+                        "所选版本或默认模型未就绪，未开始。"
+                    }else {
+                        check(existing && !edited) { "只读构建方案目前仅适用于普通私人副本。" }
+                        check(sameSource && previewDigest==sourceDigest && actual.opt("projectId")==original.project &&
+                            actual.opt("checkoutId")==checkout) { "原副本源码版本已变化，请重新读取。" }
+                    }
                     check((!edited || !actual.has("editedDraftBuild") && !actual.optBoolean("editedDraftBuildUnavailable")) &&
                         (!existing || !actual.has("existingNodeBuildTask") && !actual.optBoolean("existingNodeBuildUnavailable"))) {
                         "这版已有构建或原记录待核对；请回项目打开这一版的原任务，不重复交办。"
                     }
+                    if(previewDigest!=null){
+                        check(current(original) && review==null && heldDigest==buildDraftDigest(heldDraft())) {
+                            "原项目、草稿或审阅状态已变化，没有查看其他版本。"
+                        }
+                        // No model snapshot, runnable review, or submission identity.
+                        return@working JSONObject().put("format","pocketworld.node-build-plan-preview.v1")
+                            .put("projectId",original.project).put("checkoutId",checkout).put("sourceDigest",sourceDigest)
+                            .put("runtimeId","managed_process_v1").put("manager",pin.getString("manager"))
+                            .put("scripts",preparation.getJSONObject("scripts")).put("editedCopy",edited).put("existingCopy",existing)
+                            .put("preservedProjectDraft",existing && !untouchedBuildDraft(retained,checkout))
+                            .put("readOnly",true).put("commandsAuthorized",false).put("executionAuthorized",false).also { out ->
+                                preparation.optJSONObject("dependencies")?.let { lock ->
+                                    val summary=JSONObject()
+                                    for(key in listOf("manager","managerVersion","registry","lockPath","lockSha256","packages"))summary.put(key,lock.get(key))
+                                    out.put("lockedDependencies",summary).put("dependencyState",preparation.getString("dependencyState"))
+                                }
+                            }
+                    }
+                    val reviewedModel=checkNotNull(selectedModel)
                     val goal=OwnerDraftFirstBuild.goal(pin);val contract=ProjectOwnerWorkflows.deliveryContractForOwner(JSONObject().put("goal",goal))
                     val input=JSONObject().put("projectId",original.project).put("checkoutId",checkout).put("runtime","managed_process_v1")
                         .put("expectedSourceDigest",pin.getString("sourceDigest")).put("clientMessageId",OwnerDraftFirstBuild.reviewedClient(pin))
@@ -379,10 +416,10 @@ internal class PocketWebProjectDevelopment(
                     copyDeliveryFields(contract,input)
                     check(current(original) && heldDigest==buildDraftDigest(heldDraft())) { "原项目或草稿已变，没有准备新工作。" }
                     val selected=Review(UUID.randomUUID().toString(),original,input.toString(),ProjectConventionDraft.bind(retained),
-                        selectedModel.revision(),SystemClock.elapsedRealtime()+120_000,heldDigest)
+                        reviewedModel.revision(),SystemClock.elapsedRealtime()+120_000,heldDigest)
                     review=selected
                     JSONObject().put("reviewHandle",selected.handle).put("requestId",input.getString("clientMessageId")).put("projectId",original.project)
-                        .put("checkoutId",checkout).put("goal",goal).put("deliveryContract",contract).put("source",actual).put("model",selectedModel.value())
+                        .put("checkoutId",checkout).put("goal",goal).put("deliveryContract",contract).put("source",actual).put("model",reviewedModel.value())
                         .put("runtimeId","managed_process_v1").put("runtime","这台手机").put("expiresAt",System.currentTimeMillis()+120_000)
                         .put("commandsAuthorized",false).put("projectMemoryAuthorized",false).put("draftBuild",true).put("editedCopy",edited).put("existingCopy",existing)
                         .put("preservedProjectDraft",existing && !untouchedBuildDraft(retained,checkout))
