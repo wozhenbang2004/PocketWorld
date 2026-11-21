@@ -636,8 +636,9 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     }
     /** Non-secret address configuration only. It cannot replace the original SQL identity, grant,
      * receipt, certificate or any native Permission, and is never transmitted as an invitation. */
-    private JSONObject boundEndpoint(String id) throws Exception {
-        JSONObject peer = currentPeer(id); String raw = preferences.getString(endpointKey(id), null);
+    private JSONObject boundEndpoint(String id) throws Exception { return boundEndpoint(id, currentPeer(id)); }
+    private JSONObject boundEndpoint(String id, JSONObject peer) throws Exception {
+        String raw = preferences.getString(endpointKey(id), null);
         if (raw == null) return null;
         JSONObject config = DeviceProtocol.parseObject(raw.getBytes(StandardCharsets.UTF_8));
         DeviceProtocol.keys(config, DeviceProtocol.set("deviceId instanceId certificateFingerprint localDeviceId localInstanceId"), DeviceProtocol.set("connectionHint pairedLan"));
@@ -674,7 +675,10 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         try {
             currentPeer(id); if (channelOnline(controlChannel(id))) return NativeDeviceWorkspaceHost.Availability.blocked("设备已连接");
             ReconnectingDeviceClient client = selectedClient(id, clients); if (client != null && client.isRunning()) return NativeDeviceWorkspaceHost.Availability.blocked("正在连接，请稍后核对");
-            JSONObject config = boundEndpoint(id); if (config == null) return NativeDeviceWorkspaceHost.Availability.blocked("还没有保存连接地址，请用这台设备的新邀请更新");
+            // Keep the exact peer sampled for the existing endpoint lookup. A missing preference
+            // is distinct from an unreadable, expired or mismatched saved route.
+            JSONObject original = currentPeer(id), config = boundEndpoint(id, original);
+            if (config == null) return NativeDeviceWorkspaceHost.Availability.missingSavedEndpoint(original);
             if (config.has("connectionHint") && "relay".equals(config.getJSONObject("connectionHint").optString("kind"))) currentRelay(peerRelay(config.getJSONObject("connectionHint").getString("serviceBase"), id, false));
             return NativeDeviceWorkspaceHost.Availability.ready();
         } catch (SecurityException changed) { return NativeDeviceWorkspaceHost.Availability.blocked(changed.getMessage()); }

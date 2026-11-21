@@ -518,11 +518,22 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
             "teams.snapshot" -> {
-                fields(args)
+                fields(args, "restoreDefinitionId")
+                val restoreId = if (args.has("restoreDefinitionId")) text(args, "restoreDefinitionId") else null
                 controller.readWebTeamSnapshot { value, error ->
-                    if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) {
-                        if (value != null && error == null) { snapshot = captureSnapshot(value); deliver(PocketWebState.publicValue(snapshot) as JSONObject, null) }
-                        else deliver(null, error ?: "原团队目录尚未读取")
+                    if (currentWindow()) {
+                        if (value != null && error == null) {
+                            snapshot = captureSnapshot(value)
+                            val catalog = PocketWebState.publicValue(snapshot) as JSONObject
+                            if (restoreId == null) deliver(catalog, null)
+                            else {
+                                // Resolve the locator only in this window's freshly read private directory.
+                                val reply = JSONObject().put("catalog", catalog)
+                                runCatching { known(restoreId, "teams") }.getOrNull()?.takeIf { it.opt("id") == restoreId }
+                                    ?.let { reply.put("reading", view("definition", it)) }
+                                deliver(reply, null)
+                            }
+                        } else deliver(null, error ?: "原团队目录尚未读取")
                     }
                 }
             }

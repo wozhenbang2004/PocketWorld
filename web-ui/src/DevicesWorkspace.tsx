@@ -34,6 +34,7 @@ import './devices-reading.css';
 import './device-workspace-overview.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
+type AddressRepair = { place: DeviceReadingPlace; epoch: number };
 type PhoneArchiveRead = 'devices.queryHistory' | 'devices.queryPhoneGoalResult';
 const sentPhoneRead = (row: Data): PhoneArchiveRead | undefined => row.targetRunRecorded === true ? 'devices.queryPhoneGoalResult'
   : (Number.isSafeInteger(row.targetAcceptedAt) && row.targetAcceptedAt > 0 || row.sourceSendPhase === 'write_claimed') ? 'devices.queryHistory' : undefined;
@@ -89,7 +90,8 @@ const connectionRecoveryLine = (peer: Data) => {
   // Button availability is independently sampled after the channel snapshot, not evidence of a connection.
   if (reason === '设备已连接') return '本机两次检查的状态不一致。请先重读这台设备的本机连接记录。';
   if (state === 'CONNECTING' || peer.connection?.reconnectClientRunning === true) return '上次检查时本机仍在尝试连接，尚未核实控制通道接通。先重读本机记录，无需重配。';
-  if (reason === '还没有保存连接地址，请用这台设备的新邀请更新' || reason === '保存的连接地址无法读取，请重新更新')
+  if (peer.actions?.connect?.code === 'missing_saved_endpoint') return '本机未保存这台设备的地址。请在原设备生成短时邀请，回这里核对。不用重新配对。';
+  if (reason === '保存的连接地址无法读取，请重新更新')
     return '本机没有可用的原连接地址。可核对这台原设备的新邀请来更新地址，不重新配对。';
   return '上次未核实这台设备的控制通道。先重读本机连接记录，不必重配，也不代表原工作已经停止。';
 };
@@ -165,6 +167,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const pinnedConnection=sourceFocus?.purpose==='partner_connection';
   const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown }>();
   const peerPlace = useRef(!sourceFocus && !modelReturn ? reading?.selected : undefined);
+  const addressRepair = useRef<AddressRepair | undefined>(undefined);
   const placeRead = useRef(!peerPlace.current);
   const focusReturnedPeer = useRef(!!peerPlace.current);
   const [snapshot, setSnapshot] = useState<Data | null>(null), [peerId, setPeerId] = useState(() => peerPlace.current?.partner.deviceId || ''), [form, setForm] = useState(''), [raw, setRaw] = useState('');
@@ -252,7 +255,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     });
   };
   const closeReview = () => {
-    const old = handle.current; handle.current = ''; scope.current.invalidate(document.visibilityState === 'visible');
+    const old = handle.current; handle.current = ''; addressRepair.current = undefined; scope.current.invalidate(document.visibilityState === 'visible');
     setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setLastWindowsRead(null); setWindowsReadFailure(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
     if (old) void run('devices.discard', { viewHandle: old }).catch(() => {});
   };
@@ -276,7 +279,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setLastWindowsRead(null); setWindowsReadFailure(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
-    setLocalRead(undefined); setManualFocus(undefined);
+    setLocalRead(undefined); setManualFocus(undefined); addressRepair.current = undefined;
     autoReadSource.current = ''; // Restored native windows never retain the previous local archive handle.
     placeRead.current = !peerPlace.current;
     setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');setClosedReceipt(null);closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
@@ -420,6 +423,40 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const manualPreparationForPeer = (task: Data) => deviceManualPhonePreparation(task, peer);
   const localReadReady = !!localRead && !!snapshot && snapshot.capturedAt >= localRead.capturedAt;
   const localReadCurrent = localReadReady && localRead.revision === state.deviceWorkspaceRevision;
+  const mayRepairAddress = !sourceFocus && state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen &&
+    localReadCurrent && !!peerPlace.current && peer?.revoked === false && peer.actions?.connect?.available === false && peer.actions.connect.code === 'missing_saved_endpoint' &&
+    !deviceChannelWasConnected(peer) && peer.connection?.state !== 'CONNECTING' && peer.connection?.reconnectClientRunning !== true &&
+    Number.isSafeInteger(peer.authorizationEpoch) && peer.authorizationEpoch > 0 && supported('devices.reviewConnection');
+  const matchesAddressRepair = (pin: AddressRepair, here: Data | undefined, partner: Data | undefined) =>
+    addressRepair.current === pin && selectedPeer.current === pin.place.partner.deviceId &&
+    partner?.revoked === false && partner.authorizationEpoch === pin.epoch && sameDeviceReadingPlace(pin.place, here, partner);
+  const openAddressForm = (repair?: AddressRepair) => {
+    addressRepair.current = repair; setForm('connection'); setRaw(''); setAddress('');
+  };
+  const openMissingAddressForm = () => {
+    const place = peerPlace.current;
+    if (busy || document.hidden || !mayRepairAddress || !peer || !place || selectedPeer.current !== peer.deviceId ||
+        !sameDeviceReadingPlace(place, local, peer)) return;
+    openAddressForm({ place, epoch: peer.authorizationEpoch });
+  };
+  const reviewAddressForm = (args: { raw: string } | { serviceBase: string }) => {
+    const pin = addressRepair.current;
+    const changed = '原配对身份已变化，没有更新其他设备的地址。请重读本机连接记录。';
+    if (pin && !matchesAddressRepair(pin, local, peer)) { setError(changed); return; }
+    void invoke('devices.reviewConnection', { ...args, deviceId: pin?.place.partner.deviceId || peerId }, (value, actual) => {
+      if (pin) {
+        const selected = rows(actual?.peers).filter(row => row.deviceId === pin.place.partner.deviceId);
+        const { deviceId, instanceId, certificateFingerprint } = pin.place.partner;
+        if (value.kind !== 'connection' || value.view?.deviceId !== deviceId || value.view?.instanceId !== instanceId ||
+            value.view?.certificateFingerprint !== certificateFingerprint || selected.length !== 1 ||
+            !matchesAddressRepair(pin, actual?.local, selected[0])) {
+          if (typeof value.viewHandle === 'string' && value.viewHandle) void run('devices.discard', { viewHandle: value.viewHandle }).catch(() => {});
+          throw new Error(changed);
+        }
+      }
+      acceptReview(value);
+    });
+  };
   const overviewManualPreparation = (task: Data) => {
     const preparation = deviceOriginalManualPhonePreparation(task);
     if (!preparation) return;
@@ -574,6 +611,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const confirmReview = (extra: Data = {}) => {
     if(review?.kind==='goal'&&!originalDeviceInputReady(review.view)){setError('原目标与附带资料未能核对，请从本机接单记录重新打开。');return;}
     const original = review; if (!original || !ack || busy) return;
+    if (original.kind === 'connection' && addressRepair.current && !matchesAddressRepair(addressRepair.current, local, peer)) {
+      closeReview(); setError('原配对身份已变化，没有更新其他设备的地址。请重读本机连接记录。'); return;
+    }
     if(original.kind==='result'&&original.view.canRecordDecision!==true){setError('这份原候选现在只能在本机查看。');return;}
     handle.current = ''; setReview(null);
     void invoke('devices.confirm', { viewHandle: original.viewHandle, acknowledged: true, ...(original.kind === 'goal' ? { useForFutureGoals: future } : {}), ...extra }, (value, actual) => {
@@ -1435,6 +1475,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               : peer.connection?.state === 'DEGRADED' ? <p>上次通道不稳定。打开本机记录不需要重新配对；读取对端最新结果需重新核对。</p>
               : !deviceChannelWasConnected(peer) ? <p>{connectionRecoveryLine(peer)}</p>
               : <p>当时通道已接通；画面、输入和本次执行范围另行核对。</p>}
+            {mayRepairAddress && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={openMissingAddressForm}>更新这台设备的地址</Button></div>}
             {!retired(peer) && windowsObservation && <p className="pw-field-hint">{windowsObservation}</p>}
             {!retired(peer) && <><dl className="pw-device-scope-directions">
               <div><dt>对方授予本机</dt><dd>{received?.text}</dd></div>
@@ -1487,7 +1528,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               <p>同一局域网：对端保持接收服务开启，使用它当前显示的数字地址与短期邀请。换网不创建新身份；用原设备的邀请更新地址后重新连接。</p>
               <p>离开局域网：已有临时 WSS 租约只连控制通道，不包含桌面视频。桌面默认依赖双方可直达网络；TURN 只可能转发媒体，不能代替已认证控制通道。</p>
               <p>断开只关闭连接，不代表远端任务停止。先查看原任务与操作回执；未确认的写入不重放。</p>
-              {!retired(peer) && <Button variant="secondary" disabled={busy} onClick={() => { setForm('connection'); setRaw(''); setAddress(''); }}>核对原身份并更新连接方式</Button>}
+              {!retired(peer) && !mayRepairAddress && <Button variant="secondary" disabled={busy} onClick={() => openAddressForm()}>核对原身份并更新连接方式</Button>}
             </AccordionItem>
             <AccordionItem id="capabilities" title="能力与两端权限" description="查看范围，调整本机授予的权限" icon={IconShieldCheck}>
               {!retired(peer) && <>{!phoneAccess && peerEntry?.kind !== 'capabilities' && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>向这台设备更新能力记录</Button>}{!deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}</>}
@@ -1531,7 +1572,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               <p className="pw-source-copy">设备 {peer.deviceId} · 授权版本 {peer.authorizationEpoch}</p>
               <p className="pw-source-copy">完整证书指纹：{fingerprint(peer.certificateFingerprint || peer.fingerprint)}</p>
               <div className="pw-form-actions">
-                {!retired(peer) && <Button variant="secondary" disabled={busy} onClick={() => { setForm('connection'); setRaw(''); setAddress(''); }}>更新连接地址</Button>}
+                {!retired(peer) && !mayRepairAddress && <Button variant="secondary" disabled={busy} onClick={() => openAddressForm()}>更新连接地址</Button>}
                 {available(peer.actions?.revoke) && <Button variant="ghost" disabled={busy} onClick={() => actionReview('peer.revoke', { deviceId: peer.deviceId })}>核对并撤销本机信任</Button>}
               </div>
             </AccordionItem>
@@ -1604,7 +1645,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <p>可选另一台手机或电脑这次邀请的截图或照片，保留四周白边。只在本机识别，不上传，也不自动加入。也可以粘贴邀请：</p>
           </>}
           <TextAreaField label={form === 'relay' ? '已有临时租约' : form === 'add' ? '对方的短时邀请' : '原设备短时邀请'} value={raw} onChange={setRaw} isDisabled={busy} hint="仅在当前窗口核对，离开或进入后台后清除。" />
-          <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { void invoke(form === 'relay' ? 'devices.reviewRelay' : form === 'connection' ? 'devices.reviewConnection' : 'devices.inspectInvitation', { raw, ...(form === 'connection' ? { deviceId: peerId } : {}) }, form==='add'?value=>showPairPreview(value):acceptReview); }}>{form === 'add' ? '核对原邀请' : '读取原生审阅'}</Button>
+          <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { if (form === 'connection') reviewAddressForm({ raw }); else void invoke(form === 'relay' ? 'devices.reviewRelay' : 'devices.inspectInvitation', { raw }, form==='add'?value=>showPairPreview(value):acceptReview); }}>{form === 'add' ? '核对原邀请' : '读取原生审阅'}</Button>
           </>}
           {form === 'add' && !available(actions.join) && actions.join?.reason && <p>{actions.join.reason}</p>}
         </section>}
@@ -1634,7 +1675,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <Button variant="secondary" disabled={busy} onClick={() => { setForm('relay'); setRaw(''); }}>接收异网连接的临时中继租约</Button>
           </AccordionItem>
         </Accordion>}
-        {form === 'connection' && <><SelectField label="已配置的临时中继" value={address} onChange={setAddress} options={Array.from(new Set(rows(actions.relayLeases).map(row => row.serviceBase))).map(value => ({ id: value, label: value }))} isDisabled={busy} /><Button variant="secondary" disabled={busy || !address} onClick={() => { void invoke('devices.reviewConnection', { deviceId: peerId, serviceBase: address }, acceptReview); }}>核对原设备中继地址</Button></>}
+        {form === 'connection' && <><SelectField label="已配置的临时中继" value={address} onChange={setAddress} options={Array.from(new Set(rows(actions.relayLeases).map(row => row.serviceBase))).map(value => ({ id: value, label: value }))} isDisabled={busy} /><Button variant="secondary" disabled={busy || !address} onClick={() => reviewAddressForm({ serviceBase: address })}>核对原设备中继地址</Button></>}
         {form === 'relay' && <><p>租约仅提供临时网络通道，不授予设备权限。仍需比较双端指纹并明确选择范围。</p>{rows(actions.relayLeases).map(lease => <div className="pw-source-record" key={lease.serviceBase + lease.inviterDeviceId}><p>{lease.serviceBase} · 至 {time(lease.expiresAt)}</p><Button variant="secondary" disabled={busy} onClick={() => actionReview('relay.remove', { serviceBase: lease.serviceBase, inviterDeviceId: lease.inviterDeviceId })}>核对并移除这份租约</Button></div>)}</>}
         {form === 'recoveryProvide' && <><p>仅开放原结果的短时只读窗口，关闭页面会关闭入口。</p><SelectField label="本机实际地址或原中继" value={address} onChange={setAddress} options={recoveryAddresses.map(value => ({ id: value, label: value }))} isDisabled={busy} /><Button disabled={busy || !address} onClick={() => { void invoke('devices.openRecovery', { inviteId, address }, acceptReview); }}>开启原结果只读窗口</Button></>}
         {form === 'recoveryRead' && <><TextField label="原设备显示的数字地址或已配置中继服务" value={host} onChange={setHost} isDisabled={busy} />{!/^wss:\/\/|^https:\/\//.test(host) && <TextField label="原恢复端口" value={port} onChange={setPort} isDisabled={busy} />}<Button disabled={busy || !host || !/^wss:\/\/|^https:\/\//.test(host) && !/^\d+$/.test(port)} onClick={() => { void invoke('devices.recoverPairing', { inviteId, host, port: /^wss:\/\/|^https:\/\//.test(host) ? 0 : Number(port) }, () => { setForm(''); setNotice('已查询原已提交配对结果，未重新授权。'); }); }}>只读取原配对结果</Button></>}

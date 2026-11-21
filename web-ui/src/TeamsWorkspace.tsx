@@ -359,15 +359,28 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     entered.current = true; setBusy(true); setReview(null); setAcknowledged(false); setError('');
     setReading(original ? { ...original, viewHandle: '' } : null);
     void (async () => {
+      if (original?.kind === 'definition') {
+        const id = label(original.definition?.id);
+        if (!id) throw new Error('原团队配置已变化');
+        const value = object(await run('teams.snapshot', { restoreDefinitionId: id }));
+        const next = value.reading, shown = currentReading.current;
+        if (!alive.current || generation !== requestGeneration.current || backgrounded.current || !ownsNativeWindow() ||
+            shown?.kind !== 'definition' || shown.definition?.id !== id) { release(next); return; }
+        const fresh = object(value.catalog);
+        if (!Array.isArray(fresh.teams) || !Array.isArray(fresh.runs)) { release(next); throw new Error('原团队目录尚未读取'); }
+        acceptCatalog(fresh);
+        if (next?.kind !== 'definition' || typeof next.viewHandle !== 'string' || !next.viewHandle || next.definition?.id !== id) {
+          release(next); throw new Error('原团队配置已变化');
+        }
+        acceptReading(next);
+        return;
+      }
       const fresh = object(await run('teams.snapshot'));
       if (!alive.current || generation !== requestGeneration.current) return;
       acceptCatalog(fresh);
       if (original?.kind === 'run') {
         const value = object(await run('teams.readRun', proposalRead(original.run.id)));
         if (alive.current && generation === requestGeneration.current && value.reading?.run?.id === original.run.id) acceptReading(value.reading);
-      } else if (original?.kind === 'definition') {
-        const value = object(await run('teams.readDefinition', { id: original.definition.id }));
-        if (alive.current && generation === requestGeneration.current && value.definition?.id === original.definition.id) acceptReading(value);
       }
     })().catch(failure => { if (alive.current && generation === requestGeneration.current) setError(failure instanceof Error ? failure.message : String(failure)); })
       .finally(() => { if (generation === requestGeneration.current) { entered.current = false; if (alive.current) setBusy(false); } });

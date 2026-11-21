@@ -9,14 +9,35 @@ import org.json.JSONObject;
  * executor, key creation, network connection or receiver opt-in is created by opening a page. */
 public final class NativeDeviceWorkspaceHost implements AutoCloseable {
     public static final String FORMAT = "pocketworld.device-workspace.v1";
+    /** A local endpoint observation must not be attached to a row from another trust revision. */
+    private record MissingSavedEndpoint(String deviceId, String instanceId, String fingerprint, long epoch) {
+        boolean matches(JSONObject peer) {
+            return Boolean.FALSE.equals(peer.opt("revoked")) && deviceId.equals(peer.opt("deviceId"))
+                    && instanceId.equals(peer.opt("instanceId")) && fingerprint.equals(peer.opt("certificateFingerprint"))
+                    && epoch == peer.optLong("authorizationEpoch", -1);
+        }
+    }
     public static final class Availability {
         public final boolean available;
         public final String reason;
-        private Availability(boolean available, String reason) { this.available = available; this.reason = reason; }
+        private final MissingSavedEndpoint missingSavedEndpoint;
+        private Availability(boolean available, String reason) { this(available, reason, null); }
+        private Availability(boolean available, String reason, MissingSavedEndpoint missingSavedEndpoint) {
+            this.available = available; this.reason = reason; this.missingSavedEndpoint = missingSavedEndpoint;
+        }
         public static Availability ready() { return new Availability(true, ""); }
         public static Availability blocked(String reason) {
             if (blank(reason)) throw new IllegalArgumentException("Blocked native action needs its actual reason");
             return new Availability(false, reason);
+        }
+        static Availability missingSavedEndpoint(JSONObject trusted) {
+            String reason = "还没有保存连接地址，请用这台设备的新邀请更新";
+            String id = trusted.optString("deviceId"), instance = trusted.optString("instanceId"), fingerprint = trusted.optString("fingerprint");
+            long epoch = trusted.optLong("authorizationEpoch", -1);
+            if (!Boolean.FALSE.equals(trusted.opt("revoked")) || !id.matches("pw1_[a-f0-9]{64}")
+                    || !instance.matches("[A-Za-z0-9][A-Za-z0-9_-]{0,127}") || !fingerprint.matches("[a-f0-9]{64}")
+                    || epoch < 1 || epoch > DeviceProtocol.MAX_SAFE_INTEGER) return blocked(reason);
+            return new Availability(false, reason, new MissingSavedEndpoint(id, instance, fingerprint, epoch));
         }
         void require() { if (!available) throw new IllegalStateException(reason); }
     }
@@ -301,8 +322,13 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             for (int i = 0; i < peers.length(); i++) {
                 JSONObject peer = peers.getJSONObject(i);
                 String id = peer.getString("deviceId");
-                peer.put("actions", new JSONObject().put("revoke", availability(pairing.revokeAvailability(id)))
-                        .put("connect", availability(pairing.connectAvailability(id))).put("disconnect", availability(pairing.disconnectAvailability(id))));
+                JSONObject revoke = availability(pairing.revokeAvailability(id));
+                Availability connect = pairing.connectAvailability(id);
+                JSONObject connectView = availability(connect);
+                if (connect.missingSavedEndpoint != null && connect.missingSavedEndpoint.matches(peer))
+                    connectView.put("code", "missing_saved_endpoint");
+                peer.put("actions", new JSONObject().put("revoke", revoke).put("connect", connectView)
+                        .put("disconnect", availability(pairing.disconnectAvailability(id))));
             }
             Availability invitationAction = pairing.inviteAvailability();
             JSONObject actions = new JSONObject().put("enable", availability(receiver.enableAvailability()))
