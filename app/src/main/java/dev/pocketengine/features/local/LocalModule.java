@@ -1241,6 +1241,12 @@ public final class LocalModule implements EngineModule {
     public synchronized void requireDraftDependencyFiles(String checkout,JSONObject review)throws Exception{
         dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.requireInstalled(runtimeWorkspace(checkout),review);
     }
+    public synchronized void requireDirectViteBuildToolsForOwner(String project,String checkout,OriginalNodeWebOutput.OutputSource source)throws Exception{
+        if(!source.needsTypeScriptTool())return;
+        validateDirectNodeCheckout(project,checkout);
+        source.requireBuildTool(runtimeWorkspace(checkout));
+        ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID).requireReactTypeScriptNodeForHost();
+    }
     public interface ProjectAdmission extends ProjectRuntime.LiveGate { }
     public synchronized JSONObject projectCapabilityForHost(JSONObject exact)throws Exception {
         if(closed)throw new IllegalStateException("项目执行器已关闭");
@@ -1301,12 +1307,15 @@ public final class LocalModule implements EngineModule {
         validateDirectNodeCheckout(project,checkout);
         File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),checkout,false),files=new File(home,"files");
         JSONObject snapshot=exportDirectory(files,checkout(checkout)),source=ProjectSources.describe(snapshot);
+        var web=selected.vite()?OriginalNodeWebOutput.directViteSource(exact,snapshot):null;
+        String output=selected.vite()?(web==null?null:OriginalNodeWebOutput.ENTRY):OwnerDirectNodeBuild.selectedOutput(exact,snapshot,false);
         if(!source.getString("sourceDigest").equals(scope.opt("sourceDigest"))||
-                !scope.getString("outputPath").equals(OwnerDirectNodeBuild.selectedOutput(exact,snapshot,selected.vite()))||
+                !scope.getString("outputPath").equals(output)||
                 !scope.getString("lockSha256").equals(lock.opt("lockSha256"))||
                 !projectCapabilityStillCurrent(exact,selected.capability()))
             throw new SecurityException("所选副本的源码、锁或实际工具已变化，没有构建");
         requireDraftDependencyFiles(checkout,lock);
+        if(web!=null)requireDirectViteBuildToolsForOwner(project,checkout,web);
         DirectViteEditorResume resume=null;
         if(selected.vite())try{
             EditorSaveOrigin origin=editorSaveOrigin(snapshot.getJSONObject("checkout"),project,checkout);

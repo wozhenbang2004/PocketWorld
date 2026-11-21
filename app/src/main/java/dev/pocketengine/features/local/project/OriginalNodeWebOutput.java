@@ -7,6 +7,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import dev.pocketengine.features.local.runtime.RuntimeInvocation;
+import dev.pocketengine.features.local.runtime.RuntimeWorkspace;
 import dev.pocketengine.features.local.preview.ViteOutputMount;
 import java.util.regex.Pattern;
 import java.util.Map;
@@ -40,7 +41,25 @@ public final class OriginalNodeWebOutput {
     private static final Pattern VITE_ASSET=Pattern.compile("\\b(?:src|href)\\s*=\\s*\"((?:/|\\./)(?:assets/)?[A-Za-z0-9._-]+)\"");
     private static final String REACT_CONFIG="vite.config.js", REACT_ENTRY="src/main.jsx";
     private static final Set<String> REACT_PACKAGES=Set.of("vite","@vitejs/plugin-react","react","react-dom");
-    private static final Set<String> REACT_ENTRY_URLS=Set.of("/"+REACT_ENTRY,"./"+REACT_ENTRY,REACT_ENTRY);
+    private static final String REACT_TS_CONFIG="vite.config.ts",REACT_TS_ENTRY="src/main.tsx",REACT_TS_BUILD="tsc -b && vite build",
+        REACT_TS_VERSION="6.0.3";
+    private static final Set<String> REACT_TS_PACKAGES=Set.of("vite","@vitejs/plugin-react","react","react-dom","typescript",
+        "@types/node","@types/react","@types/react-dom");
+    // LF byte hashes of vitejs/vite@981f07fa4580fb88b333c4450431e4715d2a0b82, packages/create-vite/template-react-ts.
+    // The solution references only these two noEmit files, with no extends/plugins and only fixed cache paths.
+    private static final Map<String,String> REACT_TS_PROJECT=Map.of(
+        "tsconfig.json","770b4140bbb581e2dfd9ea9946ffc9c75a1d86ba7d2db5f77c83e37cbdf9d808",
+        "tsconfig.app.json","8e5d12ba330e7d86409edec74b95451e0db22ee09b9426c94b5bf817571eddb0",
+        "tsconfig.node.json","d366cc0827139db39c61815f22491bbfda56c654354a42ad7795143d314e45e8");
+    // microsoft/TypeScript@050880ce59e30b356b686bd3144efe24f875ebc8 (v6.0.3):
+    // npm's tsc entry -> lib/tsc.js -> lib/_tsc.js. Pin actual executable JS, not only npm metadata.
+    private record CompilerFile(String path,long bytes,String sha){}
+    private static final CompilerFile REACT_TS_BIN=new CompilerFile("bin/tsc",45,
+        "8d5fa5bd883fec0979fc2004f1fe1d99aef40570155d550eadc0b03b55513bf0");
+    private static final CompilerFile REACT_TS_SHIM=new CompilerFile("lib/tsc.js",267,
+        "2cffde0b8c6760dfb0b5b0382bbb7e00ba6a8b2d981b9205b256a700a481d983");
+    private static final CompilerFile REACT_TS_CORE=new CompilerFile("lib/_tsc.js",6_239_091,
+        "1c59e77a54b186ec43fa7f3e0d3c4bb15ca5eb5ba43e96b1d3a267139eddd3e3");
     // Official create-vite template-react config, blob 9982072c14949379a05b48f656856691a6f0ab86.
     // Only cosmetic whitespace/quotes/semicolon layout and its known comment may vary.
     private static final String IMPORT_END="(?:\\s*;\\s*|[ \\t]*\\r?\\n\\s*)";
@@ -55,10 +74,18 @@ public final class OriginalNodeWebOutput {
 
     public static final class OutputSource {
         private final String stockEntry;
-        private final boolean nestedPublic;
-        private OutputSource(String stockEntry,boolean nestedPublic){this.stockEntry=stockEntry;this.nestedPublic=nestedPublic;}
+        private final boolean nestedPublic,directReactTypeScript;
+        private OutputSource(String stockEntry,boolean nestedPublic){this(stockEntry,nestedPublic,false);}
+        private OutputSource(String stockEntry,boolean nestedPublic,boolean directReactTypeScript){
+            this.stockEntry=stockEntry;this.nestedPublic=nestedPublic;this.directReactTypeScript=directReactTypeScript;
+        }
         private boolean vite(){return stockEntry==null;}
         private String profile(){return vite()?VITE:STOCK;}
+        public boolean needsTypeScriptTool(){return directReactTypeScript;}
+        /** No package installation or command probe. Only the exact supported TS profile needs this additional fact. */
+        public void requireBuildTool(RuntimeWorkspace root)throws Exception {
+            if(directReactTypeScript)requirePreparedReactTypeScript(root);
+        }
     }
 
     public static final class Build {
@@ -172,7 +199,7 @@ public final class OriginalNodeWebOutput {
         return new OutputSource(html,false);
     }
 
-    /** Ordinary model-free Vite: configless or the official default React-JS preset only.
+    /** Ordinary model-free Vite: configless or one of the verified default React presets only.
      * Check the original validated source rows too: a binary config cannot opt out of this rule. */
     public static OutputSource directViteSource(JSONObject exact,JSONObject snapshot)throws Exception{
         JSONObject checkout=snapshot.getJSONObject("checkout");
@@ -190,7 +217,9 @@ public final class OriginalNodeWebOutput {
         if(manifest==null||manifest.getBytes(StandardCharsets.UTF_8).length>65536||!files.containsKey("package-lock.json")||
             !files.containsKey("index.html")||files.get("index.html").isBlank())return null;
         JSONObject pkg=dev.pocketengine.features.plugins.mcp.McpJson.parse(manifest),scripts=pkg.optJSONObject("scripts");
-        if(scripts==null||!"vite build".equals(scripts.opt("build"))||scripts.has("prebuild")||scripts.has("postbuild")||pkg.has("postcss"))return null;
+        if(scripts==null||scripts.has("prebuild")||scripts.has("postbuild")||pkg.has("postcss"))return null;
+        boolean typescript=REACT_TS_BUILD.equals(scripts.opt("build"));
+        if(!typescript&&!"vite build".equals(scripts.opt("build")))return null;
         boolean vite=false;
         for(String field:Set.of("dependencies","devDependencies")){
             JSONObject declared=pkg.optJSONObject(field);
@@ -205,28 +234,91 @@ public final class OriginalNodeWebOutput {
             String leaf=path.substring(path.lastIndexOf('/')+1).toLowerCase(java.util.Locale.ROOT);
             if(leaf.startsWith(".env")||leaf.startsWith(".postcssrc")||leaf.startsWith("postcss.config."))return null;
             customReactTransform|=leaf.equals(".babelrc")||leaf.startsWith(".babelrc.")||leaf.startsWith("babel.config.");
+            if(typescript&&(leaf.equals("jsconfig.json")||leaf.startsWith("tsconfig")&&leaf.endsWith(".json"))&&
+                !REACT_TS_PROJECT.containsKey(path))return null;
             if(leaf.startsWith("vite.config.")){
-                if(!REACT_CONFIG.equals(path))return null;
+                if(!(typescript?REACT_TS_CONFIG:REACT_CONFIG).equals(path))return null;
                 react=true;
             }
         }
         if(pkg.has("packageManager")&&!(pkg.opt("packageManager") instanceof String)||
                 !"npm".equals(ProjectCheckoutTooling.manager(paths,pkg.optString("packageManager"))))return null;
         OwnerDraftNodeDependencies.requirePlainProject(pkg,paths);
-        if(react&&(customReactTransform||!defaultReactVite(pkg,files)))return null;
+        if((typescript&&!react)||(react&&(customReactTransform||!defaultReactVite(pkg,files,typescript))))return null;
+        if(typescript)return new OutputSource(null,true,true);
         return requireViteSource(files,true);
     }
-    private static boolean defaultReactVite(JSONObject pkg,Map<String,String> files)throws Exception{
-        String config=files.get(REACT_CONFIG),jsx=files.get(REACT_ENTRY),html=files.get("index.html");
+    private static boolean defaultReactVite(JSONObject pkg,Map<String,String> files,boolean typescript)throws Exception{
+        String target=typescript?REACT_TS_ENTRY:REACT_ENTRY;
+        String config=files.get(typescript?REACT_TS_CONFIG:REACT_CONFIG),jsx=files.get(target),html=files.get("index.html");
         if(!"module".equals(pkg.opt("type"))||config==null||config.length()>1024||!DEFAULT_REACT_CONFIG.matcher(config).matches()||
             jsx==null||jsx.isBlank()||html.getBytes(StandardCharsets.UTF_8).length>ViteOutputMount.MAX_ENTRY_BYTES)return false;
+        if(typescript)for(var item:REACT_TS_PROJECT.entrySet()){
+            String body=files.get(item.getKey());
+            if(body==null||body.length()>2048||!item.getValue().equals(ProjectSources.sha256(body.replace("\r\n","\n").getBytes(StandardCharsets.UTF_8))))return false;
+        }
         var document=org.jsoup.Jsoup.parse(html);
         var scripts=document.select("script");
         if(scripts.size()!=1||!document.select("base").isEmpty())return false;
         var entry=scripts.get(0);
-        return entry.parent()==document.body()&&entry.attributes().size()==2&&"module".equals(entry.attr("type"))&&
-            REACT_ENTRY_URLS.contains(entry.attr("src"))&&entry.data().isBlank()&&
-            OwnerDraftNodeDependencies.matchesOriginalNpmProfile(pkg,files.get("package-lock.json"),REACT_PACKAGES);
+        String lock=files.get("package-lock.json"),src=entry.attr("src");
+        if(entry.parent()!=document.body()||entry.attributes().size()!=2||!"module".equals(entry.attr("type"))||
+            !(target.equals(src)||("/"+target).equals(src)||("./"+target).equals(src))||!entry.data().isBlank()||
+            !OwnerDraftNodeDependencies.matchesOriginalNpmProfile(pkg,lock,typescript?REACT_TS_PACKAGES:REACT_PACKAGES))return false;
+        return !typescript||REACT_TS_VERSION.equals(dev.pocketengine.features.plugins.mcp.McpJson.parse(lock)
+            .getJSONObject("packages").getJSONObject("node_modules/typescript").opt("version"));
+    }
+    private static void requirePreparedReactTypeScript(RuntimeWorkspace root)throws Exception{
+        var noFollow=LinkOption.NOFOLLOW_LINKS;
+        try{
+            Path binDir=root.resolve("node_modules/.bin",false).toPath(),link=binDir.resolve("tsc");
+            Path bin=compilerFile(root,REACT_TS_BIN);
+            // npm puts this checkout's .bin before the managed Node's PATH; do not fall back to its own node executable.
+            if(!originalTscLink(link,bin)||!Files.isExecutable(bin)||!Files.notExists(binDir.resolve("node"),noFollow))
+                throw new SecurityException("原 npm TypeScript 启动文件无法核对");
+            compilerFile(root,REACT_TS_SHIM);compilerFile(root,REACT_TS_CORE);
+            if(!binDir.equals(root.resolve("node_modules/.bin",false).toPath())||!originalTscLink(link,bin)||
+                    !Files.notExists(binDir.resolve("node"),noFollow))throw new SecurityException("原 npm 工具路径已变化");
+            Path cache=root.resolve("node_modules/.tmp",false).toPath();
+            if(!Files.notExists(cache,noFollow)&&!Files.isDirectory(cache,noFollow))throw new SecurityException("原 TypeScript 缓存不是普通目录");
+            for(String file:Set.of("tsconfig.app.tsbuildinfo","tsconfig.node.tsbuildinfo")){
+                Path target=root.resolve("node_modules/.tmp/"+file,false).toPath();
+                if(!Files.notExists(target,noFollow)&&(!Files.isRegularFile(target,noFollow)||
+                    !(Files.getAttribute(target,"unix:nlink",noFollow) instanceof Number links)||links.longValue()!=1))
+                    throw new SecurityException("原 TypeScript 缓存不能安全使用");
+            }
+        }catch(Exception unavailable){
+            throw new SecurityException("未核实这份锁在原副本中的 TypeScript 6.0.3 或本地缓存位置；没有构建。",unavailable);
+        }
+    }
+    private static boolean originalTscLink(Path link,Path bin)throws Exception{
+        return Files.isSymbolicLink(link)&&"../typescript/bin/tsc".equals(Files.readSymbolicLink(link).toString())&&bin.equals(link.toRealPath());
+    }
+    private static Path compilerFile(RuntimeWorkspace root,CompilerFile expected)throws Exception{
+        String relative="node_modules/typescript/"+expected.path();
+        Path physical=root.resolve(relative,true).toPath();var noFollow=LinkOption.NOFOLLOW_LINKS;
+        var before=Files.readAttributes(physical,BasicFileAttributes.class,noFollow);
+        if(!before.isRegularFile()||before.fileKey()==null||before.size()!=expected.bytes()||!singleCompilerLink(physical))
+            throw new SecurityException("原 TypeScript 编译资料的文件身份不同");
+        var hash=java.security.MessageDigest.getInstance("SHA-256");
+        try(var input=Files.newInputStream(physical,noFollow)){
+            byte[] block=new byte[65_536];long remaining=expected.bytes();
+            while(remaining>0){int count=input.read(block,0,(int)Math.min(remaining,block.length));
+                if(count<=0)throw new SecurityException("原 TypeScript 编译资料的字节不全");
+                hash.update(block,0,count);remaining-=count;
+            }
+            if(input.read()!=-1)throw new SecurityException("原 TypeScript 编译资料的长度已变化");
+        }
+        var after=Files.readAttributes(physical,BasicFileAttributes.class,noFollow);
+        StringBuilder actual=new StringBuilder();for(byte b:hash.digest())actual.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+        if(!after.isRegularFile()||after.size()!=expected.bytes()||!before.fileKey().equals(after.fileKey())||
+                !before.lastModifiedTime().equals(after.lastModifiedTime())||!physical.equals(root.resolve(relative,true).toPath())||
+                !singleCompilerLink(physical)||!expected.sha().contentEquals(actual))
+            throw new SecurityException("原 TypeScript 编译资料与官方固定版本不同");
+        return physical;
+    }
+    private static boolean singleCompilerLink(Path path)throws Exception{
+        return Files.getAttribute(path,"unix:nlink",LinkOption.NOFOLLOW_LINKS) instanceof Number links&&links.longValue()==1;
     }
     private static OutputSource requireViteSource(Map<String,String> files,boolean nestedPublic)throws Exception {
         String manifest=files.get("package.json");

@@ -189,13 +189,15 @@ public final class ProjectOwnerWorkflows {
         boolean nativeNpm=offerDirect&&seed==null&&deps!=null&&"npm".equals(pin.opt("manager"));
         JSONObject exact=nativeNpm?ProjectDevelopment.exact(plan,OwnerDirectNodeBuild.step(plan)):null;
         boolean directCompiler=nativeNpm&&OwnerDirectNodeBuild.selectedOutput(exact,snapshot,false)!=null;
-        boolean directVite=nativeNpm&&!directCompiler&&OwnerDirectNodeBuild.selectedOutput(exact,snapshot,true)!=null;
+        var web=nativeNpm&&!directCompiler?OriginalNodeWebOutput.directViteSource(exact,snapshot):null;
+        boolean directVite=web!=null;
         boolean supported=directCompiler||directVite;
         if(directVite)result.put("directBuildKind","vite");
         JSONObject viteWork=directVite?tasks.directViteWorkForSource(project,checkout,digest):null;
         JSONObject dependencyWork=supported?tasks.directNodeDependenciesWorkForSource(project,checkout,digest):null;
         boolean ready=supported&&"current_packages_checked".equals(result.opt("dependencyState"))&&
                 tasks.directNodeDependenciesPermitBuild(project,checkout,digest,plan.getString("runtimeIdentity"),deps);
+        if(ready&&directVite&&viteWork==null)local.requireDirectViteBuildToolsForOwner(project,checkout,web);
         var offer=ready&&directCompiler?OwnerDirectNodeBuild.offer(local,plan,pin,snapshot,false):null;
         var viteOffer=ready&&directVite&&viteWork==null?OwnerDirectNodeBuild.offer(local,plan,pin,snapshot,true):null;
         OwnerDirectNodeDependencies.Review dependencyOffer=null;

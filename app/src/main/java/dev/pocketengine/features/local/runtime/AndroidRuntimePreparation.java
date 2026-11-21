@@ -297,6 +297,30 @@ final class AndroidRuntimePreparation {
     synchronized List<String> command(RuntimeWorkspace workspace,String relative,List<String> guestCommand) throws Exception {if(active==null)throw new IllegalStateException("runtime_environment_not_prepared");return command(rootfs(active),workspace,relative,guestCommand);}
     synchronized List<String> command(RuntimeWorkspace workspace,String relative,List<String> guestCommand,Map<String,String> ordinaryEnvironment)throws Exception {if(active==null)throw new IllegalStateException("runtime_environment_not_prepared");return command(rootfs(active),workspace,relative,guestCommand,ordinaryEnvironment);}
     synchronized String guestTool(String name) throws Exception {if(active==null)throw new IllegalStateException("runtime_environment_not_prepared");JSONArray tools=active.getJSONArray("tools");for(int i=0;i<tools.length();i++)if(name.equals(tools.getJSONObject(i).getString("name")))return tools.getJSONObject(i).getString("path");throw new IllegalArgumentException("runtime_tool_not_installed");}
+    /** npm adds cwd and ancestor .bin and its packaged node-gyp-bin before the sealed Node PATH. */
+    synchronized void requireReactTypeScriptNode()throws Exception{
+        if(active==null||!engineVerified()||!"/opt/node/bin/node".equals(guestTool("node"))||!"/opt/node/bin/npm".equals(guestTool("npm")))
+            throw new SecurityException("请先核对这部手机的原 Node 和 npm");
+        File filesystem=rootfs(active);verifyTools(active,false);
+        requireAbsentGuestPath(filesystem,"node_modules/.bin/node");
+        requireAbsentGuestPath(filesystem,"opt/node/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin/node");
+    }
+    private static void requireAbsentGuestPath(File filesystem,String relative)throws Exception{
+        Path at=filesystem.toPath();String[] parts=relative.split("/");var noFollow=LinkOption.NOFOLLOW_LINKS;
+        for(int i=0;i<parts.length;i++){
+            at=at.resolve(parts[i]);
+            if(!Files.notExists(at,noFollow)&&(i==parts.length-1||!Files.isDirectory(at,noFollow)))
+                throw new SecurityException("npm 的原工具搜索路径出现额外的 Node 或不明目录，未构建");
+        }
+    }
+    synchronized List<String> commandForReactTypeScript(RuntimeWorkspace workspace,String relative,List<String> guest,Map<String,String> ordinary)throws Exception{
+        if(!".".equals(relative)||!List.of("/opt/node/bin/npm","run","build").equals(guest)||
+                !dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.nativeEnvironment().equals(ordinary)||
+                ordinary.keySet().stream().anyMatch(key->key.startsWith("NODE_")||key.equals("npm_config_node_options")))
+            throw new SecurityException("不是原 TypeScript npm 执行环境");
+        requireReactTypeScriptNode();
+        return command(rootfs(active),workspace,relative,guest,ordinary,true);
+    }
     /** The manual script route verifies only its actual installed interpreter, without invoking it. */
     synchronized String ownerPythonInterpreterHash(String generation)throws Exception {
         if(active==null||!identity().equals(generation)||!catalog.identity.equals(active.optString("catalogIdentity"))||!engineVerified())
@@ -349,13 +373,19 @@ final class AndroidRuntimePreparation {
     private Map<String,String> hostEnvironment(String environmentIdentity,File linkStorage) {Map<String,String> env=new LinkedHashMap<>();env.put("PROOT_LOADER",loader.getPath());env.put("PROOT_TMP_DIR",tmp.getPath());env.put("PROOT_L2S_DIR",linkStorage.getPath());env.put("TMPDIR",tmp.getPath());env.put("PATH","/system/bin");env.put("POCKETWORLD_ENVIRONMENT_IDENTITY",environmentIdentity);return env;}
     private List<String> command(File rootfs,RuntimeWorkspace workspace,String relative,List<String> guest) throws Exception {return command(rootfs,workspace,relative,guest,java.util.Collections.emptyMap());}
     private List<String> command(File rootfs,RuntimeWorkspace workspace,String relative,List<String> guest,Map<String,String> ordinaryEnvironment) throws Exception {
+        return command(rootfs,workspace,relative,guest,ordinaryEnvironment,false);
+    }
+    private List<String> command(File rootfs,RuntimeWorkspace workspace,String relative,List<String> guest,Map<String,String> ordinaryEnvironment,
+            boolean disableNodeCompileCache) throws Exception {
         if(!engineVerified())throw new SecurityException("runtime_apk_engine_missing_or_changed");
         File linkStorage=linkDirectory(rootfs);
         List<String> command=new ArrayList<>(List.of(proot.getPath(),"--kill-on-exit","--link2symlink","-0","-r",rootfs.getCanonicalPath(),"-b","/dev","-b","/proc","-b",linkStorage.getCanonicalPath()+":"+linkStorage.getCanonicalPath(),"-b",home.getCanonicalPath()+":/root","-b",tmp.getCanonicalPath()+":/tmp","-b",dns.getCanonicalPath()+":/etc/resolv.conf"));
         String cwd="/tmp";
         if(workspace!=null) {File directory=workspace.resolve(relative,false);if(!directory.isDirectory())throw new IllegalArgumentException("runtime_working_directory_missing");command.addAll(List.of("-b",workspace.directory().getCanonicalPath()+":/workspace"));String part=workspace.directory().toPath().relativize(directory.toPath()).toString();cwd="/workspace"+(part.isEmpty()?"":"/"+part);}
         File nativeGitPool=workspace==null?null:workspace.privateGitPoolForHost();if(nativeGitPool!=null)command.addAll(List.of("-b",nativeGitPool.getCanonicalPath()+":"+dev.pocketengine.features.local.project.ProjectGitIsolation.GUEST));
-        command.addAll(List.of("-w",cwd,"/usr/bin/env","-i","PATH=/opt/node/bin:/usr/local/bin:/usr/bin:/bin","HOME=/root","TMPDIR=/tmp","LANG=C.UTF-8","DEBIAN_FRONTEND=noninteractive","SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt","GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt"));if(nativeGitPool!=null)command.add(dev.pocketengine.features.local.project.ProjectGitIsolation.ENV+"="+dev.pocketengine.features.local.project.ProjectGitIsolation.GUEST);for(Map.Entry<String,String> variable:new java.util.TreeMap<>(ordinaryEnvironment).entrySet()){String key=variable.getKey(),value=variable.getValue();if(!dev.pocketengine.features.local.project.ProjectCommandSpec.allowedEnvironmentKey(key)&&!(key.equals("TERM")&&value.equals("xterm-256color"))&&!dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.exactEnvironment(key,value))throw new SecurityException("runtime_guest_environment_override_rejected");command.add(key+"="+value);}command.addAll(guest);if(command.size()>256)throw new IllegalArgumentException("runtime_tool_arguments_too_many");return command;
+        command.addAll(List.of("-w",cwd,"/usr/bin/env","-i","PATH=/opt/node/bin:/usr/local/bin:/usr/bin:/bin","HOME=/root","TMPDIR=/tmp","LANG=C.UTF-8","DEBIAN_FRONTEND=noninteractive","SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt","GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt"));if(nativeGitPool!=null)command.add(dev.pocketengine.features.local.project.ProjectGitIsolation.ENV+"="+dev.pocketengine.features.local.project.ProjectGitIsolation.GUEST);for(Map.Entry<String,String> variable:new java.util.TreeMap<>(ordinaryEnvironment).entrySet()){String key=variable.getKey(),value=variable.getValue();if(!dev.pocketengine.features.local.project.ProjectCommandSpec.allowedEnvironmentKey(key)&&!(key.equals("TERM")&&value.equals("xterm-256color"))&&!dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.exactEnvironment(key,value))throw new SecurityException("runtime_guest_environment_override_rejected");command.add(key+"="+value);}
+        if(disableNodeCompileCache)command.add("NODE_DISABLE_COMPILE_CACHE=1");
+        command.addAll(guest);if(command.size()>256)throw new IllegalArgumentException("runtime_tool_arguments_too_many");return command;
     }
     private void run(ManagedProcessJobs.PreparationContext context,File rootfs,RuntimeWorkspace workspace,List<String> guest,long timeout) throws Exception {
         NativeProcessSupervisor.Exit exit=context.execute(command(rootfs,workspace,".",guest),hostEnvironment(catalog.identity,linkDirectory(rootfs)),tmp,timeout);

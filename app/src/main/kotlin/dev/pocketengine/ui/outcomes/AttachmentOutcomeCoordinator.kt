@@ -833,12 +833,32 @@ internal class AttachmentOutcomeCoordinator(
                 it.opt("mimeType")=="application/pdf"&&it.opt("sourceKind")=="content_uri"&&it.isNull("sourceTaskId")&&
                 it.optLong("size",-1)>0&&it.optLong("size",-1)==file.optLong("size",-2)
         }==true
+    /** Actual saved TXT for this still-held page read, not a saved-file search or a reusable locator. */
+    fun savedPdfPageExtract(page:AttachmentPdfPageText):JSONObject? {
+        val source=state.file?:return null
+        val read=state.document?:return null
+        val catalog=state.snapshot?:return null
+        val saved=catalog.optJSONObject("savedPdfPageExtractHere")?:return null
+        val receipt=read.opt("readReceiptId") as? String?:return null
+        if(!privateLibrary()||state.globalStandaloneDraftVisit==null||state.originalReturn!=AttachmentOriginalReturn.LIST||
+            !state.documentOpen||state.originalFile==null||state.pdfPageText!=page||catalog.opt("taskId")!=""||
+            receipt.isBlank()||receipt!=saved.opt("readReceiptId")||read.opt("attachmentId")!=source.opt("id")||
+            read.opt("sha256")!=source.opt("sha256")||saved.opt("viewerId")!=page.viewerId||
+            saved.opt("rasterId")!=page.rasterId||saved.opt("page")!=page.page||
+            saved.opt("sourceAttachmentId")!=source.opt("id")||saved.opt("sourceSha256")!=source.opt("sha256"))return null
+        return catalog.optJSONArray("artifacts").objects().singleOrNull{it.opt("id")==saved.opt("id")}?.takeIf{
+            it.opt("sha256")==saved.opt("sha256")&&it.opt("role")=="result"&&it.opt("availability")=="available"&&
+                it.opt("sourceKind")=="document_extract"&&it.opt("mimeType")=="text/plain"&&
+                it.opt("sourceAttachmentId")==source.opt("id")&&it.opt("sourceSha256")==source.opt("sha256")
+        }
+    }
     fun saveReadAsFile(currentPdfPage:(()->Boolean)?=null,currentWord:(()->Boolean)?=null){
         if(state.busy||!canSaveRead())return;val task=state.taskId;val file=state.file?:return;val read=state.document?:return
         val page=state.pdfPageText
         val word=state.wordExcerpt
         check(page==null||currentPdfPage?.invoke()==true) { "原 PDF 阅读位置已变化，未保存摘录" }
         check(word==null||currentWord?.invoke()==true) { "原 Word 位置已变化，未保存摘录" }
+        if(page!=null&&savedPdfPageExtract(page)!=null)return
         if(word!=null)state=state.copy(wordSaveAttempted=true)
         val receipt=read.getString("readReceiptId")
         val pdfWork=state.snapshot?.takeIf{task!=null&&it.opt("taskId")==task&&it.opt("taskStatus")=="completed"&&
@@ -847,9 +867,7 @@ internal class AttachmentOutcomeCoordinator(
             state.originalFile==null&&state.documentOpen&&file.opt("role")=="source"&&file.opt("mimeType")=="application/pdf"&&
             read.opt("readContext")=="native_owner_preview"&&read.opt("taskId")==task&&read.opt("format")=="pdf"&&
             read.opt("coverage")=="pdf_text_layer"&&listedWorkPdf(it,file)}
-        work(replaceDocumentWithFile=word==null,onSuccess={if(page!=null && state.pdfPageText==page)
-            state=state.copy(originalFile=null,pdfPageText=null)
-            else if(word!=null && state.wordExcerpt===word)
+        work(replaceDocumentWithFile=page==null&&word==null,onSuccess={if(word!=null && state.wordExcerpt===word)
                 state=state.copy(documentOpen=false,document=null,wordExcerpt=null,wordSaveAttempted=false)}){c,_->
             if(page!=null){
                 c.setAuthorityCheck { check(currentPdfPage?.invoke()==true) { "原 PDF 阅读位置已变化，未确认保存" } }
@@ -863,6 +881,22 @@ internal class AttachmentOutcomeCoordinator(
             val snapshot=app.ownerOutcomeSnapshot(task,c);val artifacts=snapshot.optJSONArray("artifacts").objects()
             val selected=artifacts.firstOrNull{it.optString("id")==saved.getString("id")&&it.optString("sha256")==saved.getString("sha256")}?:throw IllegalStateException("摘录文件已保存，请刷新原任务成果核对；没有再次生成")
             val source=saved.optJSONObject("source")
+            if(page!=null){
+                check(task==null&&source!=null&&snapshot.opt("taskId")==""&&
+                    saved.opt("principalId")=="owner"&&saved.opt("spaceId")=="private"&&saved.opt("mimeType")=="text/plain"&&
+                    !saved.optBoolean("outputSourceRetired")&&source.opt("kind")=="document_extract"&&
+                    source.isNull("taskId")&&source.isNull("runId")&&source.isNull("operationId")&&
+                    source.opt("readReceiptId")==receipt&&source.opt("coverage")=="pdf_text_layer"&&
+                    source.opt("sourceAttachmentId")==file.opt("id")&&source.opt("sourceSha256")==file.opt("sha256")&&
+                    selected.opt("id")!=file.opt("id")&&selected.opt("role")=="result"&&selected.opt("availability")=="available"&&
+                    selected.opt("sourceKind")=="document_extract"&&selected.opt("mimeType")=="text/plain"&&
+                    selected.opt("sourceAttachmentId")==file.opt("id")&&selected.opt("sourceSha256")==file.opt("sha256")&&
+                    artifacts.count{it.opt("id")==selected.opt("id")}==1){"本页摘录已写入，未核对到完整回执；可到成果清单核对。"}
+                val verified=JSONObject().put("id",selected.getString("id")).put("sha256",selected.getString("sha256"))
+                    .put("viewerId",page.viewerId).put("rasterId",page.rasterId).put("page",page.page).put("readReceiptId",receipt)
+                    .put("sourceAttachmentId",file.getString("id")).put("sourceSha256",file.getString("sha256"))
+                return@work snapshot.put("savedPdfPageExtractHere",verified) to null
+            }
             if(word!=null){
                 val expected=AttachmentWordOrigin(file.getString("id"),file.getString("sha256"),word.unit,word.chunk,word.blocks.size)
                 check(source!=null&&source.opt("readReceiptId")==receipt&&source.opt("originalWordExcerpt")==AttachmentWordOrigin.FORMAT&&

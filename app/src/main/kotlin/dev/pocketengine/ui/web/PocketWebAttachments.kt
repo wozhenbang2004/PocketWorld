@@ -43,6 +43,7 @@ internal class PocketWebAttachments(
             "drafts.retainRevision", "drafts.checkRevision", "drafts.retainMarkdown", "drafts.checkMarkdown",
             "drafts.retainPdfPage", "drafts.checkPdfPage",
             "drafts.returnGenerated", "drafts.openGeneratedSource")
+        private val DRAFTS_WHILE_DOCUMENT_PENDING = setOf("drafts.list", "drafts.open", "drafts.save", "drafts.leave")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
         private const val DOCUMENT_REVIEW_TTL = 120_000L
@@ -144,7 +145,7 @@ internal class PocketWebAttachments(
         return ordinaryLibrary() && controller.conversationReader == null && controller.state.filePath == null &&
             !state.busy && !flow.exportPending &&
             state.file == null && state.originalFile == null && state.documentDraft == null && !state.documentOpen &&
-            state.processingSource == null && state.comparison == null && state.pendingDocumentTask == null &&
+            state.processingSource == null && state.comparison == null &&
             state.libraryDocumentReturn == null && !state.fromWorkResult && !state.restoredWorkReturn &&
             !controller.state.attachmentImporting &&
             state.libraryImport?.phase !in setOf("selecting", "selection_unconfirmed", "registering") &&
@@ -559,7 +560,8 @@ internal class PocketWebAttachments(
             val command = args.getString("command")
             val pairedPdf = flow.state.pdfPageText
             val pairedWord=flow.state.wordExcerpt
-            if(pairedPdf!=null||pairedWord!=null) check(command in setOf("back","close","cancel","saveRead")) { "请先返回原件阅读" }
+            if(pairedPdf!=null||pairedWord!=null) check(command in setOf("back","close","cancel","saveRead")||
+                pairedPdf!=null&&command=="openOriginal") { "请先返回原件阅读" }
             if (OriginalNodeCompilerDelivery.resultRow(flow.state.file)) {
                 check(command in setOf("close", "back", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails", "export", REPORT_WORK_NAVIGATION)) {
                     "此固定编译输出仅在本机查看或另存"
@@ -694,7 +696,16 @@ internal class PocketWebAttachments(
                     flow.saveReadAsFile(::stillOnPage)
                 }
                 "originalDetails" -> { flow.showOriginalDetails(); viewer.clear() }
-                "openOriginal" -> if(args.has("wordExcerptSource")){
+                "openOriginal" -> if(pairedPdf!=null){
+                    val saved=flow.savedPdfPageExtract(pairedPdf)?:error("本页保存的 TXT 尚未核对")
+                    check(args.length()==5&&libraryPdfSurface(flow.state,allowPageText=true)&&!flow.exportPending&&
+                        viewer.displayedPdfPage(flow.state.file)==pairedPdf&&args.opt("fileId")==saved.opt("id")&&
+                        args.opt("sha256")==saved.opt("sha256")){"只能打开本页刚核对保存的 TXT"}
+                    val file=selected()
+                    flow.backFromDocument()
+                    flow.selectFile(file)
+                    flow.openOriginalFile()
+                }else if(args.has("wordExcerptSource")){
                     check(args.length()==4&&args.opt("wordExcerptSource")==true&&wordLibrarySurface(flow.state)&&
                         flow.libraryWordExcerpt()!=null){"请从已核对的 Word 摘录打开原段落"}
                     val file=flow.state.file
@@ -832,6 +843,8 @@ internal class PocketWebAttachments(
         try {
             val frame = PocketWebStandaloneDocumentDrafts.Frame(text("windowId"), text("frameId"))
             val command = text("command")
+            // A live draft shelf may edit a different storage record, never resume or replace the pending generation.
+            check(flow.state.pendingDocumentTask == null || command in DRAFTS_WHILE_DOCUMENT_PENDING)
             if (command == "drafts.returnGenerated") {
                 exact("returnHandle")
                 val origin = generatedDraftReturn?.takeIf { it.handle == text("returnHandle") && it.window.id == frame.windowId }

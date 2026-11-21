@@ -220,6 +220,11 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             LiveGate current)throws Exception {
         return OwnerPythonRun.review(this,draft,observed,current);
     }
+    public void requireReactTypeScriptNodeForHost()throws Exception {
+        AndroidRuntimePreparation profile=androidRuntime;
+        if(profile==null||!jobs.available())throw new IllegalStateException("请先核对这部手机原托管开发工具");
+        profile.requireReactTypeScriptNode();
+    }
     public OwnerPythonRun.Retained retainedOwnerPython(dev.pocketengine.store.TaskStore.OwnerPythonOriginal original,
             dev.pocketengine.core.RunControl reader,java.util.function.BooleanSupplier window)throws Exception {
         return OwnerPythonRun.retainedExit(this,original.plan(),original.route(),reader,window);
@@ -291,7 +296,10 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.requireLaunch(exact,invocation.sourceSnapshot(),describe(),invocation.workspace());
         if(dev.pocketengine.features.skills.ManagedSkillBackend.exact(invocation.exact()))dev.pocketengine.features.skills.ManagedSkillBackend.requireProgram(invocation.exact());
         if(dev.pocketengine.features.local.project.ProjectGitImport.exact(invocation.exact())){if(nativeImportLease==null||invocation.executionRef().phase()!=RuntimeExecutionRef.Phase.COMMAND)throw new SecurityException("缺少原Git导入的固定命令租约");dev.pocketengine.features.local.project.ProjectGitImport.requireProgram(invocation.exact());}
-        if(androidRuntime!=null){passedToJobs=true;return dispatchAndroid(invocation,nativeImportLease,pipeAdmission);}
+        var web=invocation.directWebOutput()?dev.pocketengine.features.local.project.OriginalNodeWebOutput.directViteSource(exact,invocation.sourceSnapshot()):null;
+        if(invocation.directWebOutput()&&web==null)throw new SecurityException("原网页构建类型变化，没有派发");
+        if(androidRuntime!=null){passedToJobs=true;return dispatchAndroid(invocation,nativeImportLease,pipeAdmission,web);}
+        if(web!=null&&web.needsTypeScriptTool())throw new SecurityException("仅使用这部手机原已核对的 Node 环境");
         if(!identity.equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
         if(!describe().getBoolean("canExecute"))throw new IllegalStateException("runtime_environment_not_prepared");
         RuntimeWorkspace workspace=invocation.workspace();workspace.verify(invocation);
@@ -334,11 +342,14 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         passedToJobs=true;return pipeAdmission==null?jobs.start(invocation,command,environment,directory,timeout,lease):jobs.startPipes(invocation,command,environment,directory,timeout,lease,pipeAdmission);
         }finally{if(nativeImportLease!=null&&!passedToJobs)nativeImportLease.close();}
     }
-    private RuntimeReceipt dispatchAndroid(RuntimeInvocation invocation,AutoCloseable nativeImportLease,NativePipeAdmission pipeAdmission) throws Exception {
+    private RuntimeReceipt dispatchAndroid(RuntimeInvocation invocation,AutoCloseable nativeImportLease,NativePipeAdmission pipeAdmission,
+            dev.pocketengine.features.local.project.OriginalNodeWebOutput.OutputSource web) throws Exception {
         boolean passedToJobs=false;try {
         AndroidRuntimePreparation profile=androidRuntime;
         if(!identity().equals(invocation.exact().getString("runtimeIdentity")))throw new SecurityException("runtime_reviewed_environment_changed");
         RuntimeWorkspace workspace=invocation.workspace();workspace.verify(invocation);
+        boolean reactTypeScript=web!=null&&web.needsTypeScriptTool();
+        if(reactTypeScript){web.requireBuildTool(workspace);invocation.checkCurrent();}
         if(invocation.executionRef().phase()==RuntimeExecutionRef.Phase.STAGE) {
             RuntimeReceipt previous=jobs.existing(invocation.executionRef());if(previous!=null)return previous;
             AutoCloseable preparation=preparationLease(invocation);
@@ -363,7 +374,8 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
             timeout=payload.optLong("timeoutMillis",300000);if(timeout<1||timeout>86400000)throw new IllegalArgumentException("runtime_timeout_invalid");
             Map<String,String> ordinary=new LinkedHashMap<>();if(commandSpec!=null){JSONObject requested=commandSpec.getJSONObject("environment");for(java.util.Iterator<String> keys=requested.keys();keys.hasNext();){String name=keys.next();ordinary.put(name,requested.getString(name));}if("pty".equals(commandSpec.getString("terminalMode")))ordinary.put("TERM","xterm-256color");}
             if(invocation.ownerLockedBuild()||dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.exact(invocation.exact()))ordinary.putAll(dev.pocketengine.features.local.project.OwnerDraftNodeDependencies.nativeEnvironment());
-            command=profile.command(workspace,relative,guest,ordinary);environment=profile.hostEnvironment(identity());lease=nativeImportLease==null?profile.acquire():nativeImportLease;
+            command=reactTypeScript?profile.commandForReactTypeScript(workspace,relative,guest,ordinary):profile.command(workspace,relative,guest,ordinary);
+            environment=profile.hostEnvironment(identity());lease=nativeImportLease==null?profile.acquire():nativeImportLease;
         }
         passedToJobs=true;return pipeAdmission==null?jobs.start(invocation,command,environment,cwd,timeout,lease):jobs.startPipes(invocation,command,environment,cwd,timeout,lease,pipeAdmission);
         }finally{if(nativeImportLease!=null&&!passedToJobs)nativeImportLease.close();}

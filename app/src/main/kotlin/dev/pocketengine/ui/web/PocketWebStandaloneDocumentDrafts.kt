@@ -66,7 +66,7 @@ internal class PocketWebStandaloneDocumentDrafts(
     data class TextRetention(val state: State, val savedAt: Long? = null, val sourceUnavailable: Boolean = false)
 
     private data class Scope(val windowId: String, val ticket: PocketWebWindowTicket, val linkedEditor: Boolean,
-        val textSource: TextSeed? = null)
+        val textSource: TextSeed?, val pendingDocument: String?)
     private data class Editor(val edit: Edit, val pin: Pin, val source: RevisionSource? = null, val removalOnly: Boolean = false)
     private class FirstAttempt(val handle: String, var pin: Pin? = null)
     private class LinkedAttempt(val source: RevisionSource, var pin: Pin? = null)
@@ -97,7 +97,7 @@ internal class PocketWebStandaloneDocumentDrafts(
 
     /** Explicit shelf action only. It does not open a body. Null means this presentation retired. */
     fun list(frame: Frame, done: (Catalog?) -> Unit) {
-        val current = admission(frame)
+        val current = admission(frame, allowPendingDocument = true)
         if (scope != current) { retire(); scope = current }
         check(editor == null && blank == null) { "请先离开当前本机文档草稿" }
         check(pending == null) { "请先等待本次原草稿核对" }
@@ -187,7 +187,7 @@ internal class PocketWebStandaloneDocumentDrafts(
 
     /** Explicit selection from this visit's actual projected rows. The caller must never replay its body. */
     fun open(frame: Frame, rowHandle: String, done: (Opened?) -> Unit) {
-        val current = admission(frame)
+        val current = admission(frame, allowPendingDocument = true)
         check(scope == current && editor == null && blank == null) { "请从当前本机草稿列表打开原版本" }
         require(canonicalId(rowHandle)) { "原草稿列表位置无效" }
         val pin = rows[rowHandle] ?: error("该版本不在当前已核对的本机草稿中")
@@ -220,7 +220,7 @@ internal class PocketWebStandaloneDocumentDrafts(
 
     /** Explicit save of five typed fields. No read-back body is echoed in this acknowledgement. */
     fun save(frame: Frame, shown: Edit, fields: Fields, done: (Saved?) -> Unit) {
-        val current = admission(frame)
+        val current = admission(frame, allowPendingDocument = true)
         require(canonicalId(shown.editorHandle) && canonicalId(shown.versionHandle)) { "原草稿编辑版本无效" }
         val original = editor?.takeIf { scope == current && it.edit == shown && !it.removalOnly }
             ?: error("这份本机草稿的编辑版本已变化")
@@ -435,7 +435,7 @@ internal class PocketWebStandaloneDocumentDrafts(
     }
 
     fun leave(frame: Frame) {
-        val current = admission(frame)
+        val current = admission(frame, allowPendingDocument = true)
         check(scope == null || scope == current) { "原草稿窗口已离开" }
         retire()
     }
@@ -453,10 +453,13 @@ internal class PocketWebStandaloneDocumentDrafts(
         pending = null
     }
 
-    private fun admission(frame: Frame, linkedEditor: Boolean = false, textSource: TextSeed? = null): Scope {
+    private fun admission(frame: Frame, linkedEditor: Boolean = false, textSource: TextSeed? = null,
+                          allowPendingDocument: Boolean = false): Scope {
         checkMain()
         check(canonicalId(frame.windowId) && canonicalId(frame.frameId)) { "原文件窗口身份无效" }
-        val next = Scope(frame.windowId, captureWindow(), linkedEditor, textSource)
+        val pendingDocument = controller.attachmentOutcomes.state.pendingDocumentTask
+        check(allowPendingDocument || pendingDocument == null) { "请先核对原文档结果" }
+        val next = Scope(frame.windowId, captureWindow(), linkedEditor, textSource, pendingDocument)
         check(current(next, frame)) { "请在当前私人文件库核对原文档草稿" }
         return next
     }
@@ -482,7 +485,7 @@ internal class PocketWebStandaloneDocumentDrafts(
             visible.optJSONArray("sources") != null && visible.optJSONArray("artifacts") != null &&
             state.file == null && state.originalFile == null && state.documentDraft == null && !state.documentOpen &&
             state.processingSource == null && state.comparison == null && !state.busy && !flow.exportPending &&
-            state.pendingDocumentTask == null && displayedLibraryFrame(frame)
+            state.pendingDocumentTask == expected.pendingDocument && displayedLibraryFrame(frame)
     }
 
     private fun <T> enqueue(expected: Scope, frame: Frame, fallback: () -> T,

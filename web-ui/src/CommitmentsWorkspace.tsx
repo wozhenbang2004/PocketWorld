@@ -124,7 +124,9 @@ function CommitmentList({ state, supported, run, registerTransientBack, register
       void invoke('tasks.open', { commitmentViewHandle: reading.viewHandle });
     }
   };
-  const records = rows(snapshot.commitments).filter(row => !dueOnly || row.followUpDue === true)
+  // Execution-managed steps belong to the Plan view, but an original notification can still open its saved record.
+  const browseCommitments = rows(snapshot.commitments).filter(row => row.followUpDriver !== 'execution_plan_native_host');
+  const records = browseCommitments.filter(row => !dueOnly || row.followUpDue === true)
     .filter(row => [row.title, row.details].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .filter(row => filter === 'all' || (filter === 'open' ? !['completed', 'cancelled'].includes(row.status) : ['completed', 'cancelled'].includes(row.status)));
   const recordGroup = (row: Data) => ['completed', 'cancelled'].includes(row.status) ? 'finished' : row.followUpDue === true ? 'due' : row.status === 'snoozed' ? 'snoozed' : 'upcoming';
@@ -138,7 +140,7 @@ function CommitmentList({ state, supported, run, registerTransientBack, register
   const showReceipts = () => { if (reading?.viewHandle) void invoke('commitments.receipts', { viewHandle: reading.viewHandle }, value => { if (!Array.isArray(value?.receipts)) throw new Error('未取得原跟进通知记录。'); setReceiptRows(value.receipts); setReceiptsLoaded(true); }); };
   const unknownControls = uncertain && <div><p>这次写入尚未确认。草稿保留，请核对原清单与回执；不会自动重试。</p><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={refresh}>读取原记录核对结果</Button><Button variant="secondary" disabled={busy || !readAfterUnknown} onClick={() => { setUncertain(false); formDraft.clearSubmitted(); setNotice('已由你确认核对原记录，可重新编辑。'); }}>原记录已核对，返回编辑</Button></div></div>;
   const hasFilters = !!query || filter !== 'all' || dueOnly;
-  const hasCommitments = rows(snapshot.commitments).length > 0;
+  const hasCommitments = browseCommitments.length > 0;
   const canCreate = !busy && !uncertain && !!snapshot.commitments && supported('commitments.review');
   return <section className="pw-followup-workspace pw-knowledge-workspace" data-followup-view={current ? 'detail' : 'list'} aria-label="单项委托工作区">
     {!editor && !policy && !review && <FormDraftNotice draft={formDraft} />}

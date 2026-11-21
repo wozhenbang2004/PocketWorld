@@ -41,8 +41,8 @@ function acknowledgedResume(value:Json|undefined):Editor|undefined{
 }
 
 /** This editor owns only the current Web document's input. Native versions are opaque handles. */
-export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,initialBlank=false,initialResume=false,invoke,registerExit,onExit}:{
- active:boolean;recoverable:boolean;loading:boolean;initial?:Json;initialBlank?:boolean;initialResume?:boolean;invoke:Invoke;
+export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,generationPending,initialBlank=false,initialResume=false,invoke,registerExit,onExit}:{
+ active:boolean;recoverable:boolean;loading:boolean;initial?:Json;generationPending:boolean;initialBlank?:boolean;initialResume?:boolean;invoke:Invoke;
  registerExit:(handle:((close:boolean)=>void)|null)=>void;onExit:(close:boolean)=>Promise<void>;
 }){
  const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor|undefined>(()=>!active?undefined:initialBlank?acknowledgedBlank(initial):initialResume?acknowledgedResume(initial):undefined);
@@ -104,7 +104,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
   return true;
  };
  const start=(row?:Row)=>perform(async()=>{
-  if(!active)return;
+  if(!active||(generationPending&&!row))return;
   const result=await invoke(row?'drafts.open':'drafts.new',row?{rowHandle:row.rowHandle}:undefined),input=fields(result.fields);
   if(!mounted.current||!current.current)return;
   if(row?.linkedRevision===true&&result.status==='VERIFIED'&&result.sourceAvailable===false&&isHandle(result.editorHandle)&&isHandle(result.versionHandle)&&!input){
@@ -119,7 +119,8 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
   setEditor({handle:result.editorHandle,version:row?result.versionHandle:undefined,original:input,input,sourceName});
  });
  const save=(checking=false)=>perform(async()=>{
-  if(!active||!editor||(!checking&&(!dirty||editor.uncertain))||(checking&&editor.uncertain!=='first'))return;
+  if(!active||!editor||(generationPending&&(!editor.version||checking))||
+     (!checking&&(!dirty||editor.uncertain))||(checking&&editor.uncertain!=='first'))return;
   const original=editor,first=!original.version;
   const hold=()=>{if(mounted.current){
    setEditor(value=>value===original?{...value,uncertain:first?'first':'update'}:value);
@@ -154,7 +155,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
  const blankUnconfirmed=initialBlank&&!editor&&catalog===undefined,resumeUnconfirmed=initialResume&&!editor&&catalog===undefined;
  const retry=()=>perform(async()=>{if(active){const value=await invoke('drafts.list');if(mounted.current&&current.current)setCatalog(value)}});
  const editable=active&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation&&!removalReview&&!removal;
- const canReviewGeneration=!!editor?.version&&!dirty&&!!editor.original.name.trim()&&!!editor.original.body.trim();
+ const canReviewGeneration=!generationPending&&!!editor?.version&&!dirty&&!!editor.original.name.trim()&&!!editor.original.body.trim();
  const outputFormat=editor&&outputChoice?.editorHandle===editor.handle&&outputChoice.versionHandle===editor.version?
   outputChoice.format:editor?.original.format;
  const chooseOutputFormat=(format:string)=>{
@@ -176,7 +177,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
   setReview({id:result.reviewId,editorHandle:editor.handle,versionHandle:editor.version,fileName:result.fileName,format:result.format});setAck(false);
  });
  const confirmGeneration=()=>{
-  if(!active||!ack||!review||generation||removalReview||removal||dirty||!editor||editor.uncertain||editor.handle!==review.editorHandle||editor.version!==review.versionHandle)return;
+  if(!active||generationPending||!ack||!review||generation||removalReview||removal||dirty||!editor||editor.uncertain||editor.handle!==review.editorHandle||editor.version!==review.versionHandle)return;
   const selected=review,original=editor;
   perform(async()=>{
    setReview(undefined);setAck(false);setGeneration('submitting');setNotice('');
@@ -194,7 +195,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
    }
   });
  };
- const removalTarget=unavailable??(editor?.version&&!dirty&&!editor.uncertain?{
+ const removalTarget=generationPending?undefined:unavailable??(editor?.version&&!dirty&&!editor.uncertain?{
   editorHandle:editor.handle,versionHandle:editor.version,name:editor.original.name,format:editor.original.format}:undefined);
  const reviewRemoval=()=>{
   if(!editable||!removalTarget||flight.current)return;
@@ -234,6 +235,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
  return <section className="pw-document-editor" aria-label="本机文档草稿">
   <h3 ref={heading} tabIndex={-1}>{typed?'本页还在的输入':active&&removal?'删除本机草稿':active&&unavailable?'原文件暂不能核对':active&&editor?'编辑本机草稿':blankUnconfirmed?'新建文档':resumeUnconfirmed?'回到原草稿':'已保留的草稿'}</h3>
   {active&&<p className="pw-muted">{editor?.sourceName?<>修改草稿源自固定文件「{editor.sourceName}」，原件不变。</>:'只保存在本机。草稿不是已生成的文件。'}</p>}
+  {active&&generationPending&&<p className="pw-muted">原文档结果仍待核对。可以继续编辑并保留已有草稿，暂不能生成新文件。</p>}
   {active&&!editor&&!unavailable&&!removal&&notice&&<p role="status">{notice}</p>}
   {error&&<p className="pw-error" role="alert">{error}</p>}
   {!active?typed?<><p role="status">这些文字仍在本页，可以选中复制。原编辑窗口已关闭，不能从这里保存。</p>
@@ -247,7 +249,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
    </div>:
    unavailable?<><p><strong>{unavailable.name.trim()||'未命名草稿'}</strong></p>
     <p role="status">原文件或可编辑源暂不能核对。保留了草稿记录，不显示正文或生成替代文件。</p>
-    <Button variant="ghost" disabled={!editable} onClick={reviewRemoval}>删除草稿</Button></>:
+    {removalTarget&&<Button variant="ghost" disabled={!editable} onClick={reviewRemoval}>删除草稿</Button>}</>:
    editor?<><TextField label="文件名" value={editor.input.name} isDisabled={!editable} onChange={name=>edit({...editor.input,name})}/>
     <AttachmentWordPdfFields draft={editor.input} editable={editable} edit={edit}
      text={(field,value,limit)=>{if(value.length<=limit)edit({...editor.input,[field]:value});else setError(`此项最多 ${limit} 字，未改变输入。`)}} draftOnly/>
@@ -267,7 +269,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
     {shown?.metadataComplete===true&&!rows.length&&<p>还没有已保留的草稿。</p>}
     {!shown&&<p role="status">草稿清单尚未核对。</p>}
     <div className="pw-action-row">
-     {shown&&<Button variant="secondary" disabled={busy} onClick={()=>start()}>新建草稿</Button>}
+     {shown&&!generationPending&&<Button variant="secondary" disabled={busy} onClick={()=>start()}>新建草稿</Button>}
      {(shown?.metadataComplete!==true||error)&&<Button variant="ghost" disabled={busy} onClick={retry}>核对草稿清单</Button>}
     </div>
     {rows.map((row,index)=>{
