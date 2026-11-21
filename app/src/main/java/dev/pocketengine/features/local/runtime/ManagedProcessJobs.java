@@ -1,5 +1,6 @@
 package dev.pocketengine.features.local.runtime;
 
+import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.local.project.ProjectSources;
 import java.io.ByteArrayOutputStream;
@@ -330,11 +331,17 @@ public final class ManagedProcessJobs implements AutoCloseable {
         String finalStatus="unknown";boolean groupAbsent=false;java.util.List<JSONObject> pendingInputs=new ArrayList<>();
         boolean versionedWeb=job.invocation.versionedWebOutput();
         OriginalNodeWebOutput.LaunchObservation webBefore=null;
+        OriginalNodeCompilerOutput.LaunchObservation compilerBefore=null;
         try {
             try{
                 long sequence;synchronized(job){sequence=job.receipt.getLong("checkoutSequence");}
-                if(!versionedWeb||webCheckoutUncontended(job,sequence,true))
-                    webBefore=OriginalNodeWebOutput.observeBeforeLaunch(job.invocation);
+                if(!versionedWeb||webCheckoutUncontended(job,sequence,true)){
+                    try{webBefore=OriginalNodeWebOutput.observeBeforeLaunch(job.invocation);}
+                    catch(Exception unchecked){/* No defensible Web witness; normal execution is unchanged. */}
+                    if(webBefore==null&&versionedWeb&&job.invocation.ownerLockedBuild()&&!job.invocation.existingWebVersion().isEmpty())try{
+                        compilerBefore=OriginalNodeCompilerOutput.observeBeforeLaunch(job.invocation);
+                    }catch(Exception unchecked){/* Unproven compiler file; the original approved process still runs. */}
+                }
             }catch(Exception unchecked){/* No defensible output witness; normal execution is unchanged. */}
             if(job.invocation.exact().getJSONObject("payload").has("devWatch")){
                 try{
@@ -396,10 +403,17 @@ public final class ManagedProcessJobs implements AutoCloseable {
             // Process cancellation remains independent; it never needs this source-write lock.
             job.sourceWrites.writeLock().lock();
             try{
-                JSONObject webOutputAtExit=null;boolean nestedViteOutputAtExit=false;
+                JSONObject webOutputAtExit=null,compilerOutputAtExit=null;boolean nestedViteOutputAtExit=false;
                 if(groupAbsent&&!job.cancel&&"completed".equals(finalStatus))try{
-                    long sequence;synchronized(job){sequence=job.receipt.getLong("checkoutSequence");}
-                    if(!versionedWeb||webBefore!=null&&webCheckoutUncontended(job,sequence,false)){
+                    long sequence;boolean cleanCompilerExit;
+                    synchronized(job){sequence=job.receipt.getLong("checkoutSequence");
+                        cleanCompilerExit=compilerBefore!=null&&Boolean.TRUE.equals(job.receipt.opt("outputComplete"))&&
+                            Boolean.FALSE.equals(job.receipt.opt("outputTruncated"))&&
+                            NativeProcessSupervisor.knownOrdinaryExitContract(job.receipt.optString("nativeResultContract"));}
+                    if(cleanCompilerExit&&webCheckoutUncontended(job,sequence,false)){
+                        JSONObject observed=OriginalNodeCompilerOutput.observeAtOriginalExit(job.invocation,sequence,compilerBefore);
+                        if(webCheckoutUncontended(job,sequence,false))compilerOutputAtExit=observed;
+                    }else if(compilerBefore==null&&(!versionedWeb||webBefore!=null&&webCheckoutUncontended(job,sequence,false))){
                         try{
                             JSONObject observed=OriginalNodeWebOutput.observeAtOriginalExit(job.invocation,sequence,webBefore);
                             if(!versionedWeb||webCheckoutUncontended(job,sequence,false))webOutputAtExit=observed;
@@ -407,7 +421,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                             job.invocation.checkCurrent();nestedViteOutputAtExit=webCheckoutUncontended(job,sequence,false);
                         }
                     }
-                }catch(Exception unsupportedOrMissing){/* Success of the original process does not attest a complete Web artifact. */}
+                }catch(Exception unsupportedOrMissing){/* Process success alone does not attest an output file or Web artifact. */}
                 boolean markerClean=job.devSession==null||job.devSession.cleanupMarker();
                 // Ordinary jobs and preparation subprocesses require the same actual cleanup proof
                 // as PTY/pipe sessions before releasing their original environment lease.
@@ -417,11 +431,12 @@ public final class ManagedProcessJobs implements AutoCloseable {
                 synchronized(job) {
                     try {job.receipt.put("ownedWorkerLive",false).put("resourcesReleased",leaseClosed&&groupAbsent).put("status",leaseClosed?finalStatus:"unknown").put("finishedAt",System.currentTimeMillis());
                         if(leaseClosed&&groupAbsent&&!job.cancel){
+                            if(compilerOutputAtExit!=null)job.receipt.put(OriginalNodeCompilerOutput.WITNESS,compilerOutputAtExit);
                             if(webOutputAtExit!=null)job.receipt.put(OriginalNodeWebOutput.WITNESS,webOutputAtExit);
                             else if(nestedViteOutputAtExit)job.receipt.put(OriginalNodeWebOutput.OUTPUT_LIMITATION,OriginalNodeWebOutput.NESTED_VITE_OUTPUT);
                         }
                         if(job.devSession!=null)job.receipt.put("devMarkerCacheCleanupComplete",markerClean);RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);}
-                    catch(Exception error) {try{job.receipt.put("receiptPersistence","failed");}catch(Exception ignored){}}
+                    catch(Exception error) {try{job.receipt.remove(OriginalNodeCompilerOutput.WITNESS);job.receipt.put("receiptPersistence","failed");}catch(Exception ignored){}}
                 }
             }finally{job.sourceWrites.writeLock().unlock();}
             synchronized(this) {live.remove(job.id);notifyAll();}
@@ -612,7 +627,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
         synchronized(job){ref.requireReceipt(job.receipt);if(job.terminalInput==null||job.cancel||!"running".equals(job.receipt.optString("status"))||!Boolean.TRUE.equals(job.receipt.opt("nativeStartObserved"))||Boolean.TRUE.equals(job.receipt.opt("processExited"))||Boolean.TRUE.equals(job.receipt.opt("resourcesReleased")))throw new SecurityException("runtime_pty_original_session_not_live");}
     }
     public synchronized void requireCheckoutWritable(String checkout)throws Exception {
-        // A competing path that asks to write cannot contribute to a versioned build's result.
+        // A competing path that asks to write cannot contribute to a versioned output witness (Web or compiler file).
         // This does not admit or reject that writer and is not persisted as a new runtime lease.
         for(Job job:live.values())if(job.invocation.versionedWebOutput()&&checkout.equals(job.invocation.executionRef().checkoutId()))
             job.webObservationContended=true;

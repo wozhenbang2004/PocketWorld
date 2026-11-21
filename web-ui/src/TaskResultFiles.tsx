@@ -5,7 +5,7 @@ import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 
 type PdfExcerptStart = { page: number; chunk: number; method: 'text_layer' | 'ocr' };
-export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive' | 'original_ssh_file_download'; hasSavedSupplement?: boolean; pdfExcerptStart?: PdfExcerptStart };
+export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive' | 'original_ssh_file_download' | 'original_node_compiler_output'; hasSavedSupplement?: boolean; pdfExcerptStart?: PdfExcerptStart };
 
 type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string };
 

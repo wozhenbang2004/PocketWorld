@@ -1232,7 +1232,12 @@ public final class EngineApplication extends Application implements dev.pocketen
         }
         EngineModule attachments=addModule("attachments",()->{var pdf=new dev.pocketengine.features.attachments.documents.AndroidPdfDocumentPort(this);return new dev.pocketengine.features.attachments.AttachmentsModule(context,new dev.pocketengine.features.attachments.documents.DocumentReader(pdf,localOcr,pdf.ocrPages()));});
         if(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule)memorySources.bindAttachments((dev.pocketengine.features.attachments.AttachmentsModule)attachments,dev.pocketengine.features.attachments.AttachmentRepository.get(this).book);
-        if(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule)((dev.pocketengine.features.attachments.AttachmentsModule)attachments).setNativeRecordRead(record->{JSONObject source=record.optJSONObject("source");if(source!=null&&!source.optString("taskId").isEmpty()&&groupOrigin(tasks.get(source.getString("taskId"),false)))throw new SecurityException("群媒体技术副本请从原群任务读取");});
+        if(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule ownerAttachments)ownerAttachments.setNativeRecordRead(record->{
+            JSONObject source=record.optJSONObject("source");
+            if(dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery.claims(source))tasks.requireSettledNodeCompilerAttachment(record);
+            else if(source!=null&&!source.optString("taskId").isEmpty()&&groupOrigin(tasks.get(source.getString("taskId"),false)))
+                throw new SecurityException("群媒体技术副本请从原群任务读取");
+        });
         if(assistant instanceof dev.pocketengine.features.assistant.AssistantModule&&attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule){
             assistantAttachments=new dev.pocketengine.features.assistant.AttachmentRequestProjection(dev.pocketengine.features.attachments.AttachmentRepository.get(this).book,(dev.pocketengine.features.attachments.AttachmentsModule)attachments,this::requireDocumentReferenceRoute);
             var module=(dev.pocketengine.features.assistant.AssistantModule)assistant;module.setAttachmentProjection(assistantAttachments);

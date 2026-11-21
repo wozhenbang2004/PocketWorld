@@ -1,5 +1,7 @@
 package dev.pocketengine.store;
 
+import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
+import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.local.project.OwnerDraftFirstBuild;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
@@ -13952,6 +13954,137 @@ public final class TaskStore {
             if(!row.moveToFirst()||!"receipt".equals(row.getString(2))||row.isNull(3))throw new SecurityException("原成果动作未取得确定回执");JSONObject args=projectStoredArguments(task.getString("id"),row.getString(0),new JSONObject(row.getString(1))),receipt=new JSONObject(row.getString(3)),route=receipt.getJSONObject("projectExecution");if(!context.getJSONObject("selection").getString("selectionHash").equals(route.optString("teamProjectSelectionHash")))throw new SecurityException("原包属于另一团队副本/授权版本");dev.pocketengine.features.teams.TeamProjectWorkspaces.validatePlan(context,args.getJSONObject("plan"));JSONObject op=new JSONObject().put("operationId",operation).put("runId",row.getString(0)).put("tool","project_execute").put("state",row.getString(2)).put("arguments",args).put("receipt",receipt);JSONObject evidence=dev.pocketengine.features.local.project.ProjectPackageDelivery.evidence(args.getJSONObject("plan"),op);if(!task.getString("id").equals(evidence.getString("taskId")))throw new SecurityException("原包不是本团队整合任务");return evidence;
         }
     }
+    /** Native SQL proof of one original ended compiler command. No live grant, model or run control. */
+    public static final class OwnerNodeCompilerBuild {
+        private final OriginalNodeCompilerDelivery delivery;
+        private final JSONObject exact,route;
+        private OwnerNodeCompilerBuild(OriginalNodeCompilerDelivery delivery,JSONObject exact,JSONObject route){
+            this.delivery=delivery;this.exact=exact;this.route=route;
+        }
+        public OriginalNodeCompilerDelivery delivery(){return delivery;}
+        public JSONObject exact()throws Exception{return new JSONObject(exact.toString());}
+        public JSONObject route()throws Exception{return new JSONObject(route.toString());}
+    }
+    private OwnerNodeCompilerBuild nodeCompilerBuild(JSONObject task,String run,int epoch,String operation,boolean current)throws Exception{
+        String id=task.getString("id");requirePrivateOwner(task);
+        if(!ordinaryPlanningSource(task)||OwnerWorkTask.isOwnerWork(task)||!"assistant".equals(task.opt("kind"))||
+                !"capabilities".equals(task.opt("executionMode"))||!task.isNull("origin")||task.has("workProfileRef")||task.has("workProfileIntent")||
+                !OwnerDraftFirstBuild.ownerObservationSourceVisible(task))
+            throw new SecurityException("请打开原普通私人构建");
+        if(current){
+            requireFirstProjectObservationSource(task,run,epoch);
+            if(!task.optString("status").matches("completed|failed|needs_confirmation|awaiting_user")||
+                    task.has("developmentSession")||hasUnresolved(id))
+                throw new SecurityException("原工作仍未结束或有操作待核对");
+            try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' UNION ALL SELECT 1 FROM leases WHERE run_id=? AND epoch=? LIMIT 1",
+                    new String[]{id,run,Integer.toString(epoch)})){
+                if(active.moveToFirst())throw new SecurityException("原工作仍在执行");
+            }
+        }
+        try(Cursor original=db.rawQuery(
+                "SELECT 1 FROM operations o JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id "+
+                    "WHERE o.task_id=? AND o.run_id=? AND r.epoch=? AND o.operation_id=? AND o.tool='project_execute' "+
+                    "AND r.status IN ('completed','failed','needs_confirmation','awaiting_user') AND o.state='receipt' "+
+                    "AND length(CAST(o.arguments AS BLOB))+length(CAST(o.receipt AS BLOB))<=2097152",
+                new String[]{id,run,Integer.toString(epoch),operation})){
+            if(!original.moveToFirst())throw new SecurityException("未核对到这次已结束的原构建");
+        }
+        JSONObject context=task.getJSONObject("developmentContext"),pin=context.getJSONObject(OwnerDraftFirstBuild.FIELD);
+        OwnerDraftFirstBuild.requireContext(pin,context);
+        if(!OwnerDraftFirstBuild.existingCheckout(pin)||OwnerDraftFirstBuild.dependencies(pin)==null||!"npm".equals(pin.opt("manager")))
+            throw new SecurityException("这不是支持收取编译文件的原普通锁定构建");
+        JSONObject binding=new JSONObject().put("taskId",id).put("runId",run).put("coordinatorEpoch",epoch).put("operationId",operation);
+        JSONObject row=projectOperationForHost(binding),envelope=row.getJSONObject("receipt"),route=envelope.getJSONObject("projectExecution");
+        JSONObject request=ProjectDevelopment.originalPollRequest(task,row),plan=request.getJSONObject("plan");
+        OwnerDraftFirstBuild.requireSourceBinding(binding,request.getJSONObject("binding"));
+        OwnerDraftFirstBuild.requirePlan(pin,plan,id);
+        if(!"build".equals(request.opt("stepId"))||!"completed".equals(envelope.opt("status"))||
+                !"project_process_receipt".equals(envelope.opt("code"))||!Boolean.TRUE.equals(envelope.opt("accepted"))||
+                envelope.optBoolean("cancelRequested")||route.optBoolean("cancelRequested")||
+                !OwnerDraftFirstBuild.existingWebVersion(pin).equals(route.opt(OriginalNodeWebOutput.EXISTING_ROUTE)))
+            throw new SecurityException("原本机构建的结束回执不能核对");
+        JSONObject approval=OwnerDraftFirstBuild.consumedCommandApproval(task,row.getJSONObject("journalArguments"),route);
+        if(approval==null||!OwnerDraftFirstBuild.sameApprovedProposal(new JSONObject(approval.toString()).put("state","approved"),
+                OwnerDraftFirstBuild.reviewOperation(pin,plan,binding)))
+            throw new SecurityException("原构建与已经消费的准确批准不一致");
+        JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,"build"));
+        var witness=OriginalNodeCompilerOutput.fromReceipt(exact,route,envelope.getJSONObject("executionReceipt"));
+        if(witness==null)throw new SecurityException("这次原构建没有可核对的单文件编译输出");
+        return new OwnerNodeCompilerBuild(new OriginalNodeCompilerDelivery(witness),exact,route);
+    }
+    public synchronized OwnerNodeCompilerBuild nodeCompilerBuildForOwner(String id,String run,int epoch,String operation)throws Exception{
+        boolean owns=!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
+        try{
+            var build=nodeCompilerBuild(required(id),run,epoch,operation,true);
+            if(owns)db.setTransactionSuccessful();
+            return build;
+        }finally{if(owns)db.endTransaction();}
+    }
+    private JSONObject nodeCompilerSaveRow(OriginalNodeCompilerDelivery delivery)throws Exception{
+        String op=delivery.operationId();
+        try(Cursor row=db.rawQuery("SELECT tool,state,receipt IS NULL,run_id,length(CAST(arguments AS BLOB))+coalesce(length(CAST(receipt AS BLOB)),0) FROM operations WHERE task_id=? AND operation_id=?",
+                new String[]{delivery.taskId(),op})){
+            if(!row.moveToFirst())return null;
+            if(!OriginalNodeCompilerDelivery.TOOL.equals(row.getString(0))||!delivery.runId().equals(row.getString(3))||
+                    row.getLong(4)>8192||!delivery.matches(new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_ARGUMENTS,op))))
+                throw new SecurityException("原保存动作或身份已变化");
+            JSONObject original=new JSONObject().put("state",row.getString(1));
+            if(row.getInt(2)==0)original.put("artifact",new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_RECEIPT,op)));
+            if(!("receipt".equals(original.opt("state"))&&original.has("artifact")||
+                    OriginalNodeCompilerDelivery.PENDING.equals(original.opt("state"))&&!original.has("artifact")))
+                throw new SecurityException("原保存还不能核对");
+            return original;
+        }
+    }
+    public synchronized String nodeCompilerSaveStateForOwner(OriginalNodeCompilerDelivery delivery)throws Exception{
+        JSONObject row=nodeCompilerSaveRow(delivery);
+        return row==null?"ready":"receipt".equals(row.getString("state"))?"saved":"pending";
+    }
+    public synchronized void beginNodeCompilerSaveForOwner(OwnerNodeCompilerBuild reviewed,RunControl control)throws Exception{
+        var delivery=reviewed.delivery();JSONObject pin=delivery.pin();
+        db.beginTransaction();try{
+            control.check();
+            var now=nodeCompilerBuild(required(delivery.taskId()),delivery.runId(),pin.getInt("epoch"),pin.getString("buildOperationId"),true);
+            if(!now.delivery().matches(pin)||nodeCompilerSaveRow(delivery)!=null)
+                throw new SecurityException("已有原保存或原构建已变；不会再次写入");
+            control.check();
+            insertRemoteOperation(delivery.operationId(),delivery.taskId(),delivery.runId(),OriginalNodeCompilerDelivery.TOOL,pin,OriginalNodeCompilerDelivery.PENDING);
+            control.check();db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    /** Accept only the original Book bytes and matching single pending save; retry never writes a file. */
+    public synchronized JSONObject finishNodeCompilerSaveForOwner(OriginalNodeCompilerDelivery delivery,JSONObject book)throws Exception{
+        JSONObject pin=delivery.pin();
+        db.beginTransaction();try{
+            var ran=nodeCompilerBuild(required(delivery.taskId()),delivery.runId(),pin.getInt("epoch"),pin.getString("buildOperationId"),false);
+            if(!ran.delivery().matches(pin))throw new SecurityException("原编译退出或文件证据已变化");
+            JSONObject header=delivery.checkedArtifact(book),row=nodeCompilerSaveRow(delivery);
+            if(row==null)throw new SecurityException("原工作没有这笔确认保存");
+            if(OriginalNodeCompilerDelivery.PENDING.equals(row.opt("state"))){
+                ContentValues update=new ContentValues();update.put("state","receipt");update.put("receipt",header.toString());
+                if(db.update("operations",update,"task_id=? AND run_id=? AND operation_id=? AND tool=? AND state=? AND receipt IS NULL",
+                        new String[]{delivery.taskId(),delivery.runId(),delivery.operationId(),OriginalNodeCompilerDelivery.TOOL,OriginalNodeCompilerDelivery.PENDING})!=1)
+                    throw new SecurityException("原保存动作已变化");
+            }else if(!canonical(header).equals(canonical(row.optJSONObject("artifact"))))
+                throw new SecurityException("原成果版本与已保存回执不同");
+            db.setTransactionSuccessful();
+            return delivery.view("saved").put("artifactId",header.getString("id"));
+        }finally{db.endTransaction();}
+    }
+    /** Existing attachment routes use the committed native SQL result, not Book appearance.
+     * Only this new typed source is affected; recovery uses its exact internal Book lookup. */
+    public synchronized void requireSettledNodeCompilerAttachment(JSONObject artifact)throws Exception{
+        JSONObject source=artifact.optJSONObject("source");
+        if(!OriginalNodeCompilerDelivery.claims(source))return;
+        try{
+            String id=source.getString("taskId");JSONObject pin=source.getJSONObject("originalCompilerWitness");
+            var build=nodeCompilerBuild(required(id),pin.getString("runId"),pin.getInt("epoch"),pin.getString("buildOperationId"),false);
+            var delivery=build.delivery();JSONObject header=delivery.checkedArtifact(artifact),row=nodeCompilerSaveRow(delivery);
+            if(row!=null&&"receipt".equals(row.opt("state"))&&canonical(header).equals(canonical(row.optJSONObject("artifact"))))return;
+        }catch(Exception unavailable){/* No binding without a complete native receipt. */}
+        throw new SecurityException("原编译输出的保存或固定版本尚不能核对");
+    }
+
     /** This owner action belongs to the original settled successful build, not to goal acceptance.
      * It cannot create/reopen a run, job, capability or execution approval. */
     private JSONObject firstWebTask(String id)throws Exception{

@@ -114,7 +114,9 @@ const importMessages:Record<string,string>={
  busy_other_selection:'另一项文件选择或导入还未结束，本次没有开始。',
  unconfirmed:'这次登记结果尚未完整确认。请先重新读取资料库，不要重复导入。',
 };
-const mayReferenceOriginal=(view:Json)=>view.canSaveOriginal===true||view.historyResultOnly===true&&view.canReferenceHistoryOriginal===true;
+const compilerOutputRow=(file:Json)=>file.sourceKind==='managed_build_output'&&file.sourceRunEvidence==='original_node_compiler_output';
+const mayReferenceOriginal=(view:Json)=>!compilerOutputRow(obj(view.file))&&
+ (view.canSaveOriginal===true||view.historyResultOnly===true&&view.canReferenceHistoryOriginal===true);
 function draftContainsFile(target:FileDraftTarget,file:{fileId:string;sha256:string}){
  const native=bridge.getState(),draft=obj(native.composer);
  return draft.ready===true&&draft.key===target.key&&draft.epoch===target.epoch&&
@@ -437,13 +439,14 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  useEffect(()=>{alive.current=true;registerBack(goBack);return()=>{alive.current=false;registerBack(null)}},[registerBack,goBack]);
  useEffect(()=>{setError('');setPage('1')},[view.windowId,file.id,file.sha256]);
  const busy=pending>0||!!view.busy||!view.ready,hasFile=typeof file.id==='string';
- const canStage=!scopedResultOnly&&!workOutput&&privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
+ const compilerFile=compilerOutputRow(file);
+ const canStage=!compilerFile&&!scopedResultOnly&&!workOutput&&privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
  const title=draftDesk?'私人文件库 · 本机草稿':view.documentDraft?'编辑文档':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
   if(draftDesk){draftDeskExit.current?.(true);return}
   if(!view.ready||draftFlight.current)return;
   textReturn.current=null;
-  const returnToWork=view.restoredWorkReturn!==true&&view.fromWorkResult===true&&!!view.taskId&&openTaskId!==view.taskId;
+  const returnToWork=!compilerFile&&view.restoredWorkReturn!==true&&view.fromWorkResult===true&&!!view.taskId&&openTaskId!==view.taskId;
   if(view.busy){if(!returnToWork)run('close');return}
   void Promise.resolve(beforeBack.current?.()).then(frame=>act(returnToWork?'continueTask':'close',{},frame)).catch(()=>{});
  };
@@ -511,7 +514,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  // actual read/edit commands still require the fresh window and file frame.
  const continuationKey=view.taskId&&hasFile?JSON.stringify([view.taskId,file.id,file.sha256]):'';
  const receivedOriginal=file.sourceKind==='device_received_file'&&file.sourceRunEvidence==='original_device_file_receive';
- const canKeepSupplement=!receivedOriginal&&!scopedResultOnly&&privateFiles&&!!continuationKey&&view.continuationDraft?.available===true;
+ const canKeepSupplement=!compilerFile&&!receivedOriginal&&!scopedResultOnly&&privateFiles&&!!continuationKey&&view.continuationDraft?.available===true;
  const continuationVisible=canKeepSupplement&&(mode==='detail'||(mode==='original'&&previewContinuation===continuationKey));
  const returnToOriginalWork=workOutput&&file.sourceTaskId===view.taskId&&openTaskId===view.taskId&&snapshot.taskId===view.taskId&&
   typeof snapshot.taskRunId==='string'&&!!snapshot.taskRunId&&Number.isSafeInteger(snapshot.coordinatorEpoch)&&snapshot.coordinatorEpoch>0
@@ -551,7 +554,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   onClick={()=>run('continueDocument')}>从此版继续编辑</Button>;
  const offerDocumentEdit=canEditDocument&&canSaveOriginal&&!state.chatAttachmentPickerOpen;
  const standaloneDocument=canChooseStandaloneDocument?standaloneDocumentSelection(view):undefined;
- const canChooseAttachment=!scopedResultOnly&&(!view.taskId||!!standaloneDocument)&&canSaveOriginal&&!!draftTarget&&!!selection&&!!onChooseAttachment;
+ const canChooseAttachment=!compilerFile&&!scopedResultOnly&&(!view.taskId||!!standaloneDocument)&&canSaveOriginal&&!!draftTarget&&!!selection&&!!onChooseAttachment;
  const attachmentChoiceError=mode==='original'&&canChooseAttachment&&error;
  const chooseAttachment=async()=>{
   if(!canChooseAttachment||busy||draftBusy||view.exportPending||attachmentFlight.current||!onChooseAttachment||!draftTarget||!selection)return;
@@ -831,10 +834,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {mode==='detail'&&view.ready===true&&privateFiles&&!onReturnToSearch&&typeof view.libraryDocumentActionId==='string'&&
    view.libraryDocumentActionId===file.sourceTaskId&&<Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
     onClick={()=>run('openDocumentAction',{taskId:view.libraryDocumentActionId})}>查看原生成记录</Button>}
-  {!scopedResultOnly&&fileMenu}
+  {!compilerFile&&!scopedResultOnly&&fileMenu}
  </div>
  {copyFeedback}
- {!scopedResultOnly&&<Accordion className="pw-attachment-tools"><AccordionItem id="read-source" title="读取文字与表格" description="保留页码、位置与识别说明"><section>{file.mimeType==='application/pdf'&&<TextField label="从第几页开始" value={page} onChange={setPage}/>}<div className="pw-action-row"><Button variant="secondary" disabled={busy||!/^\d+$/.test(page)||Number(page)<1} onClick={()=>run('read',{unit:Number(page),chunk:0})}>读取文字与表格</Button>{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>本机识别图片文字</Button>}</div></section></AccordionItem></Accordion>}
+ {!compilerFile&&!scopedResultOnly&&<Accordion className="pw-attachment-tools"><AccordionItem id="read-source" title="读取文字与表格" description="保留页码、位置与识别说明"><section>{file.mimeType==='application/pdf'&&<TextField label="从第几页开始" value={page} onChange={setPage}/>}<div className="pw-action-row"><Button variant="secondary" disabled={busy||!/^\d+$/.test(page)||Number(page)<1} onClick={()=>run('read',{unit:Number(page),chunk:0})}>读取文字与表格</Button>{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>本机识别图片文字</Button>}</div></section></AccordionItem></Accordion>}
  {!scopedResultOnly&&privateFiles&&(String(file.mimeType).startsWith('image/')||['video/mp4','audio/mp4'].includes(file.mimeType))&&<Accordion className="pw-attachment-tools"><AccordionItem id="continue-source" title="图像与媒体处理" description="裁剪、转换或对照原版本"><section><div className="pw-action-row">{(String(file.mimeType).startsWith('image/')||['video/mp4','audio/mp4'].includes(file.mimeType))&&<Button variant="secondary" disabled={busy||!!view.pendingProcessingTask} onClick={()=>run('openProcessing')}>{String(file.mimeType).startsWith('image/')?'裁剪、缩放或转换原图':'剪辑原媒体片段'}</Button>}{String(file.mimeType).startsWith('image/')&&(file.parentArtifact||file.source?.parentArtifact)&&<Button variant="ghost" disabled={busy} onClick={()=>run('compareParent')}>对照父原图</Button>}</div></section></AccordionItem></Accordion>}<FileDetails value={file} title="来源与文件版本"/></section>:<>
  <section className="pw-file-library" aria-label={view.choosingSource?'选择来源文件':'文件集合'}>
  <header className="pw-file-library-header"><span className="pw-attachment-library-scope">{view.choosingSource?'选择来源':resultFilesOnly?'本轮文件':view.taskId?'原工作文件':'私人文件库'}{hasLibraryFiles&&(filterActive?` · ${matchingCount} 项匹配`:` · 当前列出 ${fileCount} 项`)}</span>{!busy&&(catalogUnconfirmed||error||view.error)?<Button variant="ghost" leadingIcon={IconRefresh} onClick={refreshList}>重新读取文件</Button>:<IconButton icon={IconRefresh} aria-label="重新读取文件" title="重新读取文件" disabled={busy} onClick={refreshList}/>}</header>
@@ -859,7 +862,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  </section>
  </>}
  {media.map(job=><Accordion className="pw-attachment-tools" key={job.operationId}><AccordionItem id={`media-${job.operationId}`} title="原媒体操作与取回" description={job.status==='completed'?'已完成':job.status||'尚待核对'}><section className="pw-file-media-job"><div className="pw-action-row"><Button variant="secondary" disabled={busy} onClick={()=>run('refreshMedia',{operationId:job.operationId})}>查询原操作</Button><Button variant="secondary" disabled={busy} onClick={()=>run('fetchMedia',{operationId:job.operationId})}>取回实际成果</Button>{view.observing?<Button variant="ghost" onClick={()=>run('stopObservation')}>停止观察</Button>:<Button variant="ghost" disabled={busy} onClick={()=>run('observeMedia',{operationId:job.operationId})}>观察进度</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('cancelMedia',{operationId:job.operationId})}>请求取消原操作</Button></div>{view.progress&&<FileDetails value={view.progress} title="实际进度回执"/>}<FileDetails value={job} title="生成与保存回执"/></section></AccordionItem></Accordion>)}
- {view.group&&<FileDetails value={snapshot.delivery||snapshot} title="原群保存与投递回执"/>}{!scopedResultOnly&&view.taskId&&view.restoredWorkReturn!==true&&<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>{resultFilesOnly?'回原工作核对其他文件':'回原任务继续处理'}</Button>}
+ {view.group&&<FileDetails value={snapshot.delivery||snapshot} title="原群保存与投递回执"/>}{!compilerFile&&!scopedResultOnly&&view.taskId&&view.restoredWorkReturn!==true&&<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>{resultFilesOnly?'回原工作核对其他文件':'回原任务继续处理'}</Button>}
  </>}
  {continuationVisible&&<div ref={continuationHeading} tabIndex={-1} className="pw-file-continuation-target">
   <AttachmentVersionContinuation key={continuationKey} original={view.continuationDraft} foregroundReady={view.ready===true}

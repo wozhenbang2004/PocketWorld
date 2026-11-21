@@ -2,7 +2,10 @@ package dev.pocketengine.features.local;
 
 import android.system.Os;
 import android.system.OsConstants;
+import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
+import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
+import dev.pocketengine.features.local.project.OwnerDraftCopyShelf;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.workspace.JsonFiles;
@@ -20,6 +23,7 @@ import dev.pocketengine.features.local.runtime.TermuxProjectRuntime;
 import dev.pocketengine.features.local.runtime.ManagedProjectRuntime;
 import dev.pocketengine.features.local.runtime.RuntimeWorkspace;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.store.TaskStore;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -1275,6 +1279,66 @@ public final class LocalModule implements EngineModule {
         var evidence=OriginalNodeWebOutput.savedEvidence(build,pin,catalog);
         dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(evidence,catalog);
         return new OriginalWebArchive(pin,catalog);
+    }
+    /** Original owner compiler delivery. Native terminal metadata only, never a log/query dispatcher. */
+    private RuntimeWorkspace requireOriginalCompilerSource(TaskStore.OwnerNodeCompilerBuild original,RunControl control,
+            java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        control.check();if(closed||!ownerWindow.getAsBoolean())throw new SecurityException("原构建审阅窗口已关闭");
+        var witness=original.delivery().witness();
+        JSONObject pin=witness.pin();String id=pin.getString("checkoutId"),project=pin.getString("projectId");
+        File base=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),id,false),files=new File(base,"files");
+        if(!files.equals(files.getCanonicalFile())||!Files.isDirectory(files.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)||
+                !Files.isRegularFile(new File(base,"checkout.json").toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))
+            throw new SecurityException("原私人副本位置不能核对");
+        // This is a reader, not a checkout writer; the managed sequence and
+        // retained release below fence replacements without marking another job contended.
+        requireIdle(id);
+        JSONObject checkout=checkout(id);
+        if(!id.equals(checkout.opt("id"))||!project.equals(checkout.opt("projectId"))||
+                checkout.has("teamProjectCopy")||checkout.has("skillExecutionCopy")||checkout.has("isolatedGit")||
+                checkout.has("nativeGitImportPending")||checkout.has("collectedFromCheckoutId")||checkout.has("collectionOperationId")||
+                checkout.has(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD))
+            throw new SecurityException("未核对到原普通私人副本");
+        var runtime=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID);
+        if(!pin.getString("runtimeIdentity").equals(runtime.identity())||pin.getLong("checkoutSequence")!=runtime.currentCheckoutSequence(id))
+            throw new SecurityException("原工具或副本执行次序已变化，没有使用当前同名文件");
+        var source=ProjectSources.describe(exportDirectory(files,checkout));
+        if(!id.equals(source.opt("checkoutId"))||!project.equals(source.opt("projectId"))||!pin.getString("sourceDigest").equals(source.opt("sourceDigest")))
+            throw new SecurityException("同一副本的实际源码已变，不能保存尚未固定的旧输出");
+        var ref=RuntimeExecutionRef.fromHost(original.exact(),original.route());
+        var result=runtime.retainedNodeTerminalReceiptForHost(ref,ownerWindow);
+        var actual=result==null?null:OriginalNodeCompilerOutput.fromReceipt(original.exact(),original.route(),result.json());
+        if(actual==null||!ProjectSources.canonical(pin).equals(ProjectSources.canonical(actual.pin()))||
+                pin.getLong("checkoutSequence")!=runtime.currentCheckoutSequence(id))
+            throw new SecurityException("原成功构建或实际退出证据已变化，没有读取其他结果");
+        control.check();return new RuntimeWorkspace(files,project,id);
+    }
+    private byte[] readOriginalCompilerBytes(TaskStore.OwnerNodeCompilerBuild original,RunControl control,
+            java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        RuntimeWorkspace workspace=requireOriginalCompilerSource(original,control,ownerWindow);
+        byte[] bytes=OriginalNodeCompilerOutput.readPinned(workspace,original.delivery().witness(),control);
+        try{requireOriginalCompilerSource(original,control,ownerWindow);return bytes;}
+        catch(Exception changed){Arrays.fill(bytes,(byte)0);throw changed;}
+    }
+    public synchronized void reviewNodeCompilerOutputForOwner(TaskStore.OwnerNodeCompilerBuild original,RunControl control,
+            java.util.function.BooleanSupplier ownerWindow)throws Exception{
+        byte[] bytes=readOriginalCompilerBytes(original,control,ownerWindow);Arrays.fill(bytes,(byte)0);
+    }
+    public synchronized JSONObject saveNodeCompilerOutputForOwner(TaskStore.OwnerNodeCompilerBuild original,RunControl control,
+            java.util.function.BooleanSupplier ownerWindow,RunControl.AuthorityCheck beforePublication)throws Exception{
+        byte[] bytes=readOriginalCompilerBytes(original,control,ownerWindow);
+        try(AutoCloseable gate=control.retainDispatchCheck(()->{
+            if(closed||!ownerWindow.getAsBoolean())throw new SecurityException("原保存窗口已关闭");
+        })){
+            control.check();beforePublication.check();
+            var book=dev.pocketengine.features.attachments.AttachmentRepository.get(context.android).book;
+            return original.delivery().save(book,bytes,control);
+        }finally{Arrays.fill(bytes,(byte)0);}
+    }
+    /** Only the exact already-confirmed Book publication may be recovered here. */
+    public synchronized JSONObject findNodeCompilerOutputForOwner(OriginalNodeCompilerDelivery delivery,RunControl control)throws Exception{
+        control.check();if(closed)throw new SecurityException("原本机项目宿主已关闭");
+        return delivery.find(dev.pocketengine.features.attachments.AttachmentRepository.get(context.android).book,control);
     }
     private JSONObject requireManagedOutputCurrent(JSONObject supplied,RunControl original)throws Exception {
         JSONObject selected=dev.pocketengine.features.local.project.ProjectManagedOutput.verified(supplied),plan=selected.getJSONObject("buildPlan");String checkout=selected.getString("checkoutId");requireIdle(checkout);requireCheckoutWritable(checkout);original.check();

@@ -6,7 +6,7 @@ import {ProjectExecutionExitPanel} from './ProjectExecutionExitPanel';
 import {originalExecutionExit,type ExecutionExit} from './project-execution-exit';
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
-import { bareManagedNodeCheck, currentManagedNodeOperation, originalFirstBuildFailure, projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, sameManagedNodeOperation, type BareManagedNodeCheck, type OriginalManagedNodePending, type ProjectExecutionData as Data } from './project-execution';
+import { bareManagedNodeCheck, currentManagedNodeOperation, nodeCompilerOutputReply, originalFirstBuildFailure, originalNodeCompilerOutput, projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, sameManagedNodeOperation, sameNodeCompilerOutput, type BareManagedNodeCheck, type NodeCompilerOutputReply, type OriginalManagedNodePending, type OriginalNodeCompilerOutput, type ProjectExecutionData as Data } from './project-execution';
 import './local-workspace.css';
 import './project-workspace-manga.css';
 
@@ -15,6 +15,96 @@ type ExecutionView = Data & {checkedPending?:BareManagedNodeCheck};
 const ownerWindow = () => { const view = bridge.getState().view as Data; return [bridge.getDocumentEpoch(), view.taskId, view.section, view.resumeRevision].join('|'); };
 const drafts = new Map<string, string>(), stopped = new Set<string>();
 const keys = [{ id: '\r', label: 'Enter' }, { id: '\t', label: 'Tab' }, { id: '\u001b', label: 'Esc' }, { id: '\u001b[A', label: '↑' }, { id: '\u001b[B', label: '↓' }, { id: '\u001b[C', label: '→' }, { id: '\u001b[D', label: '←' }];
+
+const reviewCompilerOutput = 'projects.nodeCompilerOutput.review', saveCompilerOutput = 'projects.nodeCompilerOutput.save';
+function compilerOutputWindow(taskId: string, native = bridge.getState()) {
+  const view = native.view as Data;
+  return !document.hidden && view?.taskId === taskId && view.section == null && native.state.filePath == null &&
+    native.state.attachmentWorkspace?.open !== true && [reviewCompilerOutput,saveCompilerOutput].every(name => native.capabilities.commands.includes(name))
+    ? JSON.stringify([bridge.getDocumentEpoch(),taskId,view.resumeRevision]) : '';
+}
+type CompilerOutputState = NodeCompilerOutputReply | {state: 'unconfirmed'};
+
+/** One affirmative save for the only file witnessed at this build's native
+ * exit. It never needs the log reader, another task window, or a path argument. */
+function NodeCompilerOutput({original, operation, owner}: {
+  original: OriginalNodeCompilerOutput; operation: Data; owner: string;
+}) {
+  const [reply, setReply] = useState<CompilerOutputState | null>(null);
+  const [busy, setBusy] = useState(''), [note, setNote] = useState('');
+  const region = useRef<HTMLElement>(null), active = useRef(false), flight = useRef<object|null>(null);
+  const currentReply = useRef<CompilerOutputState|null>(null);
+  const show = (next: CompilerOutputState|null) => { currentReply.current = next; setReply(next); };
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; flight.current = null; };
+  }, []);
+  const current = () => {
+    const host = bridge.getState(), surface = region.current;
+    const task = (Array.isArray(host.state.tasks) ? host.state.tasks as Data[] : []).find(task => task.id === original.taskId);
+    return active.current && !!surface?.isConnected && !!surface.getClientRects().length &&
+      !surface.closest('[hidden],[inert],[aria-hidden="true"]') && compilerOutputWindow(original.taskId,host) === owner &&
+      sameNodeCompilerOutput(original, originalNodeCompilerOutput(task,operation));
+  };
+  async function request(saving: boolean) {
+    if (!current() || flight.current) return;
+    const previous = currentReply.current;
+    if (saving ? previous?.state !== 'ready' : previous?.state === 'ready' || previous?.state === 'saved') return;
+    if (saving && previous?.state === 'ready' && previous.expiresAt <= Date.now()) {
+      show(null); setNote('这次核对已过期，没有提交保存。请重新核对同一文件。'); return;
+    }
+    const action = saving ? saveCompilerOutput : reviewCompilerOutput, token = {};
+    const accepts = () => flight.current === token && current();
+    flight.current = token; setBusy(action); setNote('');
+    // Consume this confirmation on dispatch, including when the reply is lost.
+    if (saving) show({state: 'unconfirmed'});
+    try {
+      const {taskId,runId,epoch,buildOperationId} = original;
+      const value = await bridge.command(action, {taskId,runId,epoch,buildOperationId,
+        ...(saving && previous?.state === 'ready' ? {reviewHandle:previous.reviewHandle} : {})});
+      if (!accepts()) return;
+      const next = nodeCompilerOutputReply(value, original);
+      if (!next || (saving && next.state !== 'saved') || (previous?.state === 'pending' && next.state === 'ready'))
+        throw Error('Unmatched compiler output response');
+      show(next);
+      if (previous?.state === 'unconfirmed' && next.state === 'ready')
+        setNote('没有查到已登记的保存。这次需要你重新确认。');
+    } catch {
+      if (accepts()) setNote(saving || previous?.state === 'unconfirmed' || previous?.state === 'pending'
+        ? '尚未取得这笔原保存的回执，没有再次写入。'
+        : '暂时无法核对这次编译输出。没有改用其他文件。');
+    } finally {
+      if (flight.current === token) { flight.current = null; if (active.current) setBusy(''); }
+    }
+  }
+  const ready = reply?.state === 'ready';
+  const awaiting = reply?.state === 'pending' || reply?.state === 'unconfirmed';
+  return <section className="pw-form-flow" ref={region} aria-label="这次构建的编译输出" aria-busy={!!busy}>
+    {ready && <>
+      <p><strong>保存这一个编译文件</strong></p>
+      <p><bdi dir="ltr">{original.path}</bdi> · {original.bytes.toLocaleString()} 字节</p>
+      <p className="pw-field-hint">只保存这次构建退出时核对的版本。不重新构建、运行或分享。</p>
+      <details><summary>核对文件版本</summary><p className="pw-field-hint">SHA-256：<bdi>{original.sha256}</bdi></p></details>
+      {note && <p className="pw-field-hint" role="status">{note}</p>}
+    </>}
+    {reply?.state === 'saved' && <p className="pw-reading-note" role="status">
+      <strong>已保存到本机成果。</strong> 在这件工作的「概览 → 已保存的文件成果」可打开 <bdi dir="ltr">{original.path}</bdi> 的固定原件。
+    </p>}
+    {awaiting && <p role="status" className="pw-field-hint">{busy === saveCompilerOutput ? '正在等待原保存回执。' :
+      busy === reviewCompilerOutput ? '正在核对这笔原保存。' :
+      note || '这笔原保存仍待核对。只查询原保存，不会再写一份或重新构建。'}</p>}
+    {!reply && note && <p role="status" className="pw-field-hint">{note}</p>}
+    {reply?.state !== 'saved' && <div className="pw-form-actions">
+      <Button variant={ready ? 'primary' : 'secondary'} size="small" disabled={!!busy} onClick={() => { void request(ready); }}>
+        {ready ? '确认保存文件' : awaiting ? '核对原保存' : busy ? '正在核对编译输出…' : '查看这次编译输出'}
+      </Button>
+      {ready && <Button variant="ghost" size="small" disabled={!!busy} onClick={() => {
+        if (!current() || flight.current || currentReply.current?.state !== 'ready') return;
+        show(null); setNote('');
+      }}>不保存</Button>}
+    </div>}
+  </section>;
+}
 
 /** One original project execution, displayed through the existing VT surface.
  * Open/read do not create a process; close only retires this observation session. */
@@ -160,8 +250,12 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const activity = projectExecutionActivity(output.activity || {}, execution), logPolicy = output.logObservationPolicy || {};
   const commands=bridge.getState().capabilities.commands,canObserve=commands.includes('local.execution.observe'),canInteract=commands.includes('local.execution.open')&&commands.includes('local.execution.input');
   const observed=originalExecutionExit(output.observedExit,metadata,output.nativeStatus);
+  const compiler = active && operation && !originalPending && !focusFailure ? originalNodeCompilerOutput(task,operation) : undefined;
+  const compilerWindow = compiler ? compilerOutputWindow(compiler.taskId) : '';
   if (!entries.length) return null;
-  return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title={originalPending ? pendingTitle+'的日志与回执' : focusFailure ? failureName : waitingForReceipt&&checkable&&canObserve ? '原执行记录' : '原执行与日志'} description={originalPending ? '只读，不会重跑' : focusFailure && failure ? `实际退出码 ${failure.exitCode}` : failureName || (operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`)}>
+  return <>{compiler && compilerWindow && operation && <NodeCompilerOutput key={JSON.stringify([compilerWindow,compiler])}
+    original={compiler} operation={operation} owner={compilerWindow}/>}
+  <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title={originalPending ? pendingTitle+'的日志与回执' : focusFailure ? failureName : waitingForReceipt&&checkable&&canObserve ? '原执行记录' : '原执行与日志'} description={originalPending ? '只读，不会重跑' : focusFailure && failure ? `实际退出码 ${failure.exitCode}` : failureName || (operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`)}>
     {focusFailure && failure && <>
       <dl className="pw-facts">
         <div><dt>本次所用副本</dt><dd dir="auto">{projectName || failure.projectId} · <bdi>{failure.checkoutId}</bdi></dd></div>
@@ -204,6 +298,6 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
     </>}
     {error && !waitingForReceipt && <p role="alert" className="pw-secondary-error">{error}</p>}
     <SettingsDialog isOpen={stopReview} title="停止这个原项目进程？" onClose={() => { live.current.stopReview = false; setStopReview(false); }}><p>只停止当前核对的原执行，已写入的副本和原日志保留。</p><p className="pw-field-hint">{metadata.taskId} · {metadata.runId} · {metadata.executionId}</p><div className="pw-form-actions"><Button variant="secondary" onClick={() => { live.current.stopReview = false; setStopReview(false); }}>返回</Button><Button variant="danger" disabled={!!busy || !active} onClick={() => { if (!current() || pending.current || !live.current.stopReview || live.current.stopRequested || currentPage.current?.handle !== view?.handle) return; live.current.stopRequested = true; live.current.stopReview = false; stopped.add(originalKey); if (stopped.size > 64) stopped.delete(stopped.values().next().value!); setStopRequested(true); setStopReview(false); void request('local.execution.stop'); }}>确认停止原进程一次</Button></div></SettingsDialog>
-  </AccordionItem></Accordion>;
+  </AccordionItem></Accordion></>;
 }
 

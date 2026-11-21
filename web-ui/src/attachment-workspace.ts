@@ -59,6 +59,7 @@ export function attachmentFileFormat(mimeType: unknown, name?: unknown): { categ
   return {category:'other',label:'文件'};
 }
 export function fileRunProvenance(value: unknown, evidence?: unknown): string {
+  if (evidence === 'original_node_compiler_output') return value === 'current' ? '本轮构建已固定保存' : value === 'earlier' ? '较早构建已固定保存' : '已固定保存的编译输出';
   if (evidence === 'original_device_file_receive') return value === 'current' ? '本轮接收自原设备' : value === 'earlier' ? '较早轮次接收自原设备' : '';
   switch (value) {
     case 'current': return '本轮生成';

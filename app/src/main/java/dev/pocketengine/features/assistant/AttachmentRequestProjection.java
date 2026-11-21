@@ -5,6 +5,7 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.AttachmentBook;
 import dev.pocketengine.features.attachments.AttachmentsModule;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
+import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import dev.pocketengine.runtime.AgentRunner;
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
@@ -104,6 +105,7 @@ public final class AttachmentRequestProjection implements AgentRunner.RequestPro
         if(digest==null||!digest.matches("[a-f0-9]{64}"))throw rejected("附件sha256无效");
         JSONObject meta;
         try{meta=book.get(id);}catch(Exception missing){throw rejected("附件已删除或不可读取，请重新选择当前附件");}
+        if(OriginalNodeCompilerDelivery.claims(meta.optJSONObject("source")))throw rejected("固定编译输出仅在本机查看或另存，未作为附件发送");
         if(documents!=null)documents.requireOwnerAttachment(id);
         if(!"owner".equals(meta.optString("principalId"))||!"private".equals(meta.optString("spaceId")))throw new SecurityException("附件不属于当前主人私人空间");
         if(meta.optBoolean("outputSourceRetired"))throw rejected("附件已撤回，不能重新用于模型上下文");

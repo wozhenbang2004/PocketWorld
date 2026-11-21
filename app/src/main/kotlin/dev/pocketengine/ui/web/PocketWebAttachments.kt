@@ -15,6 +15,7 @@ import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.AttachmentWorkReturn
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.objects
+import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -122,7 +123,14 @@ internal class PocketWebAttachments(
         val current = activeWindow()
         val scoped = scopedResultCurrent
         val report = state.resultRun?.report != null
-        val files = (state.snapshot?.optJSONArray("sources").objects() + state.snapshot?.optJSONArray("artifacts").objects())
+        val selectedCompiler = OriginalNodeCompilerDelivery.resultRow(state.file)
+        val scopedSnapshot = state.snapshot?.let { existing ->
+            val artifacts = if (state.choosingSource) existing.optJSONArray("artifacts").objects() else emptyList()
+            if (artifacts.any { OriginalNodeCompilerDelivery.resultRow(it) })
+                JSONObject(existing.toString()).put("artifacts", JSONArray(artifacts.filterNot { OriginalNodeCompilerDelivery.resultRow(it) }))
+            else existing
+        }
+        val files = (scopedSnapshot?.optJSONArray("sources").objects() + scopedSnapshot?.optJSONArray("artifacts").objects())
             .map { JSONObject(it.toString()) }
         val frameId = UUID.randomUUID().toString()
         frames[frameId] = Frame(location(state), files)
@@ -139,7 +147,7 @@ internal class PocketWebAttachments(
         val reviewedProcessing = originalReview?.let { original -> original.metadata().also { metadata ->
             if (original.command == "trimMedia") metadata.put("startAlignmentLabel", NativeMediaTrim.startAlignmentLabel(metadata))
         } }
-        val continuationDraft=if(scoped==null&&!state.deviceOriginalOnly&&state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null&&controller.webPrivateOwnerVisible())runCatching{
+        val continuationDraft=if(!selectedCompiler&&scoped==null&&!state.deviceOriginalOnly&&state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null&&controller.webPrivateOwnerVisible())runCatching{
             controller.readArtifactContinuationDraft(state.taskId,state.file.getString("id"),state.file.getString("sha256")).put("available",true)
         }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
         val privateOriginal = !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
@@ -158,15 +166,15 @@ internal class PocketWebAttachments(
             .put("canOpenReportOriginalWork", canNavigateFromReport(state))
             .put("libraryDocumentActionId", if(ordinaryLibrary)flow.libraryDocumentActionId() else null)
             .put("returnToLibraryDocument", ownedCopy && flow.canReturnToLibraryDocument())
-            .put("canReferenceHistoryOriginal", scoped != null && !report && privateOriginal)
-            .put("canSaveOriginal", scoped == null && privateOriginal).put("canOpenInReader", scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
+            .put("canReferenceHistoryOriginal", !selectedCompiler && scoped != null && !report && privateOriginal)
+            .put("canSaveOriginal", scoped == null && privateOriginal).put("canOpenInReader", !selectedCompiler && scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
             .put("canReviewManagedWorkApk", canReviewManagedWorkApk(state))
             .put("externalViewerResult", state.externalViewerResult)
             .put("taskId", state.taskId).put("group", state.group != null).put("team", state.team != null)
             .put("deviceOriginalOnly",state.deviceOriginalOnly).put("fromWorkResult", state.fromWorkResult).put("resultFilesOnly", state.resultRun?.taskId?.let { it == state.taskId } == true)
             .put("restoredWorkReturn", state.restoredWorkReturn)
             .put("busy", state.busy).put("error", state.error).put("notice", state.notice)
-            .put("snapshot", state.snapshot).put("file", state.file).put("document", state.document)
+            .put("snapshot", scopedSnapshot).put("file", state.file).put("document", state.document)
             .put("continuationDraft",continuationDraft)
             .put("documentOpen", state.documentOpen).put("choosingSource", state.choosingSource)
             .put("documentDraft", state.documentDraft).put("documentDraftEdited", state.documentDraftEdited)
@@ -241,6 +249,11 @@ internal class PocketWebAttachments(
             val frame = frames[args.getString("frameId")] ?: error("原文件页面已过期，请重新核对")
             check(frame.location == location(flow.state)) { "当前来源或编辑内容已变化，请重新核对" }
             val command = args.getString("command")
+            if (OriginalNodeCompilerDelivery.resultRow(flow.state.file)) {
+                check(command in setOf("close", "back", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails", "export", REPORT_WORK_NAVIGATION)) {
+                    "此固定编译输出仅在本机查看或另存"
+                }
+            }
             if (drafts.isInitialized() && drafts.value.showing()) {
                 check(command == "back" || command == "close") { "请先返回私人文件库" }
                 drafts.value.retire()

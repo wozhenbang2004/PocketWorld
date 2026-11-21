@@ -1,6 +1,7 @@
 package dev.pocketengine.features.attachments;
 
 import dev.pocketengine.store.TaskStore;
+import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import org.json.JSONObject;
 
 /** A comparison receipt for one already-selected original private result. No URI, write or execution authority. */
@@ -25,7 +26,14 @@ public final class OriginalTaskOutputPin {
         if(origin.equals("managed_build_output")){
             if(!text(source,"runId").equals(shown.opt("sourceTaskRunId"))||!text(source,"planDigest").matches("[a-f0-9]{64}"))throw changed();
             pin.put("runId",text(source,"runId")).put("planDigest",text(source,"planDigest"));
-            if(source.has("projectId")||source.has("buildJobId")){
+            if(OriginalNodeCompilerDelivery.claims(source)){
+                // The caller has already matched the complete native save row and Book source.
+                // This added pin compares the same saved output across the existing export picker.
+                if(!OriginalNodeCompilerDelivery.PROVENANCE.equals(shown.opt("sourceRunEvidence")))
+                    throw changed();
+                pin.put("artifactPlanDigest",text(source,"artifactPlanDigest"))
+                    .put("originalCompilerWitness",source.getJSONObject("originalCompilerWitness"));
+            }else if(source.has("projectId")||source.has("buildJobId")){
                 Object sequence=source.opt("buildCheckoutSequence");if(source.has("producer")||!"selected_output_observed_after_build".equals(source.opt("buildOutputAttribution"))||
                         !(sequence instanceof Integer||sequence instanceof Long)||((Number)sequence).longValue()<=0)throw changed();
                 for(String k:new String[]{"projectId","checkoutId","path","sourceDigest","buildJobId","buildReceiptIdentity","artifactPlanDigest"})pin.put(k,text(source,k));

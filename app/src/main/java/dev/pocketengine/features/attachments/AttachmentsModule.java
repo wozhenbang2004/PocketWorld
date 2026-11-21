@@ -7,6 +7,7 @@ import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
 import dev.pocketengine.features.attachments.documents.DocumentReader;
+import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
@@ -18,18 +19,37 @@ public final class AttachmentsModule implements EngineModule {
     private final AttachmentRepository repository;
     private final AttachmentDocuments documents;
     public interface NativeRecordRead {void check(JSONObject record)throws Exception;}
-    private NativeRecordRead nativeRecordRead=record->{};
+    private volatile NativeRecordRead nativeRecordRead;
     public void setNativeRecordRead(NativeRecordRead check){nativeRecordRead=java.util.Objects.requireNonNull(check);}
-    private void ownerRecord(JSONObject record)throws Exception{JSONObject source=record.optJSONObject("source");if(source!=null&&source.has("groupSpaceId"))throw new SecurityException("群媒体技术副本请通过原群成果读取");nativeRecordRead.check(record);}
+    private void ownerRecord(JSONObject record)throws Exception{
+        JSONObject source=record.optJSONObject("source");
+        if(source!=null&&source.has("groupSpaceId"))throw new SecurityException("群媒体技术副本请通过原群成果读取");
+        NativeRecordRead check=nativeRecordRead;
+        if(OriginalNodeCompilerDelivery.claims(source))throw new SecurityException("固定编译输出请在工作或私人文件库查看、另存");
+        if(check!=null)check.check(record);
+    }
     private JSONArray ownerFiles()throws Exception{JSONArray result=new JSONArray(),all=repository.book.list();for(int i=0;i<all.length();i++)try{JSONObject row=all.getJSONObject(i);ownerRecord(row);result.put(row);}catch(SecurityException hidden){}return result;}
     /** Display only. Archive and original-publication consumers keep the complete ownerFiles scan. */
-    public JSONObject ownerAttachmentInventoryForHost()throws Exception{
-        JSONObject inventory=repository.book.inspectIndex();JSONArray result=new JSONArray(),all=inventory.getJSONArray("attachments");for(int i=0;i<all.length();i++)try{JSONObject row=all.getJSONObject(i);ownerRecord(row);result.put(row);}catch(SecurityException hidden){}return inventory.put("attachments",result);
+    public JSONObject ownerAttachmentInventoryForHost()throws Exception{return ownerInventory(true);}
+    private JSONObject ownerInventory(boolean localCompilerOutputs)throws Exception{
+        JSONObject inventory=repository.book.inspectIndex();JSONArray result=new JSONArray(),all=inventory.getJSONArray("attachments");
+        for(int i=0;i<all.length();i++)try{
+            JSONObject row=all.getJSONObject(i);
+            if(localCompilerOutputs&&OriginalNodeCompilerDelivery.claims(row.optJSONObject("source"))){
+                // Only this existing local result catalog admits the new compiler role.
+                // Do not acquire the TaskStore under the Book monitor.
+                NativeRecordRead check=nativeRecordRead;
+                if(check==null||Thread.holdsLock(repository.book))continue;
+                check.check(row);
+            }else ownerRecord(row);
+            result.put(row);
+        }catch(SecurityException hidden){}
+        return inventory.put("attachments",result);
     }
     public AttachmentsModule(FeatureContext context){this(context,new DocumentReader(null,null));}
     public AttachmentsModule(FeatureContext context,DocumentReader reader){this.context=context;repository=AttachmentRepository.get(context.android);documents=new AttachmentDocuments(repository.book,reader);}
     @Override public String id(){return "attachments";}
-    @Override public JSONObject snapshot()throws Exception{return ownerAttachmentInventoryForHost().put("maxFileBytes",AttachmentBook.MAX_FILE_BYTES).put("maxTotalBytes",AttachmentBook.MAX_TOTAL_BYTES).put("commands",new JSONArray("[\"list\",\"get\",\"readText\",\"importUri\",\"createText\",\"exportToUri\",\"view\",\"share\",\"remove\"]")).put("scope","owner/private");}
+    @Override public JSONObject snapshot()throws Exception{return ownerInventory(false).put("maxFileBytes",AttachmentBook.MAX_FILE_BYTES).put("maxTotalBytes",AttachmentBook.MAX_TOTAL_BYTES).put("commands",new JSONArray("[\"list\",\"get\",\"readText\",\"importUri\",\"createText\",\"exportToUri\",\"view\",\"share\",\"remove\"]")).put("scope","owner/private");}
     public JSONObject importIntent(Intent intent,String taskId,String projectId)throws Exception{JSONObject result=repository.importIntent(intent,taskId,projectId);context.emit(id(),new JSONObject().put("status",result.getString("status")).put("attachments",result.getJSONArray("attachments")));return result;}
     /** Native capability host only; handle() has no run authority and intentionally cannot dispatch this. */
     public JSONObject readDocument(String attachmentId,String expectedSha256,DocumentContent.Request range,RunControl control)throws Exception{ownerRecord(repository.book.get(attachmentId));return documents.read(attachmentId,expectedSha256,range,control);}
@@ -97,7 +117,7 @@ public final class AttachmentsModule implements EngineModule {
         return repository.book.importBytes(new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)),name,mime,source);
     }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception{
-        if(command.equals("list"))return ownerAttachmentInventoryForHost();
+        if(command.equals("list"))return ownerInventory(false);
         if(command.equals("importUri"))return repository.importUri(Uri.parse(input.getString("uri")),0,input.optString("taskId"),input.optString("projectId"));
         if(command.equals("createText"))return createText(input,input.has("taskId")?input.getString("taskId"):null,input.has("projectId")?input.getString("projectId"):null,null);
         if(command.matches("createDocument|transformImage|trimMedia"))throw new SecurityException("文档生成必须沿原宿主动作和原执行控制；普通JSON不能提供身份");

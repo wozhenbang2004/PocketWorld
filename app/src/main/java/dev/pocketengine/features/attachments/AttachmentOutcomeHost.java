@@ -3,6 +3,7 @@ package dev.pocketengine.features.attachments;
 import android.content.Intent;
 import android.net.Uri;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
 import dev.pocketengine.media.MediaModule;
 import dev.pocketengine.store.SshWorkHistory;
@@ -66,6 +67,22 @@ public final class AttachmentOutcomeHost {
                     JSONObject received=originalReceivedFile(task,meta,origin,control);
                     if(received!=null){results.put(received);continue;}
                 }
+            }
+            if(OriginalNodeCompilerDelivery.claims(origin)){
+                try{
+                    // The ordinary attachment inventory has checked the exact published SQL row.
+                    JSONObject result=row(meta,"result").put("sourceRunEvidence",OriginalNodeCompilerDelivery.PROVENANCE)
+                        .put("sourceCoordinatorEpoch",origin.getJSONObject("originalCompilerWitness").getInt("epoch"));
+                    if(task!=null){
+                        String currentRun=task.optString("runId");
+                        int epoch=result.getInt("sourceCoordinatorEpoch"),currentEpoch=task.optInt("coordinatorEpoch");
+                        boolean current=result.getString("sourceTaskRunId").equals(currentRun);
+                        if(currentRun.isBlank()||epoch>currentEpoch||current!=(epoch==currentEpoch))continue;
+                        result.put("runProvenance",current?"current":"earlier");
+                    }
+                    results.put(result);
+                }catch(org.json.JSONException unverified){ /* An unreadable origin isn't a new Work file. */ }
+                continue;
             }
             boolean output=kind.equals("generated_media")||kind.equals("created_text")||kind.equals("document_extract")||kind.equals("remote_result_snapshot")||kind.equals("created_document")||kind.equals("derived_media")||kind.equals("managed_build_output");
             if(task!=null&&output&&kind.equals("generated_media")) {
@@ -173,7 +190,8 @@ public final class AttachmentOutcomeHost {
 
     /** The file picker supplies a real imported record. JSON callers cannot create an association here. */
     public JSONObject selectForTask(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
-        ownerTaskRequired(taskId);JSONObject actual=privateMetadata(artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,control);
+        ownerTaskRequired(taskId);JSONObject actual=privateMetadata(artifactId,expectedSha256);
+        requireReusableInput(actual);repository.book.requireUnchanged(artifactId,expectedSha256,control);
         JSONObject selected=tasks.linkOwnerAttachment(taskId,actual);control.check();return selected;
     }
     /** Display metadata for exact retained message references. Reading/opening still verifies canonical bytes. */
@@ -218,7 +236,8 @@ public final class AttachmentOutcomeHost {
     }
 
     public Intent open(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
-        requireReference(taskId,artifactId,expectedSha256);Intent prepared=repository.verifiedViewIntent(artifactId,expectedSha256,control);
+        requireReusableInput(reference(taskId,artifactId,expectedSha256));
+        Intent prepared=repository.verifiedViewIntent(artifactId,expectedSha256,control);
         try{requireReference(taskId,artifactId,expectedSha256);control.checkpoint();return prepared;}
         catch(Exception failure){try{repository.discardVerifiedView(prepared);}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure;}
     }
@@ -303,22 +322,38 @@ public final class AttachmentOutcomeHost {
         JSONObject payload=new JSONObject().put("taskId",taskId).put("operationId",operationId).put("runId",source.getString("runId")).put("epoch",source.getInt("epoch"));
         return media.call(command,payload,control);
     }
-    public void requireReference(String taskId,String artifactId,String expectedSha256)throws Exception {
-        JSONObject meta=privateMetadata(artifactId,expectedSha256);if(taskId==null||taskId.isEmpty())return;
-        JSONObject original=ownerTaskRequired(taskId), provenance=meta.optJSONObject("source");
+    public void requireReference(String taskId,String artifactId,String expectedSha256)throws Exception {reference(taskId,artifactId,expectedSha256);}
+    private JSONObject reference(String taskId,String artifactId,String expectedSha256)throws Exception {
+        JSONObject meta=privateMetadata(artifactId,expectedSha256);if(taskId==null||taskId.isEmpty())return meta;
+        JSONObject provenance=meta.optJSONObject("source");
+        if(OriginalNodeCompilerDelivery.claims(provenance)){
+            if(!taskId.equals(provenance.opt("taskId")))requireReusableInput(meta);
+            return meta;
+        }
+        JSONObject original=ownerTaskRequired(taskId);
         if(provenance!=null&&"remote_result_snapshot".equals(provenance.opt("kind"))&&taskId.equals(provenance.opt("taskId")))
             dev.pocketengine.features.remote.RemoteSavedOriginal.requireLive(original,meta);
         JSONArray selected=tasks.ownerAttachmentReferences(taskId);
-        for(int i=0;i<selected.length();i++)if(artifactId.equals(selected.getJSONObject(i).getString("id"))&&sameReference(selected.getJSONObject(i),meta))return;
+        for(int i=0;i<selected.length();i++)if(artifactId.equals(selected.getJSONObject(i).getString("id"))&&sameReference(selected.getJSONObject(i),meta))return meta;
         JSONObject source=meta.optJSONObject("source");if(source!=null&&taskId.equals(source.optString("taskId"))){
             if(source.optString("kind").equals("generated_media")){JSONObject op=tasks.ownerMediaOperationSource(taskId,source.getString("operationId"));if(!op.getString("runId").equals(source.optString("runId")))throw new SecurityException("文件不属于原媒体执行");}
-            return;
+            return meta;
         }
         throw new SecurityException("该文件未被明确选为原任务来源，也不是其真实成果");
     }
+    private static void requireReusableInput(JSONObject file){
+        if(OriginalNodeCompilerDelivery.claims(file.optJSONObject("source")))
+            throw new SecurityException("此固定编译输出仅在本机查看或另存");
+    }
     private JSONObject privateMetadata(String id,String expected)throws Exception {
         JSONObject meta=repository.book.get(id);if(!privateFile(meta)||expected==null||!expected.equals(meta.optString("sha256")))throw new SecurityException("文件空间或不可变版本不匹配");
-        JSONObject source=meta.optJSONObject("source"),task=source==null||source.optString("taskId").isEmpty()?null:tasks.get(source.getString("taskId"),false);
+        JSONObject source=meta.optJSONObject("source");
+        if(OriginalNodeCompilerDelivery.claims(source)){
+            if(Thread.holdsLock(repository.book))throw new SecurityException("固定编译输出须在原文件锁外核实");
+            tasks.requireSettledNodeCompilerAttachment(meta);
+            return meta;
+        }
+        JSONObject task=source==null||source.optString("taskId").isEmpty()?null:tasks.get(source.getString("taskId"),false);
         if(source!=null&&source.has("groupSpaceId")||task!=null&&task.optJSONObject("origin")!=null&&task.getJSONObject("origin").optString("kind").equals("group"))throw new SecurityException("群媒体技术副本不能作为私人附件；请从原群成果读取");return meta;
     }
     private JSONObject ownerTask(String taskId)throws Exception {return taskId==null||taskId.isEmpty()?null:ownerTaskRequired(taskId);}

@@ -193,6 +193,8 @@ internal class PocketWebWorkSearch(
             val row = fileHeader(file).put("runProvenance", file.optString("runProvenance", "unrecorded"))
             if (file.opt("sourceKind") == "device_received_file" && file.opt("sourceRunEvidence") == "original_device_file_receive")
                 row.put("sourceRunEvidence", "original_device_file_receive")
+            else if (file.opt("sourceKind") == "managed_build_output" && file.opt("sourceRunEvidence") == "original_node_compiler_output")
+                row.put("sourceRunEvidence", "original_node_compiler_output")
             else if (conversationResult == null && !selectedTask.optBoolean("contextWithdrawn") && !selectedTask.optBoolean("sourceCurrentReadRequired")) {
                 // Keep the existing per-file draft as the only source of text. The
                 // original work lists a marker, never an unsubmitted draft body.

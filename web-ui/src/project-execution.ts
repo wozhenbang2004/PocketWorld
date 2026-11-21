@@ -114,6 +114,87 @@ export function originalBuildWebGap(task: ProjectExecutionData): OriginalBuildWe
     !Object.hasOwn(route,'editedNodeWebVersion')?'nested_vite_output':'unverified';
 }
 
+const compilerOutputFormat = 'pocketworld.owner-node-compiler-output.v1';
+const compilerUuid = (value: unknown): value is string =>
+  typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+const compilerDigest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const positiveNumber = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+export type OriginalNodeCompilerOutput = {
+  format: typeof compilerOutputFormat; taskId: string; runId: string; epoch: number; buildOperationId: string;
+  projectId: string; checkoutId: string; sourceDigest: string; planDigest: string; requestDigest: string; runtimeIdentity: string;
+  checkoutSequence: number; path: string; bytes: number; sha256: string; beforeSha256: string;
+};
+const compilerWitnessFields = ['format','taskId','runId','epoch','buildOperationId','projectId','checkoutId','sourceDigest',
+  'planDigest','requestDigest','runtimeIdentity','checkoutSequence','path','bytes','sha256','beforeSha256'] as const;
+function compilerOutputWitness(value: unknown): OriginalNodeCompilerOutput | undefined {
+  const pin = object(value);
+  if (pin.format !== compilerOutputFormat || !compilerUuid(pin.taskId) || !compilerUuid(pin.runId) ||
+      !positiveNumber(pin.epoch) || pin.epoch > 2147483647 || !operationId(pin.buildOperationId) || !operationId(pin.projectId) ||
+      !operationId(pin.checkoutId) || !positiveNumber(pin.checkoutSequence) || !positiveNumber(pin.bytes) || pin.bytes > 256 * 1024 ||
+      typeof pin.path !== 'string' || !/^dist\/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.js$/.test(pin.path) ||
+      ![pin.sourceDigest,pin.planDigest,pin.requestDigest,pin.runtimeIdentity,pin.sha256].every(compilerDigest) ||
+      (pin.beforeSha256 !== 'absent' && !compilerDigest(pin.beforeSha256)) || pin.beforeSha256 === pin.sha256) return;
+  return Object.fromEntries(compilerWitnessFields.map(name => [name, pin[name]])) as OriginalNodeCompilerOutput;
+}
+
+/** Only the current original private tool row can offer a read. The native
+ * journal, not this exit witness, authorizes review and confirms publication. */
+export function originalNodeCompilerOutput(task: ProjectExecutionData | undefined, row: ProjectExecutionData): OriginalNodeCompilerOutput | undefined {
+  const raw = object(task?.raw), scope = object(raw.developmentContext), build = object(scope.ownerDraftFirstBuild);
+  const receipt = object(row.receipt), actual = object(receipt.executionReceipt);
+  const pin = compilerOutputWitness(actual.nodeCompilerOutput);
+  if (!pin || Object.keys(actual.nodeCompilerOutput).length !== compilerWitnessFields.length ||
+      task?.id !== pin.taskId || raw.id !== pin.taskId || raw.runId !== pin.runId || raw.coordinatorEpoch !== pin.epoch ||
+      raw.kind !== 'assistant' || raw.executionMode !== 'capabilities' || raw.actorId !== 'owner' || raw.spaceId !== 'private' ||
+      raw.origin != null || raw.parentTaskId != null || raw.teamRunId != null || raw.memberId != null ||
+      raw.executionRole === 'owner_work' || raw.ownerLocalTerminal != null || raw.ownerDeviceWork != null ||
+      raw.workProfileRef != null || raw.workProfileIntent != null || raw.developmentSession != null ||
+      raw.contextAvailable === false || raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true ||
+      raw.taskProjection !== 'detail_window' || raw.taskCoreReadLimited !== false || raw.auditBodyIncluded !== true ||
+      raw.cancelRequested !== false || raw.hasUnresolvedOperations !== false || raw.status !== task?.status ||
+      !['completed','failed','needs_confirmation','awaiting_user'].includes(raw.status) ||
+      scope.format !== 'pocketworld.development-context.v1' || scope.runtime !== 'managed_process_v1' || scope.draftOnly === true ||
+      scope.projectId !== pin.projectId || scope.checkoutId !== pin.checkoutId || scope.initialSourceDigest !== pin.sourceDigest ||
+      build.existingCheckoutBuild !== true || build.manager !== 'npm' || build.lockedDependencies?.review?.manager !== 'npm' ||
+      build.projectId !== pin.projectId || build.checkoutId !== pin.checkoutId || build.sourceDigest !== pin.sourceDigest ||
+      build.planDigest !== pin.planDigest || build.runtimeIdentity !== pin.runtimeIdentity ||
+      row.tool !== 'project_execute' || row.runId !== pin.runId || row.state !== 'receipt' || row.operationId !== pin.buildOperationId ||
+      row.bodyAvailable !== true || row.readLimited !== false || row.arguments?.stepId !== 'build' || row.arguments?.planDigest !== pin.planDigest ||
+      receipt.code !== 'project_process_receipt' || receipt.accepted !== true || receipt.status !== 'completed' || receipt.executionStatus !== 'completed' ||
+      actual.provider !== 'managed_process' || actual.kind !== 'command' || actual.requestedExecutable !== 'npm' ||
+      !Array.isArray(actual.requestedArgv) || actual.requestedArgv.length !== 2 || actual.requestedArgv[0] !== 'run' || actual.requestedArgv[1] !== 'build' ||
+      actual.id !== pin.buildOperationId || actual.operationId !== pin.buildOperationId || actual.checkoutId !== pin.checkoutId ||
+      actual.sourceDigest !== pin.sourceDigest || actual.checkoutSequence !== pin.checkoutSequence || actual.status !== 'completed' ||
+      actual.runMode !== 'foreground' || actual.launchPhase !== 'exit_observed' || actual.sourceCheckStatus !== 'pre_exec_manifest_verified' ||
+      actual.exitCode !== 0 || actual.terminationSignal !== 0 || actual.launchErrno !== 0 ||
+      !['receiptReceived','processLaunched','processExited','processGroupAbsent','resourcesReleased','outputComplete'].every(name => actual[name] === true) ||
+      !['ownedWorkerLive','cancelRequested','timedOut','outputTruncated','noChildCreated'].every(name => actual[name] === false)) return;
+  const route = object(receipt.projectExecution), original = object(actual.projectExecution);
+  const binding = {
+    authority: 'native_host_operation', command: 'project.runtime.run', runtimeId: scope.runtime, runtimeIdentity: pin.runtimeIdentity,
+    taskId: pin.taskId, runId: pin.runId, coordinatorEpoch: pin.epoch, operationId: pin.buildOperationId, projectId: pin.projectId,
+    checkoutId: pin.checkoutId, planDigest: pin.planDigest, sourceDigest: pin.sourceDigest, requestDigest: pin.requestDigest, stepId: 'build', intent: 'build',
+  };
+  return compilerDigest(route.existingNodeWebVersion) && !Object.hasOwn(route,'editedNodeWebVersion') &&
+    Object.entries(binding).every(([name, value]) => route[name] === value && original[name] === value) ? pin : undefined;
+}
+
+export const sameNodeCompilerOutput = (shown: OriginalNodeCompilerOutput, actual: OriginalNodeCompilerOutput | undefined) =>
+  !!actual && compilerWitnessFields.every(name => shown[name] === actual[name]);
+export type NodeCompilerOutputReply =
+  { state: 'ready'; reviewHandle: string; expiresAt: number } | { state: 'pending' } | { state: 'saved'; artifactId: string };
+
+export function nodeCompilerOutputReply(value: unknown, original: OriginalNodeCompilerOutput): NodeCompilerOutputReply | undefined {
+  const result = object(value);
+  if (!sameNodeCompilerOutput(original, compilerOutputWitness(value))) return;
+  const fields = Object.keys(result).length - compilerWitnessFields.length;
+  if (result.state === 'ready' && fields === 3 && compilerUuid(result.reviewHandle) &&
+      positiveNumber(result.expiresAt) && result.expiresAt > Date.now())
+    return { state: 'ready', reviewHandle: result.reviewHandle, expiresAt: result.expiresAt };
+  if (result.state === 'pending' && fields === 1) return { state: 'pending' };
+  if (result.state === 'saved' && fields === 2 && compilerUuid(result.artifactId)) return { state: 'saved', artifactId: result.artifactId };
+}
+
 /** A locator for the original native journal. This projection grants no input or stop authority. */
 export function projectExecutionRows(task: ProjectExecutionData, operation?: ProjectExecutionData): ProjectExecutionRow[] {
   const raw = object(task.raw);
