@@ -3,7 +3,9 @@ package dev.pocketengine.ui.web
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.project.OwnerDraftFirstBuild
+import dev.pocketengine.features.local.project.OwnerRevisionSource
 import dev.pocketengine.features.local.project.ProjectOwnerWorkflows
 import dev.pocketengine.features.local.project.ProjectSources
 import dev.pocketengine.ui.PocketWorldController
@@ -13,6 +15,14 @@ import java.util.UUID
 
 /** Created only from a successful explicit native open of this retained copy. */
 internal class RetainedDraftOriginalRead(val current: () -> Boolean, val read: (() -> Boolean) -> JSONObject)
+
+internal fun retainedOriginalComparison(fixed: JSONObject, project: String, checkout: String): JSONObject =
+    JSONObject().put("format", "pocketworld.retained-copy-original-draft.v1").put("projectId", project)
+        .put("checkoutId", checkout).put("readOnly", true).put("executionAuthorized", false)
+        .put("beforeFromOwnerRevision", fixed.has(OwnerRevisionSource.FIELD)).also { view ->
+            for (field in listOf("draftId", "runId", "epoch", "path", "before", "after", "beforeSha256", "afterSha256", "beforeBytes", "afterBytes"))
+                view.put(field, fixed.get(field))
+        }
 
 /** Presentation around the original project checkout and Assistant admission.
  * No execution grant, alternate runner, task ledger or restored review lives here. */
@@ -24,10 +34,12 @@ internal class PocketWebProjectDevelopment(
     private val captureOriginalDraft: (String, String) -> RetainedDraftOriginalRead?
 ) {
     private data class ReturnToDraft(val handle:String,val project:String,val checkout:String,val draftDigest:String,val until:Long)
+    private data class RetainedCopyLink(val checkout:String,val sealedIdentity:String)
     private class Page(val handle: String, val project: String, val window: PocketWebWindowTicket, val generation: Long, val requested:ReturnToDraft?=null) {
         // Set only when this specific page actually reads the native draft. Guarded by the shared draft monitor.
         var shownSeal:String?=null
         @Volatile var shownSoleCheckout:String?=null
+        @Volatile var retainedCopy:RetainedCopyLink?=null
     }
     private data class Review(val handle: String, val page: Page, val input: String, val picked:ProjectConventionDraft.Bound, val modelRevision: Long, val expires: Long, val heldBuildDraftDigest:String?=null)
     private val main = Handler(Looper.getMainLooper())
@@ -181,6 +193,44 @@ internal class PocketWebProjectDevelopment(
     }
     private fun source(original: Page, checkout: String) = controller.projectDevelopmentForWeb().sourceForOwner(original.project, checkout, true)
     private fun model() = controller.nativeModelSelection().readStable { controller.projectDevelopmentModelForWeb() }
+    private fun selectedRetainedOrigin(project:String,checkout:String) =
+        (controller.nativeButlerHost().features.module("local") as? LocalModule)?.retainedDraftOriginForSelectedCopy(project,checkout)
+
+    private fun shownCheckout(original:Page,checkout:String,allowSole:Boolean)=synchronized(drafts){
+        val saved=drafts[original.project]
+        val selected=saved?.optString("checkoutId").orEmpty()
+        original.shownSeal!=null&&(selected==checkout||allowSole&&selected.isEmpty()&&original.shownSoleCheckout==checkout)&&
+            saved?.optJSONObject("submission")?.optString("status") !in setOf("pending","unknown","unconfirmed")
+    }
+    private fun observeRetainedLink(original:Page,checkout:String,allowSole:Boolean):Boolean {
+        fun eligible()=restoreFailure==null&&current(original)&&controller.state.filePath==null&&shownCheckout(original,checkout,allowSole)
+        if(!eligible())return false
+        val proof=runCatching { selectedRetainedOrigin(original.project,checkout) }.getOrNull() ?: return false
+        if(!eligible())return false
+        original.retainedCopy=RetainedCopyLink(checkout,proof.sealedIdentity());return true
+    }
+
+    private fun captureSelectedRetained(original:Page,checkout:String):RetainedDraftOriginalRead? {
+        val link=original.retainedCopy?.takeIf { it.checkout==checkout } ?: return null
+        fun samePage()=current(original)&&original.retainedCopy===link&&controller.state.filePath==null
+        return RetainedDraftOriginalRead(::samePage) { live ->
+            fun exactPublication():JSONObject {
+                check(live()) { "原工作副本页面已离开" }
+                if(!shownCheckout(original,checkout,false)){
+                    // An implicit choice is valid only while it is still the sole ordinary copy.
+                    val rows=controller.projectDevelopmentForWeb().inspectForOwner(original.project,false).getJSONArray("checkouts")
+                    check(rows.length()==1&&rows.getJSONObject(0).opt("checkoutId")==checkout&&live()) { "私人副本已变化，请明确选择这份工作副本" }
+                }
+                val origin=selectedRetainedOrigin(original.project,checkout)
+                check(origin!=null&&origin.sealedIdentity()==link.sealedIdentity&&live()) { "原工作副本与改稿的发布关系已变化" }
+                return origin.reference()
+            }
+            val fixed=controller.nativeButlerHost().tasks.readRetainedCopyOriginalForOwner(exactPublication()) { live() }
+            exactPublication()
+            retainedOriginalComparison(fixed,original.project,checkout).put("viewHandle",original.handle)
+        }
+    }
+
     private fun metadata(original: Page): JSONObject {
         val actual = controller.projectDevelopmentForWeb().inspectForOwner(original.project)
         val checkouts = actual.getJSONArray("checkouts")
@@ -191,8 +241,15 @@ internal class PocketWebProjectDevelopment(
             actual.putOpt("phoneSourceRecovery", recovery)
         }
         val selectedModel = model()
+        val draft=shownDraft(original)
+        val selected=draft.optString("checkoutId").ifEmpty { original.shownSoleCheckout.orEmpty() }
+        if(selected.isNotEmpty()){
+            val row=(0 until checkouts.length()).map(checkouts::getJSONObject).singleOrNull { it.opt("checkoutId")==selected }
+            if(row?.opt("draftWorkingCopy")==true&&observeRetainedLink(original,selected,allowSole=true))
+                row.put("retainedOriginalLinked",true) // Only a live local link, no original task ID or text.
+        }
         return actual.put("viewHandle", original.handle).put("model", selectedModel.value()).put("modelRevision", selectedModel.revision())
-            .put("draft", shownDraft(original)).put("commandsAuthorized", false)
+            .put("draft", draft).put("commandsAuthorized", false)
             .also { out -> original.requested?.let { out.put("openedDraftReturn",it.handle) } }
             .put("draftRecoveryRequired", restoreFailure != null).put("draftRecoveryMessage", restoreFailure ?: "")
     }
@@ -294,6 +351,7 @@ internal class PocketWebProjectDevelopment(
                     } else copyDeliveryFields(retainedFields, stored.put("goal", goal).put("checkoutId", checkout))
                     if (ProjectConventionDraft.present(stored) == null) stored.remove(ProjectConventionDraft.KEY)
                 }; review = null
+                original.retainedCopy?.let { if(!shownCheckout(original,it.checkout,allowSole=true))original.retainedCopy=null }
                 done(JSONObject().put("saved", true).put("projectId", original.project).put("removedSelectedSource",drop), null)
             }
             "projects.development.readHostDiff" -> {
@@ -332,15 +390,11 @@ internal class PocketWebProjectDevelopment(
                     fields(args, "viewHandle", "checkoutId", "readOriginalDraft")
                     require(args.opt("readOriginalDraft") == true)
                     val checkout = text(args, "checkoutId")
-                    val visit = captureOriginalDraft(original.project, checkout) ?: error("请从原改稿打开这份已保留的工作副本")
-                    fun sameVisit(): Boolean = visit.current() && review == null && files.closedForOriginalDraftRead() && synchronized(drafts) {
-                        val saved = drafts[original.project]
-                        val selectedCheckout = saved?.optString("checkoutId").orEmpty()
-                        original.shownSeal != null &&
-                            (selectedCheckout == checkout || selectedCheckout.isEmpty() && original.shownSoleCheckout == checkout) &&
-                            saved?.optJSONObject("submission")?.optString("status") !in setOf("pending", "unknown", "unconfirmed")
-                    }
-                    check(sameVisit()) { "请先退出文件编辑、核对待定交办，并选择刚打开的原工作副本" }
+                    val visit = captureOriginalDraft(original.project,checkout) ?: captureSelectedRetained(original,checkout)
+                        ?: error("当前副本没有可核对的原改稿发布关系")
+                    fun sameVisit(): Boolean = visit.current() && review == null && files.closedForOriginalDraftRead() &&
+                        shownCheckout(original,checkout,allowSole=true)
+                    check(sameVisit()) { "请先退出文件编辑、核对待定交办，并选择同一份工作副本" }
                     working(original, done, extraCurrent = ::sameVisit) { visit.read { current(original) && sameVisit() } }
                     return
                 }
@@ -350,7 +404,12 @@ internal class PocketWebProjectDevelopment(
                     files.savedEditForBuild(original.project, checkout, text(saved, "filesHandle"), text(saved, "id"))
                 } else null
                 working(original, done) {
-                    if (receipt == null) source(original, checkout)
+                    if(receipt==null)source(original,checkout).also { value ->
+                        // An existing inspect follows a real explicit chooser; a Web-only selection proves nothing.
+                        if(value.opt("projectId")==original.project&&value.opt("checkoutId")==checkout&&
+                            observeRetainedLink(original,checkout,allowSole=false))
+                            value.put("retainedOriginalLinked",true).put("retainedOriginalViewHandle",original.handle)
+                    }
                     else controller.projectDevelopmentForWeb().sourceAfterSaveForOwner(original.project, checkout, receipt.path, receipt.savedHash)
                 }
             }

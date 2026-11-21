@@ -38,13 +38,17 @@ public final class WorkspaceModule implements EngineModule {
     public JSONObject createImportedProject(String name,String client,String packageSha)throws Exception{return workspace.createImported(name,client,packageSha);}
     /** Read one original source-import registration. Absence is not evidence that a checkout was ever published. */
     public JSONObject sourceProjectRegistrationForOwner(String client,String sha,String reviewedName)throws Exception {
+        return sourceProjectRegistrationForOwner(client,sha,reviewedName,false);
+    }
+    public JSONObject sourceProjectRegistrationForOwner(String client,String sha,String reviewedName,boolean requireNoAuthority)throws Exception {
         if(nativeClosed||client==null||!client.matches("[a-f0-9-]{36}")||sha==null||!sha.matches("[a-f0-9]{64}"))throw new SecurityException("原项目登记身份不可核对");
         String expected=java.util.UUID.nameUUIDFromBytes(("project-package-import:"+client).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
         org.json.JSONArray all=workspace.projects();JSONObject match=null;
         for(int i=0;i<all.length();i++){
             JSONObject row=all.getJSONObject(i),src=row.optJSONObject("sourceImport");boolean id=expected.equals(row.optString("id")),op=src!=null&&client.equals(src.optString("clientId"));
             if(!id&&!op)continue;
-            if(!id||!op||match!=null||!sha.equals(src.optString("packageSha256")))throw new SecurityException("项目目录有冲突的原导入登记，未选中其他工程");
+            if(!id||!op||match!=null||!sha.equals(src.optString("packageSha256"))||
+               requireNoAuthority&&!Boolean.FALSE.equals(src.opt("executionAuthorityRestored")))throw new SecurityException("项目目录有冲突的原导入登记，未选中其他工程");
             match=row;
         }
         return new JSONObject().put("registered",match!=null).put("expectedProjectId",expected)

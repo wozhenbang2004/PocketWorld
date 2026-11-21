@@ -22,6 +22,11 @@ public final class OwnerDraftCopyShelf {
     public static void requireOpenedForContent(File actual)throws Exception{
         if(exists(new File(actual,HELD)))throw new IllegalStateException("这份工作副本尚未打开。请从原改稿打开，再使用文件；本次查询不会把它标为已用。");
     }
+    /** Positive durable evidence of the earlier explicit claim, not just absence of the pending marker. */
+    static boolean previouslyOpened(File actual)throws Exception{
+        Path opened=safe(actual,USED).toPath();
+        return !exists(safe(actual,HELD))&&Files.isRegularFile(opened,LinkOption.NOFOLLOW_LINKS)&&Files.size(opened)==0;
+    }
     /** Only an explicit owner open may mark a new copy as in use. Metadata reads cannot claim it. */
     public static void claim(File actual)throws Exception{
         File held=new File(actual,HELD);if(!exists(held))return;

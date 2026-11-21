@@ -253,13 +253,8 @@ internal class PocketWebBridge(
             val fixed = controller.nativeButlerHost().tasks.readRetainedCopyOriginalForOwner(origin) { live() }
             check(dev.pocketengine.features.local.project.ProjectSources.canonical(origin) ==
                 dev.pocketengine.features.local.project.ProjectSources.canonical(publication()) && live()) { "原工作副本页面已变化" }
-            JSONObject().put("format", "pocketworld.retained-copy-original-draft.v1").put("projectId", project)
-                .put("checkoutId", checkout).put("requestRevision", open.request).put("sourceTaskId", open.sourceTask)
-                .put("readOnly", true).put("executionAuthorized", false)
-                .put("beforeFromOwnerRevision", fixed.has(dev.pocketengine.features.local.project.OwnerRevisionSource.FIELD)).also { view ->
-                    for (field in listOf("draftId", "runId", "epoch", "path", "before", "after", "beforeSha256", "afterSha256", "beforeBytes", "afterBytes"))
-                        view.put(field, fixed.get(field))
-                }
+            retainedOriginalComparison(fixed,project,checkout)
+                .put("requestRevision",open.request).put("sourceTaskId",open.sourceTask)
         }
     }
 

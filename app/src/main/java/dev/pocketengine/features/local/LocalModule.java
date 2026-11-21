@@ -278,6 +278,15 @@ public final class LocalModule implements EngineModule {
         dev.pocketengine.features.local.project.OwnerDraftCopyShelf.requireProjectNotShelved(root,project);
         return dev.pocketengine.features.local.project.OwnerDraftCopyPublication.requireRetainedCopyPresent(root,project,checkout,workIdentity);
     }
+    /** One already-opened sealed checkout plus its existing project registration, without source files. */
+    public synchronized dev.pocketengine.features.local.project.OwnerDraftCopyPublication.RetainedSelection retainedDraftOriginForSelectedCopy(String project,String checkout)throws Exception{
+        if(closed)throw new IllegalStateException("原本机工程宿主已关闭");
+        dev.pocketengine.features.local.project.OwnerDraftCopyShelf.requireProjectNotShelved(root,project);
+        var selection=dev.pocketengine.features.local.project.OwnerDraftCopyPublication.selectedRetainedCopy(root,project,checkout);
+        if(selection==null)return null;
+        JSONObject registry=packageWorkspace().sourceProjectRegistrationForOwner(selection.action(),selection.packageSha256(),selection.name(),true);
+        return Boolean.TRUE.equals(registry.opt("registered"))&&project.equals(registry.opt("expectedProjectId"))?selection:null;
+    }
     public synchronized JSONObject openProjectForOwner(String projectId)throws Exception {
         requireAvailableDraftProjectForOwner(projectId);
         projects.handle("export",new JSONObject().put("projectId",projectId));JSONObject latest=null;File[] entries=new File(root,"checkouts").listFiles();

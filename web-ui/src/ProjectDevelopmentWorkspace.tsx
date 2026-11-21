@@ -43,29 +43,52 @@ const copyIdentity = (value: unknown): value is string =>
   typeof value==='string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const sourceHash = (value: unknown): value is string => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
 type BuildPreview = {value:Data; viewHandle:string; window:string};
-type RetainedOriginalVisit = {projectId:string; checkoutId:string; sourceTaskId:string; requestRevision:number};
-type RetainedOriginalDifference = RetainedOriginalVisit & {
+type RetainedCopyScope = {projectId:string; checkoutId:string};
+type RetainedOriginalWarmVisit = RetainedCopyScope & {sourceTaskId:string; requestRevision:number};
+type RetainedOriginalVisit = RetainedOriginalWarmVisit | (RetainedCopyScope & {viewHandle:string});
+type RetainedOriginalDifference = {
   draftId:string; runId:string; epoch:number; path:string; before:string; after:string;
   beforeSha256:string; afterSha256:string; beforeBytes:number; afterBytes:number; beforeFromOwnerRevision:boolean;
 };
-type RetainedOriginalRead = {value:RetainedOriginalDifference; viewHandle:string; window:string};
+type RetainedOriginalRead = {value:RetainedOriginalDifference; visit:RetainedOriginalVisit; viewHandle:string; window:string};
 const sourceTaskKey=(value:unknown):value is string=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
 const sameRetainedVisit = (a:RetainedOriginalVisit,b:RetainedOriginalVisit) =>
-  a.projectId===b.projectId&&a.checkoutId===b.checkoutId&&a.sourceTaskId===b.sourceTaskId&&a.requestRevision===b.requestRevision;
+  a.projectId===b.projectId&&a.checkoutId===b.checkoutId&&('viewHandle' in a
+    ? 'viewHandle' in b&&a.viewHandle===b.viewHandle
+    : !('viewHandle' in b)&&a.sourceTaskId===b.sourceTaskId&&a.requestRevision===b.requestRevision);
 
-function currentRetainedVisit(shown:Data|undefined,projectId:string,checkoutId:string):RetainedOriginalVisit|null {
+function keepOnlySelectedRetainedLink(page:Data|null,checkoutId:string):Data|null {
+  const checkouts=rows(page?.checkouts);
+  return page&&checkouts.some(row=>row?.retainedOriginalLinked===true&&row.checkoutId!==checkoutId)
+    ? {...page,checkouts:checkouts.map(row=>row?.retainedOriginalLinked===true&&row.checkoutId!==checkoutId
+        ? {...row,retainedOriginalLinked:false}:row)}:page;
+}
+
+function currentRetainedVisit(shown:Data|undefined,page:Data|null,projectId:string,checkoutId:string):RetainedOriginalVisit|null {
   const {state,view}=bridge.getState(),native=state.openedRetainedDraftCopy,window=(view||{}) as Data;
-  if(document.hidden||window.section!==null||window.taskId!==null||state.filePath||state.projectId!==projectId||
-    state.requestedProjectId!==projectId||shown?.canReadOriginalDraft!==true||native?.canReadOriginalDraft!==true||
+  if(document.hidden||window.section!==null||window.taskId!==null||state.filePath||state.projectId!==projectId)return null;
+  // The ordinary project directory does not replay a retained-copy open. Only
+  // this native page's positively linked, currently selected checkout can read it.
+  let selected:RetainedOriginalVisit|null=null;
+  if(page?.projectId===projectId&&page.executionAuthorized===false&&copyIdentity(page.viewHandle)&&copyIdentity(checkoutId)){
+    const match=rows(page.checkouts).filter(row=>row?.projectId===projectId&&row.checkoutId===checkoutId);
+    if(match.length===1&&match[0].draftWorkingCopy===true&&match[0].retainedOriginalLinked===true)
+      selected={projectId,checkoutId,viewHandle:page.viewHandle};
+  }
+  if(state.requestedProjectId!==projectId||native?.canReadOriginalDraft!==true||
     native.projectId!==projectId||native.checkoutId!==checkoutId||!sourceTaskKey(native.sourceTaskId)||
     !Number.isSafeInteger(native.requestRevision)||native.requestRevision<1||
-    native.requestRevision!==state.requestedProjectRevision||!sameRetainedVisit(native,shown as RetainedOriginalVisit))return null;
+    native.requestRevision!==state.requestedProjectRevision)return selected;
+  // If the already-open native visit remains live, the reader returns its old
+  // receipt shape. It can expose the action only with the prior App visit or a separate Page link.
+  if(!selected&&(shown?.canReadOriginalDraft!==true||!sameRetainedVisit(native,shown as RetainedOriginalWarmVisit)))return null;
   return {projectId,checkoutId,sourceTaskId:native.sourceTaskId,requestRevision:native.requestRevision};
 }
 
 function checkedRetainedOriginal(value:Data,visit:RetainedOriginalVisit):RetainedOriginalDifference {
-  const fields=['format','readOnly','executionAuthorized','projectId','checkoutId','sourceTaskId','requestRevision','draftId','runId','epoch',
-    'path','before','after','beforeSha256','afterSha256','beforeBytes','afterBytes','beforeFromOwnerRevision'];
+  const scope='viewHandle' in visit?['viewHandle']:['sourceTaskId','requestRevision'];
+  const fields=['format','readOnly','executionAuthorized','projectId','checkoutId','draftId','runId','epoch',
+    'path','before','after','beforeSha256','afterSha256','beforeBytes','afterBytes','beforeFromOwnerRevision',...scope];
   if(value?.format!=='pocketworld.retained-copy-original-draft.v1'||value.readOnly!==true||value.executionAuthorized!==false||
     Object.keys(value).some(key=>!fields.includes(key))||!sameRetainedVisit(value as RetainedOriginalVisit,visit)||
     !sourceHash(value.draftId)||!sourceTaskKey(value.runId)||!Number.isSafeInteger(value.epoch)||value.epoch<1||
@@ -222,10 +245,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const closeBuildPreview=()=>{previewOpen.current=false;setBuildPreview(null);};
   const retainedVisit=active&&view?.projectId===projectId&&view.executionAuthorized===false&&view.viewHandle===handle.current&&
     !view.draftRecoveryRequired&&!filesOpen&&!hostDiff&&!review&&!preview&&!unresolved(submission)&&!sourceConflict&&!buildCopyMissing&&
-    can('projects.development.inspect')?currentRetainedVisit(retainedOriginalVisit,projectId,checkout):null;
+    can('projects.development.inspect')?currentRetainedVisit(retainedOriginalVisit,view,projectId,checkout):null;
   activeRetainedVisit.current=retainedVisit;
   const originalDifference=retainedRead&&retainedVisit&&retainedRead.viewHandle===handle.current&&
-    retainedRead.window===ownerWindow()&&sameRetainedVisit(retainedRead.value,retainedVisit)?retainedRead.value:null;
+    retainedRead.window===ownerWindow()&&sameRetainedVisit(retainedRead.visit,retainedVisit)?retainedRead.value:null;
   retainedOriginalOpen.current=!!originalDifference;
   const closeRetainedOriginal=()=>{retainedOriginalOpen.current=false;setRetainedRead(null);};
   useEffect(()=>{if(retainedRead&&!originalDifference)setRetainedRead(null);},[retainedRead,originalDifference]);
@@ -404,13 +427,21 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   useEffect(() => { if (active && readable && !handle.current) void readRef.current(); }, [active, readable]);
   useEffect(() => {
     if (!active || !view || !checkout || busy || review || filesOpen || buildReturn || importedEditor || differentBuildCopy || unresolved(submission)) return;
-    const key = `${view.viewHandle}|${projectId}|${checkout}`;
+    const viewHandle=view.viewHandle, key = `${viewHandle}|${projectId}|${checkout}`;
     if (sourceAttempt.current === key) return;
     sourceAttempt.current = key; setSource(null);
-    void invoke('projects.development.inspect', { viewHandle: view.viewHandle, checkoutId: checkout }, value => {
+    void invoke('projects.development.inspect', { viewHandle, checkoutId: checkout }, value => {
       if (draft.current.checkoutId !== checkout) return;
       if (value.projectId !== projectId || value.checkoutId !== checkout) throw new Error('源码不属于这个所选副本，请重新读取。');
       setSource(value);
+      // This existing inspection also sees an explicit choice made after a
+      // multi-checkout page opened. Keep only its still-selected native link.
+      if(value.retainedOriginalLinked===true&&value.retainedOriginalViewHandle===viewHandle)setView(current=>{
+        if(!current||current.viewHandle!==viewHandle||handle.current!==viewHandle||draft.current.checkoutId!==checkout)return current;
+        const checkouts=rows(current.checkouts), match=checkouts.filter(row=>row?.projectId===projectId&&row.checkoutId===checkout);
+        if(match.length!==1||match[0].draftWorkingCopy!==true||match[0].retainedOriginalLinked===true)return current;
+        return {...current,checkouts:checkouts.map(row=>row===match[0]?{...row,retainedOriginalLinked:true}:row)};
+      });
     });
   }, [active, view, checkout, busy, review, filesOpen, buildReturn, importedEditor, differentBuildCopy, submission, projectId]);
   useEffect(() => {
@@ -547,6 +578,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     void invoke('projects.development.draft',{viewHandle:handle.current,...next},value=>{
       if(value.saved!==true||value.projectId!==projectId)throw Error('原副本选择未确认，未开始工作。');
       touched.current=true;draft.current=next;setCheckout(next.checkoutId);
+      setView(page=>keepOnlySelectedRetainedLink(page,next.checkoutId));
       setHostOrigin(null);setHostFiles(null);sourceAttempt.current='';setSource(null);
     });
   };
@@ -592,7 +624,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const chooseCheckout = (value:string) => {
     setImportEditChoice(null);setImportEditorNotice('');
     const clear = !!currentPicked && checkout!==value;
-    if(clear){setRequirements(last=>({...last,constraints:''}));setView(last=>last?{...last,draft:{...last.draft,ownerPickedConvention:null}}:last);}
+    if(clear)setRequirements(last=>({...last,constraints:''}));
+    if(checkout!==value)setView(last=>{
+      const page=keepOnlySelectedRetainedLink(last,value);
+      return clear&&page?{...page,draft:{...page.draft,ownerPickedConvention:null}}:page;
+    });
     setCheckout(value); setBuildOrigin(null); setBuildCopyMissing(false); setSource(null); setHostOrigin(null); setHostFiles(null);
     sourceAttempt.current = ''; retain({ ...draft.current, checkoutId: value, ...(clear?{constraints:''}:{}) });
   };
@@ -745,16 +781,18 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     });
   };
   const readRetainedOriginal=()=>{
-    const viewHandle=handle.current,window=ownerWindow(),seen=currentRetainedVisit(retainedOriginalVisit,projectId,checkout);
+    const viewHandle=handle.current,window=ownerWindow(),seen=currentRetainedVisit(retainedOriginalVisit,view,projectId,checkout);
     if(disabled||retainedOriginalOpen.current||!retainedVisit||!seen||!sameRetainedVisit(retainedVisit,seen)||
       !viewHandle||view?.viewHandle!==viewHandle||draft.current.checkoutId!==checkout)return;
-    void invoke('projects.development.inspect',{viewHandle,checkoutId:checkout,readOriginalDraft:true},value=>{
-      const current=currentRetainedVisit(retainedOriginalVisit,projectId,checkout);
+    const stillHere=()=>{
+      const current=currentRetainedVisit(retainedOriginalVisit,view,projectId,checkout);
       const shown=activeRetainedVisit.current;
-      if(!current||!shown||!sameRetainedVisit(seen,current)||!sameRetainedVisit(seen,shown)||handle.current!==viewHandle||
-        ownerWindow()!==window||draft.current.checkoutId!==checkout)return;
-      setRetainedRead({value:checkedRetainedOriginal(value,seen),viewHandle,window});
-    });
+      return current&&shown&&sameRetainedVisit(seen,current)&&sameRetainedVisit(seen,shown)&&handle.current===viewHandle&&
+        ownerWindow()===window&&draft.current.checkoutId===checkout;
+    };
+    void invoke('projects.development.inspect',{viewHandle,checkoutId:checkout,readOriginalDraft:true},value=>{
+      if(stillHere())setRetainedRead({value:checkedRetainedOriginal(value,seen),visit:seen,viewHandle,window});
+    },failure=>{if(stillHere())setError(failureText(failure));});
   };
   const reviewNodeBuild = () => {
     const viewHandle=handle.current;

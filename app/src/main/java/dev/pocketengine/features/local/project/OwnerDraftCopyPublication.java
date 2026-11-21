@@ -112,23 +112,37 @@ public final class OwnerDraftCopyPublication {
         OwnerDraftCopyShelf.requireOpenedForContent(OwnerDraftCopyShelf.location(root,checkout,false));
         return ref;
     }
+    /** The cold Work reader has no warm open ticket. Prove one selected ordinary retained publication. */
+    public record RetainedSelection(JSONObject reference,String action,String packageSha256,String name,String sealedIdentity){}
+    public static RetainedSelection selectedRetainedCopy(File root,String project,String checkout)throws Exception{
+        JSONObject i=read(file(root,project));if(i==null)return null;
+        JSONObject ref=i.getJSONObject("reference");
+        if(!checkout.equals(ref.opt("checkoutId"))||!Boolean.FALSE.equals(ref.opt("executionAuthorized"))||
+           ref.getString("draftId").equals(ref.getString("revisionId")))return null;
+        JSONObject row=requirePresent(root,project,false,i);
+        if(!OwnerDraftFirstBuild.ordinaryCheckout(row)||row.has("collectedFromCheckoutId")||row.has("collectionOperationId")||
+           !OwnerDraftWorkCopy.matchesRetainedPublication(row,row.getJSONObject(OwnerDraftWorkCopy.FIELD))||
+           !OwnerDraftCopyShelf.previouslyOpened(OwnerDraftCopyShelf.location(root,checkout,false)))return null;
+        return new RetainedSelection(ref,i.getString("action"),i.getString("packageSha256"),i.getString("name"),ProjectSources.digest(i));
+    }
     private static void requirePresent(File root,String project,boolean catalogOnly)throws Exception{
         if(project==null||!project.matches("[a-f0-9-]{36}")||!present(new File(root,"draft-work-intents")))return;
         JSONObject i=read(file(root,project));if(i==null)return;
         requirePresent(root,project,catalogOnly,i);
     }
-    private static void requirePresent(File root,String project,boolean catalogOnly,JSONObject i)throws Exception{
+    private static JSONObject requirePresent(File root,String project,boolean catalogOnly,JSONObject i)throws Exception{
         JSONObject ref=i.getJSONObject("reference");File active=OwnerDraftCopyShelf.location(root,ref.getString("checkoutId"),false);
         File record=new File(active,"checkout.json"),files=new File(active,"files");
         if(!Files.isDirectory(files.toPath(),LinkOption.NOFOLLOW_LINKS)||!Files.isRegularFile(record.toPath(),LinkOption.NOFOLLOW_LINKS))
             throw new IllegalStateException("原改稿已经保留建立动作，但还没核对到完整副本。请回原稿继续，不会新建空工程。");
         Path seal=new File(active,SEAL).toPath();
         if(!Files.isRegularFile(seal,LinkOption.NOFOLLOW_LINKS)||Files.size(seal)!=64||!ProjectSources.digest(i).equals(new String(Files.readAllBytes(seal),StandardCharsets.US_ASCII)))throw new SecurityException("这不是原改稿已经发布的目录，未当作项目打开");
-        if(catalogOnly)return;
+        if(catalogOnly)return null;
         JSONObject row=JsonFiles.read(record),src=row.getJSONObject("sourceImport"),receipt=row.getJSONObject(OwnerDraftWorkCopy.FIELD);
         if(!project.equals(row.opt("projectId"))||!ref.getString("checkoutId").equals(row.opt("id"))||!i.getString("action").equals(src.opt("clientId"))||
            !i.getString("packageSha256").equals(src.opt("packageSha256"))||!i.getString("manifestIdentity").equals(src.opt("manifestIdentity"))||
            !Boolean.FALSE.equals(src.opt("executionAuthorityRestored")))throw new SecurityException("副本目录没有原建立动作的发布凭据，未重建");
         for(var keys=ref.keys();keys.hasNext();){String key=keys.next();if(!ProjectSources.canonical(ref.opt(key)).equals(ProjectSources.canonical(receipt.opt(key))))throw new SecurityException("目录不是原稿选定的那个副本");}
+        return row;
     }
 }
