@@ -32,7 +32,7 @@ type Props={
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
 type WorkTextVisit={taskId:string;runId:string;epoch:number;visit:string};
-type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;textStart?:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit};
+type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;textStart?:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit;libraryList?:'returning'|'listed'};
 function textBounds(body:HTMLDivElement){
  const text=body.querySelector<HTMLElement>('.pw-original-text[data-find-before] > .pw-file-text')?.getBoundingClientRect();
  return text&&text.height>0?{top:body.scrollTop+text.top-body.getBoundingClientRect().top,height:text.height}:undefined;
@@ -41,14 +41,30 @@ function readingTextStart(body:HTMLDivElement){
  const bounds=textBounds(body),top=body.scrollTop;
  return bounds&&top>=bounds.top&&top<bounds.top+bounds.height?bounds.top:undefined;
 }
+function privateTxtLibraryWindow(view:Json){
+ return view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&
+  view.taskId==null&&obj(view.snapshot).taskId===''&&
+  view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.fromWorkResult===false&&view.resultFilesOnly===false&&
+  view.historyResultOnly===false&&view.reportResultOnly===false&&view.choosingSource===false;
+}
 function privateTxtPositionScope(view:Json){
  const file=obj(view.file),version=exactFileTarget(file);
- return view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&
-  view.originalReturn==='list'&&view.taskId==null&&obj(view.snapshot).taskId===''&&
-  view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.fromWorkResult===false&&view.resultFilesOnly===false&&
-  view.historyResultOnly===false&&view.reportResultOnly===false&&view.choosingSource===false&&
-  typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
+ return privateTxtLibraryWindow(view)&&view.originalReturn==='list'&&typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
   JSON.stringify([view.windowId,version.fileId,version.sha256]):'';
+}
+function privateTxtLibraryList(view:Json){
+ return privateTxtLibraryWindow(view)&&!!attachmentFrame(view)&&view.originalReturn==='details'&&view.file==null&&view.originalFile==null&&
+  view.documentOpen===false&&view.documentDraft==null&&view.processingOpen===false&&view.comparison==null;
+}
+function ordinaryLibraryOwner(native:ReturnType<typeof bridge.getState>){
+ const current=obj(native.view);
+ return current.section===null&&current.taskId===null&&native.state.chatAttachmentPickerOpen===false&&!native.state.conversationReader;
+}
+function listedLocalTxt(view:Json,target:ExactFile|null){
+ if(!target)return false;
+ const sources=rows(obj(view.snapshot).sources).filter(row=>row.id===target.fileId),source=sources[0];
+ return sources.length===1&&source.sha256===target.sha256&&source.role==='source'&&source.availability==='available'&&
+  source.sourceKind==='content_uri'&&source.sourceTaskId==null&&typeof source.name==='string'&&/\.txt$/i.test(source.name);
 }
 function workTxtFrame(view:Json,taskId:string){
  return view.taskId===taskId&&view.fromWorkResult===true&&view.originalReturn==='entry'&&view.restoredWorkReturn===false&&
@@ -220,11 +236,13 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace);
   const scope=pin.work?workTxtPositionScope(live,workTextReader.current?.(pin.work.taskId)):privateTxtPositionScope(live);
   if(document.hidden||bridge.getDocumentEpoch()!==pin.document||native.state.chatAttachmentPickerOpen!==false||
+     (pin.libraryList&&!ordinaryLibraryOwner(native))||
      scope!==pin.scope||!matchesTextViewer(live,range)||obj(live.originalFile).busy!==false||
      range.encoding!==pin.range.encoding||
      range.offset!==pin.range.offset||range.identity!==pin.range.identity||body.scrollTop!==pin.start.top)return;
   // The text stays put even if the previous reader's disclosure above it was expanded.
   const textStart=pin.textStart!==undefined?textBounds(body)?.top:undefined;
+  if(pin.libraryList&&textStart===undefined)return;
   body.scrollTop=textStart!==undefined&&pin.textStart!==undefined?pin.top+textStart-pin.textStart:pin.top;
  },[]);
  const rememberPosition=()=>{
@@ -243,7 +261,11 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  },[view.open,view.ready,location,workTextVisit?.visit,workTextScope]);
  useLayoutEffect(()=>{
   if(!view.open)positions.current.clear();
-  if(!textReturn.current?.work&&(!view.open||!view.ready||textReturn.current?.scope!==libraryTextScope))textReturn.current=null;
+  const retained=textReturn.current;
+  const sameLibrary=retained?.libraryList&&mayRestoreText&&ordinaryLibraryOwner(bridge.getState())&&
+   view.windowId===retained.range.windowId&&bridge.getDocumentEpoch()===retained.document&&
+   (privateTxtLibraryList(view)||retained.scope===libraryTextScope);
+  if(!retained?.work&&(retained?.libraryList?!sameLibrary:!view.open||!view.ready||retained?.scope!==libraryTextScope))textReturn.current=null;
   if(!view.open||!view.ready){displayedText.current=null;return;}
   const pin=textReturn.current,body=scroller.current;
   if(body){
@@ -280,7 +302,17 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  },[view.windowId,view.frameId,view.ready]);
  const run=(command:string,args:Json={})=>{
   const pin=textReturn.current;
-  if(libraryTextScope&&(command==='originalDetails'||command==='openOriginal'&&pin)){
+  let reopenFrame:AttachmentFrame|undefined;
+  if(pin?.libraryList&&mode==='list'){
+   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),target=exactFileTarget({id:args.fileId,sha256:args.sha256});
+   if(command==='openOriginal'&&pin.libraryList==='listed'&&mayRestoreText&&ordinaryLibraryOwner(native)&&!document.hidden&&
+      bridge.getDocumentEpoch()===pin.document&&live.windowId===view.windowId&&live.windowId===pin.range.windowId&&
+      live.busy===false&&live.exportPending===false&&!live.error&&privateTxtLibraryList(live)&&target&&
+      pin.scope===JSON.stringify([live.windowId,target.fileId,target.sha256])&&listedLocalTxt(live,target)&&
+      rows(live.readableLibrarySources).some(row=>row.id===target.fileId&&row.sha256===target.sha256)){
+    pin.reopening=true;reopenFrame=attachmentFrame(live);
+   }else textReturn.current=null;
+  }else if(libraryTextScope&&(command==='originalDetails'||command==='openOriginal'&&pin)){
    const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),scope=privateTxtPositionScope(live),documentEpoch=bridge.getDocumentEpoch();
    const same=!document.hidden&&scope===libraryTextScope&&native.state.chatAttachmentPickerOpen===false;
    if(command==='originalDetails'){
@@ -292,7 +324,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   }else textReturn.current=null;
   rememberPosition();
   const leavesEditor=['openOriginal','originalDetails','continueDocument','openProcessing','compareParent','read','ocr','selectFile','attach','chooseSource','newDocument','continueTask','refresh'].includes(command);
-  void Promise.resolve(leavesEditor?beforeBack.current?.():undefined).then(frame=>act(command,args,frame)).catch(()=>{});
+  const retireReopen=()=>{if(reopenFrame&&textReturn.current===pin)textReturn.current=null};
+  void Promise.resolve(leavesEditor?beforeBack.current?.():undefined).then(frame=>act(command,args,frame??reopenFrame))
+   .then(result=>{if(result.accepted!==true)retireReopen()}).catch(retireReopen);
  };
  const goBack=useCallback(()=>{
   const current=latest.current,transfer=draftFlight.current;
@@ -301,19 +335,30 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),range=displayedText.current,body=scroller.current;
   const work=native.state.chatAttachmentPickerOpen===false&&!document.hidden&&live.windowId===current.windowId&&typeof live.taskId==='string'
    ?workTextReader.current?.(live.taskId):undefined;
-  const scope=workTxtPositionScope(live,work);
-  const pin:TextReturn|null=work&&scope&&range&&body&&body.scrollTop>0&&body.querySelector('.pw-original-text')&&
+  const textStart=body&&range&&matchesTextViewer(live,range)?readingTextStart(body):undefined;
+  const library=mayRestoreText&&ordinaryLibraryOwner(native)&&!document.hidden&&live.windowId===current.windowId&&
+   live.busy===false&&live.exportPending===false&&textStart!==undefined&&listedLocalTxt(live,exactFileTarget(obj(live.file)))?
+   privateTxtPositionScope(live):'';
+  const scope=workTxtPositionScope(live,work)||library;
+  const pin:TextReturn|null=scope&&range&&body&&body.scrollTop>0&&body.querySelector('.pw-original-text')&&
    matchesTextViewer(live,range)&&obj(live.originalFile).busy===false?
-   {scope,work,range,document:bridge.getDocumentEpoch(),top:body.scrollTop,textStart:readingTextStart(body),reopening:true}:null;
+   {scope,work,range,document:bridge.getDocumentEpoch(),top:body.scrollTop,textStart,
+    ...(library?{libraryList:'returning'}:{reopening:true})}:null;
   textReturn.current=pin;
   if(body)positions.current.set(location,body.scrollTop);
   backFlight.current=true;
   const retirePin=()=>{if(pin&&textReturn.current===pin)textReturn.current=null;};
   void Promise.resolve().then(()=>beforeBack.current?.()).then(frame=>act('back',{},frame)).then(result=>{
-   if(result.accepted!==true||obj(result.workspace).open!==false)retirePin();
+   const returned=obj(result.workspace);
+   if(pin?.libraryList){
+    if(result.accepted===true&&textReturn.current===pin&&privateTxtLibraryList(returned)&&
+       returned.windowId===pin.range.windowId&&bridge.getDocumentEpoch()===pin.document&&!document.hidden&&ordinaryLibraryOwner(bridge.getState()))
+     pin.libraryList='listed';
+    else retirePin();
+   }else if(result.accepted!==true||returned.open!==false)retirePin();
   }).catch(retirePin).finally(()=>{backFlight.current=false});
   return true;
- },[act,location]);
+ },[act,location,mayRestoreText]);
  const registerBeforeBack=useCallback((handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>{beforeBack.current=handler},[]);
  useEffect(()=>{alive.current=true;registerBack(goBack);return()=>{alive.current=false;registerBack(null)}},[registerBack,goBack]);
  useEffect(()=>{setError('');setPage('1')},[view.windowId,file.id,file.sha256]);

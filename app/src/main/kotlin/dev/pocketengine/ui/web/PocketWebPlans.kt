@@ -1,6 +1,8 @@
 package dev.pocketengine.ui.web
 
 import android.os.SystemClock
+import dev.pocketengine.features.automation.AutomationSchedule
+import dev.pocketengine.features.automation.DeviceScheduleOrigin
 import dev.pocketengine.features.automation.PlanBusinessWait
 import dev.pocketengine.features.automation.PlanRemoteWait
 import dev.pocketengine.ui.ExecutionDependencyDraft
@@ -172,7 +174,23 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
                 val row = snapshot.optJSONArray("scheduleProposals").objects().singleOrNull { it.optString("id") == id } ?: error("请重新读取原时间草案")
                 check(row.optBoolean("sourceAvailable") && row.optString("status") == "pending") { "原时间草案来源不可核对" }
                 val checked = dev.pocketengine.features.automation.AutomationBook.reviewedProposalForDisplay(row)
-                deliver(review("approveSchedule", JSONObject().put("id", id).put("digest", checked.getString("digest")), checked), null)
+                val draft = checked.getJSONObject("draft")
+                val preview = if (draft.getString("kind") == "reminder" && !DeviceScheduleOrigin.isDevice(checked.getJSONObject("origin"))) {
+                    val schedule = draft.getJSONObject("schedule")
+                    AutomationSchedule.preview(schedule, System.currentTimeMillis(), 3).also { calendar ->
+                        // Absolute times have no stored time zone. Show that same instant
+                        // in the phone's zone; leave the reviewed definition and digest intact.
+                        if (schedule.getString("type") in setOf("once", "interval")) {
+                            val zone = ZoneId.systemDefault()
+                            for (occurrence in calendar.optJSONArray("occurrences").objects()) {
+                                val local = Instant.ofEpochMilli(occurrence.getLong("at")).atZone(zone)
+                                occurrence.put("local", local.toLocalDateTime().toString()).put("zone", zone.id).put("offset", local.offset.id)
+                            }
+                        }
+                    }
+                } else null
+                deliver(review("approveSchedule", JSONObject().put("id", id).put("digest", checked.getString("digest")), checked)
+                    .also { result -> preview?.let { result.put("ordinaryReminderPreview", it) } }, null)
             }
             "plans.inspect" -> {
                 fields(args, "viewHandle"); val plan = read(text(args, "viewHandle"))

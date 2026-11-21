@@ -4,6 +4,7 @@ import { Button, SettingsDialog } from './forms-library';
 import { InlineDiff } from './shell-library';
 import {ProjectKeptDraftSections} from './ProjectKeptDraftSections';
 import { IconFile, IconRefresh } from './icons';
+import type { ContinueAdoptedFormal } from './project-file';
 
 type Data=Record<string,any>;
 type Draft={text:string;baseline:string;version:number;dirty:boolean};
@@ -51,21 +52,32 @@ export function ProjectKeptDraftIndex({project}:{project:string}) {
       <Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={s.busy} onClick={()=>void s.read('list')}>重新读取清单</Button>
     </SettingsDialog>}</div>;
 }
-export function ProjectKeptFileDrafts({state,draft,edit,disabled}:{state:Data;draft?:Draft;edit:(s:string)=>void;disabled:boolean}){
+export function ProjectKeptFileDrafts({state,draft,edit,disabled,continueAdopted}:{state:Data;draft?:Draft;edit:(s:string)=>void;disabled:boolean;continueAdopted?:ContinueAdoptedFormal}){
   const project=String(state.projectId),path=String(state.filePath),version=Number(state.fileVersion||0),s=useShelf(project,path,version);
   const held=state.heldFormalDraft, nativeHeld=held?.projectId===project&&held.path===path&&typeof held.text==='string'?held:null;
   const choice=draft?.dirty?{text:draft.text,version:draft.version,baseline:draft.baseline}:nativeHeld?{text:String(nativeHeld.text),version:Number(nativeHeld.version),baseline:null}:null;
-  const live=useRef({draft,choice,edit,disabled});live.current={draft,choice,edit,disabled};
+  const live=useRef({draft,choice,edit,disabled,continueAdopted});live.current={draft,choice,edit,disabled,continueAdopted};
   const [receipt,setReceipt]=useState(''),[chooseKept,setChooseKept]=useState(false),[selected,setSelected]=useState<{r:Item;text:string;review:string;same:boolean;old?:string}|null>(null),[removing,setRemoving]=useState(false);
+  const [keptForContinue,setKeptForContinue]=useState<{draft:Draft;scope:string;item:Item}|null>(null);
   const prepare=useRef(false);
-  useEffect(()=>{setSelected(null);setChooseKept(false);setRemoving(false);setReceipt('');const hide=()=>{if(document.hidden){setSelected(null);setChooseKept(false);setRemoving(false);}};
+  useEffect(()=>{setSelected(null);setChooseKept(false);setRemoving(false);setReceipt('');setKeptForContinue(null);const hide=()=>{if(document.hidden){setSelected(null);setChooseKept(false);setRemoving(false);setKeptForContinue(null);}};
     document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide);},[project,path,version]);
   const keep=async()=>{
-    const c=live.current.choice;if(!c||prepare.current||s.busy||disabled||!s.seen())return;prepare.current=true;
-    try{const hash=c.baseline===null?'native_held':c.version===0?'absent':await fingerprint(c.baseline);
+    const {choice:c,draft:old,continueAdopted:resume}=live.current;if(!c||prepare.current||s.busy||disabled||!s.seen())return;prepare.current=true;
+    try{const [hash,bodySha]=await Promise.all([
+      c.baseline===null?'native_held':c.version===0?'absent':fingerprint(c.baseline),
+      resume&&old?.dirty?fingerprint(c.text).catch(()=>undefined):undefined,
+    ]);
       if(!s.seen()||live.current.choice?.text!==c.text||live.current.choice?.version!==c.version)return;
       const saved=await s.read('keep',{baseVersion:c.version,baseSha256:hash,text:c.text},v=>{
+        const exactFormat=v.item?.format==='pocketworld.formal-draft.v1';
         if(!item(v.item,project,path)||v.durablyReadBack!==true)throw Error('没有取得回读原稿的凭据。');
+        // Preserve the exact dirty buffer first; a same-path shelf row alone
+        // does not authorize replacing the buffer that is still being edited.
+        if(resume&&old?.dirty&&bodySha&&exactFormat&&v.item.sha256===bodySha&&
+          v.item.bytes===new TextEncoder().encode(c.text).byteLength&&v.item.baseVersion===c.version&&v.item.baseSha256===hash&&
+          live.current.draft===old&&live.current.continueAdopted?.scope===resume.scope)
+          setKeptForContinue({draft:old,scope:resume.scope,item:v.item});
         setReceipt('这一份已在手机保留并回读。没有保存为正式版本。');});
       if(saved)await s.read('forFile');
     }catch{if(s.seen())s.setError('无法核对原稿的文字基线，未替换任何文件。');}finally{prepare.current=false;}
@@ -82,14 +94,23 @@ export function ProjectKeptFileDrafts({state,draft,edit,disabled}:{state:Data;dr
       if(v.item?.keepId!==snap.r.keepId||v.item?.text!==snap.text||v.sameFormalBase!==true||live.current.disabled||live.current.draft?.text!==snap.old)
         throw Error('编辑文字或正式基线已变化，保留稿未写进编辑区。');
       live.current.edit(snap.text);setSelected(null);setReceipt('已放入当前文字草稿，仍须明确保存才更改正式版本。');});};
-  const discard=async()=>{const snap=selected;if(!snap||!removing)return;const result=await s.read('discard',{keepId:snap.r.keepId,sha256:snap.r.sha256,reviewHandle:snap.review},v=>{
+  const discard=async()=>{const snap=selected;if(!snap||!removing)return;
+    setKeptForContinue(kept=>kept?.item.keepId===snap.r.keepId?null:kept);
+    const result=await s.read('discard',{keepId:snap.r.keepId,sha256:snap.r.sha256,reviewHandle:snap.review},v=>{
     if(v.removed!==true)throw Error('尚未核对原稿移除结果。');setSelected(null);setRemoving(false);setReceipt('已移除这份手机保留稿，未改正式文件。');});if(result)await s.read('forFile');};
+  const canContinue=!!keptForContinue&&draft===keptForContinue.draft&&continueAdopted?.scope===keptForContinue.scope&&
+    !s.error&&s.rows.some(row=>row.keepId===keptForContinue.item.keepId&&row.sha256===keptForContinue.item.sha256&&
+      row.bytes===keptForContinue.item.bytes&&row.baseVersion===keptForContinue.item.baseVersion&&
+      row.baseRevisionId===keptForContinue.item.baseRevisionId&&row.baseSha256===keptForContinue.item.baseSha256);
   if(!choice&&!s.rows.length&&!s.error&&!receipt&&!selected)return null;
   return <section aria-label="仅在手机保留的编辑草稿">
-    <div className="pw-form-actions">{choice&&<Button variant="secondary" size="small" disabled={s.busy||disabled} onClick={()=>void keep()}>在这部手机保留草稿</Button>}
+    <div className="pw-form-actions">{canContinue?<Button variant="primary" size="small" disabled={s.busy||disabled||!!selected||chooseKept}
+      onClick={()=>{if(s.seen()&&!prepare.current&&!s.busy&&!live.current.disabled&&live.current.draft===keptForContinue?.draft&&
+        live.current.continueAdopted?.scope===keptForContinue?.scope&&live.current.continueAdopted?.start())setKeptForContinue(null)}}>从正式 v{version} 继续编辑</Button>:
+      choice&&<Button variant="secondary" size="small" disabled={s.busy||disabled} onClick={()=>void keep()}>在这部手机保留草稿</Button>}
       {s.rows.length>0&&<Button variant="ghost" size="small" disabled={s.busy||disabled} onClick={()=>s.rows.length===1?inspect(s.rows[0]):setChooseKept(true)}>{s.rows.length===1?'查看手机保留稿':`查看 ${s.rows.length} 份保留稿`}</Button>}
       {s.error&&<Button variant="ghost" size="small" disabled={s.busy} onClick={()=>void s.read('forFile')}>重新核对本机清单</Button>}</div>
-    {choice&&<p className="pw-field-hint">只保留你点选的这一份，后续编辑不会自动备份。</p>}
+    {choice&&<p className="pw-field-hint">{canContinue?'旧草稿已保留。继续时只切换编辑区，不合并或保存旧草稿。':'只保留你点选的这一份，后续编辑不会自动备份。'}</p>}
     {receipt&&<p role="status">{receipt}</p>}{s.error&&<p role="alert">{s.error}</p>}
     {chooseKept&&!selected&&<SettingsDialog isOpen title="选择这个文件的一份保留稿" closeLabel="返回文件" onClose={()=>setChooseKept(false)}>
       {s.rows.map(r=><div key={r.keepId}><Button variant="secondary" disabled={s.busy} onClick={()=>inspect(r)}>{stamp(r)} · {r.bytes} 字节</Button>

@@ -415,16 +415,31 @@ internal class PocketWebProjectDevelopment(
             }
             "projects.development.prepare", "projects.development.queryCopy" -> {
                 fields(args, "viewHandle")
-                val retained = draft(original.project)
-                val request = retained.optString("copyRequestId").ifBlank {
-                    check(action == "projects.development.prepare") { "没有可查询的原副本准备" }
-                    UUID.randomUUID().toString().also { request -> updateDraft(original.project, true) { it.put("copyRequestId", request).put("copyStatus", "pending") } }
+                val (request,reservedHere) = synchronized(drafts) {
+                    val prior=draft(original.project).optString("copyRequestId")
+                    if(prior.isNotBlank()) prior to false else {
+                        check(action == "projects.development.prepare") { "没有可查询的原副本准备" }
+                        val fresh=UUID.randomUUID().toString()
+                        updateDraft(original.project, true) { it.put("copyRequestId", fresh).put("copyStatus", "pending") }
+                        fresh to true
+                    }
                 }
                 working(original, done, action == "projects.development.prepare") {
                     val host = controller.projectDevelopmentForWeb()
                     if (action == "projects.development.prepare") host.prepareCheckoutForOwner(original.project, request)
                     val observed = host.queryCheckoutForOwner(original.project, request)
-                    updateDraft(original.project) { if (it.optString("copyRequestId") == request) it.put("copyStatus", if (observed.optBoolean("found")) "ready" else "unknown") }
+                    var sameRequest=false
+                    updateDraft(original.project) { if (it.optString("copyRequestId") == request) {
+                        sameRequest=true
+                        it.put("copyStatus", if (observed.optBoolean("found")) "ready" else "unknown")
+                    } }
+                    // This window reserved this request. A recovery query or
+                    // reuse of an older request never produces this observation.
+                    val copy=observed.optJSONObject("checkout")
+                    if(reservedHere && sameRequest && observed.opt("found")==true && observed.opt("partial")==false &&
+                        observed.opt("projectId")==original.project && observed.opt("requestId")==request && copy!=null &&
+                        copy.opt("ownerDevelopmentRequestId")==request && copy.opt("projectId")==original.project &&
+                        copy.opt("id")==observed.opt("checkoutId")) observed.put("freshPrepareViewHandle",original.handle)
                     observed
                 }
             }

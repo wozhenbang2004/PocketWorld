@@ -9,13 +9,39 @@ import {OriginalMediaPlayer} from './workspace-library/OriginalMediaPlayer';
 export function FileDetails({value,title='来源详情'}:{value:unknown;title?:string}) {
  return value == null ? null : <details className="pw-file-details"><summary>{title}</summary><pre>{typeof value==='string'?value:JSON.stringify(value,null,2)}</pre></details>;
 }
-export function DocumentProjection({value}:{value:Json}) {
+type WordFragment={kind:'paragraph';block:Json}|{kind:'table';tableId:string;blocks:Json[]};
+function wordFragments(chunks:Json[]):WordFragment[]{
+ const fragments:WordFragment[]=[];
+ const coordinate=(value:unknown)=>typeof value==='string'&&/^[1-9]\d{0,6}$/.test(value);
+ for(const block of chunks){
+  const at=obj(block.locator);
+  if(block.kind!=='table_cell'||typeof at.part!=='string'||!at.part||!coordinate(at.table)||!coordinate(at.row)||!coordinate(at.column)){
+   fragments.push({kind:'paragraph',block});continue;
+  }
+  // Word units are paragraph ordinals, not table IDs. A nested table or prose ends this fragment.
+  const tableId=JSON.stringify([at.part,at.table]),previous=fragments.at(-1);
+  if(previous?.kind==='table'&&previous.tableId===tableId)previous.blocks.push(block);
+  else fragments.push({kind:'table',tableId,blocks:[block]});
+ }
+ return fragments;
+}
+export function DocumentProjection({value,orderedOriginalWord=false}:{value:Json;orderedOriginalWord?:boolean}) {
  const chunks=rows(value.chunks),tables=new Map<string,Json[]>(),paragraphs:Json[]=[];
- for(const block of chunks){const at=obj(block.locator);if(at.cell||at.table){const key=`${at.sheet||''}:${at.table||''}:${block.unit}`;tables.set(key,[...(tables.get(key)||[]),block])}else paragraphs.push(block)}
+ const orderedWord=orderedOriginalWord&&value.format==='docx'&&['ok','partial'].includes(value.status);
+ if(!orderedWord)for(const block of chunks){const at=obj(block.locator);if(at.cell||at.table){const key=`${at.sheet||''}:${at.table||''}:${block.unit}`;tables.set(key,[...(tables.get(key)||[]),block])}else paragraphs.push(block)}
+ const paragraph=(block:Json,key:string)=><div key={key}><small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small><p className="pw-file-text">{block.text}</p></div>;
+ const tableFragment=(blocks:Json[],key:string)=>{
+  const table=documentTable(blocks),caption=orderedWord?'原表格片段 · 当前读取范围':obj(blocks[0]?.locator).sheet||'原文档表格 · 当前范围';
+  return <div className="pw-file-table" key={key}><table><caption>{caption}</caption><thead><tr><th>行</th>{table.columns.map(col=><th key={col}>{col}</th>)}</tr></thead><tbody>{table.rows.map(row=><tr key={row}><th>{row}</th>{table.columns.map(col=><td key={col}>{table.text(row,col)}</td>)}</tr>)}</tbody></table></div>;
+ };
  return <section className="pw-file-projection" aria-label="当前读取范围"><p className="pw-muted">{value.coverage||'这里只显示当前已读取的范围。'} {value.status&&`读取状态：${value.status}`}</p>
  {!chunks.length&&<p>当前范围没有可显示的文字，不代表原文件为空。</p>}
- {paragraphs.map((block,i)=><div key={`${block.unit}:${block.chunk}:${i}`}><small className="pw-muted">{value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small><p className="pw-file-text">{block.text}</p></div>)}
- {[...tables].map(([key,blocks])=>{const table=documentTable(blocks);return <div className="pw-file-table" key={key}><table><caption>{obj(blocks[0]?.locator).sheet||'原文档表格 · 当前范围'}</caption><thead><tr><th>行</th>{table.columns.map(col=><th key={col}>{col}</th>)}</tr></thead><tbody>{table.rows.map(row=><tr key={row}><th>{row}</th>{table.columns.map(col=><td key={col}>{table.text(row,col)}</td>)}</tr>)}</tbody></table></div>})}
+ {orderedWord?wordFragments(chunks).map((fragment,i)=>fragment.kind==='table'?
+  tableFragment(fragment.blocks,`word:table:${fragment.tableId}:${i}`):
+  paragraph(fragment.block,`word:paragraph:${fragment.block.unit}:${fragment.block.chunk}:${i}`)):<>
+  {paragraphs.map((block,i)=>paragraph(block,`${block.unit}:${block.chunk}:${i}`))}
+  {[...tables].map(([key,blocks])=>tableFragment(blocks,key))}
+ </>}
  {value.format==='xlsx'&&<p className="pw-muted">公式显示原文件保存的值或公式文字，本次没有重新计算。</p>}
  {Array.isArray(value.warnings)&&value.warnings.length>0&&<details><summary>格式与读取说明</summary>{value.warnings.map((text:string,i:number)=><p key={i}>{text}</p>)}</details>}
  </section>;
@@ -260,7 +286,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    {systemReaderAction('用其他应用核对原件','ghost')}
   </div>
   <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>
-  <DocumentProjection value={actual}/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
+  <DocumentProjection value={actual} orderedOriginalWord/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
  </>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">
   <RadioOptions label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);setFound(null);read({encoding,offset:0})}}/>

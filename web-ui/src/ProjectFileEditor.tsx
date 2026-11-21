@@ -8,13 +8,13 @@ import { IconArrowLeft, IconCopy, IconRefresh } from './icons';
 import { Button, TextAreaField } from './forms-library';
 import { Tabs, TabList, Tab, TabPanel, InlineDiff } from './shell-library';
 import { ProgressBar, Skeleton, ShimmerText } from './library';
-import type { FileLayer } from './project-file';
+import { observedAdoptedFormalText, type ContinueAdoptedFormal, type FileLayer } from './project-file';
 import { useSurfaceEnter } from './library/surface-motion';
 import { MotionDisclosure, MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import './project-workspace.css';
 import './project-workspace-manga.css';
 type Data = Record<string, any>;
-type Props = { path: string; version: number; draft?: { text: string; baseline: string; version: number; dirty: boolean }; state: Data; conflict: boolean; mode: FileLayer; setMode: (value: FileLayer) => void; can: (action: string) => boolean; edit: (value: string) => void; save: () => void; readHistory: () => void; readRevision: (revision: number) => void; retry: () => void; copy: () => void; copyRevision: (text: string) => void; adoption: { pending: boolean; unknown: boolean; message: string; adopt: () => void }; registerBack: (handler: (() => boolean) | null) => void };
+type Props = { path: string; version: number; draft?: { text: string; baseline: string; version: number; dirty: boolean }; state: Data; conflict: boolean; mode: FileLayer; setMode: (value: FileLayer) => void; can: (action: string) => boolean; edit: (value: string) => void; save: () => void; readHistory: () => void; readRevision: (revision: number) => void; retry: () => void; copy: () => void; copyRevision: (text: string) => void; adoption: { pending: boolean; unknown: boolean; message: string; adopt: () => void }; continueAdopted?: ContinueAdoptedFormal; registerBack: (handler: (() => boolean) | null) => void };
 
 function observedEarlierText(state: Data, path: string, head: number, selected: number) {
   const source = state.revisionObservation, text = state.revisionContent;
@@ -30,23 +30,9 @@ function observedEarlierText(state: Data, path: string, head: number, selected: 
   return { project: state.projectId, revision: source.revisionId, sha: source.sha256, bytes: source.bytes, text };
 }
 
-function observedAdoptionText(state: Data, path: string, version: number) {
-  const source = state.adoptedFormalComparison;
-  // This pin accompanies the already loaded formal bytes, not the old
-  // checkout draft, a known latest project row, or authority to edit again.
-  return source?.projectVersionCommitted === true && source.evidence === 'import_receipt' &&
-    state.fileReady === true && !state.fileLoading && !state.fileSaving && source.projectId === state.projectId &&
-    state.filePath === path && source.path === path && source.version === version && state.fileVersion === version &&
-    typeof source.checkoutId === 'string' && /^[a-f0-9-]{36}$/.test(source.checkoutId) &&
-    typeof source.revisionId === 'string' && /^[a-f0-9-]{36}$/.test(source.revisionId) &&
-    typeof source.sha256 === 'string' && /^[a-f0-9]{64}$/.test(source.sha256) &&
-    Number.isSafeInteger(source.bytes) && source.bytes >= 0 && source.bytes <= 262144 &&
-    typeof state.fileBaseline === 'string' && state.fileContent === state.fileBaseline ? state.fileBaseline as string : undefined;
-}
-
-export function ProjectFileEditor({ path, version, draft, state, conflict, mode, setMode, can, edit, save, readHistory, readRevision, retry, copy, copyRevision, adoption, registerBack }: Props) {
+export function ProjectFileEditor({ path, version, draft, state, conflict, mode, setMode, can, edit, save, readHistory, readRevision, retry, copy, copyRevision, adoption, continueAdopted, registerBack }: Props) {
   const [selected, setSelected] = useState<number | null>(null), [reviewing, setReviewing] = useState(false);
-  const root = useRef<HTMLElement>(null);
+  const root = useRef<HTMLElement>(null), editorInput = useRef<HTMLTextAreaElement>(null);
   const adoptionTrigger = useRef<HTMLButtonElement>(null), adoptionReview = useRef<HTMLDivElement>(null), adoptionHeading = useRef<HTMLHeadingElement>(null), reviewWasOpen = useRef(false);
   const historyScroll = useRef<HTMLDivElement>(null), historyTop = useRef(0), lastRevision = useRef<number | null>(null);
   const back = () => { if (adoption.pending || state.fileSaving) return true; if (reviewing) { setReviewing(false); return true; } if (mode === 'history' && selected !== null) { setSelected(null); return true; } if (mode !== 'edit') { setMode('edit'); return true; } return false; };
@@ -60,7 +46,16 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   const selectedReady = selected !== null && state.revisionNumber === selected && typeof state.revisionContent === 'string' && state.revisionObservation?.representation === 'text' && state.revisionObservation?.version === selected && !state.revisionLoading;
   const locked = !!state.fileSaving || adoption.pending;
   const adoptedText = conflict && draft?.dirty === true && draft.text !== draft.baseline && draft.version > 0 && draft.version < version
-    ? observedAdoptionText(state, path, version) : undefined;
+    ? observedAdoptedFormalText(state, path, version)?.text : undefined;
+  const continueWithDisplayedDraft = continueAdopted && adoptedText !== undefined && draft ? {
+    scope: continueAdopted.scope,
+    start: () => {
+      const area = editorInput.current;
+      // Do not leave an input whose displayed text has not reached this draft.
+      if (mode === 'edit' && (!area?.isConnected || area.value !== draft.text.replace(/\r\n?/g, '\n'))) return false;
+      return continueAdopted.start();
+    },
+  } : undefined;
   const earlierText = mode === 'history' && selected !== null && !reviewing && can('projects.revision') &&
     typeof navigator.clipboard?.writeText === 'function' ? observedEarlierText(state, path, version, selected) : undefined;
   const shownDocument = bridge.getDocumentEpoch(), shownView = bridge.getState().view as Data | undefined;
@@ -90,7 +85,8 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   const switchMode = (value: FileLayer) => { if (locked) return; setReviewing(false); setMode(value); if (value === 'history') readHistory(); };
   return <section ref={root} className="pw-file-editor pw-file-workspace pw-project-file-editor" aria-label="文件工作区" aria-busy={!!state.fileLoading || locked}>
     <header className="pw-file-heading"><div><h2 className="pw-file-name">{path.split('/').at(-1)}</h2><p className="pw-file-path">{path.includes('/')?path.slice(0,path.lastIndexOf('/')):'项目根目录'}</p><p>{adoptedText !== undefined ? '正式版本 '+version : state.fileReady || version>0 ? '版本 '+(state.fileReady ? draft?.version ?? version : version) : '版本尚未核对'}<span className={draft?.dirty ? 'pw-file-dirty' : ''}>{draft?.dirty ? ' · 有保留的修改' : state.fileReady ? ' · 当前文件' : ' · 只读'}</span></p></div>{draft?.dirty && <span className="pw-file-state-dot" aria-hidden="true"/>}</header>
-    {!state.fileLoading && can('projects.keptDrafts.forFile') && <ProjectKeptFileDrafts state={state} draft={draft} edit={edit} disabled={!!state.fileSaving || adoption.pending}/>}
+    {!state.fileLoading && can('projects.keptDrafts.forFile') && <ProjectKeptFileDrafts state={state} draft={draft} edit={edit}
+      disabled={!!state.fileSaving || adoption.pending} continueAdopted={continueWithDisplayedDraft}/>}
     {state.fileLoading ? <div className="pw-loading-file" aria-busy="true"><ShimmerText>正在读取文件</ShimmerText><Skeleton width="85%" height={13}/><Skeleton width="65%" height={13}/><Skeleton width="94%" height={13}/></div> : state.fileReady && draft ? <>
       {state.heldFormalDraft && <RetainedFormalDraft state={state}/>}
       {state.fileSaving && <ProgressBar label="正在保存当前文件" isIndeterminate showValueLabel={false} size="sm"/>}
@@ -105,7 +101,7 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
       {adoption.message && <MotionFeedback identity={adoption.message} className={adoption.unknown ? 'pw-error' : 'pw-muted'} role={adoption.unknown ? 'alert' : 'status'}>{adoption.message}</MotionFeedback>}
       <Tabs selectedKey={mode} onSelectionChange={key => switchMode(key as FileLayer)} className="pw-file-tabs">
         <TabList aria-label="文件工作方式"><Tab id="edit" isDisabled={locked}>编辑</Tab><Tab id="diff" isDisabled={locked}>{adoptedText !== undefined ? '与正式版本比较' : '比较修改'}</Tab><Tab id="history" isDisabled={locked || !can('projects.history')}>版本记录</Tab></TabList>
-        <TabPanel id="edit"><TextAreaField label="文件内容" value={draft.text} onChange={edit} isReadOnly={locked} className="pw-code-editor"/></TabPanel>
+        <TabPanel id="edit"><TextAreaField ref={editorInput} label="文件内容" value={draft.text} onChange={edit} isReadOnly={locked} className="pw-code-editor"/></TabPanel>
         <TabPanel id="diff">{adoptedText === undefined
           ? <InlineDiff before={draft.baseline} after={draft.text} versionLabel={`原版本 ${draft.version}`} onCancel={() => setMode('edit')} pending={locked}/>
           : adoptedText === draft.text ? <><p role="status">正式 v{version} 与保留草稿的文字相同，草稿没有被替换。</p><pre className="pw-file-revision-content">{adoptedText}</pre></>

@@ -29,6 +29,7 @@ type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package';
 export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
 export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
+type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:string};
 export type ProjectTerminalSavedFileReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
@@ -260,6 +261,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const latest = useRef({ run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile });
   latest.current = { run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile }; activeReview.current = review;
   const attemptedLocalFiles = useRef<ProjectLocalFilesIntent|null>(null);
+  const firstFilesPreparation = useRef<FirstLocalFilesPreparation|null>(null);
   const preview=active&&buildPreview&&view?.viewHandle===buildPreview.viewHandle&&handle.current===buildPreview.viewHandle&&
     buildPreview.window===ownerWindow()&&buildPreview.value.projectId===projectId&&buildPreview.value.checkoutId===checkout&&
     source?.projectId===projectId&&source.checkoutId===checkout&&source.sourceDigest===buildPreview.value.sourceDigest&&
@@ -309,7 +311,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   };
   const read = () => {
     const readableNow = latest.current.active && !entered.current && !document.hidden && latest.current.can('projects.development.read');
-    if (readableNow) readAttempt.current = ownerWindow();
+    if (readableNow) { readAttempt.current = ownerWindow(); firstFilesPreparation.current = null; }
     const request=latest.current.localFilesIntent;
     const openLocalFiles=readableNow&&request&&request!==attemptedLocalFiles.current&&request.projectId===projectId&&request.current()?request:null;
     if(openLocalFiles)attemptedLocalFiles.current=openLocalFiles;
@@ -358,13 +360,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         (!incoming.copyRequestId||incoming.copyStatus==='ready')&&copies.length===1&&copies[0].draftWorkingCopy===false)
         setLastSavedFile(previous=>previous??position);
     }
-    // A local-files tap can only open the already-saved choice from this normal
-    // Work read. An implicit/ambiguous choice stays in the existing chooser.
-    if(openLocalFiles&&latest.current.localFilesIntent===openLocalFiles&&openLocalFiles.current()&&
+    const sameFilesVisit=openLocalFiles&&latest.current.localFilesIntent===openLocalFiles&&openLocalFiles.current()&&
       !pinned&&!buildReturn&&!importedEditor&&!fileCheckout&&value.executionAuthorized===false&&value.commandsAuthorized===false&&
       value.draftRecoveryRequired===false&&incoming.projectId===projectId&&!incoming.ownerPickedConvention&&!unresolved(incoming.submission)&&
+      canEditImportedCheckout(latest.current.can);
+    // An existing copy still requires the positively saved exact choice.
+    if(sameFilesVisit&&openLocalFiles&&
       incoming.copyStatus==='ready'&&copyIdentity(incoming.copyRequestId)&&copyIdentity(incoming.checkoutId)&&
-      draft.current.checkoutId===incoming.checkoutId&&canEditImportedCheckout(latest.current.can)){
+      draft.current.checkoutId===incoming.checkoutId){
       const checkouts=rows(value.checkouts), copy=checkouts[0];
       const original=openLocalFiles.originalCopy;
       if((!original||original.projectId===projectId&&original.checkoutId===incoming.checkoutId&&original.requestId===incoming.copyRequestId)&&
@@ -373,11 +376,19 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         setFileWindow({checkoutId:incoming.checkoutId});
       }
     }
+    // An explicit edit tap in a genuinely empty new project can instead offer
+    // one user-confirmed preparation that opens just the newly prepared list.
+    if(sameFilesVisit&&openLocalFiles&&!openLocalFiles.originalCopy&&!touched.current&&
+       Array.isArray(value.checkouts)&&value.checkouts.length===0&&!value.phoneSourceRecovery&&
+       incoming.checkoutId===''&&incoming.goal===''&&deliveryFields.every(key=>incoming[key]==='')&&
+       !incoming.submission&&!incoming.copyRequestId&&!incoming.copyStatus&&latest.current.can('projects.development.prepare'))
+      firstFilesPreparation.current={intent:openLocalFiles,viewHandle:value.viewHandle};
     });
     return openLocalFiles?reading.finally(()=>latest.current.onLocalFilesIntentHandled?.(openLocalFiles)):reading;
   };
   const readRef = useRef(read); readRef.current = read;
   const retain = (next: DevelopmentDraft) => {
+    firstFilesPreparation.current=null;
     if(next.constraints!==draft.current.constraints||next.checkoutId!==draft.current.checkoutId)keptNativePick.current=false;
     touched.current = true; draft.current = next;
     const original = handle.current, sequence = generation.current;
@@ -427,7 +438,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   useEffect(() => {
     alive.current = true; let owner = ownerWindow();
     const retire = () => {
-      generation.current++; entered.current = null; buildAfterSave.current=null; sourceRecoveryReturn.current=null;
+      generation.current++; entered.current = null; buildAfterSave.current=null; sourceRecoveryReturn.current=null; firstFilesPreparation.current=null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null; previewOpen.current=false; retainedOriginalOpen.current=false; activeRetainedVisit.current=null;
       if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setBuildPreview(null); setRetainedRead(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); }
       if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
@@ -709,12 +720,20 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     return available.find(row=>row.projectId===projectId&&row.checkoutId===importEditChoice.original.checkoutId);
   };
   const editedCopy=editedImportCopy();
-  const copy = (query: boolean) => {
+  const prepareFilesHere=()=>{
+    const target=firstFilesPreparation.current;
+    return target&&target.viewHandle===view?.viewHandle&&handle.current===target.viewHandle&&target.intent.current()&&
+      !touched.current&&!checkout&&!draft.current.checkoutId&&!available.length&&!sourceRecovery&&!view.draft?.copyRequestId&&
+      !importedEditor&&!buildReturn&&!returnTarget&&canEditImportedCheckout(latest.current.can)?target:null;
+  };
+  const prepareForFiles=prepareFilesHere();
+  const copy = (query: boolean, openFilesAfter:FirstLocalFilesPreparation|null = null) => {
     const action=query?'projects.development.queryCopy':'projects.development.prepare', expected=view?.draft?.copyRequestId;
     const state=bridge.getState().state;
     if(!active||entered.current||!view||!can(action)||document.hidden||state.projectId!==projectId||state.filePath||
-      !query&&(disabled||copyUnconfirmed||copyResult?.partial===true))return;
-    if(!query)setCopyResult({unconfirmed:true});
+      !query&&(disabled||copyUnconfirmed||copyResult?.partial===true)||
+      openFilesAfter&&(query||prepareFilesHere()!==openFilesAfter))return;
+    if(!query){firstFilesPreparation.current=null;setCopyResult({unconfirmed:true});}
     return invoke(action,{viewHandle:handle.current},value=>{
       if(!value||value.projectId!==projectId||!copyIdentity(value.requestId)||!copyIdentity(value.checkoutId)||
         expected&&value.requestId!==expected||typeof value.found!=='boolean'||typeof value.partial!=='boolean'||value.replayAllowed!==false)
@@ -723,14 +742,26 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       if(value.found&&(value.partial||!raw||raw.id!==value.checkoutId||raw.projectId!==projectId||raw.ownerDevelopmentRequestId!==value.requestId||
         typeof raw.name!=='string'||!Number.isSafeInteger(raw.createdAt)||raw.createdAt<1||raw.createdAt>8.64e15))
         throw Error('副本登记不属于原准备请求，未更换所选副本。');
-      const prepared=value.found?{checkoutId:value.checkoutId,projectId,name:raw.name,createdAt:raw.createdAt}:null;
+      const openInitialFiles=value.found&&!query&&!draft.current.checkoutId&&!currentPicked&&
+        openFilesAfter&&value.freshPrepareViewHandle===openFilesAfter.viewHandle&&
+        handle.current===openFilesAfter.viewHandle&&openFilesAfter.intent.current()&&!touched.current&&
+        canEditImportedCheckout(latest.current.can)&&Array.isArray(raw.files)&&
+        !['ownerDraftWorkCopy','sourceImport','teamProjectCopy','skillExecutionCopy','isolatedGit','nativeGitImportPending',
+          'collectedFromCheckoutId','collectionOperationId'].some(key=>key in raw);
+      // Preserve the same positive ordinary-copy classification a full native
+      // Work read supplies, so the first saved file can find the next local action.
+      const prepared=value.found?{checkoutId:value.checkoutId,projectId,name:raw.name,createdAt:raw.createdAt,
+        ...(openInitialFiles?{draftWorkingCopy:false}:{})}:null;
       setCopyResult({requestId:value.requestId,found:value.found,partial:value.partial,checkout:prepared});
       setView(previous=>previous?{...previous,draft:{...previous.draft,copyRequestId:value.requestId,copyStatus:prepared?'ready':'unknown'},
         checkouts:prepared&&!rows(previous.checkouts).some(row=>row.projectId===projectId&&row.checkoutId===prepared.checkoutId)?
           [...rows(previous.checkouts),prepared]:previous.checkouts}:previous);
       // Checking an older request is just observation. Only an explicit initial
       // prepare in an unselected project can present its new copy by default.
-      if(prepared&&!query&&!draft.current.checkoutId&&!currentPicked)chooseCheckout(prepared.checkoutId);
+      if(prepared&&!query&&!draft.current.checkoutId&&!currentPicked){
+        chooseCheckout(prepared.checkoutId);
+        if(openInitialFiles){setHostEditor(null);setFileWindow({checkoutId:prepared.checkoutId});}
+      }
     });
   };
   const start = () => {
@@ -999,7 +1030,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         <p className="pw-field-hint" role="status">原项目已登记，还没有核对到这次导入的工作副本。请先核对原导入，不另建空副本。</p>
         {can('projects.localSource.open') && <div className="pw-form-actions"><Button variant="secondary" disabled={!active || busy || !!review || filesOpen}
           onClick={openSourceRecovery}>核对原导入</Button></div>}
-      </> : available.length === 0 && can('projects.development.prepare') && <div className="pw-form-actions"><Button variant="secondary" disabled={disabled || copyUnconfirmed || copyResult?.partial === true} onClick={() => void copy(false)}>准备这个项目的私人副本</Button></div>}
+      </> : available.length === 0 && can('projects.development.prepare') && <div className="pw-form-actions"><Button variant={prepareForFiles?'primary':'secondary'} disabled={disabled || copyUnconfirmed || copyResult?.partial === true}
+        onClick={() => void copy(false,prepareForFiles)}>{prepareForFiles?'准备副本并打开文件':'准备这个项目的私人副本'}</Button></div>}
       {(view.draft?.copyRequestId || copyResult) && <div>
         {copyUnconfirmed&&<p className="pw-field-hint" role="status">{can('projects.development.queryCopy')?
           '副本准备结果还未核对。先查原请求，不会重复创建副本。':'副本准备结果未知，这个窗口暂时不能查询；不会重新创建副本。'}</p>}

@@ -51,6 +51,78 @@ export function planMutationReceipt(value: Data, command: string): Data {
   if (value?.confirmed !== true || value.command !== command || value.result?.command !== command || !Array.isArray(value.snapshot?.plans)) throw new Error('尚未取得这次计划操作的完整原生回执，请核对原目标。');
   return value;
 }
+const sameReminderSchedule = (a: Data | undefined, b: Data | undefined) => !!a && !!b &&
+  Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(key => Object.hasOwn(b, key) && JSON.stringify(a[key]) === JSON.stringify(b[key]));
+
+export function isOrdinaryReminderReview(review: Data | null) {
+  return review?.command === 'approveSchedule' && Object.hasOwn(review, 'ordinaryReminderPreview');
+}
+
+export function ordinaryReminderReview(review: Data | null) {
+  if (!review || !isOrdinaryReminderReview(review)) return null;
+  const { plan, input, ordinaryReminderPreview: preview } = review, draft = plan?.draft, schedule = draft?.schedule;
+  if (!schedule || draft.kind !== 'reminder' || typeof draft.title !== 'string' || !draft.title.trim() ||
+      typeof plan.id !== 'string' || !plan.id || plan.id !== input?.id ||
+      typeof plan.digest !== 'string' || plan.digest !== input?.digest || !/^[0-9a-f]{64}$/.test(plan.digest) ||
+      plan.status !== 'pending' || plan.executionAuthorized !== false || preview?.calendarOnly !== true ||
+      preview.policyEvaluated !== false || preview.executionAuthorized !== false || preview.timing !== 'inexact_best_effort' ||
+      !sameReminderSchedule(schedule, preview.schedule) ||
+      !Array.isArray(preview.occurrences) || preview.occurrences.length > 3 || !Number.isSafeInteger(preview.after)) return null;
+  const times = preview.occurrences as Data[];
+  const absolute = schedule.type === 'once' || schedule.type === 'interval';
+  if (!absolute && (typeof schedule.zone !== 'string' || !schedule.zone)) return null;
+  if (times.some((row, index) => !row || !Number.isSafeInteger(row.at) || row.at <= (index ? times[index - 1].at : preview.after) ||
+      typeof row.local !== 'string' || !row.local.includes('T') || typeof row.zone !== 'string' || !row.zone ||
+      typeof row.offset !== 'string' || !row.offset || !absolute && row.zone !== schedule.zone) ||
+      schedule.type === 'once' && (times.length > 1 || !!times.length && times[0].at !== schedule.at)) return null;
+  const exact = plan.ruleCreationEntered === false && plan.ruleCreationState === 'not_entered';
+  const checkOnly = plan.ruleCreationEntered === true && ['unknown', 'observed_original_rule'].includes(plan.ruleCreationState);
+  if (!exact && !checkOnly) return null;
+  const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  let repeat: string;
+  switch (schedule.type) {
+    case 'once': repeat = '仅一次'; break;
+    case 'interval': {
+      let remaining = schedule.intervalMillis;
+      if (!Number.isSafeInteger(remaining) || remaining < 60_000) return null;
+      const parts: string[] = [];
+      for (const [unit, ms] of [['天', 86_400_000], ['小时', 3_600_000], ['分', 60_000], ['秒', 1_000], ['毫秒', 1]] as const) {
+        const count = Math.floor(remaining / ms); remaining -= count * ms;
+        if (count) parts.push(`${count}${unit}`);
+      }
+      repeat = '每 ' + parts.join(' '); break;
+    }
+    case 'daily':
+      if (typeof schedule.time !== 'string') return null;
+      repeat = `每天 ${schedule.time}`; break;
+    case 'weekly':
+      if (typeof schedule.time !== 'string' || !Array.isArray(schedule.daysOfWeek) || schedule.daysOfWeek.length < 1 ||
+          schedule.daysOfWeek.length > 7 || schedule.daysOfWeek.some((day: number) => !Number.isInteger(day) || day < 1 || day > 7)) return null;
+      repeat = `每${schedule.daysOfWeek.map((day: number) => weekdays[day - 1]).join('、')} ${schedule.time}`; break;
+    case 'monthly':
+      if (typeof schedule.time !== 'string' || !Number.isSafeInteger(schedule.dayOfMonth) || schedule.dayOfMonth < 1 || schedule.dayOfMonth > 31 ||
+          !['last_day', 'skip'].includes(schedule.shortMonthPolicy)) return null;
+      repeat = `每月 ${schedule.dayOfMonth} 日 ${schedule.time}${schedule.dayOfMonth > 28 ? schedule.shortMonthPolicy === 'last_day' ? '（短月改为末日）' : '（短月跳过）' : ''}`; break;
+    case 'cron':
+      if (typeof schedule.expression !== 'string' || !schedule.expression) return null;
+      repeat = `Cron：${schedule.expression}`; break;
+    default: return null;
+  }
+  return { title: draft.title as string, repeat, times, absolute, checkOnly };
+}
+
+export function ordinaryReminderSaved(receipt: Data, review: Data): string | null {
+  const result = receipt.result?.schedule, proposal = result?.proposal, rule = result?.rule, original = review.plan;
+  const expected = original?.origin, saved = rule?.nativeOrigin;
+  if (result?.executionAuthorized !== false || proposal?.executionAuthorized !== false || proposal.status !== 'approved' ||
+      proposal.ruleCreationEntered !== true || proposal.ruleCreationState !== 'observed_original_rule' || proposal.id !== review.input?.id ||
+      proposal.digest !== review.input?.digest || proposal.ruleId !== rule?.id || rule?.id !== proposal.id ||
+      rule?.revision !== 1 || rule.kind !== 'reminder' || rule.title !== original?.draft?.title ||
+      expected?.ownerId !== 'owner' || expected.spaceId !== 'private' || !saved ||
+      ['ownerId', 'spaceId', 'taskId', 'conversationId', 'runId', 'epoch'].some(key => saved[key] !== expected[key]) ||
+      !sameReminderSchedule(rule.schedule, original?.draft?.schedule)) return null;
+  return rule.title;
+}
 export const planState = (value: string) => ({ completed: '目标已按标准完成', finished_with_failures: '本轮结束，有步骤失败', paused: '计划已暂停', cancelled: '计划已取消', evidence_unavailable: '原工作状态暂不可核对', reconciliation_required: '原结果变化，需要重新核对', review_required: '修改后待审阅', waiting_for_owner_start: '等你开始', waiting_for_original_task: '工作正在处理或等待核对', scheduled: '等待计划时间', ready_for_host_check: '等待启动条件满足', blocked: '需要处理阻塞' } as Data)[value] || '尚未授权执行';
 
 const waitingReasons = new Set(['not_due', 'quiet_or_not_due', 'conditions_blocked', 'remote_wait_pending', 'business_wait_pending']);

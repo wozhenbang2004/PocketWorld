@@ -105,7 +105,7 @@ import {ContinuedProjectBinding} from './ProjectWorkBinding';
 import {ProjectWorkStart,emptyProjectWorkDraft,type ProjectWorkDraft} from './ProjectWorkStart';
 import {ProjectWorkLauncher,type ProjectWorkPresentation} from './ProjectWorkLauncher';
 import type {LocalTerminalCheckout,LocalWorkspaceDraft} from './LocalWorkspace';
-import {fileWorkspaceKey,type FileLayer} from './project-file';
+import {fileWorkspaceKey,observedAdoptedFormalText,type ContinueAdoptedFormal,type FileLayer} from './project-file';
 import {useProjectRevision} from './useProjectRevision';
 import {packageOperationTarget,type PackagePreviewChoices,type PackagePreviewTarget} from './project-preview';
 import {TaskPackageProjectContext} from './PrepareTaskPackageProject';
@@ -3572,6 +3572,32 @@ export default function App(){
  const fileConflict=!!fileDraft?.dirty&&fileDraft.version!==Number(state.fileVersion||0);
  const editFile=(value:string)=>{if(!currentFileKey||!fileDraft||fileAdoption.isPending())return;fileEditRevisions.current.set(currentFileKey,(fileEditRevisions.current.get(currentFileKey)||0)+1);setFileDrafts(prev=>({...prev,[currentFileKey]:{...prev[currentFileKey],text:value,dirty:value!==prev[currentFileKey].baseline}}));if(can('projects.edit')&&!fileConflict)run('projects.edit',{projectId:state.projectId,path:state.filePath,version:fileDraft.version,content:value});};
  const saveFile=()=>{if(!fileDraft||fileConflict||fileAdoption.isPending()||!can('projects.save'))return;setFileDrafts(prev=>({...prev,[currentFileKey]:{...prev[currentFileKey],submitted:fileDraft.text}}));run('projects.save',{projectId:state.projectId,path:state.filePath,version:fileDraft.version,content:fileDraft.text});};
+ const adoptedHead=route==='projects'&&!taskOpen&&currentFileKey&&fileConflict&&fileDraft?.submitted===undefined&&
+   fileDraft&&fileDraft.version>0&&fileDraft.version<fileIdentity.version&&fileDraft.text!==fileDraft.baseline&&
+   !state.fileError&&!fileAdoption.holdsDraft()&&can('projects.edit')&&can('projects.save')
+   ? observedAdoptedFormalText(state,fileIdentity.path,fileIdentity.version) : undefined;
+ const adoptedEditorDocument=bridge.getDocumentEpoch(),adoptedEditorResume=obj(snapshot?.view).resumeRevision;
+ const adoptedEditRevision=fileEditRevisions.current.get(currentFileKey)||0;
+ const continueAdopted:ContinueAdoptedFormal|undefined=adoptedHead&&fileDraft&&Number.isSafeInteger(adoptedEditorResume)?{
+  scope:JSON.stringify([adoptedHead.identity,adoptedEditorDocument,adoptedEditorResume,navigationRevision,adoptedEditRevision]),
+  start:()=>{
+   const current=bridge.getState(), view=obj(current.view);
+   if(document.hidden||bridge.getDocumentEpoch()!==adoptedEditorDocument||navigationWindow.current!==navigationRevision||
+      view.resumeRevision!==adoptedEditorResume||view.section!==null||view.taskId!==null||current.host?.ready!==true||
+      current.state.fileError||current.state.attachmentWorkspace?.open||current.state.conversationReader||
+      !['projects.edit','projects.save'].every(a=>current.capabilities.commands.includes(a))||fileAdoption.holdsDraft()||
+      (fileEditRevisions.current.get(currentFileKey)||0)!==adoptedEditRevision)return false;
+   const verified=observedAdoptedFormalText(current.state,fileIdentity.path,fileIdentity.version);
+   if(!verified||verified.identity!==adoptedHead.identity||verified.text!==adoptedHead.text)return false;
+   // Native already holds this approved, loaded baseline. Only replace the
+   // specific UI buffer that the owner has preserved; do not edit or save it.
+   fileEditRevisions.current.set(currentFileKey,adoptedEditRevision+1);
+   setFileDrafts(previous=>previous[currentFileKey]===fileDraft?{...previous,
+     [currentFileKey]:{text:verified.text,baseline:verified.text,version:fileIdentity.version,dirty:false}}:previous);
+   setFileMode('edit');
+   return true;
+  },
+ }:undefined;
  const copyText=async(textToCopy:string,feedback:'toast'|'local'='toast')=>{try{if(!navigator.clipboard?.writeText)throw new Error('当前无法直接复制，请选择文字后复制。');await navigator.clipboard.writeText(textToCopy);if(feedback==='toast')toast('已复制');}catch(error){const message=error instanceof Error?error.message:'复制未完成，请选择文字后复制。';setLocalError(message);toast.error(message);throw error;}};
  const copyWithLocalFeedback=(textToCopy:string)=>copyText(textToCopy,'local');
 
@@ -5179,7 +5205,7 @@ export default function App(){
  };
  const projectsPage=<motion.main layoutScroll ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded){if(state.projectId&&projectSection==='work')projectDirectory.rememberScroll(event.currentTarget.scrollTop);else projectListTop.current.set(projectPositionKey,event.currentTarget.scrollTop)}}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
-  {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} copyRevision={value=>{void copyText(value).catch(()=>{})}} adoption={fileAdoption} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
+  {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} copyRevision={value=>{void copyText(value).catch(()=>{})}} adoption={fileAdoption} continueAdopted={continueAdopted} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
     <Tabs selectedKey={projectPreview.expanded?'preview':projectSection} onSelectionChange={key=>{if(key==='preview')projectPreview.open();else showProjectSection(key==='files'?'files':'work')}} className="pw-project-tabs">
       <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
