@@ -127,7 +127,8 @@ export function PhonePauseInstruction({ task, visible, livePause, interrupted, p
     try {
       const receipt=await pending as Row;
       if(!accepts())return;
-      if(!same(receipt,id)||receipt.leftPocketWorld!==true||receipt.resumeRequested!==false)
+      if(!receipt||receipt.taskId!==id.taskId||receipt.runId!==id.runId||receipt.epoch!==id.epoch||
+         receipt.leftPocketWorld!==true||receipt.resumeRequested!==false)
         throw Error('未确认页面切换；没有从这里继续原任务。');
     }catch(failure){if(accepts())setError(failure instanceof Error?failure.message:'未确认页面切换；没有从这里继续。')}
     finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
