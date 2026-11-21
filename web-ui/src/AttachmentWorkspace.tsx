@@ -4,7 +4,7 @@ import {bridge} from './bridge';
 import {Accordion,AccordionItem,Button,IconButton,SelectField,TextField} from './forms-library';
 import {Drawer,ContextMenuTrigger,ContextMenu,ContextMenuItem} from './shell-library';
 import {AttachmentOriginalReader,DocumentProjection,FileDetails} from './AttachmentOriginalReader';
-import {AttachmentDocumentEditor,AttachmentProcessingEditor,AttachmentVersionContinuation} from './AttachmentDocumentEditor';
+import {AttachmentDocumentEditor,AttachmentProcessingEditor,AttachmentVersionContinuation,type SavedFileNote} from './AttachmentDocumentEditor';
 import {OriginalImageComparison} from './workspace-library/OriginalImageComparison';
 import {AttachmentFileCollection} from './workspace-library/AttachmentFileCollection';
 import {attachmentActionPayload,attachmentDocumentKey,attachmentFileFormat,attachmentFrame,documentVersionKey,exactFileKey,exactFileTarget,fileBytes,fileObject as obj,fileRows as rows,fileRunProvenance,libraryFileOrigins,normalizedFileName,savedDocumentVersions,type AttachmentFrame,type FileJson as Json} from './attachment-workspace';
@@ -22,6 +22,7 @@ type Props={
  onOpenDraft?:(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
  onUseResult?:(reference:Json,topic:FileResultTopic,openOnly:boolean,stillCurrent:()=>boolean,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
  onChooseResultAttachment?:(file:OriginalAttachmentChoice,topic:FileResultTopic,stillCurrent:()=>boolean,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
+ onAdoptFileNote?:(note:SavedFileNote,frame:AttachmentFrame,closeOriginal:()=>Promise<unknown>)=>Promise<void>;
  onVerifyReportFileWork?:(taskId:string,windowId:string)=>Promise<void>;
  onChooseAttachment?:(file:OriginalAttachmentChoice,target:FileDraftTarget,stillCurrent:()=>boolean,closeOriginal:()=>Promise<void>)=>Promise<void>;
 };
@@ -61,7 +62,7 @@ function documentSourceKey(record:Json,source:Json=record){
  return file&&scope.every(key=>typeof key==='string'&&key)?JSON.stringify([...scope,file.fileId,file.sha256]):'';
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onVerifyReportFileWork,onChooseAttachment}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -505,7 +506,12 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  </>}
  {continuationVisible&&<div ref={continuationHeading} tabIndex={-1} className="pw-file-continuation-target">
   <AttachmentVersionContinuation key={continuationKey} original={view.continuationDraft} foregroundReady={view.ready===true}
-    busy={busy} act={act} beforeBack={registerBeforeBack} onReturn={returnToOriginalWork}/>
+    busy={busy} act={act} beforeBack={registerBeforeBack} onReturn={returnToOriginalWork}
+    onAdopt={mode==='original'&&onAdoptFileNote?note=>{
+     const frame=attachmentFrame(bridge.getState().state.attachmentWorkspace);
+     if(!frame||frame.windowId!==view.windowId)throw new Error('原文件窗口已变化，备注仍保留在原件。');
+     return onAdoptFileNote(note,frame,()=>act('close',{},frame,false));
+    }:undefined}/>
  </div>}
  {privateFiles&&hasFile&&view.taskId&&view.ready&&(mode==='detail'||mode==='original')&&view.continuationDraft?.available===false&&
   <p className="pw-error" role="alert">{view.continuationDraft.error||'原版本补充草稿暂不可读取，请重新读取这份成果。'}</p>}

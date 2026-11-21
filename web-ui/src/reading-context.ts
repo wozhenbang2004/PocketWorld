@@ -9,6 +9,8 @@ export type ReadingSnapshot = {
   kind: 'message' | 'table';
   title: string;
   text: string;
+  /** Keep an already verified local body inert: no Markdown links, media or raw HTML. */
+  plainText?: true;
   copyText?: string;
   quoteSource?: ReadingQuoteSource;
   tableDocument?: { markdown: string; offset: number };

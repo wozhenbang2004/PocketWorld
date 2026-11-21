@@ -9,12 +9,12 @@ const positive=(n:unknown):n is number=>Number.isSafeInteger(n)&&Number(n)>0;
 const sha=(s:unknown):s is string=>typeof s==='string'&&/^[0-9a-f]{64}$/.test(s);
 const discussionFormat='pocketworld.evidence-dialogue.v1';
 const discussionStages=[['independent','独立观点'],['challenge','证据质疑'],['response','原作者回应']] as const;
-type DiscussionAnswer={key:string;label:string;text:string};
-export type TeamResearchDelivery={key:string;team:string;memberId:string;round:number;taskId:string;hash:string;name:string;excerpt:string;excerpted:boolean;archivedVersion?:number;revisionNote?:string;answer?:DiscussionAnswer};
+type MemberAnswer={key:string;label:string;text:string;plainText?:true};
+export type TeamResearchDelivery={key:string;team:string;memberId:string;round:number;taskId:string;hash:string;name:string;excerpt:string;excerpted:boolean;archivedVersion?:number;revisionNote?:string;answer?:MemberAnswer};
 
 /** Read the coordinator's stored presentation of the protocol answer, not a
  * UI interpretation of the worker's raw JSON or a new evidence finding. */
-function discussionAnswer(run:Row, stage:Row, message:Row|undefined):DiscussionAnswer|undefined{
+function discussionAnswer(run:Row, stage:Row, message:Row|undefined):MemberAnswer|undefined{
   if(run.discussionFormat!==discussionFormat||run.discussion?.format!==discussionFormat||!message)return;
   const phase=discussionStages[stage.round-1],record=stage.discussionRecord;
   if(!phase||!record||!id(message.messageId)||!sha(record.recordId)||!sha(record.recordVersion)||record.businessVerified!==false||
@@ -39,7 +39,43 @@ function originalRef(runId:string, memberId:string, round:number, taskId:unknown
     team:runId,memberId,round,taskId,hash:ref.sha256 as string};
 }
 
-export function teamResearchDeliveries(run:Row|null,messages:unknown,edition:'current'|'archived'='current'):TeamResearchDelivery[]{
+/** The current native parent Work link is required; a team ID from the directory is not enough. */
+export function classicAnswerOwner(reading:Row|null):string{
+  const run=reading?.run, link=reading?.ownerWorkLink, roster=rows(run?.members);
+  if(reading?.kind!=='run'||!reading.viewHandle||!id(run?.id)||!id(run.teamId)||run.mode!=='collaborate'||run.definitionKind!=null||
+    (run.discussionFormat??'classic')!=='classic'||run.discussion||run.workPlan||run.productionScope||run.nativeWorkProfileModels||
+    run.researchExecutionFormat!=='pocketworld.team-research-agent.v1'||run.archived===true||!['running','paused','completed','partial'].includes(run.status)||
+    roster.length<1||roster.length>4||!roster.every(slot=>(slot.runner||'model')==='model'&&(!slot.device||slot.device==='phone'))||
+    link?.readOnly!==true||link.currentRun!==true||link.stopping!==false||link.teamRunId!==run.id||!id(link.teamTaskId)||
+    reading.taskId!==link.teamTaskId||!id(link.taskId)||!id(link.runId)||!positive(link.epoch)||!id(link.conversationId))return '';
+  return JSON.stringify([run.id,run.teamId,link.teamTaskId,link.taskId,link.runId,link.epoch,link.conversationId]);
+}
+const classicAnswerBytes=65536;
+
+/** Only a current exact stage and its unique authored native message can
+ * nominate the already visible full text. The read gesture checks its SHA. */
+function classicAnswer(stage:Row, result:Row, message:Row|undefined):MemberAnswer|undefined{
+  const ref=result.outputReference, body=stage.text, preview=result.content;
+  if(!message||!id(message.messageId)||message.truncated===true||!id(stage.turnId)||result.executionTurnId!==stage.turnId||
+    result.round!==stage.round||result.memberGeneration!==stage.generation||result.runGeneration!==message.generation||
+    !Number.isSafeInteger(result.runGeneration)||result.runGeneration<0||!positive(result.identityRevision)||
+    (message.memberSnapshot?.identityRevision??1)!==result.identityRevision||
+    typeof body!=='string'||!body.trim()||body.length!==ref.chars||body.length>classicAnswerBytes||message.content!==body||
+    typeof preview!=='string'||!preview||result.contentChars!==ref.chars||
+    !(result.contentTruncated===false&&preview===body||result.contentTruncated===true&&preview.length<body.length&&body.startsWith(preview))||
+    new TextEncoder().encode(body).byteLength>classicAnswerBytes)return;
+  return {key:JSON.stringify([message.messageId,stage.turnId,stage.generation,result.runGeneration,result.identityRevision]),
+    label:'第 '+stage.round+' 阶段答复',text:body,plainText:true};
+}
+export async function exactClassicAnswer(source:TeamResearchDelivery):Promise<boolean>{
+  if(source.answer?.plainText!==true||!globalThis.crypto?.subtle)return false;
+  const body=new TextEncoder().encode(source.answer.text);
+  if(body.byteLength>classicAnswerBytes)return false;
+  const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',body));
+  return Array.from(digest,byte=>byte.toString(16).padStart(2,'0')).join('')===source.hash;
+}
+
+export function teamResearchDeliveries(run:Row|null,messages:unknown,edition:'current'|'archived'='current',classic=false):TeamResearchDelivery[]{
   if(!run?.id||run.researchExecutionFormat!=='pocketworld.team-research-agent.v1')return [];
   if(edition==='archived'&&(run.mode!=='collaborate'||run.workPlan||run.productionScope))return [];
   const results:TeamResearchDelivery[]=[], roster=rows(run.members), answers=rows(messages).filter(m=>m.role==='assistant'&&m.kind==='answer');
@@ -79,8 +115,9 @@ export function teamResearchDeliveries(run:Row|null,messages:unknown,edition:'cu
       const r=stage.researchTask,source=originalRef(run.id,member.id,round,stage.researchTaskId,r);
       if(stage.status!=='completed'||!source)continue;
       const {name,message}=author(stage.turnId,stage.generation);
-      const answer=discussionAnswer(run,stage,message);
-      const body=answer?answer.text.slice(answer.text.indexOf('\n')+1).trim():typeof r.content==='string'?r.content.trim():'';
+      const answer=discussionAnswer(run,stage,message)??(classic ? classicAnswer(stage,r,message) : undefined);
+      const body=answer ? (answer.plainText ? answer.text : answer.text.slice(answer.text.indexOf('\n')+1)).trim()
+        : typeof r.content==='string' ? r.content.trim() : '';
       const points=Array.from(body.slice(0,224).replace(/\s+/gu,' '));
       results.push({...source,name,excerpt:points.slice(0,80).join(''),excerpted:points.length>80||!answer&&r.contentTruncated===true,answer});
     }
@@ -101,7 +138,7 @@ export function TeamResearchDeliveries({records,disabled,rawAvailable,open,openA
     return <div key={source.key}>
       <div className="pw-team-research-delivery">
         <Button data-team-delivery={answer?undefined:source.key} data-team-follow-up={answer?answer.key:source.key} variant="ghost" className="pw-team-question-row h-auto whitespace-normal" trailingIcon={IconChevronRight}
-          aria-label={answer?`阅读${source.name}的${stage}`:rawLabel} aria-description={source.excerpt||undefined} disabled={disabled||!answer&&!rawAvailable}
+          aria-label={answer?`阅读${source.name}的${stage}${answer.plainText?'全文':''}`:rawLabel} aria-description={source.excerpt||undefined} disabled={disabled||!answer&&!rawAvailable}
           onClick={event=>answer?openAnswer!(source,event.currentTarget):open(source)}>
           <span className="pw-team-attention-copy"><strong>{byline?<><bdi>{source.name}</bdi> · </>:null}{stage}</strong>
             <small dir="auto">{source.excerpt?`${source.excerpt}${source.excerpted?'…':''}`:source.archivedVersion?(source.revisionNote||'查看原答复的任务记录'):answer?'阅读成员答复':'查看原研究任务'}</small></span>

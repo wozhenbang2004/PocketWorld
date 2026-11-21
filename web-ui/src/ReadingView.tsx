@@ -55,7 +55,9 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active }: {
     setMode(next); setSelected(''); setFeedback('');
     if (next === 'select') requestAnimationFrame(() => { original.current?.focus({ preventScroll: true }); selectText(); });
   };
-  const content = <MarkdownBody text={snapshot.tableDocument?.markdown ?? snapshot.text} onlyTableAt={snapshot.tableDocument?.offset} onCopyCode={copy} />;
+  const content = snapshot.plainText === true
+    ? <div className="pw-markdown" dir="auto" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{snapshot.text}</div>
+    : <MarkdownBody text={snapshot.tableDocument?.markdown ?? snapshot.text} onlyTableAt={snapshot.tableDocument?.offset} onCopyCode={copy} />;
   return <section className="pw-reading-page" data-kind={snapshot.kind} data-text-size={textSize} hidden={!active}>
     <div className="pw-reading-tools-visibility"><button type="button" aria-expanded={toolsVisible} aria-controls={toolsId} onPointerDown={event=>event.preventDefault()} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'显示阅读工具'}</button></div>
     <div id={toolsId} hidden={!toolsVisible} className="pw-reading-tools pw-material-navigation">

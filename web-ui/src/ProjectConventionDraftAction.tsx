@@ -39,9 +39,25 @@ export function ProjectConventionDraftAction({onOpenProjectDraft,row,readHandle,
      }
      if(!checked(v)||!(v.transfer==='place'||v.transfer==='replace_older'&&earlier)||confirm&&(v.checkoutId!==review?.checkoutId||v.transfer!==review?.transfer||v.fromRevision!==review?.fromRevision||v.written!==true)||!confirm&&(v.written!==false||typeof v.review!=='string'||!v.review||!Number.isSafeInteger(v.expiresAt)||v.expiresAt<=Date.now())){if(!confirm)release(v?.review);throw new Error('回执与这条原项目约定不一致');}
      if(confirm){leave();
-       if(typeof v.draftReturnHandle==='string'&&/^[a-f0-9-]{36}$/.test(v.draftReturnHandle)&&Number.isSafeInteger(v.draftReturnExpiresAt)&&v.draftReturnExpiresAt>Date.now())
-         setDestination({projectId:project,checkoutId:v.checkoutId,handle:v.draftReturnHandle,expiresAt:v.draftReturnExpiresAt});
-       setOutcome(v.transfer==='replace_older'?'已将原项目未发送草稿中的这条约定从修订 '+v.fromRevision+' 更新为 '+v.revision+'。已经提交的任务不变。':'已放入这个项目的「新项目工作 → 默认模型 → 交付要求」。还没有提交，开始前可修改或移除。');}
+       const target=typeof v.draftReturnHandle==='string'&&/^[a-f0-9-]{36}$/.test(v.draftReturnHandle)&&Number.isSafeInteger(v.draftReturnExpiresAt)&&v.draftReturnExpiresAt>Date.now()
+         ?{projectId:project,checkoutId:v.checkoutId,handle:v.draftReturnHandle,expiresAt:v.draftReturnExpiresAt}:null;
+       if(target)setDestination(target);
+       const state=bridge.getState().state, replaced=v.transfer==='replace_older';
+       if(target&&onOpenProjectDraft&&state.projectId===project&&!state.filePath)
+         setOutcome(replaced?'已将原项目未发送草稿中的这条约定从修订 '+v.fromRevision+' 更新为 '+v.revision+'。已经提交的任务不变。':'已放入这个项目的「新项目工作 → 默认模型 → 交付要求」。还没有提交，开始前可修改或移除。');
+       else {
+         const listed:Data[]=Array.isArray(state.projects)?state.projects:[];
+         const original=listed.filter(item=>item?.id===project);
+         const nameOf=(item:Data)=>typeof item?.name==='string'?item.name.trim():'';
+         const name=original.length===1?nameOf(original[0]):'';
+         const canFind=!!name&&listed.filter(item=>nameOf(item)===name).length===1;
+         const label=canFind?`「${name}」`:`原项目（${project.slice(0,8)}）`;
+         const saved=replaced?`${label}的未发送草稿已将这条约定从修订 ${v.fromRevision} 更新为 ${v.revision}。`:`已放入${label}的未发送草稿。`;
+         const alreadySelected=state.projectId===project;
+         const where=alreadySelected?'回到当前项目的「工作」':`在「项目」顶部点项目名，选择${label}，进入「工作」`;
+         setOutcome(alreadySelected||canFind?`${saved}${where}，展开本机副本交办入口，核对「交付要求」。`:
+           `${saved}当前项目选择器不能准确定位该项目，请勿选择同名项目代替。`);
+       }}
      else{pin.current=v.review;setReview(v);}
    }catch(e){if(live.current&&seq.current===n){if(confirm){leave();setOutcome('放入结果未确认，请回原项目核对草稿，不要重复放入。');}
       else setError(e instanceof Error?e.message:String(e));}}

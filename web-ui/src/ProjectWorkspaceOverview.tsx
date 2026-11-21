@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { Accordion, AccordionItem, Button, SearchField } from './forms-library';
-import { IconAttention, IconChevronRight, IconFile, IconTerminal } from './icons';
+import { IconAttention, IconChevronRight, IconDevices, IconFile, IconTerminal } from './icons';
 import { readFollowUp, WorkQueueRow, type WorkEntry, type WorkReading } from './WorkFollowUp';
 import type { WorkCollectionFilter } from './work-collection';
 import { WorkDirectoryControls, type useWorkDirectory } from './WorkDirectory';
@@ -28,6 +28,7 @@ export type ProjectWorkspaceOverviewProps = {
   canContinue: (task: ProjectWorkspaceTask) => boolean;
   onOpenTask: (id: string, entry: ProjectWorkEntry, query: string) => void;
   onOpenTerminal: () => void;
+  onOpenPairedDevices?: (trigger: HTMLButtonElement) => void;
   onAskButler?: () => void;
   editImported?: { label: string; onOpen: () => void };
   localCopyFirst?: boolean;
@@ -39,7 +40,7 @@ export type ProjectWorkEntry = WorkEntry | 'outcomes';
 export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionFilter; expanded: boolean; selected: string; selectedEntry?: ProjectWorkEntry };
 
 /** Project work directory; saved Web versions separately use exact original B4 receipts. */
-export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onAskButler, editImported, localCopyFirst = false, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
+export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onOpenPairedDevices, onAskButler, editImported, localCopyFirst = false, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
   const savedWebLink = useRef<FindSavedBuildWeb|null>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
@@ -88,7 +89,11 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
     <ol className="pw-project-work-list pw-depth-tasks">{attention.map(renderTask)}</ol>
   </section>;
   const running = active.length > 0 && <section key="work-running" className="pw-project-work-group" aria-label="进行中的项目工作"><h3>进行中</h3><ol className="pw-project-work-list pw-depth-tasks">{active.map(renderTask)}</ol></section>;
-  const start = startContent && <section key="work-start" className="pw-project-new-work" aria-label="开始或继续项目工作">{startContent}</section>;
+  const start = (startContent || onOpenPairedDevices) && <section key="work-start" className="pw-project-new-work" aria-label="开始或继续项目工作">
+    {startContent}
+    {onOpenPairedDevices && <Button variant="secondary" size="small" leadingIcon={IconDevices} title="只打开设备目录，不带入项目文件"
+      data-workspace-entry="project-paired-device" onClick={event => onOpenPairedDevices(event.currentTarget)}>使用已配对设备</Button>}
+  </section>;
   // Same keyed launcher under the same provider in either order. Reordering the
   // directory never starts a second native file, setup or review window.
   const sections = localCopyFirst ? [needsOwner, start, tools, running] : [tools, needsOwner, running, start];

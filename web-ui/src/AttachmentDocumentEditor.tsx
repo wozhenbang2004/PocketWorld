@@ -10,7 +10,8 @@ const validDraft=(draft:Json)=>!!String(draft.name||'').trim()&&String(draft.nam
 
 /** Adapted from the document editor's serialized draft/CAS interaction. Only
  * the selected task and immutable file version receive this text. */
-export function AttachmentVersionContinuation({original,foregroundReady,busy,act,beforeBack,onReturn}:{original:Json;foregroundReady:boolean;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void;onReturn?:(frame:AttachmentFrame)=>Promise<void>}){
+export type SavedFileNote={taskId:string;fileId:string;sha256:string;revision:number;text:string};
+export function AttachmentVersionContinuation({original,foregroundReady,busy,act,beforeBack,onReturn,onAdopt}:{original:Json;foregroundReady:boolean;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void;onReturn?:(frame:AttachmentFrame)=>Promise<void>;onAdopt?:(note:SavedFileNote)=>Promise<void>}){
  const [text,setText]=useState(String(original.text||'')),[error,setError]=useState(''),[saving,setSaving]=useState(false),[applying,setApplying]=useState(false),[saved,setSaved]=useState(original.saved===true);
  const [checked,setChecked]=useState(false),[competing,setCompeting]=useState<Json|null>(null);
  const current=useRef(text),baseline=useRef(original),alive=useRef(true),paused=useRef(false),flight=useRef<Promise<AttachmentFrame|undefined>|null>(null),action=useRef(act),ready=useRef(foregroundReady);action.current=act;ready.current=foregroundReady;
@@ -73,6 +74,16 @@ export function AttachmentVersionContinuation({original,foregroundReady,busy,act
   catch(failure){if(alive.current)setError(failure instanceof Error?failure.message:'没有核对到本机保存结果，未离开这份成果。')}
   finally{finishFlight.current=false;if(alive.current)setApplying(false)}
  };
+ // Only the already projected saved note may be adopted. Do not flush or read again.
+ const canAdopt=!!onAdopt&&foregroundReady&&saved&&!competing&&!paused.current&&!dirty()&&original.saved===true&&original.revision>1&&
+  original.revision===baseline.current.revision&&original.text===text&&typeof text==='string'&&!!text.trim();
+ const adopt=async()=>{
+  if(!onAdopt||!canAdopt||busy||finishFlight.current||flight.current||paused.current||!ready.current||dirty()||current.current!==original.text)return;
+  finishFlight.current=true;setApplying(true);setError('');
+  try{await onAdopt({taskId:original.taskId,fileId:original.fileId,sha256:original.sha256,revision:original.revision,text:original.text})}
+  catch(failure){if(alive.current)setError(failure instanceof Error?failure.message:'没有确认放入原话题草稿，原备注仍保留。')}
+  finally{finishFlight.current=false;if(alive.current)setApplying(false)}
+ };
  if(original.available!==true||!accepts(original))return <p className="pw-error" role="alert">{original.error||'这个原版本的补充草稿暂不可读取。'}</p>;
  return <section className="pw-file-version-continuation" aria-label="这份成果的补充草稿">
   <h3>成果补充草稿</h3><p className="pw-muted">只保存在此文件的固定版本旁，不发送给管家，也不会停止或启动任务。</p>
@@ -84,6 +95,7 @@ export function AttachmentVersionContinuation({original,foregroundReady,busy,act
   </AccordionItem></Accordion>}
   <div className="pw-work-supplement-footer"><span role="status">{applying?'正在核对本机草稿':saving?'正在保存原版本草稿':checked?'已核对原版本的本机草稿':saved?(text?'原版本草稿已保存':'这个版本还没有补充'):'本页文字尚未确认保存'}</span><div className="pw-action-row">
    <Button variant="secondary" disabled={!foregroundReady||busy||saving||applying||!!competing||!text.trim()} onClick={()=>void finish()}>{onReturn?'保存并回原工作':saved?'核对本机草稿':'保存补充草稿'}</Button>
+   {canAdopt&&<Button variant="ghost" disabled={busy||saving||applying} aria-description="只带入这段备注，不附加文件，也不发送" onClick={()=>void adopt()}>放入原话题草稿</Button>}
   </div></div>
  </section>;
 }

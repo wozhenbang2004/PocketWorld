@@ -24,7 +24,7 @@ import { TeamFrozenFiles } from './TeamFrozenFiles';
 import { resetTeamProductionAcknowledgments, teamDefinitionPayload, teamProductionDraft, teamProductionEditorMember } from './team-production';
 import { TeamMemberAvatar, TeamMemberIdentity } from './TeamMemberIdentity';
 import { teamAvatarShape, teamAvatarShapes, teamMemberLabel, teamMessageIdentity, teamMessageAuthor } from './team-identity';
-import { teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelivery } from './TeamResearchDeliveries';
+import { classicAnswerOwner, exactClassicAnswer, teamResearchDeliveries, TeamResearchDeliveries, type TeamResearchDelivery } from './TeamResearchDeliveries';
 import { TeamFollowUps, TeamResultHandoff } from './TeamResultHandoff';
 import { finalPackage, TeamFinalPackageReading } from './TeamFinalPackageReading';
 import {deliveryReading,TeamDeliveryWorkers} from './TeamDeliveryWorkers';
@@ -168,6 +168,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const [shownMemberSources,setShownMemberSources]=useState<Record<string,boolean>>({});
   const [shownArchives,setShownArchives]=useState<Record<string,boolean>>({});
   const [openingMemberResult, setOpeningMemberResult] = useState(false);
+  const classicAnswerFlight=useRef(false);
   const deliveryReturn=useRef<{team:string;key:string;section:'progress'|'result';taskId:string;sourceHandle:string;scroll:number;entered:boolean;ordinary:boolean;documentEpoch:number;member?:ResultMember}|null>(null);
   const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
   const resultBack = useRef<() => boolean>(() => false);
@@ -786,13 +787,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   ]), { active: workspaceActive && catalogReady && (!reading || !!reading.viewHandle) && !editor && !memberDraft && !review && !phoneSelection });
   const teamResult = teamResultReading(current, messages, deliveryWorkers?.originalFileObservation);
   const followUps = teamFollowUps(current, reading?.attention);
-  const deliveries = teamResearchDeliveries(current, messages);
+  const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
+  const classicOwner = canOpenMemberResult && openReading && globalThis.crypto?.subtle ? classicAnswerOwner(reading) : '';
+  const deliveries = teamResearchDeliveries(current, messages, 'current', !!classicOwner);
   const archivedDeliveries = teamResearchDeliveries(current, messages, 'archived');
   const ordinaryAnswers = current?.mode === 'collaborate' && !hasWorkPlan && !current.productionScope &&
     current.researchExecutionFormat === 'pocketworld.team-research-agent.v1';
   const resultPhaseLink = ordinaryAnswers && resultSource?.member && resultSource.runId === current.id &&
     resultSource.member.generation === current.generation ? resultSource.member.deliveryKey : '';
-  const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
   const remainingMember = teamRemainingMember(reading, deliveries.filter(source => canOpenMemberResult || source.answer && openReading), state.tasks);
   const showOriginalQuestions = ordinaryAnswers && workspaceActive && !!reading?.viewHandle && !changed &&
     !!label(current.teamId).trim() && current.definitionKind == null && !current.nativeWorkProfileModels && current.archived !== true &&
@@ -931,16 +933,58 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const original=currentReading.current;
     if(!openReading||!item.answer||!canRead||materialBusy||document.hidden||!ownsNativeWindow()||
       original?.kind!=='run'||original.run?.id!==item.team||original.viewHandle!==reading?.viewHandle)return;
-    const same=teamResearchDeliveries(original.run,original.messages).find(row=>row.key===item.key&&row.answer?.key===item.answer?.key);
-    if(!same?.answer||same.answer.text!==item.answer.text){setNotice('这份成员答复已变化，没有打开其他阶段。');return;}
-    if (runSection === 'result') {
-      rememberSourcesOpened(item.team);
-      setResultSource(Number.isSafeInteger(original.run.generation)?resultOrigin(same.answer.key, {
-        id:same.memberId,generation:original.run.generation,deliveryKey:same.key,round:same.round,
-      }):null);
+    const show=(same:TeamResearchDelivery, generation:number)=>{
+      if(!same.answer)return;
+      if (runSection === 'result') {
+        rememberSourcesOpened(item.team);
+        setResultSource(Number.isSafeInteger(generation)?resultOrigin(same.answer.key, {
+          id:same.memberId,generation,deliveryKey:same.key,round:same.round,
+        }):null);
+      }
+      else setResultSource(saved=>saved?.runId===item.team&&saved.member?.deliveryKey===same.key?saved:null);
+      openReading({kind:'message',title:same.name+' · '+same.answer.label,text:same.answer.text,returnFocus:trigger,
+        ...(same.answer.plainText?{plainText:true as const}:{})});
+    };
+    const originalAnswer=item.answer;
+    const find=(value:Data, classic=false)=>teamResearchDeliveries(value.run,value.messages,'current',classic)
+      .find(row=>row.key===item.key&&row.answer?.key===originalAnswer.key&&row.answer.text===originalAnswer.text);
+    if(originalAnswer.plainText!==true){
+      const same=find(original);
+      if(!same){setNotice('这份成员答复已变化，没有打开其他阶段。');return;}
+      show(same,original.run.generation);return;
     }
-    else setResultSource(saved=>saved?.runId===item.team&&saved.member?.deliveryKey===same.key?saved:null);
-    openReading({kind:'message',title:`${same.name} · ${same.answer.label}`,text:same.answer.text,returnFocus:trigger});
+    if(!classicOwner||classicAnswerOwner(original)!==classicOwner||classicAnswerFlight.current||entered.current)return;
+    const documentEpoch=bridge.getDocumentEpoch(), resume=object(bridge.getState().view).resumeRevision,
+      request=requestGeneration.current+1;
+    const stillCurrent=()=>alive.current&&!backgrounded.current&&!document.hidden&&ownsNativeWindow()&&
+      documentEpoch===bridge.getDocumentEpoch()&&resume===object(bridge.getState().view).resumeRevision&&
+      shownRunSection.current===runSection&&currentReading.current===original&&requestGeneration.current===request;
+    classicAnswerFlight.current=true;
+    setOpeningMemberResult(true);
+    void (async()=>{
+      try{
+        // The same fresh native owner read as the original task action. The
+        // cached transcript supplies the identity to compare, not the answer to show.
+        const reply=await invoke('teams.readRun',{runId:item.team}), next=reply?.reading;
+        if(!stillCurrent()){release(next);return;}
+        if(next?.kind!=='run'||!next.viewHandle||next.viewHandle===original.viewHandle||next.run?.id!==item.team){
+          release(next);if(reply)setNotice('没有核对到原协作，未打开其他答复。');return;
+        }
+        const same=next.run.generation===original.run.generation&&classicAnswerOwner(next)===classicOwner?find(next,true):undefined;
+        const checked=same&&await exactClassicAnswer(same).catch(()=>false);
+        if(!stillCurrent()||newerTeamReading(next.run,object(object(bridge.getState().state.teamRuns)[item.team]))){
+          release(next);return;
+        }
+        acceptReading(next);
+        if(!checked||!same){setNotice('这份完整答复未能核对。可从原研究任务查看记录。');return;}
+        show(same,next.run.generation);
+      }catch(failure){
+        if(stillCurrent())setError(failure instanceof Error?failure.message:'原答复暂时无法核对。');
+      }finally{
+        classicAnswerFlight.current=false;
+        if(alive.current)setOpeningMemberResult(false);
+      }
+    })();
   };
   const selectRunTab = (section: RunSection) => {
     const source = resultSource, member = source?.member;
