@@ -884,14 +884,17 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     ['running', 'paused'].includes(current.status) && members.length > 0 &&
     members.every(member => (member.runner || 'model') === 'model' && (!member.device || member.device === 'phone'));
   const progressByMember = new Map(current ? members.map(member => [String(member.id), teamMemberProgress(current, member, followUps, true)]) : []);
-  const showPrerequisites = ordinaryAnswers && workspaceActive && !!reading?.viewHandle && !changed &&
+  const originalSavedWorkRoster = ordinaryAnswers && workspaceActive && !!reading?.viewHandle && !changed &&
     !!label(current.teamId).trim() && current.definitionKind == null && (current.discussionFormat ?? 'classic') === 'classic' &&
-    !current.discussion && !current.nativeWorkProfileModels && current.archived !== true &&
-    Array.isArray(catalog.history) && !rows(catalog.history).some(row => row.id === current.id) &&
-    ownerWorkLink?.readOnly === true && ownerWorkLink.currentRun === true && ownerWorkLink.stopping === false &&
+    !current.discussion && !current.nativeWorkProfileModels && ownerWorkLink?.readOnly === true && ownerWorkLink.currentRun === true &&
     ownerWorkLink.teamRunId === current.id && !!label(ownerWorkLink.teamTaskId) && ownerWorkLink.teamTaskId === reading.taskId &&
     members.length > 0 && members.length <= 4 && new Set(members.map(member => member.id)).size === members.length &&
     members.every(member => (member.runner || 'model') === 'model' && (!member.device || member.device === 'phone'));
+  // Whole-run cancellation marks unfinished stages before the original children settle.
+  const stoppedSavedWorkTeam = originalSavedWorkRoster && ownerWorkLink?.stopping === true &&
+    current?.status === 'cancelled' && current.phase === 'cancelled';
+  const showPrerequisites = originalSavedWorkRoster && ownerWorkLink?.stopping === false && current?.archived !== true &&
+    Array.isArray(catalog.history) && !rows(catalog.history).some(row => row.id === current?.id);
   const prerequisiteDocument = bridge.getDocumentEpoch(), prerequisiteResume = object(bridge.getState().view).resumeRevision;
   const actionableFollowUps = showPrerequisites ? followUps.filter(item => {
     const member = members.find(row => row.id === item.locator.memberId);
@@ -1406,7 +1409,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             const researchRecords = current.researchExecutionFormat ? teamResearchRecords(current.id, member) : [];
             const assignment = !hasWorkPlan || !progress.length ? label(member.assignment || member.role) : '';
             const memberState = member.exited ? 'exited' : member.status;
-            const stopRequested = ordinaryAnswers && !member.exited && teamMemberStopRequested(member);
+            const coordinatorStopped = stoppedSavedWorkTeam && !member.exited;
+            const stopRequested = ordinaryAnswers && !member.exited &&
+              (coordinatorStopped && memberState === 'cancelled' || teamMemberStopRequested(member));
             const showMemberState = !progress.length || member.exited || memberState === 'paused' ||
               ordinaryAnswers && ['stopping','cancelled'].includes(memberState) ||
               teamNeedsAttention(memberState) && !progress.some(fact => fact.state === memberState);
@@ -1421,7 +1426,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                   const inPlace = source?.answer && !!openReading;
                   const execution = observed && fact.state === 'completed' && String(observed.round) === fact.key ? observed : null;
                   const checkReceipt = fact.state === 'completed' && ordinaryAnswers && researchMember;
-                  const statusCopy = checkReceipt ? (source ? '答复已保存' : '完成 · 答复待核对')
+                  const statusCopy = coordinatorStopped && fact.state === 'cancelled' ? '不再派发'
+                    : checkReceipt ? (source ? '答复已保存' : '完成 · 答复待核对')
                     : fact.state === 'completed' ? '已完成' : fact.state === 'preparing' ? '正在准备'
                       : fact.state === 'queued' && (member.paused || current.status === 'paused' || ordinaryAnswers && memberState === 'cancelled') ? '未开始'
                         : stopRequested && fact.state === 'paused' ? '停止请求前已暂停' : status(fact.state);

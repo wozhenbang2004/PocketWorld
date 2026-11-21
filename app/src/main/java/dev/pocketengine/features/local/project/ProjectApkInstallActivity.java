@@ -178,10 +178,21 @@ public final class ProjectApkInstallActivity extends ComponentActivity {
         // Only the presentation uses decimal text. Native comparisons and durable identity retain the exact long.
         return ProjectSources.copy(original).put("versionCode",Long.toString(original.getLong("versionCode")));
     }
+    /** A prior system handoff is not necessarily for the file that opened this review. */
+    private static String receiptSourceRelation(OwnerFilePreviewSource chosen,JSONObject prior) throws Exception {
+        if(chosen==null||prior==null)return null;
+        JSONObject reviewed=prior.getJSONObject("review");
+        Object selectedId=chosen.metadata().opt("id"),oldId=reviewed.opt("artifactId"),oldSha=reviewed.opt("artifactSha256");
+        String uuid="[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
+        if(!(selectedId instanceof String id)||!id.matches(uuid)||!(oldId instanceof String previousId)||!previousId.matches(uuid)||
+                !(oldSha instanceof String sha)||!sha.matches("[a-f0-9]{64}"))return null;
+        return id.equals(previousId)&&chosen.sha256.equals(sha)?"same_original":"other_original";
+    }
     public JSONObject apkSurfaceSnapshot() throws Exception {
         JSONObject publicReceipt=receipt==null?null:ProjectSources.copy(receipt);if(publicReceipt!=null){publicReceipt.remove("viewUri");publicReceipt.put("review",presentedReview(receipt.getJSONObject("review")));}
         return new JSONObject().put("ready",apkSurfaceAvailable()).put("busy",busy).put("message",message)
                 .put("sourcePresent",source!=null).put("pendingHandoff",pending()).put("canRequestInstalls",getPackageManager().canRequestPackageInstalls())
+                .put("sourceName",source==null?null:source.name).put("receiptSourceRelation",receiptSourceRelation(source,receipt))
                 .put("review",review==null?JSONObject.NULL:presentedReview(review)).put("reviewId",review==null?"":ProjectSources.digest(review))
                 .put("receipt",publicReceipt==null?JSONObject.NULL:publicReceipt);
     }

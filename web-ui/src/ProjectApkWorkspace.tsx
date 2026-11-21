@@ -8,7 +8,7 @@ import { usePocketAppearance } from './usePocketAppearance';
 
 type Review = { packageName: string; versionCode: string; bytes: number; minSdk: number; artifactSha256: string; signerSha256: string[]; beforeInstalled: { observed: boolean } };
 type Receipt = { requestId: string; state: string; review: Review; observedAt?: number; observation?: { installedIdentityMatches: boolean; matchedBeforeHandoff: boolean } };
-type Data = { windowId: string; generation: number; ready: boolean; busy: boolean; message: string; sourcePresent: boolean; pendingHandoff: boolean; canRequestInstalls: boolean; review: Review | null; reviewId: string; receipt: Receipt | null };
+type Data = { windowId: string; generation: number; ready: boolean; busy: boolean; message: string; sourcePresent: boolean; sourceName?: string; pendingHandoff: boolean; canRequestInstalls: boolean; review: Review | null; reviewId: string; receipt: Receipt | null; receiptSourceRelation?: 'same_original' | 'other_original' };
 type Action = 'projectApk.read' | 'projectApk.inspect' | 'projectApk.install' | 'projectApk.settings' | 'projectApk.reconcile' | 'projectApk.closeUnknown' | 'projectApk.close';
 type Confirmation = { action: 'projectApk.install' | 'projectApk.settings' | 'projectApk.closeUnknown'; reviewId: string; requestId: string; review: Review | null };
 const stateLabels: Record<string, string> = { awaiting_system: '等待或回执未知，不自动重投', not_started: '系统安装器没有启动', system_reported_success: '系统报告成功，实际身份另行核对', system_returned_without_success: '系统未返回成功', owner_closed_unknown: '已结束等待，安装结果仍未知' };
@@ -67,11 +67,15 @@ export default function ProjectApkWorkspace({ snapshot }: { snapshot: PocketSnap
   const confirm = (action: Confirmation['action']) => { if (!data || effectLocked) return;setAcknowledged(false);setConfirmation({ action, reviewId: data.reviewId, requestId: data.receipt?.requestId || '', review: data.review }); };
   const confirmationCurrent = confirmation && (confirmation.action === 'projectApk.install' ? confirmation.reviewId === data?.reviewId && !data?.pendingHandoff : confirmation.action === 'projectApk.closeUnknown' ? confirmation.requestId === data?.receipt?.requestId && data?.pendingHandoff : !data?.pendingHandoff);
   const receipt = data?.receipt;
-  return <main className="pw-app pw-secondary pw-updates" aria-label="私人项目 APK 安装">
-    <header className="pw-secondary-header pw-updates-header"><IconButton icon={IconArrowLeft} aria-label="返回原成果" disabled={locked} onClick={() => void run('projectApk.close')} /><h1>安装私人项目 APK</h1></header>
+  const otherReceipt = data?.receiptSourceRelation === 'other_original';
+  const receiptTitle = otherReceipt ? '另一份 APK 的安装交接' : data?.receiptSourceRelation === 'same_original' ? '此原件的安装交接' : '保留的安装交接';
+  return <main className="pw-app pw-secondary pw-updates" aria-label="核对私人项目 APK">
+    <header className="pw-secondary-header pw-updates-header"><IconButton icon={IconArrowLeft} aria-label="返回原成果" disabled={locked} onClick={() => void run('projectApk.close')} /><h1>核对私人项目 APK</h1></header>
     <div className="pw-updates-scroll"><div className="pw-updates-content">
       <section className="pw-updates-group pw-updates-version" aria-label="固定成果审阅">
+        {data?.sourcePresent && data.sourceName && <p className="pw-updates-caption">已选原件：<bdi>{data.sourceName}</bdi></p>}
         <MotionFeedback identity={data?.message || 'reading'} role="status" className="pw-updates-message">{data?.message || '正在读取原构建成果…'}</MotionFeedback>
+        {otherReceipt && data?.pendingHandoff && !data.review && <p className="pw-updates-caption">另一份 APK 的安装交接仍待核对，暂不能核对当前 APK。</p>}
         {error && <MotionFeedback identity={error} role="alert" className="pw-field-error">{error}</MotionFeedback>}
         {(data?.busy || !data) && <ProgressBar aria-label="读取原 APK 身份" isIndeterminate showValueLabel={false} />}
         {(needsRead || data?.pendingHandoff) && <Button variant="secondary" disabled={locked} leadingIcon={IconRefresh} onClick={() => void run('projectApk.read')}>读取原状态，不重投</Button>}
@@ -82,8 +86,8 @@ export default function ProjectApkWorkspace({ snapshot }: { snapshot: PocketSnap
             : <Button disabled={effectLocked || !data.review} onClick={() => confirm('projectApk.install')}>审阅后交给系统安装器</Button>}
         </div>}
       </section>
-      {receipt && <section className="pw-updates-group" aria-label="原安装交接回执">
-        <h2>原交接</h2><p>{stateLabels[receipt.state] || '结果未知，只核对'}</p><ApkIdentity review={receipt.review} />
+      {receipt && <section className="pw-updates-group" aria-label={receiptTitle}>
+        <h2>{receiptTitle}</h2><p>{stateLabels[receipt.state] || '结果未知，只核对'}</p><ApkIdentity review={receipt.review} />
         {receipt.observation && <p className="pw-updates-caption">上次只读核对 {receipt.observedAt ? new Date(receipt.observedAt).toLocaleString() : ''}：{receipt.observation.installedIdentityMatches ? `当时包名、版本与证书匹配。${receipt.observation.matchedBeforeHandoff ? '交接前已匹配，不能据此确认本次发生安装。' : '没有逐字节核验安装内容或证明安装归因。'}` : '当时未能确认匹配，可能不可见、未安装或身份不同；查不到不等于未安装。'}</p>}
         <div className="pw-form-actions"><Button variant="secondary" disabled={effectLocked} onClick={() => void run('projectApk.reconcile', { requestId: receipt.requestId })}>核对原安装状态（只读）</Button>
           {data?.pendingHandoff && <Button variant="ghost" disabled={effectLocked} onClick={() => confirm('projectApk.closeUnknown')}>结束等待，不判定成败</Button>}</div>
