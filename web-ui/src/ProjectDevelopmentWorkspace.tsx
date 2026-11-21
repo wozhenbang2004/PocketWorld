@@ -25,7 +25,8 @@ const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
 const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
   deliveryFields.every(key => draft[key] === (original[key] || ''));
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string };
-type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https';
+const builtinViteStarter='builtin_vite_starter';
+type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https'|typeof builtinViteStarter;
 export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
 export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
@@ -224,7 +225,7 @@ function NodeBuildScripts({plan}:{plan:Data}) {
 
 /** The existing native catalog and checkout registration must both identify the import. */
 export function originalImportedEditor(projectId:string):ProjectImportedEditor|null {
-  const {state,view}=bridge.getState(), nativeView=view as Data|undefined;
+  const {state,view,capabilities}=bridge.getState(), nativeView=view as Data|undefined;
   if(document.hidden||state.projectId!==projectId||state.filePath||!nativeView||nativeView.taskId||nativeView.section!=null)return null;
   const projects=rows(state.features?.workspace?.projects).filter(row=>row?.id===projectId);
   const origin=projects.length===1?projects[0].sourceImport:null;
@@ -235,10 +236,12 @@ export function originalImportedEditor(projectId:string):ProjectImportedEditor|n
   const copy=matches[0], source=copy.sourceImport;
   const sourceKind:unknown=source.sourceKind;
   // A collected Termux checkout can inherit sourceImport, including native Git provenance.
-  const collectedCopy=(sourceKind==='task_source_package'||sourceKind==='git_https')&&('collectedFromCheckoutId' in copy||'collectionOperationId' in copy);
+  const starter=sourceKind===builtinViteStarter;
+  const collectedCopy=(sourceKind==='task_source_package'||sourceKind==='git_https'||starter)&&('collectedFromCheckoutId' in copy||'collectionOperationId' in copy);
   if(!copyIdentity(copy.id)||source.mode!=='new_project'||source.executionAuthorityRestored!==false||
-    (sourceKind!=='external_zip'&&sourceKind!=='saf_tree'&&sourceKind!=='task_source_package'&&sourceKind!=='git_https')||
+    (sourceKind!=='external_zip'&&sourceKind!=='saf_tree'&&sourceKind!=='task_source_package'&&sourceKind!=='git_https'&&sourceKind!==builtinViteStarter)||
     !sourceHash(source.manifestIdentity)||!sourceHash(source.sourceEvidenceSha256)||
+    starter&&('ownerDraftWorkCopy' in copy||!capabilities.commands.includes('projects.development.inspect'))||
     collectedCopy||['teamProjectCopy','skillExecutionCopy','isolatedGit','nativeGitImportPending'].some(key=>key in copy))return null;
   const identity=[origin.clientId,origin.packageSha256,source.manifestIdentity,source.sourceEvidenceSha256];
   if(sourceKind==='git_https'){
@@ -699,20 +702,24 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const originalIsCurrent=()=>alive.current&&latest.current.active&&generation.current===sequence&&handle.current===view.viewHandle&&
       sameImportedEditor(importedEditor,originalImportedEditor(projectId))&&canEditImportedCheckout(latest.current.can);
     const nativeCopies=rows(view.checkouts).filter(copy=>copy?.projectId===projectId&&copy.checkoutId===checkoutId);
-    const gitImport=importedEditor.sourceKind==='git_https';
-    const admitted=gitImport?nativeCopies.length===1&&nativeCopies[0].draftWorkingCopy===false&&view.commandsAuthorized===false:
+    const gitImport=importedEditor.sourceKind==='git_https', starter=importedEditor.sourceKind===builtinViteStarter;
+    const admitted=gitImport||starter?nativeCopies.length===1&&nativeCopies[0].draftWorkingCopy===false&&view.commandsAuthorized===false:
       nativeCopies.some(copy=>importedEditor.sourceKind!=='task_source_package'||copy.taskPackageSource===true);
     if(!originalIsCurrent()||view.projectId!==projectId||view.executionAuthorized!==false||!admitted){
       setImportEditorNotice('原导入副本已不能核对，没有打开其他文件。');return;
     }
     const hasDifferentCopy=()=>[draft.current.checkoutId,view.draft?.checkoutId].some(id=>id&&id!==checkoutId);
-    if(view.draftRecoveryRequired===true||unresolved(submission)||sourceConflict||hasDifferentCopy()){
-      setImportEditorNotice('当前项目保留了其他副本选择或待核对的工作。请先核对，再明确选择原导入副本 '+checkoutId.slice(0,8)+'。');return;
+    if(view.draftRecoveryRequired===true||unresolved(submission)||sourceConflict||hasDifferentCopy()||starter&&draft.current.checkoutId!==checkoutId){
+      setImportEditorNotice(starter?'请先核对当前选择，再选中原网页副本 '+checkoutId.slice(0,8)+'。未打开其他文件。':
+        '当前项目保留了其他副本选择或待核对的工作。请先核对，再明确选择原导入副本 '+checkoutId.slice(0,8)+'。');return;
     }
     const openCopy=(inspection?:Data)=>{
-      if(!originalIsCurrent()||hasDifferentCopy())return;
-      setImportEditorNotice('');setHostEditor(null);
+      if(!originalIsCurrent()||hasDifferentCopy()||starter&&draft.current.checkoutId!==checkoutId)return;
       const firstEntry=checkoutWebEntry(inspection??null,projectId,checkoutId);
+      if(starter&&(inspection?.firstImportedWebFile?.sourceKind!==builtinViteStarter||firstEntry?.path!=='index.html'||firstEntry.root!=='')){
+        setImportEditorNotice('未核对到这份副本的网页源文件。没有打开或创建其他文件。');return;
+      }
+      setImportEditorNotice('');setHostEditor(null);
       if(inspection?.projectId===projectId&&inspection.checkoutId===draft.current.checkoutId&&inspection.checkoutId===checkoutId&&sourceHash(inspection.sourceDigest))
         setSource(inspection); // Existing observation can name a destination, not authorize a build after an edit.
       setFileWindow({checkoutId,firstEntry:firstEntry??undefined,originalImport:importedEditor,
@@ -877,6 +884,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const archiveRoot = source?.projectId === projectId && source.checkoutId === checkout &&
     /^[a-f0-9]{64}$/.test(source.sourceDigest) ? source.retainedArchiveRoot : null;
   const importedEntry = selectedCopy && !differentBuildCopy ? checkoutWebEntry(source,projectId,checkout) : null;
+  const starterEntry=importedEntry?.path==='index.html'&&importedEntry.root===''&&source?.firstImportedWebFile?.sourceKind===builtinViteStarter;
   const versionBuild = versionBuildFor(source, projectId, checkout);
   const ordinaryBuildSource=selectedCopy?.draftWorkingCopy===false&&!differentBuildCopy&&
     source?.projectId===projectId&&source.checkoutId===checkout&&sourceHash(source.sourceDigest);
@@ -1246,15 +1254,27 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         {terminalBySave&&terminalAction}
       </>}
       {!filesOpen&&importedEntry&&<p className="pw-field-hint pw-checkout-identity">
-        {importedEntry.root?<>副本顶层保留了 <bdi>{importedEntry.root}/</bdi>。入口源码：</>:<>副本顶层的入口源码：</>}
-        <bdi>{importedEntry.path}</bdi>。{webTools?.kind==='static'?' 可直接编辑，不用准备 Node.js。':''}
-        {' 预览请查看原任务已登记的页面，或打开「已保存的构建网页」。导入的源码不会直接运行。'}
+        {starterEntry?'起步网页源码：':importedEntry.root?<>副本顶层保留了 <bdi>{importedEntry.root}/</bdi>。入口源码：</>:<>副本顶层的入口源码：</>}
+        <bdi>{importedEntry.path}</bdi>。{starterEntry?' 可先修改并保存，再另行核对构建。':<>
+          {webTools?.kind==='static'?' 可直接编辑，不用准备 Node.js。':''}
+          {' 预览请查看原任务已登记的页面，或打开「已保存的构建网页」。导入的源码不会直接运行。'}
+        </>}
       </p>}
       {!filesOpen&&!importedEntry&&webTools?.kind==='static'&&<p className="pw-field-hint">根目录有 <code>index.html</code>，直接编辑不用准备 Node.js。这个入口不是已登记的预览或构建成果。</p>}
       <div className="pw-form-actions">
-        {importedEntry&&can('projects.development.files.open')&&<Button variant="secondary" disabled={busy||!!review||filesOpen}
-          aria-label={`打开 ${importedEntry.path} 源码`} onClick={()=>{setHostEditor(null);setFileWindow({checkoutId:importedEntry.checkoutId,firstEntry:importedEntry});}}>
-          打开入口源码
+        {importedEntry&&can('projects.development.files.open')&&<Button variant="secondary" disabled={busy||!!review||filesOpen||starterEntry&&disabled}
+          aria-label={starterEntry?`编辑网页：${importedEntry.path}`:`打开 ${importedEntry.path} 源码`} onClick={()=>{
+            if(starterEntry){
+              const original=originalImportedEditor(projectId);
+              if(disabled||entered.current||handle.current!==view.viewHandle||draft.current.checkoutId!==importedEntry.checkoutId||
+                original?.sourceKind!==builtinViteStarter||original.checkoutId!==importedEntry.checkoutId){
+                setImportEditorNotice('原网页副本已变化，请先重新核对。');return;
+              }
+              setImportEditorNotice('');
+            }
+            setHostEditor(null);setFileWindow({checkoutId:importedEntry.checkoutId,firstEntry:importedEntry});
+          }}>
+          {starterEntry?'编辑网页':'打开入口源码'}
         </Button>}
         {selectedCopy && !showMissingLock && can('projects.development.files.open') && <Button variant={importedEntry?'ghost':'secondary'} disabled={busy || !!review || filesOpen}
           onClick={openSelectedCopyFiles}>{importedEntry?'编辑其他源文件':'编辑这份副本的文件'}</Button>}

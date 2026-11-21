@@ -10,6 +10,7 @@ import org.json.JSONArray;
 
 /** Native owner selection narrows the existing assistant admission; it creates no runner or grant. */
 public final class ProjectOwnerWorkflows {
+    private static final String BUILTIN_VITE_STARTER="builtin_vite_starter";
     private final LocalModule local;private final TaskStore tasks;private final AssistantModule assistant;
     private final ThreadLocal<ProjectConventionDelivery.Picked> ownerConvention=new ThreadLocal<>();
     private final ThreadLocal<JSONObject> selection=new ThreadLocal<>();
@@ -57,12 +58,16 @@ public final class ProjectOwnerWorkflows {
             source.putOpt("retainedArchiveRoot",archiveRoot);
             JSONObject origin=metadata.optJSONObject("sourceImport");
             boolean taskFork=ordinaryCheckout(metadata)&&ProjectTaskSourceRecord.hasPublishedIdentity(metadata);
+            boolean starter=origin!=null&&BUILTIN_VITE_STARTER.equals(origin.opt("sourceKind"));
             if(origin!=null&&"new_project".equals(origin.opt("mode"))&&Boolean.FALSE.equals(origin.opt("executionAuthorityRestored"))&&
-                ("external_zip".equals(origin.opt("sourceKind"))||"saf_tree".equals(origin.opt("sourceKind"))||taskFork)){
+                (starter||"external_zip".equals(origin.opt("sourceKind"))||"saf_tree".equals(origin.opt("sourceKind"))||taskFork)){
                 String root=archiveRoot==null?"":archiveRoot.getString("directory");
                 JSONObject entry=ProjectArchiveRoot.firstWebFile(snapshot.getJSONArray("files"),root);
-                if(entry!=null&&(!taskFork||unchangedForkStarter(metadata,entry)))source.put("firstImportedWebFile",entry.put("projectId",project).put("checkoutId",checkout)
-                    .put("sourceDigest",source.getString("sourceDigest")));
+                if(entry!=null&&(!taskFork||unchangedForkStarter(metadata,entry))&&(!starter||builtInViteEntry(metadata,origin,entry))){
+                    if(starter)entry.put("sourceKind",BUILTIN_VITE_STARTER);
+                    source.put("firstImportedWebFile",entry.put("projectId",project).put("checkoutId",checkout)
+                        .put("sourceDigest",source.getString("sourceDigest")));
+                }
             }
             try{source.put("checkoutTooling",ProjectCheckoutTooling.describe(snapshot,source,local.projectRuntimeForHost("managed_process_v1")).put("androidClues",wrapper!=null));}
             catch(Exception unavailable){/* Optional observation must not block reading/editing a verified checkout. */}
@@ -105,6 +110,26 @@ public final class ProjectOwnerWorkflows {
         source.remove("files");
         if(wrapper!=null)source.put("androidGradleWrapper",wrapper);
         return source;
+    }
+    /** The stored import inventory proves the authored path; the current inspected
+     * snapshot pins its actual bytes, which may include the owner's later edits. */
+    private static boolean builtInViteEntry(JSONObject checkout,JSONObject origin,JSONObject entry){
+        if(!"index.html".equals(entry.opt("path"))||!"".equals(entry.opt("root"))||!ordinaryCheckout(checkout)||
+            checkout.has(OwnerDraftWorkCopy.FIELD)||checkout.has("collectedFromCheckoutId")||checkout.has("collectionOperationId")||
+            !origin.optString("clientId").matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")||
+            !origin.optString("packageSha256").matches("[a-f0-9]{64}")||!origin.optString("manifestIdentity").matches("[a-f0-9]{64}")||
+            !origin.optString("sourceEvidenceSha256").matches("[a-f0-9]{64}"))return false;
+        JSONArray published=checkout.optJSONArray("files");
+        if(published==null||published.length()>ProjectSources.MAX_FILES)return false;
+        JSONObject authored=null;
+        for(int i=0;i<published.length();i++){
+            JSONObject file=published.optJSONObject(i);if(file==null)return false;
+            if(!"index.html".equals(file.opt("path")))continue;
+            if(authored!=null)return false;
+            authored=file;
+        }
+        return authored!=null&&authored.optInt("sourceVersion",-1)==0&&authored.optLong("bytes",-1)>0&&
+            authored.optString("sha256").matches("[a-f0-9]{64}");
     }
     /** Open a starter from the actual new copy only if its published baseline still matches.
      * Any change, ambiguity or missing proof leaves the ordinary exact file list. */

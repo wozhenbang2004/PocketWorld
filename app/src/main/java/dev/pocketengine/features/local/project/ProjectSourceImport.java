@@ -27,6 +27,8 @@ import org.json.JSONObject;
  * Ordinary ZIP entry names are strictly UTF-8; renamed Unicode-extra aliases are conservatively refused. */
 public final class ProjectSourceImport {
     public static final int MAX_ENTRIES=10_000,MAX_DEPTH=40;
+    public static final String BUILTIN_VITE_STARTER="builtin_vite_starter";
+    private static final String BUILTIN_VITE_FORMAT="pocketworld.builtin-vite-starter.v1", BUILTIN_VITE_LABEL="Vite 网页起步项目";
     private ProjectSourceImport(){}
     @FunctionalInterface public interface Current {void check()throws Exception;}
     /** Opaque provider handles never enter a JSON receipt. Only the native SAF adapter creates them. */
@@ -205,11 +207,73 @@ public final class ProjectSourceImport {
     public static Selection nativeGit(ProjectGitImport.Result result)throws Exception {
         JSONObject original=result.metadata();String id=result.actionId();original.remove("files");ProjectPackageArchive.Frozen frozen=result.source();JSONObject manifest=frozen.manifest();return new Selection(frozen,new JSONObject().put("format","pocketworld.project-source-selection.v1").put("sourceKind","git_https").put("sourceLabel",original.getString("projectName")).put("selectionId",id).put("manifestIdentity",frozen.identity).put("sourceDigest",manifest.getJSONObject("source").getString("sourceDigest")).put("files",manifest.getJSONArray("files").length()).put("expandedBytes",manifest.getLong("bytes")).put("omittedCount",manifest.getJSONArray("omitted").length()).put("includeGeneratedRoots",true).put("completeSelection",true).put("providerAtomicSnapshot",false).put("ordinaryZipIsPocketWorldPackage",false).put("stagingIdsAreNotOriginalProjectIdentity",true).put("executionAuthorityRestored",false).put("sourcePermissionPersisted",false).put("gitHistoryInPortableSourcePackage",false).put("gitHistoryCopiedOnlyByNativePublication",true).put("original",original));
     }
+    private record BuiltinVite(Map<String,String> files,String selectionId,String sourceDigest,String lockSha256,long bytes){
+        JSONObject marker()throws Exception{
+            return new JSONObject().put("format",BUILTIN_VITE_FORMAT).put("viteVersion",ProjectLiveProjectTemplate.VITE_VERSION).put("lockSha256",lockSha256);
+        }
+    }
+    private static BuiltinVite builtinVite()throws Exception{
+        Map<String,String> files=new TreeMap<>(ProjectLiveProjectTemplate.builtinStarterFiles());
+        JSONArray entries=new JSONArray();long size=0;
+        for(var file:files.entrySet()){
+            byte[] bytes=file.getValue().getBytes(StandardCharsets.UTF_8);
+            entries.put(new JSONObject().put("path",file.getKey()).put("sha256",ProjectSources.sha256(bytes)).put("bytes",bytes.length));
+            size+=bytes.length;
+        }
+        String digest=ProjectSources.manifestDigest(entries),lockSha=ProjectSources.sha256(files.get("package-lock.json").getBytes(StandardCharsets.UTF_8));
+        String id=java.util.UUID.nameUUIDFromBytes((BUILTIN_VITE_FORMAT+"\0"+digest).getBytes(StandardCharsets.UTF_8)).toString();
+        return new BuiltinVite(files,id,digest,lockSha,size);
+    }
+    public static String builtinViteSelectionId()throws Exception{return builtinVite().selectionId();}
+    /** Only signed application text enters this native source staging path. */
+    public static Selection builtinViteStarter(File root,Current current)throws Exception{
+        current.check();freshDirectory(root);var starter=builtinVite();
+        for(var file:starter.files().entrySet()){
+            current.check();
+            Files.write(target(root,path(file.getKey())).toPath(),file.getValue().getBytes(StandardCharsets.UTF_8),
+                java.nio.file.StandardOpenOption.WRITE,java.nio.file.StandardOpenOption.CREATE_NEW,LinkOption.NOFOLLOW_LINKS);
+        }
+        var selected=finish(root,starter.selectionId(),BUILTIN_VITE_LABEL,BUILTIN_VITE_STARTER,false,new JSONArray(),starter.marker(),current);
+        requireBuiltinViteStarter(selected.evidence(),selected.frozen.manifest());
+        current.check();return selected;
+    }
+    /** Called with the actual codec-verified manifest: a source-kind label or stable ID alone proves nothing. */
+    public static void requireBuiltinViteStarter(JSONObject actual,JSONObject manifest)throws Exception{
+        var starter=builtinVite();JSONObject source=manifest.getJSONObject("source"),project=manifest.getJSONObject("project");
+        JSONArray files=manifest.getJSONArray("files"),directories=manifest.getJSONArray("directories");
+        if(actual==null||!starter.selectionId().equals(source.opt("projectId"))||!starter.selectionId().equals(source.opt("checkoutId"))||
+            !starter.selectionId().equals(project.opt("id"))||!BUILTIN_VITE_LABEL.equals(project.opt("name"))||
+            !"source_project".equals(manifest.opt("mode"))||!"".equals(manifest.opt("entryPath"))||!"".equals(manifest.opt("previewRoot"))||
+            !starter.sourceDigest().equals(source.opt("sourceDigest"))||!starter.sourceDigest().equals(ProjectSources.manifestDigest(files))||
+            files.length()!=starter.files().size()||starter.bytes()!=manifest.getLong("bytes")||manifest.getJSONArray("omitted").length()!=0||
+            !Boolean.FALSE.equals(manifest.getJSONObject("policy").opt("generatedRootsIncluded"))||
+            directories.length()!=1||!"src".equals(directories.opt(0)))
+            throw new SecurityException("原起步项目临时包不匹配内置源码，未替换或导入其他文件");
+        int i=0;
+        for(String path:starter.files().keySet()){
+            JSONObject file=files.getJSONObject(i++);
+            if(!path.equals(file.opt("path"))||!"text".equals(file.opt("kind"))||!Boolean.FALSE.equals(file.opt("executable")))
+                throw new SecurityException("原起步项目文件或权限不同，没有使用缓存");
+        }
+        JSONObject expected=sourceEvidence(starter.selectionId(),BUILTIN_VITE_LABEL,BUILTIN_VITE_STARTER,false,0,
+            starter.marker(),manifest,ProjectSources.digest(manifest));
+        if(!ProjectSources.canonical(expected).equals(ProjectSources.canonical(actual)))
+            throw new SecurityException("原起步项目来源说明不同，没有使用缓存");
+    }
     private static String hex(byte[] bytes){StringBuilder out=new StringBuilder();for(byte value:bytes)out.append(String.format(java.util.Locale.ROOT,"%02x",value&255));return out.toString();}
     private static Selection finish(File root,String selection,String label,String kind,boolean generated,JSONArray omitted,JSONObject originalEvidence,Current current)throws Exception {
         if(selection==null||!selection.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("缺少本次原生来源选择身份");String name=label==null?"已有源码":label.replaceAll("[\\p{Cntrl}]"," ").trim();if(name.isEmpty())name="已有源码";if(name.length()>80)name=name.substring(0,80);if(!name.isEmpty()&&Character.isHighSurrogate(name.charAt(name.length()-1)))name=name.substring(0,name.length()-1);
         JSONArray manifest=new JSONArray();try(var paths=Files.walk(root.toPath())){for(var file:java.util.Collections.unmodifiableList(paths.filter(p->Files.isRegularFile(p,LinkOption.NOFOLLOW_LINKS)).sorted().collect(java.util.stream.Collectors.toList()))){current.check();String relative=root.toPath().relativize(file).toString().replace(File.separatorChar,'/');if(ProjectSources.sourcePath(relative))manifest.put(new JSONObject().put("path",relative).put("sha256",fileSha(file.toFile(),current)).put("bytes",Files.size(file)));}}
-        String digest=ProjectSources.manifestDigest(manifest);JSONObject original=new JSONObject().put("projectId",selection).put("checkoutId",selection).put("sourceDigest",digest).put("name",name);ProjectPackageArchive.Frozen frozen=ProjectPackageArchive.captureSourceImport(root,original,generated,omitted);current.check();JSONObject evidence=new JSONObject().put("format","pocketworld.project-source-selection.v1").put("sourceKind",kind).put("sourceLabel",name).put("selectionId",selection).put("manifestIdentity",frozen.identity).put("sourceDigest",digest).put("files",frozen.manifest().getJSONArray("files").length()).put("expandedBytes",frozen.manifest().getLong("bytes")).put("omittedCount",omitted.length()).put("includeGeneratedRoots",generated).put("completeSelection",true).put("providerAtomicSnapshot",false).put("ordinaryZipIsPocketWorldPackage",originalEvidence.has("fixedPackageManifestIdentity")).put("stagingIdsAreNotOriginalProjectIdentity",true).put("executionAuthorityRestored",false).put("sourcePermissionPersisted",false).put("original",originalEvidence);
-        return new Selection(frozen,evidence);
+        String digest=ProjectSources.manifestDigest(manifest);JSONObject original=new JSONObject().put("projectId",selection).put("checkoutId",selection).put("sourceDigest",digest).put("name",name);ProjectPackageArchive.Frozen frozen=ProjectPackageArchive.captureSourceImport(root,original,generated,omitted);current.check();
+        return new Selection(frozen,sourceEvidence(selection,name,kind,generated,omitted.length(),originalEvidence,frozen.manifest(),frozen.identity));
+    }
+    private static JSONObject sourceEvidence(String selection,String name,String kind,boolean generated,int omitted,JSONObject original,
+            JSONObject manifest,String identity)throws Exception{
+        return new JSONObject().put("format","pocketworld.project-source-selection.v1").put("sourceKind",kind).put("sourceLabel",name)
+            .put("selectionId",selection).put("manifestIdentity",identity).put("sourceDigest",manifest.getJSONObject("source").getString("sourceDigest"))
+            .put("files",manifest.getJSONArray("files").length()).put("expandedBytes",manifest.getLong("bytes")).put("omittedCount",omitted)
+            .put("includeGeneratedRoots",generated).put("completeSelection",true).put("providerAtomicSnapshot",false)
+            .put("ordinaryZipIsPocketWorldPackage",original.has("fixedPackageManifestIdentity")).put("stagingIdsAreNotOriginalProjectIdentity",true)
+            .put("executionAuthorityRestored",false).put("sourcePermissionPersisted",false).put("original",original);
     }
 }

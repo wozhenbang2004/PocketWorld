@@ -574,7 +574,7 @@ internal class ProjectPackageCoordinator(
         check(!state.busy && state.pendingImport == null && pin.optString("clientImportId") == client &&
             pin.optString("mode") == "new_project" && pin.has("sourceEvidenceSha256") && !pin.has("targetCheckoutId") &&
             state.staged?.optJSONObject("sourceEvidence")?.optString("sourceKind") in
-                setOf("saf_tree", "external_zip", "host_saved_snapshot", ProjectTaskSourceOrigin.KIND)) { "来源或创建方案已变化，没有开始新的导入" }
+                setOf("saf_tree", "external_zip", "host_saved_snapshot", "builtin_vite_starter", ProjectTaskSourceOrigin.KIND)) { "来源或创建方案已变化，没有开始新的导入" }
         webSourcePin = JSONObject(pin.toString())
         confirmImport()
     }
@@ -634,6 +634,25 @@ internal class ProjectPackageCoordinator(
         if (state.pendingFreeze != null || state.pendingImport != null) { state = state.copy(error = "请先核对未完成的保存或导入结果。"); return }
         closePreview()
         state = state.copy(ownerPanelRequested = true, sourceImportRequested = true, reviewingTaskDelivery = false, taskDelivery = null, selection = null, error = null)
+    }
+    fun stageBuiltinViteStarter() {
+        requireOwner()
+        check(foreground && state.sourceImportRequested && state.projectId == null && state.checkoutId == null &&
+            webSourceRecovery == null && !state.busy && pickerImport == null &&
+            state.pendingImport == null && state.importPlan == null && state.imported == null) {
+            "请先结束原源码操作，再选择内置小网页"
+        }
+        work { control, _ ->
+            val actual = local().stageBuiltinViteStarterForOwner { control.check() }
+            control.check()
+            check(actual.optBoolean("complete") && actual.optJSONObject("sourceEvidence")?.opt("sourceKind") == "builtin_vite_starter") {
+                "没有核对到内置小网页源码，未创建项目"
+            }
+            return@work {
+                state = state.copy(staged = actual, stagedPackages = withStage(actual), sourceSkipCandidate = null,
+                    notice = "内置小网页已备好。给项目取名后再确认创建。没有下载或运行。")
+            }
+        }
     }
     fun pickSourceDirectory(generated: Boolean, excludedDirectory: String = "") = pickSource("saf_tree", generated, false, excludedDirectory)
     fun pickSourceZip(generated: Boolean, stripRoot: Boolean) = pickSource("external_zip", generated, stripRoot)

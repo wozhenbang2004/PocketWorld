@@ -15,9 +15,9 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
     private val current: () -> Boolean, private val project: () -> String?) {
     companion object {
         const val PREFIX = "projects.localSource."
-        val COMMANDS = setOf("open", "openPrepared", "close", "folder", "zip", "select", "review", "back", "confirm",
+        val COMMANDS = setOf("open", "openPrepared", "close", "folder", "zip", "starter", "select", "review", "back", "confirm",
             "query", "retry", "releaseMissing", "discard", "openProject", "another").map { PREFIX + it }.toSet()
-        private val KINDS = setOf("saf_tree", "external_zip", "host_saved_snapshot", "task_source_package")
+        private val KINDS = setOf("saf_tree", "external_zip", "host_saved_snapshot", "task_source_package", "builtin_vite_starter")
     }
     private var window by mutableStateOf<String?>(null)
     private var origin: String? = null
@@ -41,7 +41,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         } else null
         val strippedRoot = evidence.optJSONObject("original")?.optString("singleRootStripped")?.takeIf {
             preview && evidence.opt("sourceKind") == "external_zip" && it.isNotBlank() && it.length <= 240 }
-        val firstFile = manifest?.optJSONArray("files")?.takeIf { evidence.optString("sourceKind") in setOf("external_zip","saf_tree") }?.let {
+        val firstFile = manifest?.optJSONArray("files")?.takeIf { evidence.optString("sourceKind") in setOf("external_zip","saf_tree","builtin_vite_starter") }?.let {
             runCatching { ProjectArchiveRoot.firstWebFile(it,zipRoot?.optString("directory").orEmpty())?.getString("path") }.getOrNull()
         }
         val fixed = evidence.optJSONObject("original")?.takeIf { evidence.optString("sourceKind") == "external_zip" &&
@@ -158,6 +158,10 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         if (op !in setOf("query", "retry", "releaseMissing")) check(state.pendingImport == null) { "请先核对原创建结果" }
         fun matches(row: JSONObject?) = row != null && evidence(row) != null && row.optString("selectionId") == args.getString("id") && row.optString("sha256") == args.getString("sha")
         when (op) {
+            "starter" -> {
+                check(plan() == null && result() == null) { "请先返回选择来源" }
+                original.stageBuiltinViteStarter()
+            }
             "folder", "zip" -> {
                 check(plan() == null && result() == null) { "请先返回选择来源" }
                 if (op == "folder") {
