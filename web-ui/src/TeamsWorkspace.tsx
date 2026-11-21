@@ -54,9 +54,20 @@ type MessageInput = { recipient: string; replyId: string; mode: string };
 type PendingStart = { teamId: string; since: number; goal: string };
 type ResultMember = { id: string; generation: number; deliveryKey: string; round: number };
 type ResultOrigin = { runId: string; key: string; scroll: number; member?: ResultMember };
+type WorkMemberAudit = Pick<WorkTeamResultReturn,'source'|'rearm'> & {summary:string;resume:number;request:number;seen?:true;receipt?:true;returnHandle?:string};
+type MemberDeliveryReturn = {team:string;key:string;section:'progress'|'result';taskId:string;sourceHandle:string;scroll:number;
+  entered:boolean;ordinary:boolean;documentEpoch:number;member?:ResultMember;work?:WorkMemberAudit};
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
 const object = (value: unknown): Data => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 const label = (value: unknown): string => typeof value === 'string' ? value : '';
+function memberAuditWindow(original:MemberDeliveryReturn,live:ReturnType<typeof bridge.getState>){
+  const audit=original.work,view=object(live.view),owner=live.state;
+  if(!audit||document.hidden||bridge.getDocumentEpoch()!==original.documentEpoch)return null;
+  if(!audit.seen&&view.section==='teams'&&view.taskId===null&&view.resumeRevision===audit.resume&&owner.requestedTaskRevision===audit.request)return 'team';
+  if(owner.requestedTaskRevision!==audit.request+1||owner.requestedTaskId!==original.taskId)return null;
+  if(view.section===null&&view.taskId===original.taskId&&view.resumeRevision===audit.resume)return 'child';
+  return audit.seen&&view.section==='teams'&&view.taskId===null&&view.resumeRevision===audit.resume+1?'returned':null;
+}
 const questionKey = (value: Data): string => ['memberId', 'workItemId', 'assignmentId', 'questionId'].map(key => label(value[key])).join(':');
 
 function originalResearchQuestion(run: Data, item: TeamFollowUp): string {
@@ -129,12 +140,13 @@ const memberModelLabel = (member: Data): string => {
 };
 
 /** Uses the adopted BoardUI fields/dialogs and Affect answer presentation on the original team worksite. */
-export function TeamsWorkspace({ state, run, registerTransientBack, registerBeforeLeave, alreadyShownError = '', attentionFocus, onAttentionConsumed, runFocus, onRunFocusConsumed, onAskButler, onOpenWork }: {
+export function TeamsWorkspace({ state, run, registerTransientBack, registerBeforeLeave, alreadyShownError = '', attentionFocus, onAttentionConsumed, runFocus, onRunFocusConsumed, onAskButler, originalWorkDraft, onOpenWork }: {
   state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void;
   registerBeforeLeave?: RegisterBeforeLeave; alreadyShownError?: string; attentionFocus?: Data | null;
   onAttentionConsumed?: (requestId: string) => void;
   runFocus?: TeamRunFocus | null; onRunFocusConsumed?: (requestId: string) => void;
   onAskButler?: (request: TeamButlerRequest) => void;
+  originalWorkDraft?: boolean;
   onOpenWork?: (link: TeamOwnerWorkLink, intent: TeamOwnerWorkIntent) => void;
 }) {
   const openReading = useContext(ReadingContext);
@@ -185,7 +197,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const [shownArchives,setShownArchives]=useState<Record<string,boolean>>({});
   const [openingMemberResult, setOpeningMemberResult] = useState(false);
   const classicAnswerFlight=useRef(false);
-  const deliveryReturn=useRef<{team:string;key:string;section:'progress'|'result';taskId:string;sourceHandle:string;scroll:number;entered:boolean;ordinary:boolean;documentEpoch:number;member?:ResultMember}|null>(null);
+  const deliveryReturn=useRef<MemberDeliveryReturn|null>(null);
   const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
@@ -454,7 +466,15 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       if (restoreRun && (!Array.isArray(fresh.teams) || !Array.isArray(fresh.runs))) { release(next); throw new Error('原团队目录尚未读取'); }
       acceptCatalog(fresh);
       if (restoreRun && next?.kind === 'run' && label(next.viewHandle) && next.viewHandle !== returning?.sourceHandle &&
-          next.run?.id === restoreRun) { acceptReading(next); return; }
+          next.run?.id === restoreRun) {
+        const audit=returning?.work;
+        // A cold or fallback read can still return to the member, but cannot carry the original Work Back.
+        if(returning&&audit?.receipt&&memberAuditWindow(returning,bridge.getState())==='returned'&&
+          next.run.generation===returning.member?.generation&&originalWorkTeamResult(next,audit.source)===audit.summary&&
+          teamResearchDeliveries(next.run,next.messages).filter(row=>row.key===returning.key).length===1)
+          audit.returnHandle=next.viewHandle;
+        acceptReading(next);return;
+      }
       release(next);
       if (original?.kind === 'run') {
         const value = object(await run('teams.readRun', proposalRead(original.run.id)));
@@ -479,8 +499,21 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     }
     if (!previous.active || revision !== previous.revision) restoreWorkspace();
   }, [workspaceActive, state.webWorkspaceResumeRevision]);
+  // Retire only the optional original Work return, not the member's existing read or focus.
+  useEffect(()=>{
+    const check=()=>{
+      const opened=deliveryReturn.current;
+      if(!opened?.work)return;
+      const phase=memberAuditWindow(opened,bridge.getState());
+      if(phase==='child')opened.work.seen=true;
+      else if(!phase)opened.work=undefined;
+    };
+    const stopState=bridge.subscribe(check),stopDocument=bridge.subscribeDocumentEpoch(check);
+    return ()=>{stopState();stopDocument();};
+  },[]);
   useEffect(() => {
     const hide = () => {
+      if(deliveryReturn.current)deliveryReturn.current.work=undefined;
       backgrounded.current = true; requestGeneration.current++; entered.current = false;
       setBusy(false); closeReview(); closePhoneSelection(); setMemberProbes({}); setExternalReady({});
       setReading(value => value ? { ...value, viewHandle: '' } : null);
@@ -508,6 +541,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const templateDraftBlocked = !definitionReady || !startDraft.hasSession || startDraft.loading || !!startDraft.error ||
     startDraft.stale || startDraft.requiresRecheck || !!startDraft.conflict;
   const ordinaryTemplate = modelTemplate && definition?.mode === 'collaborate';
+  const carryToOriginalDraft = originalWorkDraft && ordinaryTemplate && definition?.definitionKind == null && definition?.archived !== true &&
+    (definition?.discussionFormat == null || definition.discussionFormat === 'classic');
   const templatePreparation = !ordinaryTemplate ? '' : startDraft.requiresRecheck
     ? '上次启动的结果尚待核对；先查原协作，不新发起。'
     : startDraft.error ? '原目标草稿暂未核对，请先恢复读取或保存。'
@@ -515,7 +550,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     : !definitionReady || startDraft.loading || !startDraft.hasSession || startDraftId.current !== definition?.id
       ? '正在读取这份编组的原目标草稿。'
       : goal.length > 8000 ? '目标超过 8,000 字，请缩短再带回。'
-        : goal.trim() ? '这份目标草稿已有内容，可与已保存的编组一起带回。'
+        : goal.trim() ? carryToOriginalDraft ? '这份目标仍留在编组，本次只关联编组。' : '这份目标草稿已有内容，可与已保存的编组一起带回。'
           : '成员与职责已保存；这份草稿还没写目标。';
   const carryModelTemplate = () => {
     const original = currentReading.current, exactGoal = currentInput.current.goal;
@@ -536,7 +571,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         }
         release(fresh);
         if (currentInput.current.goal !== exactGoal) { setNotice('目标已改动，未带走旧文字。'); return; }
-        onAskButler({ teamId: original.definition.id, ...(exactGoal.trim() ? { goal: exactGoal } : {}) });
+        onAskButler({ teamId: original.definition.id, ...(carryToOriginalDraft ? { originalWorkDraft: stillOpen } : exactGoal.trim() ? { goal: exactGoal } : {}) });
       });
     });
   };
@@ -1056,7 +1091,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         const next=reply.reading;
         if(!sameSection()||!ownsNativeWindow()||currentReading.current?.viewHandle!==original.viewHandle){release(next);return}
         if(next?.kind!=='run'||!next.viewHandle||next.run?.id!==item.team){release(next);throw new Error('未读取到原协作，没有打开其他分工。')}
-        const same=teamResearchDeliveries(next.run,next.messages,item.archivedVersion?'archived':'current').find(s=>s.key===item.key);
+        const deliveries=teamResearchDeliveries(next.run,next.messages,item.archivedVersion?'archived':'current');
+        const same=deliveries.find(row=>row.key===item.key);
+        const work=workResultReturn.current;
+        const summary=section==='result'&&work?.current()?originalWorkTeamResult(original,work.source):undefined;
         acceptReading(next);
         if(!same){setNotice('这份成员原件已变化，请重新核对。没有打开另一阶段。');return}
         const member=Number.isSafeInteger(next.run.generation)?{id:same.memberId,generation:next.run.generation,deliveryKey:same.key,round:same.round}:undefined;
@@ -1064,8 +1102,13 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           !next.run.nativeWorkProfileModels && !next.run.workPlan && !next.run.productionScope &&
           next.run.researchExecutionFormat === 'pocketworld.team-research-agent.v1' &&
           rows(next.run.members).every(slot => (slot.runner || 'model') === 'model' && (!slot.device || slot.device === 'phone'));
-        const origin={team:item.team,key:item.key,section,taskId:item.taskId,sourceHandle:next.viewHandle,
-          scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,ordinary,documentEpoch:bridge.getDocumentEpoch(),member};
+        const live=bridge.getState(),resume=object(live.view).resumeRevision,request=live.state.requestedTaskRevision;
+        const audit=ordinary&&work&&summary&&member?.generation===original.run.generation&&
+          originalWorkTeamResult(next,work.source)===summary&&deliveries.filter(row=>row.key===same.key).length===1&&
+          Number.isSafeInteger(resume)&&resume>=0&&Number.isSafeInteger(request)&&request>=0
+          ? {source:work.source,rearm:work.rearm,summary,resume,request}:undefined;
+        const origin:MemberDeliveryReturn={team:item.team,key:item.key,section,taskId:item.taskId,sourceHandle:next.viewHandle,
+          scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,ordinary,documentEpoch:bridge.getDocumentEpoch(),member,work:audit};
         if (section === 'progress') setResultSource(saved=>saved?.runId===item.team&&saved.member?.deliveryKey===same.key?saved:null);
         else if(same.archivedVersion)setShownArchives(old=>({...old,[item.team]:true}));
         else rememberSourcesOpened(item.team);
@@ -1076,7 +1119,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           // A very quick close can occur before React observes the native task view.
           if(deliveryReturn.current!==origin)return;
           const opened=object(value);
-          if(opened.taskId===origin.taskId&&opened.readOnly===true&&opened.executionAuthorized===false)origin.entered=true;
+          if(opened.taskId===origin.taskId&&opened.readOnly===true&&opened.executionAuthorized===false){
+            origin.entered=true;
+            if(origin.work)origin.work.receipt=true;
+          }
           else if(!origin.entered&&object(bridge.getState().view).taskId!==origin.taskId)throw new Error('没有核对到原任务的阅读回执。');
         }).catch(failure=>{
           if(deliveryReturn.current===origin)deliveryReturn.current=null;
@@ -1104,6 +1150,16 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const exact = Array.from(area?.querySelectorAll<HTMLButtonElement>(selector)||[])
       .find(row=>(fromProgress?row.dataset.teamProgressDelivery:row.dataset.teamDelivery)===origin.key&&!row.disabled&&!row.closest('[hidden],[inert]'));
     const stage = fromProgress && origin.member && sameGeneration ? memberStage(origin.member) : undefined;
+    const audit=origin.work,returnHandle=audit?.returnHandle;
+    if(!fromProgress&&exact&&sameGeneration&&audit&&returnHandle&&returnHandle===reading.viewHandle&&!workResultReturn.current){
+      const verified=()=>{
+        const shown=currentReading.current;
+        return alive.current&&!backgrounded.current&&shownRunSection.current==='result'&&shown?.viewHandle===returnHandle&&
+          memberAuditWindow(origin,bridge.getState())==='returned'&&shown?.run?.generation===origin.member?.generation&&
+          originalWorkTeamResult(shown,audit.source)===audit.summary;
+      };
+      if(verified())workResultReturn.current=audit.rearm(verified);
+    }
     if (!fromProgress) setResultSource(exact&&origin.member&&Number.isSafeInteger(current.generation)
       ? {runId:origin.team,key:origin.key,scroll:origin.scroll,member:{...origin.member,generation:current.generation}} : null);
     const scroll=root.current?.closest<HTMLElement>('.pw-secondary-scroll');if(scroll)scroll.scrollTop=origin.scroll;
@@ -1245,12 +1301,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </div></AccordionItem>)}</Accordion></section>
       {modelTemplate && onAskButler && <section className="pw-team-handoff" aria-label="使用编组安排工作">
         {ordinaryTemplate && <div className="pw-team-template-preparation"><h3>准备本次协作</h3><p role="status">{templatePreparation}</p></div>}
-        <TextAreaField className="pw-team-saved-goal" label="这次想完成什么" value={goal} onChange={setGoal} maxLength={8000} rows={2} autoResize maxRows={8} resize="none"
-          isDisabled={busy || materialBusy || templateDraftBlocked} hint="目标先留在这份编组的草稿里。留空只带编组，不改管家的已有文字。" />
+        <TextAreaField className="pw-team-saved-goal" label={carryToOriginalDraft ? '编组保留的目标' : '这次想完成什么'} value={goal} onChange={setGoal} maxLength={8000} rows={2} autoResize maxRows={8} resize="none"
+          isDisabled={busy || materialBusy || templateDraftBlocked} hint={carryToOriginalDraft ? '这份目标只留在编组，不合并到原对话。' : '目标先留在这份编组的草稿里。留空只带编组，不改管家的已有文字。'} />
         {(startDraft.loading || startDraft.saving || startDraft.error || startDraft.stale || startDraft.conflict || startDraft.requiresRecheck || startDraft.savedAt > 0) && <FormDraftNotice draft={startDraft} />}
         <Button trailingIcon={IconChevronRight} disabled={busy || materialBusy || templateDraftBlocked || goal.length > 8000} onClick={carryModelTemplate}>
-          {goal.trim() ? '带目标和编组回管家' : '带编组回管家'}</Button>
-        <p>{ordinaryTemplate ? '带回只预填管家草稿，不发送。你提交目标后，再到同一件工作里审阅具体分工。' : '回到管家可继续编辑，确认发送后才交办。实际分工仍由你审阅。'}</p>
+          {carryToOriginalDraft ? '在原对话关联这个编组' : goal.trim() ? '带目标和编组回管家' : '带编组回管家'}</Button>
+        <p>{carryToOriginalDraft ? '只关联编组，原输入与工作引用不变，不发送。' : ordinaryTemplate ? '带回只预填管家草稿，不发送。你提交目标后，再到同一件工作里审阅具体分工。' : '回到管家可继续编辑，确认发送后才交办。实际分工仍由你审阅。'}</p>
       </section>}
       <div className="pw-team-definition-settings"><Accordion variant="divided"><AccordionItem id="definition-management" title="管理编组"><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.reviewRemove', { viewHandle: reading!.viewHandle }, reviewResult)}>移除编组</Button></AccordionItem></Accordion></div>
 

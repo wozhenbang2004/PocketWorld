@@ -27,7 +27,8 @@ const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === or
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string };
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package';
 export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
-export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean};
+export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
+export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
 export type ProjectTerminalSavedFileReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
@@ -169,6 +170,22 @@ export const sameImportedEditor = (target:ProjectImportedEditor, observed:Projec
 export const canEditImportedCheckout = (can:(action:string)=>boolean) =>
   ['projects.development.read','projects.development.files.open','projects.development.files.read',
     'projects.development.files.edit','projects.development.files.save'].every(can);
+
+/** A persisted checkout registration is a locator, not the saved owner choice.
+ * After the tap the normal Work read must still prove the original selection. */
+export function originalPreparedLocalCopy(projectId:string):ProjectPreparedLocalCopy|null {
+  const {state,view,capabilities}=bridge.getState(), window=view as Data|undefined;
+  if(document.hidden||!copyIdentity(projectId)||state.projectId!==projectId||state.filePath||state.fileLoading||state.fileSaving||
+    state.conversationReader||state.localSourceIntake?.window||state.projectGitImport?.open||
+    window?.section!==null||window.taskId!==null||rows(state.projects).filter(row=>row?.id===projectId).length!==1||
+    !canEditImportedCheckout(action=>capabilities.commands.includes(action)))return null;
+  const checkouts=rows(state.features?.local?.checkouts).filter(row=>row?.projectId===projectId),copy=checkouts[0];
+  if(checkouts.length!==1||!copyIdentity(copy.id)||!copyIdentity(copy.ownerDevelopmentRequestId)||!Array.isArray(copy.files)||
+    ['ownerDraftWorkCopy','sourceImport','teamProjectCopy','skillExecutionCopy','isolatedGit','nativeGitImportPending',
+      'collectedFromCheckoutId','collectionOperationId'].some(key=>key in copy))return null;
+  return {projectId,checkoutId:copy.id,requestId:copy.ownerDevelopmentRequestId};
+}
+
 function existingBuildBlocked(value: unknown): string {
   switch(value){
     case 'workspaces': return '这个副本使用工作区，本机快捷构建目前只支持单个 Node 项目。';
@@ -341,7 +358,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         (!incoming.copyRequestId||incoming.copyStatus==='ready')&&copies.length===1&&copies[0].draftWorkingCopy===false)
         setLastSavedFile(previous=>previous??position);
     }
-    // The Files tap can only open the already-saved choice from this normal
+    // A local-files tap can only open the already-saved choice from this normal
     // Work read. An implicit/ambiguous choice stays in the existing chooser.
     if(openLocalFiles&&latest.current.localFilesIntent===openLocalFiles&&openLocalFiles.current()&&
       !pinned&&!buildReturn&&!importedEditor&&!fileCheckout&&value.executionAuthorized===false&&value.commandsAuthorized===false&&
@@ -349,7 +366,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       incoming.copyStatus==='ready'&&copyIdentity(incoming.copyRequestId)&&copyIdentity(incoming.checkoutId)&&
       draft.current.checkoutId===incoming.checkoutId&&canEditImportedCheckout(latest.current.can)){
       const checkouts=rows(value.checkouts), copy=checkouts[0];
-      if(checkouts.length===1&&copy?.projectId===projectId&&copy.checkoutId===incoming.checkoutId&&
+      const original=openLocalFiles.originalCopy;
+      if((!original||original.projectId===projectId&&original.checkoutId===incoming.checkoutId&&original.requestId===incoming.copyRequestId)&&
+        checkouts.length===1&&copy?.projectId===projectId&&copy.checkoutId===incoming.checkoutId&&
         copy.draftWorkingCopy===false&&copy.taskPackageSource===false&&copy.hostSource===false){
         setFileWindow({checkoutId:incoming.checkoutId});
       }

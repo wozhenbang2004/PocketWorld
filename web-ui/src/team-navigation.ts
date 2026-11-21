@@ -20,6 +20,7 @@ export type TeamOwnerWorkIntent = 'overview' | 'supplement' | 'followUp' | 'retu
 export type TeamButlerRequest = {
   teamId?: string;
   goal?: string;
+  originalWorkDraft?: () => boolean;
 };
 
 export type TeamFileReviewMark = { planHash:string; reviewerTaskId:string; reviewerRunId:string; projectId:string; fileCount:number };
@@ -38,7 +39,10 @@ export function sameTeamProposal(left:TeamProposalMark,right:unknown):boolean{
 export const teamProposalEntryKey=(source:TeamDecisionOrigin)=>JSON.stringify(['team-revisions',source.conversationId,source.parentTaskId,source.parentRunId,source.parentEpoch,source.teamRunId]);
 export type WorkPackageSource = TeamDecisionOrigin & {deliveredPackage:TeamPackageMark};
 export type WorkTeamResultSource = TeamDecisionOrigin & {taskId:string};
-export type WorkTeamResultReturn = {source:WorkTeamResultSource; current:()=>boolean; retire:()=>void};
+export type WorkTeamResultReturn = {
+  source:WorkTeamResultSource; current:()=>boolean; retire:()=>void;
+  rearm:(current:()=>boolean)=>WorkTeamResultReturn|null;
+};
 export const matchesWorkTeamResult=(source:WorkTeamResultSource,link:TeamOwnerWorkLink)=>link.readOnly===true&&link.currentRun===true&&link.stopping===false&&
   link.taskId===source.parentTaskId&&link.runId===source.parentRunId&&link.epoch===source.parentEpoch&&link.conversationId===source.conversationId&&
   link.teamTaskId===source.taskId&&link.teamRunId===source.teamRunId;

@@ -111,6 +111,12 @@ internal data class AttachmentLibraryImport(val requestId:String,val phase:Strin
     fun toJson()=JSONObject().put("requestId",requestId).put("phase",phase).put("registration",registration)
 }
 
+/** The same-window link back to the already shown library details; no reader, body, or grant. */
+internal data class AttachmentLibraryDocumentReturn(
+    val action:String,val snapshot:JSONObject,val file:JSONObject,val libraryImport:AttachmentLibraryImport?,
+    val copyReceipt:OwnerAttachmentCopyReceipt?,val previousCopy:OwnerAttachmentCopyReceipt?
+)
+
 internal data class AttachmentOutcomeState(
     val open:Boolean=false,val taskId:String?=null,val deviceOriginalOnly:Boolean=false,val group:GroupResultAccess.Selection?=null,
     val snapshot:JSONObject?=null,val file:JSONObject?=null,val document:JSONObject?=null,
@@ -126,7 +132,8 @@ internal data class AttachmentOutcomeState(
     val fromWorkResult:Boolean=false,val resultRun:AttachmentResultRun?=null,val externalViewerResult:String?=null,
     val copyReceipt:OwnerAttachmentCopyReceipt?=null,val previousCopyInFile:OwnerAttachmentCopyReceipt?=null,
     val libraryImport:AttachmentLibraryImport?=null,
-    val workReturn:AttachmentWorkReturn?=null,val restoredWorkReturn:Boolean=false
+    val workReturn:AttachmentWorkReturn?=null,val restoredWorkReturn:Boolean=false,
+    val libraryDocumentReturn:AttachmentLibraryDocumentReturn?=null
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -426,11 +433,104 @@ internal class AttachmentOutcomeCoordinator(
         }){c,_->app.features.documentResultForOwner(action,c) to null}
     }
 
-    fun openDocumentAction(id:String){
+    private val documentRecordUnavailable="暂不能核对这份原件的生成记录。仍保留这份文件，没有改用其他记录。"
+    private fun libraryDocumentFormat(mime:String)=when(mime){
+        "application/pdf"->"pdf"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"->"docx"
+        else->null
+    }
+    private fun settledDocumentStatus(status:String)=status=="needs_confirmation"||status=="completed"
+    private fun matchesLibraryDocument(row:JSONObject,selected:JSONObject,id:String)=
+        row.opt("role")=="result"&&row.opt("availability")=="available"&&row.opt("sourceKind")=="created_document"&&
+            row.opt("sourceTaskId")==id&&row.opt("sourceTaskRunId")==id&&row.opt("sourceOperationId")==id&&
+            row.opt("id")==selected.opt("id")&&row.opt("sha256")==selected.opt("sha256")&&row.opt("mimeType")==selected.opt("mimeType")&&
+            row.opt("name")==selected.opt("name")&&row.optLong("size",-1)==selected.optLong("size",-2)
+
+    /** A link from the existing private library sources pane, not a current task or a filename guess. */
+    fun libraryDocumentActionId():String?{
+        val selected=state.file?:return null
+        val snapshot=state.snapshot?:return null
+        val id=selected.optString("sourceTaskId")
+        val format=libraryDocumentFormat(selected.optString("mimeType"))?:return null
+        if(!privateLibrary()||state.fromWorkResult||state.originalReturn!=AttachmentOriginalReturn.LIST||
+            state.originalFile!=null||state.documentOpen||state.documentDraft!=null||state.processingSource!=null||state.comparison!=null||
+            snapshot.opt("taskId")!=""||!id.matches(Regex("[a-f0-9-]{36}"))||
+            !selected.optString("id").matches(Regex("[a-f0-9-]{36}"))||
+            !selected.optString("sha256").matches(Regex("[a-f0-9]{64}"))||selected.optLong("size",-1)<=0||
+            !matchesLibraryDocument(selected,selected,id))return null
+        val exactActions=snapshot.optJSONObject("documentActions")?.optJSONArray("actions").objects().count{
+            it.opt("taskId")==id&&it.opt("runId")==id&&it.opt("operationId")==id&&it.opt("coordinatorEpoch")==1&&
+                it.opt("format")==format&&settledDocumentStatus(it.optString("status"))
+        }
+        return id.takeIf{exactActions==1&&snapshot.optJSONArray("artifacts").objects().count{matchesLibraryDocument(it,selected,id)}==1}
+    }
+
+    fun openDocumentAction(id:String,sourceCurrent:(()->Boolean)?=null){
         if(state.busy||state.group!=null||state.team!=null||state.taskId!=null||state.documentDraft!=null)return
         val actions=state.snapshot?.optJSONObject("documentActions")?.optJSONArray("actions").objects()
         if(actions.none{it.optString("taskId")==id}){state=state.copy(error="原文档动作不在本页原生记录中，请刷新后明确选择。");return}
-        openTask(id)
+        val selected=state.file
+        if(selected==null){openTask(id);return}
+        val current=checkNotNull(sourceCurrent){documentRecordUnavailable}
+        check(current()&&!exportPending&&libraryDocumentActionId()==id){documentRecordUnavailable}
+        val format=checkNotNull(libraryDocumentFormat(selected.getString("mimeType")))
+        val origin=AttachmentLibraryDocumentReturn(id,checkNotNull(state.snapshot),selected,state.libraryImport,state.copyReceipt,state.previousCopyInFile)
+        val fileId=selected.getString("id");val sha=selected.getString("sha256")
+        fun sameSource()=current()&&state.file===selected&&state.snapshot===origin.snapshot
+        work(completionFailure=documentRecordUnavailable,onSuccess={actual->
+            if(sameSource()){
+                // All we enter is the original record. Neither the pending document action nor the file is updated.
+                restoredDocumentDraft=null;restoreFile=null
+                state=AttachmentOutcomeState(open=true,taskId=id,snapshot=actual.getJSONObject("record"),
+                    pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,libraryDocumentReturn=origin)
+            }else state=state.copy(error=documentRecordUnavailable)
+        }){control,_->
+            control.setAuthorityCheck{check(sameSource()){documentRecordUnavailable}}
+            control.check()
+            val task=app.tasks.getForUi(id,false)?:error(documentRecordUnavailable)
+            val producer=task.optJSONObject("externalRefs")?.optJSONObject("documentCreation")?:error(documentRecordUnavailable)
+            val evidence=task.optJSONObject("evidence")?:error(documentRecordUnavailable)
+            val plan=producer.optString("planDigest")
+            check(task.opt("id")==id&&task.opt("runId")==id&&task.opt("operationId")==id&&task.opt("coordinatorEpoch")==1&&
+                task.opt("actorId")=="owner"&&task.opt("spaceId")=="private"&&task.isNull("origin")&&task.isNull("conversationId")&&
+                task.isNull("parentTaskId")&&task.opt("feature")=="attachments"&&task.opt("command")=="createDocument"&&
+                task.opt("taskProjection")=="detail_window"&&task.opt("taskCoreReadLimited")==false&&
+                !task.optBoolean("contextWithdrawn")&&!task.optBoolean("sourceCurrentReadRequired")&&task.optBoolean("contextAvailable",true)&&
+                settledDocumentStatus(task.optString("status"))&&task.opt("executionStatus")=="completed"&&
+                task.opt("externalId")==fileId&&task.opt("externalOperationId")==id&&
+                evidence.opt("id")==fileId&&evidence.opt("operationId")==id&&evidence.opt("executorStatus")=="completed"&&
+                producer.opt("format")==format&&plan.matches(Regex("[a-f0-9]{64}"))){documentRecordUnavailable}
+            val record=app.ownerOutcomeSnapshot(id,control)
+            check(originalDocumentAction(id,record)==id&&settledDocumentStatus(record.optString("taskStatus"))&&
+                record.optJSONArray("artifacts").objects().count{matchesLibraryDocument(it,selected,id)}==1){documentRecordUnavailable}
+            // Same immutable native publication, not the FeatureHost query that can reconcile a lost producer callback.
+            val saved=originalAttachments().documentResultForHost(id,id,id,plan,control)
+            val source=saved.getJSONObject("source")
+            check(saved.opt("found")==true&&saved.opt("originalPublication")==true&&saved.opt("id")==fileId&&saved.opt("sha256")==sha&&
+                saved.opt("principalId")=="owner"&&saved.opt("spaceId")=="private"&&!saved.optBoolean("outputSourceRetired")&&
+                saved.opt("name")==selected.opt("name")&&saved.opt("mimeType")==selected.opt("mimeType")&&
+                saved.optLong("size",-1)==selected.optLong("size",-2)&&source.opt("kind")=="created_document"&&
+                source.opt("taskId")==id&&source.opt("runId")==id&&source.opt("operationId")==id&&
+                source.opt("documentFormat")==format&&source.opt("planDigest")==plan){documentRecordUnavailable}
+            control.check()
+            JSONObject().put("record",record) to null
+        }
+    }
+
+    private fun currentLibraryDocumentReturn()=state.libraryDocumentReturn?.takeIf{
+        state.open&&state.group==null&&state.team==null&&!state.deviceOriginalOnly&&state.resultRun==null&&
+            !state.choosingSource&&state.taskId==it.action&&originalDocumentAction(it.action,state.snapshot)==it.action
+    }
+    fun canReturnToLibraryDocument()=currentLibraryDocumentReturn()!=null
+    fun discardLibraryDocumentReturn(){if(state.libraryDocumentReturn!=null)state=state.copy(libraryDocumentReturn=null)}
+    fun backToLibraryDocument():Boolean{
+        val origin=currentLibraryDocumentReturn()?:return false
+        check(!state.busy&&!exportPending&&state.file==null){documentRecordUnavailable}
+        cancel();restoreFile=null;restoredDocumentDraft=null
+        state=AttachmentOutcomeState(open=true,snapshot=origin.snapshot,file=origin.file,originalReturn=AttachmentOriginalReturn.LIST,
+            pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,libraryImport=origin.libraryImport,
+            copyReceipt=origin.copyReceipt,previousCopyInFile=origin.previousCopy)
+        return true
     }
     fun olderDocumentActions(){
         if(state.busy||state.group!=null||state.team!=null||state.taskId!=null||state.documentDraft!=null)return

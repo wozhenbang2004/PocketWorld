@@ -43,6 +43,7 @@ internal class PocketWebAttachments(
         check(controller.webUiCanInteract()) { "请回到当前工作区再查看文件" }
         val existing = window
         if (existing != null && acceptsWindow(existing.ticket)) return existing
+        if(existing!=null)flow.discardLibraryDocumentReturn()
         frames.clear(); review = null; processingReview = null; viewer.clear()
         return Window(UUID.randomUUID().toString(), captureWindow()).also { window = it }
     }
@@ -101,6 +102,8 @@ internal class PocketWebAttachments(
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
             .put("canOpenReportOriginalWork", canNavigateFromReport(state))
+            .put("libraryDocumentActionId", if(ordinaryLibrary)flow.libraryDocumentActionId() else null)
+            .put("returnToLibraryDocument", ownedCopy && flow.canReturnToLibraryDocument())
             .put("canReferenceHistoryOriginal", scoped != null && !report && privateOriginal)
             .put("canSaveOriginal", scoped == null && privateOriginal).put("canOpenInReader", scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
             .put("externalViewerResult", state.externalViewerResult)
@@ -215,7 +218,7 @@ internal class PocketWebAttachments(
                         flow.state.originalFile != null -> flow.backFromOriginalFile()
                         flow.state.documentOpen -> flow.backFromDocument()
                         flow.state.file != null -> flow.backFromFile()
-                        else -> flow.close()
+                        else -> if (!controller.webPrivateOwnerVisible() || !flow.backToLibraryDocument()) flow.close()
                     }
                 }
                 "refresh" -> flow.refresh()
@@ -241,7 +244,16 @@ internal class PocketWebAttachments(
                 }
                 "discardReview" -> { review = null; processingReview = null; flow.forgetProcessingReview() }
                 "queryDocument" -> flow.queryDocument()
-                "openDocumentAction" -> flow.openDocumentAction(args.getString("taskId"))
+                "openDocumentAction" -> {
+                    val id=args.getString("taskId")
+                    if(flow.state.file==null)flow.openDocumentAction(id)
+                    else {
+                        fun currentSource()=window===current&&acceptsWindow(current.ticket)&&ordinaryLibrary()&&
+                            frame.location==location(flow.state)
+                        require(args.length()==4&&currentSource()){"请在这份私人文档的来源中打开原生成记录"}
+                        flow.openDocumentAction(id,::currentSource)
+                    }
+                }
                 "olderDocumentActions" -> flow.olderDocumentActions()
                 "read" -> flow.read(DocumentContent.Request(args.optInt("unit", 1), args.optInt("chunk", 0), 4, 12000, 48, "text"))
                 "ocr" -> flow.readImageText()
@@ -329,6 +341,7 @@ internal class PocketWebAttachments(
         val scoped = flow.state.deviceOriginalOnly || scopedResultCurrent != null
         deviceTaskCurrent=null; scopedResultCurrent=null
         if(scoped && flow.state.open)flow.close()
+        flow.discardLibraryDocumentReturn()
         window = null; frames.clear(); review = null; processingReview = null; viewer.clear()
     }
     fun close() { clear(); viewer.close() }
