@@ -95,12 +95,14 @@ function SourcePanel({state,canCreateStarter,onOpenSourceFiles}:{state:Intake;ca
         <div className="pw-action-row">
           {starterAvailable&&<Button variant={state.suggestedSkip?'secondary':'primary'} disabled={busy} onClick={()=>void act('starter')}>新建小网页</Button>}
           <Button variant={starterAvailable&&!state.suggestedSkip?'secondary':'primary'} disabled={busy} onClick={()=>void act('folder',excluded?{excludedDirectory:excluded}:{})}>选择文件夹</Button>
-          <Button variant="secondary" disabled={busy} onClick={()=>void act('zip',{stripRoot:false})}>选择源码 ZIP</Button>
-          <Button variant="ghost" disabled={busy} aria-describedby={zipRootHint} onClick={()=>void act('zip',{stripRoot:true})}>选择 ZIP，尝试去掉外层</Button></div>
-        <p className="pw-field-hint" id={zipRootHint}>普通选择保留原路径。去掉外层的选项只在核对到唯一外层目录时移除一层。</p>
+          <Button variant="secondary" disabled={busy} aria-describedby={zipRootHint} onClick={()=>void act('zip',{recognizeWebRoot:true})}>选择 ZIP，识别工程根</Button></div>
+        <p className="pw-field-hint" id={zipRootHint}>明确识别到单层外目录中的 npm 网页项目时，核对移除外层后的路径；其他 ZIP 保留原路径。</p>
         {excluded&&<p className="pw-field-hint">下次选择文件夹会跳过 <bdi>{excluded}/</bdi>；ZIP 不受影响。</p>}
         <details><summary>导入范围与选项</summary>
           <p>默认跳过依赖、常见凭据文件和构建输出。最多 2,000 个文件，单文件 2 MiB，解包合计 16 MiB，原 ZIP 最多 20 MiB。不联网、不执行代码。</p>
+          <div className="pw-action-row">
+            <Button variant="secondary" disabled={busy} onClick={()=>void act('zip',{stripRoot:false})}>选择 ZIP，保留原路径</Button>
+            <Button variant="ghost" disabled={busy} onClick={()=>void act('zip',{stripRoot:true})}>选择 ZIP，尝试去掉外层</Button></div>
           <TextField label="文件夹内要跳过的目录（可选）" value={excluded} onChange={setExcluded} maxLength={240} isDisabled={busy}
             placeholder="例如 app/build" hint="只限这次选择的文件夹。写一个完整相对路径，不使用通配符；被跳过的内容不会删除。"/></details>
         {state.saved?.length>0&&<><h3>已固定、可继续的源码</h3>{state.saved.map(s=>

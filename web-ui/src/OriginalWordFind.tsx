@@ -8,7 +8,7 @@ export type OriginalWordHit={unit:number;chunk:number;offset:number;kind:'text'|
 type Scope={windowId:string;viewerId:string;identity:string;sha256:string;epoch:number};
 type Input={query:string};
 type Found={scope:Scope;input:Input;hits:OriginalWordHit[];more:boolean};
-type Reveal={found:Found;hit:OriginalWordHit;pane:HTMLElement|null;interaction:number;focus:Element|null};
+type Reveal={found:Found;hit:OriginalWordHit;pane:HTMLElement|null;interaction:number;focus:Element|null;returnRevision:number};
 
 const coordinate=(value:unknown):value is string=>typeof value==='string'&&/^[1-9]\d{0,6}$/.test(value);
 const ordinal=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&value<=1_000_000;
@@ -70,10 +70,11 @@ function confirmedRange(value:Json,found:Found,hit:OriginalWordHit){
  return text===query;
 }
 
-export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt,onSavedExcerpt,children}:{
+export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt,onSavedExcerpt,beforeFindJump,returnRevision=0,children}:{
  source:Json;windowId:string;value:Json;busy:boolean;
  find:(query:string)=>Promise<Json|null>;read:(unit:number,chunk:number)=>Promise<Json|null>;
  onExcerpt?:(viewerId:string,unit:number,chunk:number)=>void;onSavedExcerpt?:()=>void;
+ beforeFindJump?:(unit:number,chunk:number)=>(()=>void)|undefined;returnRevision?:number;
  children:(match?:OriginalWordHit,action?:ReactNode)=>ReactNode;
 }){
  const input=useRef<Input>({query:''}),entered=useRef(false),mounted=useRef(false),interaction=useRef(0);
@@ -83,7 +84,8 @@ export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt
  const captured=originalWordScope(source,windowId),visible=captured&&isWord(value,captured);
  const current=(result:Found)=>mounted.current&&input.current===result.input&&!!liveWord(result.scope);
  const shown=found&&current(found)?found:undefined;
- const selected=reveal&&current(reveal.found)&&confirmedRange(value,reveal.found,reveal.hit)?reveal:undefined;
+ const selected=reveal&&reveal.returnRevision===returnRevision&&current(reveal.found)&&
+  confirmedRange(value,reveal.found,reveal.hit)?reveal:undefined;
  useLayoutEffect(()=>{
   mounted.current=true;
   const pane=body.current?.closest<HTMLElement>('.pw-file-page-scroll'),note=()=>{interaction.current++};
@@ -124,13 +126,14 @@ export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt
  const open=async(hit:OriginalWordHit)=>{
   if(!shown||!current(shown)||!shown.hits.includes(hit)||busy||entered.current)return;
   const action={found:shown,hit,pane:body.current?.closest<HTMLElement>('.pw-file-page-scroll')??null,
-   interaction:interaction.current,focus:document.activeElement};
+   interaction:interaction.current,focus:document.activeElement,returnRevision};
+  const onLanded=beforeFindJump?.(hit.unit,hit.chunk);
   entered.current=true;setPending(true);setError('');setReveal(undefined);focusNext.current=undefined;
   try{
    const result=await read(hit.unit,hit.chunk);
    if(!current(shown))return;
    if(!result||!confirmedRange(result,shown,hit)){setError('未核对到这条匹配的原段落，没有跳到其他位置。');return}
-   focusNext.current=action;setReveal(action);
+   onLanded?.();focusNext.current=action;setReveal(action);
   }finally{entered.current=false;if(mounted.current)setPending(false)}
  };
  return <>
@@ -151,7 +154,7 @@ export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt
     {shown.more&&<p className="pw-muted">只显示前 40 处匹配。可用更具体的文字重新查找。</p>}
    </>)}
   </AccordionItem></Accordion>}
-  <div ref={body}>{children(selected?.hit,selected&&(onSavedExcerpt?
+  <div ref={body} data-word-reading-body tabIndex={-1}>{children(selected?.hit,selected&&(onSavedExcerpt?
    <Button variant="ghost" disabled={busy||pending} onClick={()=>{if(current(selected.found))onSavedExcerpt()}}>打开已保存的摘录</Button>:
    onExcerpt&&<Button variant="ghost" disabled={busy||pending} onClick={()=>{
     const page=liveWord(selected.found.scope);

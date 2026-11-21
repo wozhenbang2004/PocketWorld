@@ -10666,11 +10666,46 @@ public final class TaskStore {
         JSONObject draft=item.getJSONObject("draftScope");
         if(!"active".equals(draft.optString("state"))||draft.getLong("expiresAt")<=System.currentTimeMillis()||draft.getInt("remainingOperations")<1)throw new SecurityException("原分工的文件范围已撤销、到期或用尽，本次不补权限");
     }
-    private static void requireLocalStoppedTeamDraft(JSONObject team,JSONObject item,JSONObject child)throws Exception {
+    /** Only the original Runner's own final-answer metadata, never a generic wait message. */
+    private static int localFinalAnswerEpoch(JSONObject child,JSONObject identity) {
+        JSONObject origin=child.optJSONObject("origin");
+        if(!"owner".equals(child.opt("actorId"))||!"private".equals(child.opt("spaceId"))||origin==null||
+                !"team_assignment".equals(origin.opt("kind"))||!"awaiting_user".equals(child.opt("status"))||
+                child.optBoolean("cancelRequested")||child.has("teamProject")||identity.optString("workItemId").isEmpty()||
+                identity.has("projectSelection")||identity.has("remoteSelection"))return 0;
+        JSONObject evidence=child.optJSONObject("evidence"),nativeRun=child.optJSONObject("teamAssignmentNativeRun");
+        JSONObject proof=evidence==null?null:evidence.optJSONObject("nativeFinalAnswer");
+        String task=child.optString("id"),run=child.optString("runId");int epoch=child.optInt("coordinatorEpoch");
+        return !task.isEmpty()&&!run.isEmpty()&&epoch>0&&nativeRun!=null&&run.equals(nativeRun.opt("runId"))&&
+                proof!=null&&evidence.optJSONObject("ownerQuestion")==null&&
+                "pocketworld.runner-final-answer.v1".equals(proof.opt("format"))&&task.equals(proof.opt("taskId"))&&
+                run.equals(proof.opt("runId"))&&epoch==proof.optInt("coordinatorEpoch")&&
+                proof.optString("answerFingerprint").matches("[0-9a-f]{64}")?epoch:0;
+    }
+    private static final String UNFROZEN_TEAM_FINAL="finalWithoutFrozenOutputEpoch";
+    private static int localUnfrozenTeamFinal(JSONObject item,JSONObject child)throws Exception {
+        JSONObject settled=item.optJSONObject("assignmentTask"),identity=child.optJSONObject("teamAssignment");
+        if(settled==null||settled.optInt(UNFROZEN_TEAM_FINAL)<=0||identity==null||!"awaiting_user".equals(item.opt("status"))||
+                !"awaiting_user".equals(settled.opt("status"))||!item.getString("assignmentId").equals(settled.opt("assignmentId"))||
+                !child.getString("id").equals(settled.opt("taskId"))||!child.optString("runId").equals(settled.opt("runId"))||
+                !item.getString("memberId").equals(settled.opt("memberId"))||!identity.getString("teamRunId").equals(settled.opt("teamRunId"))||
+                !dev.pocketengine.features.teams.TeamWorkItems.sameIdentity(identity,item)||
+                item.getJSONArray("artifacts").length()!=0||settled.getJSONArray("artifacts").length()!=0)return 0;
+        int epoch=localFinalAnswerEpoch(child,identity);
+        return settled.optInt(UNFROZEN_TEAM_FINAL)==epoch?epoch:0;
+    }
+    private int requireLocalStoppedTeamDraft(JSONObject team,JSONObject item,JSONObject child)throws Exception {
         JSONObject identity=child.getJSONObject("teamAssignment"),scope=team.getJSONObject("teamWriteScope");
-        if(!child.optString("status").matches("paused|failed|interrupted")||child.optString("runId").isEmpty()||scope.has("projectSelection")||item.has("remoteSelection")
+        if(child.optString("runId").isEmpty()||scope.has("projectSelection")||item.has("remoteSelection")
                 ||item.has("projectSelection")||identity.has("remoteSelection")||identity.has("projectSelection")||child.has("teamProject"))
             throw new SecurityException("仅可从这里继续已明确停下的本机选定文件分工；请回原任务核对实际范围");
+        if(child.optString("status").matches("paused|failed|interrupted"))return 0;
+        int epoch=localUnfrozenTeamFinal(item,child);
+        if(epoch>0)try(Cursor ended=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=? AND status='awaiting_user' LIMIT 1",
+                new String[]{child.getString("id"),child.getString("runId"),Integer.toString(epoch)})){
+            if(ended.moveToFirst())return epoch;
+        }
+        throw new SecurityException("仅可继续已确认停下或原答复未冻结交付文件的分工；请回原任务核对");
     }
     /** A settled predecessor already bound by registerTeamAssignment. No author task, journal or file read. */
     private static JSONObject localContinuationOriginalText(JSONObject plan,JSONObject item,JSONObject child)throws Exception {
@@ -10711,10 +10746,11 @@ public final class TaskStore {
     private TeamWorkReview prepareTeamWorkContinuation(TeamWorkWindow window,String itemId,int itemRevision,int ownerGeneration,boolean localOnly)throws Exception{
         if(window==null||window.issuer!=this)throw new SecurityException("不是原主人工作项窗口");window.require();JSONObject team=teamWriteTask(window.teamRun),plan=team.getJSONObject("teamWorkPlan"),item=dev.pocketengine.features.teams.TeamWorkItems.find(plan.getJSONArray("items"),itemId),child=required(item.getString("assignmentId"));currentTeamWorkItem(team,new JSONObject(item.toString()).put("assignmentId",child.getString("id")));teamWorkPlanParent(window.teamRun);
         if(item.getInt("itemRevision")!=itemRevision||item.getInt("ownerGeneration")!=ownerGeneration||hasUnresolved(child.getString("id"))||teamHasPendingQuestion(child)||!child.optString("status").matches("paused|awaiting_user|needs_confirmation|interrupted|failed|cancelled"))throw new SecurityException("原工作项未处于确定安全等待点；未知操作或未回答问题不能重放");
-        requireOwnerWorkContinuationSafe(window.teamRun,child,item);if(localOnly)requireLocalStoppedTeamDraft(team,item,child);
+        requireOwnerWorkContinuationSafe(window.teamRun,child,item);int unfrozenEpoch=localOnly?requireLocalStoppedTeamDraft(team,item,child):0;
         JSONObject queued=child.optJSONObject("teamDraftContinuation");if(queued!=null&&!queued.has("runId"))throw new SecurityException("原继续已登记但尚未实际启动；请刷新核对原队列，不重复预留或替换继续身份");JSONObject budget=teamBudgetSnapshot(window.teamRun);if(budget.getInt("remainingModelRequests")<1||budget.getInt("remainingToolOperations")<1)throw new SecurityException("原父预算已用尽，此继续不追加额度");
         JSONObject facts=new JSONObject().put("kind","continue").put("planId",plan.getString("planId")).put("workItem",dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(item)).put("runId",child.getString("runId")).put("epoch",child.getInt("coordinatorEpoch")).put("parentBudget",budget).put("budgetChanged",false).put("localDraftOnly",localOnly).put("stoppedStatus",child.getString("status")).put("title",item.getString("title")).put("files",new JSONArray(item.getJSONArray("files").toString())).put("draftOperationsRemaining",item.getJSONObject("draftScope").getInt("remainingOperations")).put("expiresAt",Math.min(Math.min(plan.getLong("expiresAt"),item.getJSONObject("draftScope").getLong("expiresAt")),System.currentTimeMillis()+120_000));
         if(localOnly){
+            if(unfrozenEpoch>0)facts.put(UNFROZEN_TEAM_FINAL,unfrozenEpoch);
             JSONObject originalText=localContinuationOriginalText(plan,item,child);
             if(originalText!=null)facts.put("originalInputFile",originalText);
         }
@@ -10725,8 +10761,9 @@ public final class TaskStore {
             if(!shown.getString("runId").equals(child.getString("runId"))||shown.getInt("epoch")!=child.getInt("coordinatorEpoch")||shown.getLong("expiresAt")<=System.currentTimeMillis()||hasUnresolved(child.getString("id"))||teamHasPendingQuestion(child)||!child.optString("status").matches("paused|awaiting_user|needs_confirmation|interrupted|failed|cancelled"))throw new SecurityException("原child/epoch等待点已变化或效果未知");
             requireOwnerWorkContinuationSafe(review.window.teamRun,child,item);
             if(shown.optBoolean("localDraftOnly")){
-                requireLocalStoppedTeamDraft(team,item,child);
-                if(!shown.getString("stoppedStatus").equals(child.optString("status")))throw new SecurityException("原停点已变化，请重新审阅");
+                int unfrozenEpoch=requireLocalStoppedTeamDraft(team,item,child);
+                if(!shown.getString("stoppedStatus").equals(child.optString("status"))||shown.optInt(UNFROZEN_TEAM_FINAL)!=unfrozenEpoch)
+                    throw new SecurityException("原停点已变化，请重新审阅");
                 JSONObject originalText=shown.optJSONObject("originalInputFile");
                 if(originalText!=null&&!canonical(originalText).equals(canonical(localContinuationOriginalText(team.getJSONObject("teamWorkPlan"),item,child))))
                     throw new SecurityException("原分工的前置文件已变化，请重新审阅，没有继续");
@@ -10746,7 +10783,13 @@ public final class TaskStore {
         return dev.pocketengine.features.teams.TeamExecutionTree.project(plan,rows,operationWindow);
     }
     private static boolean scopeNeedsProjectDelivery(JSONObject team)throws Exception{return team.getJSONObject("teamWriteScope").has("projectSelection");}
-    public synchronized JSONObject teamWorkPlanSnapshot(String teamRun)throws Exception {JSONObject team=teamWriteTask(teamRun);requirePrivateOwner(team);JSONObject plan=team.optJSONObject("teamWorkPlan");if(plan==null)return new JSONObject().put("state","no_work_plan").put("executionAuthorized",false);JSONObject result=new JSONObject(plan.toString());JSONArray items=result.getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);item.put("blockedBy",dev.pocketengine.features.teams.TeamWorkItems.blockers(items,item));JSONObject child=read(item.getString("assignmentId"));if(child!=null){if(item.optString("status").equals("running")&&!child.optString("status").matches("preparing|running"))item.put("status",hasUnresolved(child.getString("id"))?"blocked_unknown":teamHasPendingQuestion(child)?"awaiting_input":child.optString("status"));item.put("assignmentTask",new JSONObject().put("assignmentId",item.getString("assignmentId")).put("taskId",child.getString("id")).put("memberId",item.getString("memberId")).put("runId",child.optString("runId")).put("status",hasUnresolved(child.getString("id"))?"blocked_unknown":teamHasPendingQuestion(child)?"awaiting_input":child.optString("status")).put("questions",child.optJSONArray("teamQuestions")==null?new JSONArray():child.getJSONArray("teamQuestions")).put("messages",child.optJSONArray("teamConversationInputs")==null?new JSONArray():child.getJSONArray("teamConversationInputs")).put("artifacts",item.getJSONArray("artifacts")));}}return new JSONObject().put("workPlan",result).put("parentBudget",teamBudgetSnapshot(teamRun));}
+    public synchronized JSONObject teamWorkPlanSnapshot(String teamRun)throws Exception {JSONObject team=teamWriteTask(teamRun);requirePrivateOwner(team);JSONObject plan=team.optJSONObject("teamWorkPlan");if(plan==null)return new JSONObject().put("state","no_work_plan").put("executionAuthorized",false);JSONObject result=new JSONObject(plan.toString());JSONArray items=result.getJSONArray("items");for(int i=0;i<items.length();i++){JSONObject item=items.getJSONObject(i);item.put("blockedBy",dev.pocketengine.features.teams.TeamWorkItems.blockers(items,item));JSONObject child=read(item.getString("assignmentId"));if(child!=null){if(item.optString("status").equals("running")&&!child.optString("status").matches("preparing|running"))item.put("status",hasUnresolved(child.getString("id"))?"blocked_unknown":teamHasPendingQuestion(child)?"awaiting_input":child.optString("status"));JSONObject shown=new JSONObject().put("assignmentId",item.getString("assignmentId")).put("taskId",child.getString("id")).put("memberId",item.getString("memberId")).put("runId",child.optString("runId")).put("status",hasUnresolved(child.getString("id"))?"blocked_unknown":teamHasPendingQuestion(child)?"awaiting_input":child.optString("status")).put("questions",child.optJSONArray("teamQuestions")==null?new JSONArray():child.getJSONArray("teamQuestions")).put("messages",child.optJSONArray("teamConversationInputs")==null?new JSONArray():child.getJSONArray("teamConversationInputs")).put("artifacts",item.getJSONArray("artifacts"));
+            if("awaiting_user".equals(shown.opt("status"))&&!item.has("projectSelection")&&!item.has("remoteSelection")){
+                JSONObject scope=team.optJSONObject("teamWriteScope");
+                int unfrozenEpoch=scope!=null&&!scope.has("projectSelection")?localUnfrozenTeamFinal(item,child):0;
+                if(unfrozenEpoch>0)shown.put(UNFROZEN_TEAM_FINAL,unfrozenEpoch);
+            }
+            item.put("assignmentTask",shown);}}return new JSONObject().put("workPlan",result).put("parentBudget",teamBudgetSnapshot(teamRun));}
     private JSONObject currentTeamWorkItem(JSONObject team,JSONObject identity)throws Exception {
         if(identity.optString("workItemId").isEmpty())return null;if(team.optBoolean("cancelRequested")||team.optString("status").matches("stopping|cancelled|completed"))throw new SecurityException("原工作项团队已停止或由主人确认完成");JSONObject plan=team.getJSONObject("teamWorkPlan"),item=dev.pocketengine.features.teams.TeamWorkItems.find(plan.getJSONArray("items"),identity.getString("workItemId"));if(!plan.optString("state").equals("active")||plan.getLong("expiresAt")<=System.currentTimeMillis()||!dev.pocketengine.features.teams.TeamWorkItems.sameIdentity(item,identity))throw new SecurityException("旧工作项/负责人generation不能写入新assignment成果");return item;
     }
@@ -11441,7 +11484,14 @@ public final class TaskStore {
     };}
     public synchronized JSONObject inspectTeamAssignment(dev.pocketengine.features.teams.TeamCoordinator.AssignmentCall call)throws Exception {JSONObject task=get(call.assignmentId,false);if(task==null)throw new SecurityException("原assignment任务不存在");JSONObject binding=new JSONObject(task.getJSONObject("teamAssignment").toString()).put("taskId",call.assignmentId);teamAssignmentIdentity(binding);String status=task.getString("status");JSONArray artifacts=new JSONArray(),frozen=teamAssignmentReceipts(binding,"team_freeze_outputs");for(int i=0;i<frozen.length();i++)if(frozen.getJSONObject(i).optJSONArray("teamArtifacts")!=null)artifacts=frozen.getJSONObject(i).getJSONArray("teamArtifacts");
         if(hasUnresolved(call.assignmentId))status="blocked_unknown";else if(teamHasPendingQuestion(task))status="awaiting_input";else{JSONArray approvals=task.optJSONArray("approvals");for(int i=0;approvals!=null&&i<approvals.length();i++){JSONObject approval=approvals.getJSONObject(i);if(task.optString("runId").equals(approval.optString("runId"))&&approval.optString("state").equals("pending")&&approval.optLong("expiresAt")>System.currentTimeMillis())status="awaiting_approval";}}
-        if(status.equals("completed")&&frozen.length()==0)status="awaiting_user";return new JSONObject().put("assignmentId",call.assignmentId).put("memberId",call.memberId).put("teamRunId",call.teamRunId).put("taskId",call.assignmentId).put("runId",task.optString("runId")).put("status",status).put("message",task.optString("summary")).put("artifacts",artifacts).put("questions",task.optJSONArray("teamQuestions")==null?new JSONArray():task.getJSONArray("teamQuestions")).put("messages",task.optJSONArray("teamConversationInputs")==null?new JSONArray():task.getJSONArray("teamConversationInputs")).put("parentBudget",teamBudgetSnapshot(call.teamRunId)).put("businessVerified",false);
+        if(status.equals("completed")&&frozen.length()==0)status="awaiting_user";JSONObject shown=new JSONObject().put("assignmentId",call.assignmentId).put("memberId",call.memberId).put("teamRunId",call.teamRunId).put("taskId",call.assignmentId).put("runId",task.optString("runId")).put("status",status).put("message",task.optString("summary")).put("artifacts",artifacts).put("questions",task.optJSONArray("teamQuestions")==null?new JSONArray():task.getJSONArray("teamQuestions")).put("messages",task.optJSONArray("teamConversationInputs")==null?new JSONArray():task.getJSONArray("teamConversationInputs")).put("parentBudget",teamBudgetSnapshot(call.teamRunId)).put("businessVerified",false);
+        // The already-read, exact assignment-revision freeze ledger was empty when this run settled.
+        if("awaiting_user".equals(status)&&frozen.length()==0&&call.workItemId.equals(binding.opt("workItemId"))&&
+                call.teamRunId.equals(binding.opt("teamRunId"))&&call.memberId.equals(binding.opt("memberId"))){
+            int unfrozenEpoch=localFinalAnswerEpoch(task,binding);
+            if(unfrozenEpoch>0)shown.put(UNFROZEN_TEAM_FINAL,unfrozenEpoch);
+        }
+        return shown;
     }
     public synchronized JSONObject resolveTeamArtifact(String teamRunId,String assignmentId,String memberId,String taskId,String frozenRunId,String artifactId,RunControl readControl)throws Exception {
         readControl.check();teamWriteTask(teamRunId);JSONObject task=required(taskId);requirePrivateOwner(task);

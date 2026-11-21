@@ -974,27 +974,29 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebAttachments.COMMANDS) {
-                val draftCommand = args.opt("command") as? String
-                if (action == "attachmentWorkspace.action" && draftCommand != null && draftCommand in PocketWebAttachments.PRIVATE_DRAFT_COMMANDS) {
-                    attachmentPages.dispatchStandaloneDraft(args) { result, error ->
-                        complete(id, result, error, retainValue = false,
-                            replayHint = "请回本机文档草稿核对同一版本；不会重复保存。")
-                        publishState()
-                    }
-                    return
-                }
-                // Only the existing explicit global Library entry has no locator at all.
-                // Do not derive this from normalized arguments, null taskId or restored state.
-                val libraryEntry: (() -> Boolean)? = if (action == "attachmentWorkspace.open" && args.length() == 0 && documentId != null) {
-                    val document = documentId
+                fun freshLibraryEntry(): (() -> Boolean)? {
+                    val document = documentId ?: return null
                     val ticket = captureWindow()
                     val current = {
                         !closed && documentId == document && acceptsWindow(ticket) && section == null && taskViewId == null &&
                             controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
                             !controller.state.chatAttachmentPickerOpen && controller.state.filePath == null
                     }
-                    current.takeIf { it() }
-                } else null
+                    return current.takeIf { it() }
+                }
+                val draftCommand = args.opt("command") as? String
+                if (action == "attachmentWorkspace.action" && draftCommand != null && draftCommand in PocketWebAttachments.PRIVATE_DRAFT_COMMANDS) {
+                    // Resume needs a fresh owner ticket and native proof of the same warm ordinary Library.
+                    val reentry = if (draftCommand == "drafts.list" && args.has("reenterVisit")) freshLibraryEntry() else null
+                    attachmentPages.dispatchStandaloneDraft(args, reentry) { result, error ->
+                        complete(id, result, error, retainValue = false,
+                            replayHint = "请回本机文档草稿核对同一版本；不会重复保存。")
+                        publishState()
+                    }
+                    return
+                }
+                // Only an explicit no-locator global entry may start a new Library visit.
+                val libraryEntry = if (action == "attachmentWorkspace.open" && args.length() == 0) freshLibraryEntry() else null
                 if (action == "attachmentWorkspace.open" && args.has("messageAttachment")) {
                     checkedPayload(args, setOf("messageAttachment"))
                     val file = visibleMessageAttachment(checkedMessageAttachmentSource(args.getJSONObject("messageAttachment")))

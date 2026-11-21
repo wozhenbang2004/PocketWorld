@@ -773,7 +773,7 @@ internal class PocketWebAttachments(
         } catch (failure: Exception) { done(null, failure.message?.take(300) ?: "文件操作未确认，请重新核对原记录") }
     }
     /** These replies must go through the Bridge's transient completion, not the ordinary workspace result. */
-    fun dispatchStandaloneDraft(args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+    fun dispatchStandaloneDraft(args: JSONObject, reentry: (() -> Boolean)?, done: (JSONObject?, String?) -> Unit) {
         val unavailable = "原草稿窗口或结果尚未核对；没有自动保存或重试。"
         fun reply(actual: JSONObject?) { if (actual == null) done(null, unavailable) else done(actual, null) }
         fun text(key: String) = args.opt(key) as? String ?: error("原草稿身份无效")
@@ -892,14 +892,29 @@ internal class PocketWebAttachments(
                 }
                 return
             }
+            val renewed = if (command == "drafts.list" && args.has("reenterVisit")) {
+                exact("reenterVisit")
+                val visit = flow.state.globalStandaloneDraftVisit ?: error("请重新打开私人文件库")
+                val active = window ?: error("原文件库窗口已离开")
+                val current = reentry ?: error("私人文件库窗口尚未就绪")
+                // The native logical visit survives a warm picker, not a cold/other/document-replaced entry.
+                // Keep its catalog and receipts. Only this explicit action grants a new shelf read on the current frame.
+                check(visit == text("reenterVisit") && globalDraftLibrary == null && ordinaryDraftLibrarySurface() &&
+                    active.id == frame.windowId && acceptsWindow(active.ticket) &&
+                    frames[frame.frameId]?.location == location(flow.state) && current() &&
+                    (!drafts.isInitialized() || !drafts.value.showing()))
+                DraftLibraryVisit(visit, current).also { globalDraftLibrary = it; changed() }
+            } else null
             check(currentDraftFrame(frame))
             val adapter = drafts.value
             fun editor() = PocketWebStandaloneDocumentDrafts.Edit(text("editorHandle"), text("versionHandle"))
             fun noGeneration(reason: String) = JSONObject().put("started", false).put("reason", reason)
             if (command != "drafts.createDocument" && command != "drafts.dismissDocument") draftDocumentReview = null
             when (command) {
-                "drafts.list" -> { exact(); adapter.list(frame) { catalog ->
-                    reply(catalog?.let { JSONObject().put("metadataComplete", it.metadataComplete)
+                "drafts.list" -> { if (renewed == null) exact(); adapter.list(frame) { catalog ->
+                    reply(catalog?.takeIf { renewed == null || globalDraftLibrary === renewed && currentDraftFrame(frame) }?.let {
+                        JSONObject().put("metadataComplete", it.metadataComplete)
+                        .apply { if (renewed != null) put("reenteredVisit", renewed.id).put("reenteredWindow", frame.windowId) }
                         .put("rows", JSONArray(it.rows.map { row -> JSONObject().put("rowHandle", row.rowHandle)
                             .put("name", row.name).put("format", row.format).put("savedAt", row.savedAt)
                             .also {

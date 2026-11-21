@@ -111,18 +111,20 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         public synchronized TaskStore.TeamWorkReview reviewLocalContinuation(String item,int itemRevision,int ownerGeneration)throws Exception {
             require();pendingRevision=null;mutation=null;source=null;pending=tasks.prepareLocalTeamWorkContinuation(window,item,itemRevision,ownerGeneration);return pending;
         }
-        /** A web owner review may only continue the original, stopped local draft.
-         * Recheck the shown member and run under the same lock as native admission. */
+        /** Recheck the shown local draft's exact member and stopped run under the same lock as native admission. */
         public synchronized JSONObject approveShownLocalContinuation(TaskStore.TeamWorkReview review,String digest,int teamGeneration,int memberGeneration,int identityRevision)throws Exception {
             require();if(review==null||pending!=review||source!=null)throw new SecurityException("请重新审阅原分工");
             synchronized(coordinator){
                 JSONObject original=coordinator.get(run),shown=review.view(),work=shown.getJSONObject("workItem"),plan=original.getJSONObject("workPlan");
                 JSONObject item=TeamWorkItems.find(plan.getJSONArray("items"),work.getString("workItemId")),member=TeamWorkPlan.find(original.getJSONArray("members"),work.getString("memberId")),child=item.optJSONObject("assignmentTask");
+                int unfrozenEpoch=shown.optInt("finalWithoutFrozenOutputEpoch");
+                boolean stopped=child!=null&&(child.optString("status").matches("paused|interrupted|failed")||
+                        "awaiting_user".equals(child.opt("status"))&&unfrozenEpoch>0&&unfrozenEpoch==child.optInt("finalWithoutFrozenOutputEpoch"));
                 if(!shown.optBoolean("localDraftOnly")||original.optInt("generation",-1)!=teamGeneration||member.optInt("generation",-1)!=memberGeneration||member.optInt("identityRevision",1)!=identityRevision
                         ||member.optBoolean("exited")||!member.optString("runner","model").equals("model")||!"phone".equals(member.opt("device"))
                         ||original.getJSONObject("productionScope").has("projectSelection")||member.has("remoteProduction")||item.has("projectSelection")||item.has("remoteSelection")
                         ||!plan.getString("planId").equals(shown.getString("planId"))||!TeamWorkItems.sameIdentity(item,work)||child==null
-                        ||!shown.getString("runId").equals(child.optString("runId"))||!child.optString("status").matches("paused|interrupted|failed"))
+                        ||!shown.getString("runId").equals(child.optString("runId"))||!stopped)
                     throw new SecurityException("原成员、分工或停点已改变，未按旧审阅继续");
                 return approveContinuation(review,digest);
             }

@@ -120,3 +120,6 @@
 .pw-file-processing-review > :is(h4,p) { margin: 0; }
 
 .pw-original-file :is(.pw-original-pagination,.pw-original-zoom)[hidden] { display: none; }
+
+/* One scoped return stays reachable after a Find scrolls away from its controls. */
+.pw-reader-find-return { position: sticky; inset-block-start: 0; z-index: 1; align-self: start; background: var(--pw-canvas); }

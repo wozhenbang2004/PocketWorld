@@ -13,7 +13,7 @@ internal class PocketWebTeamWorkReturn private constructor(
     val source: Source, val preview: JSONObject
 ) : AutoCloseable {
     data class Source(val team: String, val plan: String, val work: JSONObject, val childRun: String, val stoppedStatus: String,
-        val teamGeneration: Int, val memberGeneration: Int, val identityRevision: Int, val memberName: String)
+        val teamGeneration: Int, val memberGeneration: Int, val identityRevision: Int, val memberName: String, val unfrozenEpoch: Int)
 
     fun approve(): JSONObject {
         val result = page.approveShownLocalContinuation(review, review.view().getString("digest"), source.teamGeneration, source.memberGeneration, source.identityRevision)
@@ -31,14 +31,15 @@ internal class PocketWebTeamWorkReturn private constructor(
             val item = plan.optJSONArray("items").objects().single { it.optString("workItemId") == id }
             val member = run.optJSONArray("members").objects().single { it.optString("id") == item.getString("memberId") }
             val child = item.getJSONObject("assignmentTask")
+            val unfrozenEpoch = child.optInt("finalWithoutFrozenOutputEpoch").takeIf { child.opt("status") == "awaiting_user" && it > 0 } ?: 0
             require(!member.optBoolean("exited") && member.optString("runner", "model") == "model" && member.opt("device") == "phone"
                 && !member.has("remoteProduction") && !item.has("remoteSelection") && !item.has("projectSelection")
                 && !run.getJSONObject("productionScope").has("projectSelection")
-                && child.optString("status") in setOf("paused","failed","interrupted") && child.optString("runId").isNotBlank()
+                && (child.optString("status") in setOf("paused","failed","interrupted") || unfrozenEpoch > 0) && child.optString("runId").isNotBlank()
                 && child.optString("assignmentId") == item.getString("assignmentId") && child.optString("taskId") == item.getString("assignmentId")
                 && child.optString("memberId") == member.getString("id")) { "请打开原任务核对停点；此入口只继续已明确停下的本机选定文件分工" }
             return Source(run.getString("id"), plan.getString("planId"), TeamWorkItems.exactIdentity(item), child.getString("runId"), child.getString("status"),
-                run.getInt("generation"), member.getInt("generation"), member.optInt("identityRevision",1), member.optString("name").ifBlank { member.getString("id") })
+                run.getInt("generation"), member.getInt("generation"), member.optInt("identityRevision",1), member.optString("name").ifBlank { member.getString("id") }, unfrozenEpoch)
         }
 
         fun prepare(source: Source, page: TaskStoreTeamWriteHost.WorkPlanPage): PocketWebTeamWorkReturn {
@@ -46,7 +47,8 @@ internal class PocketWebTeamWorkReturn private constructor(
             val exact = page.reviewLocalContinuation(item.getString("workItemId"), item.getInt("itemRevision"), item.getInt("ownerGeneration"))
             val facts = exact.view()
             check(facts.optString("kind") == "continue" && facts.opt("budgetChanged") == false && facts.opt("localDraftOnly") == true && facts.optString("stoppedStatus") == source.stoppedStatus && facts.optString("planId") == source.plan
-                && facts.optString("runId") == source.childRun && TeamWorkItems.sameIdentity(facts.getJSONObject("workItem"), item)) { "原分工在读取后已改变，请刷新，没有开始工作" }
+                && facts.optString("runId") == source.childRun && facts.optInt("finalWithoutFrozenOutputEpoch") == source.unfrozenEpoch
+                && TeamWorkItems.sameIdentity(facts.getJSONObject("workItem"), item)) { "原分工在读取后已改变，请刷新，没有开始工作" }
             val files = facts.getJSONArray("files").objects().map { it.getString("path") }
             check(files.isNotEmpty() && files.size == facts.getJSONArray("files").length()) { "原文件范围不完整" }
             val budget = facts.getJSONObject("parentBudget")
@@ -54,6 +56,7 @@ internal class PocketWebTeamWorkReturn private constructor(
                 .put("title",facts.getString("title")).put("memberName",source.memberName).put("files", JSONArray(files))
                 .put("remainingModelRequests",budget.getInt("remainingModelRequests")).put("remainingToolOperations",budget.getInt("remainingToolOperations"))
                 .put("draftOperationsRemaining",facts.getInt("draftOperationsRemaining"))
+            if (source.unfrozenEpoch > 0) shown.put("finalWithoutFrozenOutput", true)
             facts.optJSONObject("originalInputFile")?.let { original ->
                 shown.put("originalInputFile", JSONObject().put("path",original.getString("path")).put("version",original.getInt("version"))
                     .put("title",original.getString("title")).put("readOnly",true))

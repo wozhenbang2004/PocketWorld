@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pocketengine.features.local.project.ProjectArchiveRoot
+import dev.pocketengine.features.local.project.ProjectSourceImport.ZipRoot
 import dev.pocketengine.ui.ProjectPackageCoordinator
 import dev.pocketengine.ui.ProjectSourceRecoveryPin
 import org.json.JSONArray
@@ -129,7 +130,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
             "confirm", "query", "retry", "releaseMissing" -> setOf("window", "actionId")
             "openProject" -> if (openedSource != null) setOf("window", "project", "checkout", "sourceFiles") else setOf("window", "project", "checkout")
             "folder" -> if (args.has("excludedDirectory")) setOf("window", "excludedDirectory") else setOf("window")
-            "zip" -> setOf("window", "stripRoot")
+            "zip" -> if (args.has("recognizeWebRoot")) setOf("window", "recognizeWebRoot") else setOf("window", "stripRoot")
             else -> setOf("window")
         }
         require(args.keys().asSequence().toSet() == fields) { "请重新打开原源码审阅" }
@@ -182,7 +183,10 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
                     val skip = if (args.has("excludedDirectory")) args.get("excludedDirectory") as? String ?: error("跳过目录必须是确切相对路径") else ""
                     original.pickSourceDirectory(false, skip)
                 }
-                else { require(args.get("stripRoot") is Boolean); original.pickSourceZip(false, args.getBoolean("stripRoot")) }
+                else if (args.has("recognizeWebRoot")) {
+                    require(args.opt("recognizeWebRoot") == true)
+                    original.pickSourceZip(false, ZipRoot.RECOGNIZE_WEB)
+                } else { require(args.get("stripRoot") is Boolean); original.pickSourceZip(false, args.getBoolean("stripRoot")) }
             }
             "select" -> {
                 check(plan() == null && result() == null)

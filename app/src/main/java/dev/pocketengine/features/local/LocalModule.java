@@ -591,13 +591,16 @@ public final class LocalModule implements EngineModule {
             try{var selected=dev.pocketengine.features.local.project.ProjectSourceImport.tree(source,copied,selection,label,generated,skip,current);return publishSourceSelection(selected,selection,current);}finally{deleteOwnPackageStaging(copied);}}
     }
     public JSONObject stageSourceZipForOwner(java.io.InputStream stream,String label,String selection,boolean stripRoot,boolean generated,RunControl original)throws Exception {
+        return stageSourceZipForOwner(stream,label,selection,stripRoot?ProjectSourceImport.ZipRoot.STRIP_SINGLE:ProjectSourceImport.ZipRoot.PRESERVE,generated,original);
+    }
+    public JSONObject stageSourceZipForOwner(java.io.InputStream stream,String label,String selection,ProjectSourceImport.ZipRoot root,boolean generated,RunControl original)throws Exception {
         packageIdentity(selection);if(stream==null)throw new IllegalArgumentException("没有主人本次所选的 ZIP");var current=sourceCurrent(original);current.check();
         synchronized(projectPackageStaging){
             File directory=packageImportRoot(),target=new File(directory,selection+".zip");
             File copied=Files.createTempDirectory(directory.toPath(),"source-read-").toFile(),archive=new File(directory,"source-archive-"+UUID.randomUUID()+".pending");
             try{
                 dev.pocketengine.features.local.project.ProjectSourceImport.copyArchive(stream,archive,current);
-                var fresh=dev.pocketengine.features.local.project.ProjectSourceImport.zip(archive,copied,selection,label,stripRoot,generated,current);
+                var fresh=ProjectSourceImport.zip(archive,copied,selection,label,root,generated,current);
                 JSONObject wanted=fresh.evidence();String layout=dev.pocketengine.features.local.project.ProjectZipSelection.selectedLayout(fresh);
                 boolean originalId=Files.exists(target.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
                 File[] candidates=originalId?new File[]{target}:directory.listFiles(f->f.getName().matches("[a-f0-9-]{36}\\.zip"));

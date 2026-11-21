@@ -46,6 +46,40 @@ export function ownerWorkIdentity(task: unknown): WorkIdentity | null {
 
 export const workIdentityKey = (value: WorkIdentity) => JSON.stringify([value.taskId, value.runId, value.epoch]);
 
+export type OwnerWorkRequestLink<T> = { task:T; work:WorkIdentity; messageId:string; revision:number };
+
+/** Join only the bounded, already displayed ordinary conversation and native
+ * Work projection. A send receipt or a similar goal is never a handoff. */
+export function originalOwnerWorkRequests<T extends Data>(tasks: readonly T[], messages: readonly unknown[],
+    original: (task: T) => WorkIdentity | null): ReadonlyMap<string, OwnerWorkRequestLink<T>> {
+  const revisions = new Map<string, number | null>();
+  for (const value of messages) {
+    const message = object(value);
+    if (!message || !id(message.id)) continue;
+    revisions.set(message.id, !revisions.has(message.id) && message.role === 'user' && message.quoteAvailable === true &&
+      positive(message.sourceRevision) ? message.sourceRevision : null);
+  }
+  const ids = new Set<string>(), duplicated = new Set<string>();
+  for (const task of tasks) if (id(task.id)) { if (ids.has(task.id)) duplicated.add(task.id); ids.add(task.id); }
+  const links = new Map<string, OwnerWorkRequestLink<T> | null>();
+  for (const task of tasks) {
+    const work = original(task), raw = object(task.raw), refs = object(raw?.ownerWork)?.sourceMessageRefs;
+    if (!work || !raw || raw.status !== task.status || raw.metadataLimited === true || raw.taskCoreReadLimited === true ||
+        !Array.isArray(refs) || refs.length < 1 || refs.length > 64) continue;
+    for (const ref of refs) {
+      if (ref?.kind !== 'message' || ref.ownerId !== 'owner' || ref.spaceId !== 'private' ||
+          !id(ref.sourceId) || !positive(ref.revision) || revisions.get(ref.sourceId) !== ref.revision) continue;
+      // Another observed Work, including one which took several source
+      // messages, makes this association ambiguous. Keep the directory entries.
+      links.set(ref.sourceId, links.has(ref.sourceId) || refs.length !== 1 || duplicated.has(work.taskId) || work.epoch < 1 ? null :
+        { task, work, messageId: ref.sourceId, revision: ref.revision });
+    }
+  }
+  const exact = new Map<string, OwnerWorkRequestLink<T>>();
+  for (const [message, link] of links) if (link) exact.set(message, link);
+  return exact;
+}
+
 export const conversationNavigationStates = {
   waiting: { label: '待处理', priority: 3 },
   running: { label: '进行中', priority: 2 },

@@ -29,6 +29,10 @@ public final class ProjectSourceImport {
     public static final int MAX_ENTRIES=10_000,MAX_DEPTH=40;
     public static final String BUILTIN_VITE_STARTER="builtin_vite_starter";
     private static final String BUILTIN_VITE_FORMAT="pocketworld.builtin-vite-starter.v1", BUILTIN_VITE_LABEL="Vite 网页起步项目";
+    private static final Set<String> ZIP_ROOT_AMBIGUOUS=Set.of("pnpm-workspace.yaml","lerna.json","nx.json","rush.json","turbo.json",
+        "yarn.lock","pnpm-lock.yaml","bun.lock","bun.lockb","npm-shrinkwrap.json","pom.xml","build.gradle","build.gradle.kts","settings.gradle","settings.gradle.kts",
+        "pyproject.toml","requirements.txt","go.mod","cargo.toml");
+    public enum ZipRoot { PRESERVE, STRIP_SINGLE, RECOGNIZE_WEB }
     private ProjectSourceImport(){}
     @FunctionalInterface public interface Current {void check()throws Exception;}
     /** Opaque provider handles never enter a JSON receipt. Only the native SAF adapter creates them. */
@@ -123,6 +127,10 @@ public final class ProjectSourceImport {
         return finish(emptyDestination,selectionId,label,"saf_tree",generated,before.omissions(),new JSONObject().put("ownerExcludedDirectory",skip.isEmpty()?null:skip).put("sourceFilesReread",true).put("providerAtomicSnapshot",false).put("executableBitsAvailable",false),current);
     }
     public static Selection zip(File archive,File emptyDestination,String selectionId,String label,boolean stripSingleRoot,boolean generated,Current current)throws Exception {
+        return zip(archive,emptyDestination,selectionId,label,stripSingleRoot?ZipRoot.STRIP_SINGLE:ZipRoot.PRESERVE,generated,current);
+    }
+    public static Selection zip(File archive,File emptyDestination,String selectionId,String label,ZipRoot root,boolean generated,Current current)throws Exception {
+        java.util.Objects.requireNonNull(root);
         freshDirectory(emptyDestination);current.check();if(Files.isSymbolicLink(archive.toPath())||!Files.isRegularFile(archive.toPath(),LinkOption.NOFOLLOW_LINKS)||archive.length()<22||archive.length()>ProjectPackageArchive.MAX_ARCHIVE_BYTES)throw new IllegalArgumentException("普通ZIP不是有界完整普通文件");long expanded=ProjectPackageArchive.preflightSelectedZip(archive);String archiveSha=fileSha(archive,current);long archiveBytes=archive.length();
         Scan scan=new Scan();String stripped="";JSONObject fixed=null;
         try(var zip=new org.apache.commons.compress.archivers.zip.ZipFile(archive,StandardCharsets.UTF_8.name())){
@@ -143,7 +151,10 @@ public final class ProjectSourceImport {
                 // Without a verified PocketWorld envelope the original ordinary-ZIP limits still apply to the full name.
                 if(expanded>ProjectPackageArchive.MAX_TOTAL_BYTES)throw new IllegalArgumentException("普通 ZIP 声明的展开总量超过16MiB，未导入");
                 for(String name:all.keySet())path(name);
-                if(stripSingleRoot){String candidate=null;boolean canStrip=true;for(var item:all.entrySet()){String name=item.getKey();int slash=name.indexOf('/');String first=slash<0?name:name.substring(0,slash);if(candidate==null)candidate=first;if(!candidate.equals(first)||slash<0&&!item.getValue().isDirectory()){canStrip=false;break;}}if(canStrip&&candidate!=null&&ProjectPackageArchive.excluded(candidate,true,generated)==null)stripped=candidate;}
+                if(root!=ZipRoot.PRESERVE){
+                    String candidate=singleZipRoot(all,generated);
+                    if(candidate!=null&&(root==ZipRoot.STRIP_SINGLE||recognizedWebRoot(zip,all,candidate,current)))stripped=candidate;
+                }
                 long total=0;
                 for(var item:all.entrySet()){current.check();String relative=item.getKey();ZipArchiveEntry entry=item.getValue();if(!stripped.isEmpty()){if(relative.equals(stripped))continue;relative=relative.substring(stripped.length()+1);}path(relative);if(omission(relative,entry.isDirectory(),generated,scan.omitted)!=null)continue;parents(relative,scan);
                     if(entry.isDirectory()){if(entry.getSize()!=0||!scan.directories.containsKey(relative)&&scan.directories.size()>=ProjectPackageArchive.MAX_FILES)throw new SecurityException("ZIP目录带内容或目录超限");File directory=NativeCommandExecutor.within(emptyDestination,relative);if(!directory.mkdirs()&&!directory.isDirectory())throw new IllegalStateException("无法保留ZIP空目录");scan.directories.put(relative,new Entry(relative,relative,true,0L,false,false));continue;}
@@ -153,10 +164,51 @@ public final class ProjectSourceImport {
         }
         if(!archiveSha.equals(fileSha(archive,current)))throw new SecurityException("原ZIP暂存字节在读取时变化");
         if(scan.files.isEmpty())throw new IllegalArgumentException("普通ZIP没有纳入的源码文件，请核对原归档和排除范围");
+        // Preserve the old durable shape. A recognition with no match has the exact retained layout.
+        boolean stripRequested=root==ZipRoot.STRIP_SINGLE||root==ZipRoot.RECOGNIZE_WEB&&!stripped.isEmpty();
         JSONObject original=(fixed==null?new JSONObject():fixed).put("originalArchiveSha256",archiveSha).put("originalArchiveBytes",archiveBytes)
-            .put("singleRootStripped",stripped).put("stripSingleRootRequested",stripSingleRoot).put("executableBitsAvailable",fixed==null).put("zipLinksRestored",false);
+            .put("singleRootStripped",stripped).put("stripSingleRootRequested",stripRequested).put("executableBitsAvailable",fixed==null).put("zipLinksRestored",false);
         return finish(emptyDestination,selectionId,label,"external_zip",generated,scan.omissions(),original,current);
     }
+    private static String singleZipRoot(Map<String,ZipArchiveEntry> entries,boolean generated){
+        String root=null;
+        for(var item:entries.entrySet()){
+            String name=item.getKey();int slash=name.indexOf('/');String top=slash<0?name:name.substring(0,slash);
+            if(root==null)root=top;
+            if(!root.equals(top)||slash<0&&!item.getValue().isDirectory())return null;
+        }
+        return root!=null&&ProjectPackageArchive.excluded(root,true,generated)==null?root:null;
+    }
+    /** Shape of one npm web project, not a supported build/lock or installed-tool assertion. */
+    private static boolean recognizedWebRoot(org.apache.commons.compress.archivers.zip.ZipFile zip,Map<String,ZipArchiveEntry> entries,
+            String root,Current current)throws Exception {
+        String prefix=root+"/",manifestName=prefix+"package.json",lockName=prefix+"package-lock.json";
+        ZipArchiveEntry wrapper=entries.get(root),manifest=entries.get(manifestName);
+        if(wrapper!=null&&wrapper.getSize()!=0||!nonemptyFile(manifest)||manifest.getSize()>65_536||!nonemptyFile(entries.get(lockName))||
+            !nonemptyFile(entries.get(prefix+"index.html")))return false;
+        // Inspect the complete validated name set before exclusions, not the truncated UI list.
+        for(String name:entries.keySet()){
+            current.check();String leaf=name.substring(name.lastIndexOf('/')+1).toLowerCase(java.util.Locale.ROOT);
+            if(ZIP_ROOT_AMBIGUOUS.contains(leaf)||"package.json".equals(leaf)&&!manifestName.equals(name)||
+                "package-lock.json".equals(leaf)&&!lockName.equals(name))return false;
+        }
+        byte[] bytes=new byte[(int)manifest.getSize()];
+        try(InputStream input=zip.getInputStream(manifest)){
+            int at=0;
+            while(at<bytes.length){current.check();int n=input.read(bytes,at,bytes.length-at);if(n<=0)return false;at+=n;}
+            current.check();if(input.read()!=-1)return false;
+        }
+        CRC32 crc=new CRC32();crc.update(bytes);if(crc.getValue()!=manifest.getCrc())return false;
+        JSONObject pkg;
+        try{
+            String body=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+            pkg=dev.pocketengine.features.plugins.mcp.McpJson.parse(body);
+        }catch(Exception malformed){return false;}
+        current.check();Object manager=pkg.opt("packageManager");
+        return !pkg.has("workspaces")&&(manager==null||manager instanceof String value&&value.matches("npm@[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?"));
+    }
+    private static boolean nonemptyFile(ZipArchiveEntry entry){return entry!=null&&!entry.isDirectory()&&entry.getSize()>0;}
     /** The sealed decoder verifies the whole envelope before we write a single payload. No old project ID,
      * checkout, executable bit, task or host is adopted. Empty directories exist only in the verified manifest. */
     private static JSONObject copyVerifiedSourcePackage(File archive,File root,boolean generated,Scan scan,Current current)throws Exception {

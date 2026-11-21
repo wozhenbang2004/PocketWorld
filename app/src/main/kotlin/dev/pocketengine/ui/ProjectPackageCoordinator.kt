@@ -10,6 +10,7 @@ import dev.pocketengine.EngineApplication
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.preview.ProjectPreviewBundle
+import dev.pocketengine.features.local.project.ProjectSourceImport.ZipRoot
 import dev.pocketengine.features.local.project.ProjectTaskSourceOrigin
 import org.json.JSONObject
 import java.util.UUID
@@ -654,13 +655,15 @@ internal class ProjectPackageCoordinator(
             }
         }
     }
-    fun pickSourceDirectory(generated: Boolean, excludedDirectory: String = "") = pickSource("saf_tree", generated, false, excludedDirectory)
-    fun pickSourceZip(generated: Boolean, stripRoot: Boolean) = pickSource("external_zip", generated, stripRoot)
-    private fun pickSource(kind: String, generated: Boolean, stripRoot: Boolean, excludedDirectory: String = "") {
+    fun pickSourceDirectory(generated: Boolean, excludedDirectory: String = "") = pickSource("saf_tree", generated, ZipRoot.PRESERVE, excludedDirectory)
+    fun pickSourceZip(generated: Boolean, stripRoot: Boolean) = pickSourceZip(generated, if (stripRoot) ZipRoot.STRIP_SINGLE else ZipRoot.PRESERVE)
+    fun pickSourceZip(generated: Boolean, root: ZipRoot) = pickSource("external_zip", generated, root)
+    private fun pickSource(kind: String, generated: Boolean, root: ZipRoot, excludedDirectory: String = "") {
         requireOwner(); if (state.busy || pickerImport != null || state.pendingFreeze != null || state.pendingImport != null) return
         val id = UUID.randomUUID().toString()
         val skip = dev.pocketengine.features.local.project.ProjectSourceImport.checkedSkipDirectory(excludedDirectory)
         require(skip.isEmpty() || kind == "saf_tree") { "只能从本机文件夹导入时跳过一个目录" }
+        val stripRoot = root == ZipRoot.STRIP_SINGLE
         // Re-selecting a ZIP to use its inner root is tentative. Keep the
         // already frozen choice until a new result is actually read and staged.
         val previous = state.staged?.takeIf { staged ->
@@ -670,6 +673,7 @@ internal class ProjectPackageCoordinator(
                 evidence.opt("ordinaryZipIsPocketWorldPackage") == false && evidence.optJSONObject("original")?.opt("singleRootStripped") == ""
         }
         pickerImport = JSONObject().put("ownerExcludedDirectory", skip.takeIf { it.isNotEmpty() }).put("selectionId", id).put("ownerSourcePicker", true).put("checkoutId", state.checkoutId.orEmpty()).put("projectId", state.projectId.orEmpty()).put("sourceKind", kind).put("includeGeneratedRoots", generated).put("stripSingleRoot", stripRoot)
+            .put("recognizeWebRoot", true.takeIf { root == ZipRoot.RECOGNIZE_WEB })
             .put("priorStageId", previous?.getString("selectionId")).put("priorStageSha", previous?.getString("sha256"))
         restoredPicker = false
         state = state.copy(staged = previous, imported = null, importPlan = null, notice = previous?.let {
@@ -739,8 +743,14 @@ internal class ProjectPackageCoordinator(
                     override fun read(): Int { c.check(); return super.read() }
                     override fun read(bytes: ByteArray, offset: Int, length: Int): Int { c.check(); return super.read(bytes, offset, length) }
                 }
-                if (pin.optString("sourceKind") == "external_zip") local().stageSourceZipForOwner(checked, sourceLabel, pin.getString("selectionId"), pin.getBoolean("stripSingleRoot"), pin.getBoolean("includeGeneratedRoots"), c)
-                else local().stageProjectPackageForOwner(checked, pin.getString("selectionId"))
+                if (pin.optString("sourceKind") == "external_zip") {
+                    val root = when {
+                        pin.opt("recognizeWebRoot") == true -> ZipRoot.RECOGNIZE_WEB
+                        pin.getBoolean("stripSingleRoot") -> ZipRoot.STRIP_SINGLE
+                        else -> ZipRoot.PRESERVE
+                    }
+                    local().stageSourceZipForOwner(checked, sourceLabel, pin.getString("selectionId"), root, pin.getBoolean("includeGeneratedRoots"), c)
+                } else local().stageProjectPackageForOwner(checked, pin.getString("selectionId"))
             } } finally { c.removeCancelAction(cancel) }
             return@work { state = state.copy(staged = actual, stagedPackages = withStage(actual), imported = null, importPlan = null, notice = when {
                 actual.optBoolean("reusedSelectedZipBytes") -> "本次选的 ZIP 字节、名称和录入路径与已有暂存相同，已复用原包，没多占位置。未复用文件权限，也未创建项目。"
