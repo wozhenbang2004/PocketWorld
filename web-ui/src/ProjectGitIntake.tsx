@@ -11,6 +11,9 @@ type IntakeState = {
 };
 
 export type PublicGitDraft = { url: string; branch: string; name: string };
+const branchPrefix = 'refs/heads/';
+const branchLimit = 120;
+
 export function ProjectGitIntake({ state, toolReturn, onPrepareTools }: {
   state?: IntakeState; toolReturn: RefObject<PublicGitDraft | null>; onPrepareTools?: () => void;
 }) {
@@ -36,7 +39,12 @@ export function ProjectGitIntake({ state, toolReturn, onPrepareTools }: {
   const review = state?.reviewId && state?.reviewKind;
   const readySource = state?.sourceStatus === 'completed' && state?.sourceAvailable !== false && !!state.commit;
   const sourceEnded = state?.sourceStatus === 'completed' || state?.sourceStatus === 'failed';
-  const canReview = !busy && !!url.trim() && !!branch.trim() && !!name.trim();
+  const enteredBranch = branch.trim();
+  // The public form accepts a name, but native review always pins a full branch ref.
+  const branchRef = enteredBranch && (enteredBranch.startsWith('refs/') ? enteredBranch : branchPrefix + enteredBranch);
+  const branchInScope = branchRef.startsWith(branchPrefix) && branchRef.length > branchPrefix.length;
+  const branchFits = branchRef.length <= branchLimit;
+  const canReview = !busy && !!url.trim() && branchInScope && branchFits && !!name.trim();
   const details = [
     ['项目', state?.projectName],
     ['分支', state?.draftBranch || state?.branch],
@@ -77,10 +85,12 @@ export function ProjectGitIntake({ state, toolReturn, onPrepareTools }: {
       </> : <>
         <p>填写公开仓库和准确分支。不会登录、保存凭据或更改已有项目。</p>
         <TextField label="公开 HTTPS 仓库地址" value={url} onChange={setUrl} maxLength={2048} isDisabled={busy} placeholder="https://github.com/owner/project.git"/>
-        <TextField label="要读取的分支" value={branch} onChange={setBranch} maxLength={120} isDisabled={busy} placeholder="例如 main"/>
+        <TextField label="要读取的分支" value={branch} onChange={setBranch} maxLength={branchLimit} isDisabled={busy} placeholder="例如 main"
+          hint={enteredBranch && (!branchInScope ? '只支持普通分支，不读取标签或其他引用。' : !branchFits ? '完整分支引用超过 120 字符上限。' :
+            <>将核对 <bdi dir="ltr" style={{ overflowWrap: 'anywhere' }}>{branchRef}</bdi></>)}/>
         <TextField label="本机项目名称" value={name} onChange={setName} maxLength={100} isDisabled={busy}/>
         <div className="pw-action-row">
-          <Button variant="primary" disabled={!canReview} onClick={() => void doAction('review', { url, branch, name })}>核对来源与分支</Button>
+          <Button variant="primary" disabled={!canReview} onClick={() => void doAction('review', { url, branch: branchRef, name })}>核对来源与分支</Button>
           {onPrepareTools && <Button variant="ghost" disabled={busy} onClick={() => { void doAction('close').then(closed => {
             if (!closed) return;
             toolReturn.current = { url, branch, name };

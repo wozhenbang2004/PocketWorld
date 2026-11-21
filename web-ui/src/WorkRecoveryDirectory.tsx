@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, IconButton, SearchField } from './forms-library';
+import { bridge } from './bridge';
 import { useCollectionMotion } from './library/journey-motion';
 import { IconClose, IconChevronRight, IconGrid, IconHistory, IconSearch } from './icons';
 import { workCollectionPresentation, type WorkCollectionFilter, type WorkCollectionTask } from './work-collection';
@@ -9,7 +10,7 @@ import './work-recovery-directory.css';
 
 type Directory = ReturnType<typeof useWorkDirectory>;
 type RunPin = { runId: string; epoch: number };
-type Origin = { id: string; entry: WorkEntry; scope: WorkCollectionFilter; query: string; updatedAt: number; run?: RunPin };
+type Origin = { id: string; entry: WorkEntry; scope: WorkCollectionFilter; query: string; updatedAt: number; run?: RunPin; ownerConversation?: string };
 const runOf = (task: WorkCollectionTask): RunPin | undefined => {
   const row=task.raw;
   return row?.id===task.id && row.actorId==='owner' && row.spaceId==='private' &&
@@ -21,6 +22,27 @@ const sameRun = (task: WorkCollectionTask, wanted?: RunPin) => {
   if (!wanted) return true;
   const run=runOf(task); return run?.runId===wanted.runId && run.epoch===wanted.epoch;
 };
+const ordinaryOwnerConversation = (task: WorkCollectionTask): string | undefined => {
+  const raw=task.raw, work=raw?.ownerWork, conversation=raw?.conversationId;
+  return raw?.kind==='assistant' && raw.executionRole==='owner_work' && raw.contextAvailable===true && raw.contextWithdrawn!==true &&
+    raw.metadataLimited!==true && raw.taskCoreReadLimited!==true && raw.origin==null && !raw.developmentContext && !raw.ownerPhoneControl && !raw.ownerDeviceWork &&
+    work?.format==='pocketworld.owner-work.v1' && work.workTaskId===task.id && work.conversationId===conversation &&
+    typeof conversation==='string' && !!conversation.trim() ? conversation : undefined;
+};
+function observedLaterOwnerRound(rows: readonly WorkCollectionTask[], original: Origin) {
+  if (!original.run || !original.ownerConversation) return undefined;
+  const matches=rows.filter(row=>row?.id===original.id);
+  if (matches.length!==1) return undefined;
+  const task=matches[0], run=runOf(task);
+  return run && run.runId!==original.run.runId && run.epoch>original.run.epoch &&
+    typeof task.updatedAt==='number' && Number.isSafeInteger(task.updatedAt) && task.updatedAt>=original.updatedAt &&
+    ordinaryOwnerConversation(task)===original.ownerConversation ? run : undefined;
+}
+function directoryWindow(snapshot: ReturnType<typeof bridge.getState>) {
+  const view=snapshot.view as {section?:string|null;taskId?:string|null;resumeRevision?:number}|undefined;
+  return !document.hidden && view?.section===null && view.taskId===null && Number.isSafeInteger(view.resumeRevision) &&
+    !snapshot.state.filePath && !snapshot.state.conversationReader ? `${bridge.getDocumentEpoch()}:${view.resumeRevision}` : '';
+}
 const scopes: { id: WorkCollectionFilter; title: string }[] = [
   { id: 'all', title: '全部' }, { id: 'attention', title: '待处理' }, { id: 'running', title: '进行中' }, { id: 'ended', title: '已结束' },
 ];
@@ -75,7 +97,8 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
   const visit = (task: WorkCollectionTask, entry: WorkEntry) => {
     if (!canOpen) return;
     const run=runOf(task);
-    origin.current = { id: task.id, entry, scope, query, updatedAt: task.updatedAt || 0, run }; setReturning(null);
+    const ownerConversation=run&&Number.isSafeInteger(task.updatedAt)&&task.raw?.controls?.canContinue===true ? ordinaryOwnerConversation(task) : undefined;
+    origin.current = { id: task.id, entry, scope, query, updatedAt: task.updatedAt || 0, run, ownerConversation }; setReturning(null);
     if (scroll.current) directory.rememberScroll(scroll.current.scrollTop);
     open(task.id, entry, query, run);
   };
@@ -124,6 +147,21 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
     && sameRun(t,returning.run) && (t.updatedAt || 0) >= returning.updatedAt);
   const differentRun = !!returning?.run && [...live, ...items].some(t => t.id===returning.id &&
     (t.updatedAt||0)>=returning.updatedAt && !!runOf(t) && !sameRun(t,returning.run));
+  const laterRound=returning&&observedLaterOwnerRound(live,returning);
+  const laterOutside=!!laterRound&&!visible.some(v=>v.task.id===returning?.id&&sameRun(v.task,laterRound));
+  const shownDirectory=laterOutside?directoryWindow(bridge.getState()):'';
+  const openLaterRound=()=>{
+    const native=bridge.getState();
+    if(!returning||!laterRound||!shownDirectory||!canOpen||!matchesScope(returning)||directoryWindow(native)!==shownDirectory||
+      !native.capabilities.commands.includes('tasks.open')||!Array.isArray(native.state.tasks))return;
+    const current=observedLaterOwnerRound(native.state.tasks,returning);
+    if(!current||current.runId!==laterRound.runId||current.epoch!==laterRound.epoch)return;
+    // Keep the notice usable if the exact open fails. A fresh return record
+    // lets the drawer restore focus here on close without changing the old pin.
+    origin.current={...returning};
+    if(scroll.current)directory.rememberScroll(scroll.current.scrollTop);
+    open(returning.id,'overview','',current);
+  };
   const targetScope = located ? workCollectionPresentation(located).group : null;
   const norm = (s: string) => s.normalize('NFKC').toLocaleLowerCase('en-US').trim();
   const retainQuery = located ? !norm(query) || norm(located.goal + '\n' + (located.summary || '')).includes(norm(query)) : false;
@@ -143,7 +181,8 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
       data-work-scope={s.id} aria-pressed={scope === s.id} onClick={() => scopeKey(s.id)}>{s.title}</Button>)}</div>
     {returning && matchesScope(returning) && directory.loaded && !directory.busy && !directory.error && !visible.some(v => v.task.id === returning.id && sameRun(v.task,returning.run)) &&
       <div ref={focusReturn} className="pw-work-return-notice" tabIndex={-1} role="status">
-        <span>{differentRun ? '这项工作已经开始了新一轮，刚才查看的是上一轮。' : '刚查看的工作不在当前列表。'}</span>{differentRun ? null : canLocate ? <Button variant="ghost" onClick={relocate}>在「{scopes.find(s => s.id === targetScope)?.title}」中定位</Button>
+        <span>{laterRound ? '这项工作已进入新一轮，刚才查看的是上一轮。' : differentRun ? '这项工作的执行轮次已变化。' : '刚查看的工作不在当前列表。'}</span>{shownDirectory&&canOpen ?
+          <Button variant="ghost" onClick={openLaterRound}>查看当前一轮</Button> : differentRun ? null : canLocate ? <Button variant="ghost" onClick={relocate}>在「{scopes.find(s => s.id === targetScope)?.title}」中定位</Button>
           : <Button variant="ghost" disabled={!canOpen} onClick={() => {
           const id = returning.id; origin.current = returning; setReturning(null); open(id, 'overview', '', returning.run);
         }}>查看原工作</Button>}<IconButton icon={IconClose} aria-label="留在当前列表" onClick={() => { setReturning(null); scroll.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus({ preventScroll: true }); }}/>

@@ -10,6 +10,8 @@ import { Drawer } from './shell-library';
 import { Select, SelectItem } from './forms-library/boardui/components/base/select/select';
 import { bridge } from './bridge';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
+import { originalPhoneStopControl, phoneStopControlFailure, type PhoneStopControlPhase } from './PhoneInlineStopReceipts';
+import { isPrivateLocalPhone } from './PhonePauseInstruction';
 import { PhoneViewerConnection, phoneViewerKey, type PhonePreviewFrame, type PhoneViewerIdentity, type PhoneViewerState, type PhoneViewerTask } from './phone-viewer-protocol';
 import './phone-viewer.css';
 import './browser-depth.css';
@@ -34,6 +36,21 @@ export type PhoneViewerProps = {
 const empty: PhoneViewerState = { phase: 'idle', frame: null, error: '', verifiedAt: 0 };
 const terminal = (task: PhoneViewerTask) => task.status === 'ended' || task.status === 'error';
 const identityOf = ({ taskId, runId, epoch }: PhoneViewerIdentity): PhoneViewerIdentity => ({ taskId, runId, epoch });
+
+// The viewer only describes a Stop clicked in the currently opened private task.
+// The task can become terminal before its control reply, so do not require a live port here.
+function privateStopWindow({taskId, runId, epoch}: PhoneViewerIdentity): string {
+  const {view, state} = bridge.getState();
+  const native = view as { taskId?: string; section?: string | null; resumeRevision?: number } | undefined;
+  if (!native || document.hidden || native.taskId !== taskId || native.section != null || !Number.isSafeInteger(native.resumeRevision)) return '';
+  const rows = Array.isArray(state.tasks) ? state.tasks.filter(row => row?.id === taskId) : [];
+  const row = rows.length === 1 ? rows[0] : null;
+  const raw = row?.raw;
+  if (!row || !isPrivateLocalPhone(row) || row.executionMode !== 'background' || raw.executionMode !== 'background' ||
+      raw.runId !== runId || raw.coordinatorEpoch !== epoch || raw.contextAvailable === false || raw.contextWithdrawn === true ||
+      raw.sourceCurrentReadRequired === true || raw.taskProjection === 'source_unavailable') return '';
+  return JSON.stringify([taskId, runId, epoch, bridge.getDocumentEpoch(), native.resumeRevision]);
+}
 
 function useDocumentVisible() {
   const [visible, setVisible] = useState(() => typeof document !== 'undefined' && document.visibilityState !== 'hidden');
@@ -168,7 +185,15 @@ function TaskSelector({ task, tasks, onSelectTask }: Pick<PhoneViewerProps, 'tas
   return <div ref={root} className="pw-phone-viewer-select"><span className="pw-field-label">查看任务</span><Select aria-label="查看任务" selectedKey={phoneViewerKey(task)} popoverContainer={container} triggerClassName="pw-select-trigger" onSelectionChange={key => { const next = tasks.find(item => phoneViewerKey(item) === key); if (next) onSelectTask(next); }}>{tasks.map(item => <SelectItem key={phoneViewerKey(item)} id={phoneViewerKey(item)} textValue={item.title || '手机任务'}><span>{item.title || '手机任务'}{item.statusLabel ? ` · ${item.statusLabel}` : item.status === 'paused' ? ' · 已暂停' : item.status === 'ended' ? ' · 已结束' : ''}</span></SelectItem>)}</Select></div>;
 }
 
-type Controls = { busy: boolean; error: string; pause?: () => void; resume?: () => void; stop?: () => void; openTask?: () => void; openSetup?: () => void };
+const stopStatus: Record<PhoneStopControlPhase, string> = {
+  checking: '正在等待这次停止的回执。',
+  requested: '已请求停止这轮任务。是否结束、独立屏是否释放，请在原任务的「过程」核对。',
+  local_only: '原控制器已收到停手。记录是否保存、在途动作与独立屏清理尚未核实。',
+  not_submitted: '本次停止未提交。若原任务通知仍在，也可从那里停手。',
+  unconfirmed: '未取得这次停止的回执。请在原任务的「过程」核对；没有自动重发。',
+};
+type Controls = { busy: boolean; error: string; stopFeedback?: PhoneStopControlPhase; pause?: () => void; resume?: () => void; stop?: () => void; openTask?: () => void; openSetup?: () => void };
+type StopVisit = { window: string };
 function PhoneControls({ task, feed, controls }: { task: PhoneViewerTask; feed: Feed; controls: Controls }) {
   const root = useRef<HTMLDivElement>(null);
   const execution = !terminal(task) && feed.phase !== 'ended' ? task.status === 'running' && controls.pause
@@ -184,7 +209,8 @@ function PhoneControls({ task, feed, controls }: { task: PhoneViewerTask; feed: 
       {controls.openTask && <button type="button" data-motion-key="task" className="pw-phone-viewer-button" disabled={controls.busy} onClick={controls.openTask}><IconArrowUpRight size={16} aria-hidden="true" />{task.status === 'waiting' ? '处理待办' : task.status === 'error' ? '查看失败原因' : '查看任务'}</button>}
       {task.preparation !== 'blocked' && !terminal(task) && feed.phase !== 'ended' && (feed.phase === 'error' || feed.phase === 'hidden' && feed.visible) && <button type="button" data-motion-key="retry" className="pw-phone-viewer-button" disabled={!feed.visible} onClick={feed.retry}><IconRefresh size={16} aria-hidden="true" />重新读取</button>}
     </div>
-    {(controls.error || feed.frame && (feed.error || (task.status === 'error' || task.status === 'waiting') && task.detail)) && <MotionFeedback identity={controls.error || feed.error || task.detail || ''} className="pw-phone-viewer-error" role="status">{controls.error || feed.error || task.detail}</MotionFeedback>}
+    {controls.stopFeedback ? <MotionFeedback identity={controls.stopFeedback} initial={false} className="pw-phone-viewer-error" role="status">{stopStatus[controls.stopFeedback]}</MotionFeedback> :
+      (controls.error || feed.frame && (feed.error || (task.status === 'error' || task.status === 'waiting') && task.detail)) && <MotionFeedback identity={controls.error || feed.error || task.detail || ''} className="pw-phone-viewer-error" role="status">{controls.error || feed.error || task.detail}</MotionFeedback>}
   </>;
 }
 
@@ -216,7 +242,7 @@ export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedCha
       <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><IconMonitor size={24} aria-hidden="true" /></span><MotionFeedback identity={JSON.stringify([phoneViewerKey(task), task.status, task.preparation, feed.phase, feed.visible])} initial={false}><strong role="status">{statusLabel(task, feed)}</strong><p>{task.preparation === 'blocked' ? '请先处理手机准备条件，任务尚未继续。' : task.status === 'error' ? '这次任务未完成，请查看原因后处理。' : terminal(task) || feed.phase === 'ended' ? '画面仅保留于本次查看中，任务结果请以原记录为准。' : '画面来自这次任务的后台独立屏。'}</p></MotionFeedback></div>
       <div className="pw-phone-viewer-sheet-control-rail"><PhoneControls task={task} feed={feed} controls={controls} /></div>
       <PhoneFrame task={task} feed={feed} large />
-      {!terminal(task) && feed.phase !== 'ended' && <p className="pw-phone-viewer-note">{task.status === 'waiting' ? '请回到任务处理待办，查看画面不会继续执行。' : task.status === 'paused' ? '任务保持暂停，点击继续执行才会恢复。' : task.status === 'stopping' ? '正在停止任务，保留最后收到的画面。' : '收起画面后，任务仍会在后台继续执行。'}</p>}
+      {!controls.stopFeedback && !terminal(task) && feed.phase !== 'ended' && <p className="pw-phone-viewer-note">{task.status === 'waiting' ? '请回到任务处理待办，查看画面不会继续执行。' : task.status === 'paused' ? '任务保持暂停，点击继续执行才会恢复。' : task.status === 'stopping' ? '正在停止任务，保留最后收到的画面。' : '收起画面后，任务仍会在后台继续执行。'}</p>}
     </div>
   </>;
   const restoreFocus = (event: Event) => { if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus(); } };
@@ -232,24 +258,64 @@ export function PhoneViewer({ task, expanded: controlledExpanded, onExpandedChan
   const cardVisible = useInView(cardElement, card);
   const feed = usePhoneViewerFeed(task, expanded || card && cardVisible, nativeVisible);
   const key = phoneViewerKey(task), current = useRef({ key, documentEpoch: bridge.getDocumentEpoch(), mounted: true });
+  const { taskId, runId, epoch } = task;
   current.current.key = key; current.current.documentEpoch = bridge.getDocumentEpoch();
   const [action, setAction] = useState<{ key: string; busy: boolean; error: string }>({ key, busy: false, error: '' });
   const actionInFlight = useRef<{ key: string; documentEpoch: number } | null>(null);
+  const shownStop = useRef<StopVisit | null>(null);
+  const [stopFeedback, setStopFeedback] = useState<{ visit: StopVisit; phase: PhoneStopControlPhase } | null>(null);
   useEffect(() => { current.current.mounted = true; return () => { current.current.mounted = false; }; }, []);
-  const act = async (callback: NonNullable<PhoneViewerProps['onPause']>) => {
+  useLayoutEffect(() => {
+    if (!nativeVisible) return;
+    const original = { taskId, runId, epoch };
+    const retire = () => {
+      const visit = shownStop.current;
+      if (visit && privateStopWindow(original) !== visit.window) {
+        shownStop.current = null;
+        setStopFeedback(previous => previous?.visit === visit ? null : previous);
+      }
+    };
+    const unsubscribe = bridge.subscribe(retire);
+    const unsubscribeDocument = bridge.subscribeDocumentEpoch(retire);
+    document.addEventListener('visibilitychange', retire);
+    return () => { shownStop.current = null; unsubscribe(); unsubscribeDocument(); document.removeEventListener('visibilitychange', retire); };
+  }, [nativeVisible, taskId, runId, epoch]);
+  const act = async (callback: NonNullable<PhoneViewerProps['onPause']>, stop = false) => {
     if (actionInFlight.current?.key === key || !feed.visible || terminal(task)) return;
     const expected = { key, documentEpoch: bridge.getDocumentEpoch() };
+    const target = identityOf(task), pin = stop && nativeVisible ? privateStopWindow(target) : '';
+    const visit = pin ? { window: pin } : null;
+    if (visit) { shownStop.current = visit; setStopFeedback({ visit, phase: 'checking' }); }
     actionInFlight.current = expected; setAction({ key, busy: true, error: '' });
     const valid = () => current.current.mounted && current.current.key === expected.key && bridge.getDocumentEpoch() === expected.documentEpoch;
-    try { await callback(identityOf(task)); if (valid()) setAction({ key, busy: false, error: '' }); }
-    catch (error) { if (valid()) setAction({ key, busy: false, error: error instanceof Error ? error.message : '任务操作未能确认，请核对原任务。' }); }
-    finally { if (actionInFlight.current === expected) actionInFlight.current = null; }
+    const settle = (phase: PhoneStopControlPhase) => {
+      if (visit && shownStop.current === visit && privateStopWindow(target) === visit.window) setStopFeedback({ visit, phase });
+    };
+    try {
+      const receipt = await callback(target);
+      if (valid()) { setAction({ key, busy: false, error: '' }); if (visit) settle(originalPhoneStopControl(receipt, target)); }
+    } catch (error) {
+      if (valid()) {
+        setAction({ key, busy: false, error: visit ? '' : error instanceof Error ? error.message : '任务操作未能确认，请核对原任务。' });
+        if (visit) settle(phoneStopControlFailure(error));
+      }
+    }
+    finally {
+      if (actionInFlight.current === expected) {
+        actionInFlight.current = null;
+        // A replaced document cannot inherit the receipt or a permanently busy Stop.
+        if (visit && !valid() && current.current.mounted)
+          setAction(previous => previous.key === expected.key && previous.busy ? { key: expected.key, busy: false, error: '' } : previous);
+      }
+    }
   };
-  const controls: Controls = { busy: action.key === key && action.busy, error: action.key === key ? action.error : '', pause: onPause ? () => void act(onPause) : undefined, resume: onResume ? () => void act(onResume) : undefined, stop: onStop ? () => void act(onStop) : undefined, openTask: onOpenTask ? () => { changeExpanded(false); onOpenTask(identityOf(task)); } : undefined, openSetup: onOpenSetup ? () => { changeExpanded(false); onOpenSetup(identityOf(task)); } : undefined };
+  const feedback = nativeVisible && stopFeedback && stopFeedback.visit === shownStop.current &&
+    privateStopWindow(task) === stopFeedback.visit.window ? stopFeedback.phase : undefined;
+  const controls: Controls = { busy: action.key === key && action.busy, error: action.key === key ? action.error : '', pause: onPause ? () => void act(onPause) : undefined, resume: onResume ? () => void act(onResume) : undefined, stop: onStop ? () => void act(onStop, true) : undefined, openTask: onOpenTask ? () => { changeExpanded(false); onOpenTask(identityOf(task)); } : undefined, openSetup: onOpenSetup ? () => { changeExpanded(false); onOpenSetup(identityOf(task)); } : undefined };
   const open = () => { if (document.activeElement instanceof HTMLElement) returnFocus.current = document.activeElement; changeExpanded(true); };
   return <div className="pw-phone-viewer" data-phone-viewer-task={task.taskId} data-phone-viewer-run={task.runId} data-phone-viewer-epoch={task.epoch}>
     {entry && <PhoneComputerEntry task={task} feed={feed} expanded={expanded} onOpen={open} available={!!feed.frame || !terminal(task) && task.preparation !== 'blocked'} />}
-    {card && <div ref={cardElement}><PhoneViewerCard task={task} feed={feed} controls={controls} onExpand={open} tasks={tasks} onSelectTask={onSelectTask} /></div>}
-    <PhoneViewerSheet task={task} feed={feed} controls={controls} expanded={expanded} onExpandedChange={changeExpanded} tasks={tasks} onSelectTask={onSelectTask} returnFocus={returnFocus} />
+    {card && <div ref={cardElement}><PhoneViewerCard task={task} feed={feed} controls={expanded ? controls : {...controls, stopFeedback: feedback}} onExpand={open} tasks={tasks} onSelectTask={onSelectTask} /></div>}
+    <PhoneViewerSheet task={task} feed={feed} controls={expanded ? {...controls, stopFeedback: feedback} : controls} expanded={expanded} onExpandedChange={changeExpanded} tasks={tasks} onSelectTask={onSelectTask} returnFocus={returnFocus} />
   </div>;
 }

@@ -3,17 +3,21 @@ import {Button,IconButton} from './forms-library';
 import {IconChevronRight,IconClose,IconHistory} from './icons';
 
 export type ShownPhoneRun={taskId:string;runId:string;epoch:number;activityHandle:string};
-type Phase='checking'|'requested'|'local_only'|'not_submitted'|'unconfirmed';
-type Item=ShownPhoneRun&{scope:string;ticket:number;phase:Phase};
+export type PhoneStopControlPhase='checking'|'requested'|'local_only'|'not_submitted'|'unconfirmed';
+type Item=ShownPhoneRun&{scope:string;ticket:number;phase:PhoneStopControlPhase};
 const matches=(a:ShownPhoneRun,b:ShownPhoneRun)=>a.taskId===b.taskId&&a.runId===b.runId&&a.epoch===b.epoch&&a.activityHandle===b.activityHandle;
 
-function originalStop(value:unknown,shown:ShownPhoneRun):Phase{
+export function originalPhoneStopControl(value:unknown,shown:Pick<ShownPhoneRun,'taskId'|'runId'|'epoch'>):PhoneStopControlPhase{
   if(!value||typeof value!=='object')return 'unconfirmed';
   const r=value as Record<string,unknown>;
   if(r.taskId!==shown.taskId||r.runId!==shown.runId||r.epoch!==shown.epoch||r.controlRequested!==true||
     r.budgetIncreased!==false||r.cleanupComplete!==false)return 'unconfirmed';
   if(r.stopJournal==='unconfirmed'&&r.originalControlCancelled===true&&!('newStopRequest' in r))return 'local_only';
   return !('stopJournal' in r)&&typeof r.newStopRequest==='boolean'?'requested':'unconfirmed';
+}
+export function phoneStopControlFailure(error:unknown):PhoneStopControlPhase{
+  const code=(error as {code?:unknown}|null)?.code;
+  return code==='not_accepted'||code==='not_sent'?'not_submitted':'unconfirmed';
 }
 
 // Presentation only, for direct taps in this foreground owner window. Never stores goals,
@@ -40,12 +44,12 @@ export function useInlinePhoneStops(scope:string|null,original:(target:ShownPhon
     const item:Item={taskId:shown.taskId,runId:shown.runId,epoch:shown.epoch,activityHandle:shown.activityHandle,
       ticket:++next.current,scope,phase:'checking'};
     publish([...saved.current.filter(row=>row.scope===scope&&row!==prior).slice(-3),item]);
-    const settle=(phase:Phase)=>{
+    const settle=(phase:PhoneStopControlPhase)=>{
       if(document.hidden||windowNow.current.scope!==scope||!windowNow.current.original(shown)||
          !saved.current.some(row=>row.ticket===item.ticket))return;
       publish(saved.current.map(row=>row.ticket===item.ticket?{...row,phase}:row));
     };
-    try{void stop().then(value=>settle(originalStop(value,shown)),error=>settle(error?.code==='not_accepted'||error?.code==='not_sent'?'not_submitted':'unconfirmed'))}
+    try{void stop().then(value=>settle(originalPhoneStopControl(value,shown)),error=>settle(phoneStopControlFailure(error)))}
     catch{settle('unconfirmed')}
     return true
   }
