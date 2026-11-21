@@ -1282,7 +1282,10 @@ internal class PocketWebBridge(
                 }
                 return
             }
-            if (action == "models.snapshot") { readModelSnapshot(id); return }
+            if (action == "models.snapshot") {
+                if (args.has("originalHomeInput")) readOriginalHomeModelInput(id, args) else readModelSnapshot(id)
+                return
+            }
             if (action == "conversation.drafts") { checkedPayload(args, setOf("taskId")); controller.readConversationDrafts(requiredString(args, "taskId")) { result, error -> complete(id, result, error) }; return }
             if (action in PocketWebRouteReferences.COMMANDS) {
                 routeReferences.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
@@ -2496,6 +2499,27 @@ internal class PocketWebBridge(
                 publishState()
             }
         })
+    }
+
+    /** Navigation evidence only. No model catalogue, selection, or return handle survives this reply. */
+    private fun readOriginalHomeModelInput(id: String, args: JSONObject) {
+        checkedPayload(args, setOf("originalHomeInput"))
+        val expected = checkedPayload(args.getJSONObject("originalHomeInput"), setOf("key", "epoch", "revision"))
+        val key = requiredString(expected, "key")
+        val epoch = requiredInt(expected, "epoch")
+        val revision = requiredLong(expected, "revision")
+        val window = captureWindow()
+        val document = documentId
+        val draft = controller.composerDraft
+        val state = controller.state
+        check(document != null && document == documentId && acceptsWindow(window) && section == "models" &&
+            taskViewId == null && controller.conversationReader == null && controller.webPrivateOwnerVisible() &&
+            state.filePath == null && state.conversationId == null && !state.chatSubmitting && !state.phoneSubmitting &&
+            !phoneComposer.intent && !controller.hasChannelPhoneOrigin && key.startsWith("new:") &&
+            draft != null && draft.key == key && draft.conversationId.isEmpty() && draft.revision == revision &&
+            controller.composerViewEpoch == epoch) { "原输入尚未核对，未打开另一份草稿。" }
+        complete(id, JSONObject().put("originalHomeInputMatched", true).put("key", key)
+            .put("epoch", epoch).put("revision", revision), null, retainValue = false)
     }
 
     private fun readModelSnapshot(requestId: String? = null) {

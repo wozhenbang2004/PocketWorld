@@ -115,7 +115,7 @@ import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentatio
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
 import {teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus} from './team-navigation';
 import {DeclinedTeamStart,originalDeclinedTeamStart,originalPendingNodeCommand,TaskApproval} from './TaskApproval';
-import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,matchesFixedProjectDraft,observedFixedProjectDraft,privateProjectTask,projectContinuation,sameFixedProjectDraftIdentity,type ContinuationSubmission,type FixedProjectDraft} from './task-continuation';
+import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,matchesFixedProjectDraft,observedFixedProjectDraft,privateProjectTask,projectContinuation,sameFixedProjectDraftIdentity,savedUnsentProfileProjectApproval,type ContinuationSubmission,type FixedProjectDraft} from './task-continuation';
 import {TaskInference} from './TaskInference';
 import {TokenBudgetsWorkspace} from './TokenBudgetsWorkspace';
 import {QuickPanelVoiceDraft} from './QuickPanelVoiceDraft';
@@ -178,7 +178,7 @@ type ChatWorkTaskOpen={returnTo:ChatWorkReturn;beforeTaskRequest:number;navigati
 type ChatDrawerReturn=ChatWorkReturn&{taskId:string;navigation:number;resumeRevision:number};
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
-type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number};
 type FileAttachmentPickerLaunch={requestId:string;cancelled:boolean;settled:boolean;reopening?:boolean};
@@ -982,7 +982,8 @@ export default function App(){
   ?navigate('remoteInbox',afterNavigate,{keepOrigin:true})
   :openRelatedWorkspace('remoteInbox',captureNavigationOrigin(),afterNavigate);
  const restoreWorkspace=async(origin:WorkspaceOrigin,keepOrigin=false,rereadOriginal=false,afterReturn?:()=>void,
-  archiveChatCurrent?:(live:ReturnType<typeof bridge.getState>,arrived:boolean)=>boolean)=>{
+  archiveChatCurrent?:(live:ReturnType<typeof bridge.getState>,arrived:boolean)=>boolean,
+  firstHomeModelCurrent?:(live:ReturnType<typeof bridge.getState>,arrived:boolean)=>boolean)=>{
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
   const phonePlace=origin.phonePlace?returnToPreparedPhoneDraft(origin.phonePlace):undefined;
   if(origin.phonePlace&&!phonePlace){setLocalError('原手机目标已变化或尚未恢复，没有切换到其他草稿。');return;}
@@ -1001,7 +1002,8 @@ export default function App(){
       live.composer.key!==source.draftKey||live.composer.conversationId!==savedHost.conversation||
       live.state.conversationReader||!exactSavedHostMessage(asArray<Message>(live.state.messages),savedHost,false)))return false;
    if(origin.task?.fixedArchive&&source&&(live.composer?.key!==source.draftKey||origin.chatWork&&live.state.conversationReader))return false;
-   return sameProposalOwner()&&(!phonePlace||samePhonePlaceDraft(phonePlace))&&(!modelInput||sameModelSetupInput(modelInput,live,bridge.getDocumentEpoch()))&&(!source||(bridge.getDocumentEpoch()===sourceDocument&&String(live.state.conversationId||'')===source.id&&(!!source.id||String(live.composer?.key||'')===source.draftKey)));};
+   if(modelInput&&!(firstHomeModelCurrent?firstHomeModelCurrent(live,arrived):sameModelSetupInput(modelInput,live,bridge.getDocumentEpoch())))return false;
+   return sameProposalOwner()&&(!phonePlace||samePhonePlaceDraft(phonePlace))&&(!source||(bridge.getDocumentEpoch()===sourceDocument&&String(live.state.conversationId||'')===source.id&&(!!source.id||String(live.composer?.key||'')===source.draftKey)));};
   const closed=await navigate(origin.route==='setup'?'butler':origin.route,()=>{
    if(!keepOrigin)relatedOrigin.current=origin.parent||null;
    if(origin.settingsDirectory)setSettingsRestore({...origin.settingsDirectory,revision:navigationWindow.current});
@@ -1059,7 +1061,51 @@ export default function App(){
  };
  const navigateFromSetup=(destination:SetupDestination)=>{const target={connections:'model-settings',background:'background',appearance:'phone:appearance',local:'local'}[destination];void navigate(target,undefined,{keepOrigin:true});setupReturnPending.current=true;};
  const closeSetup=()=>{setupReturnPending.current=false;void restoreWorkspace(setupOrigin.current,true);};
- const returnFromSecondary=()=>{if(route==='profile'){returnFromProfile();return;}if(setupReturnPending.current){void navigate('setup',undefined,{keepOrigin:true});return;}const origin=relatedOrigin.current;if(origin){if(returnOriginalArchiveChat(origin))return;if(!origin.reviewedSkill&&!origin.modelInput&&!origin.projectModelInput&&!origin.savedHostPreparation)relatedOrigin.current=null;void restoreWorkspace(origin);return;}void navigate('butler');};
+ const returnFirstHomeModelInput=async(origin:WorkspaceOrigin,choice?:AIChoice)=>{
+  const input=origin.modelInput,visit=origin.firstHomeModel,documentEpoch=bridge.getDocumentEpoch();
+  if(route!=='model-settings'||origin.route!=='butler'||!input||!visit||input.conversation!==''||
+    taskOpen||taskOpening||setupReturnPending.current||choice?.accountOnly||choice?.target?.kind==='account'||!can('models.snapshot'))return false;
+  const expected={key:input.key,epoch:input.epoch,revision:visit.draftRevision};
+  const current=(live:ReturnType<typeof bridge.getState>,arrived=false)=>{
+   const draft=live.composer,view=obj(live.view),phone=obj(live.phoneDraft);
+   return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&openedTaskId.current===null&&
+    navigationWindow.current===visit.navigation+(arrived?1:0)&&(arrived||!setupReturnPending.current&&relatedOrigin.current===origin)&&
+    (view.section==='models'||arrived&&view.section===null)&&view.taskId===null&&!live.state.conversationReader&&
+    !live.state.filePath&&!live.state.conversationId&&!live.state.chatSubmitting&&!live.state.phoneSubmitting&&
+    phone.phone===false&&phone.channelOrigin===false&&draft?.ready===true&&draft.conversationId===''&&
+    draft.key===expected.key&&draft.epoch===expected.epoch&&draft.revision===expected.revision;
+  };
+  if(!current(bridge.getState()))return false;
+  const proof=obj(await bridge.command('models.snapshot',{originalHomeInput:expected}).catch(()=>null));
+  if(proof.originalHomeInputMatched!==true||proof.key!==expected.key||proof.epoch!==expected.epoch||
+     proof.revision!==expected.revision||!current(bridge.getState()))return false;
+  // The fresh window only admits this navigation. The original input's epoch is never replaced.
+  return await restoreWorkspace(origin,false,false,choice?()=>{
+   const live=bridge.getState(),returned=modelSetupInput(live,documentEpoch);
+   // The existing model choice is saved. This check did not read the current default.
+   if(returned)setModelSetupFeedback({input:returned,choice,modelRevision:live.state.modelSelectionRevision,
+    draftRevision:expected.revision,preferenceRevision:live.state.conversationModel?.revision});
+  }:undefined,undefined,current)===true;
+ };
+ const returnFromSecondary=()=>{
+  if(route==='profile'){returnFromProfile();return;}
+  if(setupReturnPending.current){void navigate('setup',undefined,{keepOrigin:true});return;}
+  const origin=relatedOrigin.current;
+  if(origin){
+   if(returnOriginalArchiveChat(origin))return;
+   if(route==='model-settings'&&origin.firstHomeModel?.navigation===navigationWindow.current){
+    setLocalError('');
+    void returnFirstHomeModelInput(origin).then(restored=>{
+     if(!restored&&!document.hidden&&relatedOrigin.current===origin&&origin.firstHomeModel?.navigation===navigationWindow.current)
+      setLocalError('原输入尚未核对，未打开另一份草稿。请在原设置页重试返回。');
+    });
+    return;
+   }
+   if(!origin.reviewedSkill&&!origin.modelInput&&!origin.projectModelInput&&!origin.savedHostPreparation)relatedOrigin.current=null;
+   void restoreWorkspace(origin);return;
+  }
+  void navigate('butler');
+ };
  // Opening the chooser from background preparation is navigation, not a mode change.
  const phoneSettingsOrigin=setupReturnPending.current?setupOrigin.current:relatedOrigin.current;
  const phoneSettingsPin=state.backgroundSetupOpen===true&&!taskOpen&&!phoneSettingsOrigin?.task&&!phoneSettingsOrigin?.phonePreparation&&can('phone.prepare')&&can('composer.intent')
@@ -1090,7 +1136,12 @@ export default function App(){
     selection.modelSelectionRevision>=0&&selection.modelSelectionRevision===live.state.modelSelectionRevision;
    if(pending&&current?.model.availability==='unconfigured'&&!current.model.configured&&!current.model.testing&&stableSelection&&
     !conversationModelName(live.state)&&live.capabilities.commands.includes('connections.enter')){
-    await openRelatedWorkspace('model-settings',origin);return;
+    const draft=live.composer,view=obj(live.view),phone=obj(live.phoneDraft);
+    const firstHomeModel=input&&route==='butler'&&!input.conversation&&input.key.startsWith('new:')&&
+     view.section===null&&view.taskId===null&&!live.state.filePath&&!live.state.chatSubmitting&&!live.state.phoneSubmitting&&
+     phone.phone===false&&phone.channelOrigin===false&&draft?.ready===true&&draft.text===chatDraft.currentValue()&&
+     Number.isSafeInteger(draft.revision)&&draft.revision>0?{navigation:navigation+1,draftRevision:Number(draft.revision)}:null;
+    await openRelatedWorkspace('model-settings',firstHomeModel?{...origin,firstHomeModel}:origin);return;
    }
    await openSetup(undefined,undefined,pending?'onboarding':'center',undefined,undefined,origin);
   }finally{openingModelSetup.current=false;setModelSetupOpening(false);}
@@ -1098,6 +1149,7 @@ export default function App(){
  const firstModelOrigin=route==='model-settings'?(setupReturnPending.current?setupOrigin.current:relatedOrigin.current):null;
  const returnOriginalModelInput=firstModelOrigin?.modelInput?async(choice:AIChoice)=>{
   const origin=firstModelOrigin, input=origin.modelInput!;
+  if(origin.firstHomeModel&&bridge.getDocumentEpoch()!==input.document)return returnFirstHomeModelInput(origin,choice);
   const navigation=navigationWindow.current;
   const stillOriginal=()=>!document.hidden&&navigationWindow.current===navigation&&
    sameModelSetupInput(input,bridge.getState(),bridge.getDocumentEpoch());
@@ -2885,6 +2937,7 @@ export default function App(){
   const progress=getRecentTaskProgress(task);
   const stage=workCollectionPresentation(task).group;
   const actionNames=asArray<{action:string;label:string}>(review?.actions).map(x=>x.action),approved=asArray<Json>(review?.approvals),unresolved=asArray<Json>(review?.unresolvedOperations);
+  const heldProfileApproval=task.raw?.workProfileRef&&originalTaskOverview(task)&&!taskNeedsReconciliation(task)&&savedUnsentProfileProjectApproval(task);
   const protectedDisabled=taskOpening||reviewPending||reviewStale||reviewSubmitted;
   const scope=obj(review?.approvalExecutionScope||review?.task?.raw?.executionScope),currentScope=obj(task.raw?.executionScope);
   const project=projectContinuation(review),continuation=continuations[task.id];
@@ -2920,15 +2973,15 @@ export default function App(){
   const projectControls=fixedDraftOptions||(managedProjectHold&&project?<p role="status">{project.reason}</p>:legacyBuildHold&&project? <>
    <p role="status">{project.reason}</p>
    {can('history.read')&&<Button variant="secondary" onClick={viewHeldBuild}>查看原执行记录</Button>}
-  </>:project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label="原项目续接范围">
+  </>:project&&<section id="pw-project-continuation-note" tabIndex={-1} aria-label={heldProfileApproval?'原项目与范围':'原项目续接范围'}>
    {review?.task&&!reviewStale&&<ContinuedProjectBinding key={review.reviewHandle} task={review.task} projects={projects} read={can('projectRuntime.read')?args=>bridge.command('projectRuntime.read',args):undefined}/>}
-   <p>{buildNext?.receiptWasLate&&lateDependencyObserved?'继续后先核对实际依赖。本机构建命令仍需你单独批准。':buildNext?'已核对同一副本的依赖准备命令退出 0，本轮还没有运行构建。继续后先核对实际依赖；本机构建命令仍需你单独批准。':'继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。'}</p>
-   <p className="pw-muted">工具调用已用 {String(scope.toolsUsed??'未读取')} / 总上限 {String(scope.toolLimit??'未读取')}；模型调用已用 {String(scope.modelCallsUsed??'未读取')} / 总上限 {String(scope.modelCallLimit??'未读取')}。本次不增加额度，不延长截止时间。</p>
-   <p className="pw-muted">{scope.deadlineAt===0?'沿用原任务未设置截止时间的范围，仍受剩余预算约束。':typeof scope.deadlineAt==='number'?`原截止时间：${new Date(scope.deadlineAt).toLocaleString('zh-CN')}。`:'原任务期限尚未读取。'}{scope.executionPhase==='planning'?' 原任务仍处于只读规划，继续不会批准具体执行。':''}</p>
-   {project.reason&&<p role="status" className="pw-muted">{project.reason}</p>}
+   {!heldProfileApproval&&<p>{buildNext?.receiptWasLate&&lateDependencyObserved?'继续后先核对实际依赖。本机构建命令仍需你单独批准。':buildNext?'已核对同一副本的依赖准备命令退出 0，本轮还没有运行构建。继续后先核对实际依赖；本机构建命令仍需你单独批准。':'继续同一项目任务会立即开始原任务工作，不会自动发送对话草稿。'}</p>}
+   <p className="pw-muted">工具调用已用 {String(scope.toolsUsed??'未读取')} / 总上限 {String(scope.toolLimit??'未读取')}；模型调用已用 {String(scope.modelCallsUsed??'未读取')} / 总上限 {String(scope.modelCallLimit??'未读取')}。{!heldProfileApproval&&'本次不增加额度，不延长截止时间。'}</p>
+   <p className="pw-muted">{scope.deadlineAt===0?heldProfileApproval?'原任务未设置截止时间。':'沿用原任务未设置截止时间的范围，仍受剩余预算约束。':typeof scope.deadlineAt==='number'?`原截止时间：${new Date(scope.deadlineAt).toLocaleString('zh-CN')}。`:'原任务期限尚未读取。'}{scope.executionPhase==='planning'?(heldProfileApproval?' 原任务仍处于只读规划。':' 原任务仍处于只读规划，继续不会批准具体执行。'):''}</p>
+   {!heldProfileApproval&&<>{project.reason&&<p role="status" className="pw-muted">{project.reason}</p>}
    <TextAreaField label={buildNext?'接下来核对什么':'本次修改要求'} value={projectNote} onChange={value=>putProjectFeedback(projectFeedbackKey(task),value)} placeholder={buildNext?'核对同一副本的实际依赖与构建命令':'看过原结果后，希望继续修改什么？'} hint={buildNext?(projectNote===''?'可以自己填写，或点下方按钮填入建议内容，不会继续或运行构建。':'先核对这里的内容，再明确继续。对话草稿不变。'):'必填，最多 8000 字。对话中的文字、引用和附件保持原样。'} isRequired maxLength={8000} showCount isDisabled={projectBlocked||!actionNames.includes('tasks.resume')}/>
    {!buildNext&&actionNames.includes('tasks.resume')&&actionNames.includes('tasks.confirm')&&<Button variant="secondary"
-     disabled={projectBlocked||!projectNote.trim()||projectNote.trim().length>8000} onClick={()=>reviewedAction('tasks.resume')}>按本次反馈继续项目任务</Button>}
+     disabled={projectBlocked||!projectNote.trim()||projectNote.trim().length>8000} onClick={()=>reviewedAction('tasks.resume')}>按本次反馈继续项目任务</Button>}</>}
   </section>);
   const resultFeedback=actionNames.includes('tasks.confirm')&&<Accordion variant="divided" className="pw-compact-disclosures"
    expandedKeys={reviewFeedbackOpen?['result-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('result-feedback'))}>
@@ -3057,14 +3110,15 @@ export default function App(){
   const reviewTools=(!fixedDraft||draftReviewReady)&&!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
     <div className="pw-section-heading pw-task-review-tools">{pendingNodeCommand?
       <Button disabled={questionPending} onClick={readPendingNodeCommand}>{pendingNodeCommand.action==='dependencies'?'核对本次依赖准备':'核对本机构建命令'}</Button>:
-      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{heldBuildKey?'读取原执行状态':draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':observedDraft?'核对原改稿的可用操作':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!heldBuildKey&&!lateDependencyObserved&&!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
+      <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{heldProfileApproval?'核对原项目与范围':heldBuildKey?'读取原执行状态':draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':observedDraft?'核对原改稿的可用操作':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!heldBuildKey&&!lateDependencyObserved&&!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
   const reviewStatus=<>
     {readingReview&&<ThinkingLoader phase="正在读取当前任务"/>}
+    {heldProfileApproval&&<p className="pw-field-hint" role="status">这一步的批准已保存，原步骤未派发。当前不能在这里续接原工作配置。</p>}
     {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
     {continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>returnToContinuationConversation(task,continuation)}>返回原对话，草稿保留</Button>}</section>}
     {draftAcceptanceSaved?<p className="pw-muted" role="status" data-fixed-draft-decision-fallback={settledOriginalDraft?true:undefined}>{draftAcceptance?.completed?'验收已记录，原稿保留。':'已记录目标尚未达到，原稿保留。'}</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
   </>;
-  const decision=(declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||attention(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
+  const decision=(heldProfileApproval||declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||attention(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
       {taskLayer==='overview'&&reviewStatus}
       {taskLayer==='overview'&&!reviewStale&&actionNames.includes('tasks.confirm')&&noSavedDraftInReview(task,review)&&<p className="pw-field-hint" role="status">本轮还没有可核对的独立改稿。</p>}
       {originalIntegrator&&<TeamOriginalFileReceipt key={task.id+':'+task.raw!.runId+':'+task.raw!.coordinatorEpoch} id={task.id} run={task.raw!.runId} epoch={task.raw!.coordinatorEpoch} directory={task.raw!.originalTeamFileEffects??(!reviewStale?review?.task?.raw?.originalTeamFileEffects:undefined)} disabled={taskOpening||reviewPending||!overviewActive} recover={input=>bridge.command('tasks.recoverTeamFile',input)}/>}
@@ -3087,7 +3141,7 @@ export default function App(){
        }</ConversationModelPickerVisibility>;
       })}
       {review&&!reviewStale&&phoneUnknown.length>0&&<PhoneOriginalActionReview key={review.reviewHandle} taskId={task.id} rows={phoneUnknown} more={task.raw?.privatePhoneUnconfirmed?.hasMore===true} disabled={protectedDisabled} allowRecord={actionNames.includes('tasks.resolve')} submit={args=>reviewedAction('tasks.resolve',args)}/>}
-      {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(inlineDraftDecision?draftOtherOperations:fixedDraft&&!actionNames.includes('tasks.confirm')?null:ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={originalDraftReview?'验收本轮原独立改稿':legacyBuildHold?'原执行记录':project&&!managedProjectHold?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':'处理这次任务'} headerAction={legacyBuildHold?undefined:refreshControl}><div className="pw-protected-actions">{originalDraftReview?<p className="pw-field-hint">这里只验收本轮的原固定稿，不会将你另存的改稿当作本次结果。</p>:projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion} onSaved={clearSavedQuestionAnswer}/>}{resultFeedback}{draftOtherOperations}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam||waitingManaged.length?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
+      {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(inlineDraftDecision?draftOtherOperations:fixedDraft&&!actionNames.includes('tasks.confirm')?null:ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={originalDraftReview?'验收本轮原独立改稿':legacyBuildHold?'原执行记录':project&&!managedProjectHold&&!heldProfileApproval?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':heldProfileApproval&&project?'原项目与范围':'处理这次任务'} headerAction={legacyBuildHold?undefined:refreshControl}><div className="pw-protected-actions">{originalDraftReview?<p className="pw-field-hint">这里只验收本轮的原固定稿，不会将你另存的改稿当作本次结果。</p>:projectControls}{review.ownerQuestion&&<OwnerTaskQuestion key={review.reviewHandle} question={review.ownerQuestion as OwnerQuestionView} text={questionAnswer} onTextChange={setQuestionAnswer} disabled={protectedDisabled} canAnswer={actionNames.includes('tasks.answerQuestion')} canChoose={actionNames.includes('tasks.answerQuestionChoice')} submit={submitQuestion} onSaved={clearSavedQuestionAnswer}/>}{resultFeedback}{draftOtherOperations}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam||waitingManaged.length?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
       {declinedTeam&&<DeclinedTeamStart key={declinedTeam.id} decision={declinedTeam}/>}
      </div>;
   return <Tabs className="pw-work-object-tabs" selectedKey={taskLayer==='scope'?'goal':taskLayer} onSelectionChange={key=>showTaskLayer(String(key) as TaskLayer)}>

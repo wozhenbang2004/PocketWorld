@@ -15,6 +15,46 @@ export function privateProjectTask(value: unknown): boolean {
   return text(task.id) && raw.kind === 'assistant' && raw.actorId === 'owner' && raw.spaceId === 'private' && raw.origin == null && text(context.projectId) && text(context.checkoutId);
 }
 
+/** A saved decision plus a positive pre-dispatch receipt, not usable approval or live runtime status. */
+export function savedUnsentProfileProjectApproval(value: unknown): string | undefined {
+  const task = object(value), raw = object(task.raw), context = object(raw.developmentContext);
+  const profile = object(raw.workProfileRef), audit = object(raw.historyOperationPage);
+  const sha = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+  const id = (v: unknown) => typeof v === 'string' && /^[a-f0-9-]{36}$/.test(v);
+  if (!privateProjectTask(task) || raw.id !== task.id || task.status !== 'awaiting_user' || raw.status !== task.status ||
+      raw.executionMode !== 'capabilities' || raw.cancelRequested !== false || raw.contextAvailable === false ||
+      raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true || raw.hasUnresolvedOperations !== false ||
+      raw.historyHasUnconfirmedOperations !== false || raw.taskProjection !== 'detail_window' || raw.taskCoreReadLimited !== false ||
+      raw.auditBodyIncluded !== true || context.format !== 'pocketworld.development-context.v1' || !sha(context.initialSourceDigest) ||
+      !id(raw.runId) || !epoch(raw.coordinatorEpoch) || profile.runId !== raw.runId || profile.epoch !== raw.coordinatorEpoch ||
+      !text(profile.profileId) || !Number.isSafeInteger(profile.revision) || profile.revision < 1 ||
+      !sha(profile.profileDigest) || !sha(profile.resolutionDigest)) return;
+  // Require the existing complete page to rule out a competing project call in this run. Do not fetch more history.
+  if (audit.format !== 'pocketworld.task-audit-page.v1' || audit.taskId !== task.id || audit.section !== 'operations' ||
+      audit.executionAuthorized !== false || audit.completeHistory !== true || audit.hasMore !== false || audit.readLimited !== false ||
+      !Array.isArray(audit.entries) || audit.entries.length > 24 || !Array.isArray(raw.approvals)) return;
+  const calls = audit.entries.map(object).filter(row => row.tool === 'project_execute' && row.runId === raw.runId);
+  if (calls.length !== 1) return;
+  const call = calls[0], receipt = object(call.receipt), args = object(call.arguments);
+  if (call.status !== 'available' || call.state !== 'receipt' || !id(call.operationId) ||
+      receipt.code !== 'approval_required' || receipt.status !== 'not_dispatched' || receipt.accepted !== false ||
+      receipt.projectExecution !== undefined || receipt.executionReceipt !== undefined || !id(receipt.approvalId) ||
+      !id(args.planRef) || !sha(args.planDigest) || !text(args.stepId) || Object.keys(args).length !== 3) return;
+  const approvals = raw.approvals.map(object), matching = approvals.filter((row: Data) => row.id === receipt.approvalId);
+  if (matching.length !== 1) return;
+  const approval = matching[0], reviewed = object(approval.arguments), capability = object(approval.capability);
+  const plan = object(capability.nativeProjectPlan), step = object(plan.step), request = object(step.request);
+  if (approval.runId !== raw.runId || approval.tool !== call.tool || approval.state !== 'approved' ||
+      approval.continuedFromRun != null || approval.policyDecision != null || !sha(approval.argumentsHash) ||
+      approvals.some((row: Data) => row !== approval && row.runId === raw.runId && ['pending', 'approved'].includes(row.state)) ||
+      Object.keys(reviewed).length !== 3 || reviewed.planRef !== args.planRef || reviewed.planDigest !== args.planDigest || reviewed.stepId !== args.stepId ||
+      capability.feature !== 'local' || capability.checkoutId !== context.checkoutId || capability.sourceDigest !== context.initialSourceDigest ||
+      plan.fullPlanStoredInOriginalTaskStore !== true || plan.executionAuthorized !== false || plan.planDigest !== args.planDigest ||
+      step.id !== args.stepId || !text(step.localCommand) || step.localCommand !== capability.command || request.checkoutId !== context.checkoutId ||
+      (request.expectedSourceDigest != null && request.expectedSourceDigest !== capability.sourceDigest)) return;
+  return approval.id;
+}
+
 function fixedDraftPin(value:unknown):FixedProjectDraft|undefined {
   const draft=object(value);
   if(text(draft.taskId)&&text(draft.runId)&&epoch(draft.epoch)&&text(draft.draftId)&&/^[a-f0-9]{64}$/.test(draft.draftId)&&text(draft.projectId)&&text(draft.checkoutId))
