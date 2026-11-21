@@ -38,10 +38,14 @@ export function ProjectAnswerAdjustmentDraft({messageId,quote,sourceRevision,ans
    finally{busy.current=false;onBusy(false);if(active.current)setPending(false);}
  };
  if(!anchored||!bridge.getState().capabilities.commands.includes('conversation.projectConvention.stageFeedback'))return null;
+ const comment=feedback.trim(), exactQuote=Number.isSafeInteger(sourceRevision)&&sourceRevision>0&&typeof quote==='string'&&!!quote.trim()&&quote.length<=4000;
+ const preview=(exactQuote||comment)&&<details><summary>{exactQuote?'草稿会带上原答复当时的项目约定 · 修订 '+sourceRevision:'查看将放入的完整草稿'}</summary>
+   <p className="pw-reading-copy" dir="auto">{'请调整本对话中 '+time+' 的那条答复。\n\n当时提供的项目约定（修订 '+sourceRevision+'）：\n'+quote+(comment?'\n\n我的修改意见：\n'+comment:'')}</p></details>;
  return <section aria-label="这条答复的修改意见">{!open?<Button variant="secondary" size="small" disabled={attempted.current} onClick={present}>写修改意见</Button>:<>
+   {exactQuote&&preview}
    <TextAreaField label="这条答复哪里需要调整？" value={feedback} onChange={setFeedback} maxLength={600} isDisabled={pending}/>
    <p className="pw-muted">只放入这个对话的空输入框。不会发送、修改项目约定或重新启动项目；发送前仍可修改、移除或选择“仅本条不自动整理”。</p>
-   {feedback.trim()&&<details><summary>查看将放入的完整草稿</summary><p className="pw-reading-copy" dir="auto">{'请调整本对话中 '+time+' 的那条答复。\n\n当时提供的项目约定（修订 '+sourceRevision+'）：\n'+quote+'\n\n我的修改意见：\n'+feedback.trim()}</p></details>}
+   {!exactQuote&&preview}
    <Button variant="secondary" size="small" disabled={pending||!feedback.trim()||feedback.trim().length>600} onClick={()=>void save()}>放入原对话输入框</Button>
    <Button variant="ghost" size="small" disabled={pending} onClick={()=>{setFeedback('');setInfo('');setOpen(false);}}>取消</Button>
  </>}{pending&&<p role="status">正在核对原回答并保存未发送草稿…</p>}{info&&<p role="status" className="pw-muted">{info}</p>}</section>;

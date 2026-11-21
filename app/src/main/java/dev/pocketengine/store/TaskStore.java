@@ -2529,6 +2529,25 @@ public final class TaskStore {
                 .put("effectiveDeadline",TaskExecutionScope.effectiveDeadline(scope)).put("mailboxOpen",task.optJSONObject("ownerInputMailbox")!=null&&task.getJSONObject("ownerInputMailbox").optBoolean("open"))
                 .put("pendingChildCount",pending).put("relatedStateUnavailable",unavailable).put("resultHandlingActive",activeHandling);
     }
+    /** Associating an ordinary private Work needs its current identity and source, not an audit page.
+     * Null means absent, outside the ordinary shape, or beyond the full-core bound; a known stale source rejects. */
+    public synchronized String boundedOwnerWorkReferenceLabel(String id,String run,int epoch)throws Exception {
+        JSONObject work=boundedHostWorkCore(id,false);
+        if(!OwnerWorkTask.isOwnerWork(work)||!work.isNull("origin")||work.has("parentTaskId")||
+                work.has("developmentContext")||work.has("ownerPhoneControl")||work.has(OWNER_DEVICE_WORK)||
+                work.has("ownerWorkPreparation")||work.has("ownerResultHandling")||work.has("ownerWorkTakeover")||
+                work.has("workProfileRef")||work.has("workProfileIntent")||work.has("projectMemoryRead")||
+                work.has("teamAssignment")||work.has("teamWriteScope")||work.has("sourceLearningJob"))return null;
+        if(!id.equals(work.opt("id")))throw new SecurityException("原工作已不可读取，请重新选择");
+        try{requireOwnerWorkSources(work);} // Same owner/private and native provenance gate as the UI projection.
+        catch(Exception unavailable){
+            if(unavailable instanceof InterruptedException||Thread.currentThread().isInterrupted())throw unavailable;
+            throw new SecurityException("原工作已不可读取，请重新选择");
+        }
+        if(!run.equals(work.opt("runId"))||epoch!=work.optLong("coordinatorEpoch"))
+            throw new IllegalStateException("这件工作已进入另一轮，请重新关联当前工作");
+        return work.optString("goal");
+    }
     /** Navigation is derived from the original two-way task link. It grants no
      * continuation, source reuse or permission to answer a team member. */
     private boolean originalOwnerWorkTeam(JSONObject work,JSONObject team,String parentRun)throws Exception {
@@ -18056,8 +18075,12 @@ public final class TaskStore {
         },check);
     }
     private JSONObject boundedHostWorkCore(String id)throws Exception {
-        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+" THEN document END, CASE WHEN length(CAST(ui_header AS BLOB))<=32768 THEN ui_header END FROM tasks WHERE task_id=?",new String[]{id})){
-            if(!row.moveToFirst()||row.isNull(0)&&row.isNull(1))return null;
+        return boundedHostWorkCore(id,true);
+    }
+    private JSONObject boundedHostWorkCore(String id,boolean allowHeader)throws Exception {
+        String header=allowHeader?", CASE WHEN length(CAST(ui_header AS BLOB))<=32768 THEN ui_header END":"";
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+" THEN document END"+header+" FROM tasks WHERE task_id=?",new String[]{id})){
+            if(!row.moveToFirst()||row.isNull(0)&&(!allowHeader||row.isNull(1)))return null;
             return new JSONObject(row.getString(row.isNull(0)?1:0));
         }
     }

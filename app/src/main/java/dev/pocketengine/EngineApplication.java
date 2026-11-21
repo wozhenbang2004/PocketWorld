@@ -2939,6 +2939,10 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         control.check();JSONObject ref=dev.pocketengine.features.assistant.OwnerObjectReferences.locator(supplied);
         String kind=ref.getString("kind"),id=ref.getString("id"),label="";JSONObject selected=null;
         if("work".equals(kind)){
+            String ordinaryLabel=tasks.boundedOwnerWorkReferenceLabel(id,ref.getString("runId"),ref.getInt("epoch"));
+            if(ordinaryLabel!=null){
+                control.check();return dev.pocketengine.features.assistant.OwnerObjectReferences.selected(ref,ordinaryLabel);
+            }
             selected=tasks.getForUi(id,false);
             if(selected==null||!"owner".equals(selected.optString("actorId"))||!"private".equals(selected.optString("spaceId"))||"inference".equals(selected.optString("kind"))
                     ||"source_unavailable".equals(selected.optString("taskProjection"))||!selected.optBoolean("contextAvailable",true))throw new SecurityException("原工作已不可读取，请重新选择");

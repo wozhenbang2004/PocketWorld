@@ -13,7 +13,8 @@ import './attachment-page.css';
 
 export type FileDraftTarget={key:string;epoch:number;revision:number;conversationId:string;label:string};
 export type FileResultTopic={taskId:string;conversationId:string;label:string};
-export type OriginalAttachmentChoice={fileId:string;sha256:string;name:string};
+type StandaloneDocument={taskId:string;mimeType:string;size:number};
+export type OriginalAttachmentChoice={fileId:string;sha256:string;name:string;standaloneDocument?:StandaloneDocument};
 type Props={
  state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event)=>void;openTaskId?:string;
  canReturnToOpenWork?:(current:Json)=>boolean;
@@ -25,6 +26,7 @@ type Props={
  onAdoptFileNote?:(note:SavedFileNote,frame:AttachmentFrame,closeOriginal:()=>Promise<unknown>)=>Promise<void>;
  onVerifyReportFileWork?:(taskId:string,windowId:string)=>Promise<void>;
  onChooseAttachment?:(file:OriginalAttachmentChoice,target:FileDraftTarget,stillCurrent:()=>boolean,closeOriginal:()=>Promise<void>)=>Promise<void>;
+ canChooseStandaloneDocument?:boolean;
 };
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
@@ -57,12 +59,38 @@ const editableDocumentMimes=new Set([
  'application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document',
  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 ]);
+export function matchesStandaloneDocumentBook(file:Json,document:StandaloneDocument){
+ const source=obj(file.source),publication=obj(source.nativePublication),id=document.taskId;
+ return file.principalId==='owner'&&file.spaceId==='private'&&file.outputSourceRetired!==true&&
+  file.mimeType===document.mimeType&&file.size===document.size&&source.kind==='created_document'&&!Object.hasOwn(source,'groupSpaceId')&&
+  source.taskId===id&&source.runId===id&&source.operationId===id&&publication.role==='document_output'&&
+  publication.taskId===id&&publication.runId===id&&publication.operationId===id&&
+  typeof source.planDigest==='string'&&/^[a-f0-9]{64}$/.test(source.planDigest)&&publication.planDigest===source.planDigest;
+}
+function standaloneDocumentSelection(view:Json):StandaloneDocument|undefined{
+ const scope=obj(view.snapshot),file=obj(view.file),reader=obj(view.originalFile),id=view.taskId;
+ if(view.open!==true||view.ready!==true||view.canSaveOriginal!==true||
+    view.group!==false||view.team!==false||view.deviceOriginalOnly!==false||view.historyResultOnly!==false||view.reportResultOnly!==false||
+    view.resultFilesOnly!==false||view.fromWorkResult!==false||view.choosingSource!==false||
+    typeof id!=='string'||!/^[a-f0-9-]{36}$/.test(id)||scope.taskId!==id||scope.taskRunId!==id||
+    scope.coordinatorEpoch!==1||scope.originalDocumentActionId!==id||!exactFileTarget(file))return;
+ const kind=file.mimeType==='application/pdf'?'pdf':
+    file.mimeType==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'?'office':'';
+ if(!kind||reader.kind!==kind||reader.sourceUnavailable!==false||!reader.id||
+    reader.sha256!==file.sha256||reader.mimeType!==file.mimeType||reader.size!==file.size||
+    !Number.isSafeInteger(file.size)||file.size<=0)return;
+ const document={taskId:id,mimeType:file.mimeType,size:file.size};
+ const listed=file.role==='result'&&file.availability==='available'&&file.sourceKind==='created_document'&&
+    file.sourceTaskId===id&&file.sourceTaskRunId===id&&file.sourceOperationId===id;
+ const rechecked=file.found===true&&file.originalPublication===true&&file.taskId===id&&matchesStandaloneDocumentBook(file,document);
+ return listed||rechecked?document:undefined;
+}
 function documentSourceKey(record:Json,source:Json=record){
  const file=exactFileTarget(source),scope=[record.sourceTaskId,record.sourceTaskRunId,record.sourceOperationId];
  return file&&scope.every(key=>typeof key==='string'&&key)?JSON.stringify([...scope,file.fileId,file.sha256]):'';
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,canChooseStandaloneDocument}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -250,7 +278,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const editDocument=(variant:'primary'|'secondary'|'ghost')=><Button variant={variant} disabled={busy||draftBusy||view.exportPending||!!view.pendingDocumentTask}
   onClick={()=>run('continueDocument')}>从此版继续编辑</Button>;
  const offerDocumentEdit=canEditDocument&&canSaveOriginal&&!state.chatAttachmentPickerOpen;
- const canChooseAttachment=!scopedResultOnly&&!view.taskId&&canSaveOriginal&&!!draftTarget&&!!selection&&!!onChooseAttachment;
+ const standaloneDocument=canChooseStandaloneDocument?standaloneDocumentSelection(view):undefined;
+ const canChooseAttachment=!scopedResultOnly&&(!view.taskId||!!standaloneDocument)&&canSaveOriginal&&!!draftTarget&&!!selection&&!!onChooseAttachment;
  const attachmentChoiceError=mode==='original'&&canChooseAttachment&&error;
  const chooseAttachment=async()=>{
   if(!canChooseAttachment||busy||draftBusy||view.exportPending||attachmentFlight.current||!onChooseAttachment||!draftTarget||!selection)return;
@@ -258,12 +287,16 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   const read=()=>obj(bridge.getState().state.attachmentWorkspace);
   const stillCurrent=()=>{
    const native=read(),selected=obj(native.file);
-   return alive.current&&!document.hidden&&bridge.getDocumentEpoch()===epoch&&native.open===true&&native.ready===true&&native.windowId===windowId&&
-    !native.taskId&&!native.busy&&native.canSaveOriginal===true&&selected.id===selection.fileId&&selected.sha256===selection.sha256;
+   if(!alive.current||document.hidden||bridge.getDocumentEpoch()!==epoch||native.open!==true||native.ready!==true||native.windowId!==windowId||
+      native.busy||native.canSaveOriginal!==true||selected.id!==selection.fileId||selected.sha256!==selection.sha256)return false;
+   if(!standaloneDocument)return !native.taskId;
+   const current=standaloneDocumentSelection(native);
+   return current?.taskId===standaloneDocument.taskId&&current.mimeType===standaloneDocument.mimeType&&current.size===standaloneDocument.size&&
+    obj(native.originalFile).id===original.id;
   };
   if(!stillCurrent())return;
   attachmentFlight.current=true;setPending(count=>count+1);setError('');
-  try{await onChooseAttachment({...selection,name:String(file.name||'原件')},draftTarget,stillCurrent,async()=>{
+  try{await onChooseAttachment({...selection,name:String(file.name||'原件'),standaloneDocument},draftTarget,stillCurrent,async()=>{
    if(!stillCurrent())throw new Error('原文件窗口已变化，没有打开附件选择。');
    const frame=attachmentFrame(read());
    if(!frame)throw new Error('请在固定原件重开附件选择。');

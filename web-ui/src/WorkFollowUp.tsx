@@ -1,4 +1,5 @@
 import { Button } from './forms-library';
+import { bridge } from './bridge';
 import { ProgressCircle } from './library';
 import { MotionFeedback } from './library/journey-motion';
 import { IconAttention, IconCheckCircle, IconChevronRight, IconClock, IconError, IconFileText, IconHistory, IconInfo, IconPauseCircle, IconReview, IconStop } from './icons';
@@ -100,6 +101,30 @@ function StateMark({ item }: { item: WorkReading }) {
   const Icon = marker[item.kind];
   return <span className="pw-follow-mark" aria-hidden>{item.busy ? <ProgressCircle aria-label={item.label} isIndeterminate size="sm"/> : <Icon size={18}/>}</span>;
 }
+function ordinaryReviewPin(task: WorkCollectionTask) {
+  const raw = task.raw, work = raw?.ownerWork, topic = raw?.conversationId;
+  if (!raw || !task.id || raw.id !== task.id || raw.actorId !== 'owner' || raw.spaceId !== 'private' ||
+    raw.kind !== 'assistant' || raw.executionRole !== 'owner_work' || raw.status !== task.status ||
+    raw.origin != null || raw.parentTaskId != null || raw.teamRunId != null || raw.developmentContext || raw.ownerDeviceWork || raw.ownerPhoneControl ||
+    raw.contextAvailable !== true || raw.contextWithdrawn === true || raw.taskProjection === 'source_unavailable' ||
+    raw.sourceCurrentReadRequired === true || raw.metadataLimited === true || raw.taskCoreReadLimited === true ||
+    work?.format !== 'pocketworld.owner-work.v1' || work.workTaskId !== task.id || work.conversationId !== topic ||
+    typeof topic !== 'string' || !topic.trim() || typeof raw.runId !== 'string' || !raw.runId.trim() ||
+    !Number.isSafeInteger(raw.coordinatorEpoch) || raw.coordinatorEpoch <= 0 ||
+    typeof task.updatedAt !== 'number' || !Number.isSafeInteger(task.updatedAt) || task.updatedAt <= 0) return;
+  return JSON.stringify([task.id, raw.runId, raw.coordinatorEpoch, topic, task.status, task.updatedAt]);
+}
+
+/** App's ordinary overview already reads the review for this live attention row.
+ * A directory-only row does not prove those two actions are equivalent. */
+function overviewSharesCurrentReview(item: WorkReading) {
+  if (!item.ownerRequest || item.next.entry !== 'review' || item.receipt?.entry !== 'overview') return false;
+  const shown = ordinaryReviewPin(item.task), tasks = bridge.getState().state.tasks;
+  if (!shown || !Array.isArray(tasks)) return false;
+  const same = tasks.filter(task => task?.id === item.task.id);
+  return same.length === 1 && ordinaryReviewPin(same[0]) === shown && workCollectionPresentation(same[0]).group === 'attention';
+}
+
 type ActionProps = { item: WorkReading; canOpen: boolean; visit: (task: WorkCollectionTask, entry: WorkEntry) => void };
 
 export function WorkBrief({ item, canOpen, visit }: ActionProps) {
@@ -109,7 +134,7 @@ export function WorkBrief({ item, canOpen, visit }: ActionProps) {
   // Name what was actually read. If the two projections quote the same event, show it once.
   if (context && !(record && (record.text === context.text || record.text.endsWith('：' + context.text)))) facts.push(context);
   if (record) facts.push(record);
-  const receipt = next.entry !== 'overview' ? item.receipt : undefined;
+  const receipt = next.entry !== 'overview' && !(canOpen && overviewSharesCurrentReview(item)) ? item.receipt : undefined;
   const related = receipt || (next.entry === 'review' && record ? process('查看执行记录') : undefined);
   // A terminal run without an attached result is not evidence of successful delivery.
   if (kind === 'ended' && item.resultState && !item.receipt)

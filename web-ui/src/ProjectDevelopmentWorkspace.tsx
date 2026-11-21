@@ -748,6 +748,18 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const acceptedWorkAtTop = buildStepVisible && !versionBuild && !!acceptedBuild && can('tasks.open');
   const showMissingLock = buildStepVisible && !!missingRequiredLock && !versionWorkAtTop && !acceptedWorkAtTop;
   const exactBuildNext = !!(firstBuildAction || versionWorkAtTop || acceptedWorkAtTop || showMissingLock);
+  // Recognizing Python and its tools only brings the existing scope review closer.
+  // The terminal's native review still reads the current copy and execution conditions.
+  const savedScriptTooling=source?.checkoutTooling, terminalRuntime=view?.runtime;
+  const terminalBySave=canPrepareTerminal&&buildStepVisible&&!differentBuildCopy&&!exactBuildNext&&selectedCopy?.draftWorkingCopy===false&&
+    view?.model?.configured===false&&!!savedFileHere&&/\.py$/.test(savedFileHere.path)&&sourceHash(savedFileHere.savedHash)&&!!sourceVersion&&
+    savedScriptTooling?.readOnly===true&&savedScriptTooling.projectId===projectId&&savedScriptTooling.checkoutId===checkout&&
+    savedScriptTooling.sourceDigest===sourceVersion&&savedScriptTooling.runtimeId==='managed_process_v1'&&savedScriptTooling.runtimeReady===true&&
+    Array.isArray(savedScriptTooling.kinds)&&savedScriptTooling.kinds.length===1&&savedScriptTooling.kinds[0]==='python'&&
+    Array.isArray(savedScriptTooling.observedTools)&&['python3','sh'].every(tool=>savedScriptTooling.observedTools.includes(tool))&&
+    terminalRuntime?.runtimeId==='managed_process_v1'&&terminalRuntime.canExecute===true&&terminalRuntime.ptyAvailable===true;
+  const terminalAction=canPrepareTerminal&&<div className="pw-form-actions"><Button variant={terminalBySave?'secondary':'ghost'} disabled={disabled}
+    data-workspace-entry="project-copy-terminal" onClick={prepareTerminal}>{terminalBySave?'核对本机终端':'准备这份副本的终端'}</Button></div>;
   const openSelectedCopyFiles = () => {
     if (!selectedCopy || draft.current.checkoutId!==selectedCopy.checkoutId || !can('projects.development.files.open')) return;
     setHostEditor(null); setFileWindow({checkoutId:selectedCopy.checkoutId});
@@ -955,9 +967,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         {versionChanged ? <>当前已保存源码 <code>{source?.sourceDigest.slice(0,8)}</code> 不同于原构建 <code>{comparedBuild.sourceDigest.slice(0,8)}</code>。旧批准不会用于新版本。</>
           : '当前已保存源码仍是原构建使用的版本。'}
       </p>}
-      {!filesOpen && savedFileHere && <p className="pw-field-hint pw-checkout-identity">
-        上次确认保存：<bdi>{savedFileHere.path}</bdi> · <code>{savedFileHere.savedHash.slice(0,10)}</code>。重开时会核对原文件，没有另存一份历史副本。
-      </p>}
+      {!filesOpen && savedFileHere && <>
+        <p className="pw-field-hint pw-checkout-identity">
+          上次确认保存：<bdi>{savedFileHere.path}</bdi> · <code>{savedFileHere.savedHash.slice(0,10)}</code>。重开时会核对原文件，没有另存一份历史副本。
+        </p>
+        {terminalBySave&&terminalAction}
+      </>}
       {!filesOpen&&importedEntry&&<p className="pw-field-hint pw-checkout-identity">
         {importedEntry.root?<>副本顶层保留了 <bdi>{importedEntry.root}/</bdi>。入口源码：</>:<>副本顶层的入口源码：</>}
         <bdi>{importedEntry.path}</bdi>。{webTools?.kind==='static'?' 可直接编辑，不用准备 Node.js。':''}
@@ -1032,8 +1047,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {view?.viewHandle && available.some(row=>row.checkoutId===checkout && row.taskPackageSource===true) &&
         <ProjectTaskPackageOrigin key={view.viewHandle+':'+checkout} project={projectId} checkout={checkout} view={view.viewHandle}
           disabled={busy||!!review||filesOpen} invoke={invoke} can={can} open={onOpenPackageOriginal}/>}
-      {canPrepareTerminal && <div className="pw-form-actions"><Button variant="ghost" disabled={disabled} data-workspace-entry="project-copy-terminal"
-        onClick={()=>void prepareTerminal()}>准备这份副本的终端</Button></div>}
+      {!terminalBySave&&terminalAction}
       {view.model?.configured !== true && (!exactBuildNext || !['model','preview'].includes(firstBuildAction)&&!!goal.trim()) &&
         <p className="pw-local-inline-notice">交办目标需要默认模型；直接编辑文件、找回已保存的网页不需要。<Button variant={exactBuildNext?'ghost':'secondary'}
           disabled={busy || pending || !!review || filesOpen || exactBuildNext&&(disabled||!can('projects.development.draft'))}

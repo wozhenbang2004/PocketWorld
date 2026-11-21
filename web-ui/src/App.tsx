@@ -53,7 +53,7 @@ import {NewConversationMemory} from './NewConversationMemory';
 import DeveloperDiagnosticsWorkspace from './DeveloperDiagnosticsWorkspace';
 import {SetupWorkspace,type SetupDestination,type SetupView} from './SetupWorkspace';
 import {readSetup,type SetupCapability} from './setup-contract';
-import {AttachmentWorkspace,type FileDraftTarget,type FileResultTopic,type OriginalAttachmentChoice} from './AttachmentWorkspace';
+import {AttachmentWorkspace,matchesStandaloneDocumentBook,type FileDraftTarget,type FileResultTopic,type OriginalAttachmentChoice} from './AttachmentWorkspace';
 import type {SavedFileNote} from './AttachmentDocumentEditor';
 import RemoteInboxWorkspace,{type NotificationViewMemory} from './RemoteInboxWorkspace';
 import type {TeamAttentionLocator} from './NotificationTeamAttention';
@@ -2355,6 +2355,7 @@ export default function App(){
   const rows=asArray<Json>(obj(obj(frame.moduleResults)['attachments.list']).attachments).filter(row=>row?.id===file.fileId&&(fromMessage||row.sha256===file.sha256));
   const boundOutput=fromMessage?.liveResult,bookSource=obj(rows[0]?.source);
   return inputs._failed!==true&&rows.length===1&&rows[0].sha256===file.sha256&&rows[0].outputSourceRetired!==true&&
+   (!file.standaloneDocument||matchesStandaloneDocumentBook(rows[0],file.standaloneDocument))&&
    (!fromMessage||rows[0].principalId==='owner'&&rows[0].spaceId==='private'&&!!exactFileTarget(rows[0])&&!Object.hasOwn(bookSource,'groupSpaceId'))&&
    (!boundOutput||rows[0].mimeType===boundOutput.mimeType&&rows[0].size===boundOutput.size&&bookSource.kind===boundOutput.kind&&
     bookSource.taskId===boundOutput.result.taskId&&bookSource.runId===boundOutput.result.runId);
@@ -2400,9 +2401,10 @@ export default function App(){
    if(!shown&&launch.requestId)void bridge.command('attachments.closePicker',{pickerRequestId:launch.requestId}).catch(()=>{});
   }
  };
- const messageAttachmentDraft=route==='chat'&&!!state.conversationId&&canChooseFileForDraft&&!draftSwitching&&!state.attachmentWorkspace?.open&&
+ const existingPrivateAttachmentDraft=route==='chat'&&!!state.conversationId&&canChooseFileForDraft&&!draftSwitching&&
   !state.queuedInputsPage&&!state.filePath&&phoneDraft.phone===false&&phoneDraft.channelOrigin===false&&
   fileDraftTarget?.key===`conversation:${state.conversationId}`&&ordinaryDraftRevision===fileDraftTarget?.revision?fileDraftTarget:undefined;
+ const messageAttachmentDraft=!state.attachmentWorkspace?.open?existingPrivateAttachmentDraft:undefined;
  const chooseSavedMessageAttachment=async(message:Message,file:OriginalAttachmentChoice,draft:FileDraftTarget)=>{
   const documentEpoch=personalDocumentEpoch,navigation=navigationRevision;
   const resume=obj(snapshot?.view).resumeRevision;
@@ -2426,7 +2428,7 @@ export default function App(){
  const filePickerVisible=!!fileAttachmentPicker&&!fileAttachmentPickerLaunch.current?.cancelled&&state.chatAttachmentPickerRequest===fileAttachmentPicker.requestId&&
   focusedFileDraftCurrent(fileAttachmentPicker);
  const focusedInventoryReady=filePickerVisible&&obj(obj(state.moduleResultInputs)['attachments.list'])._requestId===fileAttachmentPicker?.requestId&&
-  !asArray<string>(state.moduleBusy).includes('attachments.list')&&(!fileAttachmentPicker?.sourceMessage||
+  !asArray<string>(state.moduleBusy).includes('attachments.list')&&(!fileAttachmentPicker?.sourceMessage&&!fileAttachmentPicker?.file.standaloneDocument||
    fileInPicker(fileAttachmentPicker.file,fileAttachmentPicker.requestId,fileAttachmentPicker.sourceMessage)===true);
  useEffect(()=>{
   if(!fileAttachmentPicker)return;
@@ -2459,7 +2461,7 @@ export default function App(){
   const origin=fileAttachmentPicker,native=bridge.getState(),input=obj(native.composer);
   if(!origin||fileAttachmentPickerLaunch.current?.cancelled||id!==origin.file.fileId||sha256!==origin.file.sha256||!focusedFileDraftCurrent(origin)||
      native.state.chatAttachmentPickerRequest!==origin.requestId||!Number.isSafeInteger(input.revision)||
-     origin.sourceMessage&&(input.revision!==composer.revision||fileInPicker(origin.file,origin.requestId,origin.sourceMessage)!==true))return;
+     (origin.sourceMessage||origin.file.standaloneDocument)&&(input.revision!==composer.revision||fileInPicker(origin.file,origin.requestId,origin.sourceMessage)!==true))return;
   run('attachments.toggle',{id,sha256,selected,key:origin.draft.key,epoch:origin.draft.epoch,revision:input.revision,pickerRequestId:origin.requestId});
  };
  const fileDraftConversationLoaded=(native:Json,conversationId:string,earlierRead?:string)=>{
@@ -4937,6 +4939,7 @@ export default function App(){
    onChooseResultAttachment={resultAttachmentAvailable?chooseFileInOriginalTopic:liveChatResultAttachmentAvailable?chooseLiveChatResultAttachment:undefined}
    onAdoptFileNote={fileResultTopic&&fileNoteTarget(snapshot,fileResultTopic)?(note,frame,close)=>adoptFileNote(fileResultTopic,note,frame,close):undefined}
    onVerifyReportFileWork={taskLayer==='homeReport'&&can('ownerWork.report.read')?verifyReportFileWork:undefined}
+   canChooseStandaloneDocument={!!existingPrivateAttachmentDraft}
    onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.())closeTask(true)}else setTaskOpen(true)}} direction="right" handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{

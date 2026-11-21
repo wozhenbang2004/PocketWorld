@@ -372,7 +372,11 @@ internal class AttachmentOutcomeCoordinator(
     }
     private fun showPublishedDocument(action:String,file:JSONObject,notice:String){
         val inLibrary=privateLibrary()
-        val catalog=state.snapshot?.takeIf{inLibrary&&it.opt("taskId")==""}
+        val catalog=state.snapshot?.takeIf{
+            if(inLibrary)it.opt("taskId")==""
+            else state.taskId==action&&state.documentDraft==null&&!state.fromWorkResult&&state.resultRun==null&&
+                file.opt("found")==true&&originalDocumentAction(action,it)==action
+        }
         val retainedImport=state.libraryImport.takeIf{inLibrary}
         val published=if(inLibrary)JSONObject(file.toString()).put("role","result")
             .put("sourceKind","created_document").put("sourceTaskId",action) else file
