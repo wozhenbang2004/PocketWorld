@@ -622,7 +622,10 @@ public final class TaskStore {
     }
     /** Native, body-free original USER identities. Missing legacy materialization is not proof. */
     public synchronized JSONArray scheduleProposalUserRefs(String id,String run,int epoch,String conversation)throws Exception {
-        JSONObject task=required(id);requirePrivateOwner(task);if(task.optJSONObject("origin")!=null||!"assistant".equals(task.optString("kind"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||conversation==null||conversation.isBlank()||!conversation.equals(task.optString("conversationId")))throw new SecurityException("原私人对话任务执行身份已变化");
+        return scheduleProposalUserRefs(required(id),id,run,epoch,conversation);
+    }
+    private JSONArray scheduleProposalUserRefs(JSONObject task,String id,String run,int epoch,String conversation)throws Exception {
+        requirePrivateOwner(task);if(task.optJSONObject("origin")!=null||!"assistant".equals(task.optString("kind"))||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||conversation==null||conversation.isBlank()||!conversation.equals(task.optString("conversationId")))throw new SecurityException("原私人对话任务执行身份已变化");
         JSONArray inputs=task.optJSONArray("ownerInputs"),refs=new JSONArray();java.util.Set<String> seen=new java.util.HashSet<>();if(inputs==null||inputs.length()>64)throw new SecurityException("旧提案缺原生主人输入纳入证明，请在原私聊重新提出");
         if(OwnerWorkTask.isOwnerWork(task)){
             requireOwnerWorkSources(task);JSONArray initial=task.getJSONObject("ownerWork").getJSONArray("sourceMessageRefs"),messages=checkpoint(run).optJSONArray("messages");java.util.Map<String,Long> included=new java.util.HashMap<>();
@@ -639,11 +642,9 @@ public final class TaskStore {
                 .put("conversationId",conversationId).put("taskId",taskId).put("runId",runId).put("epoch",epoch);}
         public JSONObject view()throws Exception{return new JSONObject().put("conversationId",conversationId).put("taskId",taskId)
                 .put("runId",runId).put("epoch",epoch).put("replyId",replyId);}
-        private boolean matchesOrigin(JSONObject origin){return origin!=null&&origin.length()==6&&"owner".equals(origin.opt("ownerId"))
-                &&"private".equals(origin.opt("spaceId"))&&conversationId.equals(origin.opt("conversationId"))&&taskId.equals(origin.opt("taskId"))
-                &&runId.equals(origin.opt("runId"))&&Integer.valueOf(epoch).equals(origin.opt("epoch"));}
     }
     public record OriginalReminderProposal(String id,String digest,String operation,String generation){}
+    private record OriginalReminderOperation(String id,String digest,String operation){}
     /** Only under the existing original schedule source transaction: a sole real
      * inert operation on a sole materialized private input, tied to this actual reply. */
     public synchronized OriginalReminderProposal originalReminderForReply(OriginalReminderReply reply)throws Exception{
@@ -653,29 +654,39 @@ public final class TaskStore {
                 ||!reply.runId().equals(task.opt("runId"))||reply.epoch()!=task.optInt("coordinatorEpoch")
                 ||task.optBoolean("cancelRequested")||!task.optString("status").matches("completed|needs_confirmation")
                 ||hasUnresolved(reply.taskId()))return null;
+        OriginalReminderOperation operation=originalReminderOperation(reply.taskId(),reply.runId(),reply.epoch(),reply.conversationId());
+        if(operation==null)return null;
+        JSONArray refs=scheduleProposalUserRefs(task,reply.taskId(),reply.runId(),reply.epoch(),reply.conversationId());
+        if(refs.length()!=1)return null;
+        var input=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
+        if(!reply.ownerMessageId().equals(input.sourceId))return null;
+        String generation=conversationRepository.originalReminderReplyGeneration(reply.conversationId(),reply.messageId(),
+                reply.sourceRevision(),reply.taskId(),reply.runId(),reply.epoch(),reply.replyId(),input);
+        return generation==null?null:new OriginalReminderProposal(operation.id(),operation.digest(),operation.operation(),generation);
+    }
+    /** The same bounded actual operation receipt for a saved reply hint and a later explicit review. */
+    private OriginalReminderOperation originalReminderOperation(String taskId,String runId,int epoch,String conversationId)throws Exception{
         String operation;JSONObject proposal;
         // Count any original attempt, including unsuccessful/unknown, before selecting.
         try(Cursor rows=db.rawQuery("SELECT operation_id,state,CASE WHEN length(CAST(receipt AS BLOB))<=16384 THEN receipt END "
                 +"FROM operations WHERE task_id=? AND run_id=? AND tool='schedule_propose' LIMIT 2",
-                new String[]{reply.taskId(),reply.runId()})){
+                new String[]{taskId,runId})){
             if(!rows.moveToFirst()||!"receipt".equals(rows.getString(1))||rows.isNull(2))return null;
             operation=rows.getString(0);JSONObject receipt=new JSONObject(rows.getString(2));
             if(rows.moveToNext()||!Boolean.TRUE.equals(receipt.opt("ok"))||!Boolean.TRUE.equals(receipt.opt("reviewRequired"))
                     ||!Boolean.FALSE.equals(receipt.opt("scheduled"))||!Boolean.FALSE.equals(receipt.opt("executionAuthorized")))return null;
             proposal=receipt.optJSONObject("proposal");
         }
+        JSONObject origin=proposal==null?null:proposal.optJSONObject("origin");
         if(operation==null||!operation.matches("[a-f0-9-]{36}")||proposal==null
                 ||!proposal.optString("id").matches("[a-f0-9-]{36}")||!proposal.optString("digest").matches("[a-f0-9]{64}")
                 ||!"pending".equals(proposal.opt("status"))||!Boolean.FALSE.equals(proposal.opt("executionAuthorized"))
-                ||!(reply.taskId()+":"+operation).equals(proposal.opt("identity"))||!reply.matchesOrigin(proposal.optJSONObject("origin"))
+                ||!(taskId+":"+operation).equals(proposal.opt("identity"))||origin==null||origin.length()!=6
+                ||!"owner".equals(origin.opt("ownerId"))||!"private".equals(origin.opt("spaceId"))
+                ||!taskId.equals(origin.opt("taskId"))||!conversationId.equals(origin.opt("conversationId"))
+                ||!runId.equals(origin.opt("runId"))||!Integer.valueOf(epoch).equals(origin.opt("epoch"))
                 ||proposal.optJSONObject("draft")==null||!"reminder".equals(proposal.optJSONObject("draft").opt("kind")))return null;
-        JSONArray refs=scheduleProposalUserRefs(reply.taskId(),reply.runId(),reply.epoch(),reply.conversationId());
-        if(refs.length()!=1)return null;
-        var input=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
-        if(!reply.ownerMessageId().equals(input.sourceId))return null;
-        String generation=conversationRepository.originalReminderReplyGeneration(reply.conversationId(),reply.messageId(),
-                reply.sourceRevision(),reply.taskId(),reply.runId(),reply.epoch(),reply.replyId(),input);
-        return generation==null?null:new OriginalReminderProposal(proposal.getString("id"),proposal.getString("digest"),operation,generation);
+        return new OriginalReminderOperation(proposal.getString("id"),proposal.getString("digest"),operation);
     }
     /** Only the already-prepared inert schedule draft may cross this native entry.
      * Its own prepared row is not an unrelated unknown effect; every other unresolved row is. */
@@ -12599,18 +12610,19 @@ public final class TaskStore {
     /** One actual completed request on the original task; this is data evidence, never a grant. */
     public static final class QueuedOwnerReplySelection {
         private final TaskStore issuer;
-        private final String inputs;
+        private final String inputs,originalReminderOperation;
         private boolean active=true;
         public final String taskId,conversationId,runId;
         public final int epoch;
         public final dev.pocketengine.runtime.AgentRunner.OwnerReply completed;
-        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs)throws Exception{
-            this.issuer=issuer;taskId=task.getString("id");conversationId=task.getString("conversationId");runId=task.getString("runId");epoch=task.getInt("coordinatorEpoch");this.completed=completed;this.inputs=inputs.toString();
+        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation)throws Exception{
+            this.issuer=issuer;taskId=task.getString("id");conversationId=task.getString("conversationId");runId=task.getString("runId");epoch=task.getInt("coordinatorEpoch");this.completed=completed;this.inputs=inputs.toString();this.originalReminderOperation=originalReminderOperation;
         }
         public void requireMutationScope(TaskStore original){
             if(!active||issuer!=original||!Thread.holdsLock(original)||!original.db.inTransaction())throw new SecurityException("采用回执不在原任务的同一消息事务内");
         }
         public JSONArray inputs()throws Exception{requireMutationScope(issuer);return new JSONArray(inputs);}
+        public String originalReminderOperation(){requireMutationScope(issuer);return originalReminderOperation;}
     }
     /** Records already-checkpointed model facts, including an explicit same-task resume.
      * Does not open activeChat, mint an input/grant, dispatch, retry, or refund an inference. */
@@ -12641,7 +12653,17 @@ public final class TaskStore {
                 long revision=OwnerInputQueue.integer(row.opt("ownerMessageRevision"));if(revision<1||revision!=OwnerInputQueue.integer(message.opt("ownerMessageRevision"))||!"user".equals(message.optString("role")))throw new SecurityException("采用回执的主人消息版本不一致");
                 conversationRepository.requireQueuedOwnerMessageCurrent(task.getString("conversationId"),row);selectedRows.put(new JSONObject(row.toString()));
             }
-            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows);JSONObject result;
+            String reminderOperation=null;
+            if(selectedRows.length()==1&&OwnerWorkTask.isButlerSource(task)&&!original.isCancelled()&&!task.optBoolean("cancelRequested"))try{
+                String conversation=task.getString("conversationId");
+                OriginalReminderOperation recorded=originalReminderOperation(completed.taskId,run,epoch,conversation);
+                if(recorded!=null){
+                    JSONArray refs=scheduleProposalUserRefs(task,completed.taskId,run,epoch,conversation);
+                    if(refs.length()==1&&selectedRows.getJSONObject(0).getString("messageId").equals(refs.getJSONObject(0).opt("sourceId")))
+                        reminderOperation=recorded.operation();
+                }
+            }catch(Exception unavailable){/* A presentation hint cannot block saving the original answer. */}
+            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation);JSONObject result;
             try{result=mutation.apply(selected);}finally{selected.active=false;}
             if(task.has("ownerWorkPreparation")){
                 JSONObject saved=result==null?null:result.optJSONObject("message");if(saved==null||!completed.taskId.equals(saved.optString("taskId"))||!run.equals(saved.optString("nativeRunId"))||epoch!=saved.optInt("nativeEpoch")

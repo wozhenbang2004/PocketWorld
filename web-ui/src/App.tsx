@@ -2266,7 +2266,7 @@ export default function App(){
      owner.attachmentWorkspace?.open||obj(native.phoneDraft).channelOrigin!==false)return false;
   const rows=asArray<Message>(owner.messages).filter(row=>row.id===expected.messageId&&row.sourceRevision===expected.sourceRevision);
   const match=rows.length===1&&messageReplyContext(rows[0]);
-  return !!match&&match.taskId===expected.taskId&&match.runId===expected.runId&&match.epoch===expected.epoch&&
+  return !!match&&match.originalReminderRecorded===true&&match.taskId===expected.taskId&&match.runId===expected.runId&&match.epoch===expected.epoch&&
     match.replyId===expected.replyId&&match.deliveryId===null&&match.replyToMessageIds.length===1;
  };
  const shownOriginalReminder=originalReminderChat&&originalReminderChatCurrent(originalReminderChat)?originalReminderChat:null;
@@ -5574,7 +5574,7 @@ export default function App(){
     const openQueuedReceipt=m.role==='user'&&m.submission?.status==='queued'&&!!m.submission?.taskId&&can('queued.open');
     const verifiedQueueLabel=openQueuedReceipt&&delivery?.status==='queued';
     const savedTrace=!phoneResult&&!taskResult&&m.id&&Number(m.sourceRevision)>0?replyContext:null;
-    const reminderReply=route==='chat'&&m.role==='assistant'&&!m.originalHostFinal&&savedTrace?.replyId&&savedTrace.deliveryId===null&&
+    const reminderReply=route==='chat'&&m.role==='assistant'&&!m.originalHostFinal&&savedTrace?.originalReminderRecorded===true&&savedTrace.replyId&&savedTrace.deliveryId===null&&
       savedTrace.replyToMessageIds.length===1&&m.id&&Number.isSafeInteger(m.sourceRevision)&&can('plans.reviewSchedule')?savedTrace:null;
     const noteIdentity=!phoneResult&&!taskResult&&replyContext&&!representedProjectRuns.has(workIdentityKey(replyContext))&&messageTaskAnchors.get(replyContext.taskId)===index?replyContext:null;
     const preparations=anchoredPreparations.get(index);

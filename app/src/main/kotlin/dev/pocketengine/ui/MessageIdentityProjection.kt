@@ -9,10 +9,12 @@ internal data class UiReplyContext private constructor(
     val taskId: String, val runId: String, val epoch: Int,
     val replyId: String?, val deliveryId: String?, val replyToMessageIds: List<String>,
     val publicAnswerSourcesRecorded: Boolean,
+    val originalReminderRecorded: Boolean,
 ) {
     fun toJson(): JSONObject = JSONObject().put("taskId", taskId).put("runId", runId).put("epoch", epoch)
         .put("replyId", replyId ?: JSONObject.NULL).put("deliveryId", deliveryId ?: JSONObject.NULL)
         .put("replyToMessageIds", JSONArray(replyToMessageIds))
+        .also { if (originalReminderRecorded) it.put("originalReminderRecorded", true) }
 
     companion object {
         fun fromNativeMessage(message: JSONObject): UiReplyContext? {
@@ -30,7 +32,8 @@ internal data class UiReplyContext private constructor(
                 val id = (refs.opt(index) as? String)?.takeIf { it.isNotBlank() && it.length <= 240 } ?: return null
                 if (id !in ids) ids.add(id)
             }
-            return UiReplyContext(task, run, epoch, reply, delivery, ids.toList(), message.opt("publicAnswerSourcesRecorded") == true)
+            return UiReplyContext(task, run, epoch, reply, delivery, ids.toList(), message.opt("publicAnswerSourcesRecorded") == true,
+                message.opt("originalReminderRecorded") == true && reply != null && delivery == null && ids.size == 1)
         }
     }
 }

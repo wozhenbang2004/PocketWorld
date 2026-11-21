@@ -8,6 +8,7 @@ type Fields={format:'docx'|'pdf';name:string;title:string;body:string;fontPoints
 type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update'};
 type Row={rowHandle:string;name:string;format:Fields['format'];savedAt:number};
 type GenerationReview={id:string;editorHandle:string;versionHandle:string;fileName:string;format:Fields['format']};
+type RemovalReview={editorHandle:string;versionHandle:string;name:string;format:Fields['format']};
 type Invoke=(command:string,args?:Json)=>Promise<Json>;
 const isHandle=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(value);
 const fields=(value:unknown):Fields|undefined=>{
@@ -30,17 +31,21 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
  active:boolean;recoverable:boolean;loading:boolean;initial?:Json;invoke:Invoke;
  registerExit:(handle:((close:boolean)=>void)|null)=>void;onExit:(close:boolean)=>Promise<void>;
 }){
- const [catalog,setCatalog]=useState<Json>(),[editor,setEditor]=useState<Editor>(),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor>(),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [exit,setExit]=useState<{close:boolean}>();
  const [review,setReview]=useState<GenerationReview>(),[ack,setAck]=useState(false),[generation,setGeneration]=useState<'submitting'|'accepted'|'unknown'>();
- const flight=useRef(false),mounted=useRef(true),heading=useRef<HTMLHeadingElement>(null),current=useRef(active);
+ const [removalReview,setRemovalReview]=useState<RemovalReview>(),[removal,setRemoval]=useState<'removing'|'changed'|'unknown'>();
+ const flight=useRef(false),mounted=useRef(true),heading=useRef<HTMLHeadingElement>(null),current=useRef(active),focusList=useRef(false);
  current.current=active;
  const dirty=!!editor&&JSON.stringify(editor.input)!==JSON.stringify(editor.original);
  // A reopened saved draft brought native text into the page; never reveal that body after revocation.
  const typed=(!active&&recoverable&&!busy&&editor&&!editor.version&&!editor.uncertain&&editor.original.title===''&&editor.original.body===''&&
   (editor.input.name!==editor.original.name||!!editor.input.title||!!editor.input.body))?editor.input:undefined;
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
- useLayoutEffect(()=>{heading.current?.focus({preventScroll:true})},[editor?.handle,loading,!!typed]);
+ useLayoutEffect(()=>{
+  if(!editor&&focusList.current){focusList.current=false;heading.current?.scrollIntoView({block:'start'});}
+  heading.current?.focus({preventScroll:true});
+ },[editor?.handle,loading,!!typed,!!removal]);
  const perform=(work:()=>Promise<void>)=>{
   if(flight.current)return;flight.current=true;setBusy(true);setError('');
   void work().catch(()=>{if(mounted.current)setError('本机草稿操作还未核对。请保留当前内容。')})
@@ -58,6 +63,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
   registerExit(close=>{
    if(flight.current||loading)return;
    if(review){closeGenerationReview();return}
+   if(removalReview){setRemovalReview(undefined);return}
    if(dirty||editor?.uncertain)setExit({close});else leave(close);
   });
   return()=>registerExit(null);
@@ -65,8 +71,9 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
  useEffect(()=>{
   if(exit)return registerOverlayBack(()=>setExit(undefined));
   if(active&&review)return registerOverlayBack(closeGenerationReview);
- },[exit,active,review]);
- useEffect(()=>{if(!active){setReview(undefined);setAck(false)}},[active]);
+  if(active&&removalReview)return registerOverlayBack(()=>setRemovalReview(undefined));
+ },[exit,active,review,removalReview]);
+ useEffect(()=>{if(!active){setReview(undefined);setAck(false);setRemovalReview(undefined)}},[active]);
  const start=(row?:Row)=>perform(async()=>{
   if(!active)return;
   const result=await invoke(row?'drafts.open':'drafts.new',row?{rowHandle:row.rowHandle}:undefined),input=fields(result.fields);
@@ -105,12 +112,12 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
   if(!input){setError('草稿文字超出可保留范围。');return}
   setEditor(value=>value?{...value,input}:value);setNotice('');setError('');
  };
- const shown=catalog||initial,rows=rowList(shown);
+ const shown=catalog===undefined?initial:catalog??undefined,rows=rowList(shown);
  const retry=()=>perform(async()=>{if(active){const value=await invoke('drafts.list');if(mounted.current&&current.current)setCatalog(value)}});
- const editable=active&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation;
+ const editable=active&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation&&!removalReview&&!removal;
  const canReviewGeneration=!!editor?.version&&!dirty&&!!editor.original.name.trim()&&!!editor.original.body.trim();
  const prepareGeneration=()=>perform(async()=>{
-  if(!active||review||generation||!canReviewGeneration||!editor?.version||editor.uncertain)return;
+  if(!active||review||generation||removalReview||removal||!canReviewGeneration||!editor?.version||editor.uncertain)return;
   const result=await invoke('drafts.reviewDocument',{editorHandle:editor.handle,versionHandle:editor.version});
   if(!mounted.current||!current.current)return;
   if(result.status==='invalid'){
@@ -123,7 +130,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
   setReview({id:result.reviewId,editorHandle:editor.handle,versionHandle:editor.version,fileName:result.fileName,format:result.format});setAck(false);
  });
  const confirmGeneration=()=>{
-  if(!active||!ack||!review||generation||dirty||editor?.uncertain||editor?.handle!==review.editorHandle||editor?.version!==review.versionHandle)return;
+  if(!active||!ack||!review||generation||removalReview||removal||dirty||editor?.uncertain||editor?.handle!==review.editorHandle||editor?.version!==review.versionHandle)return;
   const selected=review;
   perform(async()=>{
    setReview(undefined);setAck(false);setGeneration('submitting');setNotice('');
@@ -140,15 +147,55 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
    }
   });
  };
+ const reviewRemoval=()=>{
+  if(!editable||!editor?.version||dirty||flight.current)return;
+  setRemovalReview({editorHandle:editor.handle,versionHandle:editor.version,name:editor.original.name,format:editor.original.format});
+ };
+ const readListAfterRemoval=async(message:string)=>{
+  // Old catalogue handles were retired natively. Don't momentarily show the deleted row.
+  setCatalog(null);focusList.current=true;setEditor(undefined);setRemoval(undefined);setNotice(message);
+  try{const next=await invoke('drafts.list');if(mounted.current&&current.current)setCatalog(next)}
+  catch{if(mounted.current&&current.current)setError('当前草稿清单尚未核对，可以重新读取。')}
+ };
+ const remove=()=>{
+  const selected=removalReview;
+  if(!active||!selected||dirty||review||generation||removal||editor?.uncertain||
+     editor?.handle!==selected.editorHandle||editor?.version!==selected.versionHandle)return;
+  perform(async()=>{
+   setRemovalReview(undefined);focusList.current=true;setEditor(undefined);setRemoval('removing');setNotice('');
+   let receipt:Json|undefined;
+   try{receipt=await invoke('drafts.remove',{editorHandle:selected.editorHandle,versionHandle:selected.versionHandle,acknowledge:true})}catch{}
+   if(!mounted.current||!current.current)return;
+   if(receipt?.editorHandle===selected.editorHandle&&receipt.versionHandle===selected.versionHandle){
+    if(receipt.status==='REMOVED'){
+     await readListAfterRemoval('本机草稿已删除。已生成的文件不变。');return;
+    }
+    if(receipt.status==='MISSING'||receipt.status==='CONFLICT'){
+     setRemoval('changed');setError('原草稿版本已变化，没有删除其他草稿。');return;
+    }
+   }
+   setRemoval('unknown');setError('删除结果尚未核对，可查看当前草稿清单。没有自动重试。');
+  });
+ };
+ const returnAfterUnconfirmedRemoval=()=>perform(async()=>{
+  if(!active||removal!=='changed'&&removal!=='unknown')return;
+  if((await invoke('drafts.leave')).left!==true||!mounted.current||!current.current)throw new Error('原草稿窗口已变化');
+  await readListAfterRemoval(removal==='unknown'?'本次删除没有收到确认；这里只显示当前可核对的草稿。':'请在当前清单核对原草稿。');
+ });
  return <section className="pw-document-editor" aria-label="本机文档草稿">
-  <h3 ref={heading} tabIndex={-1}>{typed?'本页还在的输入':active&&editor?'编辑本机草稿':'已保留的草稿'}</h3>
+  <h3 ref={heading} tabIndex={-1}>{typed?'本页还在的输入':active&&removal?'删除本机草稿':active&&editor?'编辑本机草稿':'已保留的草稿'}</h3>
   {active&&<p className="pw-muted">只保存在本机。草稿不是已生成的文件。</p>}
+  {active&&!editor&&!removal&&notice&&<p role="status">{notice}</p>}
   {error&&<p className="pw-error" role="alert">{error}</p>}
   {!active?typed?<><p role="status">这些文字仍在本页，可以选中复制。原编辑窗口已关闭，不能从这里保存。</p>
     {typed.name!==editor?.original.name&&<TextField label="文件名" value={typed.name} isReadOnly/>}
     {typed.title!==''&&<TextField label="标题" value={typed.title} isReadOnly/>}
     {typed.body!==''&&<TextAreaField className="pw-document-body" label="正文" value={typed.body} isReadOnly/>}
    </>:<p role="status">原草稿窗口已关闭。重新打开「成果」后，可以查看已保留的稿件。</p>:
+   removal?<div className="pw-action-row">
+    {removal==='removing'?<p role="status">正在核对删除结果</p>:
+     <Button variant="secondary" disabled={busy} onClick={returnAfterUnconfirmedRemoval}>返回草稿清单核对</Button>}
+   </div>:
    editor?<><TextField label="文件名" value={editor.input.name} isDisabled={!editable} onChange={name=>edit({...editor.input,name})}/>
     <AttachmentWordPdfFields draft={editor.input} editable={editable} edit={edit}
      text={(field,value,limit)=>{if(value.length<=limit)edit({...editor.input,[field]:value});else setError(`此项最多 ${limit} 字，未改变输入。`)}} draftOnly/>
@@ -157,8 +204,9 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
      {!generation&&(editor.uncertain==='first'?<Button variant="secondary" disabled={busy} onClick={()=>save(true)}>核对本次草稿</Button>:
       !editor.uncertain&&(canReviewGeneration?<Button variant="primary" disabled={!editable} onClick={prepareGeneration}>核对并生成{editor.input.format==='pdf'?' PDF':' Word'}</Button>:
       <Button variant="primary" disabled={!editable||!dirty} onClick={()=>save()}>保留草稿</Button>))}
+     {editor.version&&!dirty&&!editor.uncertain&&!generation&&!removal&&<Button variant="ghost" disabled={!editable} onClick={reviewRemoval}>删除草稿</Button>}
     </footer></>:
-   loading?<p role="status">正在读取本机草稿清单</p>:<>{shown?.metadataComplete===false&&<p role="status">草稿清单尚未核对齐全，可以打开已经列出的原稿。</p>}
+   loading||busy&&catalog===null?<p role="status">正在读取本机草稿清单</p>:<>{shown?.metadataComplete===false&&<p role="status">草稿清单尚未核对齐全，可以打开已经列出的原稿。</p>}
     {shown?.metadataComplete===true&&!rows.length&&<p>还没有已保留的草稿。</p>}
     {!shown&&<p role="status">草稿清单尚未核对。</p>}
     <div className="pw-action-row">
@@ -174,6 +222,12 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
     })}</>}
   <AttachmentDocumentGenerationReview open={active&&!!review} format={review?.format||''} name={review?.fileName}
    ack={ack} busy={busy} retainedDraft onAck={setAck} onClose={closeGenerationReview} onConfirm={confirmGeneration}/>
+  <SettingsDialog isOpen={active&&!!removalReview} title="删除这份本机草稿？" closeLabel="取消删除" onClose={()=>setRemovalReview(undefined)}>
+   {removalReview&&<><p><strong>{removalReview.name.trim()||'未命名草稿'}</strong> · {removalReview.format==='pdf'?'PDF':'Word'}</p>
+    <p>删除后不能继续编辑这份草稿。已经生成的文件和另存的副本不受影响。</p>
+    <div className="pw-action-row"><Button variant="secondary" onClick={()=>setRemovalReview(undefined)}>保留草稿</Button>
+     <Button variant="danger" disabled={busy} onClick={remove}>删除此草稿</Button></div></>}
+  </SettingsDialog>
   <SettingsDialog isOpen={!!exit} title="离开本机草稿？" closeLabel="留在这里" onClose={()=>setExit(undefined)}>
    <p>本页还有未确认保留的修改。离开不会删除已保留的版本，也不会发起新的保存。已经提交但没有回执的保存，请回本机草稿核对。</p>
    <div className="pw-action-row"><Button variant="primary" onClick={()=>setExit(undefined)}>留在这里</Button>

@@ -1304,9 +1304,9 @@ public final class LocalModule implements EngineModule {
         requireDraftDependencyFiles(checkout,lock);
         DirectViteEditorResume resume=null;
         if(selected.vite())try{
-            JSONObject metadata=snapshot.getJSONObject("checkout");
-            if(publishedBuiltinViteEditorCopy(metadata,project,checkout)){
-                ProjectFileSavePosition position=ProjectFileSavePosition.readForOwner(root,project,checkout);
+            EditorSaveOrigin origin=editorSaveOrigin(snapshot.getJSONObject("checkout"),project,checkout);
+            if(origin==EditorSaveOrigin.BUILTIN_VITE||origin==EditorSaveOrigin.IMPORT_GIT){
+                ProjectFileSavePosition position=readEditorSavePosition(origin,project,checkout,source);
                 if(position!=null){
                     JSONArray actual=snapshot.getJSONArray("files");
                     for(int i=0;i<actual.length();i++){
@@ -1850,7 +1850,7 @@ public final class LocalModule implements EngineModule {
     public synchronized JSONObject saveDevelopmentFileForOwner(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {
         return readBackEditorSave(intent,false,current).file();
     }
-    private record EditorSaveReadback(JSONObject file,JSONObject checkout){}
+    private record EditorSaveReadback(JSONObject file,JSONObject checkout,JSONArray sourceManifest){}
     private EditorSaveReadback readBackEditorSave(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,
             boolean createEmpty,java.util.function.BooleanSupplier current)throws Exception {
         java.util.Objects.requireNonNull(intent);java.util.Objects.requireNonNull(current);
@@ -1863,10 +1863,10 @@ public final class LocalModule implements EngineModule {
         if(createEmpty){
             if(bytes.length!=0||!"absent".equals(intent.expectedHash)||before.opt("deleted")!=Boolean.TRUE||!"absent".equals(before.opt("sha256")))
                 throw new SecurityException("原空文件目标已变化，未覆盖现有文件");
-            return new EditorSaveReadback(createEmptyEditorFile(intent.checkoutId,intent.path,live),selected);
+            return new EditorSaveReadback(createEmptyEditorFile(intent.checkoutId,intent.path,live),selected,facts.getJSONArray("files"));
         }
         manualWriteBytes(intent.checkoutId,intent.path,bytes,intent.expectedHash,true,live);
-        return new EditorSaveReadback(read(intent.checkoutId,intent.path),selected);
+        return new EditorSaveReadback(read(intent.checkoutId,intent.path),selected,facts.getJSONArray("files"));
     }
 
     private File emptyEditorTarget(String checkout,String path)throws Exception {
@@ -1911,22 +1911,38 @@ public final class LocalModule implements EngineModule {
                 "nativeGitImportPending","collectedFromCheckoutId","collectionOperationId"})if(row.has(special))return false;
         return true;
     }
-    /** The admitted first-party source import, never a copied or cached source marker. */
-    private boolean publishedBuiltinViteEditorCopy(JSONObject row,String project,String id)throws Exception{
+    private enum EditorSaveOrigin { PREPARED, BUILTIN_VITE, IMPORT_GIT }
+    private static boolean importIdentity(Object value){
+        return value instanceof String id&&id.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}");
+    }
+    /** The originally published copy, never an inherited or cached source marker. */
+    private EditorSaveOrigin editorSaveOrigin(JSONObject row,String project,String id)throws Exception{
+        if(originalPreparedOwnerCopy(row,project,id))return EditorSaveOrigin.PREPARED;
         JSONObject source=row.optJSONObject("sourceImport");
         if(!project.equals(row.opt("projectId"))||!id.equals(row.opt("id"))||!ordinaryDirectNodeCheckout(row)||
-                row.has("ownerDevelopmentRequestId")||source==null||source.length()!=7||
-                !ProjectSourceImport.BUILTIN_VITE_STARTER.equals(source.opt("sourceKind"))||!"new_project".equals(source.opt("mode"))||
+                row.has("ownerDevelopmentRequestId")||source==null||!"new_project".equals(source.opt("mode"))||
                 !Boolean.FALSE.equals(source.opt("executionAuthorityRestored"))||!OwnerDirectNodeBuild.digest(source.opt("packageSha256"))||
                 !OwnerDirectNodeBuild.digest(source.opt("manifestIdentity"))||!OwnerDirectNodeBuild.digest(source.opt("sourceEvidenceSha256"))||
-                !(source.opt("clientId") instanceof String client)||!client.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")||
+                !(source.opt("clientId") instanceof String client)||!importIdentity(client)||
                 !project.equals(importedProjectId(client))||
-                !id.equals(UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString()))return false;
+                !id.equals(UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString()))return null;
+        EditorSaveOrigin origin;
+        if(ProjectSourceImport.BUILTIN_VITE_STARTER.equals(source.opt("sourceKind"))&&source.length()==7)origin=EditorSaveOrigin.BUILTIN_VITE;
+        else if("git_https".equals(source.opt("sourceKind"))&&source.length()==10){
+            JSONObject git=source.optJSONObject("gitOriginal");
+            if(git==null||!Boolean.TRUE.equals(source.opt("gitHistoryCopied"))||!Boolean.FALSE.equals(source.opt("credentialsRestored"))||
+                    !importIdentity(git.opt("actionId"))||!Boolean.FALSE.equals(git.opt("executionAuthorityRestored"))||
+                    !(git.opt("commitId") instanceof String commit)||!commit.matches("(?:[a-f0-9]{40}|[a-f0-9]{64})")||
+                    !source.getString("manifestIdentity").equals(git.opt("sourceManifestIdentity"))||
+                    !OwnerDirectNodeBuild.digest(git.opt("manifestSha256"))||!OwnerDirectNodeBuild.digest(git.opt("gitMetadataDigest")))return null;
+            origin=EditorSaveOrigin.IMPORT_GIT;
+        }else return null;
         JSONObject registered=packageWorkspace().sourceProjectRegistrationForOwner(client,source.getString("packageSha256"),row.optString("name"),true);
-        return Boolean.TRUE.equals(registered.opt("registered"))&&project.equals(registered.opt("expectedProjectId"));
+        return Boolean.TRUE.equals(registered.opt("registered"))&&project.equals(registered.opt("expectedProjectId"))?origin:null;
     }
-    private boolean eligibleOwnerEditorSavePosition(JSONObject row,String project,String id)throws Exception{
-        return originalPreparedOwnerCopy(row,project,id)||publishedBuiltinViteEditorCopy(row,project,id);
+    private ProjectFileSavePosition readEditorSavePosition(EditorSaveOrigin origin,String project,String id,JSONObject source)throws Exception{
+        return origin==EditorSaveOrigin.IMPORT_GIT?ProjectFileSavePosition.readForOwner(root,project,id,source.getString("sourceDigest")):
+                ProjectFileSavePosition.readForOwner(root,project,id);
     }
     private static boolean matchingSavedFile(JSONObject member,ProjectFileSavePosition position){
         return position.path().equals(member.opt("path"))&&position.sha256().equals(member.opt("sha256"))&&
@@ -1940,11 +1956,28 @@ public final class LocalModule implements EngineModule {
         EditorSaveReadback committed=readBackEditorSave(intent,createEmpty,current);
         JSONObject observed=committed.file();
         try{
-            if(!closed&&current.getAsBoolean()&&eligibleOwnerEditorSavePosition(committed.checkout(),intent.projectId,intent.checkoutId)&&
+            if(!closed&&current.getAsBoolean()&&
                     intent.checkoutId.equals(observed.opt("checkoutId"))&&intent.path.equals(observed.opt("path"))&&
                     intent.text.equals(observed.opt("content"))&&observed.opt("sha256") instanceof String sha&&
-                    !intent.expectedHash.equals(sha)&&ProjectSources.sha256(intent.text.getBytes(StandardCharsets.UTF_8)).equals(sha)&&current.getAsBoolean())
-                new ProjectFileSavePosition(intent.projectId,intent.checkoutId,intent.path,sha).recordForOwner(root);
+                    !intent.expectedHash.equals(sha)&&ProjectSources.sha256(intent.text.getBytes(StandardCharsets.UTF_8)).equals(sha)){
+                EditorSaveOrigin origin=editorSaveOrigin(committed.checkout(),intent.projectId,intent.checkoutId);
+                if(origin!=null&&current.getAsBoolean()){
+                    var position=new ProjectFileSavePosition(intent.projectId,intent.checkoutId,intent.path,sha);
+                    String revision=null;
+                    if(origin==EditorSaveOrigin.IMPORT_GIT){
+                        // Only this confirmed native write is applied to the already checked manifest.
+                        // The ordinary listing and build preflight compare this pin to their actual fresh tree.
+                        JSONArray manifest=new JSONArray(),before=committed.sourceManifest();
+                        for(int i=0;i<before.length();i++){
+                            JSONObject member=before.getJSONObject(i);
+                            if(!intent.path.equals(member.opt("path")))manifest.put(member);
+                        }
+                        revision=ProjectSources.manifestDigest(manifest.put(new JSONObject().put("path",intent.path)
+                                .put("sha256",sha).put("bytes",observed.getLong("bytes"))));
+                    }
+                    if(current.getAsBoolean())position.recordForOwner(root,revision);
+                }
+            }
         }catch(Exception optional){/* The already observed file is saved even if its location cannot be remembered. */}
         return observed;
     }
@@ -2014,8 +2047,9 @@ public final class LocalModule implements EngineModule {
         JSONObject listing=observation.listing();
         if(!project.equals(listing.opt("projectId"))||!id.equals(listing.opt("checkoutId")))throw new SecurityException("原副本文件清单已变化");
         try{
-            if(!eligibleOwnerEditorSavePosition(observation.checkout(),project,id))return listing;
-            ProjectFileSavePosition position=ProjectFileSavePosition.readForOwner(root,project,id);
+            EditorSaveOrigin origin=editorSaveOrigin(observation.checkout(),project,id);
+            if(origin==null)return listing;
+            ProjectFileSavePosition position=readEditorSavePosition(origin,project,id,listing);
             if(position==null)return listing;
             JSONArray actual=listing.getJSONArray("files");
             for(int i=0;i<actual.length();i++){

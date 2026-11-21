@@ -30,7 +30,7 @@ internal class PocketWebAttachments(
     companion object {
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
         val PRIVATE_DRAFT_COMMANDS = setOf("drafts.list", "drafts.new", "drafts.open", "drafts.saveFirst",
-            "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument")
+            "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.remove", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
         private const val DOCUMENT_REVIEW_TTL = 120_000L
@@ -471,6 +471,14 @@ internal class PocketWebAttachments(
                 "drafts.save" -> {
                     exact("editorHandle", "versionHandle", "fields")
                     adapter.save(frame, editor(), fields(), ::saved)
+                }
+                "drafts.remove" -> {
+                    exact("editorHandle", "versionHandle", "acknowledge")
+                    require(args.opt("acknowledge") == true) { "请先确认删除这份本机草稿" }
+                    val selected = editor()
+                    adapter.remove(frame, selected) { state ->
+                        reply(state?.let { JSONObject().put("status", it.name).edit(selected) })
+                    }
                 }
                 "drafts.reviewDocument" -> {
                     exact("editorHandle", "versionHandle")

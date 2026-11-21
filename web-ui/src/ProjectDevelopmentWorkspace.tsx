@@ -956,8 +956,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const starterForSave=visibleStarter?.sourceKind===builtinViteStarter&&visibleStarter.checkoutId===checkout&&
     selectedCopy?.draftWorkingCopy===false&&view?.executionAuthorized===false&&view.commandsAuthorized===false&&nativeDirectBuild&&
     sameImportedEditor(visibleStarter,originalImportedEditor(projectId))?visibleStarter:null;
-  const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock||directImportedSave||starterForSave)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
-    !view?.draftRecoveryRequired&&can('projects.development.inspect')&&(!!starterForSave||can('projects.development.reviewDraftBuild')));
+  const gitViteEntry=!!fileWindow?.buildResume||(ordinaryBuildSource&&source?.directBuildKind==='vite');
+  const candidateGit=fileWindow&&(directImportedSave||gitViteEntry)?originalImportForSave||originalImportedEditor(projectId):null;
+  const gitForSave=candidateGit?.sourceKind==='git_https'&&candidateGit.checkoutId===checkout&&
+    selectedCopy?.draftWorkingCopy===false&&view?.executionAuthorized===false&&view.commandsAuthorized===false&&nativeDirectBuild&&
+    sameImportedEditor(candidateGit,originalImportedEditor(projectId))?candidateGit:null;
+  const viteForSave=starterForSave||gitForSave;
+  const showViteSaveLabel=!!starterForSave||!!gitForSave&&gitViteEntry;
+  const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock||directImportedSave||viteForSave)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
+    !view?.draftRecoveryRequired&&can('projects.development.inspect')&&(!!viteForSave||can('projects.development.reviewDraftBuild')));
   const savedSource = source?.savedEditInSource;
   const checkedSave = savedFileHere && savedSource?.path===savedFileHere.path && savedSource.savedHash===savedFileHere.savedHash &&
     savedSource.sourceDigest===source?.sourceDigest && sourceHash(source?.sourceDigest) && typeof savedSource.matches==='boolean' ? savedSource : null;
@@ -1001,7 +1008,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const prepareSavedBuild = async ({position:saved,filesHandle,id,closeEditor}:CheckoutSaveForBuild) => {
     const viewHandle=handle.current, window=ownerWindow(), sequence=generation.current;
     const original=directImportedSave?originalImportForSave:undefined;
-    const starter=starterForSave, shown={...draft.current};
+    const vite=viteForSave, shown={...draft.current};
     if(!active||!canPrepareSavedBuild||!viewHandle||view?.viewHandle!==viewHandle||saved.projectId!==projectId||
       saved.checkoutId!==fileCheckout||draft.current.checkoutId!==saved.checkoutId||
       (missingRequiredLock&&saved.path!==missingRequiredLock)||document.hidden)
@@ -1019,28 +1026,29 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         value.checkoutId!==saved.checkoutId||!sourceHash(value.sourceDigest)||observation?.sourceDigest!==value.sourceDigest||
         observation.path!==saved.path||observation.savedHash!==saved.savedHash||typeof observation.matches!=='boolean')
         throw Error('没有核对到这次原文件保存与当前源码，文件仍留在原编辑器。');
-      const exactOrigin=starter||original;
+      const exactOrigin=vite||original;
       if(exactOrigin&&(!sameImportedEditor(exactOrigin,originalImportedEditor(projectId))||observation.matches!==true))
         throw Error('原导入副本或刚保存的字节已变化，没有进入其他版本的构建核对。');
       const tools=checkoutFirstWebTools(value,projectId,saved.checkoutId);
-      goToReview=!!starter&&value.firstImportedWebFile?.sourceKind===builtinViteStarter&&value.directBuildKind==='vite'&&
+      goToReview=!!vite&&(vite.sourceKind==='git_https'?value.existingNodeBuild===true:value.firstImportedWebFile?.sourceKind===builtinViteStarter)&&
+        value.directBuildKind==='vite'&&
         tools?.kind==='node'&&tools.manager==='npm'&&tools.runtimeReady&&tools.missing.length===0&&
         !value.existingNodeBuildTask&&!value.existingNodeBuildUnavailable&&!value.directViteBuildWork&&!value.directViteBuildWorkUnavailable;
       if(!goToReview)showSavedSource(value,true);
     },failure=>{throw failure;});
     if(!fresh)throw Error('没有取得这次原保存的核对回执。');
-    if(!goToReview||!starter)return;
+    if(!goToReview||!vite)return;
     const sameVisit=()=>alive.current&&latest.current.active&&!document.hidden&&generation.current===sequence&&ownerWindow()===window&&
       handle.current===viewHandle&&bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath;
-    const sameStarter=()=>sameVisit()&&!activeReview.current&&!previewOpen.current&&sameDraft(draft.current,shown)&&
-      sameImportedEditor(starter,originalImportedEditor(projectId));
-    if(!sameStarter())throw Error('原副本或项目草稿已变化，未打开构建审阅。');
+    const sameOrigin=()=>sameVisit()&&!activeReview.current&&!previewOpen.current&&sameDraft(draft.current,shown)&&
+      sameImportedEditor(vite,originalImportedEditor(projectId));
+    if(!sameOrigin())throw Error('原副本或项目草稿已变化，未打开构建审阅。');
     const closed=await closeEditor();
     if(!sameVisit())return;
-    if(!sameStarter()){closeFiles(saved);setError('这次写入已保存，原项目或草稿已变化，没有进入构建审阅。');return;}
+    if(!sameOrigin()){closeFiles(saved);setError('这次写入已保存，原项目或草稿已变化，没有进入构建审阅。');return;}
     showSavedSource(fresh,!closed);
     if(!closed){setError('文件已保存，但未确认原编辑器已关闭，没有打开构建审阅。可在同一副本核对。');return;}
-    await readBuildPreview(viewHandle,window,shown,fresh.sourceDigest,true,'exact',sameStarter);
+    await readBuildPreview(viewHandle,window,shown,fresh.sourceDigest,true,'exact',sameOrigin);
   };
   useEffect(()=>{
     const next=buildAfterSave.current;
@@ -1405,7 +1413,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} onClose={closeFiles}
       onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined}
-      prepareBuildLabel={starterForSave?'从这次保存核对网页构建':directImportedSave?'核对已保存源码':undefined} registerBack={registerFilesBack} />}
+      prepareBuildLabel={showViteSaveLabel?'从这次保存核对网页构建':directImportedSave?'核对已保存源码':undefined} registerBack={registerFilesBack} />}
     {originalDifference&&<SettingsDialog isOpen title="本轮原改稿" closeLabel="返回当前工作副本" onClose={closeRetainedOriginal}>
       <div className="pw-project-draft">
         <strong className="pw-project-draft-path">{originalDifference.path}</strong>

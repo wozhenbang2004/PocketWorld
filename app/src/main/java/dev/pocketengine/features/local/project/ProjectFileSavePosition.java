@@ -11,6 +11,7 @@ import org.json.JSONObject;
  * source artifact, cached draft, approval or promise to be the last physical write. */
 public record ProjectFileSavePosition(String projectId, String checkoutId, String path, String sha256) {
     private static final String FORMAT = "pocketworld.owner-checkout-file-save-position.v1";
+    private static final String VERSIONED = "pocketworld.owner-checkout-file-save-position.v2";
     private static final String NAME = "owner-file-save-position-v1.json";
     private static final int MAX_BYTES = 4096;
 
@@ -45,20 +46,36 @@ public record ProjectFileSavePosition(String projectId, String checkoutId, Strin
 
     /** Caller holds the original checkout writer lock and has already confirmed a real save. */
     public void recordForOwner(File root) throws Exception {
-        byte[] bytes = view().toString().getBytes(StandardCharsets.UTF_8);
+        recordForOwner(root, null);
+    }
+
+    /** A Git editor return must still match the exact source revision containing this save. */
+    public void recordForOwner(File root, String sourceDigest) throws Exception {
+        JSONObject value = view();
+        if (sourceDigest != null) {
+            if (!sourceDigest.matches("[a-f0-9]{64}")) throw new IllegalArgumentException("原副本源码摘要无效");
+            value.put("format", VERSIONED).put("sourceDigest", sourceDigest);
+        }
+        byte[] bytes = value.toString().getBytes(StandardCharsets.UTF_8);
         if (bytes.length > MAX_BYTES) throw new SecurityException("原副本保存定位超过范围");
         ProjectFileDraftStore.atomic(target(root, checkoutId), bytes);
     }
 
     public static ProjectFileSavePosition readForOwner(File root, String project, String checkout) throws Exception {
+        return readForOwner(root, project, checkout, null);
+    }
+
+    public static ProjectFileSavePosition readForOwner(File root, String project, String checkout, String sourceDigest) throws Exception {
         File file = target(root, checkout);
         if (!Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)) return null;
         JSONObject value = ProjectPrivateRecord.read(file, MAX_BYTES);
         target(root, checkout);
-        if (value.length() != 5 || !FORMAT.equals(value.opt("format")) ||
+        if (value.length() != (sourceDigest == null ? 5 : 6) ||
+                !(sourceDigest == null ? FORMAT : VERSIONED).equals(value.opt("format")) ||
                 !project.equals(value.opt("projectId")) || !checkout.equals(value.opt("checkoutId")) ||
                 !(value.opt("path") instanceof String path) || !(value.opt("sha256") instanceof String sha))
             throw new SecurityException("原副本保存定位不能核对");
+        if (sourceDigest != null && !sourceDigest.equals(value.opt("sourceDigest"))) return null;
         return new ProjectFileSavePosition(project, checkout, path, sha);
     }
 }

@@ -24,6 +24,8 @@ public final class ConversationRepository {
     private static final int MAX_REPLY_BYTES=MAX_BYTES/2;
     private static final String PENDING_PUBLIC_ANSWER="nativeAnonymousAnswerPending";
     private static final String FINAL_PUBLIC_ANSWER="nativeAnonymousAnswerFinal";
+    private static final String ORIGINAL_REMINDER_OPERATION="nativeOriginalReminderOperation";
+    static final String ORIGINAL_REMINDER_RECORDED="originalReminderRecorded";
     static void requireReplyContent(String text){
         if(text==null||text.isBlank())throw new IllegalArgumentException("模型没有返回文字答复");
         if(!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new IllegalArgumentException("答复含不完整Unicode字符，未替换后保存");
@@ -190,13 +192,13 @@ public final class ConversationRepository {
             return generation;
         }
     }
-    private static boolean originalAnonymousSource(JSONObject row,long revision){
+    private static boolean originalSavedAssistantSource(JSONObject row,long revision){
         return row!=null&&revision>0&&revision==row.optLong("revision")&&!row.optBoolean("deleted")
                 &&!row.optBoolean("nativeProvenanceImported")&&!row.optBoolean("memoryContextRetired")&&row.optLong("memorySourceRetiredThrough")<revision
                 &&"assistant".equals(row.optString("role"))&&"owner".equals(row.optString("ownerId"))&&"private".equals(row.optString("spaceId"))
                 &&row.optJSONObject("nativeContext")!=null;
     }
-    private static boolean sameAnonymousReply(JSONObject row,String conversation,String task,String run,int epoch,String reply){
+    private static boolean sameSavedAssistantReply(JSONObject row,String conversation,String task,String run,int epoch,String reply){
         return !reply.isEmpty()&&conversation.equals(row.optString("conversationId"))&&task.equals(row.optString("nativeTaskId"))
                 &&run.equals(row.optString("nativeRunId"))&&epoch==row.optInt("nativeEpoch")&&reply.equals(row.optString("nativeReplyId"));
     }
@@ -206,7 +208,7 @@ public final class ConversationRepository {
         if(monitor!=original||!Thread.holdsLock(monitor)||!db.inTransaction())throw new SecurityException("出处标记必须随原检查点事务保存");
         if(!active()||!fingerprint.matches("[a-f0-9]{64}"))return;
         JSONObject state=sourceByReply(reply);
-        if(!originalAnonymousSource(state,1)||!sameAnonymousReply(state,conversation,task,run,epoch,reply)||!fingerprint.equals(state.opt(PENDING_PUBLIC_ANSWER)))return;
+        if(!originalSavedAssistantSource(state,1)||!sameSavedAssistantReply(state,conversation,task,run,epoch,reply)||!fingerprint.equals(state.opt(PENDING_PUBLIC_ANSWER)))return;
         state.remove(PENDING_PUBLIC_ANSWER);state.put(FINAL_PUBLIC_ANSWER,fingerprint);
         ContentValues marker=new ContentValues();marker.put("source_json",state.toString());
         db.update("assistant_sources",marker,"generation=? AND source_id=? AND conversation_id=? AND native_reply_id=? AND revision=1 AND deleted=0 AND context_retired=0 AND retired_through<revision",
@@ -216,7 +218,7 @@ public final class ConversationRepository {
     public boolean matchesOriginalAnonymousAnswer(String conversation,String id,long revision,String task,String run,int epoch,String reply,String fingerprint,String text)throws Exception{
         if(!Thread.holdsLock(monitor)||!db.inTransaction())throw new SecurityException("出处核对必须在原任务事务内");
         JSONObject state=source(id);
-        if(!originalAnonymousSource(state,revision)||!sameAnonymousReply(state,conversation,task,run,epoch,reply)||!fingerprint.equals(state.opt(FINAL_PUBLIC_ANSWER)))return false;
+        if(!originalSavedAssistantSource(state,revision)||!sameSavedAssistantReply(state,conversation,task,run,epoch,reply)||!fingerprint.equals(state.opt(FINAL_PUBLIC_ANSWER)))return false;
         try{
             JSONObject original=nativeMessageSource(new SourceRef("message",id,revision,"owner","private"));
             return conversation.equals(original.getString("sourceConversationId"))&&("sha256:"+shaBytes(text.getBytes(StandardCharsets.UTF_8))).equals(original.getString("bodyFingerprint"));
@@ -814,6 +816,7 @@ public final class ConversationRepository {
     private void saveMessage(String gen,String conversation,JSONObject message,long importedSequence)throws Exception{
         String id=message.getString("id");JSONObject state=source(gen,id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId"))||integer(message,"revision",1)!=state.getLong("revision")||!message.getString("role").equals(state.getString("role")))throw new SecurityException("原消息/来源修订不一致，未保存副本");
         JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");meta.remove("ownerOriginalLocator");long sequence=importedSequence;
+        meta.remove(ORIGINAL_REMINDER_RECORDED); // Derived from the private source row, never from message JSON.
         boolean existing=false;
         try(Cursor row=db.rawQuery("SELECT sequence,meta_json FROM assistant_messages WHERE generation=? AND source_id=? LIMIT 1",new String[]{gen,id})){if(row.moveToFirst()){existing=true;sequence=row.getLong(0);if(new JSONObject(row.getString(1)).optBoolean("personalMemoryExcluded"))meta.put("personalMemoryExcluded",true);}}
         if(!existing&&importedSequence<0&&"user".equals(message.getString("role"))&&gen.equals(activeGeneration())){
@@ -865,10 +868,15 @@ public final class ConversationRepository {
         if(more&&!lastId.isEmpty())next=encode(new JSONObject().put("at",lastAt).put("id",lastId));return new JSONObject().put("conversations",rows).put("gaps",gaps).put("scannedRows",scanned).put("materializedHeaderUtf8Bytes",bytes).put("nextCursor",next).put("hasMore",more).put("retentionLimitApplied",false).put("paginationSemantics","mutable_updated_at_keyset_not_snapshot");
     }
     private JSONObject messageFromRow(Cursor row)throws Exception{JSONObject message=new JSONObject(row.getString(1));message.put("content",row.getString(0)).put("revision",row.getLong(2));JSONObject state=source(message.getString("id"));if(state==null||state.getBoolean("deleted"))return null;
-        if(originalAnonymousSource(state,row.getLong(2))&&state.opt(FINAL_PUBLIC_ANSWER) instanceof String fingerprint&&fingerprint.matches("[a-f0-9]{64}")
-                &&sameAnonymousReply(state,message.optString("conversationId"),message.optString("taskId"),message.optString("nativeRunId"),message.optInt("nativeEpoch"),message.optString("nativeReplyId")))
+        boolean originalReply=originalSavedAssistantSource(state,row.getLong(2))
+                &&sameSavedAssistantReply(state,message.optString("conversationId"),message.optString("taskId"),message.optString("nativeRunId"),message.optInt("nativeEpoch"),message.optString("nativeReplyId"));
+        if(originalReply&&state.opt(FINAL_PUBLIC_ANSWER) instanceof String fingerprint&&fingerprint.matches("[a-f0-9]{64}"))
             message.put("publicAnswerSourcesRecorded",true);
         else message.remove("publicAnswerSourcesRecorded"); // Old hints, imports and pending replies are not final proof.
+        if(originalReply&&row.getLong(2)==1&&!message.optBoolean("importAssignedIdentity")&&!message.has("nativeDeliveryKind")
+                &&state.opt(ORIGINAL_REMINDER_OPERATION) instanceof String operation&&operation.matches("[a-f0-9-]{36}"))
+            message.put(ORIGINAL_REMINDER_RECORDED,true);
+        else message.remove(ORIGINAL_REMINDER_RECORDED);
         if(message.has("projectConventionRecorded")){
             JSONObject proof=state.optJSONObject("nativeProjectConventionReceipt");String reply=state.optString("nativeReplyId");
             boolean original=Boolean.TRUE.equals(message.opt("projectConventionRecorded"))&&proof!=null
@@ -988,6 +996,9 @@ public final class ConversationRepository {
         JSONObject state=new JSONObject().put("kind","message").put("sourceId",replyId).put("revision",1L).put("ownerId","owner").put("spaceId","private")
                 .put("conversationId",selected.conversationId).put("role","assistant").put("deleted",false).put("updatedAt",now)
                 .put("nativeReplyId",selected.completed.id).put("nativeReplyDigest",digest).put("nativeRunId",selected.runId).put("nativeEpoch",selected.epoch).put("nativeTaskId",selected.taskId);
+        // Historical journal fact only; eligibility and the actual Book record are reread on the owner's click.
+        String reminderOperation=selected.originalReminderOperation();
+        if(reminderOperation!=null)state.put(ORIGINAL_REMINDER_OPERATION,reminderOperation);
         if(selected.completed.publicAnswerSources&&text.equals(selected.completed.text))state.put(PENDING_PUBLIC_ANSWER,CompactionPlan.fingerprint(text));
         JSONObject quote=selected.completed.projectConvention();
         if(quote!=null&&selected.taskId.equals(quote.optString("taskId"))&&selected.runId.equals(quote.optString("runId"))&&selected.epoch==quote.optInt("epoch")&&selected.completed.id.equals(quote.optString("replyId"))&&

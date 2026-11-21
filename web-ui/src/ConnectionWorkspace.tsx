@@ -104,6 +104,8 @@ export default function ConnectionWorkspace(props:Props) {
 function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, supported, run, registerTransientBack }: Props) {
   const profiles = list(data.profiles), [editing, setEditing] = useState<Data | null>(null), [selected, setSelected] = useState<Data | null>(null), [removing, setRemoving] = useState<Data | null>(null);
   const editorTrigger = useRef<HTMLElement | null>(null);
+  const goalNow=useRef(cloudGoal?.id);goalNow.current=cloudGoal?.id;
+  const [newHost,setNewHost]=useState<{id:string;key:string;goalId:string;window:string}|null>(null);
   const workBack = useRef<(() => boolean) | null>(null), editorBack = useRef<(() => boolean) | null>(null);
   const journey = useDataSettingsJourney();
   const [workOpened, setWorkOpened] = useState(false), [query, setQuery] = useState('');
@@ -155,6 +157,7 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
     }).catch(() => {});
   };
   const openProfile = (profile: Data) => {
+    setNewHost(null);
     if (selected?.id !== profile.id || selected?.bindingHash !== profile.bindingHash) { setSelected({ ...profile }); setWorkOpened(false); setProbe(null); setReceipt(null); }
     journey.open('profile:' + profile.id);
   };
@@ -166,6 +169,7 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
     ? profiles.find(profile => profile.id === savedCloud.profileId && profile.bindingHash === savedCloud.profileBinding && profile.hasToken === true) : undefined;
   const openSavedCloud = () => {
     if (!cloudGoal || !savedCloudProfile || busy || document.hidden) return;
+    setNewHost(null);
     setGuidedCloud({goalId:cloudGoal.id,profileBinding:savedCloudProfile.bindingHash});
     setSelected({ ...savedCloudProfile }); setWorkOpened(true); setProbe(null); setReceipt(null);
     journey.open('work:' + savedCloudProfile.id);
@@ -178,12 +182,40 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
     { id: 'attention', title: '需要配置或核对', profiles: filteredProfiles.filter(needsConfiguration) },
     { id: 'configured', title: '已保存配置', profiles: filteredProfiles.filter(profile => !needsConfiguration(profile)) },
   ];
-  const openEditor = (profile: Data) => { editorTrigger.current = document.activeElement as HTMLElement; setEditing(profile); };
+  const openEditor = (profile: Data) => { setNewHost(null); editorTrigger.current = document.activeElement as HTMLElement; setEditing(profile); };
   const closeEditor = () => { setEditing(null); requestAnimationFrame(() => { const trigger = editorTrigger.current; (trigger?.isConnected && trigger.getClientRects().length ? trigger : journey.root.current)?.focus({ preventScroll: true }); }); };
+  const hostFromOriginalGoal=domain==='remote'&&journey.view==='list'&&editing&&!editing.id&&cloudGoal?.originHandle?cloudGoal.id:undefined;
+  const takeNewHost=(profile:Data,goalId:string)=>{
+    const key=companionProfileKey(profile),view=bridge.getState().view as Data | undefined;
+    if(!key||goalNow.current!==goalId||journey.view!=='list'||view?.section!=='remote'||view.taskId||document.hidden||
+       profiles.some(row=>row.id===profile.id&&companionProfileKey(row)!==key))return false;
+    setEditing(null);setNewHost({id:profile.id,key,goalId,window:connectionWindow()});return true;
+  };
+  useEffect(()=>{
+    if(!newHost)return;
+    const view=bridge.getState().view as Data | undefined;
+    if(goalNow.current!==newHost.goalId||newHost.window!==connectionWindow()||journey.view!=='list'||
+       editing||view?.section!=='remote'||view.taskId||document.hidden){setNewHost(null);return;}
+    const actual=profiles.filter(row=>row.id===newHost.id);
+    if(!actual.length)return; // Local profile projection may arrive just after the Save reply.
+    setNewHost(null);
+    if(actual.length!==1||companionProfileKey(actual[0])!==newHost.key)return;
+    setGuidedCloud(null);setSelected({...actual[0]});setWorkOpened(true);setProbe(null);setReceipt(null);
+    // No environment read or work submission. The same goal is still offered
+    // by the existing work page, which needs the owner's separate choices.
+    journey.open('work:'+newHost.id);
+  },[newHost,profiles,cloudGoal?.id,journey.view,editing,resume]);
+  useEffect(()=>{
+    if(!newHost)return;
+    const hide=()=>{if(document.hidden)setNewHost(null);},leave=()=>setNewHost(null);
+    document.addEventListener('visibilitychange',hide);window.addEventListener('pagehide',leave);
+    return()=>{document.removeEventListener('visibilitychange',hide);window.removeEventListener('pagehide',leave)};
+  },[newHost]);
   return <div className="pw-connection-workspace" ref={journey.root} tabIndex={-1} data-connection-view={journey.view}>
     <div hidden={journey.view !== 'list'}>
       {cloudGoal&&<section className="pw-connection-attention" aria-label="从管家带来的目标"><h3>选择接这项工作的主机</h3>
         <p>原对话仍保留。这一步只选连接，不会把草稿发给主机。</p>
+        {newHost&&<p role="status">连接已保存，等手机更新这台主机。</p>}
         {savedCloudProfile&&<Button variant="secondary" leadingIcon={IconServer} disabled={busy} onClick={openSavedCloud}>核对已保存的 {savedCloudProfile.name || '云主机'}</Button>}</section>}
       {profiles.length > 0 && <header className="pw-connection-collection-heading"><p className="pw-connection-directory-count">{profiles.length} 个{collectionName}</p><Button variant="secondary" leadingIcon={IconAdd} aria-label={'添加' + collectionName} disabled={busy} onClick={() => openEditor({})}>添加连接</Button></header>}
       {(profiles.length > 0 || query.length > 0) && <SearchField className="pw-connection-directory-search" fieldClassName="pw-connection-search" shape="rounded" aria-label={'搜索' + collectionName} placeholder="搜索名称、地址或工作区" value={query} onChange={setQuery} />}
@@ -225,7 +257,8 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
     </>}
     {selected && workOpened && !stale && <div hidden={!working} className="pw-connection-work-body">{domain === 'remote' ? <RemoteWork cloudGoal={cloudGoal} onCloudGoalUsed={onCloudGoalUsed} guidedGoalId={guidedCloud?.profileBinding===selected.bindingHash?guidedCloud?.goalId:undefined} key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} visible={working} /> : <SshWork key={selected.id + selected.bindingHash} profile={selected} state={state} data={data} run={run} supported={supported} back={workBack} openHistory={() => journey.open('jobs:' + selected.id)} visible={working} />}</div>}
     {showingJobs && (domain === 'remote' ? <div className="pw-connection-jobs">{jobs.length === 0 && <p className="pw-secondary-empty">这项连接暂时没有已读取的原任务。可返回概览同步。</p>}{jobs.map(job => <article className="pw-connection-job" key={job.id}><header><div><h3>{job.worker || '电脑任务'}</h3><p>{profiles.find(profile => profile.id === job.profileId)?.name || job.serviceBase || '原连接'}</p></div><span>{status(job.status)}</span></header>{job.message && <p>{job.message}</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => act('remote.getJob', originalJob(job))}>读取原回执</Button>{list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId)?.id && <Button variant="ghost" onClick={() => { const task = list(state.tasks).find(task => object(task.raw).externalId === job.id && object(object(task.raw).externalRefs).profileId === job.profileId); void run('tasks.open', { id: task!.id }).catch(() => {}); }}>打开本机原任务</Button>}{['queued', 'running', 'stopping', 'awaiting_approval', 'awaiting_input'].includes(job.status) && <Button variant="ghost" disabled={busy} onClick={() => act('remote.cancelJob', originalJob(job))}>请求停止原任务</Button>}</div></article>)}<Receipt value={receipt} run={run} /></div> : selected && !stale ? <SshOriginalWork key={selected.id + ':' + selected.bindingHash} profile={selected} supported={supported('ssh.workHistory') && supported('ssh.openOriginalWork')} run={run} /> : null)}
-    {editing && <ProfileEditor key={editing.id || 'new'} domain={domain} original={editing} current={profiles.find(profile => profile.id === editing.id)} state={state} run={run} back={editorBack} close={closeEditor} />}
+    {editing && <ProfileEditor key={editing.id || 'new'} domain={domain} original={editing} current={profiles.find(profile => profile.id === editing.id)} state={state} run={run} back={editorBack} close={closeEditor}
+      onCreatedForGoal={hostFromOriginalGoal?value=>takeNewHost(value,hostFromOriginalGoal):undefined} />}
     <SettingsDialog isOpen={!!removing} title="移除这个连接？" onClose={() => { if (!busy) setRemoving(null); }}><p>只移除本机连接配置。已发生的远端操作请在原任务核对。</p><Facts values={[[ '连接', removing?.name ], ['地址', removing?.baseUrl || removing?.host ]]} /><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setRemoving(null)}>取消</Button><Button disabled={busy} onClick={() => removing && act(domain + '.removeProfile', { profileId: removing.id, expectedBindingHash: removing.bindingHash }, () => { setRemoving(null); setSelected(null); setWorkOpened(false); journey.back(); })}>移除这项原连接</Button></div></SettingsDialog>
     <SettingsDialog isOpen={!!trust} title={trust?.kind === 'forget' ? '移除原主机信任' : '确认主机身份'} onClose={() => { if (!busy) setTrust(null); }}><p>请先通过可信渠道核对这台主机，不仅依赖当前网络探测。</p><pre className="pw-connection-code">{trust?.kind === 'forget' ? trust?.profile?.hostFingerprint : trust?.fingerprint}</pre><CheckboxField isSelected={checked} onChange={setChecked}>{trust?.kind === 'forget' ? '已核对原因，移除这项原信任' : '已通过可信渠道核对一致'}</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => setTrust(null)}>取消</Button><Button disabled={busy || !checked} onClick={() => {
       if (!trust) return; const input = trust.kind === 'forget' ? { profileId: trust.profile.id, expectedBindingHash: trust.profile.bindingHash, fingerprint: trust.profile.hostFingerprint } : { profileId: trust.profileId, expectedBindingHash: trust.bindingHash, probeId: trust.probeId, fingerprint: trust.fingerprint };
@@ -234,7 +267,7 @@ function ConnectionDirectory({ cloudGoal, onCloudGoalUsed, domain, state, data, 
   </div>;
 }
 
-function ProfileEditor({ domain, original, current, state, run, close, back }: { domain: 'remote' | 'ssh'; original: Data; current?: Data; state: Data; run: Run; close: () => void; back: { current: (() => boolean) | null } }) {
+function ProfileEditor({ domain, original, current, state, run, close, back, onCreatedForGoal }: { domain: 'remote' | 'ssh'; original: Data; current?: Data; state: Data; run: Run; close: () => void; back: { current: (() => boolean) | null }; onCreatedForGoal?:(saved:Data)=>boolean }) {
   const [form, setForm] = useState<Data>({ name: text(original.name), baseUrl: text(original.baseUrl), host: text(original.host), port: text(original.port || 22), username: text(original.username), workspace: text(original.workspace), authType: original.authType === 'password' ? 'password' : 'key', token: '', privateKey: '', password: '', passphrase: '' });
   const [attempted, setAttempted] = useState(false), { request, busy, error } = useRequest(run, state);
   const clear = () => setForm(previous => ({ ...previous, token: '', privateKey: '', password: '', passphrase: '' }));
@@ -243,6 +276,7 @@ function ProfileEditor({ domain, original, current, state, run, close, back }: {
   const stale = !!original.id && (!current || current.bindingHash !== original.bindingHash);
   const field = (key: string, value: any) => setForm(previous => ({ ...previous, [key]: value }));
   const canSave = !busy && !attempted && !stale && text(form.name).trim() && (domain === 'remote' ? text(form.baseUrl).trim() : text(form.host).trim() && text(form.username).trim() && text(form.workspace).startsWith('/') && wirelessPort(form.port));
+  const continueToWork=!!onCreatedForGoal&&domain==='remote'&&!original.id&&text(form.token).trim().length>=32;
   return <SettingsDialog isOpen title={domain === 'remote' ? '电脑环境连接' : 'SSH 连接'} onClose={() => { if (!busy) { clear(); close(); } }}><div className="pw-connection-profile-editor"><div className="pw-connection-profile-editor-scroll">
     <section><h3>连接位置</h3><div className="pw-form-grid">
       <TextField label="名称" value={form.name} onChange={value => field('name', value)} />
@@ -257,7 +291,7 @@ function ProfileEditor({ domain, original, current, state, run, close, back }: {
         <p className="pw-field-hint">凭据只写入手机加密存储，不回填。更换主机或用户时请重新填写。</p>
       </>}
     </div></section>
-    </div><footer className="pw-connection-profile-editor-footer">{stale && <p role="alert">连接已在其他页面修改，请关闭后重新读取。</p>}{error && <p role="alert">{error} 请先核对当前连接列表，不重复这次保存。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { clear(); close(); }}>关闭</Button><Button disabled={!canSave} onClick={() => { const payload = connectionProfilePayload(domain, form, original); setAttempted(true); clear(); void request(domain + '.saveProfile', payload).then(close).catch(() => {}); }}>{busy ? '等待保存回执…' : '保存连接'}</Button></div></footer>
+    </div><footer className="pw-connection-profile-editor-footer">{onCreatedForGoal&&<p className="pw-field-hint">只保存连接。原目标保留，稍后再核对环境和提交。</p>}{stale && <p role="alert">连接已在其他页面修改，请关闭后重新读取。</p>}{error && <p role="alert">{error} 请先核对当前连接列表，不重复这次保存。</p>}<div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => { clear(); close(); }}>关闭</Button><Button disabled={!canSave} onClick={() => { const payload = connectionProfilePayload(domain, form, original); setAttempted(true); clear(); void request(domain + '.saveProfile', payload).then(value=>{if(!continueToWork||!onCreatedForGoal?.(value))close();}).catch(() => {}); }}>{busy ? '等待保存回执…' : continueToWork?'保存并进入工作区':'保存连接'}</Button></div></footer>
   </div></SettingsDialog>;
 }
 

@@ -208,6 +208,20 @@ internal class PocketWebStandaloneDocumentDrafts(
         }
     }
 
+    /** Delete only the displayed saved pin; retire its editor even when the receipt is uncertain. */
+    fun remove(frame: Frame, shown: Edit, done: (State?) -> Unit) {
+        val current = admission(frame)
+        val original = editor?.takeIf { scope == current && it.edit == shown }
+            ?: error("这份本机草稿的编辑版本已变化")
+        enqueue(current, frame, fallback = ::unknown,
+            call = { storage, window -> storage.remove(original.pin, window) }) { actual ->
+            if (actual == null || editor !== original) { done(null); return@enqueue }
+            editor = null; rows = emptyMap(); first = null; blank = null
+            val state = actual.state()
+            done(if (state == State.REMOVED) state else readStatus(state))
+        }
+    }
+
     fun leave(frame: Frame) {
         val current = admission(frame)
         check(scope == null || scope == current) { "原草稿窗口已离开" }
