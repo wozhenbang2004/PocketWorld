@@ -1182,7 +1182,8 @@ public final class TaskStore {
             db.setTransactionSuccessful();return conversationPhoneDeliveryAck(snapshot).put("accepted",false).put("waitingForOriginalConversation",true);
         }finally{if(selection!=null)selection.active=false;db.endTransaction();}
     }
-    private void requireConversationPhonePublication(JSONObject snapshot,JSONObject published)throws Exception {
+    /** Returns the already checked row, or no body when the publication is unavailable. */
+    private JSONObject requireConversationPhonePublication(JSONObject snapshot,JSONObject published)throws Exception {
         if(!"assistant".equals(published.optString("role"))||!"owner".equals(published.optString("ownerId"))||!"private".equals(published.optString("spaceId"))
                 ||!snapshot.getString("conversationId").equals(published.optString("conversationId"))||!snapshot.getString("deliveryId").equals(published.optString("nativeReplyId"))
                 ||!snapshot.getString("taskId").equals(published.optString("nativeTaskId"))||!snapshot.getString("runId").equals(published.optString("nativeRunId"))
@@ -1192,7 +1193,9 @@ public final class TaskStore {
             if(message==null||!snapshot.getString("taskId").equals(message.optString("taskId"))||!snapshot.getString("runId").equals(message.optString("nativeRunId"))
                     ||snapshot.getInt("epoch")!=message.optInt("nativeEpoch")||!snapshot.getString("deliveryId").equals(message.optString("nativeDeliveryId"))
                     ||!snapshot.getString("content").equals(message.optString("content"))||!snapshot.getString("resultDigest").equals(message.optString("resultDigest")))throw new SecurityException("原手机结果消息未完整保存");
+            return message;
         }
+        return null;
     }
     /** Owner reading only: the selected private publication, not the latest run of its task.
      * A result may be visible to its owner without being eligible as new model context. */
@@ -1200,14 +1203,19 @@ public final class TaskStore {
         ConversationPhoneHandoff.nativeId(conversation);ConversationPhoneHandoff.nativeId(message);
         // Native phone result publication inserts exactly revision 1. Edits or restored text do not reissue it.
         if(revision!=1L||offset<0||!ConversationPhoneHandoff.deliveryId(task,run,epoch).equals(delivery))throw new SecurityException("请选择这条原手机回执");
-        return readConversationPhoneOriginalPage(conversation,message,task,run,epoch,delivery,offset,expectedDigest,false);
+        return readConversationPhoneOriginalPage(conversation,message,task,run,epoch,delivery,offset,expectedDigest,false,false);
     }
     /** Read the current run's original private publication from its already open work.
      * The destination and message are selected by the original transaction, never by the caller. */
     public synchronized JSONObject conversationPhoneTaskOriginalPage(String task,String run,int epoch,int offset,String expectedDigest)throws Exception {
-        return readConversationPhoneOriginalPage(null,null,task,run,epoch,ConversationPhoneHandoff.deliveryId(task,run,epoch),offset,expectedDigest,true);
+        return readConversationPhoneOriginalPage(null,null,task,run,epoch,ConversationPhoneHandoff.deliveryId(task,run,epoch),offset,expectedDigest,true,false);
     }
-    private JSONObject readConversationPhoneOriginalPage(String conversation,String message,String task,String run,int epoch,String delivery,int offset,String expectedDigest,boolean fromTask)throws Exception {
+    /** The exact text that was actually saved to Chat, not the longer Work report. */
+    public synchronized JSONObject conversationPhoneTaskPublishedMessage(String task,String run,int epoch,String expectedDigest)throws Exception {
+        if(expectedDigest==null||!expectedDigest.matches("[a-f0-9]{64}"))throw new SecurityException("请先核对这轮已经保存的原回执");
+        return readConversationPhoneOriginalPage(null,null,task,run,epoch,ConversationPhoneHandoff.deliveryId(task,run,epoch),0,expectedDigest,true,true);
+    }
+    private JSONObject readConversationPhoneOriginalPage(String conversation,String message,String task,String run,int epoch,String delivery,int offset,String expectedDigest,boolean fromTask,boolean publishedMessage)throws Exception {
         String key=ConversationPhoneHandoff.resultKey(task,run,epoch);
         long revision=1L;
         db.beginTransactionNonExclusive();try{
@@ -1227,6 +1235,7 @@ public final class TaskStore {
             if(published==null||!message.equals(published.optString("sourceId"))||revision!=published.optLong("revision")||!conversation.equals(published.optString("conversationId"))
                     ||published.optBoolean("deleted")||published.optBoolean("memoryContextRetired")||published.optLong("memorySourceRetiredThrough")>=revision)
                 throw new SecurityException("原回执已撤回、换版或不可用，没有打开其他结果");
+            if(publishedMessage&&published.optBoolean("nativeProvenanceImported"))throw new SecurityException("原对话消息来源不可核对");
             if(!conversation.equals(link.getString("conversationId")))throw new SecurityException("原手机工作不属于这段私人对话");
             JSONObject record=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.PHONE_RETURN_RECORD,key,8*1024*1024));
             if(!"delivered".equals(record.optString("phase"))||!message.equals(record.optString("messageId")))throw new SecurityException("没有这条回执的正式原文");
@@ -1234,7 +1243,23 @@ public final class TaskStore {
             if(!conversation.equals(snapshot.getString("conversationId"))||!snapshot.getString("generation").equals(link.getJSONObject("source").getString("generation"))||
                     !snapshot.getString("generation").equals(conversationRepository.authority().optString("generation")))throw new SecurityException("原结果的对话或来源代次已变化");
             if(!snapshot.getString("status").equals(published.optString("nativeStatus")))throw new SecurityException("原回执终态无法核对");
-            requireConversationPhoneEndedRun(task,run,epoch);requireConversationPhonePublication(snapshot,published);
+            requireConversationPhoneEndedRun(task,run,epoch);
+            if(publishedMessage&&!expectedDigest.equals(snapshot.getString("resultDigest")))throw new SecurityException("原回执已换版，没有读取其他消息");
+            JSONObject row=requireConversationPhonePublication(snapshot,published);
+            if(publishedMessage){
+                if(row==null||!message.equals(row.opt("id"))||revision!=row.optLong("revision",-1)
+                        ||!"assistant".equals(row.opt("role"))||!"conversation_phone".equals(row.opt("nativeDeliveryKind"))
+                        ||row.optBoolean("importAssignedIdentity")||!conversation.equals(row.opt("conversationId"))
+                        ||!delivery.equals(row.opt("nativeReplyId"))||!published.optString("nativeStatus").equals(row.opt("nativeStatus"))
+                        ||!(row.opt("content") instanceof String text)||text.isBlank()||text.length()>24000)
+                    throw new SecurityException("原对话消息不可核对，没有读取其他消息");
+                JSONObject result=new JSONObject().put("format","pocketworld.phone-published-message.v1")
+                        .put("taskId",task).put("runId",run).put("epoch",epoch).put("conversationId",conversation)
+                        .put("deliveryId",delivery).put("messageId",message).put("sourceRevision",revision).put("resultDigest",expectedDigest)
+                        .put("text",text).put("summaryTruncated",snapshot.getBoolean("summaryTruncated"))
+                        .put("executionAuthorized",false).put("resultVerified",false);
+                db.setTransactionSuccessful();return result;
+            }
             JSONObject page=ConversationPhoneHandoff.summaryPage(snapshot,record.getString("originalSummary"),offset,expectedDigest).put("messageId",message).put("sourceRevision",revision);
             if(fromTask)page.remove("finalScreenReceipt"); // The work already has a separate, sourced screen observation.
             db.setTransactionSuccessful();return page;

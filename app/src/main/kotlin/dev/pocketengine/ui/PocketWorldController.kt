@@ -3794,18 +3794,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
-    internal fun readPhoneTaskOriginalResult(task: String, run: String, epoch: Int, offset: Int, digest: String,
+    internal fun readPhoneTaskOriginalResult(task: String, run: String, epoch: Int, offset: Int, digest: String, publishedMessage: Boolean,
                                             ownerWindow: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         require(epoch > 0 && run.isNotBlank() && offset >= 0 && (digest.isEmpty() && offset == 0 || digest.matches(Regex("[a-f0-9]{64}"))))
+        require(!publishedMessage || offset == 0 && digest.isNotEmpty())
         val sourceRevision = conversationSourceRevision
         val store = app.tasks
+        fun currentWork() = !publishedMessage || state.tasks.singleOrNull { it.id == task }?.raw?.let {
+            it.opt("runId") == run && it.optInt("coordinatorEpoch", -1) == epoch && it.opt("contextAvailable") != false &&
+                !it.optBoolean("contextWithdrawn") && !it.optBoolean("sourceCurrentReadRequired") && it.opt("taskProjection") != "source_unavailable"
+        } == true
         fun current() = !closed && webPrivateOwnerVisible() && webTaskViewId == task && ownerWindow() &&
-            app.tasks === store && sourceRevision == conversationSourceRevision
+            app.tasks === store && sourceRevision == conversationSourceRevision && currentWork()
         check(current()) { "请在这轮原手机工作中查看回执" }
         io.execute {
             val result = runCatching {
                 check(current()) { "原手机工作窗口已关闭" }
-                store.conversationPhoneTaskOriginalPage(task, run, epoch, offset, digest)
+                if (publishedMessage) store.conversationPhoneTaskPublishedMessage(task, run, epoch, digest)
+                else store.conversationPhoneTaskOriginalPage(task, run, epoch, offset, digest)
             }
             main.post {
                 if (!current()) done(null, "原工作或私人回执窗口已变化，未打开其他结果")

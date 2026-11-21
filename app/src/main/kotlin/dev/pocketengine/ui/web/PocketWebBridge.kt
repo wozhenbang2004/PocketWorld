@@ -1270,12 +1270,16 @@ internal class PocketWebBridge(
                 };return
             }
             if (action == "phone.result.taskOriginal") {
-                checkedPayload(args, setOf("taskId", "runId", "epoch", "offset", "expectedDigest"))
+                val publishedMessage = args.has("publishedMessage")
+                val fields = setOf("taskId", "runId", "epoch", "expectedDigest")
+                checkedPayload(args, fields + if (publishedMessage) "publishedMessage" else "offset")
+                if (publishedMessage) require(requiredBoolean(args, "publishedMessage"))
                 val task = requiredString(args, "taskId"); val window = captureWindow(); val document = documentId
                 val current = { !closed && section == null && taskViewId == task && document != null && document == documentId && acceptsWindow(window) }
                 require(current() && controller.webPrivateOwnerVisible()) { "请在原手机工作中查看这轮回执" }
                 controller.readPhoneTaskOriginalResult(task, requiredString(args, "runId"), requiredInt(args, "epoch"),
-                    requiredInt(args, "offset"), requiredString(args, "expectedDigest", true), current) {
+                    if (publishedMessage) 0 else requiredInt(args, "offset"),
+                    requiredString(args, "expectedDigest", empty = !publishedMessage), publishedMessage, current) {
                     value, error -> complete(id, value, error, retainValue = false)
                 }; return
             }
