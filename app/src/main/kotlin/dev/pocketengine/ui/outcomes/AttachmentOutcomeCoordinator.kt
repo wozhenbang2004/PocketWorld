@@ -271,7 +271,11 @@ internal class AttachmentOutcomeCoordinator(
         val resultRun=state.resultRun?.takeIf{it.taskId==task}
         var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
         work(onSuccess={actual->
-            if(group==null&&actual.optString("originalDocumentActionId").isNotEmpty()&&actual.optString("taskStatus")!in setOf("completed","failed")){pendingDocumentAction=actual.getString("originalDocumentActionId");state=state.copy(pendingDocumentTask=pendingDocumentAction)}
+            if(group==null&&pendingDocumentAction==null&&actual.optString("taskStatus")!in setOf("completed","failed")){
+                originalDocumentAction(task,actual)?.let{action->
+                    pendingDocumentAction=action;state=state.copy(pendingDocumentTask=action)
+                }
+            }
             if(savedDraft!=null&&restoredDocumentDraft===savedDraft){state=state.copy(documentDraft=JSONObject(savedDraft.toString()),documentDraftEdited=unpublishedEdits);restoredDocumentDraft=null}
             if(original!=null){
                 state=state.copy(originalFile=original)
@@ -372,11 +376,12 @@ internal class AttachmentOutcomeCoordinator(
         val retainedImport=state.libraryImport.takeIf{inLibrary}
         val published=if(inLibrary)JSONObject(file.toString()).put("role","result")
             .put("sourceKind","created_document").put("sourceTaskId",action) else file
-        pendingDocumentAction=null;restoredDocumentDraft=null;restoreFile=null
-        // This is a new Book file. Never keep showing the previous reader under its child's name.
+        if(pendingDocumentAction==action)pendingDocumentAction=null
+        restoredDocumentDraft=null;restoreFile=null
+        // Show only this operation's Book file; a separate pending save still needs its own receipt.
         // The creation task is the file's provenance, not the library's navigation scope.
         state=AttachmentOutcomeState(open=true,taskId=action.takeUnless{inLibrary},snapshot=catalog,file=published,
-            pendingProcessingTask=pendingProcessingAction,notice=notice,libraryImport=retainedImport)
+            pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,notice=notice,libraryImport=retainedImport)
     }
     private fun isPublishedDocument(action:String,file:JSONObject):Boolean{
         val source=file.optJSONObject("source")?:return false
@@ -390,16 +395,29 @@ internal class AttachmentOutcomeCoordinator(
         val action=java.util.UUID.randomUUID().toString();pendingDocumentAction=action
         state=state.copy(documentDraft=pin,pendingDocumentTask=action)
         work(onSuccess={actual->when{
-            actual.optBoolean("outputNotPublished")->{pendingDocumentAction=null;state=state.copy(pendingDocumentTask=null,error=actual.optString("message"),notice="原可编辑源已保存，可修正当前稿后明确生成新版本。")}
+            actual.optBoolean("outputNotPublished")->{
+                if(pendingDocumentAction==action)pendingDocumentAction=null
+                state=state.copy(pendingDocumentTask=pendingDocumentAction,error=actual.optString("message"),notice="原可编辑源已保存，可修正当前稿后明确生成新版本。")
+            }
             isPublishedDocument(action,actual)->showPublishedDocument(action,actual,"新文档已保存到私人文件库，可以打开核对。没有改动原件，也没有导出。")
             else->state=state.copy(notice="尚未核对到这次生成的文件。请核对原文档结果，不会自动重新生成。")
         }}){c,_->app.features.createDocumentForOwner(pin,c,action) to null}
     }
+    private fun originalDocumentAction(task:String?,snapshot:JSONObject?):String?{
+        val actual=snapshot?:return null
+        return task?.takeIf{it.isNotBlank()&&actual.opt("taskId")==it&&actual.opt("taskRunId")==it&&
+            actual.opt("coordinatorEpoch")==1&&actual.opt("originalDocumentActionId")==it}
+    }
     fun queryDocument(){
-        val action=state.pendingDocumentTask?:return
-        if(state.busy||state.group!=null||state.team!=null)return
+        if(state.busy||state.group!=null||state.team!=null||state.deviceOriginalOnly)return
+        // In a document record, check its own freshly read action, never an unrelated pending
+        // save. A live editor still checks its pending save, even when editing from another file.
+        val action=(if(state.documentDraft!=null||privateLibrary())pendingDocumentAction?.takeIf{it==state.pendingDocumentTask}
+            else if(state.resultRun==null&&!state.choosingSource)originalDocumentAction(state.taskId,state.snapshot)
+            else null)?:return
         work(onSuccess={actual->
-            if(actual.opt("found")==true&&isPublishedDocument(action,actual))showPublishedDocument(action,actual,"已找到原操作的实际固定文档，没有重新生成")
+            if(actual.opt("found")==true&&isPublishedDocument(action,actual)&&actual.optJSONObject("source")?.opt("runId")==action)
+                showPublishedDocument(action,actual,"已找到原操作的实际固定文档，没有重新生成")
             else state=state.copy(notice="原文档尚无完整发布回执。可查看原任务和已保留源，不自动重复生成。")
         }){c,_->app.features.documentResultForOwner(action,c) to null}
     }
@@ -408,7 +426,7 @@ internal class AttachmentOutcomeCoordinator(
         if(state.busy||state.group!=null||state.team!=null||state.taskId!=null||state.documentDraft!=null)return
         val actions=state.snapshot?.optJSONObject("documentActions")?.optJSONArray("actions").objects()
         if(actions.none{it.optString("taskId")==id}){state=state.copy(error="原文档动作不在本页原生记录中，请刷新后明确选择。");return}
-        pendingDocumentAction=id;openTask(id)
+        openTask(id)
     }
     fun olderDocumentActions(){
         if(state.busy||state.group!=null||state.team!=null||state.taskId!=null||state.documentDraft!=null)return

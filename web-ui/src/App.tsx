@@ -1912,19 +1912,45 @@ export default function App(){
   void act(command,{reviewHandle:reviewed.reviewHandle,...(command==='voice.accept'?{text:voiceText}:{})}).then(()=>{if(retainedVoiceEdit.current?.inputId===reviewed.inputId)retainedVoiceEdit.current=null;if(voiceReviewLive.current===reviewed)setVoiceReview(null)}).catch(error=>setLocalError(error.message)).finally(()=>{voiceWriting.current=false;setVoicePending(false)});
  };
  const discardVoice=()=>{if(isListening&&can('voice.stop')){run('voice.stop');return}if(!can('voice.review')||!can('voice.discard'))return;setVoicePending(true);void act('voice.review',{phone:intent!=='chat'}).then(async value=>{await act('voice.discard',{reviewHandle:value.reviewHandle});if(retainedVoiceEdit.current?.inputId===value.inputId)retainedVoiceEdit.current=null;}).catch(error=>setLocalError(error.message)).finally(()=>setVoicePending(false));};
- const sameLinkedStart=!!phoneStart?.requestId&&phoneStart.conversationId===state.conversationId&&
-  phoneDraft.channelOrigin!==true&&phoneDraft.sourceState!=='elsewhere'&&phoneDraft.startReceipt?.requestId===phoneStart.requestId;
+ // Switching input mode retires the review, not the exact already registered phone request.
+ // Only the native, still-owned phone draft can bring its original service denial back into view.
+ const linkedPhoneDenial=(native:ReturnType<typeof bridge.getState>,visibleGoal:string)=>{
+  const p=obj(native.phoneDraft),r=obj(p.startReceipt),view=obj(native.view),draft=native.composer,conversation=native.state.conversationId;
+  if(route!=='chat'||intent==='chat'||taskOpen||document.hidden||draftSwitchPending()||view.section!==null||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision)||
+     native.state.conversationReader||typeof conversation!=='string'||!conversation||draft?.ready!==true||
+     draft.conversationId!==conversation||draft.key!==`conversation:${conversation}`||r.composerKey!==draft.key||
+     r.conversationId!==conversation||r.draftConversationId!==conversation||p.phone!==true||p.channelOrigin!==false||p.firstCheckOnly!==true||
+     !['none','current'].includes(p.sourceState)||!Number.isSafeInteger(p.epoch)||!Number.isSafeInteger(p.revision)||
+     r.draftEpoch!==p.epoch||r.draftRevision!==p.revision||typeof r.goal!=='string'||!visibleGoal.trim()||
+     visibleGoal!==p.text||r.goal.trim()!==visibleGoal.trim()||!['main_screen','background'].includes(r.mode)||
+     r.status!=='accepted'||r.admitted!==false||r.admissionState!=='service_denied')return;
+  const receipt=phoneStartReceipt(r);
+  if(!receipt.requestId||receipt.taskId!==receipt.requestId||!receipt.runId||receipt.epoch!==1||receipt.admissionState!=='service_denied')return;
+  return {receipt,mode:r.mode as 'main_screen'|'background',witness:JSON.stringify([
+   bridge.getDocumentEpoch(),navigationWindow.current,view.resumeRevision,draft.key,p.epoch,p.revision,p.sourceEditTicket,
+   r.mode,receipt.requestId,receipt.runId,receipt.epoch])};
+ };
+ const heldLinkedDenial=linkedPhoneDenial(snapshot,phoneText.value);
+ const presentedPhoneStart=phoneStart??heldLinkedDenial?.receipt;
+ const originalDenialMode=presentedPhoneStart?.admissionState==='service_denied'&&heldLinkedDenial&&
+  presentedPhoneStart.requestId===heldLinkedDenial.receipt.requestId&&presentedPhoneStart.runId===heldLinkedDenial.receipt.runId&&
+  presentedPhoneStart.epoch===heldLinkedDenial.receipt.epoch?heldLinkedDenial.mode:undefined;
+ const sameLinkedStart=!!presentedPhoneStart?.requestId&&presentedPhoneStart.conversationId===state.conversationId&&
+  phoneDraft.channelOrigin!==true&&phoneDraft.sourceState!=='elsewhere'&&phoneDraft.startReceipt?.requestId===presentedPhoneStart.requestId;
  const sameBlankStart=!!phoneStart?.draftRequestId&&!state.conversationId&&phoneDraft.channelOrigin!==true&&phoneDraft.sourceState!=='elsewhere'&&
    phoneDraft.startReceipt?.draftRequestId===phoneStart.draftRequestId;
- const keepOriginalPhoneGoal=intent!=='chat'&&(sameLinkedStart||sameBlankStart)&&phoneStart?.status==='accepted'&&phoneStart.admitted!==true&&
+ const keepOriginalPhoneGoal=intent!=='chat'&&(sameLinkedStart||sameBlankStart)&&presentedPhoneStart?.status==='accepted'&&presentedPhoneStart.admitted!==true&&
   phoneDraft.firstCheckOnly===true&&phoneText.value.trim()===String(phoneDraft.text||'').trim();
  const queryOriginalPhone=(retire=false)=>{
-  const original=phoneStart;if(document.hidden||phoneAction.current||!original)return;
+  const original=presentedPhoneStart;if(document.hidden||phoneAction.current||!original)return;
   const blank=original.draftRequestId,action=retire?'phone.draft.retireUncreated':'phone.query';
   if(!can(action)||(!blank&&(!sameLinkedStart||!original.requestId||!original.conversationId))||(retire&&(!blank||!original.canRetire)))return;
   const args=blank?{draftRequestId:blank,...(retire?{confirmed:true}:{})}:{requestId:original.requestId,conversationId:original.conversationId};
   const window=phoneWindow.current,doc=bridge.getDocumentEpoch();
-  const here=()=>!document.hidden&&window===phoneWindow.current&&doc===bridge.getDocumentEpoch();
+  const retained=!phoneStart?heldLinkedDenial:undefined;
+  const here=()=>!document.hidden&&window===phoneWindow.current&&doc===bridge.getDocumentEpoch()&&
+   (!retained||linkedPhoneDenial(bridge.getState(),phoneText.currentValue())?.witness===retained.witness);
+  if(retained&&!here())return;
   phoneAction.current=true;setPhoneReviewPending(true);
   void act(action,args).then(value=>{if(!here())return;const receipt=phoneStartReceipt(value,original);setPhoneStart(receipt);setLocalStatus(receipt.message);if(receipt.status!=='unknown')setPhoneReview(null)})
     .catch(()=>{if(here()){
@@ -4249,11 +4275,11 @@ export default function App(){
    {intent!=='chat'&&phoneDraft.phone===true&&!state.conversationId&&!phoneDraft.channelOrigin&&composer.key&&can('phone.draft.recentStarts')&&<EarlierDraftPhoneStarts key={chatOwner} composer={String(composer.key)} except={phoneStart?.taskId} onTask={openBlankFirst}/>}
    {phoneStart&&phoneStart.draftRequestId&&phoneStart.status!=='rejected'&&!phoneReview&&<section className="pw-input-receipt" aria-label="本次草稿的手机任务">{phoneStart.admissionState&&phoneStart.admissionState!=='admitted'?<p role="status">{phoneStart.message}</p>:<Receipt receipt={phoneStart}/>}
      {blankReceiptActions(phoneStart)}{keepOriginalPhoneGoal&&<small>保留原目标，不会再次启动。编辑成新目标后可以重新审阅。</small>}</section>}
-   {phoneStart&&!phoneStart.draftRequestId&&!phoneReview&&(keepOriginalPhoneGoal||phoneStart.status==='unknown'&&(!phoneStart.requestId||sameLinkedStart))&&
+   {presentedPhoneStart&&!presentedPhoneStart.draftRequestId&&!phoneReview&&(keepOriginalPhoneGoal||presentedPhoneStart.status==='unknown'&&(!presentedPhoneStart.requestId||sameLinkedStart))&&
     <section className="pw-input-receipt" aria-label="原手机启动回执">
-     {keepOriginalPhoneGoal?<p role="status">{phoneStart.message}</p>:<Receipt receipt={phoneStart}/>}
+     {keepOriginalPhoneGoal?<p role="status">{originalDenialMode&&<strong>原{originalDenialMode==='main_screen'?'手机主屏':'后台独立屏'}请求：</strong>}{presentedPhoneStart.message}</p>:<Receipt receipt={presentedPhoneStart}/>}
      {sameLinkedStart?(can('phone.query')&&<Button variant="ghost" size="small" disabled={phoneReviewPending} onClick={()=>queryOriginalPhone()}>核对这次启动</Button>):
-       <Button variant="ghost" size="small" onClick={()=>phoneStart.taskId?openTask(phoneStart.taskId):navigate('tasks')}>核对原任务记录</Button>}
+       <Button variant="ghost" size="small" onClick={()=>presentedPhoneStart.taskId?openTask(presentedPhoneStart.taskId):navigate('tasks')}>核对原任务记录</Button>}
      {keepOriginalPhoneGoal&&<small>核对只读原回执，不会重新启动。可以直接编辑成新目标。</small>}
     </section>}{(state.voiceInput?.reviewAvailable||composer.voiceText)&&<div className="pw-voice-review"><p>有听写文字待核对。</p>{can('voice.review')&&<Button variant="secondary" disabled={voicePending} onClick={openVoiceReview}>核对原听写</Button>}{can('voice.discard')&&<Button variant="ghost" disabled={voicePending} onClick={discardVoice}>丢弃本次听写</Button>}</div>}<ConversationDelivery rows={pendingInputs} can={can} submitting={!!state.chatSubmitting} ordinaryComposer={intent==='chat'} readWindow={JSON.stringify([navigationRevision,bridge.getDocumentEpoch(),draftEpoch,state.traceSourceRevision])} onReadSavedFirst={async row=>{
     const navigation=navigationWindow.current,doc=bridge.getDocumentEpoch(),history=state.traceSourceRevision;

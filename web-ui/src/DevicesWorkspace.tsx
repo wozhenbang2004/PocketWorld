@@ -576,6 +576,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     : !desktopPeer && deviceChannelWasConnected(peer) && supported('devices.snapshot')
       ? { kind: 'capabilities', label: '核对可用能力', icon: IconLayers, open: () => readPeerCapabilities() }
       : null;
+  const groupWindowsGrantRead = !!peer && windowsPeer && deviceChannelWasConnected(peer);
+  const peerCapabilityRead = peer && !retired(peer) && !phoneAccess && peerEntry?.kind !== 'capabilities' &&
+    <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>
+      {groupWindowsGrantRead ? '向这台电脑核对能力与已签权限' : '向这台设备更新能力记录'}
+    </Button>;
   const localPhone = rows(state.phoneReadiness?.groups);
   const phoneStatus = (id: string) => { const value = localPhone.find(row => row.id === id); return ({ ready: '本机检查可用', blocked: '需要准备', unsupported: '本机不支持', unknown: '尚未核实' } as Record<string,string>)[value?.state] || '尚未核实'; };
   const localScreenDetail = (id: string) => {
@@ -1560,8 +1565,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               <p>断开只关闭连接，不代表远端任务停止。先查看原任务与操作回执；未确认的写入不重放。</p>
               {!retired(peer) && !mayRepairAddress && <Button variant="secondary" disabled={busy} onClick={() => openAddressForm()}>核对原身份并更新连接方式</Button>}
             </AccordionItem>
-            <AccordionItem id="capabilities" title="能力与两端权限" description="查看范围，调整本机授予的权限" icon={IconShieldCheck}>
-              {!retired(peer) && <>{!phoneAccess && peerEntry?.kind !== 'capabilities' && <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>向这台设备更新能力记录</Button>}{!deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}</>}
+            <AccordionItem id="capabilities" title="能力与两端权限" description="分开看对方签发与本机授予" icon={IconShieldCheck}>
+              {!groupWindowsGrantRead && peerCapabilityRead}
+              {!retired(peer) && !deviceChannelWasConnected(peer) && <p>上次检查未接通。更新时会核对实际通道，不会自动重连。</p>}
               <p>上次能力记录：{time(peer.capabilitySnapshot?.capturedAt)}</p>
               {phoneAccess && <div><h4>本机可用的手机工具</h4>
                 {phoneAccess.note && <p>{phoneAccess.note}</p>}
@@ -1577,17 +1583,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 peer.capabilitySnapshot.capabilities?.length === 0 &&
                 <p>上次对方只公开了设备身份和这一份授权回执，未公布工具或忙闲。不代表对方离线。</p>}
               {rows(peer.capabilitySnapshot?.capabilities).filter(cap => !phoneAccess || !['phone.tools.main', 'phone.tools.background'].includes(cap.id)).map(cap => <p key={cap.id}>{cap.id} · {capabilityCaveat || (cap.ready === true && cap.authorized === true ? '上次核对时可用' : cap.reason || '上次未报告就绪')}</p>)}
-              <h4>允许这台设备在本机使用</h4>{rows(peer.grantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
+              <h4>对方授予本机</h4>
+              {groupWindowsGrantRead && peerCapabilityRead}
+              {rows(peer.receivedGrantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
+              {!retired(peer) && supported('devices.readSavedPeerScope') && <SavedPeerScopeReceipt
+                key={JSON.stringify([local.deviceId,local.instanceId,peer.deviceId,peer.instanceId,peer.certificateFingerprint,peer.authorizationEpoch])}
+                here={local} peer={peer} busy={busy} read={done => readSavedPeerScope(peer, done)} />}
+              <h4>本机授予对方</h4>{rows(peer.grantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
+              {!peer.revoked && <Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.reviewPeerGrant', { deviceId: peer.deviceId }, acceptReview); }}>调整本机授予对方的权限</Button>}
               {!retired(peer) && supported('devices.readOwnerModelRules') && supported('devices.disableOwnerModelRule') && <PeerModelAutoRules
                 key={JSON.stringify([local.deviceId,local.instanceId,local.certificateFingerprint,peer.deviceId,peer.instanceId,peer.certificateFingerprint,peer.authorizationEpoch])}
                 here={local} peer={peer} busy={busy} act={(action,args,done)=>{void invoke(action,args,done);}}
                 discard={handle=>{void run('devices.discard',{rulesHandle:handle}).catch(()=>{});}} resource={item=><ResourceScope resource={item}/>} />}
-              <h4>本机可在对端使用</h4>{rows(peer.receivedGrantScopes).map((scope, index) => <GrantScope key={index} scope={scope} />)}
-              {!retired(peer) && supported('devices.readSavedPeerScope') && <SavedPeerScopeReceipt
-                key={JSON.stringify([local.deviceId,local.instanceId,peer.deviceId,peer.instanceId,peer.certificateFingerprint,peer.authorizationEpoch])}
-                here={local} peer={peer} busy={busy} read={done => readSavedPeerScope(peer, done)} />}
               {peer.hasMoreGrantScopes || peer.hasMoreReceivedGrantScopes || snapshot?.hasMoreOutgoingGrants ? <p>本次授权记录有读取上限，未列出不代表没有。</p> : null}
-              {!peer.revoked && <Button variant="secondary" disabled={busy} onClick={() => { void invoke('devices.reviewPeerGrant', { deviceId: peer.deviceId }, acceptReview); }}>调整本机授予的权限</Button>}
             </AccordionItem>
             <AccordionItem id="identity" title="身份与连接设置" description="完整指纹、连接地址与信任管理">
               {supported('devices.changeLocalPeerName') && (!retired(peer) || !!peer.ownerLocalName) && <LocalPeerNameEditor

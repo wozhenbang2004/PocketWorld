@@ -209,7 +209,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
-  const returned=useRef(''),focusReturned=useRef(false),noticeArea=useRef<HTMLDivElement>(null);
+  const returned=useRef(''),focusReturned=useRef(false),deliverySummary=useRef<HTMLSpanElement>(null);
   const [deliveryOpen,setDeliveryOpen]=useState(false);
   const [hostOrigin, setHostOrigin] = useState<Data | null>(null);
   const [hostFiles, setHostFiles] = useState<HostComparison | null>(null), [hostDiff, setHostDiff] = useState<HostDiff | null>(null);
@@ -424,9 +424,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const picked = view?.draft?.ownerPickedConvention;
   const currentPicked = !sourceConflict && keptNativePick.current && picked && Number.isSafeInteger(picked.revision) && picked.revision>0 && picked.checkoutId===checkout &&
     requirements.constraints && view?.draft?.constraints===requirements.constraints ? picked : null;
-  useEffect(()=>{if(!active||!view||!focusReturned.current||!currentPicked||document.hidden)return;
-    focusReturned.current=false;noticeArea.current?.focus({preventScroll:true});noticeArea.current?.scrollIntoView({block:'nearest',behavior:'auto'});
-  },[active,view,currentPicked]);
+  useEffect(()=>{
+    const trigger=deliverySummary.current?.closest('button');
+    if(!active||!view||!deliveryOpen||!focusReturned.current||!currentPicked||document.hidden||
+      !trigger?.isConnected||trigger.closest('[hidden],[inert]'))return;
+    // Restore to the original disclosure trigger, not a field inside its entering panel.
+    focusReturned.current=false;trigger.focus({preventScroll:true});trigger.scrollIntoView({block:'nearest',behavior:'auto'});
+  },[active,view,currentPicked,deliveryOpen]);
   const removePicked = () => { setRequirements(value=>({...value,constraints:''})); retain({...draft.current,constraints:''});
     setView(value=>value ? {...value,draft:{...value.draft,ownerPickedConvention:null}} : value); };
   const readable = can('projects.development.read');
@@ -991,9 +995,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {buildLookupUnavailable && <p role="status" className="pw-field-hint">这一版的构建记录暂未核对，请重新读取项目条件，不重复交办。</p>}
       {nodeBlocked && can('projects.development.reviewDraftBuild') && <p className="pw-field-hint" role="status">{nodeBlocked} 你仍可浏览和编辑这个副本。</p>}
       <TextAreaField label="这次的目标" value={goal} isDisabled={disabled} onChange={value => { if (value.length <= 12000) { setGoal(value); retain({ ...draft.current, goal: value }); } }} hint="例如：做一个能在手机预览的番茄钟，先用本地数据。不要填写密码或令牌。" />
-      {currentPicked && <div ref={noticeArea} tabIndex={-1} className="pw-local-inline-notice"><p>已从本项目手写约定修订 {currentPicked.revision} 放入本次草稿，尚不是模型采用的证据。</p>
-        <Button variant="ghost" size="small" disabled={disabled} onClick={removePicked}>移除本次约定</Button></div>}
-      <Accordion expandedKeys={deliveryOpen?['development-delivery']:[]} onExpandedChange={keys=>setDeliveryOpen(keys.has('development-delivery'))}><AccordionItem id="development-delivery" title="交付要求" description={deliveryFields.some(key => requirements[key].trim()) ? '已补充约束、交付物或完成标准' : '选填：约束、交付物与完成标准'}>
+      <Accordion expandedKeys={deliveryOpen?['development-delivery']:[]} onExpandedChange={keys=>setDeliveryOpen(keys.has('development-delivery'))}><AccordionItem id="development-delivery" title="交付要求" description={currentPicked
+        ? <span ref={deliverySummary}>本项目手写约定已放入草稿 · 修订 {currentPicked.revision}</span>
+        : deliveryFields.some(key => requirements[key].trim()) ? '已补充约束、交付物或完成标准' : '选填：约束、交付物与完成标准'}>
+        {currentPicked && <div className="pw-local-inline-notice"><p>移除只影响这份草稿，不会改原约定或已交办的任务。</p>
+          <Button variant="ghost" size="small" disabled={disabled} onClick={removePicked}>从本次草稿移除</Button></div>}
         <TextAreaField label="限制与约束" value={requirements.constraints} isDisabled={disabled} hint="例如：保留已有数据，沿用当前组件，每项最多 4000 字。"
           onChange={value => { if (value.length <= 4000) {
             if(currentPicked && value!==requirements.constraints)setView(previous=>previous?{...previous,draft:{...previous.draft,ownerPickedConvention:null}}:previous);
