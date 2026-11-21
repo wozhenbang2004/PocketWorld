@@ -335,7 +335,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const draftAct=async(visit:StandaloneVisit,command:string,args:Json={})=>{
   const frame=draftFrame(visit);if(!frame)throw new Error('原草稿窗口已关闭');
   const result=await act(command,args,frame,false);
-  if(!draftFrame(visit))throw new Error('原草稿窗口已变化');
+  // A positively entered generation retires the draft editor and is displayed by the existing file result workflow.
+  if(!(command==='drafts.createDocument'&&result.started===true)&&!draftFrame(visit))throw new Error('原草稿窗口已变化');
   return result;
  };
  const openDraftDesk=()=>{

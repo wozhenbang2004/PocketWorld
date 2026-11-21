@@ -3,13 +3,15 @@ import { AnimatePresence } from 'motion/react';
 import { Button, IconButton, SearchField } from './forms-library';
 import { Drawer, WorkSidebar, type WorkNavItem } from './shell-library';
 import { IconAccount, IconArrowLeft, IconChat, IconChevronDown, IconChevronRight, IconClose, IconGrid, IconMore, IconNewChat, IconNotification, IconSearch, IconSettings, IconSidebarClose, IconSidebarOpen } from './icons';
+import { conversationNavigationStates, type ConversationNavigationState } from './conversation-work';
 import './workspace-navigator.css';
 
 type Recent = { id: string; title?: string; pinOrder?: number | string };
 type Face = 'home' | 'directory' | 'records';
-export type OwnerNavigationMemory = { homeY?: number; directoryY?: number; query?: string; showPinned?: boolean };
+export type OwnerNavigationMemory = { homeY?: number; directoryY?: number; query?: string; showPinned?: boolean; showOngoing?: boolean };
 type Props = {
   items: WorkNavItem[]; selected: string; recent: readonly Recent[]; selectedConversation?: string;
+  conversationActivity?: ReadonlyMap<string, ConversationNavigationState>;
   desktop: boolean; compact: boolean; onToggleCompact: () => void;
   directoryOpen: boolean; setDirectoryOpen: (open: boolean) => void;
   searchOpen: boolean; openSearch: () => void; closeSearch: () => void; search: ReactNode; searchTrigger: Ref<HTMLButtonElement>;
@@ -40,7 +42,7 @@ const withoutUnreadBadge = (item: WorkNavItem): WorkNavItem =>
 
 /** The app remains the only route/guard owner. This shell projects the same real
  * items and conversation IDs onto three faces of its existing drawer or desktop rail. */
-export function WorkspaceNavigator({items, selected, recent, selectedConversation, desktop, compact, onToggleCompact,
+export function WorkspaceNavigator({items, selected, recent, selectedConversation, conversationActivity, desktop, compact, onToggleCompact,
   directoryOpen, setDirectoryOpen, searchOpen, openSearch, closeSearch, search, searchTrigger, memory, navigate,
   openConversation, organizeConversation, newConversation, newPending, onResumeIndependentReportFollowUp,
   profileName, avatar, canProfile, openUnread}: Props) {
@@ -49,6 +51,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
   const scroll = useRef<HTMLDivElement>(null), directoryButton = useRef<HTMLButtonElement>(null), back = useRef<HTMLButtonElement>(null);
   const priorFace = useRef<Face>(face);
   const [query, setQuery] = useState(memory.query || ''), [showPinned, setShowPinned] = useState(!!memory.showPinned);
+  const [showOngoing, setShowOngoing] = useState(!!memory.showOngoing);
   const [badAvatar, setBadAvatar] = useState<string>();
   const index = useMemo(() => new Map(items.map(i => [i.key, i])), [items]);
   const home = first.flatMap(key => { const item = index.get(key); return item ? [{ ...withoutUnreadBadge(item), label: names[key] || item.label, group: '日常工作' }] : []; });
@@ -63,7 +66,13 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
     .map(i => ({ ...withoutUnreadBadge(i), group: '匹配的功能' })) : directory;
   const onDirectoryRoute = directory.find(i => i.key === selected);
   const inbox = index.get('remoteInbox'), unread = Number(inbox?.count || 0);
-  const pinned = recent.filter(c => Number(c.pinOrder) > 0), unpinned = recent.filter(c => !(Number(c.pinOrder) > 0)).slice(0, 5);
+  const activity = (conversation: Recent) => {
+    const state = conversationActivity?.get(conversation.id);
+    return state ? conversationNavigationStates[state] : undefined;
+  };
+  const ongoing = recent.filter(activity).sort((a, b) => (activity(b)?.priority || 0) - (activity(a)?.priority || 0));
+  const other = recent.filter(c => !activity(c));
+  const pinned = other.filter(c => Number(c.pinOrder) > 0), unpinned = other.filter(c => !(Number(c.pinOrder) > 0)).slice(0, 5);
   const remember = () => { if (scroll.current && face !== 'records') memory[face === 'home' ? 'homeY' : 'directoryY'] = scroll.current.scrollTop; };
   const enter = (to: 'records' | 'directory') => {
     remember(); if (to === 'directory') setDirectoryOpen(true); else openSearch();
@@ -84,13 +93,16 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
     if (scroll.current) scroll.current.scrollTop = 0;
   };
   const choose = (key: string) => { remember(); navigate(key); };
-  const rows = (entries: readonly Recent[]) => <div className="pw-recent-work">{entries.map(c =>
-    <div className="pw-conversation-row" key={c.id}>
-      <Button variant="ghost" leadingIcon={IconChat} title={c.title || '未命名对话'} disabled={!openConversation}
+  const rows = (entries: readonly Recent[]) => <div className="pw-recent-work">{entries.map(c => {
+    const title = c.title || '未命名对话', mark = activity(c);
+    return <div className="pw-conversation-row" key={c.id}>
+      <Button variant="ghost" leadingIcon={IconChat} title={title} disabled={!openConversation}
         aria-current={c.id === selectedConversation ? 'page' : undefined} className={c.id === selectedConversation ? 'is-current' : undefined}
-        onClick={() => { remember(); openConversation?.(c.id); }}><span dir="auto">{c.title || '未命名对话'}</span></Button>
-      {organizeConversation && <IconButton icon={IconMore} aria-label={'整理对话：' + (c.title || '未命名对话')} onClick={() => organizeConversation(c.id)}/>}
-    </div>)}</div>;
+        data-conversation-activity={!!mark || undefined}
+        onClick={() => { remember(); openConversation?.(c.id); }}><span dir="auto">{title}</span>{mark && <small>{mark.label}</small>}</Button>
+      {organizeConversation && <IconButton icon={IconMore} aria-label={'整理对话：' + title} onClick={() => organizeConversation(c.id)}/>}
+    </div>;
+  })}</div>;
   const title = face === 'records' ? '搜索记录' : face === 'directory' ? '全部功能' : 'PocketWorld';
   const profile = profileName || '我的';
   return <>
@@ -123,7 +135,12 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
           trailingIcon={IconChevronRight} disabled={newPending} onClick={() => { remember(); onResumeIndependentReportFollowUp(); }}>
           <span>继续未发追问</span>
         </Button>}
-        {!mini && (pinned.length > 0 || unpinned.length > 0) && <section className="pw-work-recent pw-owner-recent" aria-label="最近对话">
+        {!mini && (ongoing.length > 0 || pinned.length > 0 || unpinned.length > 0) && <section className="pw-work-recent pw-owner-recent" aria-label="对话列表">
+          {ongoing.length > 0 && <div className="pw-conversation-group"><div className="pw-owner-recent-heading"><h3>跟进中的对话</h3>
+            {ongoing.length > 3 && <Button size="small" variant="ghost" trailingIcon={IconChevronDown} aria-expanded={showOngoing}
+              aria-label={showOngoing ? '收起跟进中的对话' : '展开其余 ' + (ongoing.length - 3) + ' 个跟进中的对话'}
+              onClick={() => { memory.showOngoing = !showOngoing; setShowOngoing(!showOngoing); }}>{showOngoing ? '收起' : '展开其余 ' + (ongoing.length - 3) + ' 个'}</Button>}</div>
+            {rows(showOngoing ? ongoing : ongoing.slice(0, 3))}</div>}
           {pinned.length > 0 && <div className="pw-conversation-group"><div className="pw-owner-recent-heading"><h3>置顶</h3>
             {pinned.length > 3 && <Button size="small" variant="ghost" trailingIcon={IconChevronDown} aria-expanded={showPinned}
               onClick={() => { memory.showPinned = !showPinned; setShowPinned(!showPinned); }}>{showPinned ? '收起' : '展开 ' + pinned.length + ' 个'}</Button>}</div>

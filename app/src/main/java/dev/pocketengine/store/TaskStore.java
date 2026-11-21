@@ -14819,8 +14819,9 @@ public final class TaskStore {
     }
     /** Historical navigation marker, not a current file, offer, or reusable admission. */
     private void projectDirectViteEditorResumeForUi(JSONObject task,JSONObject view,JSONObject captured){
+        String status=task.optString("status");
         if(captured==null||captured.length()!=9||!task.has(OwnerDirectNodeBuild.VITE_FIELD)||
-                !"detail_window".equals(view.opt("taskProjection"))||!"completed".equals(task.opt("status"))||
+                !"detail_window".equals(view.opt("taskProjection"))||!status.matches("completed|failed")||
                 !Boolean.FALSE.equals(task.opt("cancelRequested")))return;
         try{
             JSONObject original=requireOwnerNativeNodeScope(task,false);
@@ -14830,6 +14831,17 @@ public final class TaskStore {
                     !checkout.equals(captured.opt("checkoutId"))||!original.getString("sourceDigest").equals(captured.opt("sourceDigest"))||
                     !(captured.opt("path") instanceof String path)||!(captured.opt("savedHash") instanceof String sha))return;
             var position=new ProjectFileSavePosition(project,checkout,path,sha);
+            if("failed".equals(status)){
+                if(!Boolean.FALSE.equals(view.opt("hasUnresolvedOperations"))||!status.equals(directNodeReceiptRunStatus(id)))return;
+                OwnerDirectNodeOriginal build=ownerDirectNodeOriginal(task);
+                JSONObject row=build.operation(),receipt=row.getJSONObject("receipt"),actual=receipt.optJSONObject("executionReceipt");
+                // Only a real nonzero exit of the approved build can hand its saved source back for editing.
+                if(!"receipt".equals(row.opt("state"))||!"project_process_receipt".equals(receipt.opt("code"))||
+                        !Boolean.TRUE.equals(receipt.opt("accepted"))||!status.equals(receipt.opt("status"))||
+                        !status.equals(receipt.opt("executionStatus"))||!status.equals(verifiedDirectNodeExit(build,actual,false))||
+                        actual.getInt("exitCode")<=0||!Boolean.FALSE.equals(actual.opt("cancelRequested"))||
+                        !Boolean.FALSE.equals(actual.opt("timedOut")))return;
+            }
             view.put(DIRECT_VITE_EDITOR_RESUME,new JSONObject()
                     .put("taskId",id).put("runId",id).put("epoch",1).put("buildOperationId",id)
                     .put("projectId",project).put("checkoutId",checkout).put("sourceDigest",original.getString("sourceDigest"))

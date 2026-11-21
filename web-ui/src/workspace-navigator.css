@@ -20,6 +20,9 @@
 .pw-owner-recent-heading{display:flex;align-items:center;justify-content:space-between;min-width:0}
 .pw-owner-recent-heading>button{min-height:44px}
 .pw-owner-recent .pw-conversation-row>button{min-height:44px}
+.pw-owner-nav-body .pw-owner-recent .pw-recent-work .pw-conversation-row>.button-press-motion[data-conversation-activity]>span{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.pw-owner-recent .pw-conversation-row>[data-conversation-activity]>span>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pw-owner-recent .pw-conversation-row>[data-conversation-activity] small{font:500 .75rem/1.4 var(--pw-font);white-space:nowrap}
 .pw-owner-nav-find{position:sticky;top:-4px;z-index:1;padding:4px 0 8px;background:var(--pw-surface)}
 .pw-owner-nav-find [role="search"]{min-width:0}
 .pw-owner-nav-find input{min-height:42px;min-width:0}

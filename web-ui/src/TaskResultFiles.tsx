@@ -9,7 +9,7 @@ export type TaskResultFile = { id: string; sha256: string; name: string; mimeTyp
 
 type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string };
 
-function usableFile(value: unknown): value is TaskResultFile {
+export function usableResultFile(value: unknown): value is TaskResultFile {
   if (!value || typeof value !== 'object') return false;
   const file = value as Partial<TaskResultFile>;
   return typeof file.id === 'string' && !!file.id && file.id.length <= 240 && !file.id.includes('\0') &&
@@ -68,8 +68,8 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
         // Older hosts only returned outputs. Never infer inputs from a message body or filename.
         const sources: unknown = value.sourceFiles === undefined ? [] : value.sourceFiles;
         if (!Array.isArray(sources) || sources.length > 4) throw new Error('来源文件尚未核对，请到原工作文件查看。');
-        const files: TaskResultFile[] = value.files.filter(usableFile);
-        const inputs = sources.filter(usableFile);
+        const files: TaskResultFile[] = value.files.filter(usableResultFile);
+        const inputs = sources.filter(usableResultFile);
         setPage({ key, files, sources: inputs, sourceUnavailable: value.sourceUnavailable === true || inputs.length !== sources.length,
           hasRequestAttachments: value.hasRequestAttachments === true,
           limited: value.readLimited || files.length !== value.files.length || value.moreSourceFiles === true });

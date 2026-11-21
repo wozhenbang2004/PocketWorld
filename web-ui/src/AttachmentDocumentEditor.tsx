@@ -104,6 +104,19 @@ export function AttachmentWordPdfFields({draft,editable,edit,text,draftOnly=fals
  return <><TextField label="标题（可选）" value={draft.title||''} onChange={value=>text('title',value,200)} isDisabled={!editable}/><Accordion className="pw-document-secondary"><AccordionItem id="document-format" title="文件格式与排版" description={`${draft.format?.toUpperCase()} · ${draft.fontPoints||12} pt` }><div className="pw-file-form-grid"><SelectField label="文件格式" value={draft.format} options={[{id:'docx',label:'Word · 可编辑'},{id:'pdf',label:'PDF · 固定页面'}]} onChange={format=>edit({...draft,format})} isDisabled={!editable}/><SelectField label="字号" value={String(draft.fontPoints||12)} options={[10,11,12,14,16].map(n=>({id:String(n),label:`${n} pt`}))} onChange={font=>edit({...draft,fontPoints:Number(font)})} isDisabled={!editable}/></div></AccordionItem></Accordion><TextAreaField className="pw-document-body" label={`正文 · ${String(draft.body||'').length}/16000`} value={draft.body||''} onChange={value=>text('body',value,16000)} isDisabled={!editable}/>{!draftOnly&&<p className="pw-muted">用 # 标记标题、空行分段、制表符分隔简单表格。生成后可直接查看原件。</p>}</>;
 }
 
+export function AttachmentDocumentGenerationReview({open,format,name,ack,busy,retainedDraft=false,onAck,onClose,onConfirm}:{
+ open:boolean;format:string;name?:string;ack:boolean;busy:boolean;retainedDraft?:boolean;
+ onAck:(value:boolean)=>void;onClose:()=>void;onConfirm:()=>void;
+}){
+ return <SettingsDialog isOpen={open} title={`生成新的 ${format.toUpperCase()} 文件`} closeLabel={retainedDraft?'继续编辑':undefined} onClose={onClose}>
+  <p>{retainedDraft?'将用已保留版本生成一个新原件，原草稿不变。生成后可查看或另存，不会自动分享。':
+    '将保存当前可编辑内容和一个新的独立原件。生成完成后可查看排版，再选择导出或分享。'}</p>
+  <p><strong>{name}</strong></p><CheckboxField isSelected={ack} onChange={onAck}>确认生成这个新版本</CheckboxField>
+  <div className="pw-action-row"><Button variant="secondary" onClick={onClose}>继续编辑</Button>
+   <Button variant="primary" disabled={!ack||busy} onClick={onConfirm}>生成新文件</Button></div>
+ </SettingsDialog>;
+}
+
 export function AttachmentDocumentEditor({original,baseVersion,unpublished,windowId,foregroundReady,pendingTask,busy,act,beforeBack}:{original:Json;baseVersion?:string;unpublished:boolean;windowId:string;foregroundReady:boolean;pendingTask?:string;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void}) {
  const [draft,setDraft]=useState<Json>(()=>structuredClone(original)),[slide,setSlide]=useState('0'),[error,setError]=useState(''),[saving,setSaving]=useState(false),[saved,setSaved]=useState(false),[review,setReview]=useState<Json|null>(null),[ack,setAck]=useState(false),[discardOpen,setDiscardOpen]=useState(false);
  const current=useRef(draft),committed=useRef(JSON.stringify(original)),savingPromise=useRef<Promise<AttachmentFrame|undefined>|null>(null),alive=useRef(true),revision=useRef(0),action=useRef(act);current.current=draft;action.current=act;
@@ -186,7 +199,8 @@ export function AttachmentDocumentEditor({original,baseVersion,unpublished,windo
   <p>这些更改尚未生成新文档。离开会丢弃本页修改，文件库中的原件不变。</p>
   <div className="pw-action-row"><Button variant="primary" onClick={()=>answerLeave(false)}>继续编辑</Button><Button variant="danger" onClick={()=>answerLeave(true)}>放弃修改并离开</Button></div>
  </SettingsDialog>
- <SettingsDialog isOpen={!!review} title={`生成新的 ${draft.format?.toUpperCase()} 文件`} onClose={closeReview}>{review&&<><p>将保存当前可编辑内容和一个新的独立原件。生成完成后可查看排版，再选择导出或分享。</p><p><strong>{review.draft?.name}</strong></p><CheckboxField isSelected={ack} onChange={setAck}>确认生成这个新版本</CheckboxField><div className="pw-action-row"><Button variant="secondary" onClick={closeReview}>继续编辑</Button><Button variant="primary" disabled={!ack||busy} onClick={()=>{const id=review.reviewId;setReview(null);void act('createDocument',{reviewId:id,acknowledge:true}).catch(()=>{})}}>生成新文件</Button></div></>}</SettingsDialog>
+ <AttachmentDocumentGenerationReview open={!!review} format={String(draft.format||'')} name={review?.draft?.name} ack={ack} busy={busy}
+  onAck={setAck} onClose={closeReview} onConfirm={()=>{if(review){const id=review.reviewId;setReview(null);void act('createDocument',{reviewId:id,acknowledge:true}).catch(()=>{})}}}/>
  <SettingsDialog isOpen={discardOpen} title="放弃未保存修改" onClose={()=>setDiscardOpen(false)}><p>恢复到本页最后确认保留的内容。已经生成的文件与版本保持不变。</p><div className="pw-action-row"><Button variant="secondary" onClick={()=>setDiscardOpen(false)}>继续编辑</Button><Button variant="danger" disabled={busy||saving} onClick={()=>{const retained=JSON.parse(committed.current);current.current=retained;setDraft(retained);setError('');setSaved(validDraft(retained));setDiscardOpen(false)}}>放弃未保存修改</Button></div></SettingsDialog>
  </section>;
 }

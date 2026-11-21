@@ -242,13 +242,16 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   useCollectionMotion(root, owner, revision, {layout: false});
   // This dedicated native Tool Work has no assistant answer, generic file
   // collection or generic project/Chat handoff. The original Process stays on its tab.
-  if(directWeb)return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="原本机构建的网页成果">
+  const repairViteEditor=active&&status==='failed'&&!!onResumeViteBuildEditor;
+  if(directWeb)return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label={repairViteEditor?'原本机网页构建':'原本机构建的网页成果'}>
     {directWebResult&&packageRead.firstWebWindow?<DirectViteWebOutput key={JSON.stringify([owner,packageRead.firstWebWindow,directWebResult.sourceDigest])}
       target={directWebResult} ownerWindow={packageRead.firstWebWindow}/>:
       active&&status==='completed'&&packageWindowOwns(record.id)&&
         <p className="pw-reading-note" role="status">尚未核对到原网页成果。可在「过程」查看这次构建的原记录。</p>}
-    {directWebResult&&onResumeViteBuildEditor&&<div className="pw-form-actions">
-      <Button variant="secondary" onClick={onResumeViteBuildEditor}>继续编辑刚才的文件</Button>
+    {(directWebResult||repairViteEditor)&&onResumeViteBuildEditor&&<div className="pw-form-actions">
+      <Button variant={repairViteEditor?'primary':'secondary'} onClick={onResumeViteBuildEditor}>
+        {repairViteEditor?'返回编辑刚才的文件':'继续编辑刚才的文件'}
+      </Button>
     </div>}
   </section>;
   const hasExecutionRecord = !!(resultText || outcome.image || remotePhone || phoneStatus || outcome.partial);

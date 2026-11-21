@@ -1358,7 +1358,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     <div className="pw-team-loading">{(!workspaceActive || busy) && <ProgressBar aria-label={workspaceActive ? '正在读取原团队回执' : '正在进入团队工作区'} isIndeterminate showValueLabel={false} size="sm" />}</div>
     {error && error !== alreadyShownError && !editor && !memberDraft && !review && !phoneSelection && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}{notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
     {reading && <nav className="pw-team-location" aria-label="协作记录导航"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={backFromRun}>{verifiedWorkResultReturn() ? '返回原工作' : current ? '协作记录' : '全部编组'}</Button></nav>}
-    {!reading && <div className="pw-team-directory-intro"><div><h2>{choosingOriginalTeam ? '为原工作选编组' : '一起完成'}</h2><p>{choosingOriginalTeam
+    {!reading && <div className="pw-team-directory-intro"><div><h2>{choosingOriginalTeam ? '为原对话选编组' : '一起完成'}</h2><p>{choosingOriginalTeam
       ? '只关联到原对话草稿，不发送，也不启动协作。'
       : onAskButler && !originalWorkDraft && !entries.length && directoryState === 'empty' ? '先写目标，不用先建编组。管家提出分工后，在原工作里核对。' : '分工、进展与成果，都在这里。'}</p></div>
       {offerFirstOriginalTeam ? <Button variant="secondary" leadingIcon={IconAdd} disabled={busy || formDraft.loading || !!editor} onClick={() => beginEditor(null, 'definition')}>新建编组</Button>

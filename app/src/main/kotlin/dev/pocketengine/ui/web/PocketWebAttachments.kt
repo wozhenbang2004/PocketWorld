@@ -30,9 +30,10 @@ internal class PocketWebAttachments(
     companion object {
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
         val PRIVATE_DRAFT_COMMANDS = setOf("drafts.list", "drafts.new", "drafts.open", "drafts.saveFirst",
-            "drafts.checkFirst", "drafts.save", "drafts.leave")
+            "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
+        private const val DOCUMENT_REVIEW_TTL = 120_000L
     }
     private val flow get() = controller.attachmentOutcomes
     private data class Window(val id: String, val ticket: PocketWebWindowTicket)
@@ -40,6 +41,8 @@ internal class PocketWebAttachments(
     private data class Review(val id: String, val location: String, val draft: JSONObject, val expires: Long)
     private data class ProcessingReview(val id: String, val value: NativeFileProcess.Review)
     private data class DraftLibraryVisit(val id: String, val current: () -> Boolean)
+    private data class DraftDocumentReview(val id: String, val windowId: String,
+        val edit: PocketWebStandaloneDocumentDrafts.Edit, val planDigest: String, val expires: Long)
     private var window: Window? = null
     private val frames = linkedMapOf<String, Frame>()
     private var review: Review? = null
@@ -47,6 +50,7 @@ internal class PocketWebAttachments(
     private val viewer = PocketWebOriginalFiles(controller.webPresentationActivity(), { controller.webUiCanInteract() }, changed)
     // Set only by the currently admitted explicit no-argument entry from the business bridge.
     private var globalDraftLibrary: DraftLibraryVisit? = null
+    private var draftDocumentReview: DraftDocumentReview? = null
     private val drafts = lazy(LazyThreadSafetyMode.NONE) {
         PocketWebStandaloneDocumentDrafts(controller, captureWindow, acceptsWindow, ::currentDraftFrame)
     }
@@ -95,6 +99,7 @@ internal class PocketWebAttachments(
     }
     private fun retireDraftLibrary(keepPresentation: Boolean = false) {
         globalDraftLibrary = null
+        draftDocumentReview = null
         if (drafts.isInitialized()) drafts.value.retire()
         if (!keepPresentation) flow.discardStandaloneDraftPresentation()
     }
@@ -256,6 +261,7 @@ internal class PocketWebAttachments(
             }
             if (drafts.isInitialized() && drafts.value.showing()) {
                 check(command == "back" || command == "close") { "请先返回私人文件库" }
+                draftDocumentReview = null
                 drafts.value.retire()
             }
             if (flow.state.busy && command !in setOf("cancel", "close", "stopObservation")) error("请等待当前读取完成，或明确停止它")
@@ -311,7 +317,7 @@ internal class PocketWebAttachments(
                     val draft = flow.state.documentDraft ?: error("请先打开文档编辑")
                     check(flow.state.pendingDocumentTask == null && flow.state.group == null && flow.state.team == null) { "请先核对原文档动作" }
                     DocumentDraft(draft)
-                    val pin = Review(UUID.randomUUID().toString(), location(flow.state), JSONObject(draft.toString()), SystemClock.elapsedRealtime() + 120_000L)
+                    val pin = Review(UUID.randomUUID().toString(), location(flow.state), JSONObject(draft.toString()), SystemClock.elapsedRealtime() + DOCUMENT_REVIEW_TTL)
                     review = pin; result = JSONObject().put("reviewId", pin.id).put("draft", pin.draft)
                 }
                 "createDocument" -> {
@@ -443,7 +449,11 @@ internal class PocketWebAttachments(
             val frame = PocketWebStandaloneDocumentDrafts.Frame(text("windowId"), text("frameId"))
             check(currentDraftFrame(frame))
             val adapter = drafts.value
-            when (text("command")) {
+            val command = text("command")
+            fun editor() = PocketWebStandaloneDocumentDrafts.Edit(text("editorHandle"), text("versionHandle"))
+            fun noGeneration(reason: String) = JSONObject().put("started", false).put("reason", reason)
+            if (command != "drafts.createDocument" && command != "drafts.dismissDocument") draftDocumentReview = null
+            when (command) {
                 "drafts.list" -> { exact(); adapter.list(frame) { catalog ->
                     reply(catalog?.let { JSONObject().put("metadataComplete", it.metadataComplete)
                         .put("rows", JSONArray(it.rows.map { row -> JSONObject().put("rowHandle", row.rowHandle)
@@ -460,7 +470,62 @@ internal class PocketWebAttachments(
                 "drafts.checkFirst" -> { exact("editorHandle"); adapter.checkFirst(frame, text("editorHandle"), ::saved) }
                 "drafts.save" -> {
                     exact("editorHandle", "versionHandle", "fields")
-                    adapter.save(frame, PocketWebStandaloneDocumentDrafts.Edit(text("editorHandle"), text("versionHandle")), fields(), ::saved)
+                    adapter.save(frame, editor(), fields(), ::saved)
+                }
+                "drafts.reviewDocument" -> {
+                    exact("editorHandle", "versionHandle")
+                    val selected = editor()
+                    adapter.readGenerationDraft(frame, selected) { fields ->
+                        val result = fields?.takeIf { currentDraftFrame(frame) }?.let {
+                            try {
+                                val draft = DocumentDraft(content(it))
+                                val prepared = DraftDocumentReview(UUID.randomUUID().toString(), frame.windowId, selected,
+                                    draft.identity, SystemClock.elapsedRealtime() + DOCUMENT_REVIEW_TTL)
+                                draftDocumentReview = prepared
+                                JSONObject().put("status", "ready").put("reviewId", prepared.id).edit(selected)
+                                    .put("format", draft.format).put("fileName", draft.fileName())
+                            } catch (invalid: Exception) {
+                                JSONObject().put("status", "invalid").put("reason", invalid.message?.take(150) ?: "请补全草稿内容")
+                            }
+                        }
+                        reply(result)
+                    }
+                }
+                "drafts.dismissDocument" -> {
+                    exact("reviewId")
+                    val id = text("reviewId")
+                    if (draftDocumentReview?.let { it.windowId == frame.windowId && it.id == id } == true)
+                        draftDocumentReview = null
+                    reply(JSONObject().put("dismissed", true))
+                }
+                "drafts.createDocument" -> {
+                    exact("editorHandle", "versionHandle", "reviewId", "acknowledge")
+                    val selected = editor()
+                    val id = text("reviewId")
+                    val prepared = draftDocumentReview?.takeIf {
+                        args.opt("acknowledge") == true && it.id == id && it.windowId == frame.windowId && it.edit == selected
+                    } ?: error("请先核对这份已保留的草稿")
+                    draftDocumentReview = null // Consume once, even if the exact reread is unconfirmed.
+                    if (SystemClock.elapsedRealtime() >= prepared.expires) {
+                        reply(noGeneration("本次核对已过期，请重新核对草稿。")); return
+                    }
+                    adapter.readGenerationDraft(frame, selected) { fields ->
+                        val result = if (!currentDraftFrame(frame)) null else if (fields == null) {
+                            noGeneration("没有重新核对到这份已保留的版本，请退出并打开原草稿。")
+                        } else {
+                            val draft = runCatching { DocumentDraft(content(fields)) }.getOrNull()
+                            if (draft == null || draft.identity != prepared.planDigest || SystemClock.elapsedRealtime() >= prepared.expires) {
+                                noGeneration("已保留的草稿或本次核对已变化，请重新打开原稿。")
+                            } else {
+                                // This is the only entry to the existing creation operation; no draft body enters a reply.
+                                runCatching { flow.createDocumentFromSavedDraft(draft) }.getOrNull()?.let {
+                                    retireDraftLibrary()
+                                    JSONObject().put("started", true)
+                                }
+                            }
+                        }
+                        reply(result)
+                    }
                 }
                 "drafts.leave" -> { exact(); adapter.leave(frame); reply(JSONObject().put("left", true)) }
                 else -> error("未知的本机文档草稿操作")

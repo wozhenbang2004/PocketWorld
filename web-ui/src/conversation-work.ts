@@ -45,6 +45,55 @@ export function ownerWorkIdentity(task: unknown): WorkIdentity | null {
 
 export const workIdentityKey = (value: WorkIdentity) => JSON.stringify([value.taskId, value.runId, value.epoch]);
 
+export const conversationNavigationStates = {
+  waiting: { label: '待处理', priority: 3 },
+  running: { label: '进行中', priority: 2 },
+  preparing: { label: '准备中', priority: 2 },
+  queued: { label: '已排队', priority: 1 },
+} as const;
+export type ConversationNavigationState = keyof typeof conversationNavigationStates;
+const waitingForOwner = new Set(['awaiting_user', 'waiting_user', 'awaiting_approval', 'waiting_approval', 'awaiting_permission', 'waiting_permission', 'needs_confirmation']);
+
+/** Drawer-only discovery. Join native state by exact private conversation and
+ * original run, never by title, last message, or a task's model-written summary. */
+export function conversationNavigationActivity<T extends Data>(tasks: readonly T[], assistant: unknown,
+    originalWork: (task: T, conversation: string) => WorkIdentity | null): ReadonlyMap<string, ConversationNavigationState> {
+  const native = object(assistant), scope = object(native?.scope);
+  const live = new Map<string, Data | null>();
+  const active = native?.activeTurns;
+  if (scope?.ownerId === 'owner' && scope.spaceId === 'private' && Array.isArray(active)) {
+    for (const value of active) {
+      const row = object(value);
+      if (row && id(row.taskId)) live.set(row.taskId, live.has(row.taskId) ? null : row);
+    }
+  }
+  const result = new Map<string, ConversationNavigationState>();
+  for (const task of tasks) {
+    const raw = object(task.raw), conversation = raw?.conversationId, status = task.status;
+    if (!raw || !id(task.id) || raw.id !== task.id || !id(conversation) || typeof status !== 'string' ||
+        raw.actorId !== 'owner' || raw.spaceId !== 'private' ||
+        raw.kind !== 'assistant' || raw.executionMode !== 'capabilities' || raw.status !== status || raw.cancelRequested !== false ||
+        raw.metadataLimited === true || raw.contextAvailable === false || raw.contextWithdrawn === true ||
+        raw.sourceCurrentReadRequired === true || raw.taskProjection === 'source_unavailable' || raw.origin != null ||
+        raw.parentTaskId != null || raw.teamAssignment != null || raw.developmentContext != null) continue;
+    let mark: ConversationNavigationState | undefined;
+    if (originalWork(task, conversation)) {
+      if (waitingForOwner.has(status)) mark = 'waiting';
+      else if (status === 'running' || status === 'preparing' || status === 'queued') mark = status;
+    } else {
+      const turn = live.get(task.id);
+      if (!turn || raw.executionRole || turn.executionRole || turn.resourceType !== 'assistant_text' ||
+          turn.conversationId !== conversation || !id(raw.runId) || !positive(raw.coordinatorEpoch) ||
+          turn.runId !== raw.runId || turn.epoch !== raw.coordinatorEpoch || turn.resourceState !== raw.resourceState) continue;
+      if (turn.resourceState === 'running' && (status === 'running' || status === 'preparing')) mark = status;
+      else if (turn.resourceState === 'queued' && (status === 'queued' || status === 'preparing')) mark = 'queued';
+    }
+    const old = result.get(conversation);
+    if (mark && (!old || conversationNavigationStates[mark].priority > conversationNavigationStates[old].priority)) result.set(conversation, mark);
+  }
+  return result;
+}
+
 /** Navigation only. Returning to a conversation grants no permission to continue
  * a task; its current owner/run and controls must still be read by the host. */
 export function privateTaskConversationId(task: unknown): string | null {

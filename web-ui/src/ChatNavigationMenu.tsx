@@ -1,5 +1,5 @@
-import type {ReactNode,Ref} from 'react';
-import { IconChevronDown, IconFolder, IconMemory, IconMenu, IconSearch } from './icons';
+import {useRef,type ReactNode,type Ref} from 'react';
+import { IconChevronDown, IconFile, IconFolder, IconMemory, IconMenu, IconSearch } from './icons';
 import {Button,IconButton} from './forms-library';
 import {Popover,PopoverTrigger} from './shell-library';
 import {useNavigationGlass} from './useNavigationGlass';
@@ -19,6 +19,7 @@ type ChatNavigationMenuProps={
  onNavigation:()=>void;
  onOrganize?:()=>void;
  onMemory?:()=>void;
+ onDeliveredFiles?:(trigger:HTMLButtonElement)=>void;
  onNotifications?:()=>void;
  onSettings:()=>void;
 };
@@ -26,17 +27,18 @@ type ChatNavigationMenuProps={
 /** Back and global navigation are different visible targets. The title menu
  * belongs to the current conversation; account settings, notifications and
  * starting another chat belong to the single workspace navigator. */
-export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,triggerRef,unread,onConversations,onNavigation,onOrganize,onMemory}:ChatNavigationMenuProps){
- const actionsGlass=useNavigationGlass<HTMLDivElement>();
+export function ChatNavigationMenu({title,navigationTrigger,isOpen,onOpenChange,triggerRef,unread,onConversations,onNavigation,onOrganize,onMemory,onDeliveredFiles}:ChatNavigationMenuProps){
+ const actionsGlass=useNavigationGlass<HTMLDivElement>(), titleTrigger=useRef<HTMLButtonElement>(null);
  const choose=(action:()=>void)=>{onOpenChange(false);action()};
- const local=!!onOrganize||!!onMemory;
+ const local=!!onOrganize||!!onMemory||!!onDeliveredFiles;
  return <nav className="pw-chat-navigation" aria-label="对话导航">
   {navigationTrigger}
   <h1 className="pw-chat-navigation-title" title={title}>{local?
    <PopoverTrigger isOpen={isOpen} onOpenChange={onOpenChange}>
-    <Button variant="ghost" className="pw-chat-object-menu" trailingIcon={IconChevronDown} aria-label={title+'，当前对话操作'}><span dir="auto">{title}</span></Button>
+    <Button ref={titleTrigger} variant="ghost" className="pw-chat-object-menu" trailingIcon={IconChevronDown} aria-label={title+'，当前对话操作'}><span dir="auto">{title}</span></Button>
     <Popover aria-label="当前对话操作" placement="bottom" offset={8} className="pw-chat-glass-menu" dialogClassName="pw-chat-glass-dialog">
      <div className="pw-chat-menu-actions">
+      {onDeliveredFiles&&<Button variant="ghost" leadingIcon={IconFile} onClick={()=>{const trigger=titleTrigger.current;if(trigger)choose(()=>onDeliveredFiles(trigger));}}>近期文件成果</Button>}
       {onOrganize&&<Button variant="ghost" leadingIcon={IconFolder} onClick={()=>choose(onOrganize)}>整理当前对话</Button>}
       {onMemory&&<Button variant="ghost" leadingIcon={IconMemory} onClick={()=>choose(onMemory)}>本对话的个人记忆</Button>}
      </div>

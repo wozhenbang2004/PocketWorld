@@ -213,19 +213,30 @@ export function sameDirectNodeExecution(view:DirectNodeExecution|undefined,pin:D
   return view && 'pin' in view && Object.entries(pin).every(([name,value])=>view.pin[name as keyof DirectNodeExecutionPin]===value) ? view : undefined;
 }
 
-/** Exit 0 is evidence of the original process only. The existing native
- * first-web read must separately prove its eligible immutable archive. */
-export function originalDirectViteResult(task:unknown) {
+function originalDirectViteExit(task:unknown,status:'completed'|'failed') {
   const record=object(task),raw=object(record.raw),id=record.id;
-  if(!directViteWork(record)||raw.status!=='completed'||raw.cancelRequested!==false||!Array.isArray(raw.operations))return;
+  if(!directViteWork(record)||raw.status!==status||raw.cancelRequested!==false||!Array.isArray(raw.operations))return;
   const row=(raw.operations as unknown[]).map(object).find(item=>item.tool==='project_execute'&&item.runId===id&&item.operationId===id);
   if(!row)return;
   const direct=originalDirectNodeExecution(record,row),pin=directNodeLogPin(direct),actual=object(row.receipt?.executionReceipt);
-  if(direct?.phase!=='released'||direct.checkReceipt||!pin?.vite||actual.status!=='completed'||actual.exitCode!==0||
+  const exit=actual.exitCode;
+  if(direct?.phase!=='released'||direct.checkReceipt||!pin?.vite||actual.status!==status||
+    (status==='completed'?exit!==0:!Number.isSafeInteger(exit)||exit<1||exit>255)||
     actual.terminationSignal!==0||actual.launchErrno!==0||actual.launchPhase!=='exit_observed'||actual.noChildCreated!==false||
     actual.sourceCheckStatus!=='pre_exec_manifest_verified'||actual.cancelRequested!==false||actual.timedOut!==false)return;
   return {taskId:pin.taskId,runId:pin.runId,epoch:pin.epoch,projectId:pin.projectId,checkoutId:pin.checkoutId,
     buildOperationId:pin.buildOperationId,sourceDigest:pin.sourceDigest};
+}
+
+/** Exit 0 is evidence of the original process only. The existing native
+ * first-web read must separately prove its eligible immutable archive. */
+export function originalDirectViteResult(task:unknown) {
+  return originalDirectViteExit(task,'completed');
+}
+
+/** A known nonzero exit can point back to saved source, never to a webpage. */
+export function originalDirectViteEditorReturn(task:unknown) {
+  return originalDirectViteExit(task,object(object(task).raw).status==='failed'?'failed':'completed');
 }
 
 const directDependencyFormat='pocketworld.owner-direct-node-dependencies.v1';

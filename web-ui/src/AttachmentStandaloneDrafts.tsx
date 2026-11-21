@@ -1,5 +1,5 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import {AttachmentWordPdfFields} from './AttachmentDocumentEditor';
+import {AttachmentDocumentGenerationReview,AttachmentWordPdfFields} from './AttachmentDocumentEditor';
 import {Button,SettingsDialog,TextAreaField,TextField} from './forms-library';
 import {fileObject as obj,type FileJson as Json} from './attachment-workspace';
 import {registerOverlayBack} from './overlay-back';
@@ -7,6 +7,7 @@ import {registerOverlayBack} from './overlay-back';
 type Fields={format:'docx'|'pdf';name:string;title:string;body:string;fontPoints:number};
 type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update'};
 type Row={rowHandle:string;name:string;format:Fields['format'];savedAt:number};
+type GenerationReview={id:string;editorHandle:string;versionHandle:string;fileName:string;format:Fields['format']};
 type Invoke=(command:string,args?:Json)=>Promise<Json>;
 const isHandle=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(value);
 const fields=(value:unknown):Fields|undefined=>{
@@ -31,6 +32,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
 }){
  const [catalog,setCatalog]=useState<Json>(),[editor,setEditor]=useState<Editor>(),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [exit,setExit]=useState<{close:boolean}>();
+ const [review,setReview]=useState<GenerationReview>(),[ack,setAck]=useState(false),[generation,setGeneration]=useState<'submitting'|'accepted'|'unknown'>();
  const flight=useRef(false),mounted=useRef(true),heading=useRef<HTMLHeadingElement>(null),current=useRef(active);
  current.current=active;
  const dirty=!!editor&&JSON.stringify(editor.input)!==JSON.stringify(editor.original);
@@ -47,14 +49,24 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
  const leave=(close:boolean)=>perform(async()=>{
   try{await onExit(close)}catch{if(mounted.current)setError(close?'没有确认关闭原文件库。本页还在。':'还未确认退出当前草稿。本页还在。')}
  });
+ const closeGenerationReview=()=>{
+  if(!review)return;
+  setReview(undefined);setAck(false);
+  if(current.current)void invoke('drafts.dismissDocument',{reviewId:review.id}).catch(()=>{});
+ };
  useLayoutEffect(()=>{
   registerExit(close=>{
    if(flight.current||loading)return;
+   if(review){closeGenerationReview();return}
    if(dirty||editor?.uncertain)setExit({close});else leave(close);
   });
   return()=>registerExit(null);
  });
- useEffect(()=>{if(exit)return registerOverlayBack(()=>setExit(undefined));},[exit]);
+ useEffect(()=>{
+  if(exit)return registerOverlayBack(()=>setExit(undefined));
+  if(active&&review)return registerOverlayBack(closeGenerationReview);
+ },[exit,active,review]);
+ useEffect(()=>{if(!active){setReview(undefined);setAck(false)}},[active]);
  const start=(row?:Row)=>perform(async()=>{
   if(!active)return;
   const result=await invoke(row?'drafts.open':'drafts.new',row?{rowHandle:row.rowHandle}:undefined),input=fields(result.fields);
@@ -95,7 +107,39 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
  };
  const shown=catalog||initial,rows=rowList(shown);
  const retry=()=>perform(async()=>{if(active){const value=await invoke('drafts.list');if(mounted.current&&current.current)setCatalog(value)}});
- const editable=active&&!busy&&!exit&&!editor?.uncertain;
+ const editable=active&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation;
+ const canReviewGeneration=!!editor?.version&&!dirty&&!!editor.original.name.trim()&&!!editor.original.body.trim();
+ const prepareGeneration=()=>perform(async()=>{
+  if(!active||review||generation||!canReviewGeneration||!editor?.version||editor.uncertain)return;
+  const result=await invoke('drafts.reviewDocument',{editorHandle:editor.handle,versionHandle:editor.version});
+  if(!mounted.current||!current.current)return;
+  if(result.status==='invalid'){
+   setError(typeof result.reason==='string'?result.reason:'请补全本机草稿后再核对生成。');return;
+  }
+  if(result.status!=='ready'||!isHandle(result.reviewId)||result.editorHandle!==editor.handle||result.versionHandle!==editor.version||
+    result.format!==editor.original.format||typeof result.fileName!=='string'||!result.fileName.endsWith(`.${result.format}`)||result.fileName.length>85){
+   setError('没有核对到这份已保留的草稿。原稿没有改动。');return;
+  }
+  setReview({id:result.reviewId,editorHandle:editor.handle,versionHandle:editor.version,fileName:result.fileName,format:result.format});setAck(false);
+ });
+ const confirmGeneration=()=>{
+  if(!active||!ack||!review||generation||dirty||editor?.uncertain||editor?.handle!==review.editorHandle||editor?.version!==review.versionHandle)return;
+  const selected=review;
+  perform(async()=>{
+   setReview(undefined);setAck(false);setGeneration('submitting');setNotice('');
+   try{
+    const result=await invoke('drafts.createDocument',{reviewId:selected.id,editorHandle:selected.editorHandle,versionHandle:selected.versionHandle,acknowledge:true});
+    if(!mounted.current)return;
+    if(result.started===false){
+     setGeneration(undefined);
+     setError(typeof result.reason==='string'?result.reason:'此次没有开始生成。原草稿不变。');
+    }else if(result.started!==true)throw new Error('未收到原生成动作回执');
+    else setGeneration('accepted');
+   }catch{
+    if(mounted.current){setGeneration('unknown');setError('请返回成果核对原生成记录。没有改写草稿，也不会自动重试。')}
+   }
+  });
+ };
  return <section className="pw-document-editor" aria-label="本机文档草稿">
   <h3 ref={heading} tabIndex={-1}>{typed?'本页还在的输入':active&&editor?'编辑本机草稿':'已保留的草稿'}</h3>
   {active&&<p className="pw-muted">只保存在本机。草稿不是已生成的文件。</p>}
@@ -108,10 +152,11 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
    editor?<><TextField label="文件名" value={editor.input.name} isDisabled={!editable} onChange={name=>edit({...editor.input,name})}/>
     <AttachmentWordPdfFields draft={editor.input} editable={editable} edit={edit}
      text={(field,value,limit)=>{if(value.length<=limit)edit({...editor.input,[field]:value});else setError(`此项最多 ${limit} 字，未改变输入。`)}} draftOnly/>
-    <footer className="pw-document-footer"><span role="status">{busy?'正在核对本机草稿':notice||
+    <footer className="pw-document-footer"><span role="status">{generation==='unknown'?'生成是否受理尚未核对':generation==='accepted'?'已受理生成，等待新文件回执':generation?'正在核对已保留版本':busy?'正在核对本机草稿':notice||
      (editor.uncertain==='update'?'请重新打开这份原稿核对本机版本。':dirty?'本页修改尚未保留':editor.version?'已打开本机保留版':'还没有保留本页')}</span>
-     {editor.uncertain==='first'?<Button variant="secondary" disabled={busy} onClick={()=>save(true)}>核对本次草稿</Button>:
-      !editor.uncertain&&<Button variant="primary" disabled={busy||!dirty} onClick={()=>save()}>保留草稿</Button>}
+     {!generation&&(editor.uncertain==='first'?<Button variant="secondary" disabled={busy} onClick={()=>save(true)}>核对本次草稿</Button>:
+      !editor.uncertain&&(canReviewGeneration?<Button variant="primary" disabled={!editable} onClick={prepareGeneration}>核对并生成{editor.input.format==='pdf'?' PDF':' Word'}</Button>:
+      <Button variant="primary" disabled={!editable||!dirty} onClick={()=>save()}>保留草稿</Button>))}
     </footer></>:
    loading?<p role="status">正在读取本机草稿清单</p>:<>{shown?.metadataComplete===false&&<p role="status">草稿清单尚未核对齐全，可以打开已经列出的原稿。</p>}
     {shown?.metadataComplete===true&&!rows.length&&<p>还没有已保留的草稿。</p>}
@@ -127,6 +172,8 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
      return <div className="pw-file-action-record" key={row.rowHandle}><div><strong>{name}</strong><small>{caption}</small></div>
       <Button variant="ghost" disabled={busy} aria-label={`继续编辑 ${name} · ${caption}`} onClick={()=>start(row)}>继续编辑</Button></div>;
     })}</>}
+  <AttachmentDocumentGenerationReview open={active&&!!review} format={review?.format||''} name={review?.fileName}
+   ack={ack} busy={busy} retainedDraft onAck={setAck} onClose={closeGenerationReview} onConfirm={confirmGeneration}/>
   <SettingsDialog isOpen={!!exit} title="离开本机草稿？" closeLabel="留在这里" onClose={()=>setExit(undefined)}>
    <p>本页还有未确认保留的修改。离开不会删除已保留的版本，也不会发起新的保存。已经提交但没有回执的保存，请回本机草稿核对。</p>
    <div className="pw-action-row"><Button variant="primary" onClick={()=>setExit(undefined)}>留在这里</Button>

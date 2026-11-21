@@ -18,7 +18,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Private Library draft adapter. It does not initialize on app startup or
- * interact with legacy DocumentDraft/Review, Bundle, tasks, or Book.
+ * write to Bundle, tasks, or Book. Generation receives fields only from an exact
+ * explicitly revalidated saved revision; this adapter never starts it.
  *
  * The eventual host must prove its expressly opened ordinary global Library,
  * current trusted document and exact accepted Attachment window/frame. The supplied
@@ -189,6 +190,21 @@ internal class PocketWebStandaloneDocumentDrafts(
                 rows = emptyMap()
                 Saved(readStatus(state))
             })
+        }
+    }
+
+    /** Read only the exact acknowledged revision, for the current native generation review/confirmation. */
+    fun readGenerationDraft(frame: Frame, shown: Edit, done: (Fields?) -> Unit) {
+        val current = admission(frame)
+        val original = editor?.takeIf { scope == current && it.edit == shown }
+            ?: error("这份本机草稿的编辑版本已变化")
+        val pin = original.pin
+        enqueue(current, frame, fallback = ::unknown,
+            call = { storage, window -> storage.read(pin, window) }) { actual ->
+            val saved = actual?.takeIf { it.state() == State.VERIFIED }?.draft()?.takeIf {
+                editor === original && it.metadata().pin() == pin
+            }
+            done(saved?.fields())
         }
     }
 

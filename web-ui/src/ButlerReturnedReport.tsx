@@ -5,6 +5,7 @@ import {IconFolder} from './icons';
 import {OwnerWorkReport, type ReportPin, type ReportTarget} from './OwnerWorkReport';
 import {ownerWorkPresentation} from './owner-work-presentation';
 import type {ButlerHomeTask} from './ButlerHome';
+import {workCollectionPresentation} from './work-collection';
 
 export type VerifiedHomeReport={target:ReportTarget;pin:ReportPin;documentEpoch:number;resume:number};
 const resume=()=>Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0);
@@ -14,6 +15,20 @@ export function reportedHomeWork(task:ButlerHomeTask,work=ownerWorkPresentation(
   const runId=task.raw?.runId,epoch=task.raw?.coordinatorEpoch;
   if(!work?.delivered||!work.deliveryId||!work.reportMessageId||!work.conversationId||typeof runId!=='string'||!runId.trim()||!Number.isSafeInteger(epoch)||epoch<1)return null;
   return {taskId:task.id,runId,epoch,reportMessageId:work.reportMessageId,conversationId:work.conversationId};
+}
+/** A durable directory row can point at this report, but only the complete
+ * original Work opened by the owner may confirm its current identity. */
+export function completedDirectoryReport(task:ButlerHomeTask,detail=false):ReportTarget|null{
+  const raw=task.raw,work=raw?.ownerWork;
+  if(task.status!=='completed'||raw?.status!==task.status||raw.kind!=='assistant'||raw.executionMode!=='capabilities'||
+     raw.executionRole!=='owner_work'||raw.cancelRequested!==false||raw.contextAvailable!==true||raw.contextWithdrawn===true||
+     raw.sourceCurrentReadRequired===true||raw.taskProjection==='source_unavailable'||raw.taskCoreReadLimited===true||raw.metadataLimited===true||
+     raw.origin!=null||raw.parentTaskId!=null||raw.teamRunId!=null||raw.teamAssignment!=null||raw.memberId!=null||
+     raw.developmentContext!=null||raw.ownerPhoneControl!=null||raw.ownerDeviceWork!=null||raw.nativeResultHandling===true||
+     work?.format!=='pocketworld.owner-work.v1'||work.workTaskId!==task.id||work.conversationId!==raw.conversationId||work.phase!=='ended'||
+     detail&&(raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||raw.auditBodyIncluded!==true||raw.hasUnresolvedOperations!==false))return null;
+  const view=workCollectionPresentation(task);
+  return view.completed&&view.handling?.conversationId===raw.conversationId?reportedHomeWork(task,view.handling):null;
 }
 export function sameHomeReport(a:ReportTarget|null,b:ReportTarget){
   return !!a&&a.taskId===b.taskId&&a.runId===b.runId&&a.epoch===b.epoch&&a.reportMessageId===b.reportMessageId&&a.conversationId===b.conversationId;

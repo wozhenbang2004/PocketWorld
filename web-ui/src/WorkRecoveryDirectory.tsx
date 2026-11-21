@@ -1,6 +1,8 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, IconButton, SearchField } from './forms-library';
 import { bridge } from './bridge';
+import { completedDirectoryReport } from './ButlerReturnedReport';
+import type { ReportTarget } from './OwnerWorkReport';
 import { useCollectionMotion } from './library/journey-motion';
 import { IconClose, IconChevronRight, IconGrid, IconHistory, IconSearch } from './icons';
 import { workCollectionPresentation, type WorkCollectionFilter, type WorkCollectionTask } from './work-collection';
@@ -69,7 +71,7 @@ type Props = {
   directory: Directory; live: WorkCollectionTask[]; canContinue: (task: WorkCollectionTask) => boolean; scroll: RefObject<HTMLElement | null>; ready: boolean; canOpen: boolean; canReview: boolean;
   scope: WorkCollectionFilter; query: string; selectScope: (value: WorkCollectionFilter) => void;
   clearQuery: () => void; drillEnded: () => void; start: () => void; history: () => void;
-  open: (id: string, entry: WorkEntry, query: string, run?: RunPin) => void;
+  open: (id: string, entry: WorkEntry, query: string, run?: RunPin, report?: ReportTarget) => void;
   registerReturn: (fn: (() => boolean) | null) => void; extra?: ReactNode;
 };
 export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, ready, canOpen, canReview, scope, query, selectScope,
@@ -100,7 +102,9 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
     const ownerConversation=run&&Number.isSafeInteger(task.updatedAt)&&task.raw?.controls?.canContinue===true ? ordinaryOwnerConversation(task) : undefined;
     origin.current = { id: task.id, entry, scope, query, updatedAt: task.updatedAt || 0, run, ownerConversation }; setReturning(null);
     if (scroll.current) directory.rememberScroll(scroll.current.scrollTop);
-    open(task.id, entry, query, run);
+    const report = entry === 'overview' && run && bridge.getState().capabilities.commands.includes('ownerWork.report.read')
+      ? completedDirectoryReport(task) : null;
+    open(task.id, entry, query, run, report ?? undefined);
   };
   const focusOriginal = (o: Origin) => {
     if (o.run && !visible.some(item => item.task.id===o.id && sameRun(item.task,o.run))) return false;

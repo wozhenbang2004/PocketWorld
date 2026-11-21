@@ -423,12 +423,30 @@ internal class AttachmentOutcomeCoordinator(
     fun createDocument(draft:JSONObject){
         if(state.busy||state.team!=null||state.group!=null||state.documentDraft==null||pendingDocumentAction!=null)return
         val pin=try{checkedDocumentDraft(draft)}catch(failure:Exception){state=state.copy(error=safe(failure));return}
+        state=state.copy(documentDraft=pin)
+        startDocumentCreation(pin)
+    }
+    /** The current private Library bridge has just revalidated the exact saved revision and consumed its review. */
+    fun createDocumentFromSavedDraft(draft:DocumentDraft){
+        check(privateLibrary() && state.globalStandaloneDraftVisit!=null && !state.busy && !exportPending &&
+            state.file==null && state.originalFile==null && state.documentDraft==null && !state.documentOpen &&
+            state.processingSource==null && state.comparison==null && state.pendingDocumentTask==null && pendingDocumentAction==null){
+            "请在当前私人文件库核对这份草稿，没有开始生成"
+        }
+        val input=DocumentDraft.sourceInput(draft.source())
+        require(input.keys().asSequence().toSet()==setOf("format","name","title","body","fontPoints"))
+        // The already saved draft stays solely in its own store, not in the legacy editor or Activity Bundle.
+        startDocumentCreation(input)
+    }
+    private fun startDocumentCreation(pin:JSONObject){
         val action=java.util.UUID.randomUUID().toString();pendingDocumentAction=action
-        state=state.copy(documentDraft=pin,pendingDocumentTask=action)
+        state=state.copy(pendingDocumentTask=action)
         work(onSuccess={actual->when{
             actual.optBoolean("outputNotPublished")->{
                 if(pendingDocumentAction==action)pendingDocumentAction=null
-                state=state.copy(pendingDocumentTask=pendingDocumentAction,error=actual.optString("message"),notice="原可编辑源已保存，可修正当前稿后明确生成新版本。")
+                val notice=if(state.documentDraft==null)"没有发布新文件。原草稿仍在本机，可重新打开修改。"
+                    else "原可编辑源已保存，可修正当前稿后明确生成新版本。"
+                state=state.copy(pendingDocumentTask=pendingDocumentAction,error=actual.optString("message"),notice=notice)
             }
             isPublishedDocument(action,actual)->showPublishedDocument(action,actual,"新文档已保存到私人文件库，可以打开核对。没有改动原件，也没有导出。")
             else->state=state.copy(notice="尚未核对到这次生成的文件。请核对原文档结果，不会自动重新生成。")
