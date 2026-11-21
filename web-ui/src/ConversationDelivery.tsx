@@ -27,7 +27,7 @@ export function conversationPending(composer:Data,receipts:Data,messages:readonl
  });
 }
 
-type SavedDelivery = {status:'accepted'|'queued'|'consumed';messageId:string;epoch:number};
+type SavedDelivery = {status:'accepted'|'queued'|'consumed';messageId:string;epoch:number;localScreenResult:boolean};
 const deliveryText:Record<SavedDelivery['status'],{label:string;detail:string}>={
  accepted:{label:'已接收',detail:'原工作已接收这条输入，不表示已经开始处理。'},
  queued:{label:'已入队',detail:'原记录确认这条输入已入队，尚未核对是否采用。'},
@@ -41,7 +41,19 @@ function durableDelivery(receipt:Data|undefined,message:Data,conversation:string
   !recordId(receipt.clientMessageId)||status==='consumed'&&!recordId(receipt.replyMessageId)||!recordId(receipt.taskId)||!recordId(receipt.runId)||!Number.isSafeInteger(receipt.epoch)||receipt.epoch<1||
   (message.taskId!=null&&message.taskId!==receipt.taskId)||
   (receipt.ownerMessageRevision===undefined?revision!==1:receipt.ownerMessageRevision!==revision))return null;
- return {status,messageId:message.id,epoch:receipt.epoch};
+ // Native commits this consumed input and the named result together. It has
+ // no input queue and can record an unavailable measurement as its result.
+ const localScreenResult=status==='consumed'&&receipt.nativeLocalRead===true&&receipt.modelCalled===false&&
+  receipt.reconciliationRequired===false&&revision===1&&receipt.ownerMessageRevision===revision&&receipt.epoch===1&&
+  receipt.taskId===receipt.clientMessageId&&receipt.runId===receipt.taskId&&receipt.replyMessageId!==message.id&&
+  Number.isSafeInteger(receipt.consumedAt)&&receipt.consumedAt>0;
+ return {status,messageId:message.id,epoch:receipt.epoch,localScreenResult};
+}
+
+/** No mailbox exists for this exact native one-shot even if its later display receipt is uncertain. */
+export function savedLocalScreenResult(message:Data,conversation:string):boolean{
+ return message.role==='user'&&recordId(message.id)&&recordId(conversation)&&
+  durableDelivery(message.submission,message,conversation)?.localScreenResult===true;
 }
 
 /** Source is the saved owner message, never the bridge command ACK. A newer
@@ -58,14 +70,15 @@ export function savedConversationDelivery(message:Data,conversation:string,obser
  if(older)return base;
  const current=durableDelivery(latest,message,conversation);
  if(!current||latest.taskId!==original.taskId||latest.runId!==original.runId||latest.epoch!==original.epoch)return null;
+ if(current.localScreenResult!==base.localScreenResult||base.localScreenResult&&latest.replyMessageId!==original.replyMessageId)return null;
  return current.status==='consumed'?current:base;
 }
 
 export function SavedConversationDelivery({receipt,details=false}:{receipt:SavedDelivery;details?:boolean}){
- const copy=deliveryText[receipt.status];
+ const copy=receipt.localScreenResult?{label:'本机结果已保存',detail:'这次未调用模型。是否读到屏幕数据，以原回复为准。'}:deliveryText[receipt.status];
  if(!details)return <small className="pw-field-hint" role="status">{copy.label}</small>;
- return <section className="pw-input-receipt" aria-label="这条消息的发送回执">
-  <strong>发送回执：{copy.label}</strong><p>{copy.detail}</p>
+ return <section className="pw-input-receipt" aria-label={receipt.localScreenResult?'这条消息的本机回执':'这条消息的发送回执'}>
+  <strong>{receipt.localScreenResult?'本机回执':'发送回执'}：{copy.label}</strong><p>{copy.detail}</p>
   <small className="pw-field-hint">原消息 {receipt.messageId} · 执行第 {receipt.epoch} 轮</small>
  </section>;
 }

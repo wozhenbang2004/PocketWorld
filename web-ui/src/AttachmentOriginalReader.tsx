@@ -26,6 +26,14 @@ export type DisplayedOriginalText={windowId:string;viewerId:string;identity:stri
 type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;findBeforeLongText?:boolean;onTextDisplayed?:(range:DisplayedOriginalText)=>void;
  recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
 type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:boolean};
+type PdfFindInput={text:string;receipt?:{value:Json;epoch:number}};
+function verifiedPdfFind(value:Json,sha:string,query:string,first:number,pages:number){
+ const through=value.scannedThrough;
+ return value.textLayerOnly===true&&value.sha256===sha&&value.query===query&&value.firstPage===first&&
+  Number.isSafeInteger(through)&&through>=first-1&&through<=Math.min(pages,first+19)&&
+  value.nextPage===(through===pages?null:through+1)&&Array.isArray(value.matches)&&value.matches.length<=100&&
+  value.matches.every(hit=>Number.isSafeInteger(hit?.page)&&hit.page>=first&&hit.page<=through);
+}
 function pdfRaster(value:Json):PdfRaster|null {
  const {pdfRasterId,page,pages,searchAvailable}=value;
  return typeof pdfRasterId==='string'&&/^[a-f0-9-]{36}$/.test(pdfRasterId)&&
@@ -46,12 +54,22 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const [toolsVisible,setToolsVisible]=useState(false);
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
  const [recoveryEncoding,setRecoveryEncoding]=useState('');
- const [failedRead,setFailedRead]=useState<{command:string;args:Json}|null>(null);
+ const [failedRead,setFailedRead]=useState<{command:string;args:Json;pdfFind?:PdfFindInput}|null>(null);
+ const pdfInput=useRef<PdfFindInput>({text:''});
  const [pdfShown,setPdfShown]=useState<PdfRaster|null>(null),[pdfAttempt,setPdfAttempt]=useState<PdfRaster|null>(null);
  const pdfPending=useRef<{raster:PdfRaster;acknowledging:boolean}|null>(null);
  const retired=source.sourceUnavailable===true;
  const live=useRef({id:source.id,windowId,retired}),sequence=useRef(0),pending=useRef(false);live.current={id:source.id,windowId,retired};
  const type=String(source.kind),details=obj(source.information);
+ const retirePdfInput=(text:string)=>{
+  pdfInput.current.receipt=undefined;
+  pdfInput.current={text}; // Editing away and back is still a new, unsubmitted search.
+ };
+ const changeQuery=(text:string)=>{
+  const next=text.slice(0,256);
+  if(type==='pdf')retirePdfInput(next);
+  setQuery(next);setFound(null);
+ };
  const clearPdfAttempt=()=>{pdfPending.current=null;setPdfAttempt(null)};
  const currentRaster=(raster:PdfRaster)=>!live.current.retired&&document.visibilityState!=='hidden'&&pdfPending.current?.raster===raster;
  const failRaster=(raster:PdfRaster)=>{
@@ -70,11 +88,27 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   } catch {failRaster(raster)}
  };
  const invoke=async(command:string,args:Json={})=>{
-  if(pending.current||pdfPending.current||live.current.retired)return null;const owner={...live.current},request=++sequence.current;pending.current=true;setBusy(true);setFailedRead(null);setError('');
+  if(pending.current||pdfPending.current||live.current.retired)return null;
+  const pdfFind=command==='find'&&type==='pdf'?pdfInput.current:undefined;
+  const start=args.cursor,pdfPages=pdfShown?.pages??0,sha=source.sha256,epoch=bridge.getDocumentEpoch();
+  if(pdfFind&&(!pdfShown?.searchAvailable||!pdfFind.text||args.query!==pdfFind.text||
+      !Number.isSafeInteger(start)||start<1||start>pdfPages||typeof sha!=='string'||!/^[a-f0-9]{64}$/.test(sha)||
+      (start!==1&&(pdfFind.receipt?.epoch!==epoch||pdfFind.receipt.value.nextPage!==start))))return null;
+  const owner={...live.current},request=++sequence.current;pending.current=true;setBusy(true);setFailedRead(null);setError('');
   try{
    const result=await bridge.command<Json>('attachmentWorkspace.viewer',{windowId:owner.windowId,viewerId:owner.id,command,...args});
    if(request!==sequence.current||live.current.id!==owner.id||live.current.windowId!==owner.windowId||live.current.retired||document.visibilityState==='hidden')return null;
-   if(command==='find')setFound(result);
+   if(pdfFind&&bridge.getDocumentEpoch()!==epoch)return null;
+   if(command==='find'){
+    if(pdfFind){
+     if(pdfInput.current!==pdfFind)return null;
+     if(!verifiedPdfFind(obj(result),sha,pdfFind.text,start,pdfPages)){
+      pdfFind.receipt=undefined;setFound(null);return null;
+     }
+     pdfFind.receipt={value:result,epoch};
+    }
+    setFound(result);
+   }
    else if(type==='pdf'){
     const raster=pdfRaster(obj(result));
     if(!raster)throw new Error('这次 PDF 页面显示未确认');
@@ -82,15 +116,18 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    }else setValue(result);
    return result;
   }
-  catch(cause){if(request===sequence.current&&!live.current.retired){setFailedRead({command,args});setError(cause instanceof Error?cause.message:'原件读取未完成')}return null}
+  catch(cause){if(request===sequence.current&&!live.current.retired&&(!pdfFind||bridge.getDocumentEpoch()===epoch)){
+   setFailedRead({command,args,pdfFind});setError(cause instanceof Error?cause.message:'原件读取未完成')
+  }return null}
   finally{if(request===sequence.current){pending.current=false;setBusy(false)}}
  };
  useEffect(()=>{setValue(obj(source.information));setError('');setFound(null);setZoom(1);setTurn(0);pending.current=false;void invoke('load');return()=>{sequence.current++;pending.current=false;pdfPending.current=null}},[source.id,windowId]);
- useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;clearPdfAttempt();setBusy(false);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
+ useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;clearPdfAttempt();setBusy(false);if(type==='pdf')retirePdfInput(pdfInput.current.text);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
  useEffect(()=>{if(type!=='pdf'&&!retired&&Object.keys(details).length)setValue(details)},[source.information,retired]);
- useEffect(()=>{if(retired){sequence.current++;pending.current=false;clearPdfAttempt();setPdfShown(null);setBusy(false);setValue({});setFound(null);setQuery('');setFailedRead(null)}},[retired]);
+ useEffect(()=>{if(retired){sequence.current++;pending.current=false;clearPdfAttempt();setPdfShown(null);setBusy(false);setValue({});changeQuery('');setFailedRead(null)}},[retired]);
  const nativeError=typeof source.error==='string'?source.error:'';
- const failed=retired?'原来源已失效，请返回后重新打开。':nativeError||error;
+ const previousPdfFindFailed=!!failedRead?.pdfFind&&failedRead.pdfFind!==pdfInput.current;
+ const failed=retired?'原来源已失效，请返回后重新打开。':previousPdfFindFailed?'上一次 PDF 查找未完成；当前关键词尚未查找。':nativeError||error;
  const priorRange=type==='text'&&typeof details.content==='string'||type==='office'&&['ok','partial'].includes(details.status)&&
   Array.isArray(details.chunks)&&Number.isSafeInteger(details.unit)&&details.unit>=1&&details.unit<=details.totalUnits;
  // A client-only error cannot authorize displaying old content. Keep the node mounted while the native verdict settles.
@@ -110,7 +147,10 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const imageTools=(type==='pdf'||type==='image')&&ready;
  const isMarkdown=String(source.name||'').toLowerCase().endsWith('.md');
  const read=(args:Json)=>void invoke('read',args);
- const retry=()=>void invoke(failedRead?.command||'load',failedRead?.args);
+ const retry=()=>{
+  if(failedRead?.pdfFind&&failedRead.pdfFind!==pdfInput.current)return;
+  void invoke(failedRead?.command||'load',failedRead?.args);
+ };
  const encodingChoice=recoveryEncoding||String(actual.encoding||'UTF-8');
  const systemReaderAction=(label:string,variant:'secondary'|'ghost')=>!retired&&recovery?.onOpenInReader&&
   <Button variant={variant} leadingIcon={IconExternalLink} disabled={recovery.busy||readerBusy} onClick={recovery.onOpenInReader}>{label}</Button>;
@@ -120,9 +160,25 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   actual.sourceIdentity===source.identity&&actual.sha256===source.sha256&&typeof actual.content==='string'&&!!actual.content&&
   (actual.atEnd===false&&Number.isSafeInteger(actual.nextOffset)&&actual.nextOffset>actual.offset||
    actual.atEnd===true&&Number.isSafeInteger(actual.decodedCharacters)&&actual.decodedCharacters>=12_000);
- const findOriginal=((type==='pdf'&&toolsVisible)||type==='text')&&ready&&<Accordion className="pw-original-find"><AccordionItem id="original-find" title="查找原文" description={query?`当前查找：${query}`:undefined}><div className="pw-file-search"><TextField label={type==='pdf'?'查找 PDF 原文层':'查找文字（区分大小写）'} value={query} onChange={text=>{setQuery(text.slice(0,256));setFound(null)}}/><Button variant="secondary" disabled={readerBusy||!query||type==='pdf'&&!actual.searchAvailable} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:type==='pdf'?1:0})}>查找</Button></div>
+ const paintedPdfInput=pdfInput.current,paintedPdfReceipt=paintedPdfInput.receipt;
+ const foundInReader=type==='pdf'&&(paintedPdfReceipt?.value!==found||paintedPdfReceipt?.epoch!==bridge.getDocumentEpoch())?null:found;
+ const ownsPaintedFind=()=>type!=='pdf'||pdfInput.current===paintedPdfInput&&paintedPdfInput.receipt===paintedPdfReceipt&&
+  !!paintedPdfReceipt&&paintedPdfReceipt.epoch===bridge.getDocumentEpoch()&&!document.hidden;
+ // If the earlier search error hid the page, keep the same explicit search box usable for a different phrase.
+ const canFindPdf=type==='pdf'&&toolsVisible&&(ready||previousPdfFindFailed&&source.sourceUnavailable===false&&pdfShown?.searchAvailable===true);
+ const findOriginal=(canFindPdf||type==='text'&&ready)&&<Accordion className="pw-original-find"><AccordionItem id="original-find" title="查找原文" description={query?`当前查找：${query}`:undefined}><div className="pw-file-search"><TextField label={type==='pdf'?'查找 PDF 原文层':'查找文字（区分大小写）'} value={query} onChange={changeQuery}/><Button variant="secondary" disabled={readerBusy||!query||type==='pdf'&&!actual.searchAvailable} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:type==='pdf'?1:0})}>查找</Button></div>
  {type==='pdf'&&ready&&!actual.searchAvailable&&<p className="pw-muted">此设备不支持 PDF 原文搜索；可返回文件来源，选择本机文字识别。</p>}
- {found&&<div className="pw-action-row">{rows(found.matches).map((hit,i)=><Button key={i} variant="ghost" disabled={readerBusy} onClick={()=>read(type==='pdf'?{page:hit.page}:{offset:hit.offset,encoding:actual.encoding})}>{type==='pdf'?`第 ${hit.page} 页`:`位置 ${Number(hit.offset)+1}`}</Button>)}{found[type==='pdf'?'nextPage':'nextOffset']!=null&&<Button variant="secondary" disabled={readerBusy} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:found[type==='pdf'?'nextPage':'nextOffset']})}>继续后续范围</Button>}{!rows(found.matches).length&&<p>当前查找范围内没有匹配文字。</p>}{found.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}</div>}</AccordionItem></Accordion>;
+ {foundInReader&&<div className="pw-action-row">
+  {rows(foundInReader.matches).map((hit,i)=><Button key={i} variant="ghost" disabled={readerBusy}
+   onClick={()=>{if(ownsPaintedFind())read(type==='pdf'?{page:hit.page}:{offset:hit.offset,encoding:actual.encoding})}}>
+   {type==='pdf'?`第 ${hit.page} 页`:`位置 ${Number(hit.offset)+1}`}</Button>)}
+  {foundInReader[type==='pdf'?'nextPage':'nextOffset']!=null&&<Button variant="secondary" disabled={readerBusy}
+   onClick={()=>{if(ownsPaintedFind())void invoke('find',{query:type==='pdf'?foundInReader.query:query,encoding:actual.encoding,
+    cursor:foundInReader[type==='pdf'?'nextPage':'nextOffset']})}}>继续后续范围</Button>}
+  {!rows(foundInReader.matches).length&&<p>{type==='pdf'&&foundInReader.scannedThrough<foundInReader.firstPage?
+   '本次还没有查到页面。':'当前查找范围内没有匹配文字。'}</p>}
+  {foundInReader.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}
+ </div>}</AccordionItem></Accordion>;
  return <section className="pw-original-file" aria-label={`原件：${source.name}`}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
  {!retired&&readerBusy&&<p role="status">正在读取原件…</p>}
@@ -130,7 +186,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  {failed&&<section aria-label="原件读取失败">
   <p className="pw-error" role="alert">{failed}</p>
   {retaining&&ready&&<p className="pw-muted">这次操作没有更新内容，仍显示同一原件上次已读的范围。</p>}
-  {!source.sourceUnavailable&&<Button variant="secondary" disabled={readerBusy} onClick={retry}>{failedRead?.command==='find'?'重试本次查找':type==='unsupported'?'重新核对文件':'重试本次读取'}</Button>}
+  {!source.sourceUnavailable&&!previousPdfFindFailed&&<Button variant="secondary" disabled={readerBusy} onClick={retry}>{failedRead?.command==='find'?'重试本次查找':type==='unsupported'?'重新核对文件':'重试本次读取'}</Button>}
   {type==='pdf'&&!retired&&!pdfShown&&failedRead?.command==='read'&&Number(failedRead.args.page)>1&&
    <Button variant="ghost" disabled={readerBusy} onClick={()=>read({page:1})}>从第 1 页读取</Button>}
   {type==='text'&&!retired&&failedRead?.command!=='find'&&actual.previewAvailable!==false&&<div className="pw-action-row">

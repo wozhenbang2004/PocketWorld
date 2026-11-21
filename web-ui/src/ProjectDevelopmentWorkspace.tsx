@@ -551,11 +551,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   };
   const canPrepareTerminal = can('projects.development.draft') && can('connections.enter') &&
     can('local.describeCheckout') && can('local.terminal.review') && !!selectedCopy;
-  const prepareTerminal = () => {
+  const prepareTerminal = (plannedSourceDigest?:string) => {
     if(disabled||entered.current||!canPrepareTerminal||draft.current.checkoutId!==checkout)return;
     const displayed={...draft.current};
     const position=!copyUnconfirmed&&selectedCopy?.draftWorkingCopy!==true&&savedFileHere&&sourceHash(savedFileHere.savedHash)?savedFileHere:undefined;
-    void preserveSelectionBeforeDeparture(displayed,()=>onOpenTerminal({projectId,checkoutId:displayed.checkoutId},position));
+    const destination={projectId,checkoutId:displayed.checkoutId,...(plannedSourceDigest?{plannedSourceDigest}:{})};
+    void preserveSelectionBeforeDeparture(displayed,()=>onOpenTerminal(destination,position));
   };
   const reconcileSource=(useProject:boolean)=>{
     if(!sourceConflict||!active||busy||pending||filesOpen||!view||!view.draft?.ownerPickedConvention||document.hidden)return;
@@ -632,6 +633,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     sourceAttempt.current='';setSource(null);setHostEditor(null);setBuildOrigin(buildReturn);setFileWindow({checkoutId:buildReturn.checkoutId});
   },[buildReturn,onBuildReturnHandled,active,view,busy,review,fileCheckout,projectId]);
   const unfinishedInput=!!(goal||view?.draft?.goal||view?.draft?.ownerPickedConvention||deliveryFields.some(k=>requirements[k]||view?.draft?.[k]));
+  const protectModelDraft=unfinishedInput||touched.current;
+  const connectProjectModel=()=>{
+    if(!protectModelDraft&&!touched.current){onConnectModel();return;}
+    if(disabled||entered.current||!can('projects.development.draft'))return;
+    const displayed={...draft.current};
+    // Commit only the matching native draft. Opening settings cannot save a
+    // different editor value or turn a displayed sole copy into a selection.
+    void verifyDeparture(displayed,displayedSavedDraft(displayed),onConnectModel);
+  };
   const selectBuildCopy=()=>{
     if(!differentBuildCopy||unfinishedInput||disabled||!can('projects.development.draft'))return;
     const next={...draft.current,checkoutId:buildCheckout};
@@ -793,7 +803,19 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     Array.isArray(savedScriptTooling.observedTools)&&['python3','sh'].every(tool=>savedScriptTooling.observedTools.includes(tool))&&
     terminalRuntime?.runtimeId==='managed_process_v1'&&terminalRuntime.canExecute===true&&terminalRuntime.ptyAvailable===true;
   const terminalAction=canPrepareTerminal&&<div className="pw-form-actions"><Button variant={terminalBySave?'secondary':'ghost'} disabled={disabled}
-    data-workspace-entry="project-copy-terminal" onClick={prepareTerminal}>{terminalBySave?'核对本机终端':'准备这份副本的终端'}</Button></div>;
+    data-workspace-entry="project-copy-terminal" onClick={()=>prepareTerminal()}>{terminalBySave?'核对本机终端':'准备这份副本的终端'}</Button></div>;
+  // The preview itself is the native proof this is an ordinary existing copy.
+  const terminalFromPreview=!!preview&&canPrepareTerminal&&!differentBuildCopy&&!buildCopyMissing&&
+    view?.model?.configured===false&&nodeTools?.runtimeReady===true&&nodeTools.missing.length===0&&
+    Array.isArray(savedScriptTooling?.observedTools)&&savedScriptTooling.observedTools.includes('sh')&&
+    terminalRuntime?.runtimeId==='managed_process_v1'&&terminalRuntime.canExecute===true&&terminalRuntime.ptyAvailable===true;
+  const leaveBuildPreview=(next:()=>void)=>{
+    const state=bridge.getState().state;
+    if(!preview||!previewOpen.current||!buildPreview||disabled||entered.current||document.hidden||
+      handle.current!==buildPreview.viewHandle||ownerWindow()!==buildPreview.window||state.projectId!==projectId||state.filePath||
+      draft.current.checkoutId!==preview.checkoutId||sourceVersion!==preview.sourceDigest)return;
+    closeBuildPreview();next();
+  };
   const openSelectedCopyFiles = () => {
     if (!selectedCopy || draft.current.checkoutId!==selectedCopy.checkoutId || !can('projects.development.files.open')) return;
     setHostEditor(null); setFileWindow({checkoutId:selectedCopy.checkoutId});
@@ -1084,8 +1106,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {!terminalBySave&&terminalAction}
       {view.model?.configured !== true && (!exactBuildNext || !['model','preview'].includes(firstBuildAction)&&!!goal.trim()) &&
         <p className="pw-local-inline-notice">交办目标需要默认模型；直接编辑文件、找回已保存的网页不需要。<Button variant={exactBuildNext?'ghost':'secondary'}
-          disabled={busy || pending || !!review || filesOpen || exactBuildNext&&(disabled||!can('projects.development.draft'))}
-          onClick={exactBuildNext?connectBuildModel:onConnectModel}>连接模型</Button></p>}
+          disabled={exactBuildNext||protectModelDraft?disabled||!can('projects.development.draft'):busy||pending||!!review||filesOpen}
+          onClick={exactBuildNext?connectBuildModel:connectProjectModel}>连接模型</Button></p>}
       <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : checkoutKindSummary(source, projectId, checkout) || '可先编辑文件；运行命令前核对工具'}>
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
         {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>安装依赖、构建或启动仍须核对具体方案；不会因为发现项目类型就运行脚本。</p>}
@@ -1116,14 +1138,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       <strong>{preview.manager} run build</strong>
       <NodeBuildLock plan={preview} preview/>
       <NodeBuildScripts plan={preview}/>
-      <p>只查看这份副本，没有发送、下载或运行。{preview.preservedProjectDraft&&'你已写的目标留在草稿。'}提交构建交办才需要默认模型；实际命令仍须另行批准。</p>
+      <p>只查看这份副本，没有发送、下载或运行。{preview.preservedProjectDraft&&'你已写的目标留在草稿。'}把构建交给模型才需要默认模型，命令仍须另行批准。</p>
+      {terminalFromPreview&&<p>也可以自己操作。先核对这份副本的手动终端，再决定是否打开；不会代你执行上面的命令或准备依赖。</p>}
       <div className="pw-form-actions">
         <Button variant="secondary" onClick={closeBuildPreview}>返回副本</Button>
-        {view?.model?.configured===false&&can('projects.development.draft')&&<Button disabled={disabled} onClick={()=>{
-          if(!previewOpen.current||!buildPreview||disabled||entered.current||document.hidden||handle.current!==buildPreview.viewHandle||
-            ownerWindow()!==buildPreview.window||bridge.getState().state.projectId!==projectId||draft.current.checkoutId!==checkout)return;
-          closeBuildPreview();connectBuildModel();
-        }}>连接默认模型</Button>}
+        {terminalFromPreview&&<Button disabled={disabled} onClick={()=>leaveBuildPreview(()=>prepareTerminal(preview.sourceDigest))}>核对同一副本的手动终端</Button>}
+        {view?.model?.configured===false&&can('projects.development.draft')&&<Button variant={terminalFromPreview?'ghost':undefined}
+          disabled={disabled} onClick={()=>leaveBuildPreview(connectBuildModel)}>连接默认模型</Button>}
       </div>
     </div>:review && <div className="pw-local-review">
       {review.draftBuild === true ? <><strong>{review.dependencyState==='needs_lock_review'?'还缺依赖，先审阅这份锁':review.manager+' run build'}</strong>

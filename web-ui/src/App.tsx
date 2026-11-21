@@ -22,7 +22,7 @@ import {ConversationLinkedReason,ConversationOpening,ConversationStarters,Conver
 import {MotionFeedback,useCollectionMotion} from './library/journey-motion';
 import {useConversationReading} from './useConversationReading';
 import {ConversationReadingNav} from './ConversationReadingNav';
-import {ConversationDelivery,ConversationDraftStatus,SavedConversationDelivery,savedConversationDelivery,conversationPending,useConversationRegistration} from './ConversationDelivery';
+import {ConversationDelivery,ConversationDraftStatus,SavedConversationDelivery,savedConversationDelivery,savedLocalScreenResult,conversationPending,useConversationRegistration} from './ConversationDelivery';
 import {WorkSearch,type WorkSearchItem,type WorkSearchMemory} from './WorkSearch';
 import {WorkSearchOriginalReader} from './WorkSearchOriginalReader';
 import {ComposerWorkOptions} from './ComposerWorkOptions';
@@ -2674,9 +2674,33 @@ export default function App(){
    [editor.sourceRefs,editor.previewRefs,editor.objectRefs,owner.selectedChatAttachments].every(items=>Array.isArray(items)&&items.length===0);
  };
  const fileNoteLeaveFree=()=>!draftSwitchPending()&&!workSupplementBeforeLeave.current&&!projectDraftBeforeLeave.current;
+ // An owner-selected input has a native Work source entry, not a producing run.
+ // This only locates its separately saved note; it is not a file attachment or read grant.
+ const localInputNoteSource=(native:ReturnType<typeof bridge.getState>,topic:FileResultTopic)=>{
+  const state=native.state,view=obj(state.attachmentWorkspace),shown=obj(native.view),scope=obj(view.snapshot),
+   file=obj(view.file),original=obj(view.originalFile),pin=exactFileTarget(file);
+  const work=resultAttachmentWork(native,topic,true);
+  if(!work||!ordinaryChatWorkRow(asArray<Task>(state.tasks).find(row=>row.id===topic.taskId),topic.conversationId,true)||
+     !taskOpen||taskOpening||document.hidden||intent!=='chat'||shown.section!==null||shown.taskId!==topic.taskId||
+     openedTaskId.current!==topic.taskId||view.taskId!==topic.taskId||view.open!==true||view.ready!==true||view.busy!==false||
+     view.exportPending!==false||view.canSaveOriginal!==true||view.fromWorkResult!==true||view.originalReturn!=='entry'||view.restoredWorkReturn!==false||
+     view.group!==false||view.team!==false||view.deviceOriginalOnly!==false||view.resultFilesOnly!==false||
+     view.reportResultOnly!==false||view.historyResultOnly!==false||view.choosingSource!==false||
+     view.documentDraft||view.documentOpen||view.processingOpen||view.comparison||typeof view.windowId!=='string'||!view.windowId||
+     scope.taskId!==topic.taskId||scope.taskStatus!=='completed'||scope.taskRunId!==work.runId||scope.coordinatorEpoch!==work.epoch||
+     !pin||typeof file.mimeType!=='string'||!file.mimeType||!Number.isSafeInteger(file.size)||file.size<0||
+     typeof original.id!=='string'||!original.id||typeof original.identity!=='string'||!/^[a-f0-9]{64}$/.test(original.identity)||
+     original.sourceUnavailable!==false||original.busy!==false||original.error||original.sha256!==pin.sha256||original.mimeType!==file.mimeType||original.size!==file.size)return;
+  const selected=(row:Json)=>row.id===pin.fileId&&row.sha256===pin.sha256&&row.role==='source'&&row.availability==='available'&&
+   row.sourceKind==='content_uri'&&row.mimeType===file.mimeType&&row.size===file.size&&row.sourceTaskId===file.sourceTaskId&&
+   (row.sourceTaskId==null||row.sourceTaskId===topic.taskId)&&row.sourceTaskRunId==null&&row.sourceCoordinatorEpoch==null&&row.sourceOperationId==null;
+  const sources=asArray<Json>(scope.sources).filter(row=>row?.id===pin.fileId);
+  if(sources.length!==1||!selected(file)||!selected(sources[0]))return;
+  return {...work,windowId:view.windowId,...pin};
+ };
  const fileNoteTarget=(native:ReturnType<typeof bridge.getState>,topic:FileResultTopic)=>{
   if(route!=='chat'||returningConversation||!fileNoteLeaveFree()||!can('tasks.close')||!can('composer.edit'))return;
-  const source=resultAttachmentSource(native,topic),parent=source&&readFileWorkParent(topic.taskId,native);
+  const source=resultAttachmentSource(native,topic)??localInputNoteSource(native,topic),parent=source&&readFileWorkParent(topic.taskId,native);
   const draft=fileDraftFor(obj(native.composer),topic.conversationId,topic.label);
   if(!source||!parent||parent.layer!=='overview'||!draft||draft.key!==`conversation:${topic.conversationId}`||
      draft.revision!==ordinaryDraftRevision||!noteDraftEmpty(native,draft))return;
@@ -4836,7 +4860,7 @@ export default function App(){
         {m.role==='user'&&row.lastOfRole&&m.id&&m.quoteAvailable&&Number(m.sourceRevision)>0&&!!m.content.trim()&&can('phone.draft.fromMessage')&&can('phone.prepare')&&<Button variant="ghost" leadingIcon={IconMonitor} disabled={phoneReviewPending||!!state.chatSubmitting||!!state.chatBusy||!!state.phoneSubmitting||isListening||phoneStart?.status==='unknown'} onClick={()=>stageMessageForPhone(m,['changed','unverified'].includes(phoneDraft.sourceState))}>{['changed','unverified'].includes(phoneDraft.sourceState)?'保留手机草稿，关联这条原话':'准备手机任务'}</Button>}
 
         {m.id&&replyContext?.replyToMessageIds.length&&can('message.origin')?<Button variant="ghost" leadingIcon={IconHistory} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);rememberChatPosition();setMessageOriginTarget({conversationId:String(state.conversationId),messageId:m.id!,sourceMessageIds:replyContext.replyToMessageIds,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>查看对应原请求</Button>:null}
-        {m.role==='user'&&m.submission?.taskId&&can('queued.open')&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{setMessageMenu(null);run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}}>原任务的输入队列</Button>}
+        {m.role==='user'&&m.submission?.taskId&&can('queued.open')&&!savedLocalScreenResult(m,String(state.conversationId||''))&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{setMessageMenu(null);run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}}>原任务的输入队列</Button>}
         {canQuote&&<Button variant="ghost" leadingIcon={IconQuote} disabled={!draftKey||!!state.chatSubmitting} onClick={()=>{setMessageMenu(null);openQuote(m)}}>引用到草稿</Button>}
         {messageAttachmentDraft&&savedAttachmentChoices.map((file,index)=><Button key={file.fileId} variant="ghost" leadingIcon={IconFile} title={file.name}
          disabled={fileAttachmentPickerLaunch.current?.settled===false} onClick={()=>void chooseSavedMessageAttachment(m,file,messageAttachmentDraft)}>

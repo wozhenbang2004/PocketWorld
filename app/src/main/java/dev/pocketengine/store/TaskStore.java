@@ -14734,7 +14734,23 @@ public final class TaskStore {
         }finally{if(owns)db.endTransaction();}
     }
     private ProjectTerminalTarget ownerProjectExecutionTarget(String id,String execution,boolean allowFirstReceiptLookup)throws Exception{
-        JSONObject task=required(id);requirePrivateOwner(task);if(task.has("ownerLocalTerminal"))requireOwnerLocalTerminalTask(id);else if(!"assistant".equals(task.optString("kind"))||task.has("origin")||task.optJSONObject("developmentContext")==null)throw new SecurityException("请从原私人项目任务观察执行");
+        JSONObject task=required(id);requirePrivateOwner(task);
+        if(task.has("ownerLocalTerminal")){
+            requireOwnerLocalTerminalTask(id);
+            if(allowFirstReceiptLookup||!id.equals(execution))throw new SecurityException("请从原私人任务查看同一次已结束的手动终端");
+            // This shell has no assistant poll request. Only its stored PTY exit can open this read-only observer.
+            JSONObject row=ptyServiceRow(id,id,1,execution,false),receipt=row.getJSONObject("receipt"),route=receipt.getJSONObject("projectExecution"),backend=receipt.getJSONObject("executionReceipt");
+            if(!id.equals(route.opt("taskId"))||!id.equals(route.opt("runId"))||!execution.equals(route.opt("operationId")))
+                throw new SecurityException("日志不属于这次原手动终端");
+            if(!"receipt".equals(row.opt("state"))||!"project_process_receipt".equals(receipt.opt("code"))||!Boolean.TRUE.equals(receipt.opt("accepted"))||
+                !backend.optString("status").matches("completed|failed")||!Boolean.TRUE.equals(backend.opt("receiptReceived"))||
+                !Boolean.TRUE.equals(backend.opt("processLaunched"))||!Boolean.TRUE.equals(backend.opt("processExited"))||
+                !Boolean.TRUE.equals(backend.opt("processGroupAbsent"))||!Boolean.TRUE.equals(backend.opt("processSessionAbsent"))||
+                !Boolean.TRUE.equals(backend.opt("resourcesReleased")))
+                throw new SecurityException("原手动终端尚无已核实的退出与释放回执，暂不能查看");
+            return new ProjectTerminalTarget(this,id,id,1,row,true);
+        }
+        if(!"assistant".equals(task.optString("kind"))||task.has("origin")||task.optJSONObject("developmentContext")==null)throw new SecurityException("请从原私人项目任务观察执行");
         dev.pocketengine.features.local.project.ProjectBuildPlan.identity(execution);
         try(Cursor selected=db.rawQuery("SELECT o.run_id,r.epoch FROM operations o JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id WHERE o.task_id=? AND o.operation_id=? AND o.tool='project_execute'",new String[]{id,execution})){
             if(!selected.moveToFirst())throw new SecurityException("原任务没有此真实项目执行");String run=selected.getString(0);int epoch=selected.getInt(1);
