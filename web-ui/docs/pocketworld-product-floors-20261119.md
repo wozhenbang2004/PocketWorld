@@ -25,3 +25,8 @@
 - **PW-FLOOR-DEV1，本机首次交付（P0，未达到）**：不接电脑、不另装 Termux、不为了执行固定命令先配模型。导入真实项目，缺环境/缺依赖都在同一个项目给出可操作的下一步；离开再回来恢复同一次工作。改文件、确认构建、打开这次实际生成的成果。DSH Go 的[安装流程](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/onboarding/runtime_setup_page.dart)明确区分选择、安装、失败和恢复，[项目文件](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/session/workspace_files.dart)和[会话成果](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/session/session_artifacts.dart)回到同一会话。PocketWorld 已有运行环境准备和依赖已就绪的小型 TypeScript 构建，新导入的依赖准备仍未发布。先用原项目构建面板接上已审阅的依赖准备、真实回执和依赖复核，再另行确认构建。工具可能需要联网下载，不把无电脑写成离线首装。
 - **PW-FLOOR-DEV2，普通 Web 项目（下一优先，未达到）**：对已有常见项目改一处内容、保存并看到更新后的真实页面，预览和构建成果仍归原项目。参考 [Operit 的项目工作区与终端](https://github.com/AAswordman/Operit/blob/main/README.zh-CN.md#主要能力)：文件编辑与网页预览不要求切到别的工具。结合 PocketWorld 已有 Vite 与固定成果路径，不扩大为任意前端或 Android APK 已支持。
 - **PW-FLOOR-PHONE1，首次有用的手机任务（P0，未达到）**：在原聊天明确选一个已授权 App，看到它的实际第一屏和当前步骤，可交回用户或停止，结果仍可从同一聊天打开。参考 [Mika 的可见进度、接管与继续](https://github.com/wangzan101/Mika/blob/main/docs/features.en.md#operates-any-app-without-taking-over-your-screen)；主屏先验，后台独立屏逐项单独验。PocketWorld 已发布原投递结果回读，不等于能取得新选中 App 的第一屏；前台 App 的身份仍需可靠匹配，不能用连接或启动成功代替实际看见，不复制竞品的授权默认值。
+
+### 2026-11-21 · 普通网页的发布与下一道验收
+
+- **已发布：** `v0.1.305` 补上符合条件的新 TypeScript/npm 项目的锁定依赖准备；`v0.1.306` 补上基础 Vite 实际构建和原工作固定网页；`v0.1.307` 允许直接查看刚构建的基础 Vite 网页，不用先保存。三个版本的签名发布已核对；尚未在安卓上走完整条用户旅程。
+- **React 项目验收：** 按 [Vite 官方 React JavaScript 模板](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react) 的默认配置，导入带原始 npm 锁的可信项目，在手机上修改 `src/App.jsx` 中只由组件渲染的文字。确认所需依赖与构建，在原工作打开这次生成的网页，核对新文字和本地样式，点一下原组件的计数按钮。返回同一份工作，固定保存可选。这条验收不能拿构建退出码、源 HTML、截图或新开任务替代；自定义配置、React TypeScript 构建和热更新不算本轮覆盖。

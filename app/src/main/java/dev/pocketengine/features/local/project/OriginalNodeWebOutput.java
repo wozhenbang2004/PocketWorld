@@ -38,6 +38,17 @@ public final class OriginalNodeWebOutput {
     private static final Pattern VITE_ENTRY=Pattern.compile(
         "<script\\s+type=\"module\"(?:\\s+crossorigin(?:=\"\")?)?\\s+src=\"((?:/|\\./)assets/[A-Za-z0-9._-]+\\.m?js)\"\\s*>\\s*</script>");
     private static final Pattern VITE_ASSET=Pattern.compile("\\b(?:src|href)\\s*=\\s*\"((?:/|\\./)(?:assets/)?[A-Za-z0-9._-]+)\"");
+    private static final String REACT_CONFIG="vite.config.js", REACT_ENTRY="src/main.jsx";
+    private static final Set<String> REACT_PACKAGES=Set.of("vite","@vitejs/plugin-react","react","react-dom");
+    private static final Set<String> REACT_ENTRY_URLS=Set.of("/"+REACT_ENTRY,"./"+REACT_ENTRY,REACT_ENTRY);
+    // Official create-vite template-react config, blob 9982072c14949379a05b48f656856691a6f0ab86.
+    // Only cosmetic whitespace/quotes/semicolon layout and its known comment may vary.
+    private static final String IMPORT_END="(?:\\s*;\\s*|[ \\t]*\\r?\\n\\s*)";
+    private static final Pattern DEFAULT_REACT_CONFIG=Pattern.compile(
+        "\\s*import\\s+react\\s+from\\s+(?:'@vitejs/plugin-react'|\"@vitejs/plugin-react\")"+IMPORT_END+
+        "import\\s*\\{\\s*defineConfig\\s*\\}\\s*from\\s+(?:'vite'|\"vite\")"+IMPORT_END+
+        "(?://[ \\t]+https://vite\\.dev/config/[ \\t]*\\r?\\n\\s*)?"+
+        "export\\s+default\\s+defineConfig\\s*\\(\\s*\\{\\s*plugins\\s*:\\s*\\[\\s*react\\s*\\(\\s*\\)\\s*\\]\\s*,?\\s*\\}\\s*\\)\\s*;?\\s*");
     private static final Set<String> PUBLIC_MEDIA=Set.of("image/svg+xml","image/png","image/jpeg","image/webp","image/gif","image/x-icon",
         "font/woff","font/woff2","font/ttf");
     private OriginalNodeWebOutput(){}
@@ -161,7 +172,7 @@ public final class OriginalNodeWebOutput {
         return new OutputSource(html,false);
     }
 
-    /** First model-free Vite profile only: real ordinary npm/lock route, default root entry and no local config.
+    /** Ordinary model-free Vite: configless or the official default React-JS preset only.
      * Check the original validated source rows too: a binary config cannot opt out of this rule. */
     public static OutputSource directViteSource(JSONObject exact,JSONObject snapshot)throws Exception{
         JSONObject checkout=snapshot.getJSONObject("checkout");
@@ -187,17 +198,35 @@ public final class OriginalNodeWebOutput {
         }
         if(!vite)return null;
         JSONArray rows=snapshot.getJSONArray("files");Set<String> paths=new java.util.HashSet<>();
+        boolean react=false,customReactTransform=pkg.has("babel");
         for(int i=0;i<rows.length();i++){
             String path=rows.getJSONObject(i).getString("path");
             paths.add(path);
             String leaf=path.substring(path.lastIndexOf('/')+1).toLowerCase(java.util.Locale.ROOT);
-            if(leaf.startsWith("vite.config.")||leaf.startsWith(".env")||leaf.startsWith(".postcssrc")||leaf.startsWith("postcss.config."))
-                return null;
+            if(leaf.startsWith(".env")||leaf.startsWith(".postcssrc")||leaf.startsWith("postcss.config."))return null;
+            customReactTransform|=leaf.equals(".babelrc")||leaf.startsWith(".babelrc.")||leaf.startsWith("babel.config.");
+            if(leaf.startsWith("vite.config.")){
+                if(!REACT_CONFIG.equals(path))return null;
+                react=true;
+            }
         }
         if(pkg.has("packageManager")&&!(pkg.opt("packageManager") instanceof String)||
                 !"npm".equals(ProjectCheckoutTooling.manager(paths,pkg.optString("packageManager"))))return null;
         OwnerDraftNodeDependencies.requirePlainProject(pkg,paths);
+        if(react&&(customReactTransform||!defaultReactVite(pkg,files)))return null;
         return requireViteSource(files,true);
+    }
+    private static boolean defaultReactVite(JSONObject pkg,Map<String,String> files)throws Exception{
+        String config=files.get(REACT_CONFIG),jsx=files.get(REACT_ENTRY),html=files.get("index.html");
+        if(!"module".equals(pkg.opt("type"))||config==null||config.length()>1024||!DEFAULT_REACT_CONFIG.matcher(config).matches()||
+            jsx==null||jsx.isBlank()||html.getBytes(StandardCharsets.UTF_8).length>ViteOutputMount.MAX_ENTRY_BYTES)return false;
+        var document=org.jsoup.Jsoup.parse(html);
+        var scripts=document.select("script");
+        if(scripts.size()!=1||!document.select("base").isEmpty())return false;
+        var entry=scripts.get(0);
+        return entry.parent()==document.body()&&entry.attributes().size()==2&&"module".equals(entry.attr("type"))&&
+            REACT_ENTRY_URLS.contains(entry.attr("src"))&&entry.data().isBlank()&&
+            OwnerDraftNodeDependencies.matchesOriginalNpmProfile(pkg,files.get("package-lock.json"),REACT_PACKAGES);
     }
     private static OutputSource requireViteSource(Map<String,String> files,boolean nestedPublic)throws Exception {
         String manifest=files.get("package.json");

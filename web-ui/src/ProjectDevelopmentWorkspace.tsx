@@ -199,12 +199,16 @@ function checkedBuildPreview(value:Data,projectId:string,checkoutId:string,sourc
   return value;
 }
 
+const noDirectDependencyStep=(plan:Data)=>plan.dependencyState==='needs_lock_review'&&
+  !plan.directDependencies&&!plan.directDependencyWork&&!directOffer(plan)&&!directOriginal(plan);
+
 function NodeBuildLock({plan,preview=false}:{plan:Data;preview?:boolean}) {
   const lock=plan.lockedDependencies;
   if(!lock)return preview?<p>这份方案没有单独的锁定依赖准备步骤。</p>:null;
   const offer=preview&&plan.directDependencies, prior=preview&&plan.directDependencyWork&&!directOffer(plan)&&!directOriginal(plan);
   const lockCount=<>{lock.lockPath} 共 {lock.packages} 个锁条目（含其他平台）。</>;
-  return <>{!prior&&<p>{offer?'本机还缺所需包。确认后按锁从 npm 官方注册表下载，不读取用户包管理配置或执行安装脚本。':<>
+  return <>{!prior&&<p>{offer?'本机还缺所需包。确认后按锁从 npm 官方注册表下载，不读取用户包管理配置或执行安装脚本。':
+    preview&&noDirectDependencyStep(plan)?lockCount:<>
     {plan.dependencyState==='current_packages_checked'?'已核对这份相同副本中实际存在的关键包，不需要重复准备。构建是否成功仍以本次实际结果为准。':
     preview?'本机还缺所需包，后续要先单独核对依赖准备。':'本机还缺所需包。下一步只审阅原锁与下载，不会开始构建。'}
     {' '}{lockCount}准备时只向 npm 官方注册表请求，不读取用户包管理配置或执行安装脚本。</>}</p>}
@@ -888,6 +892,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const previewVite=preview?.directBuildKind==='vite', buildOffer=directOffer(preview), buildWork=directOriginal(preview);
   const dependencyOffer=preview?.directDependencies, dependencyWork=preview?.directDependencyWork;
   const dependencyNext=!!(dependencyOffer||dependencyWork&&!buildOffer&&!buildWork);
+  const buildModelReview=localViteReview&&view?.model?.configured===true&&!dependencyNext&&!buildOffer&&!buildWork&&can('projects.development.reviewDraftBuild');
+  const buildModelConnect=view?.model?.configured===false&&!dependencyNext&&!buildWork&&can('projects.development.draft');
   const webTools = selectedCopy && !differentBuildCopy ? checkoutFirstWebTools(source,projectId,checkout) : null;
   const nodeTools = webTools?.kind==='node' ? webTools : null;
   const draftNodeTools = selectedCopy?.draftWorkingCopy===true && !differentBuildCopy
@@ -1355,7 +1361,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           <p>将只在这部手机构建这份已准备依赖的 TypeScript 副本，不调用模型或安装依赖。构建可写入副本，只运行可信项目。在原工作的「过程 → 工具调用」核对 <bdi>{buildOffer.outputPath}</bdi>，有实际输出才能另行保存。</p>:
         buildWork?<p>{previewVite?'这版已有一笔网页构建。':'这版已有一笔本机构建。'}打开原工作核对，不会再运行。</p>:
         dependencyWork?<p>这版已有依赖准备记录。请打开原工作核对结果，不会重新下载或开始构建。</p>:
-        preview.dependencyState==='needs_lock_review'?<p>先准备这份项目锁定的依赖，再核对构建。手机工具准备只提供运行环境，这里不会安装项目依赖或开始构建。</p>:
+        noDirectDependencyStep(preview)?<p>还没核对到这份副本所需的包，当前不能在这里确认准备依赖或构建。
+          {buildModelReview?' 如需使用模型，可先审阅交办内容，再另行确认。':
+            !terminalFromPreview&&buildModelConnect&&can('projects.development.reviewDraftBuild')?' 如需模型协助，可先连接默认模型；连接不会开始构建。':''}</p>:
         <p>{previewVite?'这版还没有可确认的本机网页构建。没有开始构建或预览。':'这版还没有可直接确认的本机构建。交办其他构建才需要模型，命令仍须另行批准。'}</p>}
       {terminalFromPreview&&!dependencyNext&&!buildOffer&&!buildWork&&<p>你也可以核对同一副本的手动终端。打开终端不会代你准备依赖或执行构建。</p>}
       <div className="pw-form-actions">
@@ -1366,9 +1374,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           onClick={()=>{if(canActOnDirectPreview())openDirectWork(buildWork,previewVite?'vite':'compiler');}}>{previewVite?'打开原网页构建':'打开原本机构建'}</Button>}
         {dependencyWork&&can('tasks.open')&&<Button variant={dependencyNext?undefined:'ghost'} disabled={disabled} onClick={openDependencyWork}>打开原依赖准备</Button>}
         {terminalFromPreview&&!dependencyNext&&!buildOffer&&!buildWork&&<Button disabled={disabled} onClick={()=>leaveBuildPreview(()=>prepareTerminal(preview.sourceDigest))}>核对同一副本的手动终端</Button>}
-        {localViteReview&&view?.model?.configured===true&&!dependencyNext&&!buildOffer&&!buildWork&&can('projects.development.reviewDraftBuild')&&
-          <Button variant="ghost" disabled={disabled} onClick={()=>leaveBuildPreview(reviewNodeBuild)}>改为核对模型交办</Button>}
-        {view?.model?.configured===false&&!dependencyNext&&!buildWork&&can('projects.development.draft')&&<Button variant={terminalFromPreview||buildOffer?'ghost':undefined}
+        {buildModelReview&&<Button variant="ghost" disabled={disabled} onClick={()=>leaveBuildPreview(reviewNodeBuild)}>改为核对模型交办</Button>}
+        {buildModelConnect&&<Button variant={terminalFromPreview||buildOffer?'ghost':undefined}
           disabled={disabled} onClick={()=>leaveBuildPreview(connectBuildModel)}>{buildOffer?'改用模型交办':'连接默认模型'}</Button>}
       </div>
     </div>:review && <div className="pw-local-review">

@@ -103,6 +103,21 @@ public final class OwnerDraftNodeDependencies {
         }
         return names;
     }
+    /** Runtime-independent prerequisite for the React source profile. No install, repair, or installed-package claim. */
+    static boolean matchesOriginalNpmProfile(JSONObject manifest,String body,Set<String> profile)throws Exception{
+        if(body==null||bytes(body)>524288)return false;
+        var declared=declarations(manifest);
+        if(declared.count()>128||!declared.required().containsAll(profile))return false;
+        JSONObject lock=McpJson.parse(body),packages=lock.getJSONObject("packages"),root=packages.getJSONObject("");
+        if(!new java.math.BigDecimal(3).equals(lock.opt("lockfileVersion")))return false;
+        for(String key:Set.of("name","version"))if(!(manifest.opt(key) instanceof String value)||value.isBlank()||
+            !value.equals(lock.opt(key))||!value.equals(root.opt(key)))return false;
+        int count=McpLocalPackage.verifiedPublicRegistryLock("npm",body,declared.count());
+        if(count<1||count>8192)return false;
+        checkNpmList(manifest,packages);
+        for(String name:profile)if(packages.optJSONObject("node_modules/"+name)==null)return false;
+        return true;
+    }
     private static void checkNpmList(JSONObject manifest,JSONObject packages)throws Exception{
         JSONObject root=packages.getJSONObject("");
         for(String k:DEPENDENCIES)if(!ProjectSources.canonical(manifest.opt(k)).equals(ProjectSources.canonical(root.opt(k))))
