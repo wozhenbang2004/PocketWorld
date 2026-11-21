@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { bridge } from './bridge';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { bridge, type PocketSnapshot } from './bridge';
 import { Button } from './forms-library';
-import type { AuditPage, TaskHeader } from './task-history';
-import type { TaskOperation } from './task-presentation';
+import { taskAuditPage, type AuditPage, type TaskHeader } from './task-history';
+import { getTaskOperations, type TaskOperation } from './task-presentation';
+import { usePocketSnapshot } from './usePocketSnapshot';
 
 const record = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : undefined;
 const nativeId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
@@ -83,8 +84,50 @@ export function receivedOriginalWindowsTextAt(task: TaskHeader, op: TaskOperatio
 const displayText = (content: string) => content.replace(/\r\n?/g, '\n').replace(/\p{C}/gu, ch => ch === '\n' || ch === '\t' ? ch : '�');
 const sameReceived = (a: Received, b: Received) => a.identity === b.identity && a.content === b.content;
 
-export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback }: {
+function overviewWindowsText(snapshot: PocketSnapshot, taskId: string) {
+  const view = record(snapshot.view), tasks: unknown = snapshot.state.tasks;
+  const resumeRevision: unknown = view?.resumeRevision;
+  if (view?.section !== null || view.taskId !== taskId || typeof resumeRevision !== 'number' || !Number.isSafeInteger(resumeRevision) || resumeRevision < 0 ||
+    !snapshot.capabilities.commands.includes('history.read') || !Array.isArray(tasks)) return;
+  const rows: TaskHeader[] = tasks.filter(row => record(row)?.id === taskId);
+  if (rows.length !== 1) return;
+  const task = rows[0], raw = task.raw;
+  if (!raw?.ownerDeviceWork?.directWorkspace || raw.status !== task.status || !nativeId(raw.runId)) return;
+  let page: AuditPage;
+  try { page = taskAuditPage(raw.historyOperationPage, taskId, 'operations'); } catch { return; }
+  // A bounded/partial page or more than one read belongs in the existing per-operation view.
+  if (page.completeHistory !== true || page.readLimited !== false || page.hasMore !== false || page.entries[0]?.position !== page.upperPosition) return;
+  const calls = getTaskOperations({ id: taskId, raw: { historyOperationPage: page } }).filter(op => op.tool === 'device_invoke_tool');
+  if (calls.some(op => {
+    const name = record(op.arguments)?.toolName;
+    return !nativeId(op.runId) || op.runId === raw.runId && (!op.bodyAvailable || typeof name !== 'string' || !name);
+  })) return;
+  const reads = calls.filter(op => op.runId === raw.runId && record(op.arguments)?.toolName === 'workspace.read');
+  if (reads.length !== 1) return;
+  const original = originalWindowsTextAt(task, reads[0]);
+  const received = original && receivedOriginalWindowsTextAt(task, reads[0], original, page);
+  if (original && received) return { original, received, resumeRevision };
+}
+
+/** Mount only in the active Work overview. Explicitly disclose the single already-received
+ * text; never open Process, ask the Windows peer, or start a new audit read. */
+export function OriginalWindowsTextOverview({ taskId }: { taskId: string }) {
+  const snapshot = usePocketSnapshot();
+  const documentEpoch = useSyncExternalStore(bridge.subscribeDocumentEpoch, bridge.getDocumentEpoch, bridge.getDocumentEpoch);
+  const source = documentEpoch > 0 ? overviewWindowsText(snapshot, taskId) : undefined;
+  if (!source) return null;
+  const { original, received, resumeRevision } = source, sourceRevision = String(snapshot.state.traceSourceRevision ?? 0);
+  return <ReceivedOriginalWindowsText key={JSON.stringify([documentEpoch, resumeRevision, sourceRevision, received.identity])}
+    original={original} received={received} documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null} checkOverview={live => {
+      if (live === snapshot) return true;
+      const current = overviewWindowsText(live, taskId);
+      return !!current && current.resumeRevision === resumeRevision && sameReceived(current.received, received);
+    }}/>;
+}
+
+export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback, checkOverview }: {
   original: Original; received: Received; documentEpoch: number; sourceRevision: string; fallback: ReactNode;
+  checkOverview?: (live: PocketSnapshot) => boolean;
 }) {
   const [check, setCheck] = useState<{ generation: number; verified: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -104,7 +147,8 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
     const raw = live.state.tasks?.find((row: {id: string}) => row.id === original.taskId)?.raw;
     return alive.current && !document.hidden && bridge.getDocumentEpoch() === documentEpoch &&
       String(live.state.traceSourceRevision ?? 0) === sourceRevision && live.capabilities.commands.includes('history.read') &&
-      !view?.section && view?.taskId === original.taskId && currentReceivedWorkDigest(raw, original) === received.requestDigest;
+      !view?.section && view?.taskId === original.taskId && currentReceivedWorkDigest(raw, original) === received.requestDigest &&
+      (!checkOverview || checkOverview(live));
   };
   const read = async () => {
     if (reading.current || !current()) return;
@@ -123,7 +167,9 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
       if (sequence.current === attempt && alive.current) { reading.current = false; setBusy(false); }
     }
   };
-  const checked = current() && check?.generation === generation ? check : null;
+  const inWindow = current();
+  if (checkOverview && !inWindow) return null;
+  const checked = inWindow && check?.generation === generation ? check : null;
   if (checked?.verified === false) return <><p role="status">本机收到的原文本无法核对或超过显示范围，未显示正文。</p>{fallback}</>;
   return <section className="pw-operation-entry" aria-label="本机收到的原电脑文本">
     {checked ? <>
@@ -131,8 +177,8 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
       <p className="pw-muted">本机已收到这次读取的结果 · 原文件 {received.bytes} 字节。不是当前文件。</p>
       {received.bytes === 0 ? <p>原回执已核对：当时文件为 0 字节。</p> : <pre className="pw-source-copy" dir="auto">{displayText(received.content)}</pre>}
       <Button variant="ghost" onClick={clear}>关闭原文本</Button>
-    </> : <Button variant="secondary" disabled={busy || !current()} onClick={() => void read()}>
-      {busy ? '正在核对本机原文本…' : '查看本机收到的原文本'}
+    </> : <Button variant="secondary" disabled={busy || !inWindow} onClick={() => void read()}>
+      {busy ? '正在核对本机原文本…' : checkOverview ? '查看这次收到的原文本' : '查看本机收到的原文本'}
     </Button>}
   </section>;
 }
