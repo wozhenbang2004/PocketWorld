@@ -76,7 +76,7 @@ export function OriginalWordFind({source,windowId,value,busy,find,read,children}
  children:(match?:OriginalWordHit)=>ReactNode;
 }){
  const input=useRef<Input>({query:''}),entered=useRef(false),mounted=useRef(false),interaction=useRef(0);
- const body=useRef<HTMLDivElement>(null),focusNext=useRef<Reveal>();
+ const body=useRef<HTMLDivElement>(null),focusNext=useRef<Reveal|undefined>(undefined);
  const [query,setQuery]=useState(''),[found,setFound]=useState<Found>(),[reveal,setReveal]=useState<Reveal>();
  const [pending,setPending]=useState(false),[error,setError]=useState('');
  const captured=originalWordScope(source,windowId),visible=captured&&isWord(value,captured);
