@@ -10,7 +10,7 @@ import { bridge } from './bridge';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
-type OriginalFileReading = { operationId: string; artifactId: string; sha256: string; preview:
+type OriginalFileReading = { operationId: string; artifactId: string; sha256: string; path: string; bytes: number; previousSaveVerified: boolean; preview:
   { kind: 'plain_text'; text: string; truncated: boolean } | { kind: 'unsupported' } };
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const receiptStatus = (value: string) => ({unknown:'结果待核对',pending:'等待原回执',running:'执行中',failed:'执行失败',rejected:'本次已拒绝',completed:'执行回执已返回'} as Record<string,string>)[value] || value;
@@ -57,12 +57,13 @@ function artifactExportFeedback(value: Data | null | undefined, taskId: string) 
       typeof value.path !== 'string' || !value.path || value.path.length > 240 ||
       !Number.isSafeInteger(value.bytes) || value.bytes < 0 || value.bytes > 65_536) return null;
   const proof = value.targetReadback;
+  const verified = value.phase === 'verified' && proof?.status === 'verified' && proof.sha256 === value.sha256 && proof.bytes === value.bytes;
   let message: string;
   switch (value.phase) {
     case 'waiting': message = value.launchUnknown === true ? '尚未确认系统选择器是否打开。请完成或取消原选择，不会重新打开。' : '请在系统中选择保存位置，尚未写入。'; break;
     case 'selected': message = '已取得保存位置，尚未写入。'; break;
     case 'writing': message = '正在写入并核对所选文档…'; break;
-    case 'verified': message = proof?.status === 'verified' && proof.sha256 === value.sha256 && proof.bytes === value.bytes
+    case 'verified': message = verified
       ? `已另存并核对所选文档：回读 ${value.bytes.toLocaleString()} 字节，SHA-256 与原件一致。请在刚选的位置查看。`
       : '没有取得完整的目标核对证据。请检查刚选的位置，没有自动重写。'; break;
     case 'written_unverified': message = proof?.status === 'content_mismatch'
@@ -74,7 +75,7 @@ function artifactExportFeedback(value: Data | null | undefined, taskId: string) 
     case 'not_started': message = '系统保存选择器未打开，本次未开始。'; break;
     default: return null;
   }
-  return { path: value.path as string, pending: pendingArtifactExport.has(value.phase), message };
+  return { path: value.path as string, pending: pendingArtifactExport.has(value.phase), verified, message };
 }
 
 const capabilityState = (state?: string): string => ({
@@ -257,7 +258,8 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, retainedOutp
         throw new Error('没有核对到所选原文件，未显示其他成果。');
       }
       artifactTrigger.current = trigger;
-      setFile({ operationId: value.operationId, artifactId: value.artifactId, sha256: value.sha256, preview });
+      setFile({ operationId: value.operationId, artifactId: value.artifactId, sha256: value.sha256, path: value.path, bytes: value.bytes,
+        previousSaveVerified: value.previousSaveVerified === true, preview });
     });
   };
   const nativeView = bridge.getState().view as Data | undefined;
@@ -304,7 +306,11 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, retainedOutp
         <pre className="pw-source-code">{String(receipt.output)}</pre>
       </AccordionItem></Accordion>}
       {rows(receipt?.artifacts).map(artifact => {
-        const saved = file && file.operationId === operation.operationId && file.artifactId === artifact.artifactId && file.sha256 === artifact.sha256 ? file.preview : null;
+        const saved = file && file.operationId === operation.operationId && file.artifactId === artifact.artifactId &&
+          file.sha256 === artifact.sha256 && file.path === artifact.path && file.bytes === artifact.bytes ? file.preview : null;
+        const currentCopy = exported?.verified && exportState?.operationId === operation.operationId &&
+          exportState?.artifactId === artifact.artifactId && exportState?.sha256 === artifact.sha256 && exportState?.bytes === artifact.bytes &&
+          exported.path === artifact.path;
         return <div className="pw-eco-artifact" key={artifact.artifactId}>
           <p>{artifact.path} · {artifact.bytes} 字节</p>
           <Button variant="ghost" disabled={busy} aria-expanded={!!saved} onClick={event => saved ? closeArtifact() : readArtifact(operation, artifact, event.currentTarget)}>
@@ -312,6 +318,7 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, retainedOutp
           </Button>
           <Button variant="secondary" disabled={busy || exported?.pending} onClick={() => { setNotice(''); void invoke('taskCapabilities.export', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }); }}>导出原成果</Button>
           {saved && <section aria-label="原文件预览">
+            {file?.previousSaveVerified && pinnedOutput(operation) && !currentCopy && <p className="pw-field-hint">此前另存过一份副本，当时回读与原件一致。</p>}
             {saved.kind === 'plain_text' ? <>
               {saved.text ? <pre className="pw-source-code">{saved.text}</pre> : <p>这个原文件为空。</p>}
               {saved.truncated && <p className="pw-muted">这里只显示开头的文字。可导出完整原件。</p>}

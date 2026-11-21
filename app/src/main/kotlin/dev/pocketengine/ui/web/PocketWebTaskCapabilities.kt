@@ -33,18 +33,20 @@ internal class PocketWebTaskCapabilities(
     private val savePolicy: ((JSONObject, Boolean, JSONObject?, Long, RunControl) -> JSONObject)? = null,
     private val policyCatalog: (() -> JSONObject)? = null
 ) {
-    constructor(controller: PocketWorldController, changed: () -> Unit = {}, originalTaskVisible: (String) -> Boolean = { true }) : this(controller::webWindowTicket, controller::webPrivateOwnerVisible,
+    constructor(controller: PocketWorldController, changed: () -> Unit,
+        originalTaskVisible: (String) -> Boolean, historyDocument: (String, String, Int) -> String?) : this(controller::webWindowTicket, controller::webPrivateOwnerVisible,
         controller::skillExecutionHost, controller::taskCapabilitySnapshot, controller::readTaskSkillArtifact,
         { controller.nativeAccountWorkflows().mcpSnapshot() },
         { command, input, control -> controller.nativeAccountWorkflows().mcp(command, input, control) }, controller::runEcosystemControlWork,
-        PocketWebTaskArtifactExport(controller, originalTaskVisible, changed), controller::taskPermissionPolicySnapshot, controller::saveTaskPermissionPolicy,
+        PocketWebTaskArtifactExport(controller, originalTaskVisible, changed, historyDocument), controller::taskPermissionPolicySnapshot, controller::saveTaskPermissionPolicy,
         { val app = controller.nativeTokenBudgetHost(); dev.pocketengine.features.capabilities.PermissionToolCatalog.snapshot(app.features, app.tasks) })
 
     private class Page(val id: String, val task: String, val owner: Any, val native: NativeSkillExecutionHost?) {
         @Volatile var alive = true
         @Volatile var policyInventory: String? = null
-        val choices = ConcurrentHashMap<String, Pair<String, String>>()
+        val choices = ConcurrentHashMap<String, Choice>()
     }
+    private data class Choice(val kind: String, val value: String, val history: PocketWebTaskArtifactExport.HistoryPin?)
     private class Review(val id: String, val page: Page, val script: NativeSkillExecutionHost.Review?, val command: String?, val payload: String?, val shown: String) {
         @Volatile var alive = true
         @Volatile var consent = 0L
@@ -93,6 +95,7 @@ internal class PocketWebTaskCapabilities(
     private fun release(page: Page) { page.alive = false; page.policyInventory = null; page.choices.clear(); reviews.values.filter { it.page === page }.forEach(::retire); policies.values.filter { it.page === page }.forEach { it.alive = false; policies.remove(it.id) } }
     private fun closePages() = synchronized(lifetime) { generation++; pages.values.forEach(::release); pages.clear(); reviews.values.forEach(::retire); reviews.clear() }
     fun clear() { closePages(); exporter?.clear() }
+    fun leave() { closePages(); exporter?.leave() }
     fun background() { closePages(); exporter?.foreground(false) }
     fun foreground(value: Boolean) { if (!value) closePages(); exporter?.foreground(value) }
     fun exportSnapshot(): JSONObject? = exporter?.snapshot()
@@ -104,8 +107,13 @@ internal class PocketWebTaskCapabilities(
         return JSONObject().put("policyRetired", true).put("saveOutcome", "unconfirmed").put("executionAuthorized", false)
             .put("message", "原任务目标或编辑窗口已变化，这份草稿不能再提交。若刚提交过保存，结果仍需回原任务重新核对；请放弃这份草稿后重新进入。")
     }
-    private fun choice(page: Page, kind: String, value: JSONObject): String { check(page.choices.size < 1024); val id = UUID.randomUUID().toString(); page.choices[id] = kind to value.toString(); return id }
-    private fun selected(page: Page, id: String, kind: String): JSONObject { val pin = page.choices[id] ?: error("原记录已变化，请重新读取"); check(pin.first == kind && current(page)); return JSONObject(pin.second) }
+    private fun choice(page: Page, kind: String, value: JSONObject, history: PocketWebTaskArtifactExport.HistoryPin? = null): String {
+        check(page.choices.size < 1024); val id = UUID.randomUUID().toString(); page.choices[id] = Choice(kind, value.toString(), history); return id
+    }
+    private fun selectedChoice(page: Page, id: String, kind: String): Choice {
+        val pin = page.choices[id] ?: error("原记录已变化，请重新读取"); check(pin.kind == kind && current(page)); return pin
+    }
+    private fun selected(page: Page, id: String, kind: String): JSONObject = JSONObject(selectedChoice(page, id, kind).value)
     /** Rule keys are exact tool names, not credential field names; values remain a fixed enum. */
     private fun policyValue(value: JSONObject): JSONObject {
         val result = PocketWebState.publicValue(value) as JSONObject
@@ -142,7 +150,10 @@ internal class PocketWebTaskCapabilities(
         rows(value.optJSONArray("executions")).forEach { row ->
             val operation = JSONObject().put("operationId", row.getString("operationId"))
             row.put("operationHandle", choice(page, "operation", operation))
-            rows(row.optJSONObject("receipt")?.optJSONArray("artifacts")).forEach { file -> file.put("artifactHandle", choice(page, "artifact", copy(file).put("operationId", operation.getString("operationId")))) }
+            rows(row.optJSONObject("receipt")?.optJSONArray("artifacts")).forEach { file ->
+                file.put("artifactHandle", choice(page, "artifact", copy(file).put("operationId", operation.getString("operationId")),
+                    exporter?.historyPin(page.task, row, file)))
+            }
         }
         rows(value.optJSONArray("pluginNeeds")).forEach { need -> need.put("needHandle", choice(page, "mcp", copy(need))) }
         return value.put("pageHandle", page.id).put("executionAuthorized", false)
@@ -267,8 +278,14 @@ internal class PocketWebTaskCapabilities(
                 fields(input, "pageHandle", "artifactHandle", "textPreview")
                 val preview = input.has("textPreview")
                 require(!preview || input.opt("textPreview") == true)
-                val page = page(input); val file = selected(page, text(input, "artifactHandle"), "artifact")
-                work(page, done) {
+                val page = page(input); val chosen = selectedChoice(page, text(input, "artifactHandle"), "artifact")
+                val file = JSONObject(chosen.value)
+                work(page, { result, error ->
+                    // Report a past verification only after this exact source read succeeds in the current native Work.
+                    if (preview && result != null && exporter?.previouslyVerified(chosen.history) == true)
+                        result.put("previousSaveVerified", true)
+                    done(result, error)
+                }) {
                     val bytes = artifact(page.task, file.getString("operationId"), file.getString("artifactId"), file.getString("sha256"))
                     check(bytes.size.toLong() == file.getLong("bytes"))
                     val result = copy(file).put("untrusted", true).put("replayAllowed", false)
@@ -278,8 +295,9 @@ internal class PocketWebTaskCapabilities(
                 }
             }
             "taskCapabilities.export" -> {
-                fields(input, "pageHandle", "artifactHandle"); val page = page(input); val file = selected(page, text(input, "artifactHandle"), "artifact")
-                done(checkNotNull(exporter) { "原系统文件保存入口尚未挂载" }.start(page.task, file), null)
+                fields(input, "pageHandle", "artifactHandle"); val page = page(input)
+                val chosen = selectedChoice(page, text(input, "artifactHandle"), "artifact")
+                done(checkNotNull(exporter) { "原系统文件保存入口尚未挂载" }.start(page.task, JSONObject(chosen.value), chosen.history), null)
             }
             "taskCapabilities.mcp.review" -> {
                 fields(input, "pageHandle", "needHandle", "change", "value"); val page = page(input); val need = selected(page, text(input, "needHandle"), "mcp"); val change = text(input, "change"); val value = input.get("value"); require(value is Boolean && change in setOf("grant", "enabled"))

@@ -14,13 +14,16 @@ import org.json.JSONObject
 
 /** One exact original artifact and the same user-selected system document. */
 internal class PocketWebTaskArtifactExport(private val controller: PocketWorldController,
-    private val originalTaskVisible: (String) -> Boolean, private val changed: () -> Unit) {
-    private data class Artifact(val operation: String, val id: String, val path: String, val sha: String, val bytes: Long) {
+    private val originalTaskVisible: (String) -> Boolean, private val changed: () -> Unit,
+    private val historyDocument: (String, String, Int) -> String?) {
+    data class Artifact(val operation: String, val id: String, val path: String, val sha: String, val bytes: Long) {
         fun matchesBytes(row: JSONObject) = row.opt("sha256") == sha && row.opt("bytes").let {
             (it is Int || it is Long) && (it as Number).toLong() == bytes
         }
     }
-    private class Export(val id: String, val task: String, val file: Artifact) {
+    data class HistoryPin(val task: String, val run: String, val epoch: Int, val file: Artifact)
+    private data class HistoryScope(val document: String, val pin: HistoryPin)
+    private class Export(val id: String, val task: String, val file: Artifact, val history: HistoryScope?) {
         var phase = "waiting"
         var uri: Uri? = null
         var launchUnknown = false
@@ -31,6 +34,10 @@ internal class PocketWebTaskArtifactExport(private val controller: PocketWorldCo
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var foreground = true
     @Volatile private var selected: Export? = null
+    // One positive historical observation, not an active request, target locator or file read permit.
+    private var lastVerified: HistoryScope? = null
+    private val digest = Regex("[a-f0-9]{64}")
+    private val operationId = Regex("[a-f0-9-]{36}")
     private val picker = AttachmentExportPicker(activity.activityResultRegistry) { request, uri ->
         val original = selected?.takeIf { it.id == request && it.phase == "waiting" } ?: return@AttachmentExportPicker
         if (uri == null) { original.phase = "cancelled"; changed(); return@AttachmentExportPicker }
@@ -44,14 +51,49 @@ internal class PocketWebTaskArtifactExport(private val controller: PocketWorldCo
             .put("phase", original.phase).put("launchUnknown", original.launchUnknown)
             .put("targetReadback", original.target ?: JSONObject.NULL)
     }
-    fun start(task: String, file: JSONObject): JSONObject {
+    /** Only existing native choice metadata supplies this optional pin. */
+    fun historyPin(task: String, row: JSONObject, file: JSONObject): HistoryPin? {
+        val operation = row.opt("operationId") as? String ?: return null
+        val run = row.opt("runId") as? String ?: return null
+        val receipt = row.optJSONObject("receipt") ?: return null
+        val epoch = receipt.opt("epoch") as? Int ?: return null
+        val native = row.optJSONObject("arguments")?.optJSONObject("nativeSkill") ?: return null
+        val ref = native.optJSONObject("reference") ?: return null
+        val plan = ref.opt("planDigest") as? String ?: return null
+        val claimedAt = native.opt("claimedAt")
+        if ((claimedAt !is Int && claimedAt !is Long) || (claimedAt as Number).toLong() <= 0) return null
+        if (!operation.matches(operationId) || run.length !in 1..240 || run.isBlank() || epoch <= 0 ||
+            row.opt("tool") != "skills_execute" || row.opt("state") != "receipt" ||
+            native.opt("format") != "pocketworld.native-skill-operation.v1" || native.opt("approvalState") != "consumed" ||
+            native.optJSONObject("deployment")?.opt("backendId") != "phone-managed-skill-v1" ||
+            ref.opt("ownerId") != "owner" || ref.opt("spaceId") != "private" || ref.opt("taskId") != task ||
+            ref.opt("runId") != run || ref.opt("epoch") != epoch || ref.opt("operationId") != operation ||
+            receipt.opt("taskId") != task || receipt.opt("runId") != run || receipt.opt("operationId") != operation ||
+            !plan.matches(digest) || receipt.opt("planDigest") != plan || receipt.opt("executionLocation") != "this_phone" ||
+            receipt.opt("status") !in setOf("completed", "failed", "timed_out")) return null
+        val id = file.opt("artifactId") as? String ?: return null
+        val sha = file.opt("sha256") as? String ?: return null
+        val path = file.opt("path") as? String ?: return null
+        val bytes = file.opt("bytes")
+        if (bytes !is Int && bytes !is Long) return null
+        val size = (bytes as Number).toLong()
+        if (!id.matches(digest) || !sha.matches(digest) || path.length !in 1..240 || size !in 0L..65_536L) return null
+        return HistoryPin(task, run, epoch, Artifact(operation, id, path, sha, size))
+    }
+    private fun currentDocument(pin: HistoryPin) = historyDocument(pin.task, pin.run, pin.epoch)
+    fun previouslyVerified(pin: HistoryPin?): Boolean =
+        pin != null && lastVerified?.let { it.pin == pin && currentDocument(pin) == it.document } == true
+
+    fun start(task: String, file: JSONObject, history: HistoryPin?): JSONObject {
         check(foreground && controller.webPrivateOwnerVisible() && originalTaskVisible(task)) { "请返回原任务保存这一份成果" }
         check(selected?.phase !in setOf("waiting", "selected", "writing")) { "原系统保存仍在等待，请先完成或取消，不会重复打开" }
         val artifact = Artifact(file.getString("operationId"), file.getString("artifactId"), file.getString("path"), file.getString("sha256"), file.getLong("bytes"))
-        val digest = Regex("[a-f0-9]{64}")
         check(artifact.operation.isNotBlank() && artifact.id.matches(digest) && artifact.sha.matches(digest) && artifact.path.length in 1..240 &&
             artifact.bytes in 0L..65_536L && artifact.matchesBytes(file)) { "原成果信息不可核对，未打开保存位置" }
-        val original = Export(UUID.randomUUID().toString(), task, artifact); selected = original
+        val scope = history?.takeIf { it.task == task && it.file == artifact }?.let { pin ->
+            currentDocument(pin)?.let { HistoryScope(it, pin) }
+        }
+        val original = Export(UUID.randomUUID().toString(), task, artifact, scope); selected = original
         val name = artifact.path.substringAfterLast('/').take(160).ifBlank { "original-artifact.bin" }
         when (picker.launch(original.id, "application/octet-stream", name)) {
             OutcomeExportLaunch.REQUESTED -> Unit
@@ -112,6 +154,8 @@ internal class PocketWebTaskArtifactExport(private val controller: PocketWorldCo
                     writeEntered -> "write_unknown"
                     else -> "not_written"
                 }
+                if (original.phase == "verified") original.history?.takeIf { currentDocument(it.pin) == it.document }
+                    ?.let { lastVerified = it }
                 changed()
             }
         }) } catch (_: Exception) { original.phase = "not_written"; changed() }
@@ -124,5 +168,6 @@ internal class PocketWebTaskArtifactExport(private val controller: PocketWorldCo
         // Resume the one original picker on the next main turn, after that native lifecycle signal.
         if (value && original != null) main.post { if (foreground && selected === original) finish(original) }
     }
-    fun clear() { selected?.control?.cancel(); selected = null; picker.close(); changed() }
+    fun leave() { selected?.let { it.control.cancel(); it.uri = null }; selected = null; picker.close(); changed() }
+    fun clear() { lastVerified = null; leave() }
 }
