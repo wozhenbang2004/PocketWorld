@@ -14423,7 +14423,7 @@ public final class TaskStore {
             }
         }finally{if(owns)db.endTransaction();}
     }
-    /** Read the settled B4 web saves already in the original ledger; do not read ZIP bytes or stage anything. */
+    /** Read the settled owner web saves already in the original ledger; do not read ZIP bytes or stage anything. */
     public synchronized JSONObject savedBuildWebForOwner(String project,String checkout,String cursor,RunControl control)throws Exception {
         dev.pocketengine.features.local.project.ProjectBuildPlan.identity(project);
         dev.pocketengine.features.local.project.ProjectBuildPlan.identity(checkout);
@@ -14444,8 +14444,8 @@ public final class TaskStore {
             }
             // These JSON text selectors only bound native receipt candidates. Exact matching, owner
             // privacy, original-run identity and real saved receipt are checked before projection.
-            String sql="SELECT rowid,task_id,operation_id FROM operations WHERE tool=? AND state='receipt' AND receipt IS NOT NULL AND rowid<=? AND (?='0' OR rowid<?) AND instr(arguments,?)>0 AND instr(arguments,?)>0 ORDER BY rowid DESC LIMIT 17";
-            String[] args={OriginalNodeWebOutput.TOOL,Long.toString(high),Long.toString(before),Long.toString(before),
+            String sql="SELECT rowid,task_id,operation_id FROM operations WHERE tool IN (?,?) AND state='receipt' AND receipt IS NOT NULL AND rowid<=? AND (?='0' OR rowid<?) AND instr(arguments,?)>0 AND instr(arguments,?)>0 ORDER BY rowid DESC LIMIT 17";
+            String[] args={OriginalNodeWebOutput.TOOL,OriginalNodeWebOutput.DIRECT_TOOL,Long.toString(high),Long.toString(before),Long.toString(before),
                 "\"projectId\":"+JSONObject.quote(project),"\"checkoutId\":"+JSONObject.quote(checkout)};
             JSONArray items=new JSONArray();boolean more=false,limited=false;int scanned=0;long next=0;
             try(Cursor rows=db.rawQuery(sql,args)){
@@ -14458,12 +14458,15 @@ public final class TaskStore {
                             !project.equals(e.opt("projectId"))||!checkout.equals(e.opt("checkoutId")))continue;
                         JSONObject artifact=e.getJSONObject("packageArtifact");
                         if(!"web_output".equals(artifact.opt("mode"))||!OriginalNodeWebOutput.ENTRY.equals(artifact.opt("entryPath")))continue;
-                        items.put(new JSONObject().put("taskId",taskId).put("operationId",operation).put("runId",e.getString("runId"))
+                        JSONObject version=new JSONObject().put("taskId",taskId).put("operationId",operation).put("runId",e.getString("runId"))
                             .put("epoch",e.getInt("coordinatorEpoch")).put("projectId",project).put("checkoutId",checkout)
                             .put("sourceDigest",e.getString("sourceDigest")).put("artifactId",artifact.getString("id"))
                             .put("archiveSha256",e.getString("archiveSha256")).put("archiveBytes",e.getLong("archiveBytes"))
                             .put("createdAt",artifact.getLong("createdAt")).put("versionSequence",artifact.getInt("versionSequence"))
-                            .put("entryPath",OriginalNodeWebOutput.ENTRY));
+                            .put("entryPath",OriginalNodeWebOutput.ENTRY);
+                        // The same checked immutable receipt is listed, but this native subtype opens only from its original Work.
+                        if(task.has(OwnerDirectNodeBuild.VITE_FIELD))version.put("directLocalWork",true);
+                        items.put(version);
                     }catch(Exception unreadable){control.check();if(Thread.currentThread().isInterrupted())throw unreadable;limited=true;}
                 }
             }

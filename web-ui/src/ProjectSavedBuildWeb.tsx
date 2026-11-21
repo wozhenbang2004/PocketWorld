@@ -6,7 +6,7 @@ import { packagePreviewChoices, projectPackageTaskIdentity, type PackagePreviewC
 const READ='projects.savedBuildWeb.read';
 type Copy={id:string;name:string;createdAt:number};
 type Version={taskId:string;operationId:string;runId:string;epoch:number;projectId:string;checkoutId:string;
-  sourceDigest:string;artifactId:string;archiveSha256:string;archiveBytes:number;createdAt:number;versionSequence:number;entryPath:'dist/index.html'};
+  sourceDigest:string;artifactId:string;archiveSha256:string;archiveBytes:number;createdAt:number;versionSequence:number;entryPath:'dist/index.html';directLocalWork?:true};
 type Shelf={checkoutId:string;checkouts:Copy[];items:Version[];hasMore:boolean;nextCursor:string;readLimited:boolean};
 type CheckoutSelection={projectId:string;checkoutId:string};
 type BuildSelection=CheckoutSelection&{taskId:string;sourceDigest:string;runId:string;epoch:number};
@@ -39,7 +39,8 @@ function page(value:unknown,project:string,selected:string,cursor:string):Shelf 
       r.checkoutId!==''&&!r.checkouts.some(c=>c.id===r.checkoutId)||!Array.isArray(r.items)||r.items.length>8||
       r.items.some(v=>!v||!r.checkoutId||v.projectId!==project||v.checkoutId!==r.checkoutId||!id(v.taskId)||!id(v.operationId)||
         typeof v.runId!=='string'||v.runId.length<1||v.runId.length>240||!int(v.epoch,1)||!hash(v.sourceDigest)||!id(v.artifactId)||
-        !hash(v.archiveSha256)||!int(v.archiveBytes,1)||!int(v.createdAt,1)||v.createdAt>8.64e15||!int(v.versionSequence,1)||v.entryPath!=='dist/index.html')||
+        !hash(v.archiveSha256)||!int(v.archiveBytes,1)||!int(v.createdAt,1)||v.createdAt>8.64e15||!int(v.versionSequence,1)||v.entryPath!=='dist/index.html'||
+        v.directLocalWork!==undefined&&(v.directLocalWork!==true||v.runId!==v.taskId||v.epoch!==1))||
       new Set(r.items.map(v=>v.operationId)).size!==r.items.length||typeof r.readLimited!=='boolean'||typeof r.hasMore!=='boolean'||
       typeof r.nextCursor!=='string'||r.nextCursor.length>2048||(r.hasMore?(!r.nextCursor||r.nextCursor===cursor):r.nextCursor!==''))
     throw Error('没有核对到这份副本的原网页版本清单。');
@@ -154,7 +155,7 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
     if(sameShelf())openWork?.(work,shelfFocus(trigger,sameShelf));
   };
   const open=(picked:Version,trigger:HTMLButtonElement)=>{
-    if(!canPreview||!matches(picked)||picked.checkoutId!==shelf?.checkoutId||!shelf.items.includes(picked))return;
+    if(picked.directLocalWork===true||!canPreview||!matches(picked)||picked.checkoutId!==shelf?.checkoutId||!shelf.items.includes(picked))return;
     const originalShelf=owner();
     const sameShelf=()=>originalShelf()&&expandedRef.current&&current.current.copy===picked.checkoutId&&current.current.selection===selection&&
       current.current.shelf?.items.includes(picked)===true;
@@ -211,17 +212,22 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
         return <li key={v.operationId}>
           <strong>{version}</strong> <time dateTime={savedAt.toISOString()}>{when}</time>
           {selection&&(v.epoch!==selection.epoch||v.runId!==selection.runId)&&<p className="pw-field-hint">{v.epoch<selection.epoch?'较早轮次保存的网页':'另一轮保存的网页'}，不是进入时所选轮次的结果。</p>}
-          <p className="pw-field-hint">源码 {v.sourceDigest.slice(0,10)} · 固定包 {v.archiveSha256.slice(0,10)}</p>
-          <div className="pw-form-actions"><Button variant="secondary" size="small" aria-label={`${action}，${version}，${when}`}
-            disabled={!canPreview||versionBusy||!active} onClick={event=>open(v,event.currentTarget)}>{action}</Button>
-            {!selection&&openWork&&<Button variant="ghost" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
-              ()=>!current.current.selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>}</div>
+          <p className="pw-field-hint">{v.directLocalWork===true?'本机构建 · ':null}源码 {v.sourceDigest.slice(0,10)} · 固定包 {v.archiveSha256.slice(0,10)}</p>
+          <div className="pw-form-actions">{v.directLocalWork===true?
+            openWork&&<Button variant="secondary" size="small" aria-label={`查看原工作，${version}，${when}`}
+              disabled={versionBusy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
+                ()=>current.current.selection===selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>:<>
+              <Button variant="secondary" size="small" aria-label={`${action}，${version}，${when}`}
+                disabled={!canPreview||versionBusy||!active} onClick={event=>open(v,event.currentTarget)}>{action}</Button>
+              {!selection&&openWork&&<Button variant="ghost" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
+                ()=>!current.current.selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>}
+            </>}</div>
         </li>;
       })}</ul>}
       {error&&<p role="alert">{error}</p>}
       <div className="pw-form-actions">
         {shelf?.hasMore&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read(shelf.checkoutId,shelf.nextCursor)}>更多原版本</Button>}
-        {selection&&openWork&&<Button variant="secondary" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(selection,event.currentTarget,
+        {selection&&openWork&&!versions.some(v=>v.directLocalWork===true)&&<Button variant="secondary" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(selection,event.currentTarget,
           ()=>current.current.selection===selection)}>查看原构建任务</Button>}
         {selection&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>{select(null);read(selection.checkoutId);}}>查看这份副本的所有版本</Button>}
         {error&&copy&&!selection&&<Button variant="ghost" size="small" disabled={!!busy||!active} onClick={()=>read('')}>重新选择副本</Button>}

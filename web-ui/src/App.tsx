@@ -3727,7 +3727,7 @@ export default function App(){
   openTask(id,entry==='outcomes'?'overview':entry,false,undefined,query,expected,current,undefined,expected?()=>{
    if(!current()||projectTaskReturn.current!==origin)return;
    if(focusShelf){origin.focusOutcome=false;origin.returning=true;}else projectTaskReturn.current=null;
-   setLocalError(focusShelf?'原构建的工作已换轮或暂不可读取。未打开其他轮次，固定网页仍保留。':'原工作或轮次暂不可读取，没有打开其他工作。');
+   setLocalError(focusShelf?'暂时打不开原工作，尚未核实这份固定网页现在能否读取。没有打开其他轮次。':'原工作或轮次暂不可读取，没有打开其他工作。');
   }:undefined);
  };
  const openProjectReceipt=(id:string,checkoutId?:string,expected?:{runId:string;epoch:number})=>openProjectWork(id,'overview','',checkoutId,expected);
