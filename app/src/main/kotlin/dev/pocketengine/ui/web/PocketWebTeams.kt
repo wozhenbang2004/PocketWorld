@@ -230,7 +230,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 if (canAskToContinueSaved(value, row)) row.put("canRequestSavedContinuation", true) else row.remove("canRequestSavedContinuation")
             }
             result.put("messages", PocketWebState.publicValue(JSONArray(messages)))
-            result.put("attention", PocketWebState.publicValue(TeamAttention.forRun(value)))
+            val attention = TeamAttention.forRun(value)
+            result.put("attention", PocketWebState.publicValue(attention))
             result.put("revisionOffers", PocketWebState.publicValue(TeamParentRevisionOffer.available(value)))
             controller.state.tasks.singleOrNull { it.raw.optString("feature") == "teams" && it.raw.optString("externalId") == value.optString("id")
                 && it.raw.optString("actorId") == "owner" && it.raw.optString("spaceId") == "private" }
@@ -244,6 +245,12 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 result.put("ownerWorkLink", PocketWebState.publicValue(link))
                 // The original host may have left the recent task window.
                 result.put("taskId", link.getString("teamTaskId"))
+                if (link.opt("currentRun") == true && link.opt("stopping") == false) attention.objects().singleOrNull()?.takeIf {
+                    it.optString("kind") == "member_attention" && it.optString("status") in setOf("failed", "interrupted")
+                }?.optString("memberId")?.takeIf(String::isNotBlank)?.let { member ->
+                    if (runCatching { TeamCoordinator.ownerSelfWaitResumePin(value, member) != null }.getOrDefault(false))
+                        result.put("ownerSelfWaitMemberId", member)
+                }
             }
         }
         return result
@@ -939,6 +946,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             }
             "teams.control", "teams.sendMessage", "teams.answerAssignment" -> {
                 if (action == "teams.answerAssignment") fields(args, "viewHandle", "memberId", "text", "mode", "quoteMessageId", "messageId", "delivery")
+                else if (action == "teams.control") fields(args, "viewHandle", "command", "memberId", "text", "mode", "quoteMessageId", "messageId", "originalMemberOnly")
                 else fields(args, "viewHandle", "command", "memberId", "text", "mode", "quoteMessageId", "messageId")
                 val run = reading(text(args, "viewHandle"), "run", true)
                 val member = args.optString("memberId").takeIf { it.isNotEmpty() }
@@ -947,6 +955,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     val input = if (command == "cancel") {
                         require(member == null); JSONObject().put("runId", run.getString("id")).put("expectedRevision", run.getLong("revision")).put("expectedGeneration", run.getInt("generation"))
                     } else reviewedTeamCollaborationAction(run, teamCollaborationStamp(run), command, member, args.optString("text"))
+                    if (args.has("originalMemberOnly")) {
+                        require(args.opt("originalMemberOnly") == true && command == "resume" && member != null) { "只继续一名成员须核对原分工" }
+                        val pin = TeamCoordinator.ownerSelfWaitResumePin(run, member) ?: error("未核对到这名成员与原前置分工，没有继续")
+                        input.put(TeamCoordinator.OWNER_SELF_WAIT_RESUME, pin)
+                    }
                     feature(command, input)
                 } else {
                     val slot = run.optJSONArray("members").objects().singleOrNull { it.optString("id") == member && !it.optBoolean("exited") } ?: error("请选择这次原运行的成员")

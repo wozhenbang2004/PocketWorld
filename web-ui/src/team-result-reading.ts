@@ -198,7 +198,7 @@ export function teamRemainingMember(reading: Data | null, delivered: readonly { 
   if (roster.length < 2 || !item || !stoppedMemberStage(item.status) ||
       item.locator.questionId || item.locator.workItemId || item.locator.childKind || item.locator.assignmentId ||
       new Set(roster.map(member => member?.id)).size !== roster.length) return null;
-  let remaining: Data[] = [], assignment = '';
+  let remaining: Data[] = [], assignment = '', deferredOwnRound: number | undefined;
   for (const member of roster) {
     if (!text(member?.id) || member.runner !== 'model' || member.exited || member.paused ||
         (member.device != null && member.device !== 'phone')) return null;
@@ -210,12 +210,14 @@ export function teamRemainingMember(reading: Data | null, delivered: readonly { 
       continue;
     }
     remaining = stages.filter(stage => stage.status !== 'completed');
+    if (reading.ownerSelfWaitMemberId === member.id && run.rounds === 2 && remaining[0]?.round === 1 && remaining[1]?.round === 2 &&
+        ['waiting_dependency','blocked_dependency'].includes(remaining[1].status)) deferredOwnRound = 2;
     if (member.status !== item.status || !stoppedMemberStage(remaining[0]?.status) ||
         member.memberModelSelection?.format !== 'pocketworld.team-member-model.v1' ||
         member.memberModelSelection.identityRevision !== item.locator.identityRevision ||
         remaining.some(stage => {
           const child = stage.researchTask;
-          return stage.status === 'queued' ? !!stage.researchTaskId || !!child :
+          return stage.status === 'queued' || stage.round === deferredOwnRound ? !!stage.researchTaskId || !!child :
             !stoppedMemberStage(stage.status) || (stage.researchTaskId ? child?.taskId !== stage.researchTaskId ||
               child?.executionAuthorized !== false || child?.teamRunId !== run.id || child?.memberId !== member.id ||
               child?.round !== stage.round || child?.identityRevision !== item.locator.identityRevision ||
@@ -234,7 +236,7 @@ export function teamRemainingMember(reading: Data | null, delivered: readonly { 
     !['completed', 'stopping', 'cancelled', 'interrupted', 'paused', 'pausing'].includes(parentStatus);
   return {
     key: JSON.stringify([item.key, run.revision]), item, assignment,
-    rounds: remaining.map(row => row.round as number), revision: run.revision as number,
+    rounds: remaining.map(row => row.round as number), deferredOwnRound, revision: run.revision as number,
     canReview: parentPresent && pool?.parentTaskId === link.taskId && pool?.parentRunId === link.runId &&
       Number.isSafeInteger(left) && left > 0 && Number.isSafeInteger(run.callsUsed) &&
       Number.isSafeInteger(run.callLimit) && run.callsUsed < run.callLimit,

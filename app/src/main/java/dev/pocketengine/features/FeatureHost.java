@@ -4,6 +4,7 @@ import dev.pocketengine.core.EventSink;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.ExecutionResources;
 import dev.pocketengine.features.assistant.AssistantModule;
+import dev.pocketengine.features.teams.TeamCoordinator;
 import dev.pocketengine.store.TaskStore;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
@@ -746,6 +747,10 @@ public final class FeatureHost implements AutoCloseable {
             boolean backendAdmission=false;
             try{if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未执行排队操作");EngineModule module=module(feature);if(module==null)throw new IllegalArgumentException("此能力尚未接入");
                 JSONObject payload=request.optJSONObject("payload");JSONObject input=payload==null?new JSONObject():new JSONObject(payload.toString());
+                JSONObject strictMember=input.optJSONObject(TeamCoordinator.OWNER_SELF_WAIT_RESUME);
+                if(input.has(TeamCoordinator.OWNER_SELF_WAIT_RESUME)&&(strictMember==null||!nativeOwnerAdmission||!"teams".equals(feature)||!"resume".equals(command)
+                        ||!(module instanceof dev.pocketengine.features.teams.TeamsModule)||tasks==null||input.optString("memberId").isEmpty()
+                        ||!input.has("expectedRevision")||!input.has("expectedGeneration")))throw new SecurityException("原单成员续接只接受当前私人团队的准确审阅");
                 String sourceConversation=null;AssistantModule sourceAssistant=null;
                 dev.pocketengine.features.remote.PrivateHostGoalLink.Origin hostOrigin=null;
                 JSONObject anchoredWorkspace=null;
@@ -874,6 +879,7 @@ public final class FeatureHost implements AutoCloseable {
                 }
                 String reviewedTeamTask=null;
                 if(tasks!=null&&feature.equals("teams")&&command.matches("resume|continueMessages|reviseAssignment|continueOutcome")&&(input.has("expectedRevision")||input.has("expectedGeneration")))reviewedTeamTask=tasks.requireReviewedTeamControl(input);
+                if(strictMember!=null&&reviewedTeamTask==null)throw new SecurityException("原团队审阅已失效，没有继续分工。");
                 if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未进入原模块操作");
                 JSONObject result;
                 if(backendAdmission){
@@ -894,10 +900,17 @@ public final class FeatureHost implements AutoCloseable {
                         &&module instanceof dev.pocketengine.features.teams.TeamsModule team){
                     final String selectedTeam=reviewedTeamTask;
                     result=team.resumeReviewedOriginalMember(input,()->{
-                        if(!originalOwnerCurrent.getAsBoolean()||!selectedTeam.equals(tasks.requireReviewedTeamControl(input)))
+                        if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原团队审阅已关闭，没有继续分工。");
+                        if(strictMember!=null){
+                            tasks.requireOriginalSelfWaitingTeamMember(selectedTeam,input,strictMember);
+                            if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原团队审阅已关闭，没有继续分工。");
+                        }else if(!selectedTeam.equals(tasks.requireReviewedTeamControl(input)))
                             throw new SecurityException("原团队审阅或执行已变化，没有继续分工。");
                     });
-                    if(result==null)result=module.handle(command,input);
+                    if(result==null){
+                        if(strictMember!=null)throw new SecurityException("不能核对原成员执行与原模型，没有继续或改用默认模型。");
+                        result=module.handle(command,input);
+                    }
                 }
                 else result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
                 if(result==null)result=new JSONObject();

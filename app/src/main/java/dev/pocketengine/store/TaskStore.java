@@ -17456,6 +17456,34 @@ public final class TaskStore {
     }
     /** Native owner continuation only; the actual TeamsModule still performs its atomic snapshot CAS. */
     public synchronized String requireReviewedTeamControl(JSONObject input)throws Exception{return reviewedTeamTask(input,true);}
+    /** The coordinator's current first-stage pin is necessary, not sufficient: match only
+     * the original owner approval/grant and exact stopped private SQL child. */
+    public synchronized void requireOriginalSelfWaitingTeamMember(String teamId,JSONObject input,JSONObject pin)throws Exception{
+        if(!teamId.equals(reviewedTeamTask(input,true)))throw new SecurityException("原团队已变化，未继续成员");
+        String teamRun=input.getString("runId"),member=input.getString("memberId");JSONObject team=teamWriteTask(teamRun);
+        TeamParentOrigin source=researchParentControls.get(teamId);
+        if(source==null||!teamId.equals(team.getString("id"))||!teamRun.equals(source.operation)||source.original.isCancelled()||source.original.isPaused()
+                ||source.original.pauseRevision()!=source.pause||!source.original.matchesHostRun(source.task,source.run,source.epoch))
+            throw new SecurityException("原父工作控制已变化，未继续成员");
+        JSONObject parent=required(source.task),permission=grant(source.run);requirePrivateOwner(parent);
+        if(!originalOwnerWorkTeam(parent,team,source.run)||!source.run.equals(parent.opt("runId"))||source.epoch!=parent.optInt("coordinatorEpoch")
+                ||parent.optBoolean("cancelRequested")||!parent.optString("status").matches("preparing|running|needs_confirmation|awaiting_user")
+                ||permission==null||permission.optLong("expiresAt")<=System.currentTimeMillis())throw new SecurityException("原父工作授权已变化，未继续成员");
+        requireOwnerWorkSources(parent);requireTeamResearchParentScope(source,team,true);
+        String task=pin.getString("taskId"),run=pin.getString("runId"),status=pin.getString("status");int epoch=pin.getInt("epoch");
+        JSONObject child=boundedHostWorkCore(task);if(child==null)throw new SecurityException("未核对到该成员首阶段的原任务");
+        requirePrivateOwner(child);JSONObject identity=child.getJSONObject("teamResearch"),attempt=child.getJSONObject("teamResearchNativeRun");
+        if(!task.equals(child.opt("id"))||!teamId.equals(child.opt("parentTaskId"))||!run.equals(child.opt("runId"))||epoch!=child.optInt("coordinatorEpoch")
+                ||!status.matches("failed|interrupted")||!status.equals(child.opt("status"))||child.optBoolean("cancelRequested")||hasUnresolved(task)
+                ||!teamRun.equals(identity.opt("teamRunId"))||!member.equals(identity.opt("memberId"))||!task.equals(identity.opt("researchTaskId"))
+                ||identity.optInt("round")!=1||pin.getInt("identityRevision")!=identity.optInt("identityRevision")||!run.equals(attempt.opt("runId"))
+                ||epoch!=attempt.optInt("coordinatorEpoch")||!pin.getString("turnId").equals(attempt.opt("executionTurnId"))
+                ||attempt.optInt("runGeneration",-1)!=input.getInt("expectedGeneration")||attempt.optInt("memberGeneration",-1)!=input.getInt("expectedMemberGeneration"))
+            throw new SecurityException("原成员首阶段或未决操作已变化，没有继续");
+        try(Cursor actual=db.rawQuery("SELECT status,epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{task,run})){
+            if(!actual.moveToFirst()||!status.equals(actual.getString(0))||epoch!=actual.getInt(1))throw new SecurityException("首阶段没有该原中断记录，未继续");
+        }
+    }
     private String reviewedTeamTask(JSONObject input,boolean beforeDispatch)throws Exception{
         String run=input.getString("runId"),id=externalTask("teams",run);if(id==null)id=operationTask("teams",run);
         if(id==null)throw new SecurityException("缺少原团队任务记录，请先刷新原任务");

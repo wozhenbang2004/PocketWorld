@@ -22,6 +22,7 @@ import org.json.JSONObject;
 /** Existing bounded member executor; TaskStore remains the host task/permission authority. */
 public final class TeamCoordinator implements AutoCloseable {
     public static final String RESEARCH_FORMAT="pocketworld.team-research-agent.v1";
+    public static final String OWNER_SELF_WAIT_RESUME="_ownerSelfWaitMemberResume";
     private static boolean researchEnabled(Run run){return RESEARCH_FORMAT.equals(run.json.optString("researchExecutionFormat"));}
     public interface Gateway {JSONObject complete(ModelConfig config,JSONArray messages,RunControl control)throws Exception;}
     public interface ToolGateway {
@@ -1059,9 +1060,9 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
         return resumeSelected(id,memberId,config,evidence,external,wake,false);
     }
     private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages)throws Exception{
-        return resumeSelected(id,memberId,config,evidence,external,wake,useQueuedMessages,false);
+        return resumeSelected(id,memberId,config,evidence,external,wake,useQueuedMessages,false,0);
     }
-    private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages,boolean retainedControlOnly)throws Exception{
+    private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages,boolean retainedControlOnly,int deferredOwnRound)throws Exception{
         Run run=required(id);
         if(retainedControlOnly&&(run.control==null||run.control.isCancelled()||run.control.isPaused()))throw new SecurityException("原团队控制已停下，未创建替代执行。");
         if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止，不能恢复派发");
@@ -1110,7 +1111,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         // Explicit continuation restores every unfinished read-only round, including
         // later stages marked interrupted on cold restore. Keep completed output and
         // unselected members unchanged; native/external replay fences remain separate.
-        for(int i=0;i<roster(run).length();i++){JSONObject member=roster(run).getJSONObject(i);if(!member.optBoolean("exited")&&(all||memberId.equals(member.getString("id")))){run.researchWakes.remove(member.getString("id"));RunControl previousChild=run.children.get(member.getString("id"));if(previousChild!=null)previousChild.cancel();member.put("paused",false).put("generation",member.optInt("generation")+1).put("ownerContinuationGeneration",member.optInt("generation"));int next=unfinishedRound(run,member);if(researchEnabled(run)||!run.json.optString("mode").equals("produce")&&member.optString("runner","model").equals("model")){next=-1;for(int r=1;r<=plannedRounds(run);r++){JSONObject state=progress(member,r);if(!state.optString("status").equals("completed")){if(next<1)next=r;if(wake==null)state.put("status","queued");}}}if(next<1&&run.json.optString("mode").equals("produce")&&member.optString("status").equals("failed"))next=plannedRounds(run);if(next>0){
+        for(int i=0;i<roster(run).length();i++){JSONObject member=roster(run).getJSONObject(i);if(!member.optBoolean("exited")&&(all||memberId.equals(member.getString("id")))){run.researchWakes.remove(member.getString("id"));RunControl previousChild=run.children.get(member.getString("id"));if(previousChild!=null)previousChild.cancel();member.put("paused",false).put("generation",member.optInt("generation")+1).put("ownerContinuationGeneration",member.optInt("generation"));int next=unfinishedRound(run,member);if(researchEnabled(run)||!run.json.optString("mode").equals("produce")&&member.optString("runner","model").equals("model")){next=-1;for(int r=1;r<=plannedRounds(run);r++){JSONObject state=progress(member,r);if(!state.optString("status").equals("completed")){if(next<1)next=r;if(wake==null&&r!=deferredOwnRound)state.put("status","queued");}}}if(next<1&&run.json.optString("mode").equals("produce")&&member.optString("status").equals("failed"))next=plannedRounds(run);if(next>0){
             progress(member,next).put("status","queued");member.put("status","queued");
             if(!all)memberWake=new MemberWake(run.generation,memberId,member.getInt("generation"),next);
         }}}
@@ -1175,11 +1176,41 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     }
     @FunctionalInterface interface OriginalApiCurrent { boolean matches(ModelConfig saved)throws Exception; }
 
+    /** Information from the original reading, not a permit. Recomputed under the live
+     * coordinator's review lock before the held original control may continue. */
+    public static JSONObject ownerSelfWaitResumePin(JSONObject run,String memberId)throws Exception {
+        if(!"collaborate".equals(run.opt("mode"))||!RESEARCH_FORMAT.equals(run.opt("researchExecutionFormat"))||run.optInt("rounds")!=2
+                ||!"classic".equals(run.optString("discussionFormat","classic"))||run.has("workPlan")||run.has("productionScope")||run.has("nativeWorkProfileModels"))return null;
+        JSONArray members=run.getJSONArray("members");JSONObject slot=null;
+        for(int i=0;i<members.length();i++){JSONObject row=members.getJSONObject(i);if(memberId.equals(row.opt("id"))){if(slot!=null)return null;slot=row;}}
+        if(slot==null||slot.optBoolean("paused")||slot.optBoolean("exited")||!"model".equals(slot.opt("runner")))return null;
+        JSONArray stages=slot.optJSONArray("roundStates");if(stages==null||stages.length()!=2)return null;
+        JSONObject first=stages.getJSONObject(0),waiting=stages.getJSONObject(1);
+        String status=first.optString("status"),task=first.optString("researchTaskId"),turn=first.optString("turnId");
+        String waitingStatus=status.equals("failed")?"blocked_dependency":"waiting_dependency";
+        if(first.optInt("round")!=1||waiting.optInt("round")!=2||!status.matches("failed|interrupted")||!status.equals(slot.opt("status"))
+                ||!nativeUuid(task)||!nativeUuid(turn)||!waitingStatus.equals(waiting.opt("status")))return null;
+        for(String key:new String[]{"turnId","startedAt","finishedAt","generation","researchTaskId","researchTask","researchHistory","text"})if(waiting.has(key))return null;
+        if(!onlyBlocker(waiting.optJSONArray("blockedBy"),memberId)||!onlyBlocker(TeamWorkPlan.blockers(members,slot,2),memberId))return null;
+        JSONObject saved=first.optJSONObject("researchTask");int memberGeneration=slot.optInt("generation",-1),identity=slot.optInt("identityRevision",1);
+        if(saved==null||!task.equals(saved.opt("taskId"))||!run.getString("id").equals(saved.opt("teamRunId"))||!memberId.equals(saved.opt("memberId"))
+                ||first.optInt("generation",-1)!=memberGeneration||memberGeneration<0||identity<1||!turn.equals(saved.opt("executionTurnId"))
+                ||!status.equals(saved.opt("status"))||!Boolean.FALSE.equals(saved.opt("executionAuthorized"))||saved.optInt("round",-1)!=1
+                ||saved.optInt("runGeneration",-1)!=run.getInt("generation")||saved.optInt("memberGeneration",-1)!=memberGeneration
+                ||saved.optInt("identityRevision",-1)!=identity||!nativeUuid(saved.optString("runId"))||saved.optInt("coordinatorEpoch")<1)return null;
+        return new JSONObject().put("taskId",task).put("runId",saved.getString("runId")).put("epoch",saved.getInt("coordinatorEpoch"))
+                .put("status",status).put("identityRevision",identity).put("turnId",turn);
+    }
+    private static boolean onlyBlocker(JSONArray blockers,String memberId){return blockers!=null&&blockers.length()==1&&memberId.equals(blockers.opt(0));}
+    private static boolean nativeUuid(String id){try{return UUID.fromString(id).toString().equals(id);}catch(IllegalArgumentException invalid){return false;}}
+
     /** Only the private reviewed owner action may use this existing hot run. An
      * inapplicable scope keeps the old path. A captured API lane that has changed
      * is refused, never replaced with the conversation or global selection. */
     synchronized JSONObject resumeReviewedOriginalMember(JSONObject input,RunControl.AuthorityCheck ownerCurrent,
             OriginalApiCurrent current)throws Exception {
+        boolean exactSelfWait=input.has(OWNER_SELF_WAIT_RESUME);
+        if(exactSelfWait&&!runs.containsKey(input.getString("runId")))return null; // No archive promotion for this action.
         Run run=requireReviewedControl(input);String target=input.optString("memberId"),status=run.json.optString("status"),phase=run.json.optString("phase");
         if(target.isEmpty()||researchFactory==null||budgetHost==null||!"collaborate".equals(run.json.opt("mode"))||!researchEnabled(run)
                 ||run.json.has("workPlan")||run.json.has("productionScope")||run.json.has("nativeWorkProfileModels")
@@ -1189,6 +1220,8 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         if(run.executing||run.enqueued||run.paused||!run.children.isEmpty()||!run.researchTurns.isEmpty()||researchFactory.hasActiveWork(run.json.getString("id")))return null;
         JSONObject slot=member(run,target);
         if(!slot.optString("status").matches("failed|interrupted")||roster(run).length()<2)return null;
+        if(exactSelfWait){JSONObject pin=ownerSelfWaitResumePin(run.json,target);
+            if(pin==null||!TeamWorkFiles.canonical(pin).equals(TeamWorkFiles.canonical(input.getJSONObject(OWNER_SELF_WAIT_RESUME))))return null;}
         for(int i=0;i<roster(run).length();i++){
             JSONObject item=roster(run).getJSONObject(i);boolean chosen=item==slot,unfinished=false;
             if(item.optBoolean("exited")||item.optBoolean("paused")||!"model".equals(item.optString("runner","model"))
@@ -1196,6 +1229,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
             for(int round=1;round<=plannedRounds(run);round++){
                 JSONObject step=TeamWorkPlan.state(item,round);String state=step.optString("status");
                 JSONObject saved=step.optJSONObject("researchTask");String child=step.optString("researchTaskId");
+                if(exactSelfWait&&chosen&&round==2&&unfinished)continue; // The verified untouched phase still waits for its own predecessor.
                 if(chosen&&(state.matches("failed|interrupted")||unfinished&&"queued".equals(state))){
                     if("queued".equals(state)&&(saved!=null||!child.isEmpty()))return null;
                     if(!"queued".equals(state)&&(saved!=null||!child.isEmpty())&&
@@ -1219,7 +1253,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         ownerCurrent.check();run.control.check();
         // Reuse the original resume, same roster and budget. No new model, child
         // grant, recovery policy or dispatch surface is created by this selection.
-        return resumeSelected(run.json.getString("id"),target,run.originalConfig,run.evidenceFactory,run.externalFactory,null,false,true);
+        return resumeSelected(run.json.getString("id"),target,run.originalConfig,run.evidenceFactory,run.externalFactory,null,false,true,exactSelfWait?2:0);
     }
     private static boolean originalResearchStep(Run run,JSONObject member,int round,String child,JSONObject receipt)throws Exception {
         return !child.isEmpty()&&receipt!=null&&child.equals(receipt.opt("taskId"))

@@ -582,19 +582,23 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     // Native control consumes this reading before it checks the current run.
     // A rejected action must not leave enabled controls with a spent handle.
     setReading(value => value ? { ...value, viewHandle: '' } : null);
-    void invoke('teams.control', { viewHandle, command, ...(memberId ? { memberId } : {}) }, result => {
+    void invoke('teams.control', { viewHandle, command, ...(memberId ? { memberId } : {}), ...(resumed?.deferredOwnRound ? { originalMemberOnly: true } : {}) }, result => {
       if (result.confirmed !== true) throw new Error('原操作尚未确认');
       if (resumed) {
         const next = result.reading?.run, locator = resumed.item.locator;
         const slot = rows(next?.members).find(member => member.id === locator.memberId);
+        const sameWait = !resumed.deferredOwnRound || next?.generation === locator.generation &&
+          rows(slot?.roundStates).some(stage => stage.round === resumed.rounds[0] && stage.status === 'queued') &&
+          rows(slot?.roundStates).some(stage => stage.round === resumed.deferredOwnRound && ['waiting_dependency','blocked_dependency'].includes(stage.status));
         if (result.command !== 'resume' || result.reading?.kind !== 'run' || !result.reading.viewHandle ||
             next?.id !== locator.runId || !(next.revision > resumed.revision) ||
-            slot?.generation !== locator.memberGeneration + 1 || slot.status !== 'queued') {
+            slot?.generation !== locator.memberGeneration + 1 || slot.status !== 'queued' || !sameWait) {
           release(result.reading); throw new Error('原分工是否已排队待核对，请刷新这次协作，不要重复提交。');
         }
       }
       if (result.reading) acceptReading(result.reading);
-      setNotice(resumed ? '这名成员的未完成分工已排队。其他成员已交的原件保留，尚无新成果。' : '已收到原运行的操作回执。');
+      setNotice(resumed?.deferredOwnRound ? `这名成员的第 ${resumed.rounds[0]} 阶段已排队。第 ${resumed.deferredOwnRound} 阶段仍在等原结果；其他成员的原件保留。` :
+        resumed ? '这名成员的未完成分工已排队。其他成员已交的原件保留，尚无新成果。' : '已收到原运行的操作回执。');
     });
   };
   const mayAnswer = !!reading && !!current && canMutate && reply?.kind === 'assignment_question' && replyCanReceive
@@ -1442,7 +1446,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       {resumeReview && <div className="pw-collaboration-dialog" data-collaboration-kind="TeamsWorkspace">
         <h3><bdi>{name(resumeReview.item.locator.memberId)}</bdi></h3>
         <p dir="auto">{resumeReview.assignment}</p>
-        <p>这名成员还有{resumeReview.rounds.map(round => '第 ' + round + ' 阶段').join('、')}未完成。只继续这些阶段，沿用原范围和剩余额度。</p>
+        <p>{resumeReview.deferredOwnRound ? `先继续第 ${resumeReview.rounds[0]} 阶段，沿用原范围和剩余额度。第 ${resumeReview.deferredOwnRound} 阶段仍要等前一阶段交回实际结果。` :
+          `这名成员还有${resumeReview.rounds.map(round => '第 ' + round + ' 阶段').join('、')}未完成。只继续这些阶段，沿用原范围和剩余额度。`}</p>
         <p>其他成员已交回的内容保留，不重新分派。共同汇总仍按原流程处理。</p>
         {!resumeReviewCurrent && <p role="status">这项分工或原记录已变化。返回后请核对目前的进展。</p>}
         <div className="pw-form-actions"><Button variant="secondary" onClick={closeReview}>返回</Button>
