@@ -9,6 +9,7 @@ import org.json.JSONObject;
 /** One owner-reviewed private checkout version. This witness is not an approval. */
 public final class OwnerDraftFirstBuild {
     public static final String FIELD="ownerDraftFirstBuild";
+    public static final String PENDING_FIELD="originalManagedNodePending";
     public static final Set<String> TOOLS=Set.of("project_inspect","project_plan","project_execute","project_status","project_log","project_collect_plan","project_generated_artifact");
     public static final String GOAL="验证我打开的这份独立改稿副本。先按同一版 package.json 准备 Node 构建（project_plan，intent=build、ecosystem=node），让我另行确认具体命令。不要安装依赖、启动服务、改写源码或发布。失败时保留原退出和日志；若原构建成功，再查看 build 或 dist，将我另行确认的文件交回这个任务。";
     private static final String LOCKED_GOAL="在我选定的独立改稿副本中验证同版 Node 构建。已有原生核对的关键包就直接申请构建，缺依赖才按这一把锁申请准备。两项分别等待我的批准；准备失败停在本任务。只选实际构建之后观察到的 build 或 dist 文件，保留另行确认。不改原件、不开服务、不发布或切到云端。";
@@ -261,6 +262,62 @@ public final class OwnerDraftFirstBuild {
             !Set.of("npm","pnpm").contains(pin.getString("manager"))||!pin.getString("planDigest").matches("[a-f0-9]{64}")||pin.getString("runtimeIdentity").isBlank())
             throw new SecurityException("不是机主审阅的这版私人副本构建交办");
     }
+    /** The only two native plan references whose uncertain receipts require process evidence. */
+    public static String pendingManagedNodePhase(JSONObject task,JSONObject args)throws Exception{
+        JSONObject context=task.optJSONObject("developmentContext"),pin=context==null?null:context.optJSONObject(FIELD);
+        if(pin==null||args==null||args.length()!=3||!args.optString("planRef").matches("[a-f0-9-]{36}")||
+            !"pocketworld.development-context.v1".equals(context.opt("format"))||
+            !"assistant".equals(task.opt("kind"))||!"capabilities".equals(task.opt("executionMode"))||
+            !"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))||task.has("origin")||
+            !task.isNull("teamAssignment")||!task.isNull("parentTaskId"))return null;
+        String step=args.optString("stepId"),digest=args.optString("planDigest");
+        JSONObject lock=pin.optJSONObject(DEPENDENCIES);
+        if(!hash(digest)||!("build".equals(step)&&digest.equals(pin.opt("planDigest"))||
+            OwnerDraftNodeDependencies.STEP.equals(step)&&lock!=null&&digest.equals(lock.opt("planDigest"))))return null;
+        requireContext(pin,context);
+        return step;
+    }
+
+    /** Read-only classification of an already claimed operation, not a receipt or a grant. */
+    public static JSONObject pendingManagedNode(JSONObject task,JSONObject row)throws Exception{
+        if(!"unknown".equals(row.opt("state"))||!"project_execute".equals(row.opt("tool")))return null;
+        String phase=pendingManagedNodePhase(task,row.optJSONObject("arguments"));
+        JSONObject envelope=row.optJSONObject("receipt"),route=envelope==null?null:envelope.optJSONObject("projectExecution");
+        if(phase==null||route==null||!"unknown".equals(envelope.opt("status"))||envelope.opt("accepted")!=JSONObject.NULL||
+            !Set.of("project_pending","project_cancel_pending_unknown").contains(envelope.optString("code"))||
+            !"project.runtime.run".equals(route.opt("command"))||!"managed_process_v1".equals(route.opt("runtimeId"))||
+            !phase.equals(route.opt("intent"))||!row.optString("operationId").equals(route.opt("jobId"))||
+            route.optString("approvalId").isEmpty()||!hash(route.optString("capabilityFingerprint"))||!hash(route.optString("requestDigest")))return null;
+        JSONObject pin=task.getJSONObject("developmentContext").getJSONObject(FIELD);
+        if(!pin.getString("sourceDigest").equals(route.opt("sourceDigest"))||!pin.getString("runtimeIdentity").equals(route.opt("runtimeIdentity")))return null;
+        JSONObject binding=ProjectDevelopment.originalPollRequest(task,row).getJSONObject("binding");
+        int epoch=binding.getInt("coordinatorEpoch");
+        if(row.has("runEpoch")&&row.getInt("runEpoch")!=epoch)return null;
+        return new JSONObject().put("format","pocketworld.original-managed-node-pending.v1")
+            .put("taskId",binding.getString("taskId")).put("runId",binding.getString("runId")).put("epoch",epoch)
+            .put("operationId",binding.getString("operationId")).put("projectId",pin.getString("projectId"))
+            .put("checkoutId",pin.getString("checkoutId")).put("phase",phase)
+            .put("canObserve",boundManagedNodeBackend(route,envelope.optJSONObject("executionReceipt"),pin.getString("manager"),phase,epoch));
+    }
+
+    // Same native binding and reviewed command as the explicit terminal observer. A route alone is not a log.
+    private static boolean boundManagedNodeBackend(JSONObject route,JSONObject backend,String manager,String phase,int epoch)throws Exception{
+        if(backend==null||!"managed_process".equals(backend.opt("provider"))||!"command".equals(backend.opt("kind"))||
+            !"foreground".equals(backend.opt("runMode"))||!route.getString("operationId").equals(backend.opt("id"))||
+            !manager.equals(backend.opt("requestedExecutable")))return false;
+        for(String key:new String[]{"operationId","checkoutId","sourceDigest"})if(!route.getString(key).equals(backend.opt(key)))return false;
+        JSONObject link=backend.optJSONObject("projectExecution");if(link==null)return false;
+        Object generation=link.opt("coordinatorEpoch");
+        if(!(generation instanceof Integer||generation instanceof Long)||((Number)generation).longValue()!=epoch)return false;
+        for(String key:new String[]{"authority","command","projectId","checkoutId","taskId","runId","operationId",
+            "planDigest","stepId","intent","sourceDigest","requestDigest","runtimeId","runtimeIdentity"})
+            if(!route.getString(key).equals(link.opt(key)))return false;
+        JSONArray expected="build".equals(phase)?new JSONArray().put("run").put("build"):OwnerDraftNodeDependencies.argv(manager);
+        JSONArray actual=backend.optJSONArray("requestedArgv");if(actual==null||actual.length()!=expected.length())return false;
+        for(int i=0;i<expected.length();i++)if(!expected.getString(i).equals(actual.opt(i)))return false;
+        return true;
+    }
+
     /** Only the original host-enveloped operation may produce a public scalar fact; no output bodies here. */
     public static JSONObject outcomeFact(JSONObject pin,JSONObject task,JSONObject row)throws Exception{
         return outcomeFact(pin,task,row,false);

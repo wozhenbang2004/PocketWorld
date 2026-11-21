@@ -1,6 +1,7 @@
 package dev.pocketengine.ui.web
 
 import dev.pocketengine.core.RuntimeDiagnostics
+import dev.pocketengine.features.local.project.OwnerDraftFirstBuild
 import dev.pocketengine.features.local.project.ProjectEditDraft
 import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PocketWorldController
@@ -74,6 +75,7 @@ internal class PocketWebTaskActions(
                         require(outcome in setOf("occurred", "not_occurred"))
                         val op=unresolvedForReview(task).singleOrNull { it.optString("operationId",it.optString("id"))==operation } ?: error("这项原操作不在审阅中")
                         require(op.optString("tool")!="team_integrate_file") { "请查回原文件写回回执，不能人工判定" }
+                        require(!op.has(OwnerDraftFirstBuild.PENDING_FIELD)) { "请等待原本机进程回执，不能人工判定" }
                         val pin=if(op.optString("format")==PhoneActionRecovery.FORMAT){
                             require(taskViewId==task.id && controller.webPrivateOwnerVisible() && op.optBoolean("canRecord") && requiredBoolean(args,"checkedOriginal") &&
                                 op.getString("runId")==requiredString(args,"operationRun") && op.getInt("epoch")==requiredInt(args,"operationEpoch") &&
@@ -175,7 +177,7 @@ internal class PocketWebTaskActions(
                 PocketWebOwnerQuestions.actions(question).forEach { allowed[it] = if (it == PocketWebOwnerQuestions.CHOOSE) "选择原问题答案" else "回答原问题" }
                 if (task.status == "needs_confirmation" && task.id != activeTaskId) allowed["tasks.confirm"] = "核对结果"
                 if (approvals.isNotEmpty()) allowed["tasks.approve"] = "审阅操作授权"
-                if (unknown.any { it.optString("tool") != "team_integrate_file" && it.optString("operationId", it.optString("id")).isNotBlank() && (it.optString("format")!=PhoneActionRecovery.FORMAT || it.optBoolean("canRecord")) }) allowed["tasks.resolve"] = "核对原操作"
+                if (unknown.any { it.optString("tool") != "team_integrate_file" && !it.has(OwnerDraftFirstBuild.PENDING_FIELD) && it.optString("operationId", it.optString("id")).isNotBlank() && (it.optString("format")!=PhoneActionRecovery.FORMAT || it.optBoolean("canRecord")) }) allowed["tasks.resolve"] = "核对原操作"
                 if (projectContinuation != null) {
                     if (!projectContinuation.has("reason")) allowed["tasks.resume"] = "在原范围内继续项目任务"
                 } else if (task.raw.optString("executionRole") != "owner_work" && !PocketWebOwnerQuestions.blocksGenericResume(task.raw) && !dev.pocketengine.phone.MainPhoneOwnerStep.needsOwner(task.raw) && task.raw.optJSONObject(dev.pocketengine.phone.MainPhoneOwnerStep.KEY) == null && (task.raw.optString("kind") == "assistant" || isPhoneTask(task) && task.raw.optString("runId").isNotBlank() && task.raw.optInt("coordinatorEpoch")>0) && task.id != activeTaskId && task.status in setOf("paused", "awaiting_user", "needs_confirmation", "interrupted") && !task.raw.optBoolean("cancelRequested") && unknown.isEmpty() && approvals.isEmpty()) allowed["tasks.resume"] = "确认继续原任务"
@@ -234,7 +236,12 @@ internal class PocketWebTaskActions(
 
         fun unresolvedForReview(task: UiTask): List<JSONObject> {
             val raw=task.raw
+            val originalRows=raw.opt("taskProjection")=="detail_window" && raw.optJSONArray("operations")!=null
             val ordinary=unresolvedOperations(task).filterNot { it.optString("tool") in setOf("device_invoke_tool","device_delegate_goal","device_operation_get") }
+                .map { op ->
+                    val pending=if(originalRows)runCatching { OwnerDraftFirstBuild.pendingManagedNode(raw,op) }.getOrNull() else null
+                    if(pending==null)op else JSONObject(op.toString()).put(OwnerDraftFirstBuild.PENDING_FIELD,pending)
+                }
             if(!PhoneActionRecovery.local(raw))return ordinary
             // Never turn a truncated/unavailable phone ledger row into a generic one-click decision.
             val other=ordinary.filterNot { PhoneActionRecovery.phoneTool(it.optString("tool")) }

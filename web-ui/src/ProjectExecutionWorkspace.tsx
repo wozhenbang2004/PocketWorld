@@ -6,7 +6,7 @@ import {ProjectExecutionExitPanel} from './ProjectExecutionExitPanel';
 import {originalExecutionExit,type ExecutionExit} from './project-execution-exit';
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
-import { originalFirstBuildFailure, projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, type ProjectExecutionData as Data } from './project-execution';
+import { currentManagedNodeOperation, originalFirstBuildFailure, projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, sameManagedNodeOperation, type OriginalManagedNodePending, type ProjectExecutionData as Data } from './project-execution';
 import './local-workspace.css';
 import './project-workspace-manga.css';
 
@@ -17,17 +17,22 @@ const keys = [{ id: '\r', label: 'Enter' }, { id: '\t', label: 'Tab' }, { id: '\
 
 /** One original project execution, displayed through the existing VT surface.
  * Open/read do not create a process; close only retires this observation session. */
-export function ProjectExecutionWorkspace({ task, operation, active = true, run = bridge.command, prepareFailure, focusFailure = false, projectName, editFailedCopy }: {
+export function ProjectExecutionWorkspace({ task, operation, active = true, run = bridge.command, prepareFailure, focusFailure = false, projectName, editFailedCopy, originalPending, reviewedPending = [], skipPending = [] }: {
   task: Data; operation?: Data; active?: boolean; run?: Run; prepareFailure?:(r:ExecutionExit)=>void;
-  focusFailure?:boolean; projectName?:string; editFailedCopy?:()=>void;
+  focusFailure?:boolean; projectName?:string; editFailedCopy?:()=>void; originalPending?:OriginalManagedNodePending;
+  reviewedPending?:readonly OriginalManagedNodePending[]; skipPending?:readonly OriginalManagedNodePending[];
 }) {
-  const rows = focusFailure ? [] : projectExecutionRows(task, operation), failure = operation ? undefined : originalFirstBuildFailure(task);
+  const rows = focusFailure ? [] : projectExecutionRows(task, operation).filter(row=>!skipPending.some(pin=>sameManagedNodeOperation(row,pin)));
+  const knownFailure = operation&&!originalPending ? undefined : originalFirstBuildFailure(task);
+  const failure = originalPending&&knownFailure&&(knownFailure.runId!==originalPending.runId||knownFailure.operationId!==originalPending.operationId) ? undefined : knownFailure;
   const entries = failure && !rows.some(row => row.operationId === failure.operationId) ? [...rows, failure] : rows;
   const [selection, setSelection] = useState(''), [expanded, setExpanded] = useState(!!failure);
   const disclosureId = `execution:${task.id}:${operation?.operationId || 'list'}`;
   const pendingOriginal = !operation && task.raw?.developmentContext?.ownerDraftFirstBuild &&
     (task.raw.hasUnresolvedOperations === true || task.raw.historyHasUnconfirmedOperations === true);
   const selected = focusFailure ? failure : entries.find(row => row.operationId === selection) || failure || (pendingOriginal ? undefined : entries.at(-1));
+  const noPendingLog=!!selected&&selected.state==='unknown'&&reviewedPending.some(pin=>!pin.canObserve&&sameManagedNodeOperation(selected,pin));
+  const pendingTitle=originalPending?.phase==='dependencies'?'原依赖准备':'原构建';
   const execution = selected?.operationId || '', originalKey = `${task.id}|${execution}`;
   const failureName = failure && execution === failure.operationId ? failure.failureStage === 'dependencies' ? '原依赖准备失败' : '原构建失败' : '';
   const [storedView, setView] = useState<Data | null>(null), [busy, setBusy] = useState(''), [error, setError] = useState(''), [painted, setPainted] = useState('');
@@ -39,7 +44,13 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const live = useRef({ active, expanded, execution, originalKey, input, accepted, uncertain, stopRequested, stopReview, columns, height, key });
   live.current = { active, expanded, execution, originalKey, input, accepted, uncertain, stopRequested, stopReview, columns, height, key };
   const captured = { execution, originalKey, generation: generation.current, window: ownerWindow() };
-  const current = () => alive.current && live.current.active && live.current.expanded && !document.hidden && (bridge.getState().view as Data).taskId === task.id && captured.execution === live.current.execution && captured.generation === generation.current && captured.window === ownerWindow();
+  const samePendingWindow=()=>{
+    if(!originalPending)return true;
+    const snapshot=bridge.getState();
+    const liveTask=(Array.isArray(snapshot.state.tasks)?snapshot.state.tasks as Data[]:[]).find(t=>t.id===task.id);
+    return (snapshot.view as Data).section==null&&!!currentManagedNodeOperation(liveTask,originalPending);
+  };
+  const current = () => alive.current && live.current.active && live.current.expanded && !document.hidden && (bridge.getState().view as Data).taskId === task.id && captured.execution === live.current.execution && captured.generation === generation.current && captured.window === ownerWindow() && samePendingWindow();
   const close = () => {
     const old = currentPage.current; currentPage.current = null; generation.current++; pending.current = null; live.current.accepted = false; live.current.stopReview = false;
     if (alive.current) { setView(null); setBusy(''); setAccepted(false); setStopReview(false); setPainted(''); updateWindow(value => value + 1); }
@@ -51,12 +62,13 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
     if (waiting || value.metadata?.inputUncertain === false && value.output?.inputUncertain === false) { live.current.uncertain = waiting; setUncertain(waiting); }
   };
   const request = async (action: string, args: Data = {}) => {
-    if (!current() || pending.current) return;
+    if (!current() || pending.current || noPendingLog || originalPending&&(!originalPending.canObserve||
+      (action!=='local.execution.observe'&&action!=='local.execution.readLogs'))) return;
     const opening = action === 'local.execution.open' || action === 'local.execution.observe', prior = currentPage.current;
     if (!opening && (!prior || prior.executionId !== execution) || opening && !selected) return;
     const token = {}, epoch = generation.current, owner = ownerWindow(), originalExecution = execution;
     pending.current = token; setBusy(action); setError('');
-    const valid = () => alive.current && live.current.active && live.current.expanded && !document.hidden && epoch === generation.current && owner === ownerWindow() && execution === live.current.execution && pending.current === token;
+    const valid = () => alive.current && live.current.active && live.current.expanded && !document.hidden && epoch === generation.current && owner === ownerWindow() && execution === live.current.execution && pending.current === token && samePendingWindow();
     let acquired: Data | null = null;
     try {
       const value = await run(action, opening ? { taskId: task.id, executionId: originalExecution, ...(action==='local.execution.observe'?{}:{observingOnly:args.observingOnly}) } : { ...args, handle: prior!.handle });
@@ -66,6 +78,9 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
       if (opening || action === 'local.execution.readLogs') {
         if(action==='local.execution.observe'&&value.metadata?.observingOnly!==true)throw Error('未取得原执行的只读观察，不进入交互终端。');
         if (value.metadata?.taskId !== task.id || value.metadata?.executionId !== originalExecution || value.output?.executionId !== originalExecution) throw new Error('原日志或终端元数据身份不一致。');
+        if(originalPending&&(value.metadata.observingOnly!==true||value.metadata.runId!==originalPending.runId||
+          value.metadata.epoch!==originalPending.epoch||value.metadata.projectId!==originalPending.projectId||
+          value.metadata.checkoutId!==originalPending.checkoutId))throw Error('未取得同一次本机执行的原日志，没有读取其他记录。');
         if (focusFailure) {
           const receipt=originalExecutionExit(value.output.observedExit,value.metadata,value.output.nativeStatus);
           if (!failure || value.metadata.observingOnly !== true || !receipt || receipt.kind !== 'exit_code' || receipt.nativeStatus !== 'failed' ||
@@ -100,10 +115,10 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const output = view?.output || {}, metadata = view?.metadata || {}, frame = output.screen;
   const frameId = `${view?.handle}|${frame?.generation}|${frame?.revision}`;
   useEffect(() => {
-    if (!active || !expanded || !view || busy || error || stopReview || painted !== frameId || !projectExecutionShouldRead(output)) return;
+    if (originalPending || noPendingLog || !active || !expanded || !view || busy || error || stopReview || painted !== frameId || !projectExecutionShouldRead(output)) return;
     const timer = window.setTimeout(() => { void request('local.execution.readLogs'); }, output.hasMore ? 100 : 700);
     return () => window.clearTimeout(timer);
-  }, [active, expanded, view, busy, error, stopReview, painted, frameId]);
+  }, [originalPending, noPendingLog, active, expanded, view, busy, error, stopReview, painted, frameId]);
   useEffect(() => {
     if (!stopReview) return;
     return registerOverlayBack(() => { live.current.stopReview = false; setStopReview(false); });
@@ -121,7 +136,7 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const commands=bridge.getState().capabilities.commands,canObserve=commands.includes('local.execution.observe'),canInteract=commands.includes('local.execution.open')&&commands.includes('local.execution.input');
   const observed=originalExecutionExit(output.observedExit,metadata,output.nativeStatus);
   if (!entries.length) return null;
-  return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title={focusFailure ? failureName : '原执行与日志'} description={focusFailure && failure ? `实际退出码 ${failure.exitCode}` : failureName || (operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`)}>
+  return <Accordion className="pw-local-disclosures pw-project-execution" expandedKeys={expanded ? [disclosureId] : []} onExpandedChange={values => { const next = values.has(disclosureId); live.current.expanded = next; if (!next) close(); setExpanded(next); }}><AccordionItem id={disclosureId} title={originalPending ? pendingTitle+'的日志与回执' : focusFailure ? failureName : '原执行与日志'} description={originalPending ? '只读，不会重跑' : focusFailure && failure ? `实际退出码 ${failure.exitCode}` : failureName || (operation ? '这次原项目执行' : `${entries.length} 条已读取的项目执行记录`)}>
     {focusFailure && failure && <>
       <dl className="pw-facts">
         <div><dt>本次所用副本</dt><dd dir="auto">{projectName || failure.projectId} · <bdi>{failure.checkoutId}</bdi></dd></div>
@@ -130,8 +145,8 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
       {editFailedCopy&&<div className="pw-form-actions"><Button variant="secondary" disabled={!active||!!busy} onClick={editFailedCopy}>编辑原副本的当前文件</Button></div>}
     </>}
     {!focusFailure && !operation && (entries.length > 1 || !selected) && <SelectField label="原项目执行" value={execution} isDisabled={!!busy || stopReview} options={entries.map(row => ({ id: row.operationId, label: `${row.routeKind==='termux'?'外部 Termux 回执':row.interactive&&canInteract?'当前 PTY':'本机只读执行'} · ${row.operationId}` }))} onChange={value => { if (pending.current || !current()) return; close(); live.current.execution = value; setSelection(value); }} />}
-    {!selected?<p className="pw-field-hint">原操作仍有待核对项，没有用之前的日志当作本次结果。可以手动选择具体的历史执行。</p>:selected.routeKind==='termux'?(commands.includes('local.execution.savedTermux')?
-      <ProjectTermuxOriginalReceipt key={originalKey} task={task} row={selected} active={active&&expanded} run={run}/>:<p>当前版本没有外部 Termux 的原回调阅读能力，不转去本机终端。</p>):!view ? <><p className="pw-field-hint">读取原标准输出、错误输出和记录游标。打开页面不会新建或恢复执行。</p><div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request(focusFailure||canObserve?'local.execution.observe':'local.execution.open', { observingOnly: true }); }}>{failureName ? `查看${failureName}日志` : '查看原执行日志'}</Button>{selected.interactive && canInteract && <Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: false }); }}>打开原交互终端</Button>}</div></> : <>
+    {!selected?<p className="pw-field-hint">原操作仍有待核对项，没有用之前的日志当作本次结果。可以手动选择具体的历史执行。</p>:noPendingLog?<p className="pw-field-hint">尚未确认原进程回执，暂不能读取日志。没有日志不代表没有执行。</p>:selected.routeKind==='termux'?(commands.includes('local.execution.savedTermux')?
+      <ProjectTermuxOriginalReceipt key={originalKey} task={task} row={selected} active={active&&expanded} run={run}/>:<p>当前版本没有外部 Termux 的原回调阅读能力，不转去本机终端。</p>):!view ? <><p className="pw-field-hint">读取原标准输出、错误输出和记录游标。打开页面不会新建或恢复执行。</p><div className="pw-form-actions"><Button variant="secondary" disabled={!active || !!busy || !!originalPending&&!canObserve} onClick={() => { void request(originalPending||focusFailure||canObserve?'local.execution.observe':'local.execution.open', { observingOnly: true }); }}>{originalPending ? '读取原日志与回执' : failureName ? `查看${failureName}日志` : '查看原执行日志'}</Button>{!originalPending && selected.interactive && canInteract && <Button variant="secondary" disabled={!active || !!busy} onClick={() => { void request('local.execution.open', { observingOnly: false }); }}>打开原交互终端</Button>}</div></> : <>
       <div className="pw-local-screen-toolbar"><span><strong>{metadata.executable}</strong><small>{metadata.workingDirectory}</small></span><Button variant="ghost" size="small" onClick={close}>关闭视图</Button></div>
       <p className="pw-field-hint pw-execution-scope">{metadata.observingOnly ? '只读观察，不能输入或停止执行。' : '原交互终端；输入仍受原任务时限、额度与进程状态约束。'}关闭视图只结束查看，不停止原进程。</p>
       {observed&&<ProjectExecutionExitPanel key={JSON.stringify([view.handle,observed.executionId,observed.epoch,observed.kind,observed.value,observed.nativeStatus])} exit={observed} task={task} active={active&&!busy&&current()} prepare={prepareFailure}/>}

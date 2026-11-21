@@ -16989,6 +16989,25 @@ public final class TaskStore {
             appendEvent(required(id),new JSONObject().put("type","operation_intent").put("operationId",operation).put("tool","native_owner_phone_handoff").put("runId",run));db.setTransactionSuccessful();return operation;
         }finally{db.endTransaction();}
     }
+    /** Called in the resolve transaction. Human guesses must not replace this original dispatch route. */
+    private void requireManualResolutionAllowed(JSONObject task,String operationId)throws Exception{
+        JSONObject context=task.optJSONObject("developmentContext");
+        if(context==null||!context.has(OwnerDraftFirstBuild.FIELD))return;
+        try(Cursor row=db.rawQuery("SELECT o.run_id,r.epoch FROM operations o JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id " +
+                "WHERE o.task_id=? AND o.operation_id=? AND o.tool='project_execute' AND o.state='unknown' AND o.receipt IS NOT NULL " +
+                "AND length(CAST(o.arguments AS BLOB))<=4096",new String[]{task.getString("id"),operationId})){
+            if(!row.moveToFirst())return;
+            JSONObject args=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_ARGUMENTS,operationId,4096));
+            if(OwnerDraftFirstBuild.pendingManagedNodePhase(task,args)==null)return;
+            // A managed command stores a bounded output summary. Never truncate a possible route
+            // and fall through to a destructive write when the receipt is unreadable.
+            JSONObject receipt=new JSONObject(TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_RECEIPT,operationId,512*1024));
+            JSONObject original=new JSONObject().put("tool","project_execute").put("state","unknown").put("operationId",operationId)
+                    .put("runId",row.getString(0)).put("runEpoch",row.getInt(1)).put("arguments",args).put("receipt",receipt);
+            if(OwnerDraftFirstBuild.pendingManagedNode(task,original)!=null)
+                throw new SecurityException("原本机构建或依赖准备尚未取得进程回执。不能用人工判断覆盖原记录，也不会重跑。");
+        }
+    }
     public synchronized JSONObject resolveOperation(String id,String operationId,String outcome)throws Exception{
         return resolveOperation(id,operationId,outcome,null,null);
     }
@@ -17020,7 +17039,8 @@ public final class TaskStore {
         if(!outcome.equals("occurred")&&!outcome.equals("not_occurred"))throw new IllegalArgumentException("请根据实际现场确认已发生或未发生");
         JSONObject reconciliation=new JSONObject().put("source","owner_reconciliation").put("outcome",outcome).put("at",System.currentTimeMillis());if(mcp!=null){JSONObject actual=mcp.publicReceiptForHost();actual.put("ownerReconciliation",reconciliation).put("status","owner_reconciled").put("automaticallyVerified",false);reconciliation=actual;}ContentValues value=new ContentValues();value.put("state","resolved");value.put("receipt",reconciliation.toString());
         db.beginTransaction();try{
-            JSONObject t=required(id);String original=PhoneActionRecovery.checkedRun(db,t,operationId,phoneSelection);
+            JSONObject t=required(id);requireManualResolutionAllowed(t,operationId);
+            String original=PhoneActionRecovery.checkedRun(db,t,operationId,phoneSelection);
             if(original!=null){
                 // Owner classification is not an Android receipt. Keep any native evidence, never replace it with "success".
                 String prior=TaskStoreTextReader.read(db,TaskStoreTextReader.Column.OPERATION_RECEIPT,operationId,8*1024*1024);

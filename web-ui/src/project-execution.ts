@@ -3,6 +3,35 @@ export type ProjectExecutionRow = ProjectExecutionData & { operationId: string; 
 const object = (value: any): ProjectExecutionData => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const operationId = (value: unknown): value is string => typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
 
+export type OriginalManagedNodePending = {taskId:string;runId:string;epoch:number;operationId:string;
+  projectId:string;checkoutId:string;phase:'build'|'dependencies';canObserve:boolean};
+
+export function reviewedManagedNodePending(taskId:string, row:ProjectExecutionData):OriginalManagedNodePending|undefined {
+  const pin=object(row.originalManagedNodePending);
+  if(pin.format!=='pocketworld.original-managed-node-pending.v1'||!operationId(taskId)||pin.taskId!==taskId||
+    row.tool!=='project_execute'||row.state!=='unknown'||!operationId(pin.runId)||row.runId!==pin.runId||
+    !operationId(pin.operationId)||row.operationId!==pin.operationId||!operationId(pin.projectId)||!operationId(pin.checkoutId)||
+    !Number.isSafeInteger(pin.epoch)||pin.epoch<1||(pin.phase!=='build'&&pin.phase!=='dependencies')||
+    typeof pin.canObserve!=='boolean')return undefined;
+  return {taskId,runId:pin.runId,epoch:pin.epoch,operationId:pin.operationId,projectId:pin.projectId,
+    checkoutId:pin.checkoutId,phase:pin.phase,canObserve:pin.canObserve};
+}
+
+export const sameManagedNodeOperation=(row:ProjectExecutionData,pin:OriginalManagedNodePending)=>
+  row.tool==='project_execute'&&row.operationId===pin.operationId&&row.runId===pin.runId;
+
+/** A review is a locator, not a live result. Keep only the same visible native row. */
+export function currentManagedNodeOperation(task:ProjectExecutionData|undefined,pin:OriginalManagedNodePending):ProjectExecutionData|undefined {
+  const raw=object(task?.raw),scope=object(raw.developmentContext),build=object(scope.ownerDraftFirstBuild);
+  if(task?.id!==pin.taskId||raw.id!==pin.taskId||raw.actorId!=='owner'||raw.spaceId!=='private'||raw.origin||
+    raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||raw.kind!=='assistant'||raw.executionMode!=='capabilities'||
+    raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||raw.runId!==pin.runId||raw.coordinatorEpoch!==pin.epoch||scope.runtime!=='managed_process_v1'||
+    scope.projectId!==pin.projectId||scope.checkoutId!==pin.checkoutId||build.projectId!==pin.projectId||build.checkoutId!==pin.checkoutId||
+    !Array.isArray(raw.operations))return undefined;
+  return raw.operations.map(object).find((row:ProjectExecutionData)=>sameManagedNodeOperation(row,pin)&&
+    (row.state==='unknown'||row.state==='receipt'));
+}
+
 /** Native detail locator only. Even if its operation is outside this history page,
  * the observation host rechecks the original task, execution and runtime receipt. */
 export type FirstBuildFailure = ProjectExecutionRow & {runId:string;epoch:number;projectId:string;checkoutId:string;
