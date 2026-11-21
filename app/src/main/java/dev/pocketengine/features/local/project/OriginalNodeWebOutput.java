@@ -30,7 +30,7 @@ public final class OriginalNodeWebOutput {
     private static final Pattern SCRIPT=Pattern.compile("app-[A-Z0-9]{8}\\.js"), STYLE=Pattern.compile("app-[A-Z0-9]{8}\\.css"),
         ICON=Pattern.compile("mark-[A-Z0-9]{8}\\.svg");
     private static final String VITE="vite_fresh_dist_v1", STOCK="stock_web_v1";
-    static final int VITE_FILES=64, VITE_BYTES=8*1024*1024;
+    static final int VITE_FILES=64, VITE_BYTES=8*1024*1024, VITE_ENTRIES=96;
     private static final Pattern VITE_LEAF=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,159}");
     private static final Pattern VITE_ENTRY=Pattern.compile(
         "<script\\s+type=\"module\"(?:\\s+crossorigin(?:=\"\")?)?\\s+src=\"((?:/|\\./)assets/[A-Za-z0-9._-]+\\.m?js)\"\\s*>\\s*</script>");
@@ -41,7 +41,8 @@ public final class OriginalNodeWebOutput {
 
     public static final class OutputSource {
         private final String stockEntry;
-        private OutputSource(String stockEntry){this.stockEntry=stockEntry;}
+        private final boolean nestedPublic;
+        private OutputSource(String stockEntry,boolean nestedPublic){this.stockEntry=stockEntry;this.nestedPublic=nestedPublic;}
         private boolean vite(){return stockEntry==null;}
         private String profile(){return vite()?VITE:STOCK;}
     }
@@ -116,20 +117,23 @@ public final class OriginalNodeWebOutput {
         return result;
     }
     /** The stock build and lock cannot be substituted. A user can change the two plain heading slots. */
-    public static OutputSource requireSupportedSource(JSONObject checkout)throws Exception{
-        Map<String,String> expected=template(),actual=ProjectSources.files(checkout);
+    public static OutputSource requireSupportedSource(JSONObject snapshot)throws Exception{
+        Map<String,String> expected=template(),actual=ProjectSources.files(snapshot);
         for(String path:Set.of("package.json","package-lock.json","tools/build.mjs"))
-            if(!expected.get(path).equals(actual.get(path)))return requireViteSource(actual);
+            if(!expected.get(path).equals(actual.get(path))){
+                JSONObject checkout=snapshot.optJSONObject("checkout");
+                return requireViteSource(actual,checkout!=null&&OwnerDraftFirstBuild.ordinaryCheckout(checkout)&&!checkout.has(OwnerDraftWorkCopy.FIELD));
+            }
         String stock=expected.get("index.html"),html=actual.get("index.html");
         if(html==null||html.length()>stock.length()+320)throw new SecurityException("内置网页只支持更改标题文字，不更改页面入口或资源结构");
         String title=entryText(html,"title"),heading=entryText(html,"h1");
         if(!stock.replace("<title>我的小计划</title>","<title>"+title+"</title>")
                  .replace("<h1>我的小计划</h1>","<h1>"+heading+"</h1>").equals(html))
             throw new SecurityException("内置网页入口或资源结构已变；本次不标成固定整站");
-        return new OutputSource(html);
+        return new OutputSource(html,false);
     }
 
-    private static OutputSource requireViteSource(Map<String,String> files)throws Exception {
+    private static OutputSource requireViteSource(Map<String,String> files,boolean nestedPublic)throws Exception {
         String manifest=files.get("package.json");
         if(manifest==null||manifest.getBytes(StandardCharsets.UTF_8).length>65536||!files.containsKey("index.html"))
             throw new SecurityException("没有可核对的单入口 Vite 项目");
@@ -143,7 +147,7 @@ public final class OriginalNodeWebOutput {
         if(!vite||scripts==null||scripts.has("prebuild")||scripts.has("postbuild")||
            !Set.of("vite build","tsc -b && vite build").contains(scripts.optString("build")))
             throw new SecurityException("固定网页包只支持内置模板或声明了标准单入口 Vite build 的项目；其余仍可在原任务另存单文件");
-        return new OutputSource(null);
+        return new OutputSource(null,nestedPublic);
     }
     private static String entryText(String html,String tag){
         String begin="<"+tag+">",end="</"+tag+">";
@@ -184,39 +188,23 @@ public final class OriginalNodeWebOutput {
     }
     /** A positive observation in this ordinary Vite checkout, not a general archive/IO error. */
     public static final class UnsupportedNestedViteDirectory extends SecurityException {
-        private UnsupportedNestedViteDirectory(){super("原 Vite 输出含不能固定的子目录，未保存部分成果");}
+        UnsupportedNestedViteDirectory(){super("原 Vite 输出含不能固定的子目录，未保存部分成果");}
     }
     public static void requireOutputPaths(java.io.File root,OutputSource source)throws Exception{
         requireOutputPaths(root,source,false);
     }
     private static void requireOutputPaths(java.io.File root,OutputSource source,boolean observeOrdinaryViteExit)throws Exception{
         if(!source.vite()){requireStockPaths(root);return;}
-        Path dist=root.toPath().resolve("dist"),assets=dist.resolve("assets");
-        if(!Files.isDirectory(dist,LinkOption.NOFOLLOW_LINKS)||!Files.isDirectory(assets,LinkOption.NOFOLLOW_LINKS))
-            throw new SecurityException("原构建没有可核对的 dist/assets，不采用当前其他目录");
-        int count=0;long bytes=0;
-        try(var top=Files.newDirectoryStream(dist);var leaves=Files.newDirectoryStream(assets)){
-            for(Path path:top){
-                if(path.equals(assets))continue;
-                bytes+=viteFile(path,true,observeOrdinaryViteExit);
-                if(++count>VITE_FILES||bytes>VITE_BYTES)throw new SecurityException("原 Vite 网页包超过文件或字节上限");
-            }
-            for(Path path:leaves){
-                bytes+=viteFile(path,false,false);
-                if(++count>VITE_FILES||bytes>VITE_BYTES)throw new SecurityException("原 Vite 网页包超过文件或字节上限");
-            }
-        }
+        WebDistObservation.requireOutputPaths(root.toPath(),source.nestedPublic,observeOrdinaryViteExit);
     }
-    private static long viteFile(Path path,boolean top,boolean observeOrdinaryViteExit)throws Exception {
-        BasicFileAttributes info=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
-        if(top&&observeOrdinaryViteExit&&info.isDirectory()&&!info.isSymbolicLink()&&info.fileKey()!=null&&
-            path.equals(path.toFile().getCanonicalFile().toPath()))throw new UnsupportedNestedViteDirectory();
-        if(!info.isRegularFile()||info.size()<=0||info.size()>ProjectPackageArchive.MAX_FILE_BYTES||
-           ((Number)Files.getAttribute(path,"unix:nlink",LinkOption.NOFOLLOW_LINKS)).longValue()!=1||
-           !vitePath(path.getFileName().toString(),top))throw new SecurityException("原 Vite 输出含不能固定的文件类型、链接、目录或大小；未保存部分成果");
-        return info.size();
+    /** Relative to dist. Generated modules/styles keep the original flat assets scope. */
+    static boolean viteFilePath(String member,boolean nestedPublic){
+        int slash=member.lastIndexOf('/');
+        if(slash<0)return vitePath(member,true);
+        if(slash=="assets".length()&&member.startsWith("assets/"))return vitePath(member.substring(slash+1),false);
+        return nestedPublic&&ViteOutputMount.publicStaticMember(member);
     }
-    static boolean vitePath(String leaf,boolean top){
+    private static boolean vitePath(String leaf,boolean top){
         if(!VITE_LEAF.matcher(leaf).matches())return false;
         String mime=dev.pocketengine.features.local.preview.ProjectPreviewBundle.mime(leaf);
         return PUBLIC_MEDIA.contains(mime)||(top?leaf.equals("index.html")||leaf.equals("robots.txt"):
@@ -264,7 +252,7 @@ public final class OriginalNodeWebOutput {
         JSONObject checkout=snapshot.getJSONObject("checkout");
         if(!existing.isEmpty()){
             if(!edited.isEmpty()||!isExistingCheckout(existing,exact,checkout))return null;
-            return requireViteSource(ProjectSources.files(snapshot));
+            return requireViteSource(ProjectSources.files(snapshot),true);
         }
         return isEditedCopy(edited,exact,checkout)?requireSupportedSource(snapshot):null;
     }
@@ -280,9 +268,11 @@ public final class OriginalNodeWebOutput {
     public static LaunchObservation observeBeforeLaunch(RuntimeInvocation invocation)throws Exception{
         if(!invocation.versionedWebOutput())return new LaunchObservation(invocation,observeCleanDistAtLaunch(invocation),null);
         JSONObject exact=invocation.exact(),snapshot=invocation.sourceSnapshot();
-        if(!isNodeBuild(exact)||versionedSource(invocation,exact,snapshot)==null)return null;
+        if(!isNodeBuild(exact))return null;
+        OutputSource source=versionedSource(invocation,exact,snapshot);
+        if(source==null)return null;
         var root=invocation.workspace();root.verify(invocation);
-        WebDistObservation before=WebDistObservation.read(root.directory().toPath());invocation.checkCurrent();
+        WebDistObservation before=WebDistObservation.read(root.directory().toPath(),source.nestedPublic);invocation.checkCurrent();
         return new LaunchObservation(invocation,false,before);
     }
 
@@ -298,15 +288,15 @@ public final class OriginalNodeWebOutput {
         try{requireOutputPaths(root.directory(),source,versioned&&!invocation.existingWebVersion().isEmpty());}
         catch(UnsupportedNestedViteDirectory unsupported){root.verify(invocation);throw unsupported;}
         root.verify(invocation);
-        var exit=versioned?WebDistObservation.read(root.directory().toPath()):null;
+        var exit=versioned?WebDistObservation.read(root.directory().toPath(),source.nestedPublic):null;
         JSONObject info=new JSONObject().put("projectId",exact.getString("projectId")).put("checkoutId",exact.getString("checkoutId"))
             .put("sourceDigest",exact.getString("sourceDigest")).put("name",checkout.getString("name"));
         var frozen=ProjectPackageArchive.capture(root.directory(),info,"web_output",ENTRY,true);
-        requireOutputContents(frozen,source);invocation.checkCurrent();
+        requireOutputContents(frozen,source,true);invocation.checkCurrent();
         JSONObject changedTrees=null;
         boolean existing=!invocation.existingWebVersion().isEmpty();
         if(versioned){
-            exit.requireSameRead(WebDistObservation.read(root.directory().toPath()));
+            exit.requireSameRead(WebDistObservation.read(root.directory().toPath(),source.nestedPublic));
             changedTrees=launch.before.changedTo(exit,frozen).put("version",existing?invocation.existingWebVersion():invocation.editedWebVersion());
         }else{
             requireOutputPaths(root.directory(),source);
@@ -354,19 +344,30 @@ public final class OriginalNodeWebOutput {
     }
 
     public static void requireOutputContents(ProjectPackageArchive.Frozen frozen,OutputSource source)throws Exception{
+        requireOutputContents(frozen,source,false);
+    }
+    private static void requireOutputContents(ProjectPackageArchive.Frozen frozen,OutputSource source,boolean atOriginalExit)throws Exception{
         if(!source.vite()){requireCompleteStockSite(frozen,source.stockEntry);return;}
         JSONObject manifest=frozen.manifest();JSONArray dirs=manifest.getJSONArray("directories"),files=manifest.getJSONArray("files");
         if(!"web_output".equals(manifest.opt("mode"))||!ENTRY.equals(manifest.opt("entryPath"))||!"dist".equals(manifest.opt("previewRoot"))||
-            manifest.getJSONArray("omitted").length()!=0||dirs.length()!=2||!"dist".equals(dirs.opt(0))||!"dist/assets".equals(dirs.opt(1))||
-            files.length()<2||files.length()>VITE_FILES||manifest.getLong("bytes")>VITE_BYTES)
+            manifest.getJSONArray("omitted").length()!=0||files.length()<2||files.length()>VITE_FILES||
+            files.length()+dirs.length()>VITE_ENTRIES||manifest.getLong("bytes")>VITE_BYTES)
             throw new SecurityException("原固定包不是这次核对的单入口 Vite 输出，未保存部分资源");
-        java.util.HashSet<String> paths=new java.util.HashSet<>();
+        Set<String> paths=new java.util.HashSet<>(),expectedDirectories=new java.util.HashSet<>(Set.of("dist","dist/assets"));
         for(int i=0;i<files.length();i++){
             JSONObject file=files.getJSONObject(i);String path=file.getString("path");
-            boolean asset=path.startsWith("dist/assets/");
-            if(!path.startsWith("dist/")||!vitePath(path.substring(asset?12:5),!asset)||file.getLong("bytes")<=0||!paths.add(path))
+            long bytes=file.getLong("bytes");
+            if(!path.startsWith("dist/")||!viteFilePath(path.substring(5),source.nestedPublic)||
+               ProjectPackageArchive.excluded(path,false,true)!=null||bytes<=0||bytes>ProjectPackageArchive.MAX_FILE_BYTES||!paths.add(path))
                 throw new SecurityException("原固定包文件与已观察 Vite 目录不同");
+            for(int slash=path.lastIndexOf('/');slash>4;slash=path.lastIndexOf('/',slash-1))
+                expectedDirectories.add(path.substring(0,slash));
         }
+        // No omitted or orphan directories. Both observation and capture cover the
+        // same resource tree, not a subset of a build that happened to contain the entry.
+        for(int i=0;i<dirs.length();i++)if(!expectedDirectories.remove(dirs.get(i)))
+            throw new SecurityException("原固定包目录与已观察 Vite 目录不同");
+        if(!expectedDirectories.isEmpty())throw new SecurityException("原固定包缺少实际 Vite 资源目录");
         byte[] entry=frozen.file(ENTRY);
         if(entry.length>ViteOutputMount.MAX_ENTRY_BYTES)throw new SecurityException("原网页入口过大，未保存");
         String html=StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(entry)).toString();
@@ -380,6 +381,19 @@ public final class OriginalNodeWebOutput {
             if((path.startsWith("dist/assets/")||PUBLIC_MEDIA.contains(dev.pocketengine.features.local.preview.ProjectPreviewBundle.mime(path)))&&
                !paths.contains(path))throw new SecurityException("原网页引用的本地资源不在固定包中");
         }
+        if(source.nestedPublic&&(atOriginalExit||dirs.length()>2)){
+            // A new exit always checks literal public references, even if no new
+            // directory was emitted. Late review honors older witnessed flat trees.
+            for(var tag:org.jsoup.Jsoup.parse(html).select("[src], [href]")){
+                requireNestedPublicReference(tag.attr("src"),paths);
+                requireNestedPublicReference(tag.attr("href"),paths);
+            }
+        }
+    }
+    private static void requireNestedPublicReference(String literal,Set<String> paths){
+        String member=literal.startsWith("./")?literal.substring(2):literal.startsWith("/")?literal.substring(1):literal;
+        if(ViteOutputMount.publicStaticMember(member)&&!paths.contains("dist/"+member))
+            throw new SecurityException("原网页引用的本地子目录资源不在同一固定包中");
     }
     private static String viteRelative(String url){return "dist/"+url.substring(url.startsWith("./")?2:1);}
 
@@ -427,7 +441,8 @@ public final class OriginalNodeWebOutput {
         public JSONObject pin()throws Exception{return ProjectSources.copy(pin);}
     }
     public static Review review(Build build,ProjectPackageArchive.Frozen frozen,OutputSource sourceShape)throws Exception{
-        if(!sourceShape.profile().equals(build.witness.optString("outputProfile",STOCK)))
+        if(!sourceShape.profile().equals(build.witness.optString("outputProfile",STOCK))||
+           sourceShape.nestedPublic&&!build.witness.has(EXISTING_TREES))
             throw new SecurityException("原构建见证与本次审阅的网页类型不同");
         requireOutputContents(frozen,sourceShape);requireExitBytes(build.witness,frozen);
         JSONObject trees=build.witness.optJSONObject(build.witness.has(EXISTING_TREES)?EXISTING_TREES:EDITED_TREES);

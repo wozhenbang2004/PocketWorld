@@ -208,6 +208,7 @@ export function useProjectPreview(options: Options) {
     const originalView = viewRef.current, context = optionsRef.current;
     if (!originalView || pending.current || exportBusy || unknown || !context.active || context.blocked || document.hidden || !context.can(name)) return;
     if (name === 'projects.preview.mode' && extra.enabled === true && !originalView.selectionAvailable) return;
+    const closingShelf = name === 'projects.preview.close' ? savedWebShelf : null;
     const original = ticket(), request = ++generation.current;
     pending.current = true; setBusy(name); setError('');
     void bridge.command(name, { sessionId: originalView.sessionId, ...extra }).then(async value => {
@@ -241,6 +242,7 @@ export function useProjectPreview(options: Options) {
       } else if (name === 'projects.preview.close') {
         if (value?.closed !== true || value?.sessionId !== originalView.sessionId) throw new Error('未确认原预览已关闭，请核对原状态。');
         setOpened(null); setExpanded(false);
+        if (closingShelf) { setSavedWebShelf(null); closingShelf.restore(); }
       }
     }).catch(failure => {
       if (!current(original, request)) return;

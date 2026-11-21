@@ -14,8 +14,28 @@ public final class ViteOutputMount {
     private static final String LEAF = "[A-Za-z0-9][A-Za-z0-9._-]{0,159}";
     private static final Pattern MODULE = Pattern.compile("(/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}/){1,4})(assets/" + LEAF + ")");
     private static final Pattern MEMBER = Pattern.compile("(?:assets/)?" + LEAF);
+    private static final String DIRECTORY = "[A-Za-z0-9][A-Za-z0-9._-]{0,63}";
+    private static final Pattern PUBLIC_DIRECTORY = Pattern.compile(DIRECTORY + "(?:/" + DIRECTORY + "){0,2}");
+    private static final Pattern PUBLIC_LEAF = Pattern.compile(LEAF);
+    private static final int MAX_DIST_MEMBER_CHARS = 235; // The existing 240-char package path includes "dist/".
+    private static final Set<String> PUBLIC_STATIC_MIME = Set.of("image/svg+xml","image/png","image/jpeg","image/webp","image/gif",
+        "image/x-icon","font/woff","font/woff2","font/ttf");
     private static final Set<String> RESOURCE_LINKS = Set.of("stylesheet","modulepreload","preload","icon","apple-touch-icon","mask-icon","manifest");
     private ViteOutputMount() {}
+
+    /** Lexical only; physical observation and archive validation still enforce their own private path fences. */
+    public static boolean publicStaticDirectory(String path) {
+        return path != null && !path.equals("assets") && !path.startsWith("assets/") && PUBLIC_DIRECTORY.matcher(path).matches();
+    }
+
+    /** Vite copies public files below dist; only existing image/font types can add nested members. */
+    public static boolean publicStaticMember(String path) {
+        if(path==null||path.length()>MAX_DIST_MEMBER_CHARS)return false;
+        int slash=path.lastIndexOf('/');
+        if(slash<1||!publicStaticDirectory(path.substring(0,slash)))return false;
+        String leaf=path.substring(slash+1);
+        return PUBLIC_LEAF.matcher(leaf).matches()&&PUBLIC_STATIC_MIME.contains(ProjectPreviewBundle.mime(leaf));
+    }
 
     static String rootedBase(byte[] html,Predicate<String> hasMember)throws Exception {
         if(html.length>MAX_ENTRY_BYTES)return "";
@@ -53,15 +73,18 @@ public final class ViteOutputMount {
 
     private static void requireMember(String base,String literal,Predicate<String> hasMember){
         String member=literal.startsWith("/")?relativeMember(base,literal):
-            literal.startsWith("./")?literal.substring(2):literal;
-        if(member==null||!MEMBER.matcher(member).matches()||!hasMember.test(member))
+            checkedMember(literal.startsWith("./")?literal.substring(2):literal);
+        if(member==null||!hasMember.test(member))
             throw new SecurityException("原 Vite 子路径引用的资源不在同一固定网页包中，未替换资源");
     }
 
     /** Look up only literal members of the one mounted resource root, not an alias at /. */
     static String relativeMember(String base,String literalPath) {
         if(!literalPath.startsWith(base))return null;
-        String member=literalPath.substring(base.length());
-        return MEMBER.matcher(member).matches()?member:null;
+        return checkedMember(literalPath.substring(base.length()));
+    }
+
+    private static String checkedMember(String member){
+        return MEMBER.matcher(member).matches()||publicStaticMember(member)?member:null;
     }
 }
