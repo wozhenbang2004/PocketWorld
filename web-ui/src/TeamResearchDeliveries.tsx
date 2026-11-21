@@ -40,13 +40,15 @@ function originalRef(runId:string, memberId:string, round:number, taskId:unknown
 }
 
 /** The current native parent Work link is required; a team ID from the directory is not enough. */
-export function classicAnswerOwner(reading:Row|null):string{
+export function classicAnswerOwner(reading:Row|null,allowCompletedTemporary=false):string{
   const run=reading?.run, link=reading?.ownerWorkLink, roster=rows(run?.members);
   // Trust only the source fact delivered with this exact native detail, never
   // the earlier directory: archived reads can return the same saved bytes.
   const failedAggregate=reading?.currentFailedAggregateSource===true&&run?.status==='failed'&&run.phase==='failed'&&
     Number.isSafeInteger(run.generation)&&run.generation>=0&&positive(run.revision);
-  if(reading?.kind!=='run'||!reading.viewHandle||!id(run?.id)||!id(run.teamId)||run.mode!=='collaborate'||run.definitionKind!=null||
+  const completedTemporary=allowCompletedTemporary&&reading?.currentCompletedTemporaryAnswersSource===true&&
+    run?.definitionKind==='one_time'&&run.status==='completed'&&run.phase==='completed'&&link?.savedResultForDraft===true;
+  if(reading?.kind!=='run'||!reading.viewHandle||!id(run?.id)||!id(run.teamId)||run.mode!=='collaborate'||(!completedTemporary&&run.definitionKind!=null)||
     (run.discussionFormat??'classic')!=='classic'||run.discussion||run.workPlan||run.productionScope||run.nativeWorkProfileModels||
     run.researchExecutionFormat!=='pocketworld.team-research-agent.v1'||run.archived===true||
     (!failedAggregate&&!['running','paused','completed','partial'].includes(run.status))||
@@ -54,7 +56,7 @@ export function classicAnswerOwner(reading:Row|null):string{
     link?.readOnly!==true||link.currentRun!==true||link.stopping!==false||link.teamRunId!==run.id||!id(link.teamTaskId)||
     reading.taskId!==link.teamTaskId||!id(link.taskId)||!id(link.runId)||!positive(link.epoch)||!id(link.conversationId))return '';
   return JSON.stringify([run.id,run.teamId,link.teamTaskId,link.taskId,link.runId,link.epoch,link.conversationId,
-    ...(failedAggregate?['failed']:[])]);
+    ...(failedAggregate?['failed']:[]),...(completedTemporary?['one_time']:[])]);
 }
 const classicAnswerBytes=65536;
 

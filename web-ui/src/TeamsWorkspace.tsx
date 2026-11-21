@@ -895,7 +895,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const teamResult = teamResultReading(current, messages, deliveryWorkers?.originalFileObservation);
   const followUps = teamFollowUps(current, reading?.attention);
   const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
-  const classicOwner = canOpenMemberResult && openReading && globalThis.crypto?.subtle ? classicAnswerOwner(reading) : '';
+  const classicOwner = canOpenMemberResult && openReading && globalThis.crypto?.subtle ? classicAnswerOwner(reading,true) : '';
   const deliveries = teamResearchDeliveries(current, messages, 'current', !!classicOwner);
   const archivedDeliveries = teamResearchDeliveries(current, messages, 'archived');
   const ordinaryAnswers = current?.mode === 'collaborate' && !hasWorkPlan && !current.productionScope &&
@@ -1091,7 +1091,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       if(!same){setNotice('这份成员答复已变化，没有打开其他阶段。');return;}
       show(same,original.run.generation);return;
     }
-    if(!classicOwner||classicAnswerOwner(original)!==classicOwner||classicAnswerFlight.current||entered.current)return;
+    if(!classicOwner||classicAnswerOwner(original,true)!==classicOwner||classicAnswerFlight.current||entered.current)return;
     const documentEpoch=bridge.getDocumentEpoch(), resume=object(bridge.getState().view).resumeRevision,
       request=requestGeneration.current+1;
     const stillCurrent=()=>alive.current&&!backgrounded.current&&!document.hidden&&ownsNativeWindow()&&
@@ -1108,7 +1108,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         if(next?.kind!=='run'||!next.viewHandle||next.viewHandle===original.viewHandle||next.run?.id!==item.team){
           release(next);if(reply)setNotice('没有核对到原协作，未打开其他答复。');return;
         }
-        const same=next.run.generation===original.run.generation&&classicAnswerOwner(next)===classicOwner?find(next,true):undefined;
+        const same=next.run.generation===original.run.generation&&classicAnswerOwner(next,true)===classicOwner?find(next,true):undefined;
         const checked=same&&await exactClassicAnswer(same).catch(()=>false);
         if(!stillCurrent()||newerTeamReading(next.run,object(object(bridge.getState().state.teamRuns)[item.team]))){
           release(next);return;

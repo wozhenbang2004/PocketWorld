@@ -84,6 +84,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     companion object {
         const val RESTORE_MEMBER_RESULT_RUN = "restoreMemberResultRunId"
         const val CURRENT_FAILED_AGGREGATE_SOURCE = "currentFailedAggregateSource"
+        const val CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE = "currentCompletedTemporaryAnswersSource"
         val COMMANDS = setOf("teams.openWorkFileDecision", "teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
             "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM, "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.reviewSoleFailedHandoff", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
@@ -245,6 +246,13 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             member.optString("runner", "model") == "model" && member.opt("device").let { it == null || it == "phone" }
         }
     }
+    private fun originalTemporaryClassic(value: JSONObject): Boolean =
+        value.opt("definitionKind") == "one_time" && value.opt("mode") == "collaborate" &&
+            value.optString("discussionFormat", "classic") == "classic" && !value.has("discussion") &&
+            !value.has("phoneScope") && !value.has("nativeWorkProfileModels") && value.opt("summaryStale") == false &&
+            value.opt("researchExecutionFormat") == TeamCoordinator.RESEARCH_FORMAT &&
+            TeamCoordinator.ordinaryLocalReportRoster(value.optJSONArray("members"))
+
     private fun view(kind: String, value: JSONObject, answerRoutes: JSONArray? = null, currentSource: Boolean = false): JSONObject {
         while (readings.size >= 24) readings.remove(readings.keys.first())?.retire()
         val handle = UUID.randomUUID().toString()
@@ -274,8 +282,12 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 result.put("ownerWorkLink", PocketWebState.publicValue(link))
                 // The original host may have left the recent task window.
                 result.put("taskId", link.getString("teamTaskId"))
-                if (currentSource && link.opt("readOnly") == true && link.opt("currentRun") == true && link.opt("stopping") == false &&
-                    originalFailedClassicAggregate(value)) result.put(CURRENT_FAILED_AGGREGATE_SOURCE, true)
+                if (currentSource && link.opt("readOnly") == true && link.opt("currentRun") == true && link.opt("stopping") == false) {
+                    if (originalFailedClassicAggregate(value)) result.put(CURRENT_FAILED_AGGREGATE_SOURCE, true)
+                    // Only the current native lookup, with its original delivered parent, can offer the inline reader.
+                    if (checkSavedResult && attention.length() == 0 && link.opt("savedResultForDraft") == true && originalTemporaryClassic(value))
+                        result.put(CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE, true)
+                }
                 if (link.opt("currentRun") == true && link.opt("stopping") == false) attention.objects().singleOrNull()?.takeIf {
                     it.optString("kind") == "member_attention" && it.optString("status") in setOf("failed", "interrupted")
                 }?.optString("memberId")?.takeIf(String::isNotBlank)?.let { member ->
