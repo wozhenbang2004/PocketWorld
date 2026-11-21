@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button, SettingsDialog } from './forms-library';
 import { bridge } from './bridge';
-import { localWebWorkPreview, type PackagePreviewTarget, type ProjectPreviewState } from './project-preview';
+import { localWebWorkPreview, originalViteWorkPreview, type PackagePreviewTarget, type ProjectPreviewState } from './project-preview';
 import { originalDirectViteResult, type OriginalBuildWebGap } from './project-execution';
 import { registerOverlayBack } from './overlay-back';
 import { useProjectPreviewViewport } from './ProjectPreviewPane';
@@ -26,9 +26,9 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type SavedTarget = PackagePreviewTarget & {savedBuildWeb: NonNullable<PackagePreviewTarget['savedBuildWeb']>};
 type SaveIdentity = {buildOperationId: string; operationId: string; sourceDigest: string; archiveSha256: string};
 type DirectVite = NonNullable<ReturnType<typeof originalDirectViteResult>>;
-const localOpen='projects.firstWebOutput.open', localClose='projects.preview.close';
+const localOpen='projects.firstWebOutput.open', previewBuild='projects.firstWebOutput.previewBuild', localClose='projects.preview.close';
 const supports=(action:string)=>bridge.getState().capabilities.commands.includes(action);
-const canOpenLocal=()=>[localOpen,localClose,'projects.preview.viewport'].every(supports);
+const canOpenLocal=(action:string)=>[action,localClose,'projects.preview.viewport'].every(supports);
 
 /** Presentation equality only; opening still uses the original package verifier. */
 export function savedBuildWebOpenKey(target: PackagePreviewTarget) {
@@ -52,7 +52,15 @@ function currentDirectVite(target:DirectVite,ownerWindow:string) {
   return !!actual&&Object.entries(target).every(([key,value])=>actual[key as keyof DirectVite]===value);
 }
 
-type LocalWebVisit = {target:SavedTarget; session?:string; published:boolean; dismissed:boolean; closing:boolean};
+type LocalWebSource = {kind:'saved';target:SavedTarget}|{kind:'build';target:DirectVite};
+type LocalWebVisit = {source:LocalWebSource; ack?:ProjectPreviewState; published:boolean; dismissed:boolean; closing:boolean};
+
+function localWorkView(value:unknown,visit:LocalWebVisit) {
+  const {source,ack}=visit;
+  if(source.kind==='saved')return localWebWorkPreview(value,source.target);
+  const view=originalViteWorkPreview(value,source.target);
+  return view&&(!ack||['previewId','manifestIdentity','archiveSha256','archiveBytes'].every(key=>view.metadata[key]===ack.metadata[key]))?view:null;
+}
 
 /** The existing native viewport, in an adopted dialog above this same Work.
  * Never selects a project/conversation or changes the Work behind the reader. */
@@ -70,9 +78,9 @@ export function DirectViteWebOutput({target,ownerWindow}:{target:DirectVite;owne
     const original=visit.current;
     if(!original)return;
     if(!current()){finish(original);return;}
-    if(!original.session)return;
-    const view=localWebWorkPreview(bridge.getState().state.projectPreview,original.target);
-    if(view?.sessionId===original.session){
+    if(!original.ack)return;
+    const view=localWorkView(bridge.getState().state.projectPreview,original);
+    if(view?.sessionId===original.ack.sessionId){
       original.published=true;
       if(!original.dismissed&&!original.closing)setOpened(view);
     }else if(original.published&&!original.closing)finish(original);
@@ -85,8 +93,8 @@ export function DirectViteWebOutput({target,ownerWindow}:{target:DirectVite;owne
   const close=(original:LocalWebVisit)=>{
     if(!accepts(original)){finish(original);return;}
     if(original.closing)return;
-    if(!original.session){original.dismissed=true;setDialog(false);return;}
-    const sessionId=original.session;
+    if(!original.ack){original.dismissed=true;setDialog(false);return;}
+    const sessionId=original.ack.sessionId;
     original.closing=true;setOpened(null);setBusy(true);setError('');
     void bridge.command(localClose,{sessionId}).then(value=>{
       if(!accepts(original))return;
@@ -95,47 +103,62 @@ export function DirectViteWebOutput({target,ownerWindow}:{target:DirectVite;owne
     }).catch(()=>{
       if(!accepts(original))return;
       original.closing=false;
-      if(original.dismissed||localWebWorkPreview(bridge.getState().state.projectPreview,original.target)?.sessionId!==sessionId){
+      if(original.dismissed||localWorkView(bridge.getState().state.projectPreview,original)?.sessionId!==sessionId){
         finish(original);return;
       }
-      setError('尚未确认关闭这版网页。原工作和固定包仍保留。');setBusy(false);sync();
+      setError(original.source.kind==='build'?'尚未确认关闭本次预览。原工作仍保留。':'尚未确认关闭这版网页。原工作和固定包仍保留。');setBusy(false);sync();
     });
   };
   const dismiss=()=>{if(visit.current)close(visit.current);};
   useLayoutEffect(()=>dialog?registerOverlayBack(dismiss):undefined,[dialog,ownerWindow]);
-  const open=(value:PackagePreviewTarget)=>{
-    if(visit.current||!current()||!canOpenLocal()||!value.savedBuildWeb||value.taskId!==target.taskId||
-      value.savedBuildWeb.runId!==target.runId||value.savedBuildWeb.epoch!==target.epoch||
-      value.savedBuildWeb.projectId!==target.projectId||value.savedBuildWeb.checkoutId!==target.checkoutId||
-      value.savedBuildWeb.sourceDigest!==target.sourceDigest||value.savedBuildWeb.buildOperationId!==target.buildOperationId)return;
-    const original:LocalWebVisit={target:{...value,savedBuildWeb:value.savedBuildWeb},published:false,dismissed:false,closing:false};
+  const show=(source:LocalWebSource)=>{
+    const action=source.kind==='build'?previewBuild:localOpen;
+    if(visit.current||!current()||!canOpenLocal(action))return;
+    const original:LocalWebVisit={source,published:false,dismissed:false,closing:false};
+    const args=source.kind==='build'?{taskId:source.target.taskId,runId:source.target.runId,epoch:source.target.epoch,buildOperationId:source.target.buildOperationId}:
+      {taskId:source.target.taskId,operationId:source.target.operationId,entryPath:'dist/index.html'};
     visit.current=original;setOpened(null);setDialog(true);setBusy(true);setError('');
-    void bridge.command(localOpen,{taskId:value.taskId,operationId:value.operationId,entryPath:'dist/index.html'}).then(reply=>{
-      if(!accepts(original))return;
-      const exact=localWebWorkPreview(reply,original.target);
-      if(!exact)throw Error('未取得这一版归档的原预览。');
-      original.session=exact.sessionId;
+    void bridge.command(action,args).then(reply=>{
+      if(!current())return;
+      const exact=localWorkView(reply,original);
+      if(visit.current!==original){
+        // Closing a pending dialog can be followed by the same Work's Process
+        // tab unmounting this reader. Release only the exact late temp session.
+        if(source.kind==='build'&&exact&&supports(localClose))void bridge.command(localClose,{sessionId:exact.sessionId}).catch(()=>{});
+        return;
+      }
+      if(!exact)throw Error('未取得所选原网页的预览。');
+      original.ack=exact;
       if(original.dismissed){close(original);return;}
       setBusy(false);sync();
     }).catch(()=>{
       if(!accepts(original))return;
-      if(!original.dismissed)setError('未能打开这一版固定网页。没有改用其他版本，原工作仍保留。');
+      if(!original.dismissed)setError(source.kind==='build'?'未能打开这次构建的网页。没有改用其他网页或重新构建。':
+        '未能打开这一版固定网页。没有改用其他版本，原工作仍保留。');
       finish(original);
     });
   };
+  const open=(value:PackagePreviewTarget)=>{
+    const saved=value.savedBuildWeb;
+    if(!saved||value.taskId!==target.taskId||saved.runId!==target.runId||saved.epoch!==target.epoch||saved.projectId!==target.projectId||
+      saved.checkoutId!==target.checkoutId||saved.sourceDigest!==target.sourceDigest||saved.buildOperationId!==target.buildOperationId)return;
+    show({kind:'saved',target:{...value,savedBuildWeb:saved}});
+  };
+  const shown=visit.current?.source,temporary=shown?.kind==='build';
   const viewport=useProjectPreviewViewport(dialog,opened?.sessionId||'',busy||!current(),supports,ownerWindow,'.pw-settings-dialog-content');
   return <>
     <FirstNodeWebOutput target={target} ownerWindow={ownerWindow} directVite={target}
-      open={!busy&&canOpenLocal()?open:undefined} onSaved={()=>{}}/>
+      open={!busy&&canOpenLocal(localOpen)?open:undefined} onSaved={()=>{}}
+      onPreviewBuild={canOpenLocal(previewBuild)?()=>show({kind:'build',target}):undefined} previewBusy={busy||dialog}/>
     {!dialog&&error&&<p className="pw-error" role="alert">{error}</p>}
-    <SettingsDialog isOpen={dialog} title="固定网页" closeLabel="返回原工作" onClose={dismiss}>
-      <section className="pw-preview-pane pw-original-local-web" aria-label="原工作保存的固定网页" aria-busy={busy||!opened?.ready&&!opened?.error}>
-        <p className="pw-reading-note">查看这次工作已保存的版本，不重新构建或切换对话。</p>
+    <SettingsDialog isOpen={dialog} title={temporary?'本次构建预览':'固定网页'} closeLabel="返回原工作" onClose={dismiss}>
+      <section className="pw-preview-pane pw-original-local-web" aria-label={temporary?'本次构建的临时网页预览':'原工作保存的固定网页'} aria-busy={busy||!opened?.ready&&!opened?.error}>
+        <p className="pw-reading-note">{temporary?'本机临时查看，尚未固定保存。返回原工作后可另行核对保存。':'查看这次工作已保存的版本，不重新构建或切换对话。'}</p>
         <div ref={viewport} className="pw-preview-viewport" aria-label="原生隔离预览画面" data-preview-session={opened?.sessionId}>
-          {!opened?.ready&&<p className="pw-preview-placeholder" role="status">{opened?.error?'原网页画面暂不可读。':'正在打开原固定网页…'}</p>}
+          {!opened?.ready&&<p className="pw-preview-placeholder" role="status">{opened?.error?'原网页画面暂不可读。':temporary?'正在打开本次构建的网页…':'正在打开原固定网页…'}</p>}
         </div>
         {(error||opened?.error)&&<p className="pw-error" role="alert">{error||opened?.error}</p>}
-        {opened&&<AccordionWebVersion target={visit.current?.target}/>}
+        {opened&&shown?.kind==='saved'&&<AccordionWebVersion target={shown.target}/>}
       </section>
     </SettingsDialog>
   </>;
@@ -149,9 +172,9 @@ function AccordionWebVersion({target}:{target:SavedTarget|undefined}) {
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
-export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, beforeGoalAcceptance, buildWebGap, canEditBuildCopy, listedOpenKey,directVite}: {
+export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, beforeGoalAcceptance, buildWebGap, canEditBuildCopy, listedOpenKey,directVite,onPreviewBuild,previewBusy}: {
   target: BuildPosition; ownerWindow: string; hideIneligible?: boolean; checkBuildAfterFailure?: boolean; beforeGoalAcceptance?: boolean;
-  directVite?: DirectVite;
+  directVite?: DirectVite; onPreviewBuild?: ()=>void; previewBusy?: boolean;
   buildWebGap?: OriginalBuildWebGap; canEditBuildCopy?: boolean; listedOpenKey?: string;
   open?: (p: PackagePreviewTarget)=>void; onSaved: (operationId: string, sha256: string) => void}) {
   const [fact, setFact] = useState<Fact|null>(null);
@@ -259,6 +282,10 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
   },[exactListedOpen]);
   if(!visible)return null;
   const openListed=!!exactListedOpen&&listedOpenReady===exactListedOpen;
+  const previewReady=directVite&&fact?.eligible===true&&fact.state==='ready'&&fact.sourceDigest===directVite.sourceDigest&&
+    fact.buildOperationId===directVite.buildOperationId&&!saveUnconfirmed&&!failure?onPreviewBuild:undefined;
+  const reviewButton=<Button size="small" variant="secondary" disabled={!!busy||previewBusy} onClick={()=>void call(review)}>
+    {busy===review?'正在核对原网页…':'核对网页包'}</Button>;
   return <section ref={panel} className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
     {checkBuildAfterFailure && fact?.eligible===true && <p className="pw-reading-note">这项工作没有完成，但本机构建步骤已核对为成功退出。下面只处理原构建的网页。</p>}
@@ -267,8 +294,11 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
       {' '}输出含额外子目录，不在本机固定网页支持范围。{canEditBuildCopy?'可在下方继续编辑构建所用的副本。':'可在「过程」查看本次构建记录。'}</p>:
       noSavedWeb?<p className="pw-reading-note" role="status"><strong>构建通过（退出码 0），固定网页未保存。</strong> 可在「过程」查看本次构建记录。</p>:
       fact?.eligible===false&&fact.message&&<p className="pw-reading-note">{fact.message}</p>}
-    {fact?.state==='ready'&&<><p className="pw-reading-note">这次构建的网页包还未固定保存。请先核对退出时看到的文件，不重新构建。</p>
-      <Button size="small" variant="secondary" disabled={!!busy} onClick={()=>void call(review)}>{busy===review?'正在核对原网页…':'核对网页包'}</Button></>}
+    {fact?.state==='ready'&&<><p className="pw-reading-note">{previewReady?'这次构建的网页还未保存。可先在本机查看，再决定是否保存固定版。':'这次构建的网页包还未固定保存。请先核对退出时看到的文件，不重新构建。'}</p>
+      {previewReady?<div className="pw-action-row">
+        <Button size="small" variant="primary" disabled={!!busy||previewBusy} onClick={()=>{if(available()&&!flight.current&&!saveRequest.current)previewReady()}}>预览本次构建</Button>
+        {reviewButton}
+      </div>:reviewButton}</>}
     {fact?.state==='review'&&!saveUnconfirmed&&<><p className="pw-reading-note">{fact.entryPath} 与同一副本的其余 {(fact.files?.length ?? 1)-1} 项资源会一起固定在本机。不启动程序、导出或分享。</p>
       <details><summary>核对文件清单与版本</summary><ul>{fact.files?.map(f=><li key={f.path}><span dir="auto">{f.path}</span> · {f.bytes} 字节 · {f.sha256.slice(0,12)}</li>)}</ul></details>
       <div className="pw-action-row">

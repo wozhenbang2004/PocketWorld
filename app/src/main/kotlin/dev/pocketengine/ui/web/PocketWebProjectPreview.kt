@@ -19,7 +19,8 @@ internal class PocketWebProjectPreview(
 ) {
     companion object {
         const val OPEN_LOCAL_WEB = "projects.firstWebOutput.open"
-        val COMMANDS = setOf(OPEN_LOCAL_WEB, "projects.preview", "projects.preview.mode", "projects.preview.viewport",
+        const val PREVIEW_LOCAL_BUILD = "projects.firstWebOutput.previewBuild"
+        val COMMANDS = setOf(OPEN_LOCAL_WEB, PREVIEW_LOCAL_BUILD, "projects.preview", "projects.preview.mode", "projects.preview.viewport",
             "projects.preview.reload", "projects.preview.close", "projects.preview.return", "composer.preview.remove",
             "projects.package.preview.inspect", "projects.package.preview.open", "projects.package.export")
         private fun fields(args: JSONObject, names: Set<String>) {
@@ -52,6 +53,8 @@ internal class PocketWebProjectPreview(
     private var session: Session? = null
     private var closed = false
     private var opening = 0L
+    private data class PendingBuildPreview(val control: dev.pocketengine.core.RunControl, val timeout: Runnable, val reject: (String) -> Unit)
+    private var pendingBuildPreview: PendingBuildPreview? = null
     private var foreground = true
     private val layoutChanged = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> session?.let(::layout) }
     init { container.addOnLayoutChangeListener(layoutChanged) }
@@ -78,6 +81,46 @@ internal class PocketWebProjectPreview(
                 if (closed || opening != request || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) done(null, "原项目包窗口已变化，未接收迟到的入口清单")
                 else done(choices, error)
                 changed()
+            }
+            return
+        }
+        if (action == PREVIEW_LOCAL_BUILD) {
+            check(localWorkCurrent() && pendingBuildPreview == null) { "请在原构建中等待本次预览" }
+            fields(args, setOf("taskId", "runId", "epoch", "buildOperationId"))
+            val task = text(args, "taskId"); val run = text(args, "runId"); val operation = text(args, "buildOperationId")
+            require(task.matches(Regex("[a-f0-9-]{36}")) && run == task && operation == task && integer(args, "epoch") == 1L) {
+                "原本机构建身份不可核对"
+            }
+            val window = captureWindow(); val request = ++opening
+            val control = dev.pocketengine.core.RunControl()
+            // The native render must not arrive after the Web caller's 30 s ACK expires.
+            val until = android.os.SystemClock.elapsedRealtime() + 20_000L
+            fun sameWindow() = !closed && foreground && opening == request && acceptsWindow(window) && localWorkCurrent()
+            fun current() = sameWindow() && android.os.SystemClock.elapsedRealtime() < until
+            val timeout = Runnable {
+                if (pendingBuildPreview?.control === control) cancelPendingBuildPreview("原网页预览等待超时，可在原工作再试")
+            }
+            val pending = PendingBuildPreview(control, timeout) { error -> done(null, error) }
+            pendingBuildPreview = pending
+            container.postDelayed(timeout, 20_000L)
+            try {
+                controller.openOriginalViteBuildPreview(task, run, 1, operation, control, ::current) { selected, error ->
+                    container.removeCallbacks(timeout)
+                    if (pendingBuildPreview !== pending) return@openOriginalViteBuildPreview
+                    pendingBuildPreview = null
+                    if (!sameWindow() || control.isCancelled) { done(null, "原构建预览窗口已变化"); return@openOriginalViteBuildPreview }
+                    if (!current()) { done(null, "原网页预览等待超时，可在原工作再试"); return@openOriginalViteBuildPreview }
+                    if (selected == null || error != null) { done(null, error ?: "未读取这次原网页"); return@openOriginalViteBuildPreview }
+                    try { show(selected); done(snapshot(), null) } catch (failure: Exception) { done(null, failure.message ?: "原网页未能打开") }
+                    changed()
+                }
+            } catch (failure: Exception) {
+                container.removeCallbacks(timeout)
+                if (pendingBuildPreview === pending) {
+                    pendingBuildPreview = null
+                    control.cancel()
+                }
+                throw failure
             }
             return
         }
@@ -198,10 +241,10 @@ internal class PocketWebProjectPreview(
         val web = ProjectBundleWebView(controller.webPresentationActivity(), document, object : ProjectBundleWebView.Events {
             override fun error(message: String) {
                 if (session === selected) { selected.error = message.take(1600); changed() }
-                if (original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, "RENDER_ERROR", message, original.bundle.entryUrl, 0)
+                if (!original.fromLocalWebWork && original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, "RENDER_ERROR", message, original.bundle.entryUrl, 0)
             }
             override fun console(level: String, text: String, source: String, line: Int) {
-                if (original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, level, text, source, line)
+                if (!original.fromLocalWebWork && original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, level, text, source, line)
             }
         }, object : ProjectBundleWebView.SelectionEvents {
             override fun changed() { if (session === selected) this@PocketWebProjectPreview.changed() }
@@ -209,6 +252,13 @@ internal class PocketWebProjectPreview(
         })
         selected.web = web; session = selected; web.visibility = View.GONE
         container.addView(web, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
+        if (original.bundle.originalLocalViteBuild()) {
+            // If the dialog was dismissed before its ACK arrived, do not keep an unseen renderer.
+            val previewId = selected.id
+            container.postDelayed({
+                if (session?.let { it.id == previewId && it.viewport == null } == true) { retireLocalWork(); changed() }
+            }, 5_000L)
+        }
     }
 
     private fun receiveSelection(selected: Session, selection: ProjectPreviewDocument.Selection) {
@@ -264,13 +314,22 @@ internal class PocketWebProjectPreview(
         session?.let { if (value) it.web.onResume() else { hide(it); it.web.onPause() } }
         changed()
     }
+    private fun cancelPendingBuildPreview(reason: String = "原工作已离开，预览已取消") {
+        val pending = pendingBuildPreview ?: return
+        pendingBuildPreview = null
+        container.removeCallbacks(pending.timeout)
+        pending.control.cancel()
+        pending.reject(reason)
+    }
     fun retireLocalWork() {
+        cancelPendingBuildPreview()
         if (session?.original?.fromLocalWebWork != true) return
         opening++
         release()
         controller.closeProjectPreview()
     }
     fun invalidatePresentation(documentReplaced: Boolean) {
+        cancelPendingBuildPreview()
         opening++
         if (documentReplaced) { controller.projectPackages.invalidateTaskExportSelection(); release(); controller.closeProjectPreview() }
         else if (session?.original?.fromLocalWebWork == true) retireLocalWork()
@@ -283,6 +342,6 @@ internal class PocketWebProjectPreview(
     }
     fun close() {
         if (closed) return
-        closed = true; opening++; controller.projectPackages.invalidateTaskExportSelection(); release(); container.removeOnLayoutChangeListener(layoutChanged); controller.closeProjectPreview()
+        closed = true; opening++; cancelPendingBuildPreview(); controller.projectPackages.invalidateTaskExportSelection(); release(); container.removeOnLayoutChangeListener(layoutChanged); controller.closeProjectPreview()
     }
 }

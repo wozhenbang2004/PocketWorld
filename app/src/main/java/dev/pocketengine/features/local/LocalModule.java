@@ -345,7 +345,8 @@ public final class LocalModule implements EngineModule {
     public synchronized dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified projectPreviewForOwner(String previewId,String checkoutId){var preview=previews.get(previewId);if(closed||preview==null||!checkoutId.equals(preview.checkoutId))throw new IllegalStateException("此预览资源已释放，请重新核对当前项目");return preview;}
     /** The original active checkout is re-read; a cached bundle alone is not current source proof. */
     public synchronized void requireProjectPreviewCurrent(dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified preview)throws Exception {
-        if(preview==null||closed||previews.get(preview.identity)!=preview||preview.artifactId!=null)throw new SecurityException("原活动项目预览已释放或不是当前工作副本");
+        if(preview==null||closed||preview.originalLocalViteBuild()||previews.get(preview.identity)!=preview||preview.artifactId!=null)
+            throw new SecurityException("原活动项目预览已释放或不是当前工作副本");
         JSONObject source=ProjectSources.describe(export(preview.checkoutId));
         if(!preview.checkoutId.equals(source.getString("checkoutId"))||!preview.projectId.equals(source.getString("projectId"))||!preview.sourceDigest.equals(source.getString("sourceDigest")))throw new SecurityException("原预览源码已变化，请重新生成并明确选择");
         if(closed||previews.get(preview.identity)!=preview)throw new SecurityException("原项目预览已释放");
@@ -1353,6 +1354,15 @@ public final class LocalModule implements EngineModule {
         var review=OriginalNodeWebOutput.review(original,frozen,sourceShape);
         OriginalNodeWebOutput.requireSameBuild(original,currentManagedBuildProof(build,c,pause,original));
         return new OriginalWebBytes(review,frozen);
+    }
+    /** Explicit read of one original result, never a package save or a generic preview registration. */
+    public synchronized ProjectPreviewBundle.Verified openDirectViteBuildPreviewForOwner(OriginalNodeWebOutput.Build original,RunControl control)throws Exception{
+        if(original==null||!original.directOwnerVite())throw new SecurityException("请选择这项原本机网页构建");
+        control.check();long pause=control.pauseRevision();
+        var observed=readOriginalWebBytes(original,control);
+        var bundle=ProjectPreviewBundle.fromOriginalLocalViteBuild(observed.frozen,observed.review);
+        control.check();if(closed||control.isPaused()||pause!=control.pauseRevision())throw new SecurityException("原网页预览窗口已关闭");
+        return bundle;
     }
     public synchronized OriginalNodeWebOutput.Review reviewFirstWebOutputForOwner(OriginalNodeWebOutput.Build original, RunControl c)throws Exception{
         return readOriginalWebBytes(original,c).review;

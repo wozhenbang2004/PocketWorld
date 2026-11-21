@@ -1351,7 +1351,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       {!dependencyNext&&<NodeBuildScripts plan={preview}/>}
       <p>这次只核对已保存源码，没有下载或运行。{preview.preservedProjectDraft&&'你已写的目标留在草稿。'}</p>
       {dependencyOffer?<p>只为这个缺少依赖目录的副本准备锁定依赖。不调用模型、不开始构建。</p>:
-        buildOffer?previewVite?<p>只在这部手机构建这版网页，不调用模型或安装依赖。构建可能联网并写入副本，只运行可信项目。在原工作核对并保留本次网页后，可打开只读预览；不会自动打开或发布。</p>:
+        buildOffer?previewVite?<p>只在这部手机构建这版网页，不调用模型或安装依赖。构建可能联网并写入副本，只运行可信项目。确认后进入原工作的「概览」。本次网页可预览时，点「预览本次构建」即可查看，不用先保存。想保留时再保存网页包；网页不会自动打开或发布。</p>:
           <p>将只在这部手机构建这份已准备依赖的 TypeScript 副本，不调用模型或安装依赖。构建可写入副本，只运行可信项目。在原工作的「过程 → 工具调用」核对 <bdi>{buildOffer.outputPath}</bdi>，有实际输出才能另行保存。</p>:
         buildWork?<p>{previewVite?'这版已有一笔网页构建。':'这版已有一笔本机构建。'}打开原工作核对，不会再运行。</p>:
         dependencyWork?<p>这版已有依赖准备记录。请打开原工作核对结果，不会重新下载或开始构建。</p>:

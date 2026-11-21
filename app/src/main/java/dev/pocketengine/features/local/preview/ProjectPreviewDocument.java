@@ -25,7 +25,10 @@ public final class ProjectPreviewDocument {
     }
     public synchronized void release(){if(released)return;loading();released=true;}
     /** A fixed bundle may be observed; only the native registry's original SQL source can admit its reference. */
-    public synchronized long beginSelection(){if(!ready())throw stale();ticket=Math.addExact(ticket,1);selecting=true;return ticket;}
+    public synchronized long beginSelection(){
+        if(bundle.originalLocalViteBuild()||!ready())throw stale();
+        ticket=Math.addExact(ticket,1);selecting=true;return ticket;
+    }
     public synchronized void endSelection(){selecting=false;ticket=Math.addExact(ticket,1);}
     public synchronized Selection select(long capturedGeneration,long selectionTicket,String capturedNativeUrl,JSONObject observation)throws Exception {
         if(!ready()||!selecting||generation!=capturedGeneration||ticket!=selectionTicket||!Objects.equals(path,path(capturedNativeUrl)))throw stale();

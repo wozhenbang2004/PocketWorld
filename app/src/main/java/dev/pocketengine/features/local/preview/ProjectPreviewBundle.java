@@ -1,5 +1,7 @@
 package dev.pocketengine.features.local.preview;
 
+import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
+import dev.pocketengine.features.local.project.ProjectPackageArchive;
 import dev.pocketengine.features.local.project.ProjectSources;
 import dev.pocketengine.features.local.project.ProjectFileBytes;
 import dev.pocketengine.features.local.NativeCommandExecutor;
@@ -14,33 +16,58 @@ import java.util.TreeMap;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Immutable observed bytes from one native active workspace; never a model-supplied file resolver. */
+/** Immutable observed native preview bytes; never a model-supplied file resolver. */
 public final class ProjectPreviewBundle {
     public static final int MAX_RESOURCES=256,MAX_RESOURCE_BYTES=4*1024*1024,MAX_TOTAL_BYTES=32*1024*1024;
+    public static final String ORIGINAL_LOCAL_VITE_BUILD="original_local_vite_build";
     private ProjectPreviewBundle(){}
     public static final class Resource {
         public final String path,mimeType,sha256;private final byte[] bytes;
         private Resource(String path,byte[] bytes)throws Exception {this.path=path;this.bytes=bytes.clone();mimeType=mime(path);sha256=ProjectSources.sha256(bytes);}
         public byte[] bytes(){return bytes.clone();}
     }
+    // Renderer-only provenance. No package/saved artifact id or recipient is minted.
+    private record LocalViteBuild(String taskId,String runId,int epoch,String buildOperationId,
+            String manifestIdentity,String archiveSha256,long archiveBytes){
+        JSONObject metadata()throws Exception{
+            return new JSONObject().put("taskId",taskId).put("runId",runId).put("epoch",epoch)
+                .put("buildOperationId",buildOperationId).put("manifestIdentity",manifestIdentity)
+                .put("archiveSha256",archiveSha256).put("archiveBytes",archiveBytes);
+        }
+    }
     public static final class Verified {
         public final String checkoutId,projectId,sourceDigest,entryPath,previewRoot,identity,origin,entryUrl;public final long capturedAt;public final int totalBytes;
         public final String artifactId,artifactSha256;
         private final Map<String,Resource> resources;
         private final String rootedBase;
+        private final LocalViteBuild localViteBuild;
         private Verified(String checkout,String project,String source,String entry,String root,Map<String,Resource> resources,int total)throws Exception {
-            this(checkout,project,source,entry,root,resources,total,null,null,"");
+            this(checkout,project,source,entry,root,resources,total,null,null,"",null);
         }
-        private Verified(String checkout,String project,String source,String entry,String root,Map<String,Resource> resources,int total,String artifactId,String artifactSha,String rootedBase)throws Exception {
+        private Verified(String checkout,String project,String source,String entry,String root,Map<String,Resource> resources,int total,
+                String artifactId,String artifactSha,String rootedBase,LocalViteBuild localViteBuild)throws Exception {
             checkoutId=checkout;projectId=project;sourceDigest=source;entryPath=entry;previewRoot=root;capturedAt=System.currentTimeMillis();totalBytes=total;this.resources=Collections.unmodifiableMap(new LinkedHashMap<>(resources));
-            this.artifactId=artifactId;artifactSha256=artifactSha;this.rootedBase=rootedBase;
+            this.artifactId=artifactId;artifactSha256=artifactSha;this.rootedBase=rootedBase;this.localViteBuild=localViteBuild;
             JSONObject core=new JSONObject().put("checkoutId",checkout).put("projectId",project).put("sourceDigest",source).put("entryPath",entry).put("previewRoot",root).put("resources",manifest());if(artifactId!=null)core.put("artifactId",artifactId).put("artifactSha256",artifactSha);
             if(!rootedBase.isEmpty())core.put("rootedBase",rootedBase);
+            if(localViteBuild!=null)core.put(ORIGINAL_LOCAL_VITE_BUILD,localViteBuild.metadata());
             identity=ProjectSources.digest(core);origin="https://pw-project-"+identity.substring(0,40)+".invalid/";
             entryUrl=origin+(rootedBase.isEmpty()?"":rootedBase.substring(1))+encoded(entry.substring(root.isEmpty()?0:root.length()+1));
         }
-        public JSONObject metadata()throws Exception{return new JSONObject().put("previewId",identity).put("checkoutId",checkoutId).put("projectId",projectId).put("sourceDigest",sourceDigest).put("entryPath",entryPath).put("previewRoot",previewRoot)
-                .put("resources",manifest()).put("resourceCount",resources.size()).put("bytes",totalBytes).put("capturedAt",capturedAt).put("origin",artifactId==null?"active_workspace_observation":"fixed_workspace_project_artifact").put("artifactId",artifactId).put("artifactSha256",artifactSha256).put("atomicArtifactFence",false).put("businessVerified",false).put("persisted",artifactId!=null);}
+        public boolean originalLocalViteBuild(){return localViteBuild!=null;}
+        public JSONObject metadata()throws Exception{
+            JSONObject result=new JSONObject().put("previewId",identity).put("checkoutId",checkoutId).put("projectId",projectId)
+                .put("sourceDigest",sourceDigest).put("entryPath",entryPath).put("previewRoot",previewRoot).put("resources",manifest())
+                .put("resourceCount",resources.size()).put("bytes",totalBytes).put("capturedAt",capturedAt);
+            if(localViteBuild==null)result.put("origin",artifactId==null?"active_workspace_observation":"fixed_workspace_project_artifact")
+                .put("artifactId",artifactId).put("artifactSha256",artifactSha256);
+            else {
+                JSONObject proof=localViteBuild.metadata();
+                for(var keys=proof.keys();keys.hasNext();){String key=keys.next();result.put(key,proof.get(key));}
+                result.put("origin",ORIGINAL_LOCAL_VITE_BUILD).put("authorityAdded",false);
+            }
+            return result.put("atomicArtifactFence",false).put("businessVerified",false).put("persisted",artifactId!=null);
+        }
         public JSONArray manifest()throws Exception {JSONArray result=new JSONArray();for(Resource resource:resources.values())result.put(new JSONObject().put("path",resource.path).put("mimeType",resource.mimeType).put("sha256",resource.sha256).put("bytes",resource.bytes.length));return result;}
         String resourcePath(String url){
             try {
@@ -56,9 +83,30 @@ public final class ProjectPreviewBundle {
         public boolean document(String url){Resource resource=resource(url);return resource!=null&&resource.mimeType.equals("text/html");}
     }
     /** Reopen verified immutable archive bytes; no listener, live service, grant or active-tree fallback. */
-    public static Verified fromProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String artifactId,String artifactSha,String selectedEntry)throws Exception {
+    public static Verified fromProjectPackage(ProjectPackageArchive.Frozen frozen,String artifactId,String artifactSha,String selectedEntry)throws Exception {
         if(artifactId==null||!artifactId.matches("[a-f0-9-]{36}")||artifactSha==null||!artifactSha.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("请选择原固定成果版本");
-        JSONObject manifest=frozen.manifest(),source=manifest.getJSONObject("source");String entry=VersionedWorkspace.path(selectedEntry);
+        return fromArchive(frozen,frozen.manifest(),selectedEntry,artifactId,artifactSha,null);
+    }
+    /** Same already-reviewed bytes in memory, with no archive registration or resource fallback. */
+    public static Verified fromOriginalLocalViteBuild(ProjectPackageArchive.Frozen frozen,OriginalNodeWebOutput.Review original)throws Exception{
+        if(original==null||!original.build.directOwnerVite())throw new SecurityException("请选择这项原本机网页构建");
+        JSONObject pin=original.pin(),manifest=frozen.manifest(),source=manifest.getJSONObject("source");
+        OriginalNodeWebOutput.requirePin(original.build,pin);
+        // The typed review checked the archive SHA/size and complete tree against the exit witness.
+        // Frozen's manifest identity also binds every byte; pairing it to that review needs no ZIP rewrite.
+        if(!frozen.identity.equals(pin.getString("manifestIdentity"))||!"web_output".equals(manifest.opt("mode"))||
+            !OriginalNodeWebOutput.ENTRY.equals(manifest.opt("entryPath"))||!"dist".equals(manifest.opt("previewRoot"))||
+            manifest.getJSONArray("omitted").length()!=0)
+            throw new SecurityException("预览资源与这次原构建的清单不同，未打开其他输出");
+        for(String key:new String[]{"projectId","checkoutId","sourceDigest"})if(!pin.getString(key).equals(source.opt(key)))
+            throw new SecurityException("预览资源不是这项原工作的项目、工作副本或源码版本");
+        var proof=new LocalViteBuild(pin.getString("taskId"),pin.getString("runId"),pin.getInt("epoch"),pin.getString("buildOperationId"),
+            frozen.identity,pin.getString("archiveSha256"),pin.getLong("archiveBytes"));
+        return fromArchive(frozen,manifest,OriginalNodeWebOutput.ENTRY,null,null,proof);
+    }
+    private static Verified fromArchive(ProjectPackageArchive.Frozen frozen,JSONObject manifest,String selectedEntry,
+            String artifactId,String artifactSha,LocalViteBuild localViteBuild)throws Exception{
+        JSONObject source=manifest.getJSONObject("source");String entry=VersionedWorkspace.path(selectedEntry);
         if(!mime(entry).equals("text/html")||manifest.getString("mode").equals("web_output")&&!entry.equals(manifest.getString("entryPath")))throw new IllegalArgumentException("请选择这份成果声明的HTML入口");
         int slash=entry.lastIndexOf('/');String root=slash<0?"":entry.substring(0,slash),prefix=root.isEmpty()?"":root+"/";Map<String,Resource> resources=new TreeMap<>();int total=0;
         for(int i=0;i<manifest.getJSONArray("files").length();i++){
@@ -71,7 +119,8 @@ public final class ProjectPreviewBundle {
         // Only the single dist entry can mount its own complete archive at a different URL prefix.
         String rootedBase="web_output".equals(manifest.opt("mode"))&&"dist/index.html".equals(entry)&&manifest.getJSONArray("omitted").length()==0?
             ViteOutputMount.rootedBase(main.bytes,resources::containsKey):"";
-        return new Verified(source.getString("checkoutId"),source.getString("projectId"),source.getString("sourceDigest"),entry,root,resources,total,artifactId,artifactSha,rootedBase);
+        return new Verified(source.getString("checkoutId"),source.getString("projectId"),source.getString("sourceDigest"),
+            entry,root,resources,total,artifactId,artifactSha,rootedBase,localViteBuild);
     }
     /** Capture the entry's resource directory, excluding dependency/cache trees. No HTTP listener is opened. */
     public static Verified capture(File activeRoot,String checkout,String project,String source,String entryPath)throws Exception {

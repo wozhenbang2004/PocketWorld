@@ -803,11 +803,13 @@ internal class PocketWebBridge(
             if (action in PocketWebProjectPreview.COMMANDS) {
                 if (action in setOf("projects.preview", "projects.package.preview.open", "projects.preview.return") ||
                     action == "projects.preview.viewport" && args.optBoolean("visible")) projectWorkPages.clear()
-                val localTask = if (action == PocketWebProjectPreview.OPEN_LOCAL_WEB) requiredString(args, "taskId") else null
+                val localTask = if (action == PocketWebProjectPreview.OPEN_LOCAL_WEB || action == PocketWebProjectPreview.PREVIEW_LOCAL_BUILD)
+                    requiredString(args, "taskId") else null
                 fun localWorkCurrent() = localTask != null && section == null && taskViewId == localTask && controller.webPrivateOwnerVisible()
                 check(localTask == null || localWorkCurrent()) { "请先打开这份原本机构建" }
                 (projectPreview ?: error("原项目预览宿主尚未接入")).dispatch(action, args, ::localWorkCurrent) { result, error ->
-                    complete(id, result, error, retainValue = localTask == null); publishState()
+                    complete(id, result, error, retainValue = localTask == null && result?.opt("localWebWork") != true)
+                    publishState()
                 }
                 return
             }
@@ -1133,6 +1135,7 @@ internal class PocketWebBridge(
                 )
                 val preview = projectPreview?.snapshot()
                 val previewTaskVisible = controller.webPrivateOwnerVisible() && preview?.optString("taskId") == taskId &&
+                    preview?.opt("localWebWork") != true &&
                     preview?.optJSONObject("metadata")?.optString("projectId") == controller.state.projectId
                 require(fromReader || controller.state.tasks.any { it.id == taskId } || taskHistory.contains(taskId) || channelUsageVisible || phoneResultVisible || taskResultVisible || previewTaskVisible) { "请先重新读取这个原任务的历史窗口" }
                 val requestNavigation = if (args.has("requestNavigation")) requiredBoolean(args, "requestNavigation") else true

@@ -1035,6 +1035,41 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null, "原项目页面已关闭") }
     }
 
+    /** Open verified bytes from this finished local Build without creating a saved artifact. */
+    internal fun openOriginalViteBuildPreview(task: String, run: String, epoch: Int, operation: String,
+        control: dev.pocketengine.core.RunControl, ownerCurrent: () -> Boolean,
+        done: (RegisteredProjectPreview?, String?) -> Unit) {
+        val request = ++projectPreviewRequest
+        fun current() = !closed && !control.isCancelled && request == projectPreviewRequest &&
+            ownerCurrent() && webPrivateOwnerVisible()
+        check(current()) { "请留在这份原构建查看网页" }
+        try { io.execute {
+            val result = runCatching {
+                check(current()) { "原构建预览窗口已关闭" }
+                val tasks = app.tasks
+                val original = tasks.firstWebBuildForOwner(task, run, epoch, operation)
+                    ?.takeIf { it.directOwnerVite() } ?: error("未核对到这次实际生成的原网页")
+                check(tasks.firstWebOutputForOwner(original).opt("state") == "ready") { "请查看这次构建的原保存状态" }
+                val local = app.features.module("local") as? dev.pocketengine.features.local.LocalModule
+                    ?: error("原项目模块不可用")
+                val bundle = local.openDirectViteBuildPreviewForOwner(original, control)
+                val checked = tasks.firstWebBuildForOwner(task, run, epoch, operation)
+                    ?.takeIf { it.directOwnerVite() } ?: error("原构建已变化")
+                check(bundle.originalLocalViteBuild() && tasks.firstWebOutputForOwner(checked).opt("state") == "ready") {
+                    "原构建或保存状态已变化，请重新查看"
+                }
+                requireSamePackagePreviewSource(original.facts(), checked.facts())
+                control.check()
+                RegisteredProjectPreview(task, "", bundle, selectionUnavailableReason = "本次构建仅供预览",
+                    fromLocalWebWork = true)
+            }
+            main.post {
+                if (!current()) done(null, "原构建窗口已变化，未打开迟到的网页")
+                else result.fold({ selected -> done(selected, null) }, { done(null, message(it as? Exception ?: Exception(it))) })
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null, "原构建窗口已关闭") }
+    }
+
     /** Archive/source IO stays on the original worker and outside every TaskStore monitor. */
     internal fun checkProjectPreviewSelection(original: RegisteredProjectPreview, ownerCurrent: () -> Boolean, done: (Boolean, String?) -> Unit) {
         val request = projectPreviewRequest

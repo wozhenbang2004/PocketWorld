@@ -21,6 +21,7 @@ export type SourceMember = { path: string; fileSha256: string; bytes: number; ar
 export type SavedWebBuildOrigin = { runId: string; epoch: number; buildOperationId: string };
 type SavedBuildWebPick = SavedWebBuildOrigin & { projectId: string; checkoutId: string; sourceDigest: string; artifactId: string; artifactSha256: string };
 export type PackagePreviewTarget = { taskId: string; operationId: string; sourceMember?: SourceMember; savedBuildWeb?: SavedBuildWebPick };
+export type OriginalVitePreviewTarget = SavedWebBuildOrigin & { taskId: string; projectId: string; checkoutId: string; sourceDigest: string };
 export type ProjectPackageOutcome = PackagePreviewTarget & {
   runId: string; epoch: number; projectId: string; checkoutId: string; sourceDigest: string;
   artifactId: string; archiveSha256: string; archiveBytes: number; manifestIdentity: string;
@@ -68,6 +69,21 @@ export function localWebWorkPreview(value:unknown,target:PackagePreviewTarget):P
     meta.origin==='fixed_workspace_project_artifact'&&meta.projectId===saved.projectId&&meta.checkoutId===saved.checkoutId&&
     meta.sourceDigest===saved.sourceDigest&&meta.artifactId===saved.artifactId&&meta.artifactSha256===saved.artifactSha256&&
     meta.entryPath==='dist/index.html'?view:null;
+}
+
+/** Nonpersistent original build evidence; never a fixed archive or Chat preview. */
+export function originalViteWorkPreview(value:unknown,target:OriginalVitePreviewTarget):ProjectPreviewState|null {
+  const source=record(value);
+  if(source.kind!=='bundle'||source.localWebWork!==true||source.selectionAvailable!==false||source.selecting!==false||
+    Object.hasOwn(source,'packageOperationId'))return null;
+  const view=bundlePreviewState(source,true),meta=view?.metadata;
+  return view&&meta&&view.taskId===target.taskId&&meta.origin==='original_local_vite_build'&&meta.persisted===false&&
+    meta.authorityAdded===false&&meta.taskId===target.taskId&&meta.runId===target.runId&&meta.epoch===target.epoch&&
+    meta.buildOperationId===target.buildOperationId&&meta.projectId===target.projectId&&meta.checkoutId===target.checkoutId&&
+    meta.sourceDigest===target.sourceDigest&&meta.entryPath==='dist/index.html'&&meta.previewRoot==='dist'&&
+    !Object.hasOwn(meta,'artifactId')&&!Object.hasOwn(meta,'artifactSha256')&&
+    sha256(meta.previewId)&&sha256(meta.manifestIdentity)&&sha256(meta.archiveSha256)&&
+    Number.isSafeInteger(meta.archiveBytes)&&Number(meta.archiveBytes)>0&&Number(meta.archiveBytes)<=20*1024*1024?view:null;
 }
 
 const identifier = (value: unknown): value is string => typeof value === 'string' && !!value && value.length <= 200;
