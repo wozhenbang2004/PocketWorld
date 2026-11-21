@@ -10,6 +10,11 @@ import java.util.Map;
 public final class DocumentContent {
     private DocumentContent() {}
     public static final String PARSER_VERSION = "pocket-document-2";
+    /** The original Office reader and its same-file finder use the same UTF-16 cut. */
+    static int textChunkEnd(String text,int offset) {
+        int end=Math.min(offset+1024,text.length());
+        return end<text.length()&&Character.isHighSurrogate(text.charAt(end-1))?end-1:end;
+    }
     public static final class Request {
         public final int startUnit, startChunk, maxUnits, maxChars, maxChunks;
         public final String extraction;
@@ -140,8 +145,7 @@ public final class DocumentContent {
             unit(unit);
             if(lastUnit!=unit) {lastUnit=unit;unitChunk=0;}
             for(int offset=0;offset<text.length();) {
-                int end=Math.min(offset+1024,text.length());
-                if(end<text.length() && Character.isHighSurrogate(text.charAt(end-1))) end--;
+                int end=textChunkEnd(text,offset);
                 int charStart=offset;
                 String value=text.substring(offset,end); offset=end; int index=unitChunk++;
                 // The existing sheet parse already sees these pieces. No previous text is kept or reread.

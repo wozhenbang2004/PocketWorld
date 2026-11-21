@@ -4005,25 +4005,47 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }}
         }
     }
-    /** Uses the same durable owner draft and submission receipt as ordinary conversation input. */
-    internal fun sendOwnerWorkInput(expected: JSONObject, client: String, text: String, mode: String, done: (JSONObject?, String?) -> Unit) {
-        check(webPrivateOwnerVisible() && !state.chatSubmitting) { "请等待原输入回执" }
+    /** Explicitly send this private composer's current staged files to one selected live Work. */
+    internal fun sendOwnerWorkInput(expected: JSONObject, client: String, text: String, mode: String,
+                                    attachments: JSONArray, done: (JSONObject?, String?) -> Unit) {
+        check(webPrivateOwnerVisible() && !hasChannelPhoneOrigin && !state.chatSubmitting && !state.chatBusy &&
+            !state.phoneSubmitting && !state.chatAttachmentPickerOpen && state.filePath == null && queuedInputsPage == null &&
+            !composerSaving && !voiceInput.active() && !voiceInput.snapshot().optBoolean("reviewAvailable")) {
+            "请回原私人对话，等当前草稿就绪后再补充"
+        }
         require(UUID.fromString(client).toString() == client && mode in setOf("queue", "steer")) { "补充身份或采用方式无效" }
-        val binding = originalOwnerWorkBinding(expected, state.conversationId, state.tasks)
+        val conversation = state.conversationId?.takeIf(String::isNotBlank) ?: error("没有读到原私人对话，未发送")
+        val binding = originalOwnerWorkBinding(expected, conversation, state.tasks)
+        val task = state.tasks.single { it.id == binding.getString("taskId") }
+        val raw = task.raw; val work = raw.optJSONObject("ownerWork")
+        require(task.status == "running" && raw.opt("status") == task.status && raw.opt("cancelRequested") == false &&
+            raw.opt("kind") == "assistant" && raw.opt("executionMode") == "capabilities" &&
+            raw.opt("contextAvailable") == true && raw.opt("contextWithdrawn") != true && raw.opt("sourceCurrentReadRequired") != true &&
+            raw.optJSONObject("controls")?.opt("canInput") == true &&
+            work != null && work.opt("format") == "pocketworld.owner-work.v1" && work.opt("workTaskId") == task.id && work.opt("conversationId") == conversation &&
+            listOf("origin", "parentTaskId", "teamRunId", "teamAssignment", "memberId", "developmentContext", "ownerPhoneControl",
+                "ownerDeviceWork").all(raw::isNull)) { "所选原工作已变化或不再接收补充；草稿仍保留" }
         val model = ownerComposer ?: error("原草稿尚未读取，未发送")
         val draft = model.active()
-        check(draft.key !in unconfirmedDraftMemory && writingDraftMemory != draft.key && !model.oneMessageExcluded(draft.key)) { "请先核对原私聊草稿的单条记忆限制，未将它转交另一项工作" }
-        require(draft.conversationId == state.conversationId && text == draft.text && (text.isNotBlank() || state.selectedChatAttachments.isNotEmpty()) && text.trim().length <= 12000 && mode == draft.mode) { "原草稿或补充方式已变化，请核对保留内容" }
-        require(draft.sourceRefs().length() == 0 && draft.previewRefs().length() == 0 && draft.objectRefs().length() == 0) { "本次任务补充支持文字和已选附件；关联对象、原文或预览引用仍保留，请先在管家对话中处理" }
-        val selected = state.selectedChatAttachments.toList()
-        val fingerprint = ownerWorkDraftFingerprint(ChatInputRules.fingerprint(text.trim(), state.conversationId, mode, selected, draft.sourceRefs(), draft.previewRefs()), binding)
-        val unresolved = model.matchingPending(draft.key, fingerprint)
-        if (unresolved != null) {
-            queryChatSubmission(unresolved.clientId)
-            done(JSONObject().put("clientMessageId", unresolved.clientId).put("status", "unconfirmed").put("message", "正在查询这条输入的原回执，没有重复提交"), null)
-            return
+        require(draft.key == "conversation:$conversation" && draft.conversationId == conversation && text == draft.text &&
+            text.trim().length <= 12000 && mode == draft.mode && draft.voiceText.isEmpty() &&
+            model.pending().none { it.draftKey == draft.key }) { "原草稿已变化或有输入待核对，未提交补充" }
+        check(draft.key !in unconfirmedDraftMemory && writingDraftMemory != draft.key && !model.oneMessageExcluded(draft.key)) {
+            "请先核对原私聊草稿的单条记忆限制，未将它转交另一项工作"
         }
-        require(model.pending(client) == null) { "这条输入身份已登记，请查询原回执" }
+        require(draft.sourceRefs().length() == 0 && draft.previewRefs().length() == 0 && draft.objectRefs().length() == 0) {
+            "这次仅支持文字和已选附件；原引用仍保留，未提交补充"
+        }
+        val stagedFiles = draft.attachments()
+        val selected = stagedFiles.objects().mapNotNull(ChatInputRules::attachment)
+        require(selected.size in 1..4 && selected.size == stagedFiles.length() && selected == state.selectedChatAttachments &&
+            attachments.length() == selected.size && selected.map { it.id }.toSet().size == selected.size &&
+            selected.withIndex().all { (index, file) ->
+                val reviewed = attachments.optJSONObject(index)
+                reviewed != null && reviewed.length() == 2 && reviewed.opt("id") == file.id && reviewed.opt("sha256") == file.sha256
+            }) { "所选附件已变化，未提交补充" }
+        require(model.pending(client) == null && !state.chatReceipts.containsKey(client)) { "这条输入身份已登记，请查询原回执" }
+        val fingerprint = ownerWorkDraftFingerprint(ChatInputRules.fingerprint(text.trim(), conversation, mode, selected), binding)
         model.prepare(client, draft.key, draft.revision, fingerprint, binding)
         val input = JSONObject(binding.toString()).put("message", ChatInputRules.submittedText(text, selected)).put("clientMessageId", client).put("mode", mode)
             .put("attachments", org.json.JSONArray().also { files -> selected.forEach { files.put(it.selection()) } }).put("_ownerWorkTargeted", true)

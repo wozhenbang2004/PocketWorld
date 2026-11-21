@@ -5,6 +5,7 @@ import {MarkdownBody} from './library';
 import {bridge} from './bridge';
 import {documentTable,fileObject as obj,fileRows as rows,type FileJson as Json} from './attachment-workspace';
 import {OriginalMediaPlayer} from './workspace-library/OriginalMediaPlayer';
+import {OriginalWordFind,originalWordHitBlock,type OriginalWordHit} from './OriginalWordFind';
 
 export function FileDetails({value,title='来源详情'}:{value:unknown;title?:string}) {
  return value == null ? null : <details className="pw-file-details"><summary>{title}</summary><pre>{typeof value==='string'?value:JSON.stringify(value,null,2)}</pre></details>;
@@ -36,19 +37,24 @@ function wordFragments(chunks:Json[]):WordFragment[]{
  }
  return fragments;
 }
-export function DocumentProjection({value,orderedOriginalWord=false,pdfPage}:{value:Json;orderedOriginalWord?:boolean;pdfPage?:number}) {
+export function DocumentProjection({value,orderedOriginalWord=false,pdfPage,wordMatch}:{value:Json;orderedOriginalWord?:boolean;pdfPage?:number;wordMatch?:OriginalWordHit}) {
  const chunks=rows(value.chunks),tables=new Map<string,Json[]>(),paragraphs:Json[]=[];
  const orderedWord=orderedOriginalWord&&value.format==='docx'&&['ok','partial'].includes(value.status);
  const wordHeadings=new Map((orderedWord?confirmedWordHeadings(value):[]).map(heading=>[heading.unit,heading] as const));
  if(!orderedWord)for(const block of chunks){const at=obj(block.locator);if(at.cell||at.table){const key=`${at.sheet||''}:${at.table||''}:${block.unit}`;tables.set(key,[...(tables.get(key)||[]),block])}else paragraphs.push(block)}
  const paragraph=(block:Json,key:string)=>{
   const heading=wordHeadings.get(block.unit);
-  if(heading&&block.kind==='text'&&block.chunk===0&&block.text===heading.text)return <h4 key={key} className="pw-file-text"><bdi>{block.text}</bdi></h4>;
-  return <div key={key}>{!pdfPage&&<small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small>}<p className="pw-file-text">{block.text}</p></div>;
+  const selected=orderedWord&&wordMatch&&originalWordHitBlock(block,wordMatch)?{'data-original-word-find':'true',tabIndex:-1}:undefined;
+  if(heading&&block.kind==='text'&&block.chunk===0&&block.text===heading.text)return <h4 key={key} className="pw-file-text" {...selected}><bdi>{block.text}</bdi></h4>;
+  return <div key={key} {...selected}>{!pdfPage&&<small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small>}<p className="pw-file-text">{block.text}</p></div>;
  };
  const tableFragment=(blocks:Json[],key:string)=>{
   const table=documentTable(blocks),caption=orderedWord?'原表格片段 · 当前读取范围':obj(blocks[0]?.locator).sheet||'原文档表格 · 当前范围';
-  return <div className="pw-file-table" key={key}><table><caption>{caption}</caption><thead><tr><th>行</th>{table.columns.map(col=><th key={col}>{col}</th>)}</tr></thead><tbody>{table.rows.map(row=><tr key={row}><th>{row}</th>{table.columns.map(col=><td key={col}>{table.text(row,col)}</td>)}</tr>)}</tbody></table></div>;
+  const selected=orderedWord&&wordMatch&&blocks.some(block=>originalWordHitBlock(block,wordMatch))?wordMatch:undefined;
+  return <div className="pw-file-table" key={key}><table><caption>{caption}</caption><thead><tr><th>行</th>{table.columns.map(col=><th key={col}>{col}</th>)}</tr></thead><tbody>{table.rows.map(row=><tr key={row}><th>{row}</th>{table.columns.map(col=>{
+   const isMatch=!!selected&&selected.row===row&&selected.column===col;
+   return <td key={col} data-original-word-find={isMatch?'true':undefined} tabIndex={isMatch?-1:undefined}>{table.text(row,col)}</td>;
+  })}</tr>)}</tbody></table></div>;
  };
  return <section className="pw-file-projection" aria-label="当前读取范围"><p className="pw-muted">{pdfPage?
   value.truncated===true?'只显示本页已读到的文字。':'仅显示该页的本机文本层，未做图片识别。':
@@ -629,7 +635,11 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    }}/>}
   {(!worksheets.length||worksheets.length<actual.totalUnits)&&
    <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>}
-  <DocumentProjection value={actual} orderedOriginalWord/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
+  {actual.format==='docx'?<OriginalWordFind source={source} windowId={windowId} value={actual} busy={readerBusy}
+   find={query=>invoke('find',{query})} read={(unit,chunk)=>invoke('read',{unit,chunk})}>
+   {match=><DocumentProjection value={actual} orderedOriginalWord wordMatch={match}/>}
+  </OriginalWordFind>:<DocumentProjection value={actual} orderedOriginalWord/>}
+  {Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
  </>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">
   <RadioOptions label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);selectTextEncoding(encoding)}}/>

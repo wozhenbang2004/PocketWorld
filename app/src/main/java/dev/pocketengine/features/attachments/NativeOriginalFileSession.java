@@ -80,6 +80,11 @@ public final class NativeOriginalFileSession implements AutoCloseable {
     }
     public JSONObject text(String encoding,int offset,int maxChars,RunControl control)throws Exception {worker();File selected=file();JSONObject page=new OwnerTextDocument(()->new FileInputStream(selected)).page(encoding,offset,maxChars,control);current();return page.put("sha256",original.sha256).put("sourceIdentity",original.identity);}
     public JSONObject searchText(String encoding,String query,int offset,RunControl control)throws Exception {worker();File selected=file();JSONObject found=new OwnerTextDocument(()->new FileInputStream(selected)).search(encoding,query,offset,control);current();return found.put("sha256",original.sha256).put("sourceIdentity",original.identity);}
+    public JSONObject searchWord(String query,RunControl control)throws Exception {
+        worker();current();byte[] bytes=original.bytes(control);
+        try{JSONObject found=OriginalWordFind.read(bytes,query,control);current();return found.put("sha256",original.sha256).put("sourceIdentity",original.identity);}
+        finally{Arrays.fill(bytes,(byte)0);}
+    }
     public DocumentContent.Result document(int unit,int chunk,RunControl control)throws Exception {
         worker();current();byte[] bytes=original.bytes(control);try{DocumentReader reader=new DocumentReader(new AndroidPdfDocumentPort(context),null);boolean word=original.mimeType.contains("wordprocessingml")||original.name.toLowerCase(java.util.Locale.ROOT).endsWith(".docx");DocumentContent.Result result=reader.read(bytes,DocumentContent.Request.originalOfficeView(unit,chunk,word),control);current();return result;}finally{Arrays.fill(bytes,(byte)0);}
     }

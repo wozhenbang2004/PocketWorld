@@ -9,6 +9,8 @@ type Original = { taskId: string; runId: string; epoch: number };
 type Pause = Original & { pauseRevision: number; scopeRevision: number };
 type Review = Pause & { reviewHandle: string; noteRecorded: boolean };
 type Draft = { target: Original; pause?: Pause; text: string };
+export type MainPauseResume = {key:string;current:()=>boolean;submit:(trigger:HTMLButtonElement)=>Promise<unknown>|undefined};
+type ResumeFeedback = {current:()=>boolean;phase:'pending'|'accepted'|'unknown'};
 const same = (a?: Original | null, b?: Original | null) => !!a && !!b && a.taskId === b.taskId && a.runId === b.runId && a.epoch === b.epoch;
 const samePause = (a: Pause, b: Pause) => same(a,b) && a.pauseRevision === b.pauseRevision && a.scopeRevision === b.scopeRevision;
 export function isPrivateLocalPhone(task: Row) {
@@ -41,15 +43,20 @@ export function InterruptedPhoneRecord({reviewed,canStart,onHistory,onReview}:{r
 }
 
 /** Only the mounted private task holds its unsent draft. Text does not enter the original run until the explicit final click. */
-export function PhonePauseInstruction({ task, visible, livePause, interrupted, run }: {task:Row;visible:boolean;livePause:boolean;interrupted:boolean;run:(action:string,args:Row)=>Promise<any>}) {
+export function PhonePauseInstruction({ task, visible, livePause, interrupted, plainMainResume, run }: {task:Row;visible:boolean;livePause:boolean;interrupted:boolean;plainMainResume?:MainPauseResume;run:(action:string,args:Row)=>Promise<any>}) {
   const id=phoneRunIdentity(task), [draft,setDraft]=useState<Draft|null>(null), [review,setReview]=useState<Review|null>(null);
   const [busy,setBusy]=useState(false), [error,setError]=useState(''), [notice,setNotice]=useState(''), [expanded,setExpanded]=useState(false);
+  const [resumeFeedback,setResumeFeedback]=useState<ResumeFeedback>();
+  const attemptedPlainPause=useRef('');
   const paused=task.status==='paused'&&livePause&&!interrupted;
   const life=useRef(true), flight=useRef(false), ticket=useRef(0), info=useRef({id,visible,paused,interrupted}); info.current={id,visible,paused,interrupted};
   const input=useRef<Draft|null>(draft);input.current=draft;
   useEffect(()=>{life.current=true;return()=>{life.current=false;ticket.current++}},[]);
   useEffect(()=>{
-    const lose=()=>{ticket.current++;flight.current=false;setBusy(false);setReview(null)};
+    const lose=()=>{
+      ticket.current++;flight.current=false;setBusy(false);setReview(null);
+      setResumeFeedback(old=>old?.phase==='pending'?{...old,phase:'unknown'}:old);
+    };
     if(!visible)lose();
     const hide=()=>{if(document.hidden)lose()};
     document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide);
@@ -90,10 +97,33 @@ export function PhonePauseInstruction({ task, visible, livePause, interrupted, r
     }catch(failure){if(accepts())setError((failure instanceof Error?failure.message:'补充或恢复结果待核对')+'。原稿保留；请先核对这次暂停，不要重复提交。')}
     finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
   };
+  const continueWithoutNote=async(trigger:HTMLButtonElement)=>{
+    const offered=plainMainResume;
+    if(!offered||!id||!origin(id)||!info.current.paused||expanded||flight.current||
+       input.current?.text||attemptedPlainPause.current===offered.key)return;
+    const receiving=offered.submit(trigger);
+    if(!receiving){if(offered.current())setError('原暂停已变化，这次没有提交继续。');return}
+    const serial=++ticket.current;
+    attemptedPlainPause.current=offered.key;flight.current=true;setBusy(true);setError('');setNotice('');
+    setResumeFeedback({current:offered.current,phase:'pending'});
+    const accepts=()=>serial===ticket.current&&origin(id)&&offered.current();
+    try{
+      await receiving;
+      if(accepts())setResumeFeedback({current:offered.current,phase:'accepted'});
+    }catch{
+      if(accepts())setResumeFeedback({current:offered.current,phase:'unknown'});
+    }finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
+  };
   const discard=()=>{if(busy)return;input.current=null;setDraft(null);setReview(null);setError('');setNotice('');setExpanded(false)};
-  if(!id||!isPrivateLocalPhone(task)||(!paused&&!draft&&(!notice||interrupted)))return null;
-  return <section className="pw-work-supplement" aria-label="本次本机任务补充">
-    {!expanded?<>{paused&&<Button variant="secondary" leadingIcon={IconEdit} disabled={!visible||busy} onClick={()=>{setExpanded(true);if(!draftElsewhere)void read()}}>{draft?.text?'打开本次补充草稿':'补充后继续…'}</Button>}{!paused&&draft&&<Button variant="ghost" onClick={()=>setExpanded(true)}>查看未确认的补充草稿</Button>}</>:<>
+  const plainFeedback=visible&&resumeFeedback?.current()?resumeFeedback.phase:undefined;
+  const offerPlain=paused&&visible&&plainMainResume&&!draft?.text&&attemptedPlainPause.current!==plainMainResume.key;
+  if(!id||!isPrivateLocalPhone(task)||(!paused&&!draft&&(!notice||interrupted)&&!plainFeedback))return null;
+  return <section className="pw-work-supplement" aria-label={plainMainResume||plainFeedback?'本次手机任务的暂停操作':'本次本机任务补充'}>
+    {!expanded?<>
+      {offerPlain&&<Button variant="primary" disabled={busy} aria-description="仍使用手机主屏，不会替你打开应用或另开一轮。" onClick={event=>void continueWithoutNote(event.currentTarget)}>继续这次暂停</Button>}
+      {paused&&<Button variant="secondary" leadingIcon={IconEdit} disabled={!visible||busy} onClick={()=>{setExpanded(true);if(!draftElsewhere)void read()}}>{draft?.text?'打开本次补充草稿':'补充后继续…'}</Button>}
+      {!paused&&draft&&<Button variant="ghost" onClick={()=>setExpanded(true)}>查看未确认的补充草稿</Button>}
+    </>:<>
       <h4>{paused?'补充后继续':'未确认的补充草稿'}</h4>
       <p className="pw-field-hint">{paused?'只给这次已暂停的本机任务及其模型。本来的可用应用、权限、额度和截止时间不变。写字不会恢复任务。':'原稿仍在本页。没有可提交的原暂停，也没有将它带入其他轮次。'}</p>
       <TextAreaField label="给本次执行补充什么？" value={draft?.text||''} onChange={value=>{const old=input.current;if(!old||busy)return;const next={...old,text:value};input.current=next;setDraft(next)}} maxLength={8000} rows={3} showCount isDisabled={busy||draftElsewhere||!paused||!draft?.pause}/>
@@ -105,6 +135,8 @@ export function PhonePauseInstruction({ task, visible, livePause, interrupted, r
         {draft&&<Button variant="ghost" disabled={busy} onClick={discard}>舍弃本页草稿</Button>}
       </div>
     </>}
-    {busy&&<p role="status">正在等原任务回执…</p>}{error&&<p className="pw-error" role="alert">{error}</p>}{notice&&!interrupted&&<p role="status">{notice}</p>}
+    {plainFeedback==='accepted'&&<p role="status">已接纳本轮继续。新画面或结果需看后续原回执。</p>}
+    {plainFeedback==='unknown'&&<p role="status">未核对到本轮继续的回执。请在原任务核对，不要重复继续。</p>}
+    {busy&&<p role="status">{plainFeedback==='pending'?'正在等待这次继续的回执…':'正在等原任务回执…'}</p>}{error&&<p className="pw-error" role="alert">{error}</p>}{notice&&!interrupted&&<p role="status">{notice}</p>}
   </section>;
 }

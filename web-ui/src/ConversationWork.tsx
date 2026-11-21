@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { IconChevronDown, IconChevronRight, IconClock, IconError, IconInfo, IconPauseCircle } from './icons';
 import { Button } from './forms-library';
 import { ProgressCircle } from './library';
@@ -35,7 +35,7 @@ function latestRequestWork(tasks: Task[], pinned: Task | undefined, messages: re
 }
 
 /** A compact continuation of the conversation; the existing task drawer owns its details. */
-export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus, onTeamDecision, pinnedTask, allowMessageTail, messages }: { tasks: Task[]; onOpen: (task: Task, trigger: HTMLButtonElement) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void; onTeamDecision?:OpenTeamDecision; pinnedTask?:Task; allowMessageTail?:boolean; messages?:readonly ConversationMessage[] }) {
+export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus, onTeamDecision, pinnedTask, allowMessageTail, messages, stagedSupplement }: { tasks: Task[]; onOpen: (task: Task, trigger: HTMLButtonElement) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void; onTeamDecision?:OpenTeamDecision; pinnedTask?:Task; allowMessageTail?:boolean; messages?:readonly ConversationMessage[]; stagedSupplement?:(task:Task)=>ReactNode }) {
   const [expanded, setExpanded] = useState(false);
   const root=useRef<HTMLElement>(null),focused=useRef<{node:HTMLElement;id:string;identity:string}|null>(null);
   const listId = useId();
@@ -88,6 +88,7 @@ export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyF
         <MotionFeedback as="span" identity={needsAttention ? action : status} initial={false} className="pw-work-entry-state">{needsAttention ? action : status}</MotionFeedback>
         <IconChevronRight className="pw-work-chevron" size={16} aria-hidden="true" />
       </Button>
+      {stagedSupplement?.(task)}
       {onTeamDecision && teams.map(team=><ConversationTeamDecisions key={team.teamRunId} team={team} distinguish={teams.length>1} onOpen={onTeamDecision}/>)}
     </li>;
   };

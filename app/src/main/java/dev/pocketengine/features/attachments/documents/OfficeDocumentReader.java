@@ -31,12 +31,15 @@ final class OfficeDocumentReader {
     private static final String CONTENT_TYPES="http://schemas.openxmlformats.org/package/2006/content-types";
     private final Map<String,byte[]> parts=new LinkedHashMap<>();
     private final Set<String> names=new HashSet<>();
+    private final OriginalWordFind find;
     private RunControl control;
     private DocumentContent.Collector out;
     private String format="zip";
     private static final class Limit extends SAXException { Limit(String s){super(s);} }
     private static final class Invalid extends SAXException { Invalid(String s){super(s);} }
     private static final class Relation {final String target,type;Relation(String target,String type){this.target=target;this.type=type;}}
+    OfficeDocumentReader(){this(null);}
+    OfficeDocumentReader(OriginalWordFind find){this.find=find;}
 
     DocumentContent.Result read(byte[] bytes,DocumentContent.Request request,RunControl control)throws Exception {
         this.control=control;out=new DocumentContent.Collector(request);
@@ -64,6 +67,7 @@ final class OfficeDocumentReader {
             else if(type.equals("application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"))format="pptx";
             else return DocumentReader.unavailable("office","unsupported","Only non-macro DOCX, XLSX and PPTX main parts are supported");
             for(String name:names)if(name.toLowerCase(java.util.Locale.ROOT).endsWith("vbaproject.bin"))throw new Invalid("Macro payload in non-macro document");
+            if(find!=null&&!format.equals("docx"))return DocumentReader.unavailable(format,"unsupported","Original Word find requires a DOCX body");
             if(format.equals("docx"))word(main);
             else if(format.equals("xlsx"))workbook(main);
             else presentation(main);
@@ -237,7 +241,7 @@ final class OfficeDocumentReader {
                 if(text!=null&&deleted==0&&(n.equals("tab")||n.equals("br")))text.append(n.equals("tab")?'\t':'\n');
             }
             @Override void text(char[] c,int s,int n){if(capture>0&&text!=null&&body>0&&drawing==0&&deleted==0)text.append(c,s,n);}
-            @Override void end(String uri,String n) {
+            @Override void end(String uri,String n)throws Exception {
                 if(!ns(uri,"wordprocessingml"))return;
                 if(n.equals("drawing")||n.equals("pict")||n.equals("object")){drawing--;return;}
                 if(n.equals("body")){if(depth==bodyDepth)bodyDepth=0;body--;return;}
@@ -246,7 +250,10 @@ final class OfficeDocumentReader {
                 if(n.equals("pPr")&&depth==headingProperties)headingProperties=0;
                 if(n.equals("p")&&text!=null){
                     String visible=text.toString();
-                    out.add(paragraph,tables.isEmpty()?"text":"table_cell",locator,visible);out.unit(paragraph);
+                    String kind=tables.isEmpty()?"text":"table_cell";
+                    if(find==null)out.add(paragraph,kind,locator,visible);
+                    else find.observe(paragraph,kind,locator,visible);
+                    out.unit(paragraph);
                     if(depth==headingParagraph&&!headingUnsafe&&headingLevel>0)out.wordHeading(paragraph,headingLevel,visible);
                     headingParagraph=0;text=null;
                 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react';
 import { Button, CheckboxField, SettingsDialog } from './forms-library';
 import { bridge } from './bridge';
 import {TeamRevisionFileComparison,originalRevision,type RevisionComparison} from './TeamRevisionFileComparison';
@@ -29,12 +29,14 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
   const [shown,setShown]=useState(false),[source,setSource]=useState<Reading|null>(null),[selected,setSelected]=useState(''),[page,setPage]=useState<Page|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[memberFirst,setMemberFirst]=useState('');
   const [allLoaded,setAllLoaded]=useState(false),[approval,setApproval]=useState<Approval|null>(null),[ack,setAck]=useState(false);
+  const [completeFiles,setCompleteFiles]=useState<{fileHandle:string;ids:ReadonlySet<string>}|null>(null);
+  const nextFocus=useRef<{fileHandle:string;artifactId:string;origin:Element|null}|null>(null), fileSection=useRef<HTMLElement>(null);
   const [projectView,setProjectView]=useState(false);
   const [registered,setRegistered]=useState(''),[unknown,setUnknown]=useState(false);
   const generation=useRef(0),current=useRef<Reading|null>(null),pending=useRef(false),opened=useRef(false);
   const release=(handle?:string)=>{if(handle)void bridge.command('teams.closeReading',{fileHandle:handle}).catch(()=>{});};
   const close=()=>{generation.current++;pending.current=false;opened.current=false;release(current.current?.fileHandle);current.current=null;
-    setProjectView(false);setAllLoaded(false);setApproval(null);setAck(false);setRegistered('');setUnknown(false);setBusy(false);setShown(false);setSource(null);setSelected('');setPage(null);setMemberFirst('');setError('');onOpen(false);};
+    setProjectView(false);setAllLoaded(false);setCompleteFiles(null);nextFocus.current=null;setApproval(null);setAck(false);setRegistered('');setUnknown(false);setBusy(false);setShown(false);setSource(null);setSelected('');setPage(null);setMemberFirst('');setError('');onOpen(false);};
   const returnToRevision=()=>{generation.current++;pending.current=false;setBusy(false);setError('');setProjectView(false);};
   const dismiss=()=>{close();if(entry&&!document.hidden)entry.returnToWork?.()};
   useEffect(()=>()=>{generation.current++;opened.current=false;pending.current=false;release(current.current?.fileHandle);current.current=null;onOpen(false);},[view,team,onOpen]);
@@ -102,9 +104,11 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
       void open(undefined,memberEntry.file);
     }
   },[entry?.requestId,memberEntry?.requestId,disabled,active,view]);
-  const read=async(row:FileRow,offset:number)=>{
-    const original=current.current;if(!original||pending.current||!opened.current)return;
-    const seq=++generation.current;pending.current=true;setBusy(true);setError('');setSelected(row.artifactId);if(!offset)setPage(null);
+  const read=async(row:FileRow,offset:number,reveal=false)=>{
+    const original=current.current;if(!original||pending.current||!opened.current||
+      reveal&&(!active||document.hidden||original!==source||!original.files.includes(row)))return;
+    const seq=++generation.current,origin=document.activeElement;nextFocus.current=null;
+    pending.current=true;setBusy(true);setError('');setSelected(row.artifactId);if(!offset)setPage(null);
     try{
       const part=await run('teams.readFrozenDiff',{viewHandle:view,fileHandle:original.fileHandle,artifactId:row.artifactId,offset});
       if(seq!==generation.current)return;
@@ -112,10 +116,27 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
          ||part.offset!==offset||part.retainedChars!==row.retainedChars||typeof part.diff!=='string'||part.endOffset!==offset+part.diff.length
          ||part.endOffset>part.retainedChars||(part.endOffset===offset&&offset<part.retainedChars))throw new Error('差异片段身份或范围不符，没有替换成其他文件。');
       if(part.allTextRangesReturned===true)setAllLoaded(true);
+      if(original.fullProject===false&&original.ownerDecision?.state==='eligible'&&!original.revisionComparison&&
+         part.nativeTruncated===false&&row.truncated===false&&part.endOffset===part.retainedChars&&
+         (offset===0||page?.id===row.artifactId&&page.end===offset&&page.body.length===offset)){
+        setCompleteFiles(old=>({fileHandle:original.fileHandle,
+          ids:new Set([...(old&&old.fileHandle===original.fileHandle?old.ids:[]),row.artifactId])}));
+      }
+      if(reveal)nextFocus.current={fileHandle:original.fileHandle,artifactId:row.artifactId,origin};
       setPage(old=>({id:row.artifactId,body:(offset&&old?.id===row.artifactId&&old.end===offset?old.body:'')+part.diff,end:part.endOffset,size:part.retainedChars}));
     }catch(e){if(seq===generation.current)setError(e instanceof Error?e.message:String(e));}
     finally{if(seq===generation.current){pending.current=false;setBusy(false);}}
   };
+
+  useLayoutEffect(()=>{
+    const next=nextFocus.current;
+    if(!next||page?.id!==next.artifactId)return;
+    nextFocus.current=null;
+    if(!active||document.hidden||current.current?.fileHandle!==next.fileHandle||selected!==next.artifactId||
+       document.activeElement!==next.origin&&document.activeElement!==document.body)return;
+    const section=fileSection.current;
+    if(section?.isConnected){section.focus({preventScroll:true});section.scrollIntoView({block:'start'});}
+  },[active,page,selected]);
 
   const openOriginalReviewer=async()=>{
     const original=current.current;
@@ -158,6 +179,11 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
   const finding=source?blockedFinding(source.ownerDecision,team,source.planHash):null;
   const files=source?.files??[];
   const orderedFiles=memberFirst?[...files.filter(file=>file.artifactId===memberFirst),...files.filter(file=>file.artifactId!==memberFirst)]:files;
+  const coverage=source&&completeFiles&&completeFiles.fileHandle===source.fileHandle?completeFiles.ids:undefined;
+  const currentIndex=orderedFiles.findIndex(file=>file.artifactId===selected);
+  const nextFile=source?.ownerDecision?.state==='eligible'&&source.fullProject===false&&!source.revisionComparison&&
+    !unknown&&!registered&&!allLoaded&&page?.id===selected&&page.end===page.size&&coverage&&coverage.has(selected)&&currentIndex>=0?
+    [...orderedFiles.slice(currentIndex+1),...orderedFiles.slice(0,currentIndex)].find(file=>file.kind==='text'&&!file.truncated&&!coverage.has(file.artifactId)):undefined;
   return <><Button variant="secondary" size="small" disabled={disabled||!active||!view} onClick={()=>void open()}>{hasRevision?'核对上版写回与本次冻结':'查看冻结文件与原项目差异'}</Button>
     <SettingsDialog isOpen={shown} title={approval?approval.firstProject?"核对完整项目的首版文件许可":"核对这份写回许可":source?.revisionComparison?"核对原分工修订":"原协作的冻结文件"} onClose={dismiss} className="pw-team-modal">
       <div className="pw-form-stack">{approval?<><p>{approval.firstProject?'你正在给下列原冻结文本登记首版许可。这份登记不可用于发起整合。':'这份许可只适用于下列原冻结文本。批准后，管家可在原授权内请求唯一整合者将它们写回原项目；本次不会启动整合或写入文件。'}</p>
@@ -186,13 +212,15 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
             {bridge.getState().capabilities.commands.includes('teams.openDeliveryWorker')&&<Button variant="secondary" size="small" disabled={busy} onClick={()=>void openOriginalReviewer()}>查看这次原审阅任务</Button>}
           </section>}
           {!source.files.length&&<p>没有读到这次协作的冻结文件。</p>}
-          {orderedFiles.filter(file=>!source.revisionComparison||file.artifactId===selected).map(file=><section className="pw-team-expanded-copy" key={file.artifactId}><h3>{file.path}</h3>
+          {orderedFiles.filter(file=>!source.revisionComparison||file.artifactId===selected).map(file=><section className="pw-team-expanded-copy" key={file.artifactId}
+            ref={selected===file.artifactId?fileSection:undefined} tabIndex={selected===file.artifactId?-1:undefined}><h3>{file.path}</h3>
             <p className="pw-field-hint">贡献成员：{memberName(file.memberId) || file.memberId} · {file.retainedApplied?'与原整合回执及当前项目一致':file.matchesOwnerBase?'项目基线仍与原分工一致':'项目基线已改变'} · {file.currentExists?`项目版本 ${file.currentVersion}`:'打开时项目中无此文件'}</p>
             {file.kind!=='text'?<p>{file.kind==='deletion'?'这是删除记录。':'这是二进制或超出文本比较范围的文件。'}没有文本差异可展示。{typeof file.beforeBytes==='number'&&typeof file.afterBytes==='number'?` 原 ${file.beforeBytes} 字节，成果 ${file.afterBytes} 字节。`:''}</p>:
               <>{selected!==file.artifactId&&<Button variant="ghost" disabled={busy} onClick={()=>void read(file,0)}>查看这份差异</Button>}
                 {selected===file.artifactId&&<>{busy&&!page&&<p role="status">正在读取差异…</p>}
                   {page?.id===file.artifactId&&<>{page.body?<pre className="pw-team-file-diff" tabIndex={0} aria-label={`${file.path} 的原始文本差异`}>{page.body}</pre>:<p>打开时两份文本没有行差异。</p>}
-                    {page.end<page.size&&<Button variant="ghost" disabled={busy} onClick={()=>void read(file,page.end)}>继续读取差异（{page.end}/{page.size}）</Button>}</>}
+                    {page.end<page.size&&<Button variant="ghost" disabled={busy} onClick={()=>void read(file,page.end)}>继续读取差异（{page.end}/{page.size}）</Button>}
+                    {nextFile&&<Button variant="secondary" disabled={busy||!active} onClick={()=>void read(nextFile,0,true)}>核对下一份：<bdi>{nextFile.path}</bdi></Button>}</>}
                   {file.truncated&&<p className="pw-field-hint">原生比较只保留了一段差异，不能当作完整文件审阅。</p>}
                   {!source.revisionComparison&&<Button variant="ghost" disabled={busy} onClick={()=>{setSelected('');setPage(null);setError('');}}>收起差异</Button>}</>}</>}
           </section>)}

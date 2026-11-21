@@ -1309,9 +1309,15 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "ownerWork.input") {
-                checkedPayload(args, setOf("taskId", "runId", "epoch", "clientMessageId", "message", "mode"))
-                require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到管家输入框补充原任务" }
-                controller.sendOwnerWorkInput(args, requiredString(args, "clientMessageId"), requiredString(args, "message", true), requiredString(args, "mode")) { result, error ->
+                checkedPayload(args, setOf("taskId", "runId", "epoch", "clientMessageId", "message", "mode", "key", "draftEpoch", "revision", "expectedAttachments"))
+                val draft = controller.composerDraft ?: error("原草稿尚未读取，未发送")
+                require(documentId != null && !phoneComposer.intent && !controller.hasChannelPhoneOrigin &&
+                    requiredString(args, "key") == draft.key && requiredInt(args, "draftEpoch") == controller.composerViewEpoch) {
+                    "原私人输入窗口已变化，未提交补充"
+                }
+                requireAttachmentDraft(args)
+                controller.sendOwnerWorkInput(args, requiredString(args, "clientMessageId"), requiredString(args, "message", true),
+                    requiredString(args, "mode"), args.getJSONArray("expectedAttachments")) { result, error ->
                     complete(id, result, error, "outcome_unknown"); publishState()
                 }
                 return

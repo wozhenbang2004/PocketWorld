@@ -238,8 +238,20 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                     command == "check" -> JSONObject().put("current", true)
                     command == "find" -> {
                         val query = request.getString("query"); require(query.isNotEmpty() && query.length <= 256)
-                        if (type == "pdf") original.pdfSearch(query, request.optInt("cursor", 1), pin.lifetime)
-                        else { check(type == "text"); original.searchText(request.optString("encoding", "UTF-8"), query, request.optInt("cursor", 0), pin.lifetime) }
+                        when (type) {
+                            "pdf" -> original.pdfSearch(query, request.optInt("cursor", 1), pin.lifetime)
+                            "text" -> original.searchText(request.optString("encoding", "UTF-8"), query, request.optInt("cursor", 0), pin.lifetime)
+                            "office" -> {
+                                val info=pin.information
+                                check(info!=null && info.opt("format")=="docx" && info.opt("status")=="partial" &&
+                                    info.opt("sourceIdentity")==identity && info.opt("sha256")==pin.source.sha256 &&
+                                    request.keys().asSequence().toSet()==setOf("windowId","viewerId","command","query")) {
+                                    "请先打开这份原 Word 正文"
+                                }
+                                original.searchWord(query,pin.lifetime)
+                            }
+                            else -> error("这份原件不支持查找")
+                        }
                     }
                     else -> when (type) {
                         "pdf" -> {
@@ -260,6 +272,8 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                             if (page.status in setOf("ok", "partial") && unit <= page.totalUnits && (chunk == 0 || page.chunks.isNotEmpty()))
                                 officePosition = unit to chunk
                             document(page).put("unit", unit).put("chunk", chunk).apply {
+                                if (officePosition != null && page.format == "docx")
+                                    put("sourceIdentity", identity).put("sha256",pin.source.sha256)
                                 if (officePosition != null && page.format == "xlsx" && page.previousWorksheetChunk in 0 until chunk)
                                     put("previousWorksheetRange", JSONObject().put("unit", unit).put("chunk", page.previousWorksheetChunk))
                                 if (officePosition != null && page.format == "xlsx" && page.worksheets.size > 1)
