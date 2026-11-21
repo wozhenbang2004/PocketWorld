@@ -10,7 +10,7 @@ import { OwnerWorkReport } from './OwnerWorkReport';
 import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
-import { FirstNodeWebOutput, firstNodeWebOwnerWindow, savedBuildWebOpenKey } from './FirstNodeWebOutput';
+import { DirectViteWebOutput, FirstNodeWebOutput, firstNodeWebOwnerWindow, savedBuildWebOpenKey } from './FirstNodeWebOutput';
 import { ProjectDraftDifference, type FixedDraftDecisionSlot } from './ProjectDraftDifference';
 import type { OriginalProjectDraft } from './ButlerPreparations';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
@@ -21,7 +21,7 @@ import {messagePhoneResult,phoneConversationId,phoneRunIdentity} from './phone-s
 import { RetainedPhoneImage } from './RetainedPhoneImage';
 import { HeldPhoneResultImage } from './HeldPhoneResultImage';
 import { MessageAttachment } from './MessageAttachment';
-import { originalBuildWebGap } from './project-execution';
+import { directViteWork, originalBuildWebGap, originalDirectViteResult } from './project-execution';
 import './task-reading.css';
 
 const stoppedAttemptTitles: Record<string, string> = {
@@ -186,7 +186,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const firstWeb = active && (status==='completed' || checkBuildAfterFailure || beforeGoalAcceptance) && buildOwner &&
     typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
     ? {...buildOwner,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
-  const packageRead = useProjectPackages(task, active, readIdentity, firstWeb?.taskId);
+  const directWeb=directViteWork(task), directWebResult=active&&directWeb?originalDirectViteResult(task):undefined;
+  const packageRead = useProjectPackages(task, active, readIdentity, directWebResult?.taskId??firstWeb?.taskId);
   const phoneConversation=phoneWorkReportLocation&&phoneConversationId(record), phoneRun=phoneRunIdentity(record);
   // In this direct Chat→Work surface, a previous round's saved bubble stays in Chat,
   // not in the current phone result as a generic same-task reply.
@@ -238,6 +239,14 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const owner = JSON.stringify([record.id, record.raw?.runId, record.raw?.coordinatorEpoch]);
   const revision = JSON.stringify([settlementTitle, !!resultText, !!outcome.image, !!remotePhone, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256]), outcome.projectPackages.map(item => [item.operationId, item.archiveSha256])]);
   useCollectionMotion(root, owner, revision, {layout: false});
+  // This dedicated native Tool Work has no assistant answer, generic file
+  // collection or project/Chat handoff. The original Process stays on its tab.
+  if(directWeb)return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="原本机构建的网页成果">
+    {directWebResult&&packageRead.firstWebWindow?<DirectViteWebOutput key={JSON.stringify([owner,packageRead.firstWebWindow,directWebResult.sourceDigest])}
+      target={directWebResult} ownerWindow={packageRead.firstWebWindow}/>:
+      active&&status==='completed'&&packageWindowOwns(record.id)&&
+        <p className="pw-reading-note" role="status">尚未核对到原网页成果。可在「过程」查看这次构建的原记录。</p>}
+  </section>;
   const hasExecutionRecord = !!(resultText || outcome.image || remotePhone || phoneStatus || outcome.partial);
   const executionResult = (hasExecutionRecord || showEmptyResult && !settlementTitle) && <div className="pw-outcome-document">
       <header className="pw-outcome-heading"><h3>{hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>

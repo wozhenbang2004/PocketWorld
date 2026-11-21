@@ -339,7 +339,7 @@ public final class ManagedProcessJobs implements AutoCloseable {
                     if(!directCompiler)try{webBefore=OriginalNodeWebOutput.observeBeforeLaunch(job.invocation);}
                     catch(Exception unchecked){/* No defensible Web witness; normal execution is unchanged. */}
                     if(job.invocation.ownerLockedBuild()&&(directCompiler||
-                        webBefore==null&&versionedWeb&&!job.invocation.existingWebVersion().isEmpty()))try{
+                        webBefore==null&&versionedWeb&&!job.invocation.directWebOutput()&&!job.invocation.existingWebVersion().isEmpty()))try{
                         compilerBefore=OriginalNodeCompilerOutput.observeBeforeLaunch(job.invocation);
                     }catch(Exception unchecked){/* Unproven compiler file; the original approved process still runs. */}
                 }
@@ -437,7 +437,13 @@ public final class ManagedProcessJobs implements AutoCloseable {
                             else if(nestedViteOutputAtExit)job.receipt.put(OriginalNodeWebOutput.OUTPUT_LIMITATION,OriginalNodeWebOutput.NESTED_VITE_OUTPUT);
                         }
                         if(job.devSession!=null)job.receipt.put("devMarkerCacheCleanupComplete",markerClean);RuntimeFiles.write(new File(job.directory,"receipt.json"),job.receipt);}
-                    catch(Exception error) {try{job.receipt.remove(OriginalNodeCompilerOutput.WITNESS);job.receipt.put("receiptPersistence","failed");}catch(Exception ignored){}}
+                    catch(Exception error) {try{
+                        job.receipt.remove(OriginalNodeCompilerOutput.WITNESS);
+                        if(job.invocation.directWebOutput()){
+                            job.receipt.remove(OriginalNodeWebOutput.WITNESS);job.receipt.remove(OriginalNodeWebOutput.OUTPUT_LIMITATION);
+                        }
+                        job.receipt.put("receiptPersistence","failed");
+                    }catch(Exception ignored){}}
                 }
             }finally{job.sourceWrites.writeLock().unlock();}
             synchronized(this) {live.remove(job.id);notifyAll();}

@@ -120,36 +120,47 @@ const compilerUuid = (value: unknown): value is string =>
 const compilerDigest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const positiveNumber = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const directCompilerFormat = 'pocketworld.owner-direct-node-build.v1';
+const directViteFormat = 'pocketworld.owner-direct-vite-build.v1';
 const directCompilerPath = (value: unknown): value is string =>
   typeof value === 'string' && /^dist\/[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.js$/.test(value);
 
+export function directViteWork(task: unknown) {
+  const raw=object(object(task).raw);
+  return raw.command==='project.viteBuild.owner'||raw.nativeExecutionMode==='OWNER_DIRECT_VITE_BUILD'||
+    raw.ownerDirectViteBuild?.format===directViteFormat;
+}
+
 function originalDirectNodeScope(task: ProjectExecutionData | undefined) {
-  const raw = object(task?.raw), context = object(raw.developmentContext), scope = object(raw.ownerDirectNodeBuild), id = task?.id;
+  const raw=object(task?.raw), context=object(raw.developmentContext), id=task?.id, vite=directViteWork(task);
+  const scope=object(vite?raw.ownerDirectViteBuild:raw.ownerDirectNodeBuild);
   if (!compilerUuid(id) || raw.id !== id || raw.runId !== id || raw.operationId !== id || raw.coordinatorEpoch !== 1 ||
-      raw.status !== task?.status || raw.kind !== 'tool' || raw.feature !== 'local' || raw.command !== 'project.nodeBuild.owner' ||
-      raw.nativeExecutionMode !== 'OWNER_DIRECT_NODE_BUILD' || raw.executionMode !== 'capabilities' ||
+      raw.status !== task?.status || raw.kind !== 'tool' || raw.feature !== 'local' ||
+      raw.command !== (vite?'project.viteBuild.owner':'project.nodeBuild.owner') ||
+      raw.nativeExecutionMode !== (vite?'OWNER_DIRECT_VITE_BUILD':'OWNER_DIRECT_NODE_BUILD') || raw.executionMode !== 'capabilities' ||
       raw.actorId !== 'owner' || raw.spaceId !== 'private' || raw.origin != null || raw.conversationId != null && raw.conversationId !== '' ||
       raw.parentTaskId != null || raw.teamRunId != null || raw.memberId != null || raw.teamAssignment != null ||
       raw.executionRole === 'owner_work' || raw.ownerLocalTerminal != null || raw.ownerDeviceWork != null ||
       raw.workProfileRef != null || raw.workProfileIntent != null || raw.developmentSession != null ||
       raw.contextAvailable === false || raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true ||
       raw.taskProjection !== 'detail_window' || raw.taskCoreReadLimited !== false || raw.auditBodyIncluded !== true ||
-      scope.format !== directCompilerFormat || scope.requestId !== id || scope.runId !== id || scope.buildOperationId !== id ||
+      (vite?raw.ownerDirectNodeBuild!=null:raw.ownerDirectViteBuild!=null) ||
+      scope.format !== (vite?directViteFormat:directCompilerFormat) || scope.requestId !== id || scope.runId !== id || scope.buildOperationId !== id ||
       scope.epoch !== 1 || scope.modelDispatchAllowed !== false || scope.replayAllowed !== false ||
-      !operationId(scope.projectId) || !operationId(scope.checkoutId) || !directCompilerPath(scope.outputPath) ||
+      !operationId(scope.projectId) || !operationId(scope.checkoutId) || (vite?scope.outputPath!=='dist/index.html':!directCompilerPath(scope.outputPath)) ||
       ![scope.sourceDigest,scope.planDigest,scope.runtimeIdentity,scope.lockSha256].every(compilerDigest) ||
       scope.runtimeId !== 'managed_process_v1' || context.runtime !== scope.runtimeId ||
       context.format !== 'pocketworld.development-context.v1' || context.draftOnly === true ||
       context.ownerDraftFirstBuild != null || context.clientMessageId != null ||
       context.projectId !== scope.projectId || context.checkoutId !== scope.checkoutId || context.initialSourceDigest !== scope.sourceDigest) return;
   return {taskId:id,runId:id,epoch:1,buildOperationId:id,projectId:scope.projectId,checkoutId:scope.checkoutId,
-    sourceDigest:scope.sourceDigest,planDigest:scope.planDigest,runtimeIdentity:scope.runtimeIdentity,outputPath:scope.outputPath};
+    sourceDigest:scope.sourceDigest,planDigest:scope.planDigest,runtimeIdentity:scope.runtimeIdentity,outputPath:scope.outputPath,vite};
 }
 
 export type DirectNodeExecution = {phase:'unverified'} | {
   phase:'waiting'|'stopping'|'uncertain'|'released'|'releasedAfterStop';
   pin:NonNullable<ReturnType<typeof originalDirectNodeScope>> & {requestDigest:string;approvalId:string};
   checkReceipt:boolean;
+  logAvailable?:boolean;
 };
 
 /** The direct Tool Work opens on registration, before the process's ended
@@ -157,7 +168,7 @@ export type DirectNodeExecution = {phase:'unverified'} | {
 export function originalDirectNodeExecution(task: ProjectExecutionData | undefined, selected: ProjectExecutionData): DirectNodeExecution | undefined {
   const raw = object(task?.raw);
   if (raw.kind !== 'tool' || raw.command !== 'project.nodeBuild.owner' && raw.nativeExecutionMode !== 'OWNER_DIRECT_NODE_BUILD' &&
-      raw.ownerDirectNodeBuild?.format !== directCompilerFormat) return;
+      raw.ownerDirectNodeBuild?.format !== directCompilerFormat && !directViteWork(task)) return;
   const scope = originalDirectNodeScope(task);
   if (!scope || selected.tool !== 'project_execute' || selected.runId !== scope.runId ||
       selected.operationId !== scope.buildOperationId || !Array.isArray(raw.operations)) return {phase:'unverified'};
@@ -165,7 +176,8 @@ export function originalDirectNodeExecution(task: ProjectExecutionData | undefin
   const row = rows[0], receipt = object(row?.receipt), route = object(receipt.projectExecution), actual = object(receipt.executionReceipt);
   if (rows.length !== 1 || row.operationId !== scope.buildOperationId || row.bodyAvailable === false || row.readLimited === true ||
       row.arguments?.stepId !== 'build' || row.arguments?.planDigest !== scope.planDigest ||
-      !compilerDigest(route.directOwnerNodeCompilerVersion) || !compilerDigest(route.requestDigest) ||
+      !compilerDigest(scope.vite?route.directOwnerNodeWebVersion:route.directOwnerNodeCompilerVersion) ||
+      Object.hasOwn(route,scope.vite?'directOwnerNodeCompilerVersion':'directOwnerNodeWebVersion') || !compilerDigest(route.requestDigest) ||
       !compilerUuid(route.approvalId) || !compilerDigest(route.capabilityFingerprint) || route.jobId !== scope.buildOperationId ||
       Object.hasOwn(route,'existingNodeWebVersion') || Object.hasOwn(route,'editedNodeWebVersion')) return {phase:'unverified'};
   const binding = {authority:'native_host_operation',command:'project.runtime.run',runtimeId:'managed_process_v1',runtimeIdentity:scope.runtimeIdentity,
@@ -185,17 +197,35 @@ export function originalDirectNodeExecution(task: ProjectExecutionData | undefin
       actual.id !== scope.buildOperationId || actual.operationId !== scope.buildOperationId ||
       actual.checkoutId !== scope.checkoutId || actual.sourceDigest !== scope.sourceDigest ||
       actual.receiptReceived !== true || actual.resourcesReleased !== true ||
+      scope.vite && (actual.processGroupAbsent!==true||actual.ownedWorkerLive!==false||actual.requestedExecutable!=='npm'||
+        !Array.isArray(actual.requestedArgv)||actual.requestedArgv.length!==2||actual.requestedArgv[0]!=='run'||actual.requestedArgv[1]!=='build') ||
       !Object.entries(binding).every(([name,value])=>actual.projectExecution?.[name]===value)) return {phase:'unverified'};
-  return {phase:stopping ? 'releasedAfterStop' : 'released',pin,checkReceipt:unfinalized || raw.status === 'awaiting_user'};
+  return {phase:stopping ? 'releasedAfterStop' : 'released',pin,checkReceipt:unfinalized || raw.status === 'awaiting_user',
+    ...(scope.vite?{logAvailable:actual.processLaunched===true&&actual.processExited===true}:{})};
 }
 
 export function directNodeLogPin(view:DirectNodeExecution|undefined) {
-  return view?.phase === 'released' || view?.phase === 'releasedAfterStop' ? view.pin : undefined;
+  return (view?.phase === 'released' || view?.phase === 'releasedAfterStop') && view.logAvailable!==false ? view.pin : undefined;
 }
 
 export type DirectNodeExecutionPin=NonNullable<ReturnType<typeof directNodeLogPin>>;
 export function sameDirectNodeExecution(view:DirectNodeExecution|undefined,pin:DirectNodeExecutionPin) {
   return view && 'pin' in view && Object.entries(pin).every(([name,value])=>view.pin[name as keyof DirectNodeExecutionPin]===value) ? view : undefined;
+}
+
+/** Exit 0 is evidence of the original process only. The existing native
+ * first-web read must separately prove its eligible immutable archive. */
+export function originalDirectViteResult(task:unknown) {
+  const record=object(task),raw=object(record.raw),id=record.id;
+  if(!directViteWork(record)||raw.status!=='completed'||raw.cancelRequested!==false||!Array.isArray(raw.operations))return;
+  const row=(raw.operations as unknown[]).map(object).find(item=>item.tool==='project_execute'&&item.runId===id&&item.operationId===id);
+  if(!row)return;
+  const direct=originalDirectNodeExecution(record,row),pin=directNodeLogPin(direct),actual=object(row.receipt?.executionReceipt);
+  if(direct?.phase!=='released'||direct.checkReceipt||!pin?.vite||actual.status!=='completed'||actual.exitCode!==0||
+    actual.terminationSignal!==0||actual.launchErrno!==0||actual.launchPhase!=='exit_observed'||actual.noChildCreated!==false||
+    actual.sourceCheckStatus!=='pre_exec_manifest_verified'||actual.cancelRequested!==false||actual.timedOut!==false)return;
+  return {taskId:pin.taskId,runId:pin.runId,epoch:pin.epoch,projectId:pin.projectId,checkoutId:pin.checkoutId,
+    buildOperationId:pin.buildOperationId,sourceDigest:pin.sourceDigest};
 }
 
 const directDependencyFormat='pocketworld.owner-direct-node-dependencies.v1';

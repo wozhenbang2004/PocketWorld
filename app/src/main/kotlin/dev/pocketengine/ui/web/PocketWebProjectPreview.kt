@@ -18,7 +18,8 @@ internal class PocketWebProjectPreview(
     private val changed: () -> Unit
 ) {
     companion object {
-        val COMMANDS = setOf("projects.preview", "projects.preview.mode", "projects.preview.viewport",
+        const val OPEN_LOCAL_WEB = "projects.firstWebOutput.open"
+        val COMMANDS = setOf(OPEN_LOCAL_WEB, "projects.preview", "projects.preview.mode", "projects.preview.viewport",
             "projects.preview.reload", "projects.preview.close", "projects.preview.return", "composer.preview.remove",
             "projects.package.preview.inspect", "projects.package.preview.open", "projects.package.export")
         private fun fields(args: JSONObject, names: Set<String>) {
@@ -58,6 +59,7 @@ internal class PocketWebProjectPreview(
     fun snapshot(): JSONObject? = session?.let { selected ->
         JSONObject().put("kind", "bundle").put("metadata", selected.original.bundle.metadata())
             .put("taskId", selected.original.taskId).put("conversationId", selected.original.conversationId)
+            .put("localWebWork", selected.original.fromLocalWebWork)
             .put("sessionId", selected.id).put("documentGeneration", selected.document.generation())
             .put("ready", selected.document.ready()).put("selecting", selected.web.isSelectionEnabled)
             .put("visible", selected.visible).put("error", selected.error ?: JSONObject.NULL)
@@ -66,7 +68,7 @@ internal class PocketWebProjectPreview(
             .also { if (selected.original.packageOperationId != null) it.put("packageOperationId", selected.original.packageOperationId) }
     }
 
-    fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+    fun dispatch(action: String, args: JSONObject, localWorkCurrent: () -> Boolean = { false }, done: (JSONObject?, String?) -> Unit) {
         check(!closed && foreground && controller.webPrivateOwnerVisible()) { "原私人预览窗口已关闭" }
         if (action == "projects.package.preview.inspect") {
             fields(args, setOf("taskId", "operationId")); val task = text(args, "taskId"); val operation = text(args, "operationId")
@@ -79,18 +81,21 @@ internal class PocketWebProjectPreview(
             }
             return
         }
-        if (action == "projects.package.preview.open") {
+        if (action == "projects.package.preview.open" || action == OPEN_LOCAL_WEB) {
+            val direct = action == OPEN_LOCAL_WEB
+            check(!direct || localWorkCurrent()) { "请从原本机构建打开已保存网页" }
             fields(args, setOf("taskId", "operationId", "entryPath")); val task = text(args, "taskId"); val operation = text(args, "operationId")
             val entry = args.opt("entryPath") as? String ?: error("原项目包入口必须为路径文字")
             dev.pocketengine.features.workspace.VersionedWorkspace.path(entry)
             controller.projectPackages.invalidateTaskExportSelection()
             val window = captureWindow(); val request = ++opening
-            controller.openRegisteredProjectPackagePreview(task, operation, entry, { !closed && foreground && opening == request && acceptsWindow(window) }) { selected, error ->
+            fun current() = !closed && foreground && opening == request && acceptsWindow(window) && (!direct || localWorkCurrent())
+            controller.openRegisteredProjectPackagePreview(task, operation, entry, ::current, done = { selected, error ->
                 if (selected == null || error != null) { done(null, error ?: "原固定包预览未读取"); return@openRegisteredProjectPackagePreview }
-                if (closed || opening != request || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) { done(null, "原预览窗口已变化"); return@openRegisteredProjectPackagePreview }
+                if (!current() || !controller.webPrivateOwnerVisible()) { done(null, "原预览窗口已变化"); return@openRegisteredProjectPackagePreview }
                 try { show(selected); done(snapshot(), null) } catch (failure: Exception) { done(null, failure.message ?: "原固定包预览未能打开") }
                 changed()
-            }
+            }, fromLocalWork = direct)
             return
         }
         if (action == "projects.package.export") {
@@ -133,7 +138,7 @@ internal class PocketWebProjectPreview(
                 fields(args, setOf("sessionId", "enabled")); val enabled = boolean(args, "enabled")
                 disableSelection(selected)
                 if (enabled) {
-                    require(selected.visible && selected.document.ready()) { "请等待原预览显示完成再选择元素" }
+                    require(!selected.original.fromLocalWebWork && selected.visible && selected.document.ready()) { "请等待原预览显示完成再选择元素" }
                     val target = controller.captureProjectPreviewDraft(selected.original.conversationId)
                     val window = captureWindow(); val epoch = selected.selectionEpoch; val generation = selected.document.generation()
                     fun current() = !closed && foreground && session === selected && selected.selectionEpoch == epoch &&
@@ -169,9 +174,13 @@ internal class PocketWebProjectPreview(
             "projects.preview.return" -> {
                 fields(args, setOf("sessionId")); hide(selected)
                 controller.projectPackages.invalidateTaskExportSelection()
-                controller.returnToProjectPreviewConversation(selected.original.conversationId)
-                changed()
-                done(JSONObject().put("sessionId", selected.id).put("conversationId", selected.original.conversationId).put("returned", true), null)
+                if (selected.original.fromLocalWebWork) {
+                    release(); controller.closeProjectPreview()
+                    done(JSONObject().put("sessionId", selected.id).put("taskId", selected.original.taskId).put("returned", true), null)
+                } else {
+                    controller.returnToProjectPreviewConversation(selected.original.conversationId)
+                    done(JSONObject().put("sessionId", selected.id).put("conversationId", selected.original.conversationId).put("returned", true), null)
+                }
             }
             "projects.preview.close" -> {
                 fields(args, setOf("sessionId")); release(); controller.closeProjectPreview()
@@ -221,6 +230,7 @@ internal class PocketWebProjectPreview(
     }
 
     private fun refreshSelectionAvailability(selected: Session) {
+        if (selected.original.fromLocalWebWork) return
         selected.selectionAvailable = false; selected.selectionUnavailableReason = "正在重新核对原预览来源"
         val window = captureWindow(); val epoch = selected.selectionEpoch
         fun current() = !closed && foreground && session === selected && selected.selectionEpoch == epoch && acceptsWindow(window)
@@ -254,9 +264,17 @@ internal class PocketWebProjectPreview(
         session?.let { if (value) it.web.onResume() else { hide(it); it.web.onPause() } }
         changed()
     }
+    fun retireLocalWork() {
+        if (session?.original?.fromLocalWebWork != true) return
+        opening++
+        release()
+        controller.closeProjectPreview()
+    }
     fun invalidatePresentation(documentReplaced: Boolean) {
         opening++
-        if (documentReplaced) { controller.projectPackages.invalidateTaskExportSelection(); release(); controller.closeProjectPreview() } else session?.let(::hide)
+        if (documentReplaced) { controller.projectPackages.invalidateTaskExportSelection(); release(); controller.closeProjectPreview() }
+        else if (session?.original?.fromLocalWebWork == true) retireLocalWork()
+        else session?.let(::hide)
         changed()
     }
     private fun release() {

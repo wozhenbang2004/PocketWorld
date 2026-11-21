@@ -346,7 +346,8 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   const observed=originalExecutionExit(output.observedExit,metadata,output.nativeStatus);
   const compiler = active && operation && !originalPending && !focusFailure && !directWaiting && !dependency ? originalNodeCompilerOutput(task,operation) : undefined;
   const compilerWindow = compiler ? compilerOutputWindow(compiler.taskId) : '';
-  const directBuildNote=direct?.phase==='waiting'?'这次构建已登记。收到结束与资源释放回执后，才可查看原日志。':
+  const directBuildNote=direct&&'pin' in direct&&direct.logAvailable===false&&!direct.checkReceipt?'原构建未留下可读取的进程日志。':
+    direct?.phase==='waiting'?'这次构建已登记。收到结束与资源释放回执后，才可查看原日志。':
     direct?.phase==='stopping'?'已请求停止这次构建，尚未确认原进程退出与资源释放。':
     directLog?'这次构建已有结束回执，原工作结果仍待核对。':'这次构建的结束回执仍待核对。没有回执不代表没有执行。';
   const dependencyStatus=dependencyVisible&&dependency&&

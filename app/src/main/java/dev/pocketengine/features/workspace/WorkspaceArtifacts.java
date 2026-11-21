@@ -1,5 +1,8 @@
 package dev.pocketengine.features.workspace;
 
+import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
+import dev.pocketengine.features.local.project.OwnerDirectNodeBuild;
+
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -57,7 +60,7 @@ public final class WorkspaceArtifacts {
     private static String hashBytes(byte[] bytes)throws Exception{return hex(MessageDigest.getInstance("SHA-256").digest(bytes));}
     private JSONArray catalog()throws Exception {JSONArray records=JsonFiles.read(catalog).optJSONArray("artifacts");return records==null?new JSONArray():records;}
     public synchronized JSONArray list(String projectId)throws Exception {
-        JSONArray all=catalog(),selected=new JSONArray();for(int i=0;i<all.length();i++){JSONObject record=all.getJSONObject(i);if(projectId==null||projectId.isEmpty()||projectId.equals(record.optString("projectId")))selected.put(JsonFiles.copy(record));}return selected;
+        JSONArray all=catalog(),selected=new JSONArray();for(int i=0;i<all.length();i++){JSONObject record=all.getJSONObject(i);if(!OriginalNodeWebOutput.directArchiveMetadata(record)&&(projectId==null||projectId.isEmpty()||projectId.equals(record.optString("projectId"))))selected.put(JsonFiles.copy(record));}return selected;
     }
     public synchronized JSONObject create(String projectId,String path,int version,JSONObject hostIdentity)throws Exception {
         JSONObject source=workspace.read(projectId,path,version);if(!source.optBoolean("contentAvailable"))throw new IllegalArgumentException("此原版本需使用native字节成果入口，未将二进制或大文件改成文字");JSONArray all=catalog();if(all.length()>=200)throw new IllegalStateException("最多保留200份文件成果，请先整理已有成果");
@@ -100,20 +103,26 @@ public final class WorkspaceArtifacts {
     }
     /** Native active-tree selection creates another typed version in this same artifact catalog. */
     public JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception {
-        return createProjectPackage(frozen,ownerActionId,false);
+        return createProjectPackage(frozen,ownerActionId,false,false);
     }
     /** Same save path; only the original owner web receipt consumes the narrow pre-publication proof. */
     JSONObject createFirstNodeWebPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception {
-        return createProjectPackage(frozen,ownerActionId,true);
+        return createFirstNodeWebPackage(frozen,ownerActionId,false);
     }
-    private synchronized JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId,boolean classifyQuota)throws Exception {
+    JSONObject createFirstNodeWebPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId,boolean directVite)throws Exception {
+        return createProjectPackage(frozen,ownerActionId,true,directVite);
+    }
+    private synchronized JSONObject createProjectPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId,
+            boolean classifyQuota,boolean directVite)throws Exception {
         if(ownerActionId==null||!ownerActionId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("缺少这次原生文件快照动作身份");
         String id=UUID.nameUUIDFromBytes(("project-package:"+ownerActionId).getBytes(StandardCharsets.UTF_8)).toString();
         JSONObject manifest=frozen.manifest(),source=manifest.getJSONObject("source");JSONArray all=catalog();int sequence=1;
+        if(directVite&&(!"web_output".equals(manifest.opt("mode"))||!OriginalNodeWebOutput.ENTRY.equals(manifest.opt("entryPath"))))
+            throw new SecurityException("原本机网页需用实际固定入口");
         boolean projectExists=false;JSONArray projects=workspace.projects();for(int i=0;i<projects.length();i++)if(source.getString("projectId").equals(projects.getJSONObject(i).getString("id")))projectExists=true;if(!projectExists)throw new IllegalArgumentException("原项目不存在，不能把外来描述冒充本机项目成果");
         for(int i=0;i<all.length();i++){
             JSONObject prior=all.getJSONObject(i);
-            if(id.equals(prior.optString("id"))){if("retired".equals(prior.optString("availability")))throw new IllegalStateException("原固定成果已明确撤下，不重放此保存动作");if(!"project_bundle".equals(prior.optString("kind"))||!frozen.identity.equals(prior.optString("manifestIdentity")))throw new SecurityException("这次原快照动作已对应其他文件版本，未另存或覆盖");readProjectPackage(id,prior.getString("sha256"));return JsonFiles.copy(prior);}
+            if(id.equals(prior.optString("id"))){if("retired".equals(prior.optString("availability")))throw new IllegalStateException("原固定成果已明确撤下，不重放此保存动作");if(!"project_bundle".equals(prior.optString("kind"))||!frozen.identity.equals(prior.optString("manifestIdentity")))throw new SecurityException("这次原快照动作已对应其他文件版本，未另存或覆盖");requirePackageScope(prior,directVite);readProjectPackage(id,prior.getString("sha256"),directVite);return JsonFiles.copy(prior);}
             if("project_bundle".equals(prior.optString("kind"))&&source.getString("projectId").equals(prior.optString("projectId")))sequence=Math.max(sequence,prior.optInt("versionSequence")+1);
         }
         File archive=new File(root,id+".project.zip"),record=new File(root,id+".project.json");
@@ -126,12 +135,13 @@ public final class WorkspaceArtifacts {
                 if(!Files.isSymbolicLink(record.toPath())&&record.isFile()&&JsonFiles.read(record).optBoolean("retired"))throw new IllegalStateException("原固定成果已明确移除，保留原动作删除记录，不重放生成");
                 if(Files.isSymbolicLink(archive.toPath())||Files.isSymbolicLink(record.toPath())||!archive.isFile()||!record.isFile())throw new SecurityException("原快照动作有未确认文件，未覆盖");
                 JSONObject retained=JsonFiles.read(record),prior=retained.getJSONObject("artifact");
+                requirePackageScope(prior,directVite);
                 if(!id.equals(prior.optString("id"))||!ownerActionId.equals(prior.optString("ownerActionId"))||!frozen.identity.equals(prior.optString("manifestIdentity"))||!frozen.identity.equals(dev.pocketengine.features.local.project.ProjectSources.digest(retained.getJSONObject("manifest")))||archive.length()!=prior.getLong("sizeBytes")||!prior.getString("sha256").equals(hashFile(archive))||!frozen.identity.equals(dev.pocketengine.features.local.project.ProjectPackageArchive.read(archive).identity))throw new SecurityException("原快照动作的未登记文件与所选清单不同，未覆盖或另存");
                 all.put(prior);catalogAttempted=true;JsonFiles.write(catalog,new JSONObject().put("artifacts",all));published=true;return JsonFiles.copy(prior);
             }
             try(java.io.FileOutputStream output=new java.io.FileOutputStream(pending)){dev.pocketengine.features.local.project.ProjectPackageArchive.write(frozen,output);output.getFD().sync();}
             String sha=hashFile(pending);
-            JSONObject artifact=new JSONObject().put("id",id).put("kind","project_bundle").put("source","owner_active_project").put("projectId",source.getString("projectId")).put("checkoutId",source.getString("checkoutId"))
+            JSONObject artifact=new JSONObject().put("id",id).put("kind","project_bundle").put("source",directVite?OriginalNodeWebOutput.DIRECT_ARTIFACT_SOURCE:"owner_active_project").put("projectId",source.getString("projectId")).put("checkoutId",source.getString("checkoutId"))
                 .put("sourceDigest",source.getString("sourceDigest")).put("manifestIdentity",frozen.identity).put("versionId",id).put("versionSequence",sequence).put("ownerActionId",ownerActionId)
                 .put("mode",manifest.getString("mode")).put("entryPath",manifest.optString("entryPath")).put("previewRoot",manifest.optString("previewRoot")).put("fileCount",manifest.getJSONArray("files").length()).put("expandedBytes",manifest.getLong("bytes"))
                 .put("omittedCount",manifest.getJSONArray("omitted").length()).put("name",manifest.getJSONObject("project").getString("name")).put("mimeType","application/zip").put("createdAt",System.currentTimeMillis())
@@ -160,23 +170,46 @@ public final class WorkspaceArtifacts {
         return new QuotaBeforePublication(limit,action,manifest);
     }
     public synchronized JSONObject projectPackage(String id,String expectedSha)throws Exception {
-        JSONObject artifact=packageMetadata(id,expectedSha);var frozen=readProjectPackage(id,expectedSha);return JsonFiles.copy(artifact).put("manifest",frozen.manifest());
+        return projectPackage(id,expectedSha,false);
+    }
+    synchronized JSONObject projectPackage(String id,String expectedSha,boolean directVite)throws Exception {
+        JSONObject artifact=packageMetadata(id,expectedSha);
+        requirePackageScope(artifact,directVite);
+        var frozen=readProjectPackage(id,expectedSha,directVite);
+        return JsonFiles.copy(artifact).put("manifest",frozen.manifest());
+    }
+    private static void requirePackageScope(JSONObject artifact,boolean directVite){
+        if(directVite!=OriginalNodeWebOutput.directArchiveMetadata(artifact))
+            throw new SecurityException("固定网页只能从所属的原本机工作读取，未改用其他成果");
     }
     /** Read the selected archive once; require its catalog, manifest and producing operation together. */
     public synchronized dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen originalTaskPackage(JSONObject source)throws Exception {
         String id=source.getString("artifactId"),sha=source.getString("artifactSha256");
-        var frozen=readProjectPackage(id,sha);
-        dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(source,packageMetadata(id,sha).put("manifest",frozen.manifest()));
+        JSONObject actual=packageMetadata(id,sha);
+        boolean direct=Boolean.TRUE.equals(source.opt(OwnerDirectNodeBuild.VITE_FIELD));
+        requirePackageScope(actual,direct);
+        if(direct&&(source.has("conversationId")||!OriginalNodeWebOutput.directArchiveMetadata(source.getJSONObject("packageArtifact"))))
+            throw new SecurityException("缺少原本机网页的固定记录");
+        var frozen=readProjectPackage(id,sha,direct);
+        dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(source,actual.put("manifest",frozen.manifest()));
         return frozen;
     }
     public synchronized JSONObject findProjectPackage(String ownerActionId,String projectId,String checkoutId,String manifestIdentity)throws Exception {
+        return findProjectPackage(ownerActionId,projectId,checkoutId,manifestIdentity,false);
+    }
+    synchronized JSONObject findProjectPackage(String ownerActionId,String projectId,String checkoutId,String manifestIdentity,boolean directVite)throws Exception {
         if(ownerActionId==null||!ownerActionId.matches("[a-f0-9-]{36}")||manifestIdentity==null||!manifestIdentity.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("缺少原快照动作定位");
         String id=UUID.nameUUIDFromBytes(("project-package:"+ownerActionId).getBytes(StandardCharsets.UTF_8)).toString();JSONArray all=catalog();
-        for(int i=0;i<all.length();i++){JSONObject row=all.getJSONObject(i);if(id.equals(row.optString("id"))){if(!projectId.equals(row.optString("projectId"))||!checkoutId.equals(row.optString("checkoutId"))||!manifestIdentity.equals(row.optString("manifestIdentity")))throw new SecurityException("原快照动作与所选项目版本不一致");readProjectPackage(id,row.getString("sha256"));return JsonFiles.copy(row).put("found",true);}}
+        for(int i=0;i<all.length();i++){JSONObject row=all.getJSONObject(i);if(id.equals(row.optString("id"))){if(!projectId.equals(row.optString("projectId"))||!checkoutId.equals(row.optString("checkoutId"))||!manifestIdentity.equals(row.optString("manifestIdentity")))throw new SecurityException("原快照动作与所选项目版本不一致");readProjectPackage(id,row.getString("sha256"),directVite);return JsonFiles.copy(row).put("found",true);}}
         return new JSONObject().put("found",false).put("ownerActionId",ownerActionId);
     }
     public synchronized dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen readProjectPackage(String id,String expectedSha)throws Exception {
-        JSONObject meta=packageMetadata(id,expectedSha);File archive=new File(root,id+".project.zip"),record=new File(root,id+".project.json");
+        return readProjectPackage(id,expectedSha,false);
+    }
+    private dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen readProjectPackage(String id,String expectedSha,boolean directVite)throws Exception {
+        JSONObject meta=packageMetadata(id,expectedSha);
+        requirePackageScope(meta,directVite);
+        File archive=new File(root,id+".project.zip"),record=new File(root,id+".project.json");
         if(Files.isSymbolicLink(record.toPath())||!record.isFile())throw new IllegalStateException("原固定项目包登记不可用");JSONObject retained=JsonFiles.read(record);
         if(!dev.pocketengine.features.local.project.ProjectSources.canonical(meta).equals(dev.pocketengine.features.local.project.ProjectSources.canonical(retained.getJSONObject("artifact"))))throw new SecurityException("原固定项目包登记与所选版本不一致");
         if(Files.isSymbolicLink(archive.toPath())||!archive.isFile()||archive.length()!=meta.getLong("sizeBytes")||!expectedSha.equals(hashFile(archive)))throw new IllegalStateException("所选固定项目包字节不可用或已变化，未改用最新成果");

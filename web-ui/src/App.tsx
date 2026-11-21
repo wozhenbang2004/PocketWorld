@@ -4380,7 +4380,7 @@ export default function App(){
  const selectedLocalPhone=!!selectedTask&&isPrivateLocalPhone(selectedTask);
  const selectedPhoneSurface=privatePhoneSurface(selectedTask,state.livePrivatePhones);
  const selectedPhoneStop=selectedTask&&!terminal(selectedTask)&&can('phone.stop')&&(selectedLocalPhone?!!selectedPhoneSurface:selectedTask.id===activeTask?.id)?phoneRunIdentity(selectedTask):null;
- const selectedTaskStop=selectedTask&&!selectedTask.raw?.ownerDirectNodeDependencies&&(selectedPhoneStop||(selectedWorkIdentity
+ const selectedTaskStop=selectedTask&&!selectedTask.raw?.ownerDirectNodeDependencies&&!selectedTask.raw?.ownerDirectViteBuild&&(selectedPhoneStop||(selectedWorkIdentity
   ?selectedTask.raw?.controls?.canStop===true&&can('ownerWork.control')
   :!selectedLocalPhone&&selectedTask.raw?.executionRole!=='owner_work'&&!terminal(selectedTask)&&can('tasks.stop')));
  const selectedWorkPresentation=selectedTask?workCollectionPresentation(selectedTask):null;

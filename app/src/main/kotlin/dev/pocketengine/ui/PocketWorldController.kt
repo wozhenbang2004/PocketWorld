@@ -920,7 +920,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal data class RegisteredProjectPreview(val taskId: String, val conversationId: String,
         val bundle: dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified,
         val packageOperationId: String? = null, val selectionAvailable: Boolean = false,
-        val selectionUnavailableReason: String? = null)
+        val selectionUnavailableReason: String? = null, val fromLocalWebWork: Boolean = false)
     internal data class PreviewDraftTarget(val key: String, val revision: Long, val epoch: Int, val conversationId: String,
         val ownerWindow: Pair<Triple<Long, Int, Long>, Long>)
 
@@ -973,6 +973,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             val result = runCatching {
                 check(webPrivateOwnerVisible() && ownerCurrent()) { "原项目包读取窗口已关闭" }
                 val source = app.tasks.ownerPackagePreviewSource(task, operation)
+                check(source.opt("ownerDirectViteBuild") != true) { "请回这份原本机构建打开已保存网页" }
                 val local = app.features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("原项目模块不可用")
                 val choices = local.inspectProjectPackagePreviewForOwner(source)
                 requireSamePackagePreviewSource(source, app.tasks.ownerPackagePreviewSource(task, operation))
@@ -1001,25 +1002,32 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
 
     /** Exact original receipt and chosen archive member; this never prepares a checkout. */
     internal fun openRegisteredProjectPackagePreview(task: String, operation: String, entry: String,
-        ownerCurrent: () -> Boolean, done: (RegisteredProjectPreview?, String?) -> Unit) {
+        ownerCurrent: () -> Boolean, done: (RegisteredProjectPreview?, String?) -> Unit,
+        fromLocalWork: Boolean = false) {
         check(webPrivateOwnerVisible() && ownerCurrent()) { "请从原私人项目打开固定包预览" }
-        val project = state.projectId ?: error("请先选择原项目")
-        require(state.projects.any { it.id == project }) { "原私人项目不在当前列表" }
+        val project = state.projectId
+        fun originalProjectVisible() = project != null && state.projectId == project && state.projects.any { it.id == project }
+        require(fromLocalWork || originalProjectVisible()) { "请先选择原私人项目" }
         val request = ++projectPreviewRequest
         try { io.execute {
             val result = runCatching {
                 check(webPrivateOwnerVisible() && ownerCurrent()) { "原项目包窗口已关闭" }
                 val source = app.tasks.ownerPackagePreviewSource(task, operation)
-                check(source.getString("projectId") == project) { "请先明确选择这个原任务的项目" }
+                val localWeb = source.opt("ownerDirectViteBuild") == true
+                check(fromLocalWork == localWeb) { "请从这份原任务的网页成果入口打开" }
+                check(fromLocalWork || source.getString("projectId") == project) { "请先明确选择这个原任务的项目" }
                 val local = app.features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("原项目模块不可用")
-                val bundle = local.openProjectPackagePreviewForOwner(source, entry)
-                val current = runCatching { local.requireProjectPackagePreviewCurrent(bundle, source) }
+                val bundle = if (localWeb) local.openDirectViteArchiveForOwner(source, entry)
+                    else local.openProjectPackagePreviewForOwner(source, entry)
+                val current = if (localWeb) null else runCatching { local.requireProjectPackagePreviewCurrent(bundle, source) }
                 requireSamePackagePreviewSource(source, app.tasks.ownerPackagePreviewSource(task, operation))
-                RegisteredProjectPreview(task, source.getString("conversationId"), bundle, operation, current.isSuccess,
-                    current.exceptionOrNull()?.let { message(it as? Exception ?: Exception(it)) })
+                RegisteredProjectPreview(task, if (localWeb) "" else source.getString("conversationId"), bundle, operation,
+                    current?.isSuccess == true,
+                    if (localWeb) "固定网页仅供查看" else current?.exceptionOrNull()?.let { message(it as? Exception ?: Exception(it)) },
+                    fromLocalWebWork = localWeb)
             }
             main.post {
-                if (closed || request != projectPreviewRequest || !ownerCurrent() || !webPrivateOwnerVisible() || state.projectId != project || state.projects.none { it.id == project }) {
+                if (closed || request != projectPreviewRequest || !ownerCurrent() || !webPrivateOwnerVisible() || (!fromLocalWork && !originalProjectVisible())) {
                     done(null, "原项目或窗口已变化，未把迟到成果打开到另一页面")
                 } else result.fold({ selected -> projectPreview = selected.bundle; projectPreviewTaskId = selected.taskId; done(selected, null) },
                     { done(null, message(it as? Exception ?: Exception(it))) })
@@ -1032,7 +1040,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val request = projectPreviewRequest
         fun current() = !closed && ownerCurrent() && webPrivateOwnerVisible() && request == projectPreviewRequest &&
             projectPreview === original.bundle && projectPreviewTaskId == original.taskId
-        check(current()) { "原预览选择窗口已变化" }
+        check(!original.fromLocalWebWork && current()) { "原预览仅供查看或选择窗口已变化" }
         try { io.execute {
             val result = runCatching {
                 check(current()) { "原预览已关闭" }

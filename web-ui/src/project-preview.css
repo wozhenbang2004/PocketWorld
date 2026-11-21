@@ -52,6 +52,7 @@
 .pw-preview-pane > .pw-preview-context { font-size: 12px; }
 .pw-preview-pane > .pw-preview-context p { font-size: 12px; line-height: 1.7; }
 .pw-preview-pane > .pw-preview-viewport { min-height: 180px; border-radius: 14px; box-shadow: none; }
+.pw-original-local-web > .pw-preview-viewport { flex: none; height: min(56dvh, 36rem); }
 .pw-preview-pane > [data-orientation] { flex: none; }
 .pw-preview-pane > .pw-preview-draft-status { margin-top: 2px; }
 .pw-preview-pane > .pw-preview-footer { padding-top: 4px; }

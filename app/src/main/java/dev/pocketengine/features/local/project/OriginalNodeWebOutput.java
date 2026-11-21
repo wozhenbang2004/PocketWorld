@@ -18,7 +18,10 @@ import org.json.JSONObject;
 
 /** One owner-selected static deliverable. Not a model tool, build, device operation or preview grant. */
 public final class OriginalNodeWebOutput {
-    public static final String TOOL="owner_keep_first_node_web_output", ENTRY="dist/index.html";
+    public static final String TOOL="owner_keep_first_node_web_output", DIRECT_TOOL="owner_keep_direct_node_web_output", ENTRY="dist/index.html";
+    public static final String DIRECT_ROUTE="directOwnerNodeWebVersion", DIRECT_ARTIFACT_SOURCE="owner_direct_vite_work";
+    public static boolean directArchiveMetadata(JSONObject artifact){return DIRECT_ARTIFACT_SOURCE.equals(artifact.opt("source"));}
+    private static final String DIRECT_FORMAT="pocketworld.owner-native-node-web-version.v1";
     public static final String PENDING="owner_web_output_pending", NOT_PUBLISHED="owner_web_output_not_published";
     public static final String WITNESS="firstNodeWebOutput", EDITED_ROUTE="editedNodeWebVersion", EXISTING_ROUTE="existingNodeWebVersion";
     public static final String OUTPUT_LIMITATION="firstNodeWebOutputLimitation", NESTED_VITE_OUTPUT="nested_vite_output";
@@ -49,15 +52,25 @@ public final class OriginalNodeWebOutput {
 
     public static final class Build {
         private final JSONObject plan,binding,facts,witness;
-        private Build(JSONObject plan, JSONObject binding, JSONObject facts,JSONObject witness)throws Exception{
+        private final boolean direct;
+        private Build(JSONObject plan, JSONObject binding, JSONObject facts,JSONObject witness,boolean direct)throws Exception{
             this.plan=ProjectSources.copy(plan);this.binding=ProjectSources.copy(binding);
-            this.facts=ProjectSources.copy(facts);this.witness=ProjectSources.copy(witness);
+            this.facts=ProjectSources.copy(facts);this.witness=ProjectSources.copy(witness);this.direct=direct;
         }
         public JSONObject plan()throws Exception{return ProjectSources.copy(plan);}
         public JSONObject binding()throws Exception{return ProjectSources.copy(binding);}
         public JSONObject facts()throws Exception{return ProjectSources.copy(facts);}
         public String checkoutId(){return facts.optString("checkoutId");}
         public String operationId(){return facts.optString("operationId");}
+        public boolean directOwnerVite(){return direct;}
+        public String saveTool(){return direct?DIRECT_TOOL:TOOL;}
+    }
+    public static String directVersion(JSONObject exact,JSONObject binding)throws Exception{
+        if(binding.has(OriginalNodeCompilerOutput.DIRECT_ROUTE))throw new SecurityException("原网页构建不借编译文件来源");
+        return OriginalNodeCompilerOutput.directBuildVersion(exact,binding,DIRECT_FORMAT);
+    }
+    public static boolean matchesDirectRoute(JSONObject exact,JSONObject route)throws Exception{
+        return !route.has(OriginalNodeCompilerOutput.DIRECT_ROUTE)&&OriginalNodeCompilerOutput.matchesDirectBuildRoute(exact,route,DIRECT_ROUTE,DIRECT_FORMAT);
     }
     /** Internal original SQL row; a tool success string or an arbitrary artifact id is not a build. */
     public static Build fromOriginalRow(JSONObject task,JSONObject pin,JSONObject row,boolean current)throws Exception{
@@ -71,6 +84,24 @@ public final class OriginalNodeWebOutput {
             if(outcome==null||!"build_exit".equals(outcome.opt("kind"))||outcome.getInt("value")!=0)throw new SecurityException("不是这一轮实际成功的 Node 构建");
         }
         if(ProjectDevelopment.recordedReceipt(task,row)==null)throw new SecurityException("原构建没有原生结果");
+        String edited=OwnerDraftFirstBuild.editedWebVersion(pin),existing=OwnerDraftFirstBuild.existingWebVersion(pin);
+        JSONObject route=row.getJSONObject("receipt").getJSONObject("projectExecution");
+        requireVersionRoute(route,EDITED_ROUTE,edited);
+        requireVersionRoute(route,EXISTING_ROUTE,existing);
+        if(route.has(DIRECT_ROUTE))throw new SecurityException("原网页构建用途不同");
+        return verifiedBuild(task,row,plan,binding,edited,existing,false);
+    }
+    /** The store supplies the already verified native Tool Work and its actual consumed SQL operation. */
+    public static Build fromDirectRow(JSONObject task,JSONObject row,JSONObject plan,JSONObject exact,JSONObject route)throws Exception{
+        var ref=dev.pocketengine.features.local.runtime.RuntimeExecutionRef.fromHost(exact,route);
+        JSONObject actual=row.getJSONObject("receipt").getJSONObject("executionReceipt");
+        ref.requireReceipt(actual);
+        if(!matchesDirectRoute(exact,route)||!actual.isNull("receiptPersistence"))
+            throw new SecurityException("原本机网页构建缺少已保留的退出证据");
+        return verifiedBuild(task,row,plan,ref.binding(),"",route.getString(DIRECT_ROUTE),true);
+    }
+    private static Build verifiedBuild(JSONObject task,JSONObject row,JSONObject plan,JSONObject binding,
+            String editedVersion,String existingVersion,boolean direct)throws Exception{
         JSONObject actual=row.getJSONObject("receipt").getJSONObject("executionReceipt");
         JSONObject proof=ProjectManagedOutput.build(plan,binding,actual,actual.getLong("checkoutSequence"));
         if(!Boolean.FALSE.equals(actual.opt("cancelRequested"))||!Boolean.FALSE.equals(actual.opt("timedOut")))
@@ -79,19 +110,15 @@ public final class OriginalNodeWebOutput {
         int epoch=binding.getInt("coordinatorEpoch");
         if(!taskId.equals(binding.getString("taskId"))||!op.equals(row.getString("operationId"))||epoch<1)
             throw new SecurityException("原构建的任务或轮次身份不同");
-        String ownerOp=UUID.nameUUIDFromBytes(ProjectSources.canonical(new JSONArray().put(TOOL).put(taskId).put(run).put(epoch).put(op))
+        String ownerOp=UUID.nameUUIDFromBytes(ProjectSources.canonical(new JSONArray().put(direct?DIRECT_TOOL:TOOL).put(taskId).put(run).put(epoch).put(op))
                 .getBytes(StandardCharsets.UTF_8)).toString();
         JSONObject facts=new JSONObject().put("taskId",taskId).put("runId",run).put("epoch",epoch).put("buildOperationId",op)
             .put("buildReceiptIdentity",proof.getString("receiptIdentity")).put("checkoutSequence",proof.getLong("checkoutSequence"))
             .put("operationId",ownerOp);
         for(String key:ListKeys.SOURCE)facts.put(key,plan.get(key));
         JSONObject witness=actual.optJSONObject(WITNESS);
-        String editedVersion=OwnerDraftFirstBuild.editedWebVersion(pin),existingVersion=OwnerDraftFirstBuild.existingWebVersion(pin);
-        JSONObject route=row.getJSONObject("receipt").getJSONObject("projectExecution");
-        requireVersionRoute(route,EDITED_ROUTE,editedVersion);
-        requireVersionRoute(route,EXISTING_ROUTE,existingVersion);
         requireWitness(facts,witness,editedVersion,existingVersion);
-        return new Build(plan,binding,facts,witness);
+        return new Build(plan,binding,facts,witness,direct);
     }
     private static void requireVersionRoute(JSONObject route,String key,String expected){
         if(expected.isEmpty()?route.has(key):!expected.equals(route.opt(key)))
@@ -108,7 +135,8 @@ public final class OriginalNodeWebOutput {
 
     public static void requireSameWitness(Build original,JSONObject actual)throws Exception {
         JSONObject seen=actual.optJSONObject(WITNESS);
-        if(seen==null||!ProjectSources.canonical(original.witness).equals(ProjectSources.canonical(seen)))
+        if(seen==null||original.direct&&!actual.isNull("receiptPersistence")||
+            !ProjectSources.canonical(original.witness).equals(ProjectSources.canonical(seen)))
             throw new SecurityException("原运行宿主的退出资源证据与原任务回执不同");
     }
     private static Map<String,String> template()throws Exception{
@@ -133,6 +161,44 @@ public final class OriginalNodeWebOutput {
         return new OutputSource(html,false);
     }
 
+    /** First model-free Vite profile only: real ordinary npm/lock route, default root entry and no local config.
+     * Check the original validated source rows too: a binary config cannot opt out of this rule. */
+    public static OutputSource directViteSource(JSONObject exact,JSONObject snapshot)throws Exception{
+        JSONObject checkout=snapshot.getJSONObject("checkout");
+        if(!exact.getString("checkoutId").equals(checkout.opt("id"))||!exact.getString("projectId").equals(checkout.opt("projectId"))||
+            !isNodeBuild(exact)||!"npm".equals(exact.getJSONObject("payload").opt("executable")))return null;
+        return directViteSource(snapshot);
+    }
+    /** Same source-shape inspection for the project entry, without suggesting that lock/tools are ready. */
+    static OutputSource directViteSource(JSONObject snapshot)throws Exception{
+        JSONObject checkout=snapshot.getJSONObject("checkout");
+        if(!OwnerDraftFirstBuild.ordinaryCheckout(checkout)||checkout.has(OwnerDraftWorkCopy.FIELD)||
+            checkout.has("collectedFromCheckoutId")||checkout.has("collectionOperationId"))return null;
+        var files=ProjectSources.files(snapshot);
+        String manifest=files.get("package.json");
+        if(manifest==null||manifest.getBytes(StandardCharsets.UTF_8).length>65536||!files.containsKey("package-lock.json")||
+            !files.containsKey("index.html")||files.get("index.html").isBlank())return null;
+        JSONObject pkg=dev.pocketengine.features.plugins.mcp.McpJson.parse(manifest),scripts=pkg.optJSONObject("scripts");
+        if(scripts==null||!"vite build".equals(scripts.opt("build"))||scripts.has("prebuild")||scripts.has("postbuild")||pkg.has("postcss"))return null;
+        boolean vite=false;
+        for(String field:Set.of("dependencies","devDependencies")){
+            JSONObject declared=pkg.optJSONObject(field);
+            vite|=declared!=null&&declared.opt("vite") instanceof String version&&!version.isBlank();
+        }
+        if(!vite)return null;
+        JSONArray rows=snapshot.getJSONArray("files");Set<String> paths=new java.util.HashSet<>();
+        for(int i=0;i<rows.length();i++){
+            String path=rows.getJSONObject(i).getString("path");
+            paths.add(path);
+            String leaf=path.substring(path.lastIndexOf('/')+1).toLowerCase(java.util.Locale.ROOT);
+            if(leaf.startsWith("vite.config.")||leaf.startsWith(".env")||leaf.startsWith(".postcssrc")||leaf.startsWith("postcss.config."))
+                return null;
+        }
+        if(pkg.has("packageManager")&&!(pkg.opt("packageManager") instanceof String)||
+                !"npm".equals(ProjectCheckoutTooling.manager(paths,pkg.optString("packageManager"))))return null;
+        OwnerDraftNodeDependencies.requirePlainProject(pkg,paths);
+        return requireViteSource(files,true);
+    }
     private static OutputSource requireViteSource(Map<String,String> files,boolean nestedPublic)throws Exception {
         String manifest=files.get("package.json");
         if(manifest==null||manifest.getBytes(StandardCharsets.UTF_8).length>65536||!files.containsKey("index.html"))
@@ -250,6 +316,7 @@ public final class OriginalNodeWebOutput {
     private static OutputSource versionedSource(RuntimeInvocation invocation,JSONObject exact,JSONObject snapshot)throws Exception{
         String edited=invocation.editedWebVersion(),existing=invocation.existingWebVersion();
         JSONObject checkout=snapshot.getJSONObject("checkout");
+        if(invocation.directWebOutput())return directViteSource(exact,snapshot);
         if(!existing.isEmpty()){
             if(!edited.isEmpty()||!isExistingCheckout(existing,exact,checkout))return null;
             return requireViteSource(ProjectSources.files(snapshot),true);
@@ -475,14 +542,17 @@ public final class OriginalNodeWebOutput {
         String id=UUID.nameUUIDFromBytes(("project-package:"+action).getBytes(StandardCharsets.UTF_8)).toString();
         if(!id.equals(artifact.opt("id"))||!id.equals(artifact.opt("versionId"))||!action.equals(artifact.opt("ownerActionId"))||
             !"project_bundle".equals(artifact.opt("kind"))||!"web_output".equals(artifact.opt("mode"))||
+            build.direct!=directArchiveMetadata(artifact)||build.direct&&!ENTRY.equals(artifact.opt("entryPath"))||
             !Boolean.TRUE.equals(artifact.opt("persisted"))||"retired".equals(artifact.optString("availability"))||
             pin.getLong("archiveBytes")!=artifact.getLong("sizeBytes")||!pin.getString("archiveSha256").equals(artifact.opt("sha256")))
             throw new SecurityException("原固定网页成果没有同一份完整字节回执");
         for(String k:Set.of("projectId","checkoutId","sourceDigest","manifestIdentity"))if(!pin.getString(k).equals(artifact.opt(k)))
             throw new SecurityException("原固定网页成果不属于这次审阅");
+        JSONObject metadata=ProjectPackageDelivery.metadata(artifact);
+        if(build.direct)metadata.put("source",DIRECT_ARTIFACT_SOURCE);
         return build.facts().put("format",ProjectPackageDelivery.EVIDENCE_FORMAT).put("coordinatorEpoch",pin.getInt("epoch"))
             .put("manifestIdentity",pin.getString("manifestIdentity")).put("archiveSha256",pin.getString("archiveSha256"))
-            .put("archiveBytes",pin.getLong("archiveBytes")).put("packageArtifact",ProjectPackageDelivery.metadata(artifact))
+            .put("archiveBytes",pin.getLong("archiveBytes")).put("packageArtifact",metadata)
             .put("authorityAdded",false).put("buildOutputAttribution","selected_output_observed_after_build");
     }
 }

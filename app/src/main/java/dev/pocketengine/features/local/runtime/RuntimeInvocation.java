@@ -2,6 +2,7 @@ package dev.pocketengine.features.local.runtime;
 
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
+import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.local.project.ProjectSources;
 import org.json.JSONObject;
 
@@ -13,7 +14,7 @@ public final class RuntimeInvocation {
     private final ProjectRuntime.LiveGate gate;
     private final long pauseRevision;
     private final RuntimeWorkspace workspace;
-    private final boolean ownerLockedBuild;
+    private final boolean ownerLockedBuild,directWebOutput;
     private final String editedWebVersion,existingWebVersion,directCompilerVersion;
 
     public RuntimeInvocation(JSONObject exact,JSONObject nativeBinding,JSONObject frozenSourceSnapshot,
@@ -30,8 +31,11 @@ public final class RuntimeInvocation {
             !"managed_process_v1".equals(exact.opt("runtimeId"))))throw new SecurityException("runtime_owner_locked_build_scope_mismatch");
         this.ownerLockedBuild=ownerLockedBuild;
         // An optional identifier from the original native admission, never read from model arguments.
-        editedWebVersion=nativeBinding.optString(dev.pocketengine.features.local.project.OriginalNodeWebOutput.EDITED_ROUTE);
-        existingWebVersion=nativeBinding.optString(dev.pocketengine.features.local.project.OriginalNodeWebOutput.EXISTING_ROUTE);
+        directWebOutput=nativeBinding.has(OriginalNodeWebOutput.DIRECT_ROUTE);
+        if(directWebOutput&&(!ownerLockedBuild||!OriginalNodeWebOutput.matchesDirectRoute(exact,nativeBinding)))
+            throw new SecurityException("runtime_direct_owner_web_scope_mismatch");
+        editedWebVersion=nativeBinding.optString(OriginalNodeWebOutput.EDITED_ROUTE);
+        existingWebVersion=nativeBinding.optString(directWebOutput?OriginalNodeWebOutput.DIRECT_ROUTE:OriginalNodeWebOutput.EXISTING_ROUTE);
         if(nativeBinding.has(OriginalNodeCompilerOutput.DIRECT_ROUTE)){
             if(!ownerLockedBuild||!OriginalNodeCompilerOutput.matchesDirectRoute(exact,nativeBinding))
                 throw new SecurityException("runtime_direct_owner_compiler_scope_mismatch");
@@ -56,6 +60,7 @@ public final class RuntimeInvocation {
     public String existingWebVersion(){return existingWebVersion;}
     public boolean versionedWebOutput(){return !editedWebVersion.isEmpty()||!existingWebVersion.isEmpty();}
     public boolean directCompilerOutput(){return !directCompilerVersion.isEmpty();}
+    public boolean directWebOutput(){return directWebOutput;}
     public RuntimeWorkspace workspace() {
         if(workspace==null)throw new SecurityException("runtime_native_active_workspace_required");
         return workspace;

@@ -7,7 +7,9 @@ import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.local.project.OwnerDraftCopyShelf;
 import dev.pocketengine.features.local.project.OwnerDraftNodeDependencies;
+import dev.pocketengine.features.local.project.OwnerDirectNodeBuild;
 import dev.pocketengine.features.local.project.OwnerDirectNodeDependencies;
+import dev.pocketengine.features.local.preview.ProjectPreviewBundle;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.workspace.JsonFiles;
@@ -384,6 +386,19 @@ public final class LocalModule implements EngineModule {
         requirePackagePreviewOwner(nativeEvidence);
         return projectPreviewForOwner(metadata.getString("previewId"),nativeEvidence.getString("checkoutId"));
     }
+    /** Separate original Work path. No current source, generic package choices or Chat references. */
+    public synchronized ProjectPreviewBundle.Verified openDirectViteArchiveForOwner(JSONObject evidence,String entryPath)throws Exception{
+        requirePackagePreviewOwner(evidence,true);
+        JSONObject artifact=evidence.getJSONObject("packageArtifact");
+        if(!OriginalNodeWebOutput.ENTRY.equals(entryPath)||!entryPath.equals(artifact.opt("entryPath"))||
+                !"web_output".equals(artifact.opt("mode"))||!Boolean.FALSE.equals(evidence.opt("authorityAdded"))||
+                !"selected_output_observed_after_build".equals(evidence.opt("buildOutputAttribution")))
+            throw new SecurityException("请打开这项原本机网页工作的已保存入口");
+        var frozen=packageWorkspace().originalTaskPackage(evidence);
+        var opened=ProjectPreviewBundle.fromProjectPackage(frozen,evidence.getString("artifactId"),evidence.getString("artifactSha256"),entryPath);
+        requirePackagePreviewOwner(evidence,true);
+        return rememberPackagePreview(opened);
+    }
     /** Source-edit references require both the original archive and the actual original checkout. */
     public synchronized void requireProjectPackagePreviewCurrent(dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified preview,JSONObject nativeEvidence)throws Exception {
         if(preview==null||closed||previews.get(preview.identity)!=preview||preview.artifactId==null)throw new SecurityException("原固定项目包预览已释放");
@@ -400,12 +415,19 @@ public final class LocalModule implements EngineModule {
         if(closed||previews.get(preview.identity)!=preview)throw new SecurityException("原固定项目包预览已释放");
     }
     private void requirePackagePreviewOwner(JSONObject nativeEvidence)throws Exception {
-        if(closed||nativeEvidence==null||!"fixed_workspace_project_artifact".equals(nativeEvidence.optString("sourceKind"))
+        requirePackagePreviewOwner(nativeEvidence,false);
+    }
+    private void requirePackagePreviewOwner(JSONObject nativeEvidence,boolean directVite)throws Exception {
+        if(closed||nativeEvidence==null||(directVite?(!Boolean.TRUE.equals(nativeEvidence.opt(OwnerDirectNodeBuild.VITE_FIELD))||
+            nativeEvidence.has("conversationId")):nativeEvidence.has(OwnerDirectNodeBuild.VITE_FIELD))||
+            !"fixed_workspace_project_artifact".equals(nativeEvidence.optString("sourceKind"))
             ||!nativeEvidence.getString("packageOperationId").equals(nativeEvidence.getString("operationId"))
             ||!nativeEvidence.getString("artifactId").equals(nativeEvidence.getJSONObject("packageArtifact").getString("id"))
             ||!nativeEvidence.getString("artifactSha256").equals(nativeEvidence.getString("archiveSha256")))throw new SecurityException("缺少原任务的固定项目包来源");
         JSONObject selected=checkout(nativeEvidence.getString("checkoutId"));
-        if(!nativeEvidence.getString("projectId").equals(selected.getString("projectId"))||selected.has("teamProjectCopy"))throw new SecurityException("原固定包的私人项目副本已不可用");
+        if(!nativeEvidence.getString("projectId").equals(selected.getString("projectId"))||selected.has("teamProjectCopy")||
+                directVite&&(!nativeEvidence.getString("checkoutId").equals(selected.opt("id"))||!ordinaryDirectNodeCheckout(selected)))
+            throw new SecurityException("原固定包的私人项目副本已不可用");
         JSONArray existing=projects.snapshot().getJSONArray("projects");boolean found=false;
         for(int i=0;i<existing.length();i++)if(nativeEvidence.getString("projectId").equals(existing.getJSONObject(i).getString("id")))found=true;
         if(!found)throw new SecurityException("原私人项目已不存在，没有自动创建项目或副本");
@@ -422,7 +444,12 @@ public final class LocalModule implements EngineModule {
     }
     private dev.pocketengine.features.workspace.WorkspaceModule packageWorkspace(){if(!(projects instanceof dev.pocketengine.features.workspace.WorkspaceModule))throw new IllegalStateException("原工作区文件成果宿主不可用");return (dev.pocketengine.features.workspace.WorkspaceModule)projects;}
     private dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen capturePackage(JSONObject input)throws Exception {
-        String checkoutId=JsonFiles.text(input,"checkoutId",80);requireCheckoutWritable(checkoutId);requireIdle(checkoutId);JSONObject checkout=checkout(checkoutId),source=ProjectSources.describe(export(checkoutId));
+        return capturePackage(input,true);
+    }
+    private dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen capturePackage(JSONObject input,boolean writerFence)throws Exception {
+        String checkoutId=JsonFiles.text(input,"checkoutId",80);
+        if(writerFence)requireCheckoutWritable(checkoutId);
+        requireIdle(checkoutId);JSONObject checkout=checkout(checkoutId),source=ProjectSources.describe(export(checkoutId));
         if(input.has("expectedSourceDigest")&&!source.getString("sourceDigest").equals(input.getString("expectedSourceDigest")))throw new SecurityException("原项目源码已变化，请重新核对项目包清单");
         if(input.has("includeGeneratedRoots")&&!(input.opt("includeGeneratedRoots") instanceof Boolean))throw new IllegalArgumentException("输出根目录选择需为布尔值");
         JSONObject original=new JSONObject().put("projectId",source.getString("projectId")).put("checkoutId",checkoutId).put("sourceDigest",source.getString("sourceDigest")).put("name",checkout.getString("name"));
@@ -448,11 +475,13 @@ public final class LocalModule implements EngineModule {
     }
     private JSONObject previewProjectPackage(JSONObject input)throws Exception {
         String id=input.getString("artifactId"),sha=input.getString("sha256");var frozen=packageWorkspace().projectPackage(id,sha);
-        var bundle=dev.pocketengine.features.local.preview.ProjectPreviewBundle.fromProjectPackage(frozen,id,sha,input.getString("entryPath"));
+        return rememberPackagePreview(ProjectPreviewBundle.fromProjectPackage(frozen,id,sha,input.getString("entryPath"))).metadata();
+    }
+    private ProjectPreviewBundle.Verified rememberPackagePreview(ProjectPreviewBundle.Verified bundle){
         // Re-reading the same verified bytes does not revoke an already open native document.
-        var retained=previews.get(bundle.identity);if(retained!=null)return retained.metadata();
+        var retained=previews.get(bundle.identity);if(retained!=null)return retained;
         previews.put(bundle.identity,bundle);int bytes=0;for(var value:previews.values())bytes+=value.totalBytes;while(previews.size()>3||bytes>48*1024*1024){var key=previews.keySet().iterator().next();bytes-=previews.remove(key).totalBytes;}
-        return bundle.metadata();
+        return bundle;
     }
     /** Native-only stream export; generic feature JSON never receives an app-private payload path. */
     public long exportProjectPackageForOwner(String id,String sha,java.io.OutputStream destination)throws Exception {if(closed)throw new IllegalStateException("原项目模块已关闭");return packageWorkspace().exportProjectPackage(id,sha,destination);}
@@ -1163,16 +1192,16 @@ public final class LocalModule implements EngineModule {
     }
     /** This preflight does not claim, install or modify. The original host keeps this same
      * module monitor through the SQL claim and existing runtime dispatch. */
-    public synchronized void requireDirectNodeBuildForOwner(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.Confirmed selected)throws Exception{
+    public synchronized void requireDirectNodeBuildForOwner(OwnerDirectNodeBuild.Confirmed selected)throws Exception{
         selected.requireHost(this);selected.requireUnenteredWindow();
         JSONObject scope=selected.scope(),plan=selected.plan(),lock=selected.lock();
-        JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.OwnerDirectNodeBuild.step(plan));
+        JSONObject exact=ProjectDevelopment.exact(plan,OwnerDirectNodeBuild.step(plan));
         String checkout=scope.getString("checkoutId"),project=scope.getString("projectId");
-        validateDirectCompilerCheckout(project,checkout);
+        validateDirectNodeCheckout(project,checkout);
         File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),checkout,false),files=new File(home,"files");
         JSONObject snapshot=exportDirectory(files,checkout(checkout)),source=ProjectSources.describe(snapshot);
         if(!source.getString("sourceDigest").equals(scope.opt("sourceDigest"))||
-                !scope.getString("outputPath").equals(OriginalNodeCompilerOutput.selectedPathForOwnerReview(exact,snapshot))||
+                !scope.getString("outputPath").equals(OwnerDirectNodeBuild.selectedOutput(exact,snapshot,selected.vite()))||
                 !scope.getString("lockSha256").equals(lock.opt("lockSha256"))||
                 !projectCapabilityStillCurrent(exact,selected.capability()))
             throw new SecurityException("所选副本的源码、锁或实际工具已变化，没有构建");
@@ -1180,7 +1209,7 @@ public final class LocalModule implements EngineModule {
         selected.requireUnenteredWindow();
     }
     public synchronized boolean directNodeDependencyRootAbsentForOwner(String project,String checkout)throws Exception{
-        validateDirectCompilerCheckout(project,checkout);
+        validateDirectNodeCheckout(project,checkout);
         RuntimeWorkspace active=runtimeWorkspace(checkout);
         OwnerDraftNodeDependencies.workspace(active);
         return Files.notExists(active.resolve("node_modules",false).toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
@@ -1199,7 +1228,7 @@ public final class LocalModule implements EngineModule {
         OwnerDraftNodeDependencies.requireLaunch(exact,snapshot,projectRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID),runtimeWorkspace(checkout));
         selected.requireUnenteredWindow();
     }
-    private void validateDirectCompilerCheckout(String project,String id)throws Exception{
+    private void validateDirectNodeCheckout(String project,String id)throws Exception{
         if(closed)throw new IllegalStateException("原本机项目宿主已关闭");
         File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),id,false),files=new File(home,"files");
         if(!files.equals(files.getCanonicalFile())||!Files.isDirectory(files.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)||
@@ -1208,10 +1237,12 @@ public final class LocalModule implements EngineModule {
         requireIdle(id);
         JSONObject metadata=checkout(id);
         if(!project.equals(metadata.opt("projectId"))||!id.equals(metadata.opt("id"))||
-                !dev.pocketengine.features.local.project.OwnerDirectNodeBuild.ordinaryCheckout(metadata)||
-                metadata.has(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD)||
-                metadata.has("collectedFromCheckoutId")||metadata.has("collectionOperationId"))
+                !ordinaryDirectNodeCheckout(metadata))
             throw new SecurityException("这不是所选的普通本机私人副本");
+    }
+    private static boolean ordinaryDirectNodeCheckout(JSONObject metadata){
+        return OwnerDirectNodeBuild.ordinaryCheckout(metadata)&&!metadata.has(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD)&&
+                !metadata.has("collectedFromCheckoutId")&&!metadata.has("collectionOperationId");
     }
     /** Native original-operation port. Raw feature requests cannot supply its retained authority. */
     public synchronized JSONObject executeProjectForHost(JSONObject exact,JSONObject binding,RunControl original,ProjectAdmission admission)throws Exception {
@@ -1266,12 +1297,24 @@ public final class LocalModule implements EngineModule {
     }
     private JSONObject currentManagedBuildProof(OriginalManagedBuild b,RunControl original,long pause,OriginalNodeWebOutput.Build web)throws Exception{
         original.check();if(original.isPaused()||pause!=original.pauseRevision())throw new SecurityException("原任务的暂停状态已变化");
-        requireIdle(b.checkout);requireCheckoutWritable(b.checkout);
+        boolean directVite=web!=null&&web.directOwnerVite();
+        requireIdle(b.checkout);
+        if(directVite)validateDirectNodeCheckout(b.plan.getString("projectId"),b.checkout);
+        else requireCheckoutWritable(b.checkout);
         ManagedProjectRuntime runtime=ownedServiceRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID);
         if(runtime!=b.runtime||!b.plan.getString("runtimeIdentity").equals(runtime.identity()))throw new SecurityException("原构建工具环境已变化");
         JSONObject source=ProjectSources.describe(export(b.checkout));
         if(!b.checkout.equals(source.getString("checkoutId"))||!b.plan.getString("projectId").equals(source.getString("projectId"))||!b.plan.getString("sourceDigest").equals(source.getString("sourceDigest")))throw new SecurityException("原构建与当前源码版本不同，未列出其他版本的输出");
-        JSONObject actual=runtime.query(b.ref).json();if(web!=null)OriginalNodeWebOutput.requireSameWitness(web,actual);
+        JSONObject actual;
+        if(directVite){
+            // Read only the exact retained original metadata; never the live job or its log file.
+            RuntimeReceipt retained=runtime.retainedNodeTerminalReceiptForHost(b.ref,()->!closed&&!original.isCancelled()&&
+                    !original.isPaused()&&pause==original.pauseRevision());
+            if(retained==null)throw new SecurityException("没有核对到这次原网页构建的已保留退出回执");
+            actual=retained.json();
+        }else actual=runtime.query(b.ref).json();
+        if(web!=null)OriginalNodeWebOutput.requireSameWitness(web,actual);
+        original.check();if(original.isPaused()||pause!=original.pauseRevision())throw new SecurityException("原任务的暂停状态已变化");
         return dev.pocketengine.features.local.project.ProjectManagedOutput.build(b.plan,b.binding,actual,runtime.currentCheckoutSequence(b.checkout));
     }
     public synchronized JSONObject managedOutputDirectoryForHost(JSONObject request,String checkout,String directory,JSONObject cursor,RunControl original,dev.pocketengine.features.capabilities.ModelCapabilityAdapters.Binding currentAdmission)throws Exception{
@@ -1301,10 +1344,12 @@ public final class LocalModule implements EngineModule {
         JSONObject exact=ProjectDevelopment.exact(plan,dev.pocketengine.features.local.project.ProjectBuildPlan.step(plan,"build"));
         OriginalManagedBuild build=new OriginalManagedBuild(plan,binding,id,runtime,RuntimeExecutionRef.fromHost(exact,binding));
         long pause=c.pauseRevision();OriginalNodeWebOutput.requireSameBuild(original,currentManagedBuildProof(build,c,pause,original));
-        var sourceShape=OriginalNodeWebOutput.requireSupportedSource(export(id));
+        JSONObject snapshot=export(id);
+        var sourceShape=original.directOwnerVite()?OriginalNodeWebOutput.directViteSource(exact,snapshot):OriginalNodeWebOutput.requireSupportedSource(snapshot);
+        if(sourceShape==null)throw new SecurityException("原网页的默认 Vite 源码结构已变化");
         OriginalNodeWebOutput.requireOutputPaths(content(id),sourceShape);
         var frozen=capturePackage(new JSONObject().put("checkoutId",id).put("expectedSourceDigest",plan.getString("sourceDigest"))
-            .put("mode","web_output").put("entryPath",OriginalNodeWebOutput.ENTRY).put("includeGeneratedRoots",true));
+            .put("mode","web_output").put("entryPath",OriginalNodeWebOutput.ENTRY).put("includeGeneratedRoots",true),!original.directOwnerVite());
         var review=OriginalNodeWebOutput.review(original,frozen,sourceShape);
         OriginalNodeWebOutput.requireSameBuild(original,currentManagedBuildProof(build,c,pause,original));
         return new OriginalWebBytes(review,frozen);
@@ -1319,18 +1364,23 @@ public final class LocalModule implements EngineModule {
         ownerCurrent.require();c.check();beforePublication.require();
         // The SQL intent is now durable. An immutable Frozen object is the sole write input.
         // No live file or pipeline is dispatched while copying the ZIP.
-        JSONObject saved=packageWorkspace().createFirstNodeWebPackage(actual.frozen,dev.pocketengine.features.local.project.ProjectPackageDelivery.actionId(original.build.operationId()));
+        String action=dev.pocketengine.features.local.project.ProjectPackageDelivery.actionId(original.build.operationId());
+        JSONObject saved=original.build.directOwnerVite()?packageWorkspace().createDirectViteWebPackage(actual.frozen,action):
+            packageWorkspace().createFirstNodeWebPackage(actual.frozen,action);
         return verifyOriginalWebArchive(original.build,pin,saved);
     }
     /** Query only after a possibly interrupted owner save. No workspace fallback, creation or runtime query. */
     public synchronized OriginalWebArchive findFirstWebOutputForOwner(OriginalNodeWebOutput.Build build,JSONObject pin)throws Exception{
         OriginalNodeWebOutput.requirePin(build,pin);
-        JSONObject found=packageWorkspace().findProjectPackage(dev.pocketengine.features.local.project.ProjectPackageDelivery.actionId(build.operationId()),
-            pin.getString("projectId"),pin.getString("checkoutId"),pin.getString("manifestIdentity"));
+        String action=dev.pocketengine.features.local.project.ProjectPackageDelivery.actionId(build.operationId());
+        String project=pin.getString("projectId"),checkout=pin.getString("checkoutId"),manifest=pin.getString("manifestIdentity");
+        JSONObject found=build.directOwnerVite()?packageWorkspace().findDirectViteArchive(action,project,checkout,manifest):
+            packageWorkspace().findProjectPackage(action,project,checkout,manifest);
         return !found.optBoolean("found")?null:verifyOriginalWebArchive(build,pin,found);
     }
     private OriginalWebArchive verifyOriginalWebArchive(OriginalNodeWebOutput.Build build,JSONObject pin,JSONObject result)throws Exception{
-        JSONObject catalog=packageWorkspace().projectPackageMetadata(result.getString("id"),pin.getString("archiveSha256"));
+        String id=result.getString("id"),sha=pin.getString("archiveSha256");
+        JSONObject catalog=build.directOwnerVite()?packageWorkspace().directViteArchiveMetadata(id,sha):packageWorkspace().projectPackageMetadata(id,sha);
         var evidence=OriginalNodeWebOutput.savedEvidence(build,pin,catalog);
         dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(evidence,catalog);
         return new OriginalWebArchive(pin,catalog);

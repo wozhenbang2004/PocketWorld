@@ -58,23 +58,32 @@ public final class OriginalNodeCompilerOutput {
 
     /** Output provenance only; the original owner confirmation and native SQL claim still authorize dispatch. */
     public static String directVersion(JSONObject exact,JSONObject nativeBinding)throws Exception {
+        if(nativeBinding.has(OriginalNodeWebOutput.DIRECT_ROUTE))throw unavailable();
+        return directBuildVersion(exact,nativeBinding,DIRECT_FORMAT);
+    }
+
+    /** Shared exact owner npm dispatch identity; an output-specific format domain separates witnesses. */
+    static String directBuildVersion(JSONObject exact,JSONObject nativeBinding,String format)throws Exception {
         if(!directNpmBuild(exact)||
             nativeBinding.has(OriginalNodeWebOutput.EXISTING_ROUTE)||nativeBinding.has(OriginalNodeWebOutput.EDITED_ROUTE)||
             !(nativeBinding.opt("taskId") instanceof String id)||!DIRECT_ID.matcher(id).matches()||
             "00000000-0000-0000-0000-000000000000".equals(id)||!id.equals(nativeBinding.opt("runId"))||
             !id.equals(nativeBinding.opt("operationId"))||!number(nativeBinding.opt("coordinatorEpoch"),1))throw unavailable();
         RuntimeExecutionRef ref=RuntimeExecutionRef.fromHost(exact,nativeBinding);
-        JSONObject version=ref.binding().put("format",DIRECT_FORMAT);
+        JSONObject version=ref.binding().put("format",format);
         for(String key:ROUTE_FACTS)version.put(key,exact.get(key));
         return ProjectSources.digest(version);
     }
 
     /** Only the original SQL route carries this marker; the provider receipt keeps its existing wire shape. */
     public static boolean matchesDirectRoute(JSONObject exact,JSONObject originalRoute)throws Exception {
-        if(!(originalRoute.opt(DIRECT_ROUTE) instanceof String marker)||!"native_host_operation".equals(originalRoute.opt("authority"))||
-            !Objects.equals(originalRoute.opt("jobId"),originalRoute.opt("operationId")))return false;
-        for(String key:ROUTE_FACTS)if(!Objects.equals(exact.opt(key),originalRoute.opt(key)))return false;
-        return directVersion(exact,originalRoute).equals(marker);
+        return !originalRoute.has(OriginalNodeWebOutput.DIRECT_ROUTE)&&matchesDirectBuildRoute(exact,originalRoute,DIRECT_ROUTE,DIRECT_FORMAT);
+    }
+    static boolean matchesDirectBuildRoute(JSONObject exact,JSONObject route,String key,String format)throws Exception {
+        if(!(route.opt(key) instanceof String marker)||!"native_host_operation".equals(route.opt("authority"))||
+            !Objects.equals(route.opt("jobId"),route.opt("operationId")))return false;
+        for(String fact:ROUTE_FACTS)if(!Objects.equals(exact.opt(fact),route.opt(fact)))return false;
+        return directBuildVersion(exact,route,format).equals(marker);
     }
 
     private static boolean existingVersion(JSONObject exact,Object marker)throws Exception {

@@ -288,11 +288,9 @@ export function useProjectPreview(options: Options) {
     openSavedWebOriginalWork, blocked: options.blocked, can: options.can };
 }
 
-export function ProjectPreviewPane({ control, composer }: { control: ReturnType<typeof useProjectPreview>; composer: Data }) {
+export function useProjectPreviewViewport(expanded:boolean,sessionId:string,blocked:boolean,can:(name:string)=>boolean,
+  windowIdentity:string|number,clipWithin='.pw-preview-pane') {
   const viewport = useRef<HTMLDivElement>(null);
-  const { expanded, view, busy, error, unknown, blocked, can } = control;
-  const working = !!busy || control.exportBusy;
-  const sessionId = view?.sessionId || '';
   useLayoutEffect(() => {
     if (!expanded || !sessionId || !can('projects.preview.viewport')) return;
     const epoch = bridge.getDocumentEpoch(); let frame = 0, disposed = false, last = '';
@@ -300,7 +298,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       if (bridge.getDocumentEpoch() !== epoch) return;
       const node = viewport.current, bounds = node?.getBoundingClientRect();
       let rect = bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : null;
-      const pane = node?.closest<HTMLElement>('.pw-preview-pane'), paneBounds = pane?.getBoundingClientRect();
+      const pane = node?.closest<HTMLElement>(clipWithin), paneBounds = pane?.getBoundingClientRect();
       // The native renderer is a sibling of this Web UI, so CSS scrolling does
       // not clip it. Report only the part inside this same pane's client area.
       if (rect && pane && paneBounds) {
@@ -318,7 +316,7 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
     const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(() => { if (!disposed) send(true); }); };
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
     if (viewport.current) observer?.observe(viewport.current);
-    const pane = viewport.current?.closest<HTMLElement>('.pw-preview-pane');
+    const pane = viewport.current?.closest<HTMLElement>(clipWithin);
     if (pane) observer?.observe(pane);
     window.addEventListener('resize', schedule); window.addEventListener('scroll', schedule, true);
     window.visualViewport?.addEventListener('resize', schedule); window.visualViewport?.addEventListener('scroll', schedule);
@@ -330,7 +328,15 @@ export function ProjectPreviewPane({ control, composer }: { control: ReturnType<
       window.visualViewport?.removeEventListener('resize', schedule); window.visualViewport?.removeEventListener('scroll', schedule);
       document.removeEventListener('visibilitychange', schedule); send(false);
     };
-  }, [expanded, sessionId, blocked, can, control.resumeRevision]);
+  }, [expanded, sessionId, blocked, can, windowIdentity, clipWithin]);
+  return viewport;
+}
+
+export function ProjectPreviewPane({ control, composer }: { control: ReturnType<typeof useProjectPreview>; composer: Data }) {
+  const { expanded, view, busy, error, unknown, blocked, can } = control;
+  const working = !!busy || control.exportBusy;
+  const sessionId = view?.sessionId || '';
+  const viewport=useProjectPreviewViewport(expanded,sessionId,blocked,can,control.resumeRevision);
   if (!expanded) return null;
   const refs = Array.isArray(composer.previewRefs) ? composer.previewRefs : [];
   const count = view ? refs.filter((ref: Data) => ref.previewId === view.metadata.previewId).length : 0;

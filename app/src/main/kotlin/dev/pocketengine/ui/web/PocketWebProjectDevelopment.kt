@@ -532,6 +532,12 @@ internal class PocketWebProjectDevelopment(
                                 }
                                 if(direct){
                                     val localReview = checkNotNull(directPlan)
+                                    if (preparation.opt("directBuildKind") == "vite") out.put("directBuildKind","vite")
+                                    localReview.viteWork()?.let { prior ->
+                                        check(prior.opt("projectId")==original.project && prior.opt("checkoutId")==checkout &&
+                                            prior.opt("sourceDigest")==sourceDigest) { "原网页构建不属于当前源码" }
+                                        out.put("directViteBuildWork",prior)
+                                    }
                                     localReview.dependencyWork()?.let { originalWork ->
                                         check(originalWork.opt("projectId") == original.project && originalWork.opt("checkoutId") == checkout &&
                                             originalWork.opt("sourceDigest") == sourceDigest) { "原依赖工作不属于当前源码" }
@@ -546,11 +552,25 @@ internal class PocketWebProjectDevelopment(
                                         dependencyReview = DependencyReview(handle, original, checkout, heldDigest, offered)
                                         out.put("directDependencies", ready.put("reviewHandle", handle))
                                     }
+                                    localReview.viteOffer()?.let { offered ->
+                                        val ready = offered.view()
+                                        if (out.opt("directBuildKind")!="vite" || out.has("directViteBuildWork") ||
+                                            out.has("directDependencies") || localReview.offer()!=null ||
+                                            ready.opt("projectId")!=original.project || ready.opt("checkoutId")!=checkout ||
+                                            ready.opt("sourceDigest")!=sourceDigest) {
+                                            offered.close()
+                                            error("原网页构建审阅不属于当前源码")
+                                        }
+                                        val handle = UUID.randomUUID().toString()
+                                        directReview = DirectReview(handle, original, checkout, heldDigest, offered)
+                                        out.put("directViteBuild",ready.put("reviewHandle",handle))
+                                    }
                                     val prior=actual.optJSONObject("directNodeBuildWork")
                                     if(prior!=null){
                                         directPlan?.offer()?.close();out.put("directBuildWork",prior)
                                     } else if(actual.opt("directNodeBuildWorkUnavailable")!=true){
                                         directPlan?.offer()?.let { offered ->
+                                            check(directReview==null) { "本机构建类型发生冲突，请重读原项目" }
                                             val handle=UUID.randomUUID().toString()
                                             val ready=offered.view()
                                             check(ready.opt("projectId")==original.project && ready.opt("checkoutId")==checkout &&

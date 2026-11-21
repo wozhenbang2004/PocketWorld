@@ -349,15 +349,14 @@ public final class FeatureHost implements AutoCloseable {
     public boolean ownsGitImportTask(String id)throws Exception{JSONObject task=tasks==null?null:tasks.get(id,false);return task!=null&&(task.has("ownerGitImport")||task.has("ownerGitPublication"));}
     public dev.pocketengine.features.local.project.ProjectGitImport.Result gitImportResultForOwner(String id,dev.pocketengine.core.RunControl observation)throws Exception{JSONObject row=tasks.ownerGitImportForOwner(id);if(row.optBoolean("sourceRetired")||!"completed".equals(row.getString("status")))throw new SecurityException("请先取得未撤回的原Git读取与退出结果，再审阅发布");return ((dev.pocketengine.features.local.LocalModule)module("local")).gitImportsForOwner().result(row.getJSONObject("scope"),row.getJSONObject("nativeJob"),observation);}
 
-    /** Explicit same-window native owner compiler confirmation. No Assistant send, queue or tool grant. */
+    /** Explicit same-window native owner build confirmation. No Assistant send, queue or tool grant. */
     public JSONObject submitDirectNodeBuildForOwner(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.Confirmed confirmed)throws Exception{
         if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))
             throw new IllegalStateException("原本机项目宿主不可用");
         confirmed.requireHost(local);confirmed.requireUnenteredWindow();
         JSONObject scope=confirmed.scope();String id=scope.getString("requestId");
         synchronized(local){
-            if(tasks.directNodeWorkForSource(scope.getString("projectId"),scope.getString("checkoutId"),scope.getString("sourceDigest"))!=null)
-                return directNodeBuildForOwner(id,false);
+            if(directNodeWorkForSource(scope,confirmed.vite())!=null)return directNodeBuildForOwner(id,false);
             local.requireDirectNodeBuildForOwner(confirmed);
             if(!tasks.beginOwnerDirectNodeBuild(confirmed,local))return directNodeBuildForOwner(id,false);
             var initial=tasks.ownerDirectNodeOriginalForOwner(id);
@@ -400,7 +399,11 @@ public final class FeatureHost implements AutoCloseable {
             emitTask(id);sendState();
         }
         JSONObject scope=original.scope();
-        return tasks.directNodeWorkForSource(scope.getString("projectId"),scope.getString("checkoutId"),scope.getString("sourceDigest"));
+        return directNodeWorkForSource(scope,dev.pocketengine.features.local.project.OwnerDirectNodeBuild.VITE_FORMAT.equals(scope.opt("format")));
+    }
+    private JSONObject directNodeWorkForSource(JSONObject scope,boolean vite)throws Exception{
+        String project=scope.getString("projectId"),checkout=scope.getString("checkoutId"),source=scope.getString("sourceDigest");
+        return vite?tasks.directViteWorkForSource(project,checkout,source):tasks.directNodeWorkForSource(project,checkout,source);
     }
     /** One distinct, approved npm ci Work, with no implicit build or replacement of an existing root. */
     public JSONObject submitDirectNodeDependenciesForOwner(dev.pocketengine.features.local.project.OwnerDirectNodeDependencies.Confirmed confirmed)throws Exception{

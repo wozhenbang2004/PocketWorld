@@ -29,6 +29,14 @@ public final class WorkspaceModule implements EngineModule {
         if(nativeClosed)throw new IllegalStateException("原工作区已关闭");
         return artifacts.createFirstNodeWebPackage(frozen,ownerActionId);
     }
+    public JSONObject createDirectViteWebPackage(dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen frozen,String ownerActionId)throws Exception{
+        if(nativeClosed)throw new IllegalStateException("原工作区已关闭");
+        return artifacts.createFirstNodeWebPackage(frozen,ownerActionId,true);
+    }
+    public JSONObject directViteArchiveMetadata(String id,String sha)throws Exception{return artifacts.projectPackage(id,sha,true);}
+    public JSONObject findDirectViteArchive(String action,String project,String checkout,String manifest)throws Exception{
+        return artifacts.findProjectPackage(action,project,checkout,manifest,true);
+    }
     public dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen projectPackage(String id,String sha)throws Exception{return artifacts.readProjectPackage(id,sha);}
     public JSONObject projectPackageMetadata(String id,String sha)throws Exception{return artifacts.projectPackage(id,sha);}
     public dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen originalTaskPackage(JSONObject source)throws Exception{return artifacts.originalTaskPackage(source);}

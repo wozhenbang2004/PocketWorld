@@ -39,9 +39,13 @@ function record(value: unknown): Record<string, unknown> {
 
 export function projectPreviewState(value: unknown): ProjectPreviewState | null {
   const source = record(value);
+  return source.localWebWork===true?null:bundlePreviewState(source,false);
+}
+
+function bundlePreviewState(source:Record<string,unknown>, localWork:boolean): ProjectPreviewState | null {
   if (source.kind !== undefined && source.kind !== 'bundle') return null;
   if (typeof source.sessionId !== 'string' || !source.sessionId || typeof source.taskId !== 'string' || !source.taskId ||
-      typeof source.conversationId !== 'string' || !source.conversationId ||
+      typeof source.conversationId !== 'string' || (localWork ? source.conversationId!=='' : !source.conversationId) ||
       !Number.isSafeInteger(source.documentGeneration) || Number(source.documentGeneration) < 0) return null;
   return {
     kind: 'bundle', sessionId: source.sessionId, taskId: source.taskId, conversationId: source.conversationId,
@@ -53,6 +57,17 @@ export function projectPreviewState(value: unknown): ProjectPreviewState | null 
     selectionUnavailableReason: typeof source.selectionUnavailableReason === 'string' ? source.selectionUnavailableReason : null,
     metadata: record(source.metadata),
   };
+}
+
+/** An exact local Work reader only. Never valid for the project/Chat handoff. */
+export function localWebWorkPreview(value:unknown,target:PackagePreviewTarget):ProjectPreviewState|null {
+  const source=record(value),saved=target.savedBuildWeb;
+  if(!saved||source.kind!=='bundle'||source.localWebWork!==true||source.selectionAvailable!==false||source.selecting!==false)return null;
+  const view=bundlePreviewState(source,true),meta=view?.metadata;
+  return view&&meta&&view.taskId===target.taskId&&view.packageOperationId===target.operationId&&
+    meta.origin==='fixed_workspace_project_artifact'&&meta.projectId===saved.projectId&&meta.checkoutId===saved.checkoutId&&
+    meta.sourceDigest===saved.sourceDigest&&meta.artifactId===saved.artifactId&&meta.artifactSha256===saved.artifactSha256&&
+    meta.entryPath==='dist/index.html'?view:null;
 }
 
 const identifier = (value: unknown): value is string => typeof value === 'string' && !!value && value.length <= 200;

@@ -260,7 +260,7 @@ internal class PocketWebTaskActions(
             val selected=rows.map { it.getString("operationId") }.toSet()
             return rows+other.filterNot { val id=it.optString("operationId",it.optString("id")); id in selected || rows.isNotEmpty() && id.isEmpty() }
         }
-        fun specialOwnerTask(task: UiTask) = isOwnerPhoneControlTask(task) || setOf("ownerRuntimeSetup", "ownerLocalTerminal", "ownerDirectNodeBuild", "ownerDirectNodeDependencies", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
+        fun specialOwnerTask(task: UiTask) = isOwnerPhoneControlTask(task) || setOf("ownerRuntimeSetup", "ownerLocalTerminal", "ownerDirectNodeBuild", "ownerDirectViteBuild", "ownerDirectNodeDependencies", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
 
         fun runtimeSetupTask(task: UiTask) = task.raw.optJSONObject("ownerRuntimeSetup") != null &&
             task.raw.optString("kind") == "tool" && task.raw.optString("actorId") == "owner" &&

@@ -275,7 +275,9 @@ internal class ProjectPackageCoordinator(
                 evidence.getString("checkoutId") == pin.getString("checkoutId")) { "原团队签收或整合者执行已变化，未导出" }
             evidence.put("packageOperationId", evidence.getString("operationId")).put("artifactId", evidence.getJSONObject("packageArtifact").getString("id"))
                 .put("artifactSha256", evidence.getString("archiveSha256"))
-        } else app.tasks.ownerPackagePreviewSource(pin.getString("taskId"), pin.getString("operationId"))
+        } else app.tasks.ownerPackagePreviewSource(pin.getString("taskId"), pin.getString("operationId")).also {
+            check(it.opt("ownerDirectViteBuild") != true) { "这份本机构建网页目前仅在原任务中查看" }
+        }
         check(source.getString("taskId") == pin.getString("taskId") && source.getString("packageOperationId") == pin.getString("operationId") &&
             source.getString("projectId") == pin.getString("projectId") && source.getString("artifactId") == pin.getString("artifactId") &&
             source.getString("artifactSha256") == pin.getString("sha256")) { "原任务、操作或固定包版本已变化，未改用其他成果" }
