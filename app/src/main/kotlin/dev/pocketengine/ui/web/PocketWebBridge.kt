@@ -365,6 +365,8 @@ internal class PocketWebBridge(
         controller::runPluginCatalogWork,::captureWindow,::acceptsWindow,
         { task, run, epoch, operation, current ->
             controller.nativeButlerHost().features.checkDirectNodeReceiptForOwner(task,run,epoch,operation,java.util.function.BooleanSupplier { current() })
+        }, { task, run, epoch, operation, current ->
+            controller.nativeButlerHost().features.checkDirectNodeDependencyReceiptForOwner(task,run,epoch,operation,java.util.function.BooleanSupplier { current() })
         }) {
         taskViewId.takeIf{!closed&&documentId!=null&&section==null&&controller.state.filePath==null&&controller.webPrivateOwnerVisible()}
     }
@@ -783,7 +785,7 @@ internal class PocketWebBridge(
                 projectDevelopment.dispatch(action,args){r,e->complete(id,r,e,retainValue=false)};return
             }
             if (action in PocketWebProjectDevelopment.COMMANDS) {
-                projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
+                projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.reviewDraftBuild", "projects.development.localBuild.review", "projects.development.localDependencies.confirm", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
             }
             if (action in PocketWebButlerPreparations.COMMANDS) {
                 butlerPreparations.dispatch(action, args, section == null && taskViewId == null) { result, error -> complete(id, result, error, "outcome_unknown", retainValue=action !in setOf("butler.preparation.project.savedRevisions","butler.preparation.project.followup") && !(action=="butler.preparation.project.review" && args.has("ownerRevision"))); publishState() }; return

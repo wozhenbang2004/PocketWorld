@@ -17,3 +17,11 @@
 
 - DSHA 的 [Gradle](https://github.com/DSH-APP/DSHA/blob/main/app/build.gradle) 产物面向 arm64；[固定输入锁](https://github.com/DSH-APP/DSHA/blob/main/ci/sunset-inputs.lock.json) 对完整构建输入记录 SHA-256 和字节数。锁记录不是手机实际下载量。PocketWorld 采用“备妥一次、显示真实环境、再固定项目执行”的体验目标，不照抄离线大小和特权设定。
 - OpenPhoneUse 的 [ToolRegistry](https://github.com/joungminsung/OpenPhoneUse/blob/main/app/src/main/java/com/phoneuse/agent/ToolRegistry.kt) 将手机、记忆、用户确认和连接器分别交给模块；[DeviceInfoModule](https://github.com/joungminsung/OpenPhoneUse/blob/main/app/src/main/java/com/phoneuse/agent/DeviceInfoModule.kt) 明确给出了“代码存在但未进入注册表”的范例。PocketWorld 的设备状态也不应把“实现了这个工具”合并成“这台设备、当前屏幕可用了”。
+
+### 2026-11-21 · 用同一条用户旅程决定开发顺序
+
+基线为已发布的 `v0.1.304`；下述判断来自固定版本的源码和上游文档。签名出包、静态走查和实际体验分别记录，本次没有安卓实测。
+
+- **PW-FLOOR-DEV1，本机首次交付（P0，未达到）**：不接电脑、不另装 Termux、不为了执行固定命令先配模型。导入真实项目，缺环境/缺依赖都在同一个项目给出可操作的下一步；离开再回来恢复同一次工作。改文件、确认构建、打开这次实际生成的成果。DSH Go 的[安装流程](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/onboarding/runtime_setup_page.dart)明确区分选择、安装、失败和恢复，[项目文件](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/session/workspace_files.dart)和[会话成果](https://github.com/ccch1mneyyy/dsh-Go/blob/9ad11167c53a5da12ff8791c21f4327f5d8a9a25/app/lib/ui/session/session_artifacts.dart)回到同一会话。PocketWorld 已有运行环境准备和依赖已就绪的小型 TypeScript 构建，新导入的依赖准备仍未发布。先用原项目构建面板接上已审阅的依赖准备、真实回执和依赖复核，再另行确认构建。工具可能需要联网下载，不把无电脑写成离线首装。
+- **PW-FLOOR-DEV2，普通 Web 项目（下一优先，未达到）**：对已有常见项目改一处内容、保存并看到更新后的真实页面，预览和构建成果仍归原项目。参考 [Operit 的项目工作区与终端](https://github.com/AAswordman/Operit/blob/main/README.zh-CN.md#主要能力)：文件编辑与网页预览不要求切到别的工具。结合 PocketWorld 已有 Vite 与固定成果路径，不扩大为任意前端或 Android APK 已支持。
+- **PW-FLOOR-PHONE1，首次有用的手机任务（P0，未达到）**：在原聊天明确选一个已授权 App，看到它的实际第一屏和当前步骤，可交回用户或停止，结果仍可从同一聊天打开。参考 [Mika 的可见进度、接管与继续](https://github.com/wangzan101/Mika/blob/main/docs/features.en.md#operates-any-app-without-taking-over-your-screen)；主屏先验，后台独立屏逐项单独验。PocketWorld 已发布原投递结果回读，不等于能取得新选中 App 的第一屏；前台 App 的身份仍需可靠匹配，不能用连接或启动成功代替实际看见，不复制竞品的授权默认值。

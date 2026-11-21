@@ -6,6 +6,7 @@ import android.os.SystemClock
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.project.OwnerDraftFirstBuild
 import dev.pocketengine.features.local.project.OwnerDirectNodeBuild
+import dev.pocketengine.features.local.project.OwnerDirectNodeDependencies
 import dev.pocketengine.features.local.project.OwnerRevisionSource
 import dev.pocketengine.features.local.project.ProjectOwnerWorkflows
 import dev.pocketengine.features.local.project.ProjectSources
@@ -44,11 +45,13 @@ internal class PocketWebProjectDevelopment(
     }
     private data class Review(val handle: String, val page: Page, val input: String, val picked:ProjectConventionDraft.Bound, val modelRevision: Long, val expires: Long, val heldBuildDraftDigest:String?=null)
     private data class DirectReview(val handle: String,val page: Page,val checkout: String,val heldDraft: String,val offered: OwnerDirectNodeBuild.Review)
+    private data class DependencyReview(val handle: String, val page: Page, val checkout: String, val heldDraft: String, val offered: OwnerDirectNodeDependencies.Review)
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var generation = 0L
     @Volatile private var page: Page? = null
     @Volatile private var review: Review? = null
     @Volatile private var directReview: DirectReview? = null
+    @Volatile private var dependencyReview: DependencyReview? = null
     private var busy = false
     private val files = PocketWebCheckoutFiles(controller)
     // Identifiers and unsent text only. Original checkout metadata / Assistant
@@ -67,7 +70,8 @@ internal class PocketWebProjectDevelopment(
         private val deliveryFields = arrayOf("constraints", "deliverable", "completionCriteria")
         private const val LOCAL_BUILD_REVIEW = "projects.development.localBuild.review"
         private const val LOCAL_BUILD_CONFIRM = "projects.development.localBuild.confirm"
-        val COMMANDS = setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, "projects.development.read", "projects.development.draft", "projects.development.inspect",
+        private const val LOCAL_DEPENDENCIES_CONFIRM = "projects.development.localDependencies.confirm"
+        val COMMANDS = setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, LOCAL_DEPENDENCIES_CONFIRM, "projects.development.read", "projects.development.draft", "projects.development.inspect",
             "projects.development.taskPackageSource", "projects.development.resolveTaskPackageSource",
             "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource", "projects.development.readHostDiff",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.reviewDraftBuild", "projects.development.review",
@@ -84,7 +88,10 @@ internal class PocketWebProjectDevelopment(
         }
         held
     }
-    private fun clearDirectReview() { val old=directReview;directReview=null;old?.offered?.close() }
+    private fun clearDirectReview() {
+        val build = directReview; directReview = null; build?.offered?.close()
+        val dependencies = dependencyReview; dependencyReview = null; dependencies?.offered?.close()
+    }
     fun clear() { generation++; page = null; review = null; clearDirectReview(); busy = false; files.clear() }
     private fun public(value: JSONObject) = PocketWebState.publicValue(value) as JSONObject
     private fun fields(value: JSONObject, vararg allowed: String) = require(value.keys().asSequence().all { it in allowed }) { "项目操作包含未声明字段" }
@@ -309,14 +316,14 @@ internal class PocketWebProjectDevelopment(
             check(review == null && !busy) { "请先完成或关闭原项目审阅" }
             files.dispatch(action, args, original.project, { current(original) }, done); return
         }
-        if (action in setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, "projects.development.draft", "projects.development.prepare", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start"))
+        if (action in setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, LOCAL_DEPENDENCIES_CONFIRM, "projects.development.draft", "projects.development.prepare", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start"))
             check(restoreFailure == null) { restoreFailure ?: "本机项目输入引用不可用" }
         when (action) {
             "projects.development.dismiss" -> {
                 fields(args, "viewHandle", "reviewHandle")
                 val id=text(args, "reviewHandle")
                 if (review?.handle == id) review = null
-                if (directReview?.handle == id) clearDirectReview()
+                if (directReview?.handle == id || dependencyReview?.handle == id) clearDirectReview()
                 done(JSONObject().put("dismissed", true).put("taskStopped", false), null)
             }
             "projects.development.draft" -> {
@@ -524,6 +531,21 @@ internal class PocketWebProjectDevelopment(
                                     out.put("lockedDependencies",summary).put("dependencyState",preparation.getString("dependencyState"))
                                 }
                                 if(direct){
+                                    val localReview = checkNotNull(directPlan)
+                                    localReview.dependencyWork()?.let { originalWork ->
+                                        check(originalWork.opt("projectId") == original.project && originalWork.opt("checkoutId") == checkout &&
+                                            originalWork.opt("sourceDigest") == sourceDigest) { "原依赖工作不属于当前源码" }
+                                        out.put("directDependencyWork", originalWork)
+                                    }
+                                    localReview.dependencyOffer()?.let { offered ->
+                                        val handle = UUID.randomUUID().toString()
+                                        val ready = offered.view()
+                                        check(!out.has("directDependencyWork") && localReview.offer() == null &&
+                                            ready.opt("projectId") == original.project && ready.opt("checkoutId") == checkout &&
+                                            ready.opt("sourceDigest") == sourceDigest) { "原依赖审阅不属于当前源码" }
+                                        dependencyReview = DependencyReview(handle, original, checkout, heldDigest, offered)
+                                        out.put("directDependencies", ready.put("reviewHandle", handle))
+                                    }
                                     val prior=actual.optJSONObject("directNodeBuildWork")
                                     if(prior!=null){
                                         directPlan?.offer()?.close();out.put("directBuildWork",prior)
@@ -572,6 +594,21 @@ internal class PocketWebProjectDevelopment(
                 directReview=null
                 working(original,done,effect=true,extraCurrent=::sameWindow){
                     try { controller.localTerminalHost().submitDirectNodeBuildForOwner(prepared.offered.confirm(::sameWindow)) }
+                    finally { prepared.offered.close() }
+                }
+            }
+            LOCAL_DEPENDENCIES_CONFIRM -> {
+                fields(args, "viewHandle", "reviewHandle")
+                check(!busy && review == null) { "请先核对原项目的锁定依赖" }
+                val prepared = dependencyReview?.takeIf { it.page === original && it.handle == text(args, "reviewHandle") }
+                    ?: error("原依赖审阅已关闭或已使用")
+                fun sameWindow() = current(original) && controller.state.filePath == null &&
+                    files.closedForOriginalDraftRead() && shownCheckout(original, prepared.checkout, allowSole = true) &&
+                    buildDraftDigest(draft(original.project)) == prepared.heldDraft
+                check(sameWindow()) { "已离开原项目副本，没有准备依赖" }
+                dependencyReview = null
+                working(original, done, effect = true, extraCurrent = ::sameWindow) {
+                    try { controller.localTerminalHost().submitDirectNodeDependenciesForOwner(prepared.offered.confirm(::sameWindow)) }
                     finally { prepared.offered.close() }
                 }
             }

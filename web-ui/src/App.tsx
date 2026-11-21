@@ -3527,10 +3527,10 @@ export default function App(){
   openTask(id,entry==='outcomes'?'overview':entry,false,undefined,query,expected,current,undefined,expected?()=>{
    if(!current()||projectTaskReturn.current!==origin)return;
    if(focusShelf){origin.focusOutcome=false;origin.returning=true;}else projectTaskReturn.current=null;
-   setLocalError('原构建的工作已换轮或暂不可读取。未打开其他轮次，固定网页仍保留。');
+   setLocalError(focusShelf?'原构建的工作已换轮或暂不可读取。未打开其他轮次，固定网页仍保留。':'原工作或轮次暂不可读取，没有打开其他工作。');
   }:undefined);
  };
- const openProjectReceipt=(id:string,checkoutId?:string)=>openProjectWork(id,'overview','',checkoutId);
+ const openProjectReceipt=(id:string,checkoutId?:string,expected?:{runId:string;epoch:number})=>openProjectWork(id,'overview','',checkoutId,expected);
  const drillEndedWork=()=>{
   if(taskList.current)taskDirectory.rememberScroll(taskList.current.scrollTop);
   setEndedScopeOrigin({filter:filter as WorkCollectionFilter,query:taskQuery});setTaskFiltersOpen(false);
@@ -4380,7 +4380,7 @@ export default function App(){
  const selectedLocalPhone=!!selectedTask&&isPrivateLocalPhone(selectedTask);
  const selectedPhoneSurface=privatePhoneSurface(selectedTask,state.livePrivatePhones);
  const selectedPhoneStop=selectedTask&&!terminal(selectedTask)&&can('phone.stop')&&(selectedLocalPhone?!!selectedPhoneSurface:selectedTask.id===activeTask?.id)?phoneRunIdentity(selectedTask):null;
- const selectedTaskStop=selectedTask&&(selectedPhoneStop||(selectedWorkIdentity
+ const selectedTaskStop=selectedTask&&!selectedTask.raw?.ownerDirectNodeDependencies&&(selectedPhoneStop||(selectedWorkIdentity
   ?selectedTask.raw?.controls?.canStop===true&&can('ownerWork.control')
   :!selectedLocalPhone&&selectedTask.raw?.executionRole!=='owner_work'&&!terminal(selectedTask)&&can('tasks.stop')));
  const selectedWorkPresentation=selectedTask?workCollectionPresentation(selectedTask):null;

@@ -198,6 +198,92 @@ export function sameDirectNodeExecution(view:DirectNodeExecution|undefined,pin:D
   return view && 'pin' in view && Object.entries(pin).every(([name,value])=>view.pin[name as keyof DirectNodeExecutionPin]===value) ? view : undefined;
 }
 
+const directDependencyFormat='pocketworld.owner-direct-node-dependencies.v1';
+export type DirectNodeDependencyPin = {
+  taskId:string;runId:string;epoch:1;dependencyOperationId:string;projectId:string;checkoutId:string;
+  sourceDigest:string;planDigest:string;runtimeIdentity:string;lockSha256:string;managerVersion:string;packages:number;
+  requestDigest:string;approvalId:string;
+};
+type DependencyExit = {kind:'exit_code'|'signal'|'no_child';value:number};
+type DirectNodeDependencyExecution = {phase:'unverified'} |
+  {phase:'pending';pin:DirectNodeDependencyPin;canCheck:boolean} |
+  {phase:'completed'|'failed'|'paused';pin:DirectNodeDependencyPin;exit:DependencyExit;nativeStatus:'completed'|'failed'};
+
+/** The dependency command is its own private native Work. Unknown admission
+ * is neither a terminal/log handle nor proof packages are ready for a build. */
+export function originalDirectNodeDependencyExecution(task:ProjectExecutionData|undefined,shown?:ProjectExecutionData):DirectNodeDependencyExecution|undefined {
+  const raw=object(task?.raw),context=object(raw.developmentContext),scope=object(raw.ownerDirectNodeDependencies),id=task?.id;
+  if(raw.command!=='project.nodeDependencies.owner'&&raw.nativeExecutionMode!=='OWNER_DIRECT_NODE_DEPENDENCIES'&&
+    scope.format!==directDependencyFormat)return;
+  if(!compilerUuid(id)||raw.id!==id||raw.runId!==id||raw.operationId!==id||raw.coordinatorEpoch!==1||
+    raw.status!==task?.status||raw.kind!=='tool'||raw.feature!=='local'||raw.command!=='project.nodeDependencies.owner'||
+    raw.nativeExecutionMode!=='OWNER_DIRECT_NODE_DEPENDENCIES'||raw.executionMode!=='capabilities'||raw.actorId!=='owner'||raw.spaceId!=='private'||
+    raw.origin!=null||raw.conversationId!=null&&raw.conversationId!==''||raw.parentTaskId!=null||raw.teamRunId!=null||raw.memberId!=null||
+    raw.teamAssignment!=null||raw.workProfileRef!=null||raw.workProfileIntent!=null||raw.developmentSession!=null||
+    raw.ownerDirectNodeBuild!=null||raw.ownerLocalTerminal!=null||raw.ownerDeviceWork!=null||raw.executionRole==='owner_work'||
+    raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||
+    raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||raw.auditBodyIncluded!==true||
+    scope.format!==directDependencyFormat||scope.requestId!==id||scope.runId!==id||scope.epoch!==1||scope.dependencyOperationId!==id||
+    scope.modelDispatchAllowed!==false||scope.replayAllowed!==false||scope.runtimeId!=='managed_process_v1'||
+    !operationId(scope.projectId)||!operationId(scope.checkoutId)||![scope.sourceDigest,scope.planDigest,scope.runtimeIdentity,scope.lockSha256].every(compilerDigest)||
+    scope.manager!=='npm'||typeof scope.managerVersion!=='string'||!/^11\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(scope.managerVersion)||
+    scope.lockPath!=='package-lock.json'||scope.registry!=='https://registry.npmjs.org/'||!positiveNumber(scope.packages)||scope.packages>8192||
+    context.format!=='pocketworld.development-context.v1'||context.draftOnly===true||context.ownerDraftFirstBuild!=null||context.clientMessageId!=null||
+    context.runtime!==scope.runtimeId||context.projectId!==scope.projectId||context.checkoutId!==scope.checkoutId||
+    context.initialSourceDigest!==scope.sourceDigest||!Array.isArray(raw.operations)||
+    shown&&(shown.tool!=='project_execute'||shown.runId!==id||shown.operationId!==id||shown.bodyAvailable!==true||shown.readLimited!==false))
+    return {phase:'unverified'};
+  const rows=(raw.operations as unknown[]).map(object).filter(row=>row.tool==='project_execute'&&row.runId===id);
+  const row=rows[0],receipt=object(row?.receipt),route=object(receipt.projectExecution),actual=object(receipt.executionReceipt);
+  if(rows.length!==1||row.operationId!==id||row.bodyAvailable===false||row.readLimited===true||
+    row.arguments?.stepId!=='dependencies'||row.arguments?.planDigest!==scope.planDigest||
+    !compilerDigest(route.requestDigest)||!compilerUuid(route.approvalId)||!compilerDigest(route.capabilityFingerprint)||route.jobId!==id||
+    ['directOwnerNodeCompilerVersion','existingNodeWebVersion','editedNodeWebVersion'].some(key=>Object.hasOwn(route,key)))
+    return {phase:'unverified'};
+  const binding={authority:'native_host_operation',command:'project.runtime.run',runtimeId:scope.runtimeId,runtimeIdentity:scope.runtimeIdentity,
+    taskId:id,runId:id,coordinatorEpoch:1,operationId:id,projectId:scope.projectId,checkoutId:scope.checkoutId,
+    sourceDigest:scope.sourceDigest,planDigest:scope.planDigest,requestDigest:route.requestDigest,stepId:'dependencies',intent:'dependencies'};
+  const matches=(value:ProjectExecutionData)=>Object.entries(binding).every(([key,expected])=>value[key]===expected);
+  if(!matches(route))return {phase:'unverified'};
+  const pin:DirectNodeDependencyPin={taskId:id,runId:id,epoch:1,dependencyOperationId:id,projectId:scope.projectId,checkoutId:scope.checkoutId,
+    sourceDigest:scope.sourceDigest,planDigest:scope.planDigest,runtimeIdentity:scope.runtimeIdentity,lockSha256:scope.lockSha256,
+    managerVersion:scope.managerVersion,packages:scope.packages,requestDigest:route.requestDigest,approvalId:route.approvalId};
+  const unfinalized=['running','stopping','reconciling','interrupted'].includes(raw.status);
+  // A nonterminal provider observation can be nested in this envelope. It
+  // never changes the pending action into a log handle or a result.
+  if(row.state==='unknown'&&['project_pending','project_cancel_pending_unknown'].includes(receipt.code)&&receipt.status==='unknown'&&
+    receipt.accepted===null&&receipt.replayAllowed===false)
+    return {phase:'pending',pin,canCheck:unfinalized};
+  if(row.state!=='receipt'||receipt.code!=='project_process_receipt'||receipt.accepted!==true||
+    !['completed','failed'].includes(actual.status)||receipt.status!==actual.status||receipt.executionStatus!==actual.status||
+    actual.provider!=='managed_process'||actual.kind!=='command'||actual.runMode!=='foreground'||actual.requestedExecutable!=='npm'||
+    !Array.isArray(actual.requestedArgv)||actual.requestedArgv[0]!=='ci'||actual.terminalMode==='pty'||
+    actual.id!==id||actual.operationId!==id||actual.checkoutId!==scope.checkoutId||actual.sourceDigest!==scope.sourceDigest||
+    actual.receiptReceived!==true||actual.resourcesReleased!==true||actual.processGroupAbsent!==true||actual.ownedWorkerLive!==false||
+    typeof actual.cancelRequested!=='boolean'||typeof actual.timedOut!=='boolean'||!positiveNumber(actual.finishedAt)||
+    actual.sourceCheckStatus!=='pre_exec_manifest_verified'||!matches(object(actual.projectExecution)))
+    return {phase:'unverified'};
+  let exit:DependencyExit|undefined;
+  if(actual.launchPhase==='exit_observed'&&actual.processLaunched===true&&actual.processExited===true&&actual.noChildCreated===false&&actual.launchErrno===0){
+    if(actual.terminationSignal===0&&Number.isInteger(actual.exitCode)&&actual.exitCode>=0&&actual.exitCode<=255)
+      exit={kind:'exit_code',value:actual.exitCode};
+    if(actual.exitCode===-1&&Number.isInteger(actual.terminationSignal)&&actual.terminationSignal>0&&actual.terminationSignal<=127)
+      exit={kind:'signal',value:actual.terminationSignal};
+  }else if(actual.launchPhase==='no_child_created'&&actual.processLaunched===false&&actual.processExited===false&&actual.noChildCreated===true&&
+    actual.exitCode===-1&&actual.terminationSignal===0&&positiveNumber(actual.launchErrno)&&actual.launchErrno<=2147483647&&
+    actual.timedOut===false&&actual.outputComplete===true)exit={kind:'no_child',value:actual.launchErrno};
+  const nativeStatus=exit?.kind==='exit_code'&&exit.value===0&&!actual.cancelRequested&&!actual.timedOut?'completed':'failed';
+  if(!exit||nativeStatus!==actual.status)return {phase:'unverified'};
+  if(unfinalized||raw.status==='awaiting_user')return {phase:'pending',pin,canCheck:true};
+  const phase=raw.cancelRequested===true?'paused':nativeStatus;
+  if(raw.hasUnresolvedOperations!==false||raw.status!==phase)return {phase:'unverified'};
+  return {phase,pin,exit,nativeStatus};
+}
+
+export function sameDirectNodeDependency(view:DirectNodeDependencyExecution|undefined,pin:DirectNodeDependencyPin) {
+  return view&&'pin' in view&&Object.entries(pin).every(([key,value])=>view.pin[key as keyof DirectNodeDependencyPin]===value)?view:undefined;
+}
+
 export type OriginalNodeCompilerOutput = {
   format: typeof compilerOutputFormat; taskId: string; runId: string; epoch: number; buildOperationId: string;
   projectId: string; checkoutId: string; sourceDigest: string; planDigest: string; requestDigest: string; runtimeIdentity: string;

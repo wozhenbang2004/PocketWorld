@@ -121,7 +121,8 @@ public final class ProjectOwnerWorkflows {
     public JSONObject reviewNodeBuildForOwner(String project,String checkout)throws Exception {
         return reviewNodeBuild(project,checkout,false).preview();
     }
-    public record DirectNodeBuildReview(JSONObject preview,OwnerDirectNodeBuild.Review offer){}
+    public record DirectNodeBuildReview(JSONObject preview,OwnerDirectNodeBuild.Review offer,
+            OwnerDirectNodeDependencies.Review dependencyOffer,JSONObject dependencyWork){}
     public DirectNodeBuildReview reviewDirectNodeBuildForOwner(String project,String checkout)throws Exception {
         return reviewNodeBuild(project,checkout,true);
     }
@@ -155,9 +156,17 @@ public final class ProjectOwnerWorkflows {
             result.put("dependencyState",local.draftDependencyFilesReady(checkout,deps)?"current_packages_checked":"needs_lock_review");
             if(seed!=null&&!OwnerDraftFirstBuild.edited(pin))result.putOpt("previousVerification",tasks.classicFirstBuildForDraft(seed));
         }
-        var offer=offerDirect&&"npm".equals(pin.opt("manager"))&&"current_packages_checked".equals(result.opt("dependencyState"))
+        boolean directCompiler=offerDirect&&seed==null&&deps!=null&&"npm".equals(pin.opt("manager"))&&
+                OriginalNodeCompilerOutput.selectedPathForOwnerReview(ProjectDevelopment.exact(plan,OwnerDirectNodeBuild.step(plan)),snapshot)!=null;
+        JSONObject dependencyWork=directCompiler?tasks.directNodeDependenciesWorkForSource(project,checkout,digest):null;
+        var offer=directCompiler&&"current_packages_checked".equals(result.opt("dependencyState"))&&
+                tasks.directNodeDependenciesPermitBuild(project,checkout,digest,plan.getString("runtimeIdentity"),deps)
                 ?OwnerDirectNodeBuild.offer(local,plan,pin,snapshot):null;
-        return new DirectNodeBuildReview(result,offer);
+        OwnerDirectNodeDependencies.Review dependencyOffer=null;
+        if(directCompiler&&dependencyWork==null&&"needs_lock_review".equals(result.opt("dependencyState"))&&
+                local.directNodeDependencyRootAbsentForOwner(project,checkout))
+            dependencyOffer=OwnerDirectNodeDependencies.offer(local,ProjectBuildPlan.lockedNodeDependencies(snapshot,plan.getString("runtimeIdentity"),deps));
+        return new DirectNodeBuildReview(result,offer,dependencyOffer,dependencyWork);
     }
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
     /** Project-level saved result shelf, separate from a work draft and from current runtime/tooling. */

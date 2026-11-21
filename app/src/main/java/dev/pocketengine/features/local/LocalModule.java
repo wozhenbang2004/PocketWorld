@@ -6,6 +6,8 @@ import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.local.project.OwnerDraftCopyShelf;
+import dev.pocketengine.features.local.project.OwnerDraftNodeDependencies;
+import dev.pocketengine.features.local.project.OwnerDirectNodeDependencies;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.workspace.JsonFiles;
@@ -1175,6 +1177,26 @@ public final class LocalModule implements EngineModule {
                 !projectCapabilityStillCurrent(exact,selected.capability()))
             throw new SecurityException("所选副本的源码、锁或实际工具已变化，没有构建");
         requireDraftDependencyFiles(checkout,lock);
+        selected.requireUnenteredWindow();
+    }
+    public synchronized boolean directNodeDependencyRootAbsentForOwner(String project,String checkout)throws Exception{
+        validateDirectCompilerCheckout(project,checkout);
+        RuntimeWorkspace active=runtimeWorkspace(checkout);
+        OwnerDraftNodeDependencies.workspace(active);
+        return Files.notExists(active.resolve("node_modules",false).toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
+    }
+    /** Actual consent may only fill a missing dependency root, never replace existing packages. */
+    public synchronized void requireDirectNodeDependenciesForOwner(OwnerDirectNodeDependencies.Confirmed selected)throws Exception{
+        selected.requireHost(this);selected.requireUnenteredWindow();
+        JSONObject scope=selected.scope(),plan=selected.plan();OwnerDirectNodeDependencies.requireScope(scope,plan);
+        String project=scope.getString("projectId"),checkout=scope.getString("checkoutId");
+        if(!directNodeDependencyRootAbsentForOwner(project,checkout))
+            throw new SecurityException("此副本已存在或无法核对 node_modules，没有覆盖依赖");
+        JSONObject exact=ProjectDevelopment.exact(plan,OwnerDirectNodeDependencies.step(plan)),snapshot=export(checkout);
+        if(!scope.getString("sourceDigest").equals(ProjectSources.describe(snapshot).opt("sourceDigest"))||
+                !projectCapabilityStillCurrent(exact,selected.capability()))
+            throw new SecurityException("所选副本的源码、锁或实际工具已变化，没有准备依赖");
+        OwnerDraftNodeDependencies.requireLaunch(exact,snapshot,projectRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID),runtimeWorkspace(checkout));
         selected.requireUnenteredWindow();
     }
     private void validateDirectCompilerCheckout(String project,String id)throws Exception{

@@ -402,11 +402,50 @@ public final class FeatureHost implements AutoCloseable {
         JSONObject scope=original.scope();
         return tasks.directNodeWorkForSource(scope.getString("projectId"),scope.getString("checkoutId"),scope.getString("sourceDigest"));
     }
-    /** Explicit same-Work reconciliation of a durable result, not another dispatch or log observation. */
-    public JSONObject checkDirectNodeReceiptForOwner(String id,String run,int epoch,String operation,BooleanSupplier window)throws Exception{
+    /** One distinct, approved npm ci Work, with no implicit build or replacement of an existing root. */
+    public JSONObject submitDirectNodeDependenciesForOwner(dev.pocketengine.features.local.project.OwnerDirectNodeDependencies.Confirmed confirmed)throws Exception{
         if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))
             throw new IllegalStateException("原本机项目宿主不可用");
-        var checked=tasks.captureOwnerDirectNodeReceiptCheck(id,run,epoch,operation,window);
+        confirmed.requireHost(local);confirmed.requireUnenteredWindow();
+        JSONObject scope=confirmed.scope();String id=scope.getString("requestId");
+        String project=scope.getString("projectId"),checkout=scope.getString("checkoutId"),source=scope.getString("sourceDigest");
+        synchronized(local){
+            JSONObject prior=tasks.directNodeDependenciesWorkForSource(project,checkout,source);
+            if(prior!=null)return prior;
+            local.requireDirectNodeDependenciesForOwner(confirmed);
+            if(!tasks.beginOwnerDirectNodeDependencies(confirmed,local))return tasks.directNodeDependenciesWorkForSource(project,checkout,source);
+            var initial=tasks.ownerDirectNodeDependenciesOriginalForOwner(id);
+            RunControl original=new RunControl();
+            try{
+                original.bindHostRun(id,id,1);
+                String approval=initial.route().getString("approvalId");
+                original.setAuthorityCheck(()->tasks.requireOwnerDirectNodeDependenciesCurrent(id,approval,original));
+                // The typed plan supplies the existing package policy. A build-ready lock parameter
+                // would require already installed dependencies and must not be used here.
+                JSONObject backend=local.executeProjectForHost(initial.exact(),initial.route(),original,
+                        ()->tasks.requireOwnerDirectNodeDependenciesCurrent(id,approval,original));
+                tasks.recordProjectOperation(initial.route(),initial.exact(),backend);
+                tasks.finishOwnerDirectNodeDependenciesFromReceipt(initial.route());
+            }catch(Exception unconfirmed){
+                synchronized(tasks){
+                    if(tasks.hasUnresolved(id))tasks.status(id,"reconciling","原依赖准备结果待核对；没有再次运行。");
+                }
+            }
+        }
+        emitTask(id);sendState();return tasks.directNodeDependenciesWorkForSource(project,checkout,source);
+    }
+    /** Explicit same-Work reconciliation of a durable result, not another dispatch or log observation. */
+    public JSONObject checkDirectNodeReceiptForOwner(String id,String run,int epoch,String operation,BooleanSupplier window)throws Exception{
+        return checkDirectNodeWorkReceiptForOwner(id,run,epoch,operation,window,false);
+    }
+    public JSONObject checkDirectNodeDependencyReceiptForOwner(String id,String run,int epoch,String operation,BooleanSupplier window)throws Exception{
+        return checkDirectNodeWorkReceiptForOwner(id,run,epoch,operation,window,true);
+    }
+    private JSONObject checkDirectNodeWorkReceiptForOwner(String id,String run,int epoch,String operation,BooleanSupplier window,boolean dependencies)throws Exception{
+        if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local))
+            throw new IllegalStateException("原本机项目宿主不可用");
+        var checked=dependencies?tasks.captureOwnerDirectNodeDependencyReceiptCheck(id,run,epoch,operation,window):
+                tasks.captureOwnerDirectNodeReceiptCheck(id,run,epoch,operation,window);
         dev.pocketengine.features.local.runtime.RuntimeReceipt retained=null;
         if(checked.needsProvider())try{retained=local.retainedDirectNodeReceiptForHost(checked);}
         catch(Exception unreadable){if(Thread.currentThread().isInterrupted())throw unreadable;/* Absence and I/O faults stay unknown. */}

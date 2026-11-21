@@ -17,13 +17,15 @@ internal class PocketWebNodeCompilerOutput(
     private val capture: () -> PocketWebWindowTicket,
     private val accepts: (PocketWebWindowTicket) -> Boolean,
     private val checkReceipt: (String, String, Int, String, () -> Boolean) -> JSONObject,
+    private val checkDependencyReceipt: (String, String, Int, String, () -> Boolean) -> JSONObject,
     private val selected: () -> String?
 ) {
     companion object {
         private const val REVIEW = "projects.nodeCompilerOutput.review"
         private const val SAVE = "projects.nodeCompilerOutput.save"
         private const val CHECK_RECEIPT = "projects.nodeBuild.checkReceipt"
-        val COMMANDS = setOf(REVIEW, SAVE, CHECK_RECEIPT)
+        private const val CHECK_DEPENDENCY_RECEIPT = "projects.nodeDependencies.checkReceipt"
+        val COMMANDS = setOf(REVIEW, SAVE, CHECK_RECEIPT, CHECK_DEPENDENCY_RECEIPT)
     }
     private data class Original(val task: String, val run: String, val epoch: Int, val build: String)
     private data class Offer(val original: Original, val pin: JSONObject, val window: PocketWebWindowTicket,
@@ -37,12 +39,14 @@ internal class PocketWebNodeCompilerOutput(
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         require(action in COMMANDS)
         val saving = action == SAVE
-        val checking = action == CHECK_RECEIPT
-        val keys = setOf("taskId", "runId", "epoch", "buildOperationId") + if (saving) setOf("reviewHandle") else emptySet()
+        val dependency = action == CHECK_DEPENDENCY_RECEIPT
+        val checking = action == CHECK_RECEIPT || dependency
+        val operationKey = if (dependency) "dependencyOperationId" else "buildOperationId"
+        val keys = setOf("taskId", "runId", "epoch", operationKey) + if (saving) setOf("reviewHandle") else emptySet()
         require(args.keys().asSequence().toSet() == keys && keys.filter { it != "epoch" }.all { args.opt(it) is String })
         val epoch = args.get("epoch")
         require(epoch is Int || epoch is Long)
-        val original = Original(args.getString("taskId"), args.getString("runId"), args.getInt("epoch"), args.getString("buildOperationId"))
+        val original = Original(args.getString("taskId"), args.getString("runId"), args.getInt("epoch"), args.getString(operationKey))
         require(original.task.matches(Regex("[a-f0-9-]{36}")) && original.run.matches(Regex("[a-f0-9-]{36}")) &&
             original.build.matches(Regex("[A-Za-z0-9_-]{1,80}")) && original.epoch > 0 && original.epoch.toLong() == (epoch as Number).toLong())
         if (checking) require(original.task == original.run && original.task == original.build && original.epoch == 1)
@@ -62,6 +66,7 @@ internal class PocketWebNodeCompilerOutput(
                 var next: Offer? = null
                 val result = runCatching {
                     requireCurrent()
+                    if (dependency) return@runCatching checkDependencyReceipt(original.task, original.run, original.epoch, original.build, ::current)
                     if (checking) return@runCatching checkReceipt(original.task, original.run, original.epoch, original.build, ::current)
                     val store = tasks()
                     val build = store.nodeCompilerBuildForOwner(original.task, original.run, original.epoch, original.build)
