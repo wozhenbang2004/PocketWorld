@@ -519,7 +519,7 @@ internal class PocketWebBridge(
         domainGeneration++
         taskPackagePreparation.clear()
         taskHistory.clear(); workSearch.clear()
-        reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); memoryHistory.clear(); conversationOrganization.clear(); if (documentReplaced) taskCapabilities.clear() else taskCapabilities.background(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveImageChoice = !documentReplaced); pluginPages.clear(); localPages.clear(); projectDevelopment.invalidateDraftReturn(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
+        reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); memoryHistory.clear(); conversationOrganization.clear(); if (documentReplaced) taskCapabilities.clear() else taskCapabilities.background(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(keepDraftPresentation = !documentReplaced); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveImageChoice = !documentReplaced); pluginPages.clear(); localPages.clear(); projectDevelopment.invalidateDraftReturn(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
         if (documentReplaced) personal.clear() else personal.background()
         developerLogs.clear()
         if (documentReplaced) routeReferences.clear() else routeReferences.background()
@@ -576,7 +576,8 @@ internal class PocketWebBridge(
             projection?.getJSONObject("state")?.put("backgroundOwner", background.snapshot())
             projection?.getJSONObject("state")?.put("remoteInbox", remoteInbox.snapshot())
             projection?.getJSONObject("state")?.put("modelDiagnostics", modelDiagnostics.snapshot())
-            projection?.getJSONObject("state")?.put("attachmentWorkspace", attachmentPages.snapshot())
+            projection?.getJSONObject("state")?.put("attachmentWorkspace", attachmentPages.snapshot(
+                draftPresentation = documentId != null && section == null && taskViewId == null))
             projection?.getJSONObject("state")?.put("taskCapabilityExport", taskCapabilities.exportSnapshot() ?: JSONObject.NULL)
             if (section == "teams" && controller.webPrivateOwnerVisible()) projection?.getJSONObject("state")?.put("teamFinalPackageExport", teamPages.finalPackageExportSnapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("systemSpeech", presentation.speechInfo())
@@ -846,6 +847,27 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebAttachments.COMMANDS) {
+                val draftCommand = args.opt("command") as? String
+                if (action == "attachmentWorkspace.action" && draftCommand != null && draftCommand in PocketWebAttachments.PRIVATE_DRAFT_COMMANDS) {
+                    attachmentPages.dispatchStandaloneDraft(args) { result, error ->
+                        complete(id, result, error, retainValue = false,
+                            replayHint = "请回本机文档草稿核对同一版本；不会重复保存。")
+                        publishState()
+                    }
+                    return
+                }
+                // Only the existing explicit global Library entry has no locator at all.
+                // Do not derive this from normalized arguments, null taskId or restored state.
+                val libraryEntry: (() -> Boolean)? = if (action == "attachmentWorkspace.open" && args.length() == 0 && documentId != null) {
+                    val document = documentId
+                    val ticket = captureWindow()
+                    val current = {
+                        !closed && documentId == document && acceptsWindow(ticket) && section == null && taskViewId == null &&
+                            controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
+                            !controller.state.chatAttachmentPickerOpen && controller.state.filePath == null
+                    }
+                    current.takeIf { it() }
+                } else null
                 if (action == "attachmentWorkspace.open" && args.has("messageAttachment")) {
                     checkedPayload(args, setOf("messageAttachment"))
                     val file = visibleMessageAttachment(checkedMessageAttachmentSource(args.getJSONObject("messageAttachment")))
@@ -881,7 +903,7 @@ internal class PocketWebBridge(
                             check(current() && entry.matchesTask(task.raw)) { "原工作轮次已变化，未打开其他工作" }
                             dismiss()
                         })
-                }) { result, error ->
+                }, draftLibraryEntry = libraryEntry) { result, error ->
                     complete(id, result, error, retainValue = !readerScoped); publishState()
                 }; return
             }

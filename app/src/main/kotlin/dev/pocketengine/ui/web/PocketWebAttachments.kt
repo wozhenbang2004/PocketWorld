@@ -4,6 +4,8 @@ import android.net.Uri
 import android.os.SystemClock
 import android.webkit.WebResourceResponse
 import dev.pocketengine.features.attachments.creation.DocumentDraft
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Fields
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Format
 import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.processing.NativeFileProcess
 import dev.pocketengine.features.attachments.processing.NativeMediaTrim
@@ -26,6 +28,8 @@ internal class PocketWebAttachments(
 ) {
     companion object {
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
+        val PRIVATE_DRAFT_COMMANDS = setOf("drafts.list", "drafts.new", "drafts.open", "drafts.saveFirst",
+            "drafts.checkFirst", "drafts.save", "drafts.leave")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
     }
@@ -34,17 +38,26 @@ internal class PocketWebAttachments(
     private data class Frame(val location: String, val files: List<JSONObject>)
     private data class Review(val id: String, val location: String, val draft: JSONObject, val expires: Long)
     private data class ProcessingReview(val id: String, val value: NativeFileProcess.Review)
+    private data class DraftLibraryVisit(val id: String, val current: () -> Boolean)
     private var window: Window? = null
     private val frames = linkedMapOf<String, Frame>()
     private var review: Review? = null
     private var processingReview: ProcessingReview? = null
     private val viewer = PocketWebOriginalFiles(controller.webPresentationActivity(), { controller.webUiCanInteract() }, changed)
+    // Set only by the currently admitted explicit no-argument entry from the business bridge.
+    private var globalDraftLibrary: DraftLibraryVisit? = null
+    private val drafts = lazy(LazyThreadSafetyMode.NONE) {
+        PocketWebStandaloneDocumentDrafts(controller, captureWindow, acceptsWindow, ::currentDraftFrame)
+    }
 
     private fun activeWindow(): Window {
         check(controller.webUiCanInteract()) { "请回到当前工作区再查看文件" }
         val existing = window
         if (existing != null && acceptsWindow(existing.ticket)) return existing
-        if(existing!=null)flow.discardLibraryDocumentReturn()
+        if(existing!=null) {
+            flow.discardLibraryDocumentReturn()
+            retireDraftLibrary()
+        }
         frames.clear(); review = null; processingReview = null; viewer.clear()
         return Window(UUID.randomUUID().toString(), captureWindow()).also { window = it }
     }
@@ -57,6 +70,33 @@ internal class PocketWebAttachments(
     private var scopedResultCurrent: (() -> Boolean)? = null
     val hasScopedResult: Boolean get() = scopedResultCurrent != null
     private fun ordinaryLibrary()=flow.privateLibrary()&&scopedResultCurrent==null&&!controller.state.chatAttachmentPickerOpen&&controller.webPrivateOwnerVisible()
+    private fun ordinaryDraftLibrarySurface(): Boolean {
+        val state = flow.state
+        val catalog = state.snapshot
+        return ordinaryLibrary() && controller.conversationReader == null && controller.state.filePath == null &&
+            !state.busy && !flow.exportPending &&
+            state.file == null && state.originalFile == null && state.documentDraft == null && !state.documentOpen &&
+            state.processingSource == null && state.comparison == null && state.pendingDocumentTask == null &&
+            state.libraryDocumentReturn == null && !state.fromWorkResult && !state.restoredWorkReturn &&
+            !controller.state.attachmentImporting &&
+            state.libraryImport?.phase !in setOf("selecting", "selection_unconfirmed", "registering") &&
+            catalog != null && catalog.opt("taskId") == "" &&
+            catalog.optJSONArray("sources") != null && catalog.optJSONArray("artifacts") != null
+    }
+    private fun mayUseDraftLibrary(): Boolean {
+        val visit = globalDraftLibrary ?: return false
+        return flow.state.globalStandaloneDraftVisit == visit.id && visit.current() && ordinaryDraftLibrarySurface()
+    }
+    private fun currentDraftFrame(selected: PocketWebStandaloneDocumentDrafts.Frame): Boolean {
+        val active = window ?: return false
+        return active.id == selected.windowId && acceptsWindow(active.ticket) && mayUseDraftLibrary() &&
+            frames[selected.frameId]?.location == location(flow.state)
+    }
+    private fun retireDraftLibrary(keepPresentation: Boolean = false) {
+        globalDraftLibrary = null
+        if (drafts.isInitialized()) drafts.value.retire()
+        if (!keepPresentation) flow.discardStandaloneDraftPresentation()
+    }
     private fun canNavigateFromReport(state: AttachmentOutcomeState): Boolean =
         state.resultRun?.report != null && scopedResultCurrent?.invoke() == true && controller.webPrivateOwnerVisible() &&
             !state.deviceOriginalOnly && state.group == null && state.team == null && state.file?.optString("role") == "result" &&
@@ -70,9 +110,13 @@ internal class PocketWebAttachments(
         clear();deviceTaskCurrent=current
         flow.openReceivedOriginal(file,current);changed()
     }
-    fun snapshot(): JSONObject {
+    fun snapshot(draftPresentation: Boolean = false): JSONObject {
         if(flow.state.deviceOriginalOnly && deviceTaskCurrent?.invoke()!=true || scopedResultCurrent?.invoke()==false)clear()
         val state = flow.state
+        globalDraftLibrary?.let { visit ->
+            if (state.globalStandaloneDraftVisit != visit.id || !visit.current()) retireDraftLibrary()
+        }
+        if (drafts.isInitialized() && drafts.value.showing() && !mayUseDraftLibrary()) retireDraftLibrary()
         if (!state.open) { if (window != null || scopedResultCurrent != null) clear(); return JSONObject().put("open", false) }
         if (!controller.webUiCanInteract()) return JSONObject().put("open", true).put("ready", false)
         val current = activeWindow()
@@ -106,6 +150,11 @@ internal class PocketWebAttachments(
             .map{JSONObject().put("id",it.getString("id")).put("sha256",it.getString("sha256"))}) else null
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
+            .put("standaloneDraftLibrary", mayUseDraftLibrary())
+            // This ordinary state projection may match a retained Web pane, never a draft command or handle.
+            .put("standaloneDraftLibraryVisit", flow.state.globalStandaloneDraftVisit?.takeIf {
+                draftPresentation && ordinaryDraftLibrarySurface()
+            })
             .put("canOpenReportOriginalWork", canNavigateFromReport(state))
             .put("libraryDocumentActionId", if(ordinaryLibrary)flow.libraryDocumentActionId() else null)
             .put("returnToLibraryDocument", ownedCopy && flow.canReturnToLibraryDocument())
@@ -136,6 +185,7 @@ internal class PocketWebAttachments(
     fun dispatch(action: String, args: JSONObject, resultRun: AttachmentResultRun? = null,
                  readerCurrent: (() -> Boolean)? = null,
                  restoreWork: ((AttachmentWorkReturn, () -> Boolean, () -> Unit) -> Unit)? = null,
+                 draftLibraryEntry: (() -> Boolean)? = null,
                  done: (JSONObject?, String?) -> Unit) {
         try {
             check(controller.webUiCanInteract()) { "请回到当前工作区再操作文件" }
@@ -175,7 +225,11 @@ internal class PocketWebAttachments(
                     require(!args.has("sha256")) { "请选择对应的原文件" }
                     // The coordinator rereads the original owner task on its IO executor.
                     // An older task need not still be in the home page's summary cache.
-                    clear(); scopedResultCurrent = readerCurrent; flow.openTask(task, resultRun)
+                    clear(); scopedResultCurrent = readerCurrent
+                    val visit = if (args.length() == 0 && task == null && resultRun == null && readerCurrent == null &&
+                        draftLibraryEntry != null && draftLibraryEntry()) DraftLibraryVisit(UUID.randomUUID().toString(), draftLibraryEntry) else null
+                    globalDraftLibrary = visit
+                    flow.openTask(task, resultRun, visit?.id)
                 }
                 done(JSONObject().put("opened", true).put("reading", true), null); changed(); return
             }
@@ -187,6 +241,10 @@ internal class PocketWebAttachments(
             val frame = frames[args.getString("frameId")] ?: error("原文件页面已过期，请重新核对")
             check(frame.location == location(flow.state)) { "当前来源或编辑内容已变化，请重新核对" }
             val command = args.getString("command")
+            if (drafts.isInitialized() && drafts.value.showing()) {
+                check(command == "back" || command == "close") { "请先返回私人文件库" }
+                drafts.value.retire()
+            }
             if (flow.state.busy && command !in setOf("cancel", "close", "stopObservation")) error("请等待当前读取完成，或明确停止它")
             fun selected(): JSONObject {
                 val file = frame.files.firstOrNull { it.optString("id") == args.optString("fileId") && it.optString("sha256") == args.optString("sha256") }
@@ -346,9 +404,60 @@ internal class PocketWebAttachments(
             changed(); done(result.put("workspace", snapshot()), null)
         } catch (failure: Exception) { done(null, failure.message?.take(300) ?: "文件操作未确认，请重新核对原记录") }
     }
+    /** These replies must go through the Bridge's transient completion, not the ordinary workspace result. */
+    fun dispatchStandaloneDraft(args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        val unavailable = "原草稿窗口或结果尚未核对；没有自动保存或重试。"
+        fun reply(actual: JSONObject?) { if (actual == null) done(null, unavailable) else done(actual, null) }
+        fun text(key: String) = args.opt(key) as? String ?: error("原草稿身份无效")
+        fun exact(vararg extra: String) {
+            require(args.keys().asSequence().toSet() == setOf("command", "windowId", "frameId") + extra)
+        }
+        fun fields(): Fields {
+            val input = args.getJSONObject("fields")
+            require(input.keys().asSequence().toSet() == setOf("format", "name", "title", "body", "fontPoints"))
+            val format = Format.values().singleOrNull { it.value == input.opt("format") } ?: error("草稿格式无效")
+            fun field(key: String) = input.opt(key) as? String ?: error("草稿字段无效")
+            return Fields(format, field("name"), field("title"), field("body"),
+                input.opt("fontPoints") as? Int ?: error("草稿字号无效"))
+        }
+        fun content(value: Fields) = JSONObject().put("format", value.format().value).put("name", value.name())
+            .put("title", value.title()).put("body", value.body()).put("fontPoints", value.fontPoints())
+        fun JSONObject.edit(value: PocketWebStandaloneDocumentDrafts.Edit?) =
+            put("editorHandle", value?.editorHandle).put("versionHandle", value?.versionHandle)
+        fun saved(value: PocketWebStandaloneDocumentDrafts.Saved?) =
+            reply(value?.let { JSONObject().put("status", it.state.name).edit(it.edit) })
+        try {
+            val frame = PocketWebStandaloneDocumentDrafts.Frame(text("windowId"), text("frameId"))
+            check(currentDraftFrame(frame))
+            val adapter = drafts.value
+            when (text("command")) {
+                "drafts.list" -> { exact(); adapter.list(frame) { catalog ->
+                    reply(catalog?.let { JSONObject().put("metadataComplete", it.metadataComplete)
+                        .put("rows", JSONArray(it.rows.map { row -> JSONObject().put("rowHandle", row.rowHandle)
+                            .put("name", row.name).put("format", row.format).put("savedAt", row.savedAt) })) })
+                } }
+                "drafts.new" -> { exact(); val new = adapter.newDraft(frame)
+                    reply(JSONObject().put("editorHandle", new.editorHandle).put("fields", content(new.fields)))
+                }
+                "drafts.open" -> { exact("rowHandle"); adapter.open(frame, text("rowHandle")) { opened ->
+                    reply(opened?.let { JSONObject().put("status", it.state.name).edit(it.edit)
+                        .put("fields", it.fields?.let(::content)) })
+                } }
+                "drafts.saveFirst" -> { exact("editorHandle", "fields"); adapter.firstSave(frame, text("editorHandle"), fields(), ::saved) }
+                "drafts.checkFirst" -> { exact("editorHandle"); adapter.checkFirst(frame, text("editorHandle"), ::saved) }
+                "drafts.save" -> {
+                    exact("editorHandle", "versionHandle", "fields")
+                    adapter.save(frame, PocketWebStandaloneDocumentDrafts.Edit(text("editorHandle"), text("versionHandle")), fields(), ::saved)
+                }
+                "drafts.leave" -> { exact(); adapter.leave(frame); reply(JSONObject().put("left", true)) }
+                else -> error("未知的本机文档草稿操作")
+            }
+        } catch (_: Exception) { done(null, unavailable) }
+    }
     fun response(uri: Uri, method: String, headers: Map<String, String>): WebResourceResponse? = viewer.response(uri, method, headers)
-    fun foreground(visible: Boolean) { if (!visible) clear() }
-    fun clear() {
+    fun foreground(visible: Boolean) { if (!visible) clear(keepDraftPresentation = true) }
+    fun clear(keepDraftPresentation: Boolean = false) {
+        retireDraftLibrary(keepDraftPresentation)
         val scoped = flow.state.deviceOriginalOnly || scopedResultCurrent != null
         deviceTaskCurrent=null; scopedResultCurrent=null
         if(scoped && flow.state.open)flow.close()

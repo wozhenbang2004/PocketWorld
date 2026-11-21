@@ -133,7 +133,8 @@ internal data class AttachmentOutcomeState(
     val copyReceipt:OwnerAttachmentCopyReceipt?=null,val previousCopyInFile:OwnerAttachmentCopyReceipt?=null,
     val libraryImport:AttachmentLibraryImport?=null,
     val workReturn:AttachmentWorkReturn?=null,val restoredWorkReturn:Boolean=false,
-    val libraryDocumentReturn:AttachmentLibraryDocumentReturn?=null
+    val libraryDocumentReturn:AttachmentLibraryDocumentReturn?=null,
+    val globalStandaloneDraftVisit:String?=null // Native in-session provenance, never restored from Bundle.
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -230,7 +231,16 @@ internal class AttachmentOutcomeCoordinator(
         work(teamDifference=true){c,_->val actual=requireTeamHost().difference(selected,offset,12000,c);if(offset>0&&previous!=null&&(actual.getInt("currentVersion")!=previous.getInt("currentVersion")||actual.getString("currentHash")!=previous.getString("currentHash")))throw IllegalStateException("原项目在比较时已变化，请从头查看实际差异");actual to null}
     }
     private fun requireTeamHost():TeamWorkspaceOutcomeHost=teamHost?:throw IllegalStateException("原团队文件成果读取尚未挂载，请回原分工核对")
-    fun openTask(task:String?,resultRun:AttachmentResultRun?=null) { cancel();restoreFile=null;restoredDocumentDraft=null;state=AttachmentOutcomeState(open=true,taskId=task,pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,resultRun=resultRun);refresh() }
+    fun openTask(task:String?,resultRun:AttachmentResultRun?=null,globalStandaloneDraftVisit:String?=null) {
+        check(globalStandaloneDraftVisit==null||task==null&&resultRun==null)
+        cancel();restoreFile=null;restoredDocumentDraft=null
+        state=AttachmentOutcomeState(open=true,taskId=task,pendingDocumentTask=pendingDocumentAction,
+            pendingProcessingTask=pendingProcessingAction,resultRun=resultRun,globalStandaloneDraftVisit=globalStandaloneDraftVisit)
+        refresh()
+    }
+    fun discardStandaloneDraftPresentation(){
+        if(state.globalStandaloneDraftVisit!=null)state=state.copy(globalStandaloneDraftVisit=null)
+    }
     fun openGroup(selection:GroupArtifactSelection) {
         cancel();restoreFile=null;restoredDocumentDraft=null;state=AttachmentOutcomeState(open=true,taskId=selection.taskId,group=GroupResultAccess.Selection(selection.requestId,selection.taskId,selection.spaceId,selection.outputId,selection.artifactId,selection.audience,selection.visibility,selection.sourceOperationId.orEmpty(),selection.sourceTaskRunId.orEmpty()))
         refresh()
