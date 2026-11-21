@@ -140,6 +140,17 @@ public final class TeamsModule implements EngineModule {
     /** Private foreground reading; not a feature command, task update or execution admission. */
     public JSONObject retainedOwnerReading(String runId)throws Exception{return coordinator.retainedOwnerReading(runId);}
     public TeamCoordinator.OwnerRunReading retainedOwnerRun(String runId)throws Exception{return coordinator.retainedOwnerRun(runId);}
+    /** Native foreground-only; deliberately not a module/model command. */
+    public TeamCoordinator.OwnerWorkReportRead readOwnerWorkReport(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.OwnerWorkTeamReportOrigin origin,
+                                                                   java.util.function.BooleanSupplier current)throws Exception{
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
+        return coordinator.readCheckedOwnerWorkReport(tasks,origin,current);
+    }
+    public JSONObject confirmOwnerWorkReport(dev.pocketengine.store.TaskStore tasks,TeamCoordinator.OwnerWorkReport report,boolean completed,String feedback,
+                                              java.util.function.BooleanSupplier current)throws Exception{
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
+        return coordinator.confirmOwnerWorkReport(tasks,report,completed,feedback,current);
+    }
     /** Foreground owner receipt recovery only; not exposed by handle() or any model tool. */
     public JSONObject recoverOwnerOriginalFile(String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{
         if(writeHost==null)throw new IllegalStateException("原团队文件宿主不可用");return writeHost.recoverOriginalFile(coordinator,id,run,epoch,operation,ownerWindow);

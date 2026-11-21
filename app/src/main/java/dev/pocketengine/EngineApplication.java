@@ -4660,6 +4660,27 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             default:throw new IllegalArgumentException("当前版本不支持该原生操作");
         }
     }
+    /** Uses the same current owner-result decision transaction, never a Teams command or Runner. */
+    public dev.pocketengine.features.teams.TeamCoordinator.OwnerWorkReportRead readOwnerWorkTeamReport(
+            String id,String run,int epoch,String digest,String teamRun,int generation,long revision,java.util.function.BooleanSupplier current)throws Exception {
+        requireOwnerActionReady("getTask");if(!current.getAsBoolean())throw new SecurityException("原工作审阅窗口已关闭");
+        if(!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule selected))throw new SecurityException("原团队保存记录不可用");
+        var origin=tasks.ownerWorkTeamReportOrigin(id,run,epoch,digest,teamRun,generation,revision);
+        return selected.readOwnerWorkReport(tasks,origin,current);
+    }
+    public JSONObject confirmOwnerWorkTeamReport(dev.pocketengine.features.teams.TeamCoordinator.OwnerWorkReport proof,boolean done,String feedback,
+                                                java.util.function.BooleanSupplier current)throws Exception {
+        requireOwnerActionReady("confirmResult");if(!current.getAsBoolean())throw new SecurityException("原工作审阅窗口已关闭");
+        String id=proof.origin().taskId();
+        if(id.equals(activeId())||capabilityControls.containsKey(id)||features.mediaControl(id)!=null||features.teamControl(id)!=null)
+            throw new IllegalStateException("请先停止或等待原工作执行结束");
+        if(!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule selected))throw new SecurityException("原团队保存记录不可用");
+        // Do not hold EngineApplication across the coordinator/TaskStore transaction.
+        JSONObject result=selected.confirmOwnerWorkReport(tasks,proof,done,feedback,current);
+        if(done&&!result.optBoolean("alreadyConfirmed"))completeBoundCommitments(id);
+        pushTask(id);
+        return result;
+    }
     private void completeBoundCommitments(String taskId)throws Exception{
         EngineModule module=features.module("automation");if(automationPlans==null||!(module instanceof dev.pocketengine.features.automation.AutomationModule))return;
         try{automationPlans.onTaskChanged((dev.pocketengine.features.automation.AutomationModule)module,taskId);}

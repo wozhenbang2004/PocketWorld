@@ -2153,6 +2153,71 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     /** The source flag and exact returned record come from the same lookup.
      * Moving a run to history need not change its revision or its saved bytes. */
     public record OwnerRunReading(JSONObject run,boolean currentSource){}
+    public static final int OWNER_WORK_REPORT_MAX_BYTES=64*1024;
+    /** A human result review, not a model, source-context or continuation capability. */
+    public static final class OwnerWorkReport {
+        private final TeamCoordinator issuer;
+        private final dev.pocketengine.store.TaskStore.OwnerWorkTeamReportOrigin origin;
+        private final String messageId;
+        private OwnerWorkReport(TeamCoordinator issuer,dev.pocketengine.store.TaskStore.OwnerWorkTeamReportOrigin origin,String messageId){
+            this.issuer=issuer;this.origin=origin;this.messageId=messageId;
+        }
+        public dev.pocketengine.store.TaskStore.OwnerWorkTeamReportOrigin origin(){return origin;}
+        public boolean holdsOriginalMonitor(){return Thread.holdsLock(issuer);}
+        public JSONObject evidence()throws Exception{return origin.reference().put("messageId",messageId);}
+    }
+    public record OwnerWorkReportRead(OwnerWorkReport proof,String body){}
+    synchronized OwnerWorkReportRead readOwnerWorkReport(dev.pocketengine.store.TaskStore.OwnerWorkTeamReportOrigin origin)throws Exception {
+        if(closed)throw new SecurityException("原团队结果宿主已关闭");
+        String id=origin.teamRun();
+        Run live=runs.get(id);
+        // This current owner result path never opens an archived execution slot.
+        if(live==null)throw new SecurityException("原团队已不在当前结果窗口；请在原协作记录查看，未选择替代汇总");
+        JSONObject saved=live.json;
+        if(!id.equals(saved.opt("id"))||!id.equals(saved.opt("operationId"))||!origin.teamDefinition().equals(saved.opt("teamId"))
+                ||!RESEARCH_FORMAT.equals(saved.opt("researchExecutionFormat"))||!"collaborate".equals(saved.opt("mode"))
+                ||!"classic".equals(saved.optString("discussionFormat","classic"))||saved.has("definitionKind")||saved.has("phoneScope")
+                ||saved.has("workPlan")||saved.has("productionScope")||saved.has("nativeWorkProfileModels")
+                ||!"completed".equals(saved.opt("status"))||!"completed".equals(saved.opt("phase"))
+                ||!"host_model".equals(saved.opt("summaryProducer"))||saved.opt("summaryStale")!=Boolean.FALSE
+                ||saved.getInt("generation")!=origin.generation()||saved.getLong("revision")!=origin.revision()
+                ||!(saved.opt("summary") instanceof String text)||text.length()>OWNER_WORK_REPORT_MAX_BYTES||text.isBlank())
+            throw new SecurityException("没有这次选择的确切团队汇总，未打开其他版本");
+        JSONArray roster=saved.getJSONArray("members");
+        if(!ordinaryLocalReportRoster(roster))throw new SecurityException("仅可在此核对原普通本机团队汇总");
+        JSONArray transcript=saved.getJSONArray("transcript");
+        JSONObject message=transcript.optJSONObject(transcript.length()-1);
+        if(message==null||!"assistant".equals(message.opt("role"))||!"summary".equals(message.opt("kind"))
+                ||message.optInt("generation",-1)!=origin.generation()||!nativeUuid(message.optString("messageId"))
+                ||!text.equals(message.opt("content"))||text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length!=origin.bytes()
+                ||!origin.sha256().equals(TeamOutputText.hash(text)))
+            throw new SecurityException("原汇总正文与原保存回执不一致，没有用节选替代");
+        return new OwnerWorkReportRead(new OwnerWorkReport(this,origin,message.getString("messageId")),text);
+    }
+    public static boolean ordinaryLocalReportRoster(JSONArray roster){
+        if(roster==null||roster.length()<1||roster.length()>4)return false;
+        for(int i=0;i<roster.length();i++){
+            JSONObject member=roster.optJSONObject(i);
+            if(member==null||!"model".equals(member.opt("runner"))||!"phone".equals(member.opt("device")))return false;
+        }
+        return true;
+    }
+    synchronized OwnerWorkReportRead readCheckedOwnerWorkReport(dev.pocketengine.store.TaskStore tasks,dev.pocketengine.store.TaskStore.OwnerWorkTeamReportOrigin origin,
+                                                               java.util.function.BooleanSupplier current)throws Exception {
+        if(!current.getAsBoolean())throw new SecurityException("原汇总审阅窗口已关闭");
+        OwnerWorkReportRead report=readOwnerWorkReport(origin);
+        tasks.requireOwnerWorkTeamReportOrigin(origin);
+        if(!current.getAsBoolean())throw new SecurityException("原汇总审阅窗口已关闭");
+        return report;
+    }
+    synchronized JSONObject confirmOwnerWorkReport(dev.pocketengine.store.TaskStore tasks,OwnerWorkReport shown,boolean completed,String feedback,
+                                                    java.util.function.BooleanSupplier current)throws Exception {
+        if(shown==null||shown.issuer!=this||!current.getAsBoolean())throw new SecurityException("原汇总审阅窗口已关闭");
+        OwnerWorkReport again=readOwnerWorkReport(shown.origin).proof();
+        if(!shown.messageId.equals(again.messageId)||!current.getAsBoolean())throw new SecurityException("原团队汇总已换版，未登记决定");
+        // Same lock order as save() -> native TaskStore mirror. No publish/dispatch under either lock.
+        return tasks.confirmReviewedTeamReport(shown,completed,feedback,current);
+    }
     synchronized OwnerRunReading retainedOwnerRun(String id)throws Exception {
         Run hot=runs.get(id);
         return hot==null?new OwnerRunReading(archivedOriginal(id,archived.get(id)),false):new OwnerRunReading(JsonFiles.copy(hot.json),true);

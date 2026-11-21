@@ -14,6 +14,7 @@ import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ReasoningOptions
 import dev.pocketengine.store.OwnerPhoneControlScope
 import dev.pocketengine.store.TaskExecutionScope
+import dev.pocketengine.features.teams.TeamCoordinator
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.ChatInputRules
 import dev.pocketengine.ui.MediaOwnerUi
@@ -35,10 +36,13 @@ import org.json.JSONObject
 
 /** A one-use reference to the exact task that was displayed, never a Web-created approval. */
 internal class PocketWebTaskReviews(private val now: () -> Long = SystemClock::elapsedRealtime) {
-    private data class Reviewed(val task: UiTask, val identity: String, val actions: Set<String>, val expires: Long, val positiveApprovalIds: Set<String>)
+    data class TeamReport(val proof: TeamCoordinator.OwnerWorkReport, val current: () -> Boolean)
+    private data class Reviewed(val task: UiTask, val identity: String, val actions: Set<String>, val expires: Long,
+                                val positiveApprovalIds: Set<String>, val report: TeamReport?)
     private val entries = linkedMapOf<String, Reviewed>()
 
-    fun create(task: UiTask, actions: Set<String>, positiveApprovalIds: Set<String> = emptySet(), bindingTask: UiTask = task): String {
+    fun create(task: UiTask, actions: Set<String>, positiveApprovalIds: Set<String> = emptySet(), bindingTask: UiTask = task,
+               report: TeamReport? = null): String {
         if (bindingTask !== task) {
             require(task.raw.optString("taskProjection") == "approval_only" && actions.all { it == "tasks.approve" } &&
                 task.id == bindingTask.id && task.status == bindingTask.status && task.updatedAt == bindingTask.updatedAt &&
@@ -49,18 +53,41 @@ internal class PocketWebTaskReviews(private val now: () -> Long = SystemClock::e
         while (entries.size >= 24) entries.remove(entries.keys.first())
         val copy = task.copy(raw = JSONObject(task.raw.toString()))
         val handle = UUID.randomUUID().toString()
-        entries[handle] = Reviewed(copy, identity(if (bindingTask === task) copy else bindingTask), actions.toSet(), now() + 120_000L, positiveApprovalIds.toSet())
+        entries[handle] = Reviewed(copy, identity(if (bindingTask === task) copy else bindingTask), actions.toSet(), now() + 120_000L, positiveApprovalIds.toSet(), report)
         return handle
     }
 
     fun take(handle: String, action: String, current: List<UiTask>, positiveApprovalId: String? = null): UiTask {
         val reviewed = entries.remove(handle) ?: throw IllegalStateException("原审阅已关闭或已使用，请重新核对原任务")
         check(now() < reviewed.expires) { "原审阅已过期，请重新核对原任务" }
-        check(action in reviewed.actions) { "这项操作不在原审阅范围内" }
+        check(action in reviewed.actions && reviewed.report == null) { "这项操作不在原审阅范围内" }
         if (positiveApprovalId != null) check(positiveApprovalId in reviewed.positiveApprovalIds) { "尚未读取这项操作的完整范围，请重新核对" }
         val actual = current.firstOrNull { it.id == reviewed.task.id }
         check(actual != null && identity(actual) == reviewed.identity) { "原任务已变化，未沿用旧审阅执行；请重新核对" }
         return reviewed.task
+    }
+
+    fun teamReportParent(handle: String, taskId: String, current: List<UiTask>): UiTask {
+        val review = entries[handle] ?: error("请先读取这件原工作的结果核对")
+        check(review.report == null && now() < review.expires && review.task.id == taskId && "tasks.confirm" in review.actions &&
+            current.singleOrNull { it.id == taskId }?.let(::identity) == review.identity) { "原工作核对已变化，请重新读取" }
+        return review.task
+    }
+
+    fun selectTeamReport(original: String, taskId: String, current: List<UiTask>, report: TeamReport): String {
+        val task = teamReportParent(original, taskId, current)
+        check(report.current() && report.proof.origin().taskId() == task.id)
+        entries.entries.removeAll { it.value.task.id == taskId && "tasks.confirm" in it.value.actions }
+        return create(task, setOf("tasks.confirm"), report = report)
+    }
+
+    fun takeTeamReport(handle: String, taskId: String?, current: List<UiTask>): TeamReport {
+        val entry = entries[handle] ?: error("原汇总核对已关闭，请重新核对")
+        val report = entry.report ?: error("本次决定缺少已经读取的原汇总")
+        entries.remove(handle)
+        check(taskId == entry.task.id && now() < entry.expires && report.current() &&
+            current.singleOrNull { it.id == taskId }?.let(::identity) == entry.identity) { "原汇总核对已变化，未改为普通验收" }
+        return report.copy(current = { now() < entry.expires && report.current() })
     }
 
     fun clear() = entries.clear()
@@ -280,6 +307,8 @@ internal class PocketWebBridge(
     private var taskReturnSection: String? = null
     private var workspaceResumeRevision = 0L
     private var taskReviewGeneration = 0L
+    @Volatile private var teamReportReviewGeneration = 0L
+    @Volatile private var teamReportSelectionGeneration = 0L
     private val commandFence = PocketWebCommandFence()
     private val reviews = PocketWebTaskReviews()
     private val taskActions = PocketWebTaskActions(controller, reviews, ::canUseTaskControls) { work -> main.post(work) }
@@ -1269,6 +1298,10 @@ internal class PocketWebBridge(
                 }
                 return
             }
+            if (action == "tasks.confirm" && args.has("usingTeamReport")) {
+                submitOwnerWorkTeamReport(id, args)
+                return
+            }
             if (action in PocketWebTaskActions.DECISIONS) {
                 when (val decision = taskActions.decide(action, args, taskViewId)) {
                     PocketWebTaskActions.Decision.Accepted -> { complete(id, accepted(), null); publishState() }
@@ -1297,16 +1330,24 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.review") {
-                checkedPayload(args, setOf("id", "approvalId"))
+                checkedPayload(args, setOf("id", "approvalId", "teamReport"))
                 val taskId = requiredString(args, "id")
+                if (args.has("teamReport")) {
+                    require(!args.has("approvalId"))
+                    readOwnerWorkTeamReport(id, taskId, args.getJSONObject("teamReport"))
+                    return
+                }
                 val approvalId = if (args.has("approvalId")) requiredString(args, "approvalId").also { require(it.length <= 128) } else null
                 require(taskViewId == taskId && controller.webUiCanInteract()) { "请重新打开这个原任务的审阅窗口" }
                 requireTask(taskId)
+                teamReportReviewGeneration++
                 val generation = taskReviewGeneration
+                val reportSelection = teamReportSelectionGeneration
                 val document = documentId
                 val navigation = Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision)
                 taskActions.read(taskId, approvalId, { closed }, {
-                    taskViewId == taskId && controller.webUiCanInteract() && generation == taskReviewGeneration && document == documentId &&
+                    taskViewId == taskId && controller.webUiCanInteract() && generation == taskReviewGeneration &&
+                        reportSelection == teamReportSelectionGeneration && document == documentId &&
                         navigation == Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision)
                 }) { result, error ->
                     complete(id, result, error, retainValue = result?.has("capabilityApprovalRead") != true && result?.has("savedTeamDefaultModel") != true)
@@ -2132,6 +2173,73 @@ internal class PocketWebBridge(
         commandReceipts[id] = identity to replay
         while (commandReceipts.size > 128) commandReceipts.remove(commandReceipts.keys.first())
         emit(response)
+    }
+
+    private fun ownerTeamResultWindow(task: String): () -> Boolean {
+        require(!closed && documentId != null && section == null && taskViewId == task &&
+            controller.webPrivateOwnerVisible() && controller.conversationReader == null) { "请在原私人工作窗口核对这份汇总" }
+        val bridge = commandFence.ticket()
+        val owner = controller.displayedPhoneWindowVersion()
+        val selection = teamReportReviewGeneration
+        // The stable foreground generation has no controller/store callback while the original SQL write is held.
+        return { !closed && commandFence.accepts(bridge) && controller.displayedPhoneWindowAlive(owner) &&
+            taskViewId == task && teamReportReviewGeneration == selection && controller.conversationReader == null }
+    }
+
+    private fun readOwnerWorkTeamReport(id: String, taskId: String, selection: JSONObject) {
+        checkedPayload(selection, setOf("sourceReviewHandle", "teamRunId", "generation", "revision"))
+        val original = requiredString(selection, "sourceReviewHandle")
+        val team = requiredString(selection, "teamRunId")
+        val generation = requiredInt(selection, "generation")
+        val revision = requiredLong(selection, "revision")
+        require(!closed && documentId != null && section == null && taskViewId == taskId &&
+            controller.webPrivateOwnerVisible() && controller.conversationReader == null) { "请在原私人工作窗口核对这份汇总" }
+        val task = reviews.teamReportParent(original, taskId, controller.state.tasks)
+        val raw = task.raw
+        val candidate = raw.optJSONArray("ownerWorkTeams").objects().singleOrNull { it.opt("teamRunId") == team }?.optJSONObject("reportForReview")
+        require(raw.opt("taskProjection") == "detail_window" && raw.opt("taskCoreReadLimited") == false &&
+            raw.opt("contextAvailable") == true && raw.opt("hasUnresolvedOperations") == false &&
+            pendingCapabilityApprovals(task).isEmpty() && candidate != null && candidate.opt("teamRunId") == team &&
+            candidate.getInt("generation") == generation && candidate.getLong("revision") == revision) { "这份汇总不在当前原工作核对中" }
+        teamReportSelectionGeneration++
+        teamReportReviewGeneration++
+        val current = ownerTeamResultWindow(taskId)
+        val owner = controller.nativeTokenBudgetHost()
+        controller.runTeamPhoneWork {
+            val read = runCatching { owner.readOwnerWorkTeamReport(taskId, raw.getString("runId"), raw.getInt("coordinatorEpoch"),
+                raw.getString("resultReviewDigest"), team, generation, revision) { current() } }
+            main.post {
+                val value = read.mapCatching { exact ->
+                    check(current() && section == null && controller.webPrivateOwnerVisible()) { "原汇总审阅窗口已关闭" }
+                    val view = exact.proof.evidence().put("contract", exact.proof.origin().contract()).put("body", exact.body())
+                    val handle = reviews.selectTeamReport(original, taskId, controller.state.tasks, PocketWebTaskReviews.TeamReport(exact.proof, current))
+                    JSONObject().put("reviewHandle", handle).put("expiresInMs", 120_000).put("teamReport", view)
+                }
+                value.fold({ complete(id, it, null, retainValue = false) },
+                    { complete(id, null, it.message ?: "未读取原团队汇总", retainValue = false) })
+            }
+        }
+    }
+
+    private fun submitOwnerWorkTeamReport(id: String, args: JSONObject) {
+        checkedPayload(args, setOf("reviewHandle", "usingTeamReport", "completed", "feedback"))
+        require(requiredBoolean(args, "usingTeamReport"))
+        val done = requiredBoolean(args, "completed")
+        val feedback = requiredString(args, "feedback", empty = true).also { require(it.length <= 8000) }
+        val task = taskViewId ?: error("原工作核对已关闭")
+        val currentWindow = ownerTeamResultWindow(task)
+        val review = reviews.takeTeamReport(requiredString(args, "reviewHandle"), task, controller.state.tasks)
+        val owner = controller.nativeTokenBudgetHost()
+        controller.runTeamPhoneWork {
+            val result = runCatching { owner.confirmOwnerWorkTeamReport(review.proof, done, feedback) { currentWindow() && review.current() } }
+            main.post {
+                if (!currentWindow() || section != null || !controller.webPrivateOwnerVisible())
+                    complete(id, null, "原窗口已变化，请只核对原任务记录；没有重新提交", "outcome_unknown", retainValue = false)
+                else result.fold({ complete(id, it, null, retainValue = false, replayHint = "请在原工作核对已经记录的决定") },
+                    { complete(id, null, it.message ?: "决定尚未确认，请核对原工作", "outcome_unknown", retainValue = false) })
+                publishState()
+            }
+        }
     }
 
     /** Keep the original foreground review valid through the existing native owner queue. */
