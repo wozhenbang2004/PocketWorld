@@ -762,12 +762,16 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         return exchange(target, request, null, original::check, request.deadline());
     }
     private DeviceCapabilityPort.Reply exchange(String target, DeviceTaskEnvelope request, TaskStoreDeviceTasks.OutboundSendTicket ticket, DeviceArtifactTransfer.Current originalCurrent, long nativeDeadline) throws Exception {
-        originalCurrent.require(); PeerChannel exact = controlChannel(target);
+        return exchange(target,request,ticket,originalCurrent,nativeDeadline,null);
+    }
+    private DeviceCapabilityPort.Reply exchange(String target, DeviceTaskEnvelope request, TaskStoreDeviceTasks.OutboundSendTicket ticket, DeviceArtifactTransfer.Current originalCurrent, long nativeDeadline,PeerChannel capturedReadChannel) throws Exception {
+        originalCurrent.require(); PeerChannel exact = capturedReadChannel==null?controlChannel(target):capturedReadChannel;
         if (exact == null || exact.connection.state() != DeviceConnection.State.ONLINE && exact.connection.state() != DeviceConnection.State.DEGRADED) throw new IOException("设备尚未连接，未派发请求");
         if (pending.size() >= 32) throw new IOException("设备请求等待窗口已满，未派发请求");
         String id = request.requestId(); PendingCall call = new PendingCall(target, exact, ticket);
         if (pending.putIfAbsent(id, call) != null) throw new SecurityException("同一原请求仍在等待，不能重复派发");
         try {
+            if(capturedReadChannel!=null)originalCurrent.require();
             if (!(ticket != null ? exact.connection.sendControl(ticket) : exact.connection.sendControl(DeviceProtocol.canonicalBytes(request.json())))) throw new IOException("发送队列已满，未派发新请求");
             long waitMs = "desktop.viewer".equals(request.method()) && "negotiate".equals(request.arguments().optString("action")) ? 25000 : 15000;
             long until = Math.min(nativeDeadline, Math.min(request.deadline(), System.currentTimeMillis() + waitMs));
@@ -801,6 +805,34 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
     DeviceCapabilityPort.Reply readOwnerHistory(DeviceTaskEnvelope request, RunControl originalReadCancellation) throws Exception {
         if (!Set.of("operation.get", "task.get", "task.events").contains(request.method()) || request.sideEffecting()) throw new SecurityException("历史窗口只读取原执行结果");
         return exchange(request.targetDeviceId(), request, null, originalReadCancellation::check, request.deadline());
+    }
+    /** This Work reader uses the very channel that authenticated its pinned original certificate.
+     * No resolve/start/describe, no substitute channel, and no execution ticket. */
+    DeviceCapabilityPort.Reply readOriginalWindowsText(TaskStoreDeviceTasks.OwnerWindowsTextEvidence original,
+                                                       DeviceIdentity.LocalIdentity local,DeviceArtifactTransfer.Current current)throws Exception {
+        current.require(); var pin=original.target(); var wire=original.wire();
+        PeerChannel exact=controlChannel(pin.deviceId());
+        if(!channelOnline(exact))throw new IOException("原电脑当前未连接，未读取结果。");
+        if(!pin.deviceId().equals(exact.peer.deviceId())||!pin.certificateFingerprint().equals(exact.peer.certificateFingerprint()))
+            throw new SecurityException("原电脑证书已变化，未发送读取请求。");
+        PairingCoordinator.HistoryQuery query;
+        try {
+            long now=System.currentTimeMillis();
+            query=owner.pairing().historyRoute(exact.peer,wire.grantId(),now)
+                    .historyQuery(local,"operation.get",wire.operationId(),wire.resourceBinding(),now,5000,null);
+        }catch(SecurityException denied){throw new SecurityException("原电脑的原结果读取授权暂不可核对，未发送读取请求。",denied);}
+        var request=query.envelope();
+        if(!pin.instanceId().equals(request.instanceId())||wire.authorizationEpoch()!=request.authorizationEpoch())
+            throw new SecurityException("原电脑实例或原授权已变化，未发送读取请求。");
+        DeviceArtifactTransfer.Current checked=()->{
+            current.require(); query.requireTargetPeer(exact.peer,System.currentTimeMillis());
+            if(controlChannel(pin.deviceId())!=exact)throw new IOException("原电脑连接已变化，未核对到结果。");
+        };
+        original.requireCurrentJob();
+        DeviceCapabilityPort.Reply reply=exchange(pin.deviceId(),request,null,checked,request.deadline(),exact);
+        checked.require(); query.requireTargetPeer(reply.peer(),System.currentTimeMillis());
+        if(!request.requestId().equals(reply.response().opt("requestId")))throw new SecurityException("未收到匹配这次原读取的回执。");
+        return reply;
     }
     DeviceArtifactFetch.ReadReply readImageChunk(TaskStoreDeviceTasks.DeviceReceiveEvidence evidence, PairingCoordinator.HistoryQuery query,
             DeviceIdentity.AuthenticatedPeer expected, long nativeDeadline) throws Exception {

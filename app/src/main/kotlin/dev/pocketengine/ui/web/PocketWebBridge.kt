@@ -8,6 +8,7 @@ import dev.pocketengine.EngineApplication.OwnerWorkControlRejected
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.core.RuntimeDiagnostics
 import dev.pocketengine.features.devices.DirectedPhoneTarget
+import dev.pocketengine.features.devices.DirectedWorkspaceTarget
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
 import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ReasoningOptions
@@ -28,6 +29,7 @@ import dev.pocketengine.ui.unresolvedOperations
 import dev.pocketengine.ui.workspaceTaskLinks
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -367,6 +369,7 @@ internal class PocketWebBridge(
     private val voiceInput = PocketWebVoiceInput(controller, phoneComposer)
     private var deviceWindow: NativeDeviceWorkspaceHost.Window? = null
     private val devicePages = PocketWebDevices(controller, { deviceWindow }, { !closed && section == "devices" && controller.webPrivateOwnerVisible() })
+    private val readingOriginalWindowsText = AtomicBoolean(false)
     private val pluginPages = PocketWebPlugins(controller, controller.webPluginFeatureHost(), controller.webPresentationActivity())
     private val domainSnapshots = mutableMapOf<String, JSONObject>()
     private val domainErrors = mutableMapOf<String, String>()
@@ -1488,6 +1491,10 @@ internal class PocketWebBridge(
                 }
                 return
             }
+            if (action == "devices.queryHistory" && args.has("originalWindowsText")) {
+                readOriginalWindowsText(id, args)
+                return
+            }
             if (action == "devices.returnToReceivedPhoneGoal") {
                 requireSection("devices")
                 val originalId = devicePages.receivedTaskForReturn(args)
@@ -1980,6 +1987,46 @@ internal class PocketWebBridge(
                 else emit(JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", false)
                     .put("error", JSONObject().put("code", "invalid_request").put("message", failure.message ?: "请求未接受")))
             }
+        }
+    }
+
+    /** The Work variant of the existing receipt read accepts no generic history or stop handle. */
+    private fun readOriginalWindowsText(id: String, args: JSONObject) {
+        checkedPayload(args, setOf("originalWindowsText", "taskId", "runId", "epoch", "operationId"))
+        require(requiredBoolean(args, "originalWindowsText"))
+        val task = requiredString(args, "taskId"); val run = requiredString(args, "runId")
+        val epoch = requiredInt(args, "epoch"); val operation = requiredString(args, "operationId")
+        val original = requireTask(task).raw
+        val target = requireNotNull(DirectedWorkspaceTarget.fromTask(original)) { "原工作未固定电脑。" }
+        val window = captureWindow(); val document = requireNotNull(documentId)
+        val closedMessage = "原工作窗口或执行已变化，未显示原文本。"
+        fun current(): Boolean {
+            if (closed || documentId != document || section != null || taskViewId != task || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) return false
+            val raw = controller.state.tasks.firstOrNull { it.id == task }?.raw ?: return false
+            return raw.opt("id") == task && raw.opt("runId") == run && epoch > 0 && raw.optInt("coordinatorEpoch") == epoch &&
+                raw.opt("actorId") == "owner" && raw.opt("spaceId") == "private" && !raw.has("origin") && raw.opt("contextAvailable") != false &&
+                !raw.optBoolean("contextWithdrawn") && !raw.optBoolean("sourceCurrentReadRequired") && raw.opt("taskProjection") != "source_unavailable" &&
+                runCatching { DirectedWorkspaceTarget.fromTask(raw) == target }.getOrDefault(false)
+        }
+        require(current()) { closedMessage }
+        check(readingOriginalWindowsText.compareAndSet(false, true)) { "正在核对另一份原文本，请等这次回执。" }
+        try {
+            controller.runDeviceWorkspaceWork(Runnable {
+                val result = runCatching {
+                    check(current()) { closedMessage }
+                    val host = controller.nativeDeviceWorkspace() ?: error("本机设备回执暂不可用。")
+                    host.openOwnerWindow().use { it.readOriginalWindowsText(task, run, epoch, operation) { check(current()) { closedMessage } } }
+                }
+                main.post {
+                    readingOriginalWindowsText.set(false)
+                    if (!current()) complete(id, null, closedMessage, retainValue = false)
+                    else result.fold({ complete(id, it, null, retainValue = false) },
+                        { complete(id, null, it.message ?: "没有取得可核对的原文本。", retainValue = false) })
+                }
+            })
+        } catch (failure: Exception) {
+            readingOriginalWindowsText.set(false)
+            throw failure
         }
     }
 

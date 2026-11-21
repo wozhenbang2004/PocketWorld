@@ -11,6 +11,7 @@ import { phoneStopReceipt } from './phone-stop-receipt';
 import { phoneResourceHistory } from './phone-resource-history';
 import { getTaskEventHistory, getTaskOperations } from './task-presentation';
 import { taskAuditPage, taskHistoryIdentity, type AuditPage, type AuditSection, type TaskHeader } from './task-history';
+import { OriginalWindowsTextRead, originalWindowsTextAt } from './OriginalWindowsTextRead';
 
 type Window = { identity: string; cursor: string; prior: string[]; page: AuditPage };
 const message = (failure: unknown) => failure instanceof Error ? failure.message : String(failure);
@@ -195,9 +196,14 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
       {navigation(events, '任务记录')}
     </section></TabPanel>
       <TabPanel id="operations" shouldForceMount><section className="pw-task-operations" aria-label="工具记录">
-      {tools.length ? <div className="pw-task-tools">{tools.map((operation, index) => <div key={recordKey(operation.runId, operation.operationId)} data-audit-section="operations" data-audit-key={recordKey(operation.runId, operation.operationId)} tabIndex={-1}>
-        {operation.runId && task.raw?.runId && operation.runId !== task.raw.runId && <small className="pw-muted">早先执行记录</small>}{renderOperation(operation, index, task.id)}
-      </div>)}</div> : <p className="pw-muted pw-task-tool-empty">当前窗口没有可读取的工具记录。</p>}
+      {tools.length ? <div className="pw-task-tools">{tools.map((operation, index) => {
+        const original = originalRead && selectedTab === 'operations' && bridge.getState().capabilities.commands.includes('devices.queryHistory')
+          ? originalWindowsTextAt(task, operation) : undefined;
+        return <div key={recordKey(operation.runId, operation.operationId)} data-audit-section="operations" data-audit-key={recordKey(operation.runId, operation.operationId)} tabIndex={-1}>
+          {operation.runId && task.raw?.runId && operation.runId !== task.raw.runId && <small className="pw-muted">早先执行记录</small>}{renderOperation(operation, index, task.id)}
+          {original && <OriginalWindowsTextRead key={JSON.stringify([identity, original])} original={original} documentEpoch={documentEpoch} sourceRevision={revision}/>}
+        </div>;
+      })}</div> : <p className="pw-muted pw-task-tool-empty">当前窗口没有可读取的工具记录。</p>}
       {navigation(operations, '工具记录')}
     </section></TabPanel>
     </Tabs>

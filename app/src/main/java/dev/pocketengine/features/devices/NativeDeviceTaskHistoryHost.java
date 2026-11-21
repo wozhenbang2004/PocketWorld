@@ -1,8 +1,10 @@
 package dev.pocketengine.features.devices;
 
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.devices.transport.DeviceArtifactTransfer;
 import dev.pocketengine.store.TaskStore;
 import dev.pocketengine.store.TaskStoreDeviceTasks;
+import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 
 /** Explicit local owner history UI, never a model tool or an execution-scope fallback. */
@@ -19,6 +21,85 @@ public final class NativeDeviceTaskHistoryHost {
     private final TaskStore tasks;private final DeviceIdentity.LocalIdentity local;private final NativeReads source;
     public NativeDeviceTaskHistoryHost(TaskStore originalTasks,DeviceIdentity.LocalIdentity existingLocalIdentity,NativeReads source){tasks=java.util.Objects.requireNonNull(originalTasks);local=java.util.Objects.requireNonNull(existingLocalIdentity);this.source=java.util.Objects.requireNonNull(source);}
     public Window open(String originalTaskId,String originalOperationId)throws Exception{return new Window(tasks.deviceTasks().ownerHistoryEvidence(originalTaskId,originalOperationId));}
+
+    @FunctionalInterface interface WindowsTextRead {
+        DeviceCapabilityPort.Reply read(TaskStoreDeviceTasks.OwnerWindowsTextEvidence original, DeviceArtifactTransfer.Current current)throws Exception;
+    }
+    /** The caller owns the current private Work window. No generic History/stop window, and no journal update. */
+    static JSONObject readOriginalWindowsText(TaskStore tasks,DeviceIdentity.LocalIdentity local,String task,String run,int epoch,String operation,
+                                             DeviceArtifactTransfer.Current current,WindowsTextRead reader)throws Exception {
+        current.require();
+        var original=tasks.deviceTasks().ownerWindowsTextEvidence(task,run,epoch,operation,local.deviceId());
+        var reply=reader.read(original,current);
+        current.require();
+        String knownJob=original.requireCurrentJob();
+        JSONObject value=windowsTextSnapshot(original,reply,knownJob);
+        current.require();
+        return value;
+    }
+
+    private static JSONObject windowsTextSnapshot(TaskStoreDeviceTasks.OwnerWindowsTextEvidence original, DeviceCapabilityPort.Reply reply,
+                                                  String knownJob)throws Exception {
+        var wire=original.wire(); var target=original.target();
+        JSONObject response=DeviceProtocol.validateMessage(reply.response());
+        String unavailable="原电脑没有提供可核对的原短文本，不能据此判断文件没有内容。";
+        if(!target.deviceId().equals(reply.peer().deviceId())||!target.certificateFingerprint().equals(reply.peer().certificateFingerprint())
+                ||!"DeviceResponse".equals(response.opt("messageType"))||!"operation.get".equals(response.opt("method"))
+                ||!target.deviceId().equals(response.opt("executorDeviceId"))||!target.instanceId().equals(response.opt("instanceId")))
+            throw new SecurityException(unavailable);
+        JSONObject receipt=response.getJSONObject("result"); String job=receipt.optString("jobId");
+        if(!"OperationReceipt".equals(receipt.opt("messageType"))||!Boolean.TRUE.equals(receipt.opt("accepted"))
+                ||!wire.operationId().equals(receipt.opt("operationId"))||!wire.argumentsDigest().equals(receipt.opt("argumentsDigest"))
+                ||!job.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")||!knownJob.isEmpty()&&!knownJob.equals(job)
+                ||receipt.has("localTaskId")||receipt.has("runId")||receipt.has("executorEpoch")||receipt.has("cancellation")
+                ||!"succeeded".equals(receipt.opt("status"))||!"reported".equals(receipt.opt("effectState")))throw new SecurityException(unavailable);
+        JSONObject audience=receipt.getJSONObject("audience"), frozen=wire.json();
+        for(String field:new String[]{"rootTaskId","localTaskId","originDeviceId","callerDeviceId","targetDeviceId","instanceId","grantId","authorizationEpoch","argumentsDigest"})
+            if(!DeviceProtocol.canonical(frozen.opt(field)).equals(DeviceProtocol.canonical(audience.opt(field))))throw new SecurityException(unavailable);
+        if(!wire.runId().equals(audience.opt("requestRunId"))||wire.executorEpoch()!=audience.optLong("requestExecutorEpoch")
+                ||!DeviceProtocol.resourceEquals(wire.resourceBinding(),audience.getJSONObject("resourceBinding")))throw new SecurityException(unavailable);
+
+        JSONObject payload=receipt.getJSONObject("payload"), snapshot=payload.optJSONObject("windowsReadReceipt"), data=payload.optJSONObject("nativeToolResult");
+        String path=wire.toolInvocation().arguments().getString("path");
+        if(snapshot==null||data==null||!"completed".equals(payload.opt("status"))||!"device_tool".equals(payload.opt("worker"))
+                ||!Boolean.TRUE.equals(payload.opt("historicalReadOnly"))||!Boolean.FALSE.equals(payload.opt("taskControl"))
+                ||!wire.originDeviceId().equals(payload.opt("originalOriginDeviceId"))||wire.authorizationEpoch()!=payload.optLong("acceptedAuthorizationEpoch")
+                ||!"windows-workspace-read-receipt-v1".equals(snapshot.opt("profile"))||!"workspace.read".equals(snapshot.opt("tool"))
+                ||!"text_snapshot".equals(snapshot.opt("phase"))||!Boolean.FALSE.equals(snapshot.opt("readAgain"))
+                ||!job.equals(snapshot.opt("jobId"))||!job.equals(payload.opt("id"))
+                ||!wire.operationId().equals(snapshot.opt("operationId"))||!wire.operationId().equals(payload.opt("operationId"))
+                ||!wire.argumentsDigest().equals(snapshot.opt("argumentsDigest"))
+                ||!wire.resourceBinding().getString("environmentId").equals(snapshot.opt("environmentId"))
+                ||!DeviceProtocol.sha256(path.getBytes(StandardCharsets.UTF_8)).equals(snapshot.opt("pathDigest"))||!path.equals(data.opt("path")))
+            throw new SecurityException(unavailable);
+        long bytes=DeviceProtocol.integer(snapshot.opt("bytes"),"原文本字节",0,24576);
+        if(bytes>1024)throw new IllegalStateException("这份原文本超过此处的 1 KiB 阅读范围，未显示正文，也没有重读文件。");
+        long at=DeviceProtocol.integer(snapshot.opt("updatedAt"),"原文本时间",receipt.getLong("acceptedAt"),8_640_000_000_000_000L);
+        DeviceProtocol.integer(snapshot.opt("revision"),"原文本版本",1,DeviceProtocol.MAX_SAFE_INTEGER);
+        if(!(data.opt("content") instanceof String content)||!(snapshot.opt("part") instanceof String text)
+                ||!Boolean.FALSE.equals(snapshot.opt("partial"))
+                ||bytes!=DeviceProtocol.integer(data.opt("bytes"),"原文件字节",0,1024)||!displayText(content).equals(text))throw new SecurityException(unavailable);
+        byte[] raw=content.getBytes(StandardCharsets.UTF_8); String version="sha256:"+DeviceProtocol.sha256(raw);
+        if(bytes!=raw.length||!version.equals(snapshot.opt("version"))||!version.equals(data.opt("version")))throw new SecurityException(unavailable);
+        if(text.getBytes(StandardCharsets.UTF_8).length>1024)throw new IllegalStateException("原文本转成可显示文字后超过 1 KiB，未显示正文，也没有重读文件。");
+        return new JSONObject().put("format","pocketworld.original-windows-text.v1").put("readOnly",true)
+                .put("taskId",wire.parentTaskId()).put("runId",wire.runId()).put("epoch",wire.executorEpoch()).put("operationId",wire.operationId())
+                .put("deviceId",target.deviceId()).put("instanceId",target.instanceId()).put("bytes",bytes).put("version",version)
+                .put("recordedAt",at).put("text",text);
+    }
+
+    private static String displayText(String original) {
+        // Same plain-text representation as the Windows retained snapshot, not a new file read.
+        StringBuilder out=new StringBuilder();
+        original.replace("\r\n","\n").replace('\r','\n').codePoints().forEach(cp->{
+            int type=Character.getType(cp);
+            if(cp!='\n'&&cp!='\t'&&(type==Character.CONTROL||type==Character.FORMAT||type==Character.SURROGATE
+                    ||type==Character.PRIVATE_USE||type==Character.UNASSIGNED))out.append('\uFFFD');
+            else out.appendCodePoint(cp);
+        });
+        return out.toString();
+    }
+
     public final class Window implements AutoCloseable {
         private final TaskStoreDeviceTasks.OwnerHistoryEvidence original;private final RunControl io=new RunControl();private volatile boolean closed;
         private Window(TaskStoreDeviceTasks.OwnerHistoryEvidence original){this.original=original;}

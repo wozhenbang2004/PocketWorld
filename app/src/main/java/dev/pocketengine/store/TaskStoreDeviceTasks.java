@@ -407,6 +407,89 @@ public final class TaskStoreDeviceTasks {
         if(kind.equals("task")&&!dev.pocketengine.features.devices.DeviceProtocol.receiverTaskId(original).equals(object))throw new SecurityException("原目标Task绑定被替换");JSONObject accepted=new JSONObject().put("accepted",true).put("acceptedAt",typed.getLong("acceptedAt")).put("acceptedObjectKind",kind).put("objectId",object).put("targetOperationId",evidence.operation).put("instanceId",typed.getString("instanceId")).put("runId",typed.optString("runId")).put("parentTaskId",evidence.id).put("parentOperationId",allocation.getString("anchorOperationId")).put("sourceOperationId",evidence.operation).put("operationArgumentsDigest",typed.getString("argumentsDigest")).put("verifiedOperationReceipt",typed).put("argumentsDigest",allocation.getString("anchorArgumentsDigest")).put("executorDeviceId",actualPeer.deviceId());if(kind.equals("task"))accepted.put("localTaskId",object);if(kind.equals("job"))accepted.put("jobId",object);if(typed.has("executorEpoch"))accepted.put("executorEpoch",typed.getLong("executorEpoch"));recordChildAccepted(dev.pocketengine.features.devices.DeviceTaskCoordinator.authenticatedChildAcceptance(actualPeer,accepted));
     }
 
+    private record WindowsTextClaim(DirectedWorkspaceTarget target, DeviceTaskEnvelope wire, String wireHash,
+                                    String preparation, String knownJob) {}
+
+    /** A local read proof for one original workspace.read. Neither a send ticket nor an accepted job. */
+    public final class OwnerWindowsTextEvidence {
+        private final String id, run, operation, here;
+        private final int epoch;
+        private final WindowsTextClaim selected;
+        private OwnerWindowsTextEvidence(String id,String run,int epoch,String operation,String here,WindowsTextClaim selected) {
+            this.id=id; this.run=run; this.epoch=epoch; this.operation=operation; this.here=here; this.selected=selected;
+        }
+        public DirectedWorkspaceTarget target(){return selected.target();}
+        public DeviceTaskEnvelope wire(){return selected.wire();}
+        /** If the genuine callback settled meanwhile, its original per-operation job must match too. */
+        public String requireCurrentJob() throws Exception {
+            WindowsTextClaim live=windowsTextClaim(id,run,epoch,operation,here);
+            if(!selected.target().equals(live.target())||!selected.wireHash().equals(live.wireHash())
+                    ||!selected.preparation().equals(live.preparation())
+                    ||!selected.knownJob().isEmpty()&&!selected.knownJob().equals(live.knownJob()))
+                throw new SecurityException("原任务、电脑或派发已经变化，未用其他记录替代。");
+            return live.knownJob();
+        }
+    }
+    public OwnerWindowsTextEvidence ownerWindowsTextEvidence(String id,String run,int epoch,String operation,String here)throws Exception {
+        DeviceProtocol.identifier(id,"taskId"); DeviceProtocol.identifier(run,"runId"); DeviceProtocol.identifier(operation,"operationId");
+        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here));
+    }
+    private WindowsTextClaim windowsTextClaim(String id,String run,int epoch,String operation,String here)throws Exception {
+        synchronized(owner){
+            JSONObject parent=task(id), marker=parent.optJSONObject("ownerDeviceWork");
+            if(!id.equals(parent.opt("id"))||!"owner".equals(parent.opt("actorId"))||!"private".equals(parent.opt("spaceId"))
+                    ||parent.has("origin")||!"assistant".equals(parent.opt("kind"))||!"capabilities".equals(parent.opt("executionMode"))
+                    ||!"".equals(parent.opt("conversationId"))||!run.equals(parent.opt("runId"))||epoch<1||epoch!=parent.optInt("coordinatorEpoch",-1)
+                    ||Boolean.FALSE.equals(parent.opt("contextAvailable"))||parent.optBoolean("contextWithdrawn")||parent.optBoolean("sourceCurrentReadRequired")
+                    ||marker==null||!"pocketworld.owner-device-work.v1".equals(marker.opt("format"))||!id.equals(marker.opt("requestId"))
+                    ||!marker.optString("requestDigest").matches("[a-f0-9]{64}")||parent.has("ownerPhoneControl"))
+                throw new SecurityException("请回到原私人电脑工作的同一次执行，未联系设备。");
+            DirectedWorkspaceTarget target=DirectedWorkspaceTarget.fromTask(parent);
+            if(target==null)throw new SecurityException("原工作没有固定电脑，未联系设备。");
+            // Per operation, not the allocation's first child: one session can list and read multiple files.
+            String query="SELECT o.state,r.epoch,b.target_device_id,l.allocation_id,l.intent_digest,l.wire_digest,l.wire_json,"+
+                    "CASE WHEN length(CAST(o.receipt AS BLOB))<=131072 THEN o.receipt END"+
+                    " FROM operations o JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id"+
+                    " JOIN device_child_links l ON l.parent_task_id=o.task_id AND l.parent_operation_id=o.operation_id"+
+                    " JOIN device_child_budget b ON b.parent_task_id=l.parent_task_id AND b.allocation_id=l.allocation_id"+
+                    " WHERE o.task_id=? AND o.run_id=? AND o.operation_id=? AND o.tool='device_invoke_tool'";
+            try(Cursor row=db.rawQuery(query,new String[]{id,run,operation})){
+                String unavailable="本机无法核对这次原文本的派发，未联系电脑。";
+                if(!row.moveToFirst()||!row.getString(0).matches("unknown|receipt")||row.getInt(1)!=epoch
+                        ||!target.deviceId().equals(row.getString(2))||row.isNull(6)||row.isNull(7))throw new SecurityException(unavailable);
+                byte[] raw=row.getString(6).getBytes(StandardCharsets.UTF_8);
+                DeviceTaskEnvelope wire=DeviceProtocol.parseRequest(raw);
+                JSONObject frozen=wire.json(), journal=new JSONObject(row.getString(7)), send=journal.optJSONObject("nativeDeviceSend");
+                String hash=DeviceProtocol.sha256(raw), allocation=row.getString(3), digest=wire.argumentsDigest();
+                if(send==null||!"pocketworld.native-device-send.v1".equals(send.opt("format"))||!"write_claimed".equals(send.opt("state"))
+                        ||send.optLong("claimedAt")<=0||!hash.equals(send.opt("wireSha256"))||!allocation.equals(send.opt("allocationId"))
+                        ||!row.getString(4).equals(send.opt("intentDigest"))||!digest.matches("[a-f0-9]{64}")||!digest.equals(row.getString(5))
+                        ||!"tool.invoke".equals(wire.method())||!"workspace-v1".equals(frozen.opt("capabilityVersion"))
+                        ||!operation.equals(wire.operationId())||!id.equals(wire.rootTaskId())||!id.equals(wire.parentTaskId())
+                        ||!run.equals(wire.runId())||epoch!=wire.executorEpoch()||epoch!=frozen.optInt("attempt")
+                        ||!here.equals(wire.callerDeviceId())||!here.equals(wire.originDeviceId())||!target.deviceId().equals(wire.targetDeviceId())
+                        ||!target.instanceId().equals(wire.instanceId())||!allocation.equals(wire.localTaskId())||!allocation.equals(wire.budget().opt("allocationId")))
+                    throw new SecurityException(unavailable);
+                JSONObject resource=DeviceProtocol.validateResourceBinding("workspace-v1",wire.resourceBinding());
+                var tool=wire.toolInvocation(); Object path=tool.arguments().opt("path");
+                if(!allocation.equals(DeviceProtocol.allocationId(id,target.deviceId(),resource,"tool_session",null))
+                        ||!"workspace.read".equals(tool.toolName())||!"read".equals(tool.effect())
+                        ||!(path instanceof String relative)||relative.isEmpty()||relative.length()>2048||tool.arguments().length()!=1)
+                    throw new SecurityException(unavailable);
+                String job="";
+                if(journal.has("nativeDeviceAcceptedBinding")){
+                    JSONObject actual=journal.getJSONObject("nativeDeviceAcceptedBinding"); job=actual.optString("jobId");
+                    if(!"job".equals(actual.opt("acceptedObjectKind"))||job.isEmpty()||!job.equals(actual.opt("objectId"))
+                            ||!id.equals(actual.opt("parentTaskId"))||!operation.equals(actual.opt("sourceOperationId"))
+                            ||!operation.equals(actual.opt("targetOperationId"))||!digest.equals(actual.opt("operationArgumentsDigest"))
+                            ||!target.deviceId().equals(actual.opt("executorDeviceId"))||!target.instanceId().equals(actual.opt("instanceId")))
+                        throw new SecurityException(unavailable);
+                }
+                return new WindowsTextClaim(target,wire,hash,marker.getString("requestDigest"),job);
+            }
+        }
+    }
+
     /** Opaque SQL-issued receive authority shared by the original bulk transport only. */
     public sealed interface DeviceReceiveEvidence permits DeviceImageEvidence, DeviceFileEvidence {
         dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer actualControlPeer();

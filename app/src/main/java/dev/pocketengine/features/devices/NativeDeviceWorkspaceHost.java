@@ -1,5 +1,6 @@
 package dev.pocketengine.features.devices;
 
+import dev.pocketengine.features.devices.transport.DeviceArtifactTransfer;
 import java.util.Objects;
 import org.json.JSONObject;
 
@@ -203,6 +204,9 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {throw new IllegalStateException("本机未提供原任务派单索引");}
         default JSONObject savedDirectedPhoneDispatches(DirectedPhoneTarget target,String source,String after)throws Exception {throw new IllegalStateException("此宿主未提供原派单的本机留档");}
         HistoryAction openHistory(String originalTaskId, String originalOperationId) throws Exception;
+        default JSONObject readOriginalWindowsText(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current current)throws Exception {
+            throw new SecurityException("此宿主未开放原电脑文本读取。");
+        }
         void pause(String originalTaskId) throws Exception;
         void resume(String originalTaskId) throws Exception;
         default JSONObject resumeRequest(String originalTaskId)throws Exception{return null;}
@@ -581,6 +585,12 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             try { safe = source.view(); if (!id.equals(safe.optString("taskId")) || !operationId.equals(safe.optString("operationId"))) throw new SecurityException("不是这项原任务操作的历史窗口"); }
             catch (Exception invalid) { source.close(); throw invalid; }
             HistoryWindow opened = new HistoryWindow(this, nextReview(), source, copy(safe)); history = opened; return opened;
+        }
+        /** One result via the private Work window. Never creates a HistoryWindow or a review generation. */
+        public JSONObject readOriginalWindowsText(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current ownerCurrent)throws Exception {
+            DeviceArtifactTransfer.Current bound=()->{current();ownerCurrent.require();};
+            bound.require(); JSONObject value=control.readOriginalWindowsText(task,run,epoch,operation,bound);
+            bound.require(); return copy(value);
         }
         public Availability stopAvailability(String id) throws Exception { current(); return control.stopAvailability(id); }
         public void requestStop(String id) throws Exception { current(); stopAvailability(id).require(); control.requestStop(id); }

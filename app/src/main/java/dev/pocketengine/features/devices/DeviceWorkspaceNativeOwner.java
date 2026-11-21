@@ -6,6 +6,7 @@ import dev.pocketengine.EngineApplication;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.local.LocalModule;
+import dev.pocketengine.features.devices.transport.DeviceArtifactTransfer;
 import dev.pocketengine.features.devices.transport.DeviceEndpointResolver;
 import dev.pocketengine.features.devices.transport.DeviceTransportStatus;
 import dev.pocketengine.store.TaskStore;
@@ -498,6 +499,14 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             return new JSONObject().put("kind","savedDirectedPhoneDispatches").put("readOnly",true).put("sourceTaskId",source)
                     .put("target",target.view()).put("localDeviceId",local.deviceId()).put("localInstanceId",local.instanceId())
                     .put("after",after).put("nextAfter",next).put("rows",rows);
+        }
+        public JSONObject readOriginalWindowsText(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current current)throws Exception {
+            current.require(); DeviceIdentity.LocalIdentity local=existingIdentity();
+            if(local==null)throw new SecurityException("本机原身份不可核对，未联系电脑。");
+            JSONObject value=NativeDeviceTaskHistoryHost.readOriginalWindowsText(tasks,local,task,run,epoch,operation,current,
+                    (proof,window)->network.readOriginalWindowsText(proof,local,window));
+            if(existingIdentity()!=local)throw new SecurityException("本机原身份已变化，未显示结果。");
+            return value;
         }
         public NativeDeviceWorkspaceHost.HistoryAction openHistory(String id, String operation) throws Exception {
             DeviceIdentity.LocalIdentity local = existingIdentity(); if (local == null) throw new SecurityException("本机设备身份不存在，不能继承原结果读取范围");
