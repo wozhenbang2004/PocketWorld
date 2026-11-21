@@ -231,6 +231,7 @@ final class OfficeDocumentReader {
         });
     }
     private void workbook(String part)throws Exception {
+        out.trackPreviousWorksheetRange();
         out.warning("Stored cell values only; formulas are not evaluated, cached values can be stale; styles, dates, charts and merged-cell layout are not rendered");
         Map<String,Relation> rels=relationships(part);List<String[]> sheets=new ArrayList<>();
         parse(part,new Handler(){@Override void start(String uri,String n,Attributes a)throws Exception {

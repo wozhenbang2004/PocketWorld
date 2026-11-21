@@ -956,6 +956,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     ownerWorkLink.stopping === false && ownerWorkLink.teamRunId === current?.id && current?.status === 'completed' &&
     teamResult.original && Array.isArray(reading?.attention) && reading.attention.length === 0 &&
     ['conversation.select', 'composer.object.add'].every(command => bridge.getState().capabilities.commands.includes(command));
+  // A saved original report can lead the result; unfinished/unverified work still leads with member evidence.
+  const publishedOrdinaryResult = ordinaryAnswers && canPrepareFollowUp && !changed && !!reading &&
+    ownerPublishedOrdinaryTeamResult(reading);
   const prepareFollowUp = () => {
     const original = currentReading.current, link = ownerWorkLink;
     if (!canPrepareFollowUp || !canRead || materialBusy || !link || !original?.viewHandle || !onOpenWork) return;
@@ -1543,7 +1546,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} partial={partialResult} memberName={name} showSourcesFirst={ordinaryAnswers} revisionOffers={revisionRows.length||focusedProposal ? <TeamParentRevisions rows={revisionRows} returnToWork={focusedProposal?.returnToWork?()=>leaveWithDrafts(focusedProposal.returnToWork!):undefined} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
+          <TeamResultHandoff result={teamResult} partial={partialResult} memberName={name} showSourcesFirst={ordinaryAnswers}
+            prioritizePublishedReport={publishedOrdinaryResult} revisionOffers={revisionRows.length||focusedProposal ? <TeamParentRevisions rows={revisionRows} returnToWork={focusedProposal?.returnToWork?()=>leaveWithDrafts(focusedProposal.returnToWork!):undefined} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
             const original=reading?.viewHandle;if(!original||!canMutate||materialBusy)return;
             void invoke('teams.reviewParentRevision',{viewHandle:original,operationId:row.operationId},value=>{
               if(currentReading.current?.viewHandle!==original||value.operation!=='reviseFromParent'||value.input?.runId!==current.id||value.input?.operationId!==row.operationId||
@@ -1555,7 +1559,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
             open={openMemberDelivery} openAnswer={openReading?openMemberAnswer:undefined}
             groupByMember={ordinaryAnswers ? name : undefined}
             locate={resultPhaseLink ? {deliveryKey:resultPhaseLink,open:()=>selectRunTab('progress')} : undefined}
-            expanded={shownMemberSources[current.id] ?? (!!partialResult || ordinaryAnswers && deliveries.length <= 3)} onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined}
+            expanded={shownMemberSources[current.id] ?? (!!partialResult || ordinaryAnswers && !publishedOrdinaryResult && deliveries.length <= 3)}
+            onExpanded={value=>setShownMemberSources(old=>({...old,[current.id]:value}))}/> : undefined}
             archivedSources={archivedDeliveries.length>0 && canOpenMemberResult ? <TeamResearchDeliveries records={archivedDeliveries} archived disabled={!canRead||materialBusy} rawAvailable={canOpenMemberResult} open={openMemberDelivery}
               locate={resultPhaseLink ? {deliveryKey:resultPhaseLink,open:()=>selectRunTab('progress')} : undefined}
               expanded={shownArchives[current.id] ?? !deliveries.length} onExpanded={value=>setShownArchives(old=>({...old,[current.id]:value}))}/> : undefined} stopped={current.status === 'cancelled'}

@@ -226,6 +226,24 @@ function ordinaryWorkTeamDraft(live:ReturnType<typeof bridge.getState>){
  return work?.runId&&work.epoch>0&&work.runId===ref.runId&&work.epoch===ref.epoch&&typeof generation==='string'&&generation
   ?{work,generation,conversation,key:draft.key as string,epoch:draft.epoch as number,revision:draft.revision as number}:null;
 }
+type TeamGoalStarter=NonNullable<ReturnType<typeof emptyTeamGoalDraft>>&{documentEpoch:number;navigation:number};
+function emptyTeamGoalDraft(live:ReturnType<typeof bridge.getState>){
+ const {composer:draft,state}=live,view=obj(live.view),phone=obj(live.phoneDraft),conversation=state.conversationId;
+ if(draft?.ready!==true||typeof draft.key!=='string'||draft.text!==''||draft.voiceText!==''||
+    !Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||draft.revision<1||!Number.isSafeInteger(view.resumeRevision)||
+    !(conversation===null?draft.conversationId===''&&draft.key.startsWith('new:'):
+      typeof conversation==='string'&&!!conversation&&draft.conversationId===conversation&&draft.key===`conversation:${conversation}`)||
+    view.taskId!==null||phone.phone!==false||phone.channelOrigin!==false||state.conversationReader||state.queuedInputsPage||
+    state.filePath||state.attachmentWorkspace?.open||state.chatAttachmentPickerOpen||state.chatSubmitting||state.phoneSubmitting||
+    state.listening||state.voiceInput?.active||state.voiceInput?.reviewAvailable||foregroundConversationTurn(state)||
+    ![draft.objectRefs,draft.sourceRefs,draft.previewRefs,state.selectedChatAttachments].every(value=>Array.isArray(value)&&!value.length)||
+    !Array.isArray(draft.pending)||draft.pending.some(row=>row?.draftKey===draft.key)||
+    !live.capabilities.commands.includes('composer.edit'))return null;
+ return {key:draft.key,epoch:Number(draft.epoch),revision:Number(draft.revision),resume:Number(view.resumeRevision)};
+}
+function sameEmptyTeamGoal(left:NonNullable<ReturnType<typeof emptyTeamGoalDraft>>,right:ReturnType<typeof emptyTeamGoalDraft>){
+ return right?.key===left.key&&right.epoch===left.epoch&&right.revision===left.revision&&right.resume===left.resume;
+}
 type TeamDraftVisit=NonNullable<ReturnType<typeof ordinaryWorkTeamDraft>>&{documentEpoch:number;navigation:number;resume:number};
 function sameTeamDraftVisit(visit:TeamDraftVisit,live:ReturnType<typeof bridge.getState>,revision=true){
  const current=ordinaryWorkTeamDraft(live);
@@ -492,6 +510,11 @@ export default function App(){
 
  const navigationWindow=useRef(0);const [navigationRevision,setNavigationRevision]=useState(0),[secondaryPage,setSecondaryPage]=useState('');
  const [sentPhoneFocus,setSentPhoneFocus]=useState<(SentPhoneGoalFocus&{navigation:number})|null>(null);
+ const [teamGoalStarter,setTeamGoalStarter]=useState<TeamGoalStarter|null>(null);
+ useEffect(()=>{
+  const hide=()=>{if(document.hidden)setTeamGoalStarter(null)};
+  document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide);
+ },[]);
  const [cloudGoal,setCloudGoal]=useState<(CloudGoal&{navigation:number})|null>(null);
  const [savedHostChoice,setSavedHostChoice]=useState<ChatWorkReturn|null>(null);
  const savedHostSession=useRef<ChatWorkReturn|null>(null),savedHostFlight=useRef<ChatWorkReturn|null>(null);
@@ -3164,13 +3187,20 @@ export default function App(){
      return;
    }
    if(state.chatSubmitting||state.phoneSubmitting||phoneAction.current||phoneReviewPending){setLocalError('请先等待当前输入处理完成，协作草稿仍保留。');return;}
+   const goal=typeof request.goal==='string'?request.goal.trim():'';
+   const original=!request.teamId&&!goal&&!draftSwitchPending()?emptyTeamGoalDraft(bridge.getState()):null;
+   const beforeNavigation=navigationWindow.current,beforeDocument=bridge.getDocumentEpoch();
    void navigate('butler',()=>{
      const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
      const current=()=>navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden;
+     const sameOriginal=original&&navigation===beforeNavigation+1&&documentEpoch===beforeDocument&&
+       sameEmptyTeamGoal(original,emptyTeamGoalDraft(bridge.getState()));
      void changeIntent('chat').then(async changed=>{
        if(!changed||!current())return;
+       // The existing intent command advances the native composer epoch once, even for chat → chat.
+       // The starter can only follow that accepted transition, not another draft or an intervening edit.
+       if(original&&sameOriginal)setTeamGoalStarter({...original,epoch:original.epoch+1,navigation,documentEpoch});
        if(request.teamId&&!await stageButlerObject({kind:'team',id:request.teamId},current))return;
-       const goal=typeof request.goal==='string'?request.goal.trim():'';
        if(goal){
          const draft=obj(bridge.getState().composer);
          if(draft.ready!==true||!draft.key||!Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||!can('composer.edit')){setLocalError('管家输入尚未就绪，原协作目标仍保留。');return;}
@@ -3876,6 +3906,22 @@ export default function App(){
     onBackChange={registerCapabilityBack} registerBeforeLeave={registerTaskPolicyBeforeLeave} onOpenTools={next=>void openRelatedWorkspace(next||'capabilities')}/>;
   const currentResultDecision=ordinaryWork&&overviewActive&&task.status==='needs_confirmation'&&!reviewStale&&
    actionNames.includes('tasks.confirm')&&can('tasks.confirm')&&currentReviewWindow(reviewWindow.current);
+  // A saved original plan has its own decision. Opening another round is
+  // still possible, but it is not the action that reviews this plan.
+  const planOwner=ordinaryChatWorkRow(task,String(task.raw?.conversationId||''),true);
+  const planApproval=approved.length===1?approved[0]:null;
+  const originalPlan=obj(planApproval?.webReview?.executionPlan);
+  const currentPlanDecision=!!planOwner&&overviewActive&&originalTaskOverview(task)&&task.status==='awaiting_user'&&
+   task.raw?.status===task.status&&task.raw.hasUnresolvedOperations===false&&task.raw.cancelRequested!==true&&
+   task.raw.workProfileRef==null&&task.raw.workProfileIntent==null&&
+   !reviewStale&&!review?.ownerQuestion&&!unresolved.length&&can('tasks.approve')&&actionNames.includes('tasks.approve')&&
+   currentReviewWindow(reviewWindow.current)&&currentScope.executionPhase==='planning'&&
+   planApproval?.tool==='execution_plan_review'&&planApproval.state==='pending'&&planApproval.runId===planOwner.runId&&
+   Number.isSafeInteger(planApproval.expiresAt)&&planApproval.expiresAt>Date.now()&&
+   planApproval.webReview?.kind==='execution_plan'&&planApproval.webReview.canApprove===true&&
+   originalPlan.taskId===task.id&&originalPlan.runId===planOwner.runId&&originalPlan.epoch===planOwner.epoch&&
+   originalPlan.scopeRevision===currentScope.revision&&originalPlan.planRevision===currentScope.planRevision&&
+   originalPlan.planArtifactRef===currentScope.planArtifactRef&&originalPlan.planHash===currentScope.planHash;
   const requestWork=ordinaryWork?ownerWorkIdentity(task):null;
   const declinedTeam=overviewActive&&obj(snapshot?.view).taskId===task.id?originalDeclinedTeamStart(task):null;
   const teamDeclineSettlesReview=!!declinedTeam&&review?.task?.id===declinedTeam.identity.taskId&&
@@ -3992,7 +4038,7 @@ export default function App(){
        reviewed={!!review&&!reviewStale&&!readingReview} canStart={actionNames.includes('tasks.resume')} onHistory={can('history.read')?()=>showTaskLayer('process'):undefined}
        onReview={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {inspectResult?[evidence,taskToolsInOverview&&taskTools,decision,workFacts]:decisionFirst?[mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence,taskToolsInOverview&&taskTools]:[latestProgress,workFacts,evidence,taskToolsInOverview&&taskTools,decision]}
-     {taskLayer==='overview'&&ownerWorkActions(task,currentResultDecision)}
+     {taskLayer==='overview'&&ownerWorkActions(task,currentResultDecision,currentPlanDecision)}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&workSupplementTarget?.taskId===task.id&&can('ownerWork.supplement.read')&&<OwnerWorkSupplement key={workIdentityKey(workSupplementTarget)} target={workSupplementTarget} task={task} can={can}
@@ -4086,7 +4132,7 @@ export default function App(){
    </TabPanel>
   </Tabs>;
  };
- const ownerWorkActions=(task:Task,currentResultDecision:boolean)=>{
+ const ownerWorkActions=(task:Task,currentResultDecision:boolean,currentPlanDecision:boolean)=>{
   const identity=ownerWorkIdentity(task);if(!identity)return null;
   const control=workControls[workIdentityKey(identity)],controls=obj(task.raw?.controls);
   const hasTeamDecision=controls.canContinue===true&&workWaitsForTeamDecision(task);
@@ -4115,17 +4161,21 @@ export default function App(){
    void openRelatedWorkspace('model-settings',origin);
   };
   if(!setDefault&&!supplement&&!continuing&&!note&&controls.resultCapacityState!=='full')return null;
-  const foldNewRound=continuing&&currentResultDecision;
+  const foldNewRound=continuing&&(currentResultDecision||currentPlanDecision);
+  const foldSupplement=currentPlanDecision&&supplement&&controls.canInput===false;
+  const more=foldNewRound||foldSupplement;
   const explanation=!control?.pending&&!control?.unknown&&!control?.usedForContinuation?note:null;
   const newRound=continuing&&<Button variant="secondary" disabled={taskOpening||control?.pending||control?.unknown||control?.usedForContinuation} onClick={()=>controlWork(task,'continue')}>在原任务开新一轮</Button>;
-  return <section className="pw-owner-work-actions" aria-label={foldNewRound?'这件工作的其他操作':'继续这件工作'}>
+  const openSupplement=supplement&&<Button variant={continuing||hasTeamDecision?'ghost':'secondary'} disabled={taskOpening||!!state.chatSubmitting} onClick={()=>{void targetWork(task)}}>{controls.canInput===true?'补充这件工作':'查看补充草稿'}</Button>;
+  return <section className="pw-owner-work-actions" aria-label={more?'这件工作的其他操作':'继续这件工作'}>
    {setDefault&&<Button variant="secondary" leadingIcon={IconSettings} onClick={openDefaultSetup}>设置应用默认模型</Button>}
    {!foldNewRound&&explanation&&<p>{explanation}</p>}
    {!note&&controls.resultCapacityState==='full'&&<p role="status">这件事的结果留存已满，暂不能继续执行。已有结果未因容量限制而删除；能否查看仍取决于原任务来源是否可用。容量限制不代表正在执行的任务已经停止。</p>}
    {!foldNewRound&&newRound}
-   {supplement&&<Button variant={continuing||hasTeamDecision?'ghost':'secondary'} disabled={taskOpening||!!state.chatSubmitting} onClick={()=>{void targetWork(task)}}>{controls.canInput===true?'补充这件工作':'查看补充草稿'}</Button>}
-   {foldNewRound&&<Accordion key={workIdentityKey(identity)} variant="divided" className="pw-compact-disclosures w-full"><AccordionItem title="更多操作">
-    {explanation&&<p className="pw-field-hint">{explanation}</p>}{newRound}
+   {!foldSupplement&&openSupplement}
+   {more&&<Accordion key={workIdentityKey(identity)} variant="divided" className="pw-compact-disclosures w-full"><AccordionItem title="更多操作">
+    {foldNewRound&&<>{explanation&&<p className="pw-field-hint">{explanation}</p>}{newRound}</>}
+    {foldSupplement&&openSupplement}
    </AccordionItem></Accordion>}
   </section>;
  };
@@ -4253,6 +4303,22 @@ export default function App(){
    editText(draft);
    editor.focus({preventScroll:true});
   }:undefined;
+ const teamStarterIsCurrent=(source:TeamGoalStarter,live:ReturnType<typeof bridge.getState>)=>{
+  const draft=emptyTeamGoalDraft(live);
+  return !document.hidden&&!draftSwitchPending()&&bridge.getDocumentEpoch()===source.documentEpoch&&navigationWindow.current===source.navigation&&
+    obj(live.view).section===null&&sameEmptyTeamGoal(source,draft);
+ };
+ const stageTeamGoal=route==='butler'&&ready&&!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget&&stageExample&&teamGoalStarter&&
+   teamStarterIsCurrent(teamGoalStarter,snapshot)?(value:string)=>{
+    const original=teamGoalStarter,editor=workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)');
+    if(!editor||editor.value!==''||chatDraft.currentValue()!==''||!teamStarterIsCurrent(original,bridge.getState()))return;
+    setTeamGoalStarter(null);
+    editor.focus({preventScroll:true});
+    // Write only to the same still-empty native draft. Never update the local text optimistically.
+    void bridge.command('composer.edit',{key:original.key,epoch:original.epoch,expectedRevision:original.revision,text:value}).catch(()=>{
+      if(teamStarterIsCurrent(original,bridge.getState()))setLocalError('尚未确认填入模板。可以在原输入框核对或直接写下目标。');
+    });
+   }:undefined;
  const stageLocalDisplayExample=route==='butler'&&!composerModelName&&ready&&!state.conversationId&&!messages.length&&
   !foregroundTurn&&!state.chatBusy&&!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget&&
   composer.canOfferPrimaryDisplayExample===true&&stageExample?()=>{
@@ -4670,7 +4736,7 @@ export default function App(){
    </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
      {memoryStatus&&<Button variant="ghost" size="small" className="pw-composer-memory-status" trailingIcon={IconChevronRight} aria-haspopup="dialog" onClick={()=>setConversationMemoryOpen(true)}>{memoryStatus}</Button>}
    </ChatComposer>
-   {route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&!homePhoneAttention.length&&
+   {stageTeamGoal?<ConversationStarters onDraft={stageTeamGoal} purpose="team"/>:route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&!homePhoneAttention.length&&
     stageExample&&<ConversationStarters onDraft={stageExample}/>}
    {intent!=='chat'&&['elsewhere','changed','unverified'].includes(phoneDraft.sourceState)&&<p className="pw-field-hint" role="status">{phoneDraft.sourceState==='elsewhere'?'手机草稿仍留在原私人对话，这里不会显示或提交它。':phoneDraft.sourceState==='changed'?'原消息已换版或不是最新交代。草稿已保留。要改用最新交代，请在那条消息的操作里选择「保留手机草稿，关联这条原话」。':'这份保留草稿缺少可核对的原消息。原文字还在，可在最新主人消息的操作里重新指定来源，或清空后另写。'}</p>}
    {intent!=='chat'&&phoneDraft.phone===true&&!state.conversationId&&!phoneDraft.channelOrigin&&composer.key&&can('phone.draft.recentStarts')&&<EarlierDraftPhoneStarts key={chatOwner} composer={String(composer.key)} except={phoneStart?.taskId} onTask={openBlankFirst}/>}

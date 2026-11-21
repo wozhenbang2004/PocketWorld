@@ -1,12 +1,73 @@
+import { useSyncExternalStore } from 'react';
+import { bridge } from './bridge';
 import { IconFolder, IconMonitor, IconPhone, IconServer, IconTeam } from './icons';
 import { homeWorkIdentity } from './butler-work-entry';
 import type { WorkCollectionTask } from './work-collection';
 import { phoneResourceHistory } from './phone-resource-history';
 import { originalHostLocation } from './original-seen-host-end';
+import { isPrivateLocalPhone } from './PhonePauseInstruction';
+import { privatePhoneSurface } from './private-phone-surface';
+import { taskAuditPage } from './task-history';
 import './work-execution-place.css';
 
 function label(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 90) : '';
+}
+
+const observationToken = (value: unknown): value is string => typeof value === 'string' && value.length <= 240 && !!value.trim();
+
+function subscribePhoneRead(notify: () => void) {
+  const unsubscribe = bridge.subscribe(notify);
+  document.addEventListener('visibilitychange', notify);
+  return () => { unsubscribe(); document.removeEventListener('visibilitychange', notify); };
+}
+
+/** On the original Work overview only, after the live screen fact is absent.
+ * An already-committed receipt is not a current frame, an app locator or input authority. */
+function mainPhoneRead(task: WorkCollectionTask): 'retained' | 'unconfirmed' | null {
+  if (!['preparing', 'running'].includes(task.status)) return null;
+  const { state, view, capabilities } = bridge.getState();
+  const activeView = view as { taskId?: string; section?: string | null } | undefined;
+  if (document.hidden || activeView?.taskId !== task.id || activeView.section !== null ||
+      state.conversationReader || !capabilities.commands.includes('history.read')) return null;
+  const rows = Array.isArray(state.tasks) ? state.tasks.filter(row => row?.id === task.id) : [];
+  const live = rows.length === 1 ? rows[0] : null;
+  const raw = live?.raw;
+  if (!raw || !isPrivateLocalPhone(live) || live.status !== task.status || raw.status !== live.status ||
+      live.executionMode !== 'main_screen' || raw.executionMode !== 'main_screen' || task.raw?.executionMode !== raw.executionMode ||
+      live.updatedAt !== task.updatedAt || raw.runId !== task.raw?.runId || raw.coordinatorEpoch !== task.raw?.coordinatorEpoch ||
+      raw.contextAvailable === false || raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true ||
+      raw.metadataLimited === true || raw.taskProjection !== 'detail_window' || raw.auditBodyIncluded !== true ||
+      raw.taskCoreReadLimited !== false || privatePhoneSurface(live, state.livePrivatePhones)?.lastObservation) return null;
+  try {
+    const { entries } = taskAuditPage(raw.historyEventPage, task.id, 'events');
+    if (entries.some(row => {
+      if (row.type !== 'observation' || row.status !== 'available' ||
+          row.eventKey !== 'task:' + task.id + ':event-order:' + row.position) return false;
+      const e = row.event, r = e?.receipt, b = r?.observationBinding;
+      // The Android port labels this receipt 'main'. Its native observation binding
+      // carries the run identity even when the outer Runner event carries only taskId.
+      return e?.type === 'observation' && e.taskId === task.id && e.seq === row.position &&
+        e.tool === 'phone_observe' && e.status === 'completed' &&
+        (e.runId === undefined || e.runId === raw.runId) &&
+        (e.coordinatorEpoch === undefined || e.coordinatorEpoch === raw.coordinatorEpoch) &&
+        (e.epoch === undefined || e.epoch === raw.coordinatorEpoch) &&
+        r?.ok === true && r.changedDuringRead === false && r.executionMode === 'main' && r.displayId === 0 &&
+        b?.taskId === task.id && b.runId === raw.runId && b.epoch === raw.coordinatorEpoch && b.displayId === 0 &&
+        observationToken(r.observationId) && r.observationId === b.observationId && observationToken(r.sessionId) && r.sessionId === b.sessionId &&
+        Number.isSafeInteger(r.pauseRevision) && r.pauseRevision >= 0 && r.pauseRevision === b.pauseRevision &&
+        r.treeSchemaVersion === 1 && r.observationSources?.treeAvailable === true &&
+        r.observationSources?.treeReason === 'accessibility_tree' && Array.isArray(r.nodes) && r.nodes.length > 0;
+    })) return 'retained';
+  } catch { /* A limited or unreadable page is not evidence that no reading happened. */ }
+  return 'unconfirmed';
+}
+
+function MainPhoneRead({ task }: { task: WorkCollectionTask }) {
+  const receipt = useSyncExternalStore(subscribePhoneRead, () => mainPhoneRead(task), () => null);
+  return receipt ? <small role="status">{receipt === 'retained'
+    ? '本轮已读到主屏的界面结构。这不是实时画面。'
+    : '本页尚未核对到本轮主屏的读屏回执。'}</small> : null;
 }
 
 /** The place comes from the native work binding, not the conversation, the
@@ -67,6 +128,7 @@ export function WorkExecutionPlace({ task, projects, canReadPhoneResources, remo
     <Icon size={16} aria-hidden />
     <div><span className="pw-work-execution-meta">{heading}</span><strong dir="auto">{title}</strong>
       {detail && <small dir="auto">{detail}</small>}
+      {binding.domain === 'phone' && task.executionMode === 'main_screen' && canReadPhoneResources && <MainPhoneRead task={task}/>}
       {phoneRecords?.stored && <small>任务当时记录：{phoneRecords.stored.summary}</small>}
       {phoneRecords?.event && <small>同轮一笔清理：{phoneRecords.event.summary}</small>}</div>
   </section>;

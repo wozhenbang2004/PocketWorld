@@ -72,6 +72,14 @@ const officePreviewIssue:Record<string,string>={
  unsupported:'这个文档格式没有内置预览。', encrypted:'这份文档受加密保护，无法在这里预览。',
  invalid:'未能读出这份文档的结构。', limit_exceeded:'这份文档超出了内置预览的读取范围。', unavailable:'这份文档暂时不能在这里预览。',
 };
+function previousWorksheetRange(value:Json){
+ const previous=obj(value.previousWorksheetRange),first=rows(value.chunks)[0];
+ if(value.format!=='xlsx'||!['ok','partial'].includes(value.status)||!Number.isSafeInteger(value.totalUnits)||
+    !Number.isSafeInteger(value.unit)||value.unit<1||value.unit>value.totalUnits||
+    !Number.isSafeInteger(value.chunk)||first?.unit!==value.unit||first.chunk!==value.chunk||previous.unit!==value.unit||
+    !Number.isSafeInteger(previous.chunk)||previous.chunk<0||previous.chunk>=value.chunk)return;
+ return {unit:previous.unit,chunk:previous.chunk};
+}
 
 export function AttachmentOriginalReader(props:OriginalReaderProps) {
  return <OriginalReader key={JSON.stringify([props.windowId,props.source.id])} {...props}/>;
@@ -168,6 +176,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const unavailable=actual.previewAvailable===false?'这个格式没有内置预览。':officeIssue;
  const ready=(!failed||retaining)&&!unavailable&&type!=='unsupported'&&Object.keys(actual).length>0,page=Number(actual.page||1),pages=Number(actual.pages||0);
  const readerBusy=busy||source.busy||pdfAttempt!==null;
+ const previousWorksheet=ready&&type==='office'&&source.sourceUnavailable===false?previousWorksheetRange(actual):undefined;
  const shownText=ready&&!readerBusy&&!failed&&type==='text'&&source.sourceUnavailable===false&&typeof actual.content==='string'&&!!actual.content&&
   textEncodings.some(row=>row.id===actual.encoding)&&Number.isSafeInteger(actual.offset)&&actual.offset>=0;
  useLayoutEffect(()=>{
@@ -283,6 +292,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  {ready&&(type==='video'||type==='audio')&&<OriginalMediaPlayer key={`${windowId}:${source.id}`} url={source.url} kind={type} name={String(source.name||'媒体原件')} onError={()=>setError('此设备未能播放这份原媒体。')} />}
  {ready&&type==='office'&&<>
   <div className="pw-action-row"><p className="pw-muted">本机只显示文字和表格结构，不还原完整排版和图表。</p>
+   {previousWorksheet&&<Button variant="ghost" disabled={readerBusy} onClick={()=>read(previousWorksheet)}>读取本表上一段</Button>}
    {systemReaderAction('用其他应用核对原件','ghost')}
   </div>
   <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>

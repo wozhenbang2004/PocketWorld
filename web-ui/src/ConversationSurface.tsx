@@ -23,10 +23,11 @@ export function ConversationOpening({setup,editing,pending,onDraft}:{
  </section>;
 }
 
-/** The first-use home can share just the two actions without adding another heading or editor. */
-export function ConversationStarters({onDraft}:{onDraft:(value:string)=>void}){
- return <div className="pw-start-examples" role="group" aria-label="选择一个例子写入草稿">
-  {starters.map(s=><Button key={s.label} size="small" variant="ghost" trailingIcon={IconArrowUpRight} onClick={()=>onDraft(s.draft)} aria-label={s.label+'，写入草稿'}>{s.label}</Button>)}
+/** First-use starter actions share the existing editor; choosing one never sends. */
+export function ConversationStarters({onDraft,purpose}:{onDraft:(value:string)=>void;purpose?:'team'}){
+ const examples=purpose==='team'?[{label:'填入团队目标模板',draft:'请为这件事安排团队分工。\n目标：\n希望交付：\n完成条件：'}]:starters;
+ return <div className="pw-start-examples" role="group" aria-label={purpose==='team'?'先写团队目标，再核对分工':'选择一个例子写入草稿'}>
+  {examples.map(s=><Button key={s.label} size="small" variant="ghost" trailingIcon={IconArrowUpRight} onClick={()=>onDraft(s.draft)} aria-label={s.label+'，写入草稿'}>{s.label}</Button>)}
  </div>;
 }
 

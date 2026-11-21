@@ -186,7 +186,10 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                             // A failed or out-of-range jump is not a new reading position.
                             if (page.status in setOf("ok", "partial") && unit <= page.totalUnits && (chunk == 0 || page.chunks.isNotEmpty()))
                                 officePosition = unit to chunk
-                            document(page).put("unit", unit).put("chunk", chunk)
+                            document(page).put("unit", unit).put("chunk", chunk).apply {
+                                if (officePosition != null && page.format == "xlsx" && page.previousWorksheetChunk in 0 until chunk)
+                                    put("previousWorksheetRange", JSONObject().put("unit", unit).put("chunk", page.previousWorksheetChunk))
+                            }
                         }
                         "text" -> {
                             val encoding = request.optString("encoding", preferences.getString("$identity.encoding", "UTF-8") ?: "UTF-8")

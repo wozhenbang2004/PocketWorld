@@ -25,9 +25,10 @@ export function TeamFollowUps({ items, disabled, read, expanded = true, toggle, 
   </section>;
 }
 
-export function TeamResultHandoff({ result, partial, memberName, actions, sources, showSourcesFirst = false, archivedSources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview, nextRequest }: {
+export function TeamResultHandoff({ result, partial, memberName, actions, sources, showSourcesFirst = false, prioritizePublishedReport = false, archivedSources, frozenFiles, finalPackageReader, revisionOffers, stopped, openMembers, openMessage, openOriginalReview, nextRequest }: {
   result: ReturnType<typeof teamResultReading>; actions: Actions; sources?:ReactNode; archivedSources?:ReactNode; frozenFiles?:ReactNode; finalPackageReader?:ReactNode; revisionOffers?:ReactNode; stopped: boolean;
   showSourcesFirst?: boolean;
+  prioritizePublishedReport?: boolean;
   partial: ReturnType<typeof teamPartialReading>; memberName: (id: string) => string;
   openMembers: () => void; openMessage: (id: string) => void; openOriginalReview?: () => void;
   nextRequest?: { open: () => void; disabled: boolean };
@@ -41,11 +42,19 @@ export function TeamResultHandoff({ result, partial, memberName, actions, source
   const summaryFirst = result.original && !partial;
   const summaryByline = result.author && <span className="pw-team-result-caption">由 <bdi>{result.author}</bdi> 汇总</span>;
   const leadingSources = showSourcesFirst && !!sources;
+  const publishedReport = prioritizePublishedReport && summaryFirst && !!nextRequest;
+  const showSummaryHeading = !partial && !!result.body && (!leadingSources || publishedReport);
   const summaryHeading = <header className="pw-team-result-heading"><h4>{summaryTitle}</h4>{summaryByline}</header>;
+  const followUp = result.original && nextRequest && <div>
+    <Button variant="secondary" trailingIcon={IconChevronRight} disabled={actions.disabled || nextRequest.disabled}
+      onClick={nextRequest.open}>在原对话写后续要求</Button>
+    <p className="pw-field-hint">只带回草稿，不会发送或继续协作。</p>
+  </div>;
   return <section className="pw-team-result" aria-label="本次协作成果">
-    <header className="pw-team-result-heading"><h3 data-team-result-heading tabIndex={-1}>{partial ? '本次已交回的成果' : leadingSources || !result.body ? '本次协作成果' : summaryTitle}</h3>
+    <header className="pw-team-result-heading"><h3 data-team-result-heading tabIndex={-1}>{partial ? '本次已交回的成果' : showSummaryHeading ? summaryTitle : '本次协作成果'}</h3>
       {!partial && result.previous && <span className="pw-team-result-stale">历史版本</span>}
-      {!partial && !leadingSources && summaryByline}</header>
+      {!partial && (!leadingSources || publishedReport) && summaryByline}</header>
+    {publishedReport && followUp}
     <TeamFollowUps {...actions}/>
     {revisionOffers}
     {finalPackageReader}
@@ -53,12 +62,8 @@ export function TeamResultHandoff({ result, partial, memberName, actions, source
     {openOriginalReview && <Button variant="secondary" size="small" disabled={actions.disabled} trailingIcon={IconChevronRight}
       onClick={openOriginalReview}>查看待审阅的原协作任务</Button>}
     {leadingSources && sources}
-    {summaryFirst && summary && <>{leadingSources && summaryHeading}{summary}</>}
-    {result.original && nextRequest && <div>
-      <Button variant="secondary" trailingIcon={IconChevronRight} disabled={actions.disabled || nextRequest.disabled}
-        onClick={nextRequest.open}>在原对话写后续要求</Button>
-      <p className="pw-field-hint">只带回草稿，不会发送或继续协作。</p>
-    </div>}
+    {summaryFirst && summary && <>{leadingSources && !publishedReport && summaryHeading}{summary}</>}
+    {!publishedReport && followUp}
     {!leadingSources && sources}
     {partial && (partial.remaining.length > 0 || partial.synthesizing || !summary || result.previous) && <div className="pw-team-result-remainder">
       {partial.remaining.length > 0 && <><h4>尚未完成的分工</h4><ul role="list">
