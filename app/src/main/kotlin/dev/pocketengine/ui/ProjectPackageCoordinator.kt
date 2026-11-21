@@ -66,8 +66,9 @@ internal class ProjectPackageCoordinator(
     private var foreground = false
     private var exportUri: Uri? = null
     private var importUri: Uri? = null
-    private class TaskExport(val pin: JSONObject, var stillSelected: () -> Boolean, var done: ((JSONObject?, String?) -> Unit)?,
-        val team: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection? = null) {
+    data class DirectViteExport(val runId: String, val epoch: Int, val buildOperationId: String, val checkoutId: String, val sourceDigest: String)
+    private class TaskExport(val pin: JSONObject, @Volatile var stillSelected: () -> Boolean, var done: ((JSONObject?, String?) -> Unit)?,
+        val team: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection? = null, val directVite: DirectViteExport? = null) {
         // An Android picker temporarily retires Teams reading handles. Its result is NOT permission
         // to write after a page switch. Only a new click in the exact original result consumes it.
         @Volatile var teamTarget: Uri? = null
@@ -235,7 +236,12 @@ internal class ProjectPackageCoordinator(
     }
     fun closePreview() { state = state.copy(preview = null) }
     fun previewError(message: String) { state = state.copy(error = message.take(500)) }
-    fun exportSnapshot(): JSONObject? = state.exportStatus?.takeUnless { it.has("teamRunId") }?.let { JSONObject(it.toString()) }
+    fun exportSnapshot(): JSONObject? = state.exportStatus?.takeUnless { it.has("teamRunId") || it.has("ownerDirectViteBuild") }?.let { JSONObject(it.toString()) }
+    fun directViteExportSnapshot(): JSONObject? {
+        val selected = taskExport?.takeIf { it.directVite != null && it.stillSelected() } ?: return null
+        return state.exportStatus?.takeIf { it.opt("ownerDirectViteBuild") == true && it.opt("requestId") == selected.pin.opt("requestId") }
+            ?.let { JSONObject(it.toString()) }
+    }
     /** Display only inside the current original Teams result. Never publish its target name to other pages. */
     fun teamExportSnapshot(descriptor: JSONObject): JSONObject? {
         val row = state.exportStatus ?: return null
@@ -254,9 +260,13 @@ internal class ProjectPackageCoordinator(
             .put("projectId", pin.getString("projectId")).put("status", phase).put("message", message)
             .put("exported", phase == "exported")
         if (pin.has("teamRunId")) for (key in listOf("teamRunId", "runId", "epoch", "checkoutId")) result.put(key, pin.get(key))
+        selected.directVite?.let { original ->
+            result.put("ownerDirectViteBuild", true).put("runId", original.runId).put("epoch", original.epoch)
+                .put("buildOperationId", original.buildOperationId).put("checkoutId", original.checkoutId).put("sourceDigest", original.sourceDigest)
+        }
         if (bytes != null) result.put("bytes", bytes)
         if (target != null) result.put("targetReadback",target)
-        state = state.copy(exportStatus = result, notice = if (selected.team == null) message else state.notice)
+        state = state.copy(exportStatus = result, notice = if (selected.team == null && selected.directVite == null) message else state.notice)
     }
     private fun completeTaskExport(selected: TaskExport, result: JSONObject?, error: String?) {
         val done = selected.done ?: return
@@ -276,8 +286,13 @@ internal class ProjectPackageCoordinator(
                 evidence.getString("checkoutId") == pin.getString("checkoutId")) { "原团队签收或整合者执行已变化，未导出" }
             evidence.put("packageOperationId", evidence.getString("operationId")).put("artifactId", evidence.getJSONObject("packageArtifact").getString("id"))
                 .put("artifactSha256", evidence.getString("archiveSha256"))
-        } else app.tasks.ownerPackagePreviewSource(pin.getString("taskId"), pin.getString("operationId")).also {
-            check(it.opt("ownerDirectViteBuild") != true) { "这份本机构建网页目前仅在原任务中查看" }
+        } else app.tasks.ownerPackagePreviewSource(pin.getString("taskId"), pin.getString("operationId")).also { actual ->
+            val direct = selected.directVite
+            if (direct == null) check(actual.opt("ownerDirectViteBuild") != true) { "这份本机构建网页只能从原任务选择" }
+            else check(actual.opt("ownerDirectViteBuild") == true && !actual.has("conversationId") &&
+                actual.opt("runId") == direct.runId && actual.opt("epoch") == direct.epoch && actual.opt("coordinatorEpoch") == direct.epoch &&
+                actual.opt("buildOperationId") == direct.buildOperationId && actual.opt("checkoutId") == direct.checkoutId &&
+                actual.opt("sourceDigest") == direct.sourceDigest) { "原本机构建来源已变化，未写入其他版本" }
         }
         check(source.getString("taskId") == pin.getString("taskId") && source.getString("packageOperationId") == pin.getString("operationId") &&
             source.getString("projectId") == pin.getString("projectId") && source.getString("artifactId") == pin.getString("artifactId") &&
@@ -285,18 +300,27 @@ internal class ProjectPackageCoordinator(
         if (pin.has("sourceFingerprint")) check(pin.getString("sourceFingerprint") == dev.pocketengine.store.TaskStore.capabilityFingerprint(source)) { "原固定包来源登记已变化，未导出其他版本" }
         return source
     }
+    private fun taskExportArtifact(pin: JSONObject, selected: TaskExport?, source: JSONObject?): JSONObject =
+        if (selected?.directVite != null) local().inspectDirectViteArchiveForExport(requireNotNull(source))
+        else local().handle("project.package.get", JSONObject().put("artifactId", pin.getString("artifactId")).put("sha256", pin.getString("sha256")))
+
     /** Explicit Web selection only. The old native package panel is not activated or mounted. */
     fun offerTaskExport(task: String, operation: String, artifactId: String, artifactSha256: String, project: String,
         ownerCurrent: () -> Boolean, stillSelected: () -> Boolean, done: (JSONObject?, String?) -> Unit) =
-        offerPackageExport(task, operation, artifactId, artifactSha256, project, null, ownerCurrent, stillSelected, done)
+        offerPackageExport(task, operation, artifactId, artifactSha256, project, null, null, ownerCurrent, stillSelected, done)
+
+    fun offerDirectViteExport(task: String, operation: String, artifactId: String, artifactSha256: String, project: String,
+        original: DirectViteExport, ownerCurrent: () -> Boolean, stillSelected: () -> Boolean, done: (JSONObject?, String?) -> Unit) =
+        offerPackageExport(task, operation, artifactId, artifactSha256, project, null, original, ownerCurrent, stillSelected, done)
 
     fun offerTeamExport(original: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         val evidence = original.view().getJSONObject("evidence")
         offerPackageExport(evidence.getString("taskId"), evidence.getString("operationId"), evidence.getJSONObject("packageArtifact").getString("id"),
-            evidence.getString("archiveSha256"), evidence.getString("projectId"), original, current, current, done)
+            evidence.getString("archiveSha256"), evidence.getString("projectId"), original, null, current, current, done)
     }
     private fun offerPackageExport(task: String, operation: String, artifactId: String, artifactSha256: String, project: String,
-        team: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection?, ownerCurrent: () -> Boolean, stillSelected: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        team: dev.pocketengine.store.TaskStore.TeamProjectPackageSelection?, directVite: DirectViteExport?,
+        ownerCurrent: () -> Boolean, stillSelected: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         check(!closed && foreground && privateOwner() && ownerCurrent() && stillSelected()) { "请从原私人项目选择固定包导出" }
         check(!state.busy && pickerExport == null && pickerImport == null && exportUri == null) { "原文件操作尚未结束，请先核对原结果，没有重新打开文件选择器" }
         require(task.isNotBlank() && operation.isNotBlank() && artifactId.isNotBlank() && project.isNotBlank() && artifactSha256.matches(Regex("[a-f0-9]{64}"))) { "固定包导出身份不完整" }
@@ -308,14 +332,14 @@ internal class ProjectPackageCoordinator(
                 .put("epoch", evidence.getInt("coordinatorEpoch")).put("checkoutId", evidence.getString("checkoutId"))
         }
         taskExport?.let { it.teamTarget = null; it.targetProbe.cancel() } // a fresh choice never inherits an earlier destination
-        val selected = TaskExport(pin, stillSelected, done, team); taskExport = selected
+        val selected = TaskExport(pin, stillSelected, done, team, directVite); taskExport = selected
         taskExportStatus(selected, "checking", "正在核对这次任务保存的固定包。")
         work(ownerCurrent = { taskExportCurrent(selected) && ownerCurrent() }, onFailure = { failure ->
             if (selected.phase == "checking") taskExportStatus(selected, "rejected", failure.message?.take(600) ?: "原固定包暂不可核对，未打开导出位置")
             completeTaskExport(selected, null, state.exportStatus?.optString("message") ?: "原固定包导出未开始")
         }) { c, _ ->
             val source = requireTaskExportSource(selected)
-            val artifact = local().handle("project.package.get", JSONObject().put("artifactId", artifactId).put("sha256", artifactSha256))
+            val artifact = taskExportArtifact(pin, selected, source)
             dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(source, artifact)
             pin.put("checkoutId", source.getString("checkoutId")).put("sourceFingerprint", dev.pocketengine.store.TaskStore.capabilityFingerprint(source))
             requireTaskExportSource(selected); c.check()
@@ -360,6 +384,13 @@ internal class ProjectPackageCoordinator(
         if (selected.phase == "checking" || selected.phase == "writing") cancel()
         else taskExportStatus(selected, "cancelled", "原固定包窗口已变化，未向所选位置写入。")
         completeTaskExport(selected, null, "原固定包窗口已变化，导出未继续")
+    }
+    /** The ordinary system pause retains its one picker; leaving this Work never does. */
+    fun retireDirectViteExport() {
+        val selected = taskExport?.takeIf { it.directVite != null } ?: return
+        invalidateTaskExportSelection()
+        selected.selected = false
+        selected.stillSelected = { false }
     }
     private fun inspectTeamTarget(selected: TaskExport, uri: Uri) {
         selected.teamTarget = uri
@@ -420,16 +451,19 @@ internal class ProjectPackageCoordinator(
         val currentSelection = if (selected == null) !pin.has("taskId") && matches(pin) else taskExportCurrent(selected)
         if (restoredPicker || !currentSelection) { reject("原导出入口已变化。请重读原固定成果，再明确选择目标；未写入所选位置。"); return }
         if (!ProjectPackageDocument.allowed(app,uri)) { reject("没有取得系统选定的外部文档，未读取或写入其他位置"); return }
-        if (selected != null) taskExportStatus(selected, "writing", "正在导出所选固定包，请等待保存结果。")
+        if (selected != null) taskExportStatus(selected, "writing", if (selected.directVite != null)
+            "正在核对这版固定网页和所选位置，尚未确认导出。" else "正在导出所选固定包，请等待保存结果。")
         work(ownerCurrent = selected?.let { original -> { taskExportCurrent(original) } }, onFailure = selected?.let { original -> { failure: Exception ->
             if (original.phase == "writing") taskExportStatus(original, if (original.writeStarted) "unknown" else "rejected",
                 if (original.writeStarted) "导出未完整确认，目标可能已有部分内容；请核对所选文件，没有自动重写。" else failure.message?.take(600) ?: "原固定包导出未开始")
         } }) { c, _ ->
             val source = selected?.let(::requireTaskExportSource)
-            val artifact = local().handle("project.package.get", JSONObject().put("artifactId", pin.getString("artifactId")).put("sha256", pin.getString("sha256")))
-            if (source != null) dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(source, artifact)
-            val expected=pin.getString("sha256");val size=artifact.getLong("sizeBytes")
-            check(size in 1..dev.pocketengine.features.local.project.ProjectPackageArchive.MAX_ARCHIVE_BYTES.toLong()&&artifact.getString("sha256")==expected){"原固定包摘要或字节数不可核对，未写入"}
+            val direct = selected?.directVite != null
+            val artifact = if (direct) null else taskExportArtifact(pin, selected, source)
+            if (source != null && artifact != null) dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(source, artifact)
+            val expected=pin.getString("sha256");val size=if(direct)requireNotNull(source).getLong("archiveBytes") else requireNotNull(artifact).getLong("sizeBytes")
+            check(size in 1..dev.pocketengine.features.local.project.ProjectPackageArchive.MAX_ARCHIVE_BYTES.toLong()&&
+                (if(direct) source?.opt("archiveSha256") else artifact?.opt("sha256"))==expected){"原固定包摘要或字节数不可核对，未写入"}
             fun requireCurrent() {
                 c.check()
                 check(if(selected!=null)taskExportCurrent(selected) else foreground&&matches(pin)&&state.artifact?.let {it.opt("id")==pin.opt("artifactId")&&it.opt("sha256")==expected}==true){"原固定包导出窗口已变化"}
@@ -437,6 +471,15 @@ internal class ProjectPackageCoordinator(
             if (selected != null) requireTaskExportSource(selected)
             requireCurrent(); val displayName=ProjectPackageDocument.name(app,uri,c,::requireCurrent)
             if (selected?.team != null) check(displayName != null && displayName == selected.teamTargetName) { "所选文件名已变化，未写入；请重新选择位置" }
+            // The selected original's raw, verified immutable ZIP is held before opening a destination.
+            val fixed = if (direct) {
+                requireCurrent()
+                val original = requireNotNull(selected)
+                local().readDirectViteArchiveForExport(requireTaskExportSource(original)).also {
+                    check(it.size.toLong() == size) { "原固定包字节数已变化，未写入" }
+                    requireTaskExportSource(original)
+                }
+            } else null
             requireCurrent(); if (selected != null) selected.writeStarted = true
             val opened = try {app.contentResolver.openOutputStream(uri, "wt") ?: error("所选位置无法写入")}
                 catch(failure:Exception){throw IllegalStateException("系统目标未返回写入回执，可能已创建或截断；请核对原位置，没有自动重写",failure)}
@@ -446,14 +489,17 @@ internal class ProjectPackageCoordinator(
                     override fun write(value: Int) { requireCurrent(); out.write(value) }
                     override fun write(value: ByteArray, offset: Int, length: Int) { requireCurrent(); out.write(value, offset, length) }
                 }
-                val copied = local().exportProjectPackageForOwner(pin.getString("artifactId"), pin.getString("sha256"), checked)
+                val copied = if (fixed != null) {
+                    for (offset in fixed.indices step 8192) checked.write(fixed, offset, minOf(8192, fixed.size - offset))
+                    fixed.size.toLong()
+                } else local().exportProjectPackageForOwner(pin.getString("artifactId"), pin.getString("sha256"), checked)
                 if (selected != null) { requireTaskExportSource(selected); check(copied == source!!.getLong("archiveBytes")) { "实际导出字节数与原固定包不符" } }
                 requireCurrent(); raw.flush(); copied
             } } catch (failure: Exception) { throw IllegalStateException("导出未完整确认，所选目标可能已有部分内容；请核对原成果和目标", failure) }
             finally { c.removeCancelAction(cancel) }
             check(bytes==size){"原固定包的写入字节数不符；目标可能已有内容，未重新写入"}
             requireCurrent();val target=ProjectPackageDocument.readBack(app,uri,displayName,bytes,expected,c,::requireCurrent)
-            val finalArtifact=local().handle("project.package.get",JSONObject().put("artifactId",pin.getString("artifactId")).put("sha256",expected))
+            val finalArtifact=taskExportArtifact(pin,selected,if(direct)requireTaskExportSource(requireNotNull(selected)) else null)
             check(finalArtifact.opt("id")==pin.opt("artifactId")&&finalArtifact.opt("sha256")==expected&&finalArtifact.optLong("sizeBytes",-1)==size){"原固定包来源已变化；请核对目标，没有恢复写入"}
             if(selected!=null)dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(requireTaskExportSource(selected),finalArtifact)
             requireCurrent();val verified=ProjectPackageDocument.verified(target,bytes,expected)
@@ -463,7 +509,7 @@ internal class ProjectPackageCoordinator(
                     else if(target.opt("status")=="destination_changed")"写入已返回，但所选文档名称发生变化；请核对原位置，没有自动重写。"
                     else if(target.opt("status")=="content_mismatch")"写入已返回，但所选位置回读不符；请核对原文件，没有自动重写。"
                     else "写入已返回，但所选位置无法回读；不能确认已保存完整包，没有自动重写。"
-                if(selected?.team==null)state=state.copy(notice=message)
+                if(selected?.team==null&&selected?.directVite==null)state=state.copy(notice=message)
                 if(selected!=null)taskExportStatus(selected,if(verified)"exported" else "written_unverified",message,bytes,target)
             }
         }
@@ -906,7 +952,7 @@ internal class ProjectPackageCoordinator(
         webSourcePin?.let { out.putString("ownerLocalSourcePosition", it.toString()) }
         out.putString("projectPackageActions", org.json.JSONArray(positions.values.toList().takeLast(41)).toString())
         pickerImport?.let { out.putString("projectPackageImportPicker", it.toString()) }; pickerExport?.let { out.putString("projectPackageExportPicker", it.toString()) }
-        state.exportStatus?.let { out.putString("projectPackageExportStatus", it.toString()) }
+        state.exportStatus?.takeUnless { it.has("ownerDirectViteBuild") }?.let { out.putString("projectPackageExportStatus", it.toString()) }
     }
     fun restore(saved: Bundle?) {
         runCatching {

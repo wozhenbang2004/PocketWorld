@@ -394,16 +394,33 @@ public final class LocalModule implements EngineModule {
     }
     /** Separate original Work path. No current source, generic package choices or Chat references. */
     public synchronized ProjectPreviewBundle.Verified openDirectViteArchiveForOwner(JSONObject evidence,String entryPath)throws Exception{
+        requireDirectViteSavedArchive(evidence,entryPath);
+        var frozen=packageWorkspace().originalTaskPackage(evidence);
+        var opened=ProjectPreviewBundle.fromProjectPackage(frozen,evidence.getString("artifactId"),evidence.getString("artifactSha256"),entryPath);
+        requirePackagePreviewOwner(evidence,true);
+        return rememberPackagePreview(opened);
+    }
+    private void requireDirectViteSavedArchive(JSONObject evidence,String entryPath)throws Exception {
         requirePackagePreviewOwner(evidence,true);
         JSONObject artifact=evidence.getJSONObject("packageArtifact");
         if(!OriginalNodeWebOutput.ENTRY.equals(entryPath)||!entryPath.equals(artifact.opt("entryPath"))||
                 !"web_output".equals(artifact.opt("mode"))||!Boolean.FALSE.equals(evidence.opt("authorityAdded"))||
                 !"selected_output_observed_after_build".equals(evidence.opt("buildOutputAttribution")))
-            throw new SecurityException("请打开这项原本机网页工作的已保存入口");
-        var frozen=packageWorkspace().originalTaskPackage(evidence);
-        var opened=ProjectPreviewBundle.fromProjectPackage(frozen,evidence.getString("artifactId"),evidence.getString("artifactSha256"),entryPath);
+            throw new SecurityException("请从原本机网页工作选择这次已保存的固定包");
+    }
+    /** Internal caller must re-resolve the same original TaskStore source on both sides of the picker. */
+    public synchronized JSONObject inspectDirectViteArchiveForExport(JSONObject evidence)throws Exception {
+        requireDirectViteSavedArchive(evidence,OriginalNodeWebOutput.ENTRY);
+        JSONObject actual=packageWorkspace().directViteArchiveMetadata(evidence.getString("artifactId"),evidence.getString("artifactSha256"));
+        dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(evidence,actual);
         requirePackagePreviewOwner(evidence,true);
-        return rememberPackagePreview(opened);
+        return actual;
+    }
+    public synchronized byte[] readDirectViteArchiveForExport(JSONObject evidence)throws Exception {
+        requireDirectViteSavedArchive(evidence,OriginalNodeWebOutput.ENTRY);
+        byte[] bytes=packageWorkspace().readDirectViteArchiveForExport(evidence);
+        requirePackagePreviewOwner(evidence,true);
+        return bytes;
     }
     /** Source-edit references require both the original archive and the actual original checkout. */
     public synchronized void requireProjectPackagePreviewCurrent(dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified preview,JSONObject nativeEvidence)throws Exception {

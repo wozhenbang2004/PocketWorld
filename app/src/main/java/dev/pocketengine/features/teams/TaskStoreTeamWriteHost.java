@@ -356,16 +356,18 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
     public final class TextOutputApproval implements AutoCloseable {
         private final TeamOwnerFileReading shown;private final RunControl authority=new RunControl();
         private final String reviewerTask,reviewerRun,project,projectFacts;private final boolean firstProject;
+        private final JSONObject originalReviewerFindings;
         private volatile boolean registering;
         private final long expires=android.os.SystemClock.elapsedRealtime()+120_000;
         private final java.util.concurrent.atomic.AtomicBoolean spent=new java.util.concurrent.atomic.AtomicBoolean();
         private TextOutputApproval(TeamOwnerFileReading seen,boolean firstProject)throws Exception{
             shown=seen;this.firstProject=firstProject;if(!shown.shownAllOriginalDiffs())throw new SecurityException("请先逐份加载并核对本次原始文本差异");
             verifiedOriginal();
-            JSONObject facts=firstProject?tasks.firstProjectTeamOutputFacts(shown.team(),shown.plan(),authority):tasks.firstLocalTeamOutputDecision(shown.team(),shown.plan(),authority);
+            JSONObject facts=firstProject?tasks.firstProjectTeamOutputFacts(shown.team(),shown.plan(),authority):tasks.firstLocalTeamOutputDecisionForReview(shown.team(),shown.plan(),authority);
             if(!(firstProject?"eligible_project_first":"eligible").equals(facts.getString("state")))throw new SecurityException("原计划不再需要或不允许这次批准，请重读原成果");
             if(firstProject)checkProject(facts);projectFacts=firstProject?TeamWorkFiles.canonical(facts):null;
             reviewerTask=facts.getString("reviewerTaskId");reviewerRun=facts.getString("reviewerRunId");project=facts.getString("targetProjectId");
+            originalReviewerFindings=firstProject?null:facts.optJSONObject("originalReviewerFindings");
         }
         private void checkProject(JSONObject facts)throws Exception{
             if(projects==null||reviews.containsKey(shown.team())||integrations.containsKey(shown.team()))throw new SecurityException("原独审或整合尚未退出，或项目宿主不可用");
@@ -386,6 +388,8 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
             for(int i=0;i<files.length();i++){JSONObject file=files.getJSONObject(i),row=new JSONObject().put("path",file.getString("path")).put("existing",file.getBoolean("currentExists"));
                 if(firstProject)row.put("version",file.getInt("currentVersion")).put("sha256",file.getString("sha256"));paths.put(row);}
             JSONObject value=new JSONObject().put("teamRunId",shown.team()).put("planHash",shown.plan()).put("projectId",project).put("files",paths).put("startsIntegration",false);
+            if(originalReviewerFindings!=null)value.put("originalReviewerFindings",originalReviewerFindings)
+                    .put("reviewerTaskId",reviewerTask).put("reviewerRunId",reviewerRun);
             if(firstProject){JSONObject facts=new JSONObject(projectFacts);value.put("firstProject",true).put("parentCheckoutId",facts.getString("checkoutId")).put("sourceDigest",facts.getString("sourceDigest"))
                     .put("snapshotIdentity",facts.getString("snapshotIdentity")).put("reviewRouteCaptured",facts.optBoolean("reviewRouteCaptured")).put("reviewerTaskId",reviewerTask).put("reviewerRunId",reviewerRun).put("startsChecks",false).put("packagesProject",false);}
             return value;

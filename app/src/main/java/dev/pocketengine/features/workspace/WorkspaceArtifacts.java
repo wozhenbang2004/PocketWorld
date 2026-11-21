@@ -218,6 +218,28 @@ public final class WorkspaceArtifacts {
         if(!expectedSha.equals(hashFile(archive))||archive.length()!=meta.getLong("sizeBytes"))throw new SecurityException("读取期间原固定项目包已变化，未交付其他版本");
         return frozen;
     }
+    /** Freeze the original ZIP bytes, not a new ZIP made from the manifest. No destination is open yet. */
+    synchronized byte[] readDirectViteArchiveForExport(JSONObject source)throws Exception {
+        if(!Boolean.TRUE.equals(source.opt(OwnerDirectNodeBuild.VITE_FIELD)))throw new SecurityException("只能导出原本机网页工作实际保存的固定包");
+        originalTaskPackage(source);
+        String id=source.getString("artifactId"),sha=source.getString("artifactSha256");
+        long size=source.getLong("archiveBytes");
+        if(size<=0||size>dev.pocketengine.features.local.project.ProjectPackageArchive.MAX_ARCHIVE_BYTES)
+            throw new SecurityException("原固定包字节数不可核对");
+        byte[] bytes=new byte[(int)size];File archive=new File(root,id+".project.zip");
+        try(java.io.InputStream input=Files.newInputStream(archive.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){
+            for(int off=0;off<bytes.length;){
+                int n=input.read(bytes,off,bytes.length-off);
+                if(n<=0)throw new IllegalStateException("原固定包字节未读完整，未写入所选位置");
+                off+=n;
+            }
+            if(input.read()!=-1)throw new SecurityException("原固定包字节数已变化，未写入所选位置");
+        }
+        if(!sha.equals(hex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes))))
+            throw new SecurityException("原固定包字节摘要已变化，未写入所选位置");
+        requirePackageScope(packageMetadata(id,sha),true);
+        return bytes;
+    }
     /** Stream exactly the owner's pinned original version. A failed postcheck never confirms export. */
     public synchronized long exportProjectPackage(String id,String expectedSha,java.io.OutputStream output)throws Exception {
         JSONObject meta=packageMetadata(id,expectedSha);readProjectPackage(id,expectedSha);

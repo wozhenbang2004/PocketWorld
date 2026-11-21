@@ -34,6 +34,10 @@ public final class WorkspaceModule implements EngineModule {
         return artifacts.createFirstNodeWebPackage(frozen,ownerActionId,true);
     }
     public JSONObject directViteArchiveMetadata(String id,String sha)throws Exception{return artifacts.projectPackage(id,sha,true);}
+    public byte[] readDirectViteArchiveForExport(JSONObject source)throws Exception{
+        if(nativeClosed)throw new IllegalStateException("原工作区已关闭");
+        return artifacts.readDirectViteArchiveForExport(source);
+    }
     public JSONObject findDirectViteArchive(String action,String project,String checkout,String manifest)throws Exception{
         return artifacts.findProjectPackage(action,project,checkout,manifest,true);
     }

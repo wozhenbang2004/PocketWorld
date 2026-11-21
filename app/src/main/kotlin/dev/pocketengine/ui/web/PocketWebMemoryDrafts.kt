@@ -10,7 +10,12 @@ import org.json.JSONObject
 
 /** Only the native original-operation review holds adoption authority; Web receives selectors. */
 internal class PocketWebMemoryDrafts(private val controller: PocketWorldController) {
-    private data class Window(val id: String, val review: NativeConversationMemoryDraftHost.Review, val owner: Any, val control: RunControl)
+    internal data class OriginalChatReply(
+        val current: () -> Boolean,
+        val selector: () -> JSONObject?,
+    )
+    private data class Window(val id: String, val review: NativeConversationMemoryDraftHost.Review, val owner: Any, val control: RunControl,
+                              val replyCurrent: (() -> Boolean)?)
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var window: Window? = null
     @Volatile private var selectorControl: RunControl? = null
@@ -30,7 +35,8 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
         val value = args.opt(key); require(value is String && value.isNotBlank() && value.length <= max && '\u0000' !in value) { "请从原提案重新打开" }; return value
     }
     private fun epoch(args: JSONObject): Int { val value = args.opt("epoch"); require(value is Int && value > 0) { "原提案执行代次无效" }; return value }
-    private fun current(value: Window) = window === value && controller.webPrivateOwnerVisible() && controller.webWindowTicket() == value.owner && !value.control.isCancelled
+    private fun current(value: Window) = window === value && controller.webPrivateOwnerVisible() && controller.webWindowTicket() == value.owner &&
+        !value.control.isCancelled && value.replyCurrent?.invoke() != false
     private fun selection(args: JSONObject) { fields(args, "taskId", "runId", "epoch", "operationId", "proposalDigest") }
     private fun presentation(row: JSONObject): JSONObject {
         val result = JSONObject().put("proposal", row.getJSONObject("proposal")).put("apply", row.getJSONObject("apply"))
@@ -42,7 +48,7 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
         return result
     }
 
-    fun dispatch(action: String, args: JSONObject, originalChat: Boolean, done: (JSONObject?, String?) -> Unit) {
+    fun dispatch(action: String, args: JSONObject, originalChat: Boolean, originalReply: OriginalChatReply? = null, done: (JSONObject?, String?) -> Unit) {
         check(controller.webPrivateOwnerVisible()) { "请回到原私人回答审阅记忆提案" }
         if (action == "memoryDraft.close") { fields(args, "handle"); if (window?.id == text(args, "handle")) clear(); done(JSONObject().put("closed", true), null); return }
         check(!busy) { "请等待原审阅回执" }
@@ -59,35 +65,54 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                 if (!args.has("chosenRevision")) null else args.opt("chosenRevision").let {
                     require((it is Int || it is Long) && (it as Number).toLong() > 0) { "请重新核对原记忆版本" }; (it as Number).toLong()
                 }
-            } else { selection(args); null }
+            } else { if (originalReply == null) selection(args); null }
             val foregroundConversation = if (savedRecord) controller.state.conversationId else null
             val memoryRevision = if (savedRecord) controller.state.memoryRefreshRevision else -1L
             val sourceRevision = if (savedRecord) controller.conversationSourceRevision else -1L
-            val task = text(args, "taskId"); val run = text(args, "runId"); val epoch = epoch(args); val operation = text(args, "operationId")
-            val digest = text(args, "proposalDigest", 64); require(digest.matches(Regex("[a-f0-9]{64}")))
+            fun checkedSelector(input: JSONObject): JSONObject {
+                val digest = text(input, "proposalDigest", 64); require(digest.matches(Regex("[a-f0-9]{64}")))
+                return JSONObject().put("taskId", text(input, "taskId")).put("runId", text(input, "runId"))
+                    .put("epoch", epoch(input)).put("operationId", text(input, "operationId")).put("proposalDigest", digest)
+            }
+            val explicit = if (originalReply == null) checkedSelector(args) else {
+                check(action == "memoryDraft.open" && originalChat && originalReply.current())
+                null
+            }
+            val replySourceRevision = controller.conversationSourceRevision
+            fun originalReadCurrent() = originalReply == null ||
+                originalReply.current() && controller.conversationSourceRevision == replySourceRevision
             clear(); val request = generation; val owner = controller.webWindowTicket(); val control = RunControl(); selectorControl = control; busy = true
             controller.runPluginCatalogWork(Runnable {
                 var acquired: NativeConversationMemoryDraftHost.Review? = null
                 val answer = runCatching {
                     check(controller.webPrivateOwnerVisible() && controller.webWindowTicket() == owner && generation == request)
-                    control.check()
+                    control.check(); check(originalReadCurrent()) { "原私人回答窗口已变化" }
+                    val selector = explicit ?: checkedSelector(originalReply?.selector?.invoke() ?: error("未能核对这条回答的原记忆提案"))
+                    check(originalReadCurrent()) { "原私人回答窗口已变化" }
+                    val task = selector.getString("taskId"); val run = selector.getString("runId"); val epoch = selector.getInt("epoch")
+                    val operation = selector.getString("operationId"); val digest = selector.getString("proposalDigest")
                     val host = controller.conversationMemoryDraftHost()
                     if (savedRecord) return@runCatching host.originalSavedRecordForOwner(task, run, epoch, operation, digest, foregroundConversation, chosenRevision, spanKey)
                     val row = if (action == "memoryDraft.undo") host.undoForOwner(task, run, epoch, operation, digest, control)
                         else host.queryForOwner(task, run, epoch, operation)
                     check(row.getJSONObject("proposal").getString("proposalDigest") == digest) { "原提案内容已变化" }
-                    if (action == "memoryDraft.open" && row.getJSONObject("apply").getString("status") == "pending_owner") {
+                    val out = if (action == "memoryDraft.open" && row.getJSONObject("apply").getString("status") == "pending_owner") {
                         acquired = host.reviewForOwner(task, run, epoch, operation, digest)
                         val view = acquired!!.view()
                         if (view.opt("dismissOnly") == true) JSONObject().put("proposal", JSONObject().put("action", row.getJSONObject("proposal").getString("action")))
                             .put("apply", JSONObject().put("status", "pending_owner")).put("review", view)
                         else presentation(row).put("review", view)
                     } else presentation(row)
+                    if (originalReply != null) out.put("originalTarget", selector)
+                    out
                 }
                 main.post {
                     if (request != generation || !controller.webPrivateOwnerVisible() || controller.webWindowTicket() != owner) { acquired?.close(); control.cancel(); done(null, "原记忆审阅窗口已变化，请查询原操作结果，不要重复提交"); return@post }
                     if (selectorControl === control) selectorControl = null
                     busy = false
+                    if (!originalReadCurrent()) {
+                        acquired?.close(); control.cancel(); done(null, "原私人回答窗口已变化，没有打开其他提案"); return@post
+                    }
                     if (savedRecord && (controller.state.conversationId != foregroundConversation || controller.state.memoryRefreshRevision != memoryRevision ||
                             controller.conversationSourceRevision != sourceRevision ||
                             answer.getOrNull()?.let { System.currentTimeMillis() >= it.getLong("readExpiresAt") } == true)) {
@@ -114,7 +139,7 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                                     .put("offset", span.getLong("offset")).put("chars", span.getLong("chars")).put("sha256", span.getString("sha256")))
                             } else if (message != null && span != null) result.put("visibleQuoteKey", span.getString("key"))
                         }
-                        acquired?.let { native -> Window(UUID.randomUUID().toString(), native, owner, control).also { window = it; result.put("handle", it.id) } }
+                        acquired?.let { native -> Window(UUID.randomUUID().toString(), native, owner, control, originalReply?.current).also { window = it; result.put("handle", it.id) } }
                         if (acquired == null) control.cancel()
                         done(PocketWebState.publicValue(result) as JSONObject, null)
                     }, { acquired?.close(); control.cancel(); done(null, it.message ?: "原记忆草稿暂不可读取") })
@@ -141,7 +166,10 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                 }
             }
             main.post {
-                if (!current(original)) { done(null, "原窗口已关闭；请按原任务查询保存结果，不要重复提交"); return@post }
+                if (!current(original)) {
+                    if (original.replyCurrent != null && window === original) clear()
+                    done(null, "原窗口已关闭；请按原任务查询保存结果，不要重复提交"); return@post
+                }
                 busy = false
                 if (action == "memoryDraft.source" && answer.getOrNull()?.let { System.currentTimeMillis() >= it.getLong("readExpiresAt") } == true) {
                     done(null, "原提案阅读窗口已过期，请在原回答重新核对"); return@post

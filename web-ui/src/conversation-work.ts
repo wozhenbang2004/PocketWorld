@@ -9,7 +9,7 @@ const positive = (value: unknown): value is number => Number.isSafeInteger(value
 const ended = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'needs_confirmation', 'awaiting_user', 'reconciling', 'paused']);
 
 export type WorkIdentity = { taskId: string; runId: string; epoch: number };
-export type ReplyContext = WorkIdentity & { replyId?: string | null; deliveryId?: string | null; replyToMessageIds: string[]; originalReminderRecorded?: true };
+export type ReplyContext = WorkIdentity & { replyId?: string | null; deliveryId?: string | null; replyToMessageIds: string[]; originalReminderRecorded?: true; originalMemoryDraftRecorded?: true };
 export type TaskResult = WorkIdentity & { kind: 'automation' | 'team' | 'owner_work'; deliveryId: string; status: string; endedAt: number; summaryChars: number; summaryTruncated: boolean; noticeKind?: 'capacity_recovery' | 'capacity_cancel' | null };
 
 /** These fields were checked by native projection; they only support reading and navigation. */
@@ -20,7 +20,9 @@ export function messageReplyContext(message: unknown): ReplyContext | null {
       || !value.replyToMessageIds.every(id)) return null;
   return { taskId: row.taskId, runId: value.runId, epoch: value.epoch, replyId: id(value.replyId) ? value.replyId : null,
     deliveryId: id(value.deliveryId) ? value.deliveryId : null, replyToMessageIds: [...new Set<string>(value.replyToMessageIds)],
-    ...(value.originalReminderRecorded === true && { originalReminderRecorded: true as const }) };
+    ...(value.originalReminderRecorded === true && { originalReminderRecorded: true as const }),
+    ...(value.originalMemoryDraftRecorded === true && id(value.replyId) && value.deliveryId === null &&
+      value.replyToMessageIds.length === 1 && { originalMemoryDraftRecorded: true as const }) };
 }
 
 export function messageTaskResult(message: unknown): TaskResult | null {

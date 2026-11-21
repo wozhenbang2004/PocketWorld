@@ -6,6 +6,7 @@ import android.widget.FrameLayout
 import dev.pocketengine.features.local.preview.ProjectBundleWebView
 import dev.pocketengine.features.local.preview.ProjectPreviewDocument
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.ProjectPackageCoordinator
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -20,7 +21,8 @@ internal class PocketWebProjectPreview(
     companion object {
         const val OPEN_LOCAL_WEB = "projects.firstWebOutput.open"
         const val PREVIEW_LOCAL_BUILD = "projects.firstWebOutput.previewBuild"
-        val COMMANDS = setOf(OPEN_LOCAL_WEB, PREVIEW_LOCAL_BUILD, "projects.preview", "projects.preview.mode", "projects.preview.viewport",
+        const val EXPORT_LOCAL_WEB = "projects.firstWebOutput.export"
+        val COMMANDS = setOf(OPEN_LOCAL_WEB, PREVIEW_LOCAL_BUILD, EXPORT_LOCAL_WEB, "projects.preview", "projects.preview.mode", "projects.preview.viewport",
             "projects.preview.reload", "projects.preview.close", "projects.preview.return", "composer.preview.remove",
             "projects.package.preview.inspect", "projects.package.preview.open", "projects.package.export")
         private fun fields(args: JSONObject, names: Set<String>) {
@@ -141,6 +143,28 @@ internal class PocketWebProjectPreview(
             }, fromLocalWork = direct)
             return
         }
+        if (action == EXPORT_LOCAL_WEB) {
+            check(localWorkCurrent() && session == null && pendingBuildPreview == null) { "请返回这次原本机构建选择已保存网页" }
+            fields(args, setOf("taskId", "runId", "epoch", "buildOperationId", "operationId", "projectId", "checkoutId", "sourceDigest", "artifactId", "artifactSha256"))
+            val task = text(args, "taskId"); val run = text(args, "runId"); val build = text(args, "buildOperationId")
+            val operation = text(args, "operationId"); val project = text(args, "projectId"); val checkout = text(args, "checkoutId")
+            val source = text(args, "sourceDigest"); val artifact = text(args, "artifactId"); val sha = text(args, "artifactSha256")
+            val id = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
+            val digest = Regex("[a-f0-9]{64}")
+            require(listOf(task, operation, artifact).all(id::matches) && run == task && build == task && operation != build &&
+                integer(args, "epoch") == 1L && source.matches(digest) && sha.matches(digest)) { "原固定网页的构建或版本身份不可核对" }
+            val window = captureWindow(); val request = ++opening
+            val original = ProjectPackageCoordinator.DirectViteExport(run, 1, build, checkout, source)
+            // The ordinary picker backgrounds this Activity and retires command tickets, not the same original Work visit.
+            controller.projectPackages.offerDirectViteExport(task, operation, artifact, sha, project, original,
+                { !closed && foreground && opening == request && acceptsWindow(window) }, localWorkCurrent) { result, error ->
+                if (closed || opening != request || !acceptsWindow(window) || !localWorkCurrent())
+                    done(null, "请在原工作核对这次固定包导出的回执，没有重新请求")
+                else done(result, error)
+                changed()
+            }
+            return
+        }
         if (action == "projects.package.export") {
             fields(args, setOf("taskId", "operationId", "artifactId", "artifactSha256"))
             val task = text(args, "taskId"); val operation = text(args, "operationId")
@@ -226,8 +250,12 @@ internal class PocketWebProjectPreview(
                 }
             }
             "projects.preview.close" -> {
-                fields(args, setOf("sessionId")); release(); controller.closeProjectPreview()
-                controller.projectPackages.invalidateTaskExportSelection()
+                fields(args, setOf("sessionId"))
+                if (selected.original.fromLocalWebWork) releaseExactLocalWork(selected)
+                else {
+                    release(); controller.closeProjectPreview()
+                    controller.projectPackages.invalidateTaskExportSelection()
+                }
                 done(JSONObject().put("sessionId", selected.id).put("closed", true), null)
             }
             else -> error("未接入的原预览操作")
@@ -252,11 +280,13 @@ internal class PocketWebProjectPreview(
         })
         selected.web = web; session = selected; web.visibility = View.GONE
         container.addView(web, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
-        if (original.bundle.originalLocalViteBuild()) {
-            // If the dialog was dismissed before its ACK arrived, do not keep an unseen renderer.
+        if (original.fromLocalWebWork) {
+            // Neither the temporary nor saved Work dialog keeps an unseen renderer after a lost ACK.
             val previewId = selected.id
             container.postDelayed({
-                if (session?.let { it.id == previewId && it.viewport == null } == true) { retireLocalWork(); changed() }
+                session?.takeIf { it.id == previewId && it.viewport == null }?.let { unseen ->
+                    releaseExactLocalWork(unseen); changed()
+                }
             }, 5_000L)
         }
     }
@@ -335,6 +365,12 @@ internal class PocketWebProjectPreview(
         else if (session?.original?.fromLocalWebWork == true) retireLocalWork()
         else session?.let(::hide)
         changed()
+    }
+    /** Retire an exact renderer, not a newer preview request still verifying this Work. */
+    private fun releaseExactLocalWork(selected: Session) {
+        check(session === selected && selected.original.fromLocalWebWork)
+        release()
+        controller.releaseLocalWorkPreviewCache(selected.original)
     }
     private fun release() {
         val selected = session ?: return; session = null

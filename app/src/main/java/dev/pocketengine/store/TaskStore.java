@@ -509,6 +509,11 @@ public final class TaskStore {
     /** Audit reads retain the exact original run and operation even after source withdrawal. */
     public synchronized JSONObject skillProposalForOwner(String id,String run,int epoch,String operation)throws Exception{return conversationProposalForOwner(ConversationDraftKind.SKILL,id,run,epoch,operation);}
     public synchronized JSONObject memoryProposalForOwner(String id,String run,int epoch,String operation)throws Exception{return conversationProposalForOwner(ConversationDraftKind.MEMORY,id,run,epoch,operation);}
+    /** Exact saved-reply selector for a deliberate read; never return a task list or message body. */
+    public JSONObject originalReplyMemoryDraftForOwner(String conversation,String message,long revision,String task,String run,int epoch,String reply)throws Exception{
+        if(conversationRepository==null)return null;
+        return conversationRepository.originalMemoryDraftForReply(conversation,message,revision,task,run,epoch,reply);
+    }
     private JSONObject conversationProposalForOwner(ConversationDraftKind kind,String id,String run,int epoch,String operation)throws Exception {
         JSONObject task=required(id);requirePrivateOwner(task);if(!"assistant".equals(task.optString("kind"))||task.has("origin"))throw new SecurityException("原提案不是私人会话");
         try(Cursor original=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND run_id=? AND epoch=?",new String[]{id,run,Integer.toString(epoch)})){if(!original.moveToFirst())throw new SecurityException("原提案执行已不可核对");}
@@ -11998,6 +12003,13 @@ public final class TaskStore {
     /** First approval of the original local selected-file plan only; never a recovery,
      * integrator scope, command authorization, or request to dispatch an integrator. */
     public synchronized JSONObject firstLocalTeamOutputDecision(String run,String hash,RunControl owner)throws Exception{
+        return firstLocalTeamOutputDecision(run,hash,owner,false);
+    }
+    /** Only the explicit owner permission preview needs the exact prior reviewer's submitted text. */
+    public synchronized JSONObject firstLocalTeamOutputDecisionForReview(String run,String hash,RunControl owner)throws Exception{
+        return firstLocalTeamOutputDecision(run,hash,owner,true);
+    }
+    private JSONObject firstLocalTeamOutputDecision(String run,String hash,RunControl owner,boolean includeOriginalFindings)throws Exception{
         owner.check();JSONObject team=teamWriteTask(run),previous=team.optJSONObject("teamOutputReview");
         if(previous!=null){
             if(!hash.equals(previous.optString("planHash")))return new JSONObject().put("state","previous_approval");
@@ -12027,7 +12039,34 @@ public final class TaskStore {
                     ||identity.has("remoteSelection")||identity.has("projectSelection")||child.has("teamProject"))throw new SecurityException("原文件范围或成员交付已变，请回原任务核对");
             try(Cursor active=db.rawQuery("SELECT 1 FROM runs WHERE task_id=? AND status='running' LIMIT 1",new String[]{child.getString("id")})){if(active.moveToFirst())throw new SecurityException("原成员仍有实际执行，未登记许可");}
         }
-        owner.check();return new JSONObject().put("state","eligible").put("reviewerTaskId",independent.getString("taskId")).put("reviewerRunId",independent.getString("runId")).put("targetProjectId",scope.getString("targetProjectId"));
+        JSONObject result=new JSONObject().put("state","eligible").put("reviewerTaskId",independent.getString("taskId")).put("reviewerRunId",independent.getString("runId")).put("targetProjectId",scope.getString("targetProjectId"));
+        if(includeOriginalFindings)try{
+            JSONObject original=originalLocalReviewerFindings(team,independent,run,hash);
+            if(original!=null)result.put("originalReviewerFindings",original);
+        }catch(Exception unavailable){owner.check();} // Missing prior text never changes the existing permission path.
+        owner.check();return result;
+    }
+    private JSONObject originalLocalReviewerFindings(JSONObject team,JSONObject mirror,String run,String hash)throws Exception{
+        String id=dev.pocketengine.features.teams.TeamDeliveryWorkers.taskId(run,"reviewer",hash);
+        if(!id.equals(mirror.opt("taskId"))||!isOriginalLocalReviewerFinding(mirror,run,hash))return null;
+        JSONObject child=read(id);
+        if(!dev.pocketengine.features.teams.TeamDeliveryWorkers.original(child,run,team.getString("id"),"reviewer",hash)||
+                !child.getString("runId").equals(mirror.opt("runId"))||child.optInt("coordinatorEpoch",-1)<1||
+                !"independent_original_runner".equals(mirror.opt("reviewerKind")))return null;
+        if(!hash.equals(capabilityFingerprint(child.getJSONObject("teamAssignment").getJSONObject("plan"))))return null;
+        requireSettledFirstProjectTask(child);
+        JSONObject proof=child.getJSONObject("evidence").optJSONObject("teamIndependentReview");
+        if(!isOriginalLocalReviewerFinding(proof,run,hash)||!id.equals(proof.opt("taskId"))||!child.getString("runId").equals(proof.opt("runId"))||
+                !(proof.opt("findings") instanceof String findings)||!findings.equals(mirror.opt("findings"))||
+                findings.isBlank()||findings.length()>4000||!StandardCharsets.UTF_8.newEncoder().canEncode(findings))return null;
+        return new JSONObject().put("teamRunId",run).put("planHash",hash).put("taskId",id).put("runId",child.getString("runId"))
+                .put("epoch",child.getInt("coordinatorEpoch")).put("role","reviewer").put("verdict","no_blocking_findings").put("findings",findings)
+                .put("readOnly",true).put("executionAuthorized",false).put("businessVerified",false);
+    }
+    private static boolean isOriginalLocalReviewerFinding(JSONObject proof,String run,String hash){
+        return proof!=null&&run.equals(proof.opt("teamRunId"))&&hash.equals(proof.opt("planHash"))&&"no_blocking_findings".equals(proof.opt("verdict"))&&
+                Boolean.TRUE.equals(proof.opt("verdictSubmitted"))&&Boolean.TRUE.equals(proof.opt("completeOriginalFilesRead"))&&
+                Boolean.TRUE.equals(proof.opt("safeReceiptAndModelPresentationVerified"));
     }
     private JSONObject parentProjectForTeamReturn(String taskId,String run,int epoch)throws Exception{
         JSONObject parent=required(taskId);requirePrivateOwner(parent);requireOwnerWorkPreparationTargetCurrent(parent);
@@ -12937,18 +12976,21 @@ public final class TaskStore {
     public static final class QueuedOwnerReplySelection {
         private final TaskStore issuer;
         private final String inputs,originalReminderOperation;
+        private final JSONObject originalMemoryDraft;
         private boolean active=true;
         public final String taskId,conversationId,runId;
         public final int epoch;
         public final dev.pocketengine.runtime.AgentRunner.OwnerReply completed;
-        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation)throws Exception{
+        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation,JSONObject originalMemoryDraft)throws Exception{
             this.issuer=issuer;taskId=task.getString("id");conversationId=task.getString("conversationId");runId=task.getString("runId");epoch=task.getInt("coordinatorEpoch");this.completed=completed;this.inputs=inputs.toString();this.originalReminderOperation=originalReminderOperation;
+            this.originalMemoryDraft=originalMemoryDraft;
         }
         public void requireMutationScope(TaskStore original){
             if(!active||issuer!=original||!Thread.holdsLock(original)||!original.db.inTransaction())throw new SecurityException("采用回执不在原任务的同一消息事务内");
         }
         public JSONArray inputs()throws Exception{requireMutationScope(issuer);return new JSONArray(inputs);}
         public String originalReminderOperation(){requireMutationScope(issuer);return originalReminderOperation;}
+        public JSONObject originalMemoryDraft(){requireMutationScope(issuer);return originalMemoryDraft;}
     }
     /** Records already-checkpointed model facts, including an explicit same-task resume.
      * Does not open activeChat, mint an input/grant, dispatch, retry, or refund an inference. */
@@ -12979,7 +13021,11 @@ public final class TaskStore {
                 long revision=OwnerInputQueue.integer(row.opt("ownerMessageRevision"));if(revision<1||revision!=OwnerInputQueue.integer(message.opt("ownerMessageRevision"))||!"user".equals(message.optString("role")))throw new SecurityException("采用回执的主人消息版本不一致");
                 conversationRepository.requireQueuedOwnerMessageCurrent(task.getString("conversationId"),row);selectedRows.put(new JSONObject(row.toString()));
             }
-            String reminderOperation=null;
+            String reminderOperation=null;JSONObject originalMemoryDraft=null;
+            if(selectedRows.length()==1&&OwnerWorkTask.isButlerSource(task)&&!original.isCancelled()&&!task.optBoolean("cancelRequested"))try{
+                JSONObject input=selectedRows.getJSONObject(0);
+                originalMemoryDraft=completed.originalMemoryDraftPin(task.getString("conversationId"),run,epoch,input.getString("messageId"),input.getLong("ownerMessageRevision"));
+            }catch(Exception unavailable){/* Never impede the original answer transaction for a presentation hint. */}
             if(selectedRows.length()==1&&OwnerWorkTask.isButlerSource(task)&&!original.isCancelled()&&!task.optBoolean("cancelRequested"))try{
                 String conversation=task.getString("conversationId");
                 OriginalReminderOperation recorded=originalReminderOperation(completed.taskId,run,epoch,conversation);
@@ -12989,7 +13035,7 @@ public final class TaskStore {
                         reminderOperation=recorded.operation();
                 }
             }catch(Exception unavailable){/* A presentation hint cannot block saving the original answer. */}
-            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation);JSONObject result;
+            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation,originalMemoryDraft);JSONObject result;
             try{result=mutation.apply(selected);}finally{selected.active=false;}
             if(task.has("ownerWorkPreparation")){
                 JSONObject saved=result==null?null:result.optJSONObject("message");if(saved==null||!completed.taskId.equals(saved.optString("taskId"))||!run.equals(saved.optString("nativeRunId"))||epoch!=saved.optInt("nativeEpoch")

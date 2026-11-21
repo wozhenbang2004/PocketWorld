@@ -34,7 +34,7 @@ type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
 type WorkTextVisit={taskId:string;runId:string;epoch:number;visit:string};
 type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;textStart?:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit;libraryList?:'returning'|'listed'};
-type StandaloneVisit={windowId:string;document:number;page:Document;presentation:string;entry:'catalog'|'blank'|'resume';pendingDocument?:string};
+type StandaloneVisit={windowId:string;document:number;page:Document;presentation:string;entry:'catalog'|'blank'|'resume';pendingDocument?:string;warmReentry?:true};
 const standalonePendingDocument=(view:Json)=>typeof view.pendingDocumentTask==='string'?view.pendingDocumentTask:undefined;
 function standaloneLibrarySurface(view:Json){
  return view.open===true&&view.taskId==null&&view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&
@@ -75,6 +75,13 @@ function standaloneDraftPresentation(native:ReturnType<typeof bridge.getState>,v
     current.standaloneDraftLibraryVisit!==visit.presentation||standalonePendingDocument(current)!==visit.pendingDocument||
     typeof current.standaloneDraftLibrary!=='boolean')return;
  return {frame,leased:current.standaloneDraftLibrary};
+}
+function warmDraftKey(native:ReturnType<typeof bridge.getState>,visit:StandaloneVisit){
+ const shown=standaloneDraftPresentation(native,visit),live=obj(native.state.attachmentWorkspace),resume=obj(live.warmSavedDraft);
+ // The Android command ticket rotates. The actual Web document and logical Library must remain the same.
+ return visit.entry==='catalog'&&shown?.leased===false&&shown.frame.windowId!==visit.windowId&&
+  live.busy===false&&live.exportPending===false&&resume.library===visit.presentation&&resume.previousWindow===visit.windowId&&
+  typeof resume.key==='string'&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(resume.key)?resume.key:undefined;
 }
 function generatedDraftHandoff(view:Json){
  const marker=obj(view.generatedDraftReturn),file=obj(view.file),target=exactFileTarget(file);
@@ -279,6 +286,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const draftDeskActive=!!draftDesk&&draftPresentation?.leased===true&&draftDesk.visit.windowId===draftPresentation.frame.windowId&&
   draftDesk.visit.document===bridge.getDocumentEpoch();
  const draftDeskReadOnly=!!draftDesk&&draftPresentation?.leased===false&&draftDesk.visit.windowId!==draftPresentation.frame.windowId;
+ const suspendedDraftKey=draftDeskReadOnly&&draftDesk?warmDraftKey(bridge.getState(),draftDesk.visit):undefined;
  const [catalogFilter,setCatalogFilter]=useState<{scope:string;name:string;format:string}|null>(null);
  const [draftHandoff,setDraftHandoff]=useState<DraftHandoff|null>(null);
  const draftFlight=useRef<DraftHandoff|null>(null);
@@ -449,6 +457,18 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
     setError('本机文档草稿尚未核对。文件清单保留，可以从这里再打开。');
   });
  };
+ const resumeSavedDraft=async(visit:StandaloneVisit,key:string)=>{
+  const native=bridge.getState(),shown=draftPresentationFrame(visit);
+  if(!shown||shown.leased!==false||warmDraftKey(native,visit)!==key||backFlight.current)throw new Error('原草稿窗口已变化');
+  const fresh:StandaloneVisit={...visit,windowId:shown.frame.windowId,document:bridge.getDocumentEpoch(),warmReentry:true};
+  // Track the exact new native window before dispatch, even if the reply is lost. The child hides the old editor until a verified read.
+  draftVisit.current=fresh;
+  setLocalDrafts(value=>value?.visit===visit?{...value,visit:fresh}:value);
+  const result=await act('drafts.resumeSaved',{resumeKey:key},shown.frame,false);
+  if(result.resumedKey!==key||result.resumedWindow!==fresh.windowId||!await waitForDraftLibraryFrame(fresh)||!draftFrame(fresh))
+   throw new Error('未核对到同一份已保留的草稿');
+  return result;
+ };
  const returnGeneratedDraft=async()=>{
   const shown=generatedDraftHandoff(view);
   if(!shown||onReturnToSearch||busy||draftBusy||draftVisit.current||backFlight.current||generatedDraftFlight.current)return;
@@ -488,7 +508,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   if(close){
    // A revoked editor is gone. Only the fresh ordinary frame for this same Library can close it.
    const frame=current&&shown?.leased===true&&shown.frame.windowId===current.windowId?shown.frame:
-    shown?.leased===false&&shown.frame.windowId!==visit.windowId?shown.frame:undefined;
+    shown?.leased===false&&(shown.frame.windowId!==visit.windowId||visit.warmReentry)?shown.frame:undefined;
    if(!frame)throw new Error('原文件库尚未核对，没有关闭其他页面。');
    const result=await act('close',{},frame,false);
    if(result.accepted!==true||obj(result.workspace).open!==false)throw new Error('原文件库尚未确认关闭。');
@@ -1169,6 +1189,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    draftDesk.visit.entry==='resume'?'正在核对生成前的原草稿…':'正在打开本机文档草稿…'}</p>:
   <AttachmentStandaloneDrafts active={draftDeskActive} recoverable={draftDeskReadOnly} loading={draftDesk.loading} initial={draftDesk.initial}
   generationPending={!!draftDesk.visit.pendingDocument} initialBlank={draftDesk.visit.entry==='blank'} initialResume={draftDesk.visit.entry==='resume'}
+  warmResumeKey={suspendedDraftKey} onWarmResume={key=>resumeSavedDraft(draftDesk.visit,key)}
   invoke={(command,args)=>draftAct(draftDesk.visit,command,args)} registerExit={handler=>{draftDeskExit.current=handler}}
   onExit={close=>leaveDraftDesk(draftDesk.visit,close)}/>):view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}
   retainLinkedDraft={view.canRetainLinkedDocumentDraft===true&&!onReturnToSearch}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<><AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}

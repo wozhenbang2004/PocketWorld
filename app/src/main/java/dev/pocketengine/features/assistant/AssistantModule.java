@@ -860,7 +860,7 @@ public final class AssistantModule implements EngineModule {
     private JSONObject findConversation(String id)throws Exception{return sourceRead(()->{
         if(durable())return historyRepository.window(id,"",80);
         JSONObject legacy=copy(find(id));JSONArray messages=legacy.optJSONArray("messages");
-        for(int i=0;messages!=null&&i<messages.length();i++){JSONObject row=messages.optJSONObject(i);if(row!=null){row.remove("projectConventionRecorded");row.remove(ConversationRepository.ORIGINAL_REMINDER_RECORDED);}}
+        for(int i=0;messages!=null&&i<messages.length();i++){JSONObject row=messages.optJSONObject(i);if(row!=null){row.remove("projectConventionRecorded");row.remove(ConversationRepository.ORIGINAL_REMINDER_RECORDED);row.remove(ConversationRepository.ORIGINAL_MEMORY_DRAFT_RECORDED);}}
         return legacy;
     });}
     /** Native completed-turn receipt only; no generic command can assert input consumption. */

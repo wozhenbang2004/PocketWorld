@@ -4,7 +4,7 @@ import { bridge } from './bridge';
 import { localWebWorkPreview, originalViteWorkPreview, type PackagePreviewTarget, type ProjectPreviewState } from './project-preview';
 import { originalDirectViteResult, type OriginalBuildWebGap } from './project-execution';
 import { registerOverlayBack } from './overlay-back';
-import { useProjectPreviewViewport } from './ProjectPreviewPane';
+import { exportPendingPhases, packageExportState, useProjectPreviewViewport } from './ProjectPreviewPane';
 
 const read = 'projects.firstWebOutput.read';
 const review = 'projects.firstWebOutput.review';
@@ -27,6 +27,7 @@ type SavedTarget = PackagePreviewTarget & {savedBuildWeb: NonNullable<PackagePre
 type SaveIdentity = {buildOperationId: string; operationId: string; sourceDigest: string; archiveSha256: string};
 type DirectVite = NonNullable<ReturnType<typeof originalDirectViteResult>>;
 const localOpen='projects.firstWebOutput.open', previewBuild='projects.firstWebOutput.previewBuild', localClose='projects.preview.close';
+const exportLocalWeb='projects.firstWebOutput.export';
 const supports=(action:string)=>bridge.getState().capabilities.commands.includes(action);
 const canOpenLocal=(action:string)=>[action,localClose,'projects.preview.viewport'].every(supports);
 
@@ -123,8 +124,8 @@ export function DirectViteWebOutput({target,ownerWindow}:{target:DirectVite;owne
       const exact=localWorkView(reply,original);
       if(visit.current!==original){
         // Closing a pending dialog can be followed by the same Work's Process
-        // tab unmounting this reader. Release only the exact late temp session.
-        if(source.kind==='build'&&exact&&supports(localClose))void bridge.command(localClose,{sessionId:exact.sessionId}).catch(()=>{});
+        // tab unmounting this reader. Release only this exact late Work session.
+        if(exact&&supports(localClose))void bridge.command(localClose,{sessionId:exact.sessionId}).catch(()=>{});
         return;
       }
       if(!exact)throw Error('未取得所选原网页的预览。');
@@ -169,6 +170,51 @@ function AccordionWebVersion({target}:{target:SavedTarget|undefined}) {
     <dt>版本</dt><dd><bdi>{target.savedBuildWeb.artifactId}</bdi></dd>
     <dt>归档摘要</dt><dd><bdi>{target.savedBuildWeb.artifactSha256}</bdi></dd>
   </dl></details>;
+}
+
+function DirectViteArchiveExport({original,ownerWindow,saved,archiveBytes,blocked}:{
+  original:DirectVite;ownerWindow:string;saved:SavedTarget;archiveBytes:number;blocked:boolean;
+}){
+  const args={taskId:saved.taskId,operationId:saved.operationId,...saved.savedBuildWeb};
+  function exact(value:unknown){
+    if(!value||typeof value!=='object'||Array.isArray(value))return null;
+    const raw=value as Record<string,unknown>;
+    const result=packageExportState(raw);
+    return result&&raw.ownerDirectViteBuild===true&&uuid.test(result.requestId)&&
+      Object.entries(args).every(([key,expected])=>raw[key]===expected)&&
+      (!result.exported||result.bytes===archiveBytes)?result:null;
+  }
+  const native=exact(bridge.getState().state.directVitePackageExport);
+  const [before,setBefore]=useState('');
+  const [checking,setChecking]=useState(false), [note,setNote]=useState('');
+  const entered=useRef(false);
+  const receipt=native?.requestId!==before?native:null;
+  const pending=!!receipt&&exportPendingPhases.has(receipt.status);
+  const unverified=(phase:string)=>phase==='unknown'||phase==='written_unverified';
+  const unknown=receipt?unverified(receipt.status):!!note;
+  function choose(){
+    const current=()=>currentDirectVite(original,ownerWindow);
+    const existing=exact(bridge.getState().state.directVitePackageExport);
+    if(!current()||blocked||entered.current||pending||unknown||!supports(exportLocalWeb)||
+        existing&&(exportPendingPhases.has(existing.status)||unverified(existing.status)))return;
+    const prior=existing?.requestId||'';
+    entered.current=true;setBefore(prior);setChecking(true);setNote('');
+    void bridge.command(exportLocalWeb,args).then(value=>{
+      if(!current())return;
+      const reply=exact(value);
+      if(!reply||reply.requestId===prior)throw Error('没有核对到这次固定包的导出回执。');
+    }).catch(()=>{
+      if(current())setNote('尚未核对这次导出。请查看所选位置，没有重新写入或改用其他网页。');
+    }).finally(()=>{
+      entered.current=false;setChecking(false);
+    });
+  }
+  return <>
+    <Button size="small" variant="secondary" disabled={blocked||checking||pending||unknown} onClick={choose}>导出这版网页包</Button>
+    {(receipt||checking||note)&&<p className={unknown||receipt?.status==='rejected'?'pw-error':'pw-reading-note'} role="status">
+      {receipt?.message||(checking?'正在核对这版固定网页…':note)}
+    </p>}
+  </>;
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
@@ -314,7 +360,10 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
       {fact.reason==='artifact_count_limit'?'保存时文件成果已达 200 项上限。':'当时存入这份网页包会超过固定项目包共用的 64 MiB 上限。'}
       没有改动已有成果，这笔保存不会重试。</p>}
     {fact?.state==='saved'&&<><p className="pw-reading-note" role="status">网页已固定保存。打开这一版不会联网、重新构建或读取当前同名文件。</p>
-      {savedTarget&&!openListed&&<Button ref={savedOpen} size="small" variant="primary" disabled={!!busy||!open} onClick={()=>{if(available())open?.(savedTarget)}}>打开固定网页</Button>}</>}
+      {savedTarget&&!openListed&&<Button ref={savedOpen} size="small" variant="primary" disabled={!!busy||!open} onClick={()=>{if(available())open?.(savedTarget)}}>打开固定网页</Button>}
+      {directVite&&savedTarget&&typeof fact.archiveBytes==='number'&&supports(exportLocalWeb)&&
+        <DirectViteArchiveExport key={savedBuildWebOpenKey(savedTarget)} original={directVite} ownerWindow={ownerWindow} saved={savedTarget}
+          archiveBytes={fact.archiveBytes} blocked={!!busy||!!previewBusy}/>}</>}
     {failure&&<><p className="pw-error" role="alert">{failure}</p>
       {!saveUnconfirmed&&fact?.state!=='pending'&&<Button size="small" variant="ghost" disabled={!!busy} onClick={()=>void call(read)}>核对原结果</Button>}</>}
   </section>;

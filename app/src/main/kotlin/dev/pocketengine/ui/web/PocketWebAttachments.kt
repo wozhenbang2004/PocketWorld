@@ -42,8 +42,8 @@ internal class PocketWebAttachments(
             "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.remove", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument",
             "drafts.retainRevision", "drafts.checkRevision", "drafts.retainMarkdown", "drafts.checkMarkdown",
             "drafts.retainPdfPage", "drafts.checkPdfPage",
-            "drafts.returnGenerated", "drafts.openGeneratedSource")
-        private val DRAFTS_WHILE_DOCUMENT_PENDING = setOf("drafts.list", "drafts.open", "drafts.save", "drafts.leave")
+            "drafts.returnGenerated", "drafts.openGeneratedSource", "drafts.resumeSaved")
+        private val DRAFTS_WHILE_DOCUMENT_PENDING = setOf("drafts.list", "drafts.open", "drafts.save", "drafts.leave", "drafts.resumeSaved")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
         private const val DOCUMENT_REVIEW_TTL = 120_000L
@@ -65,6 +65,9 @@ internal class PocketWebAttachments(
     private val viewer = PocketWebOriginalFiles(controller.webPresentationActivity(), { controller.webUiCanInteract() }, changed)
     // Set only by the currently admitted explicit no-argument entry from the business bridge.
     private var globalDraftLibrary: DraftLibraryVisit? = null
+    private data class RetiredSavedDraft(val library: String,val previousWindow: String,val editor: PocketWebStandaloneDocumentDrafts.WarmEditor)
+    private var retiredSavedDraft: RetiredSavedDraft? = null
+    private var warmDraftCheck: DraftLibraryVisit? = null
     private var draftDocumentReview: DraftDocumentReview? = null
     private class GeneratedDraftReturn(val window: Window, val library: String, val action: String,
         val plan: String, val pin: Pin, val handle: String = UUID.randomUUID().toString()) {
@@ -151,6 +154,10 @@ internal class PocketWebAttachments(
             state.libraryImport?.phase !in setOf("selecting", "selection_unconfirmed", "registering") &&
             catalog != null && catalog.opt("taskId") == "" &&
             catalog.optJSONArray("sources") != null && catalog.optJSONArray("artifacts") != null
+    }
+    private fun warmSavedDraft(now: Window): RetiredSavedDraft? = retiredSavedDraft?.takeIf {
+        globalDraftLibrary == null && it.previousWindow != now.id && it.library == flow.state.globalStandaloneDraftVisit &&
+            it.editor.pendingDocument == flow.state.pendingDocumentTask && ordinaryDraftLibrarySurface()
     }
     private fun mayUseDraftLibrary(): Boolean {
         val visit = globalDraftLibrary ?: return false
@@ -328,7 +335,19 @@ internal class PocketWebAttachments(
             frames[selected.frameId]?.location == location(flow.state) && linkedEditorSource() != null
     }
     private fun retireDraftLibrary(keepPresentation: Boolean = false) {
+        val state = flow.state
+        val visit = globalDraftLibrary
+        val previous = window
+        if (!keepPresentation) retiredSavedDraft = null
+        else if (visit != null) {
+            retiredSavedDraft = if (previous != null && state.globalStandaloneDraftVisit == visit.id && drafts.isInitialized() &&
+                state.file == null && !state.busy && !flow.exportPending) {
+                drafts.value.warmEditor(previous.id,previous.ticket,state.pendingDocumentTask)?.let { RetiredSavedDraft(visit.id,previous.id,it) }
+            } else null
+        } else if (retiredSavedDraft?.let { it.library != state.globalStandaloneDraftVisit || it.editor.pendingDocument != state.pendingDocumentTask } == true)
+            retiredSavedDraft = null
         globalDraftLibrary = null
+        warmDraftCheck = null
         draftDocumentReview = null
         generatedDraftReturn = null
         if (drafts.isInitialized()) {
@@ -454,6 +473,9 @@ internal class PocketWebAttachments(
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
             .put("standaloneDraftLibrary", mayUseDraftLibrary())
             .put("canRetainLinkedDocumentDraft", linkedEditorSource() != null)
+            .put("warmSavedDraft", if (draftPresentation) warmSavedDraft(current)?.let {
+                JSONObject().put("library",it.library).put("previousWindow",it.previousWindow).put("key",it.editor.key)
+            } else null)
             .put("generatedDraftReturn", sourceDraftReturn)
             .put("markdownDraft", draftTextIndicator(markdown)).put("pdfPageDraft", draftTextIndicator(pdfDraft))
             // This ordinary state projection may match a retained Web pane, never a draft command or handle.
@@ -558,6 +580,7 @@ internal class PocketWebAttachments(
             val frame = frames[args.getString("frameId")] ?: error("原文件页面已过期，请重新核对")
             check(frame.location == location(flow.state)) { "当前来源或编辑内容已变化，请重新核对" }
             val command = args.getString("command")
+            retiredSavedDraft = null // A different explicit use of the Library retires the old editor locator.
             val pairedPdf = flow.state.pdfPageText
             val pairedWord=flow.state.wordExcerpt
             if(pairedPdf!=null||pairedWord!=null) check(command in setOf("back","close","cancel","saveRead")||
@@ -574,6 +597,7 @@ internal class PocketWebAttachments(
             }
             if (drafts.isInitialized() && drafts.value.showing()) {
                 check(command == "back" || command == "close") { "请先返回私人文件库" }
+                warmDraftCheck = null
                 draftDocumentReview = null
                 drafts.value.retire()
             }
@@ -854,6 +878,41 @@ internal class PocketWebAttachments(
             val command = text("command")
             // A live draft shelf may edit a different storage record, never resume or replace the pending generation.
             check(flow.state.pendingDocumentTask == null || command in DRAFTS_WHILE_DOCUMENT_PENDING)
+            check(warmDraftCheck == null || command == "drafts.leave")
+            if (command == "drafts.resumeSaved") {
+                exact("resumeKey")
+                val active = window ?: error("原文件库窗口已离开")
+                val owner = freshOwner ?: error("私人文件库窗口尚未就绪")
+                val prior = warmSavedDraft(active)?.takeIf { it.editor.key == text("resumeKey") } ?: error("原草稿版本尚未核对")
+                check(active.id == frame.windowId && acceptsWindow(active.ticket) && owner() &&
+                    frames[frame.frameId]?.location == location(flow.state) && (!drafts.isInitialized() || !drafts.value.showing()))
+                retiredSavedDraft = null // The key is an exact-address locator and is never again an editor authority.
+                val admitted = DraftLibraryVisit(prior.library,owner).also { globalDraftLibrary = it; warmDraftCheck = it }
+                val adapter = drafts.value
+                fun retireFailedRead() {
+                    // A late failure cannot clear a newer editor opened after leaving this check.
+                    if (warmDraftCheck === admitted) {
+                        warmDraftCheck = null
+                        if (globalDraftLibrary === admitted) { adapter.retire(); globalDraftLibrary = null }
+                    }
+                }
+                try {
+                    adapter.resumeWarmEditor(frame,prior.editor) { opened ->
+                        val verified = opened?.takeIf { warmDraftCheck === admitted && globalDraftLibrary === admitted && currentDraftFrame(frame) &&
+                            it.state == State.VERIFIED && it.fields != null && it.edit != null && it.warmResumeKey != null &&
+                            !it.sourceUnavailable && it.sourceName == null }
+                        if (verified == null) { retireFailedRead(); reply(null) }
+                        else {
+                            warmDraftCheck = null
+                            reply(JSONObject().put("status",verified.state.name).edit(verified.edit)
+                                .put("fields",verified.fields?.let(::content)).put("warmResumeKey",verified.warmResumeKey)
+                                .put("resumedKey",prior.editor.key).put("resumedWindow",frame.windowId))
+                        }
+                    }
+                } catch (failure: Exception) { retireFailedRead(); throw failure }
+                changed()
+                return
+            }
             if (command == "drafts.returnGenerated") {
                 exact("returnHandle")
                 val origin = generatedDraftReturn?.takeIf { it.handle == text("returnHandle") && it.window.id == frame.windowId }
@@ -954,7 +1013,7 @@ internal class PocketWebAttachments(
                     active.id == frame.windowId && acceptsWindow(active.ticket) &&
                     frames[frame.frameId]?.location == location(flow.state) && current() &&
                     (!drafts.isInitialized() || !drafts.value.showing()))
-                DraftLibraryVisit(visit, current).also { globalDraftLibrary = it; changed() }
+                DraftLibraryVisit(visit, current).also { retiredSavedDraft = null; globalDraftLibrary = it; changed() }
             } else null
             check(currentDraftFrame(frame))
             val adapter = drafts.value
@@ -978,7 +1037,8 @@ internal class PocketWebAttachments(
                 }
                 "drafts.open" -> { exact("rowHandle"); adapter.open(frame, text("rowHandle")) { opened ->
                     reply(opened?.let { JSONObject().put("status", it.state.name).edit(it.edit)
-                        .put("fields", it.fields?.let(::content)).put("sourceName", it.sourceName).sourceUnavailable(it.sourceUnavailable) })
+                        .put("fields", it.fields?.let(::content)).put("sourceName", it.sourceName)
+                        .put("warmResumeKey",it.warmResumeKey).sourceUnavailable(it.sourceUnavailable) })
                 } }
                 "drafts.saveFirst" -> { exact("editorHandle", "fields"); adapter.firstSave(frame, text("editorHandle"), fields(), ::saved) }
                 "drafts.checkFirst" -> { exact("editorHandle"); adapter.checkFirst(frame, text("editorHandle"), ::saved) }
@@ -1061,7 +1121,7 @@ internal class PocketWebAttachments(
                         reply(result)
                     }
                 }
-                "drafts.leave" -> { exact(); adapter.leave(frame); reply(JSONObject().put("left", true)) }
+                "drafts.leave" -> { exact(); adapter.leave(frame); warmDraftCheck = null; reply(JSONObject().put("left", true)) }
                 else -> error("未知的本机文档草稿操作")
             }
         } catch (_: Exception) { done(null, unavailable) }

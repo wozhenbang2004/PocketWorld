@@ -135,7 +135,7 @@ import {TaskInference} from './TaskInference';
 import {TokenBudgetsWorkspace} from './TokenBudgetsWorkspace';
 import {QuickPanelVoiceDraft} from './QuickPanelVoiceDraft';
 import {SkillDraftReview,type ConversationDraftTarget,type ReviewedSkillTarget} from './SkillDraftReview';
-import {MemoryDraftReview,type SavedMemoryConversationPin} from './MemoryDraftReview';
+import {MemoryDraftReview,type OriginalMemoryDraftReply,type SavedMemoryConversationPin} from './MemoryDraftReview';
 import {RouteReference,type RouteReferenceTarget} from './RouteReference';
 import {ConversationDrafts} from './ConversationDrafts';
 import {ConversationWork} from './ConversationWork';
@@ -186,6 +186,7 @@ type Json=Record<string,any>;
 type Task={id:string;goal:string;status:string;summary?:string;executionMode?:string;updatedAt?:number;raw?:Json;hostReceipt?:Json};
 type OriginalReminderSource={conversationId:string;messageId:string;sourceRevision:number;taskId:string;runId:string;epoch:number;replyId:string};
 type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:number;navigation:number;resume:number;returnFocus?:HTMLButtonElement|null};
+type OriginalMemoryDraftVisit={source:OriginalMemoryDraftReply&{conversationId:string;replyId:string};documentEpoch:number;navigation:number;resume:number;trigger:HTMLButtonElement};
 type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
@@ -533,6 +534,7 @@ export default function App(){
  const headerActionsGlass=useNavigationGlass<HTMLDivElement>();
  const [skillDraftTarget,setSkillDraftTarget]=useState<(ConversationDraftTarget&{chatWork?:ChatWorkReturn})|null>(null);
  const [memoryDraftTarget,setMemoryDraftTarget]=useState<ConversationDraftTarget|null>(null);
+ const [originalMemoryDraft,setOriginalMemoryDraft]=useState<OriginalMemoryDraftVisit|null>(null);
  const [personalTarget,setPersonalTarget]=useState<PersonalTarget>({view:'home'}),[personalTargetKey,setPersonalTargetKey]=useState(0);
  const [conversationMemoryOpen,setConversationMemoryOpen]=useState(false),[conversationMemoryControls,setConversationMemoryControls]=useState<ConversationMemoryControls|null>(null);
  const conversationMemoryBack=useRef<(()=>boolean)|null>(null);
@@ -2638,6 +2640,30 @@ export default function App(){
  };
  const shownOriginalReminder=originalReminderChat&&originalReminderChatCurrent(originalReminderChat)?originalReminderChat:null;
  useEffect(()=>{if(originalReminderChat&&!shownOriginalReminder)setOriginalReminderChat(null)},[originalReminderChat,shownOriginalReminder]);
+ const originalMemoryDraftCurrent=(visit:OriginalMemoryDraftVisit)=>{
+  const live=bridge.getState(),view=obj(live.view),owner=live.state,source=visit.source;
+  if(route!=='chat'||intent!=='chat'||taskOpen||taskOpening||document.hidden||!visit.trigger.isConnected||
+     visit.documentEpoch!==bridge.getDocumentEpoch()||visit.navigation!==navigationWindow.current||view.section!==null||view.taskId!==null||
+     view.resumeRevision!==visit.resume||owner.conversationId!==source.conversationId||owner.conversationReader||owner.filePath||
+     owner.queuedInputsPage||owner.chatAttachmentPickerOpen||owner.attachmentWorkspace?.open||obj(live.phoneDraft).channelOrigin!==false)return false;
+  const rows=asArray<Message>(owner.messages).filter(row=>row.id===source.messageId&&row.sourceRevision===source.sourceRevision);
+  const reply=rows.length===1&&messageReplyContext(rows[0]);
+  return !!reply&&reply.originalMemoryDraftRecorded===true&&reply.taskId===source.taskId&&reply.runId===source.runId&&reply.epoch===source.epoch&&
+    reply.replyId===source.replyId&&reply.deliveryId===null&&reply.replyToMessageIds.length===1;
+ };
+ const shownOriginalMemoryDraft=originalMemoryDraft&&originalMemoryDraftCurrent(originalMemoryDraft)?originalMemoryDraft:null;
+ useEffect(()=>{
+  if(!originalMemoryDraft)return;
+  if(!shownOriginalMemoryDraft){setOriginalMemoryDraft(null);return}
+  const hidden=()=>{if(document.hidden)setOriginalMemoryDraft(null)};
+  const leave=()=>setOriginalMemoryDraft(null);
+  document.addEventListener('visibilitychange',hidden);window.addEventListener('pagehide',leave);
+  return()=>{document.removeEventListener('visibilitychange',hidden);window.removeEventListener('pagehide',leave)};
+ },[originalMemoryDraft,shownOriginalMemoryDraft]);
+ const closeOriginalMemoryDraft=(visit:OriginalMemoryDraftVisit)=>{
+  setOriginalMemoryDraft((active:OriginalMemoryDraftVisit|null)=>active===visit?null:active);
+  requestAnimationFrame(()=>{if(originalMemoryDraftCurrent(visit))visit.trigger.focus({preventScroll:true})});
+ };
  const originalReminderPage=route==='automation'&&originalReminderRule?.navigation===navigationRevision&&
   originalReminderRule.documentEpoch===personalDocumentEpoch?originalReminderRule:undefined;
  const closeOriginalReminder=(visit:OriginalReminderChatVisit)=>{
@@ -2716,7 +2742,7 @@ export default function App(){
    }
   }
   if(route==='chat'&&savedHostSession.current){closeSavedHost();return true}
-  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,navigationMoreOpen,chatMenuOpen,deliveredFileVisit,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
+  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(shownOriginalMemoryDraft){closeOriginalMemoryDraft(shownOriginalMemoryDraft);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,navigationMoreOpen,chatMenuOpen,deliveredFileVisit,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,shownOriginalMemoryDraft,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{
@@ -6261,6 +6287,8 @@ export default function App(){
     const savedTrace=!phoneResult&&!taskResult&&m.id&&Number(m.sourceRevision)>0?replyContext:null;
     const reminderReply=route==='chat'&&m.role==='assistant'&&!m.originalHostFinal&&savedTrace?.originalReminderRecorded===true&&savedTrace.replyId&&savedTrace.deliveryId===null&&
       savedTrace.replyToMessageIds.length===1&&m.id&&Number.isSafeInteger(m.sourceRevision)&&can('plans.reviewSchedule')?savedTrace:null;
+    const memoryDraftReply=route==='chat'&&intent==='chat'&&!taskOpen&&!taskOpening&&!state.conversationReader&&!m.originalHostFinal&&
+      savedTrace?.originalMemoryDraftRecorded===true&&savedTrace.replyId&&m.sourceRevision===1&&can('memoryDraft.open')?savedTrace:null;
     const noteIdentity=!phoneResult&&!taskResult&&replyContext&&!representedProjectRuns.has(workIdentityKey(replyContext))&&messageTaskAnchors.get(replyContext.taskId)===index?replyContext:null;
     const preparations=anchoredPreparations.get(index),originalMessageWork=m.id?messageWork.get(m.id):undefined;
     const originalProject=preparations?.length===1?preparations[0]:null;
@@ -6325,6 +6353,15 @@ export default function App(){
        </Button>}
       {m.role==='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)} onSpeak={can('speech.speak')&&m.id&&row.lastOfRole?playing=>run(playing?'speech.speak':'speech.stop',{messageId:m.id}):undefined} speaking={!!state.speaking}/>}
       {memoryShortcut&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconMemory} aria-label="核对这条回答提供给模型的记忆" onClick={()=>setProvidedMemoryMessage(memoryShortcut)}>本次记忆</Button>}
+      {memoryDraftReply&&<Button variant="secondary" size="small" className="pw-message-trace" leadingIcon={IconMemory}
+        onClick={event=>{
+          const live=bridge.getState(),resume=obj(live.view).resumeRevision,conversation=live.state.conversationId;
+          if(originalMemoryDraft||memoryDraftTarget||!m.id||!memoryDraftReply.replyId||typeof conversation!=='string'||!Number.isSafeInteger(resume))return;
+          const visit:OriginalMemoryDraftVisit={source:{conversationId:conversation,messageId:m.id,sourceRevision:1,taskId:memoryDraftReply.taskId,
+            runId:memoryDraftReply.runId,epoch:memoryDraftReply.epoch,replyId:memoryDraftReply.replyId},
+            documentEpoch:bridge.getDocumentEpoch(),navigation:navigationWindow.current,resume:Number(resume),trigger:event.currentTarget};
+          if(originalMemoryDraftCurrent(visit)){setMessageMenu(null);setOriginalMemoryDraft(visit)}
+        }}>核对记忆提案</Button>}
       <PopoverTrigger isOpen={messageMenu===id} onOpenChange={value=>setMessageMenu(value?id:null)}>
        <IconButton icon={IconMore} size="small" aria-label="消息操作与来源"/>
        <Popover className="pw-message-popover" aria-label="消息操作与来源"><div className="pw-message-menu">
@@ -6517,7 +6554,11 @@ export default function App(){
     asArray<string>(live.moduleBusy).includes('workspace.list'))){
     setLocalError('原项目或导入副本状态已变化，没有打开其他文件。');return;
   }
-  showImportedEditor(target);
+  // Reopening a single registered phone import should reach the same inventory
+  // as its fresh receipt. Let that existing window verify any prior saved file.
+  const copies=asArray<Json>(live.features?.local?.checkouts).filter(row=>row?.projectId===target.projectId);
+  const originalPhoneDirectory=target.exactPhoneSource===true&&copies.length===1&&copies[0].id===target.checkoutId;
+  showImportedEditor(originalPhoneDirectory?{...target,openDirectory:true}:target);
  };
  phoneImportFilesQuiet.current=project=>ready&&route==='projects'&&!previewBlocked&&!projectPreview.expanded&&!packageOpening&&!taskOpening&&
   !projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&!projectLocalFilesIntent&&!pythonSetupReturn&&!dependencyBuildReturn&&
@@ -6925,6 +6966,9 @@ export default function App(){
  {isChatSurface&&newMemoryScope&&<NewConversationMemory key={draftKey+':'+draftEpoch} composer={composer} allowSingle={singleLearningScope} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} registerBack={registerConversationMemoryBack}/>}
  {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}/>}
  {memoryDraftTarget&&<MemoryDraftReview key={`${memoryDraftTarget.runId}:${memoryDraftTarget.operationId}`} target={memoryDraftTarget} originalWorkReturn={savedMemoryWorkReturn} onOpenMemory={target=>{setMemoryDraftTarget(null);openPersonalMemory({view:'memory',...target})}} onClose={()=>setMemoryDraftTarget(null)}/>}
+ {shownOriginalMemoryDraft&&!memoryDraftTarget&&<MemoryDraftReview key={`answer:${shownOriginalMemoryDraft.source.messageId}`}
+  originalReply={shownOriginalMemoryDraft.source} isCurrent={()=>originalMemoryDraftCurrent(shownOriginalMemoryDraft)}
+  onOpenMemory={target=>{setOriginalMemoryDraft(null);openPersonalMemory({view:'memory',...target})}} onClose={()=>closeOriginalMemoryDraft(shownOriginalMemoryDraft)}/>}
  {state.quickPanelVoice&&<QuickPanelVoiceDraft key={state.quickPanelVoice.handoffId} handoff={state.quickPanelVoice} input={obj(state.voiceInput)} run={act}/>}
  {showPhoneNotice&&phoneNotification&&<PhoneNotificationReturn key={phoneNotification.token} notice={phoneNotification} busy={phoneNotification.checking}
   chatVisible={route==='chat'&&!taskOpen&&(intent==='chat'||!!state.conversationReader)} changed={tasks.some(t=>t.id===phoneNotification.taskId&&(t.raw?.runId!==phoneNotification.runId||t.raw?.coordinatorEpoch!==phoneNotification.epoch))} onClose={returnFromPhoneNotice} onSame={can('tasks.open')?()=>enterPhoneNotification(phoneNotification):undefined}

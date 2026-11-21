@@ -71,6 +71,32 @@ public final class AgentRunner {
         /** Called only after this actual request completed and its text reached the original journal. */
         default void completed(OwnerReply reply,RunControl original)throws Exception { }
     }
+    /** Body-free link from the existing canonical native tool receipt, never a grant or provider claim. */
+    private record OriginalMemoryDraft(String task,String run,int epoch,String conversation,String operation,String digest,
+                                       dev.pocketengine.features.memory.SourceRef input) {
+        static OriginalMemoryDraft observed(String task,RunControl control,String operation,JSONObject receipt){
+            try{
+                var run=control.hostRunIdentity();JSONObject proposal=receipt.optJSONObject("memoryDraft");
+                if(run==null||!control.matchesHostRun(task,run.runId(),run.epoch())||!operation.matches("[a-f0-9-]{36}")||
+                        !Boolean.TRUE.equals(receipt.opt("ok"))||!Boolean.TRUE.equals(receipt.opt("proposed"))||
+                        !Boolean.TRUE.equals(receipt.opt("reviewRequired"))||!Boolean.FALSE.equals(receipt.opt("formalMemorySaved"))||
+                        !Boolean.FALSE.equals(receipt.opt("executionAuthorized"))||receipt.has("memoryDraftApply")||proposal==null||
+                        !"pocketworld.conversation-memory-draft.v1".equals(proposal.opt("format"))||
+                        !"pending_owner".equals(proposal.opt("status"))||!"create".equals(proposal.opt("action"))||
+                        !task.equals(proposal.opt("taskId"))||!run.runId().equals(proposal.opt("runId"))||
+                        !Integer.valueOf(run.epoch()).equals(proposal.opt("epoch"))||!operation.equals(proposal.opt("operationId"))||
+                        !Boolean.FALSE.equals(proposal.opt("formalMemorySaved"))||!Boolean.FALSE.equals(proposal.opt("executionAuthorized")))return null;
+                String conversation=proposal.getString("conversationId"),digest=proposal.getString("proposalDigest");
+                JSONArray refs=proposal.getJSONArray("sourceRefs");JSONObject scope=proposal.getJSONObject("scope");
+                if(conversation.isBlank()||!digest.matches("[a-f0-9]{64}")||refs.length()!=1||
+                        !"owner".equals(scope.opt("ownerId"))||!"private".equals(scope.opt("spaceId"))||
+                        proposal.optJSONObject("candidate")==null)return null;
+                var input=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
+                return "message".equals(input.kind)&&"owner".equals(input.ownerId)&&"private".equals(input.spaceId)
+                        ?new OriginalMemoryDraft(task,run.runId(),run.epoch(),conversation,operation,digest,input):null;
+            }catch(Exception unavailable){return null;} // Optional link; never impede the original tool or answer.
+        }
+    }
     /** Native proof of one completed model turn. Ordinary JSON cannot construct this value. */
     public static final class OwnerReply {
         public final String id,taskId,text;
@@ -78,15 +104,17 @@ public final class AgentRunner {
         private final java.util.List<String> messageIds;
         private final String memoryReference,memoryContext,projectConvention;
         private final RunControl producer;
+        private final OriginalMemoryDraft memoryDraft;
         private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context){
             this(taskId,text,ids,producer,reference,context,null);
         }
         private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,String physical){
-            this(taskId,text,ids,producer,reference,context,physical,false);
+            this(taskId,text,ids,producer,reference,context,physical,false,null);
         }
-        private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,String physical,boolean publicAnswerSources){
+        private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,String physical,boolean publicAnswerSources,OriginalMemoryDraft memoryDraft){
             this.id=reference==null?java.util.UUID.randomUUID().toString():reference.optString("answerId");this.taskId=taskId;this.text=text;messageIds=immutableOwnerIds(ids);this.producer=java.util.Objects.requireNonNull(producer);
             this.publicAnswerSources=reference==null&&publicAnswerSources;
+            this.memoryDraft=memoryDraft;
             memoryReference=reference==null?null:reference.toString();memoryContext=context==null?null:context.toString();
             String projected=null;try{JSONObject actual=dev.pocketengine.features.local.project.ProjectConventionDelivery.forReply(producer,taskId,physical,id,text);if(actual!=null)projected=actual.toString();}
             catch(Exception unavailable){/* No exact source evidence: the original answer still stands. */}projectConvention=projected;
@@ -96,6 +124,11 @@ public final class AgentRunner {
         public JSONObject memoryReference()throws Exception{return memoryReference==null?null:new JSONObject(memoryReference);}
         public JSONObject projectConvention()throws Exception{return projectConvention==null?null:new JSONObject(projectConvention);}
         public JSONObject memoryContext()throws Exception{return memoryContext==null?null:new JSONObject(memoryContext);}
+        public JSONObject originalMemoryDraftPin(String conversation,String run,int epoch,String input,long revision)throws Exception{
+            return memoryDraft!=null&&taskId.equals(memoryDraft.task)&&run.equals(memoryDraft.run)&&epoch==memoryDraft.epoch&&
+                    conversation.equals(memoryDraft.conversation)&&input.equals(memoryDraft.input.sourceId)&&revision==memoryDraft.input.revision
+                    ?new JSONObject().put("operationId",memoryDraft.operation).put("proposalDigest",memoryDraft.digest):null;
+        }
     }
     private final RequestProjection requestProjection;
     private final OwnerInputs ownerInputs;
@@ -556,6 +589,8 @@ public final class AgentRunner {
             String recallIntent=latestOwnerRecallQuery(history,lastFeedback.isEmpty()?goal:lastFeedback);
             String durableOwnerReturnNonce="";
             JSONObject lastAnonymousWebResult=null;
+            OriginalMemoryDraft originalMemoryDraft=null;
+            boolean memoryDraftAttempted=false;
 
             SafeModelRecovery modelRecovery=new SafeModelRecovery();
             int firstRound=originalModelRounds;
@@ -957,7 +992,7 @@ public final class AgentRunner {
                     OwnerReply savedOwnerReply=null;
                     if(ownerInputs!=null&&!requestedOwnerIds.isEmpty()){
                         savedOwnerReply=new OwnerReply(taskId,finalMessage.getString("content"),requestedOwnerIds,control,memoryReference,memoryDependency,nativeApprovedResponse?null:nativeRequest[0],
-                                memoryReference==null&&hasCurrentAnonymousWebResult(history,finalAnswerIndex,lastAnonymousWebResult));
+                                memoryReference==null&&hasCurrentAnonymousWebResult(history,finalAnswerIndex,lastAnonymousWebResult),originalMemoryDraft);
                         ownerInputs.completed(savedOwnerReply,control);
                     }
                     // Queue means next owner turn, not cancellation of the current tool batch.
@@ -1327,6 +1362,10 @@ public final class AgentRunner {
                     }
                     ToolReceiptSettlement.Decision settlement=settleToolDecision(journal,recordedOperation,receipt);
                     ToolOutcome toolOutcome=settlement.outcome;
+                    if(instructionProfile==NativeInstructionProfile.OWNER_BUTLER&&"memory_propose".equals(name)&&recordedOperation!=null){
+                        originalMemoryDraft=!memoryDraftAttempted&&toolOutcome.successful()?OriginalMemoryDraft.observed(taskId,control,recordedOperation,receipt):null;
+                        memoryDraftAttempted=true;
+                    }
                     if(nativeApprovedResponse&&toolOutcome.successful())nativeApprovalCompleted=true;
                     boolean projectRunning=settlement.projectRunning,nativeRunning=settlement.nativeRunning;
                     if(nativeRunning&&!ownedServiceOperations.contains(recordedOperation))ownedServiceOperations.add(recordedOperation);

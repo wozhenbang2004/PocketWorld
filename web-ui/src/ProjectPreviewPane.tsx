@@ -18,10 +18,10 @@ type Options = { value: unknown; exportValue?: unknown; projectId: string; resum
 const fixedPackage = (view: ProjectPreviewState | null) => !!view &&
   (!!view.packageOperationId || view.metadata.origin === 'fixed_workspace_project_artifact');
 const exportPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing', 'exported', 'written_unverified', 'cancelled', 'rejected', 'unknown']);
-const exportPendingPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing']);
+export const exportPendingPhases = new Set(['checking', 'document_requested', 'selection_returned', 'writing']);
 const sameExportTarget = (value: PackageExportTarget | null, target: PackageExportTarget | null) => !!value && !!target &&
   value.taskId === target.taskId && value.operationId === target.operationId && value.artifactId === target.artifactId && value.artifactSha256 === target.artifactSha256;
-function packageExportState(value: unknown): PackageExportState | null {
+export function packageExportState(value: unknown): PackageExportState | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const source = value as Data;
   if (source.kind !== 'project_package_export' || !['taskId', 'operationId', 'artifactId', 'projectId', 'requestId'].every(key => typeof source[key] === 'string' && source[key].length > 0 && source[key].length <= 200) ||

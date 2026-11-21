@@ -14,38 +14,64 @@ import { usePendingCandidateDeadline } from './usePendingCandidateDeadline';
 
 type Data = Record<string, any>;
 export type SavedMemoryConversationPin = ConversationDraftTarget & { conversationId: string };
+export type OriginalMemoryDraftReply = Pick<ConversationDraftTarget, 'taskId' | 'runId' | 'epoch'> & { messageId: string; sourceRevision: 1 };
+type MemoryDraftProps = ({ target: ConversationDraftTarget; originalReply?: never; isCurrent?: never } |
+  { target?: never; originalReply: OriginalMemoryDraftReply; isCurrent: () => boolean }) & {
+  onClose: () => void;
+  onOpenMemory?: (target: { id: string; candidate: boolean }) => void;
+  originalWorkReturn?: (pin: SavedMemoryConversationPin) => { open?: () => void } | undefined;
+};
+function originalReplyTarget(value: unknown, reply: OriginalMemoryDraftReply): ConversationDraftTarget | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 5) return null;
+  const row = value as Record<string, unknown>;
+  return row.taskId === reply.taskId && row.runId === reply.runId && row.epoch === reply.epoch &&
+    typeof row.operationId === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(row.operationId) &&
+    typeof row.proposalDigest === 'string' && /^[a-f0-9]{64}$/.test(row.proposalDigest)
+    ? { taskId: reply.taskId, runId: reply.runId, epoch: reply.epoch, operationId: row.operationId, proposalDigest: row.proposalDigest } : null;
+}
 const proposalWindow = () => {
   const s = bridge.getState().state;
   return JSON.stringify([bridge.getDocumentEpoch(), s.conversationId, s.memoryRefreshRevision, s.traceSourceRevision]);
 };
-export function MemoryDraftReview({ target, onClose, onOpenMemory, originalWorkReturn }: {
-  target: ConversationDraftTarget;
-  onClose: () => void;
-  onOpenMemory?: (target: { id: string; candidate: boolean }) => void;
-  originalWorkReturn?: (pin: SavedMemoryConversationPin) => { open?: () => void } | undefined;
-}) {
+export function MemoryDraftReview({ target, originalReply, isCurrent, onClose, onOpenMemory, originalWorkReturn }: MemoryDraftProps) {
   const [value, setValue] = useState<Data | null>(null), [reviewClosed, setReviewClosed] = useState(false);
+  const [resolved, setResolved] = useState<ConversationDraftTarget | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(true), [attempted, setAttempted] = useState(false), [undoUncertain, setUndoUncertain] = useState(false);
   const [focused, setFocused] = useState<{ id: string; revision: number; duplicate: boolean; windowKey: string } | null>(null);
   const handle = useRef(''), alive = useRef(true), entered = useRef(false);
-  const original = { taskId: target.taskId, runId: target.runId, epoch: target.epoch, operationId: target.operationId, proposalDigest: target.proposalDigest };
+  const selected = target || resolved;
+  const original = selected && { taskId: selected.taskId, runId: selected.runId, epoch: selected.epoch, operationId: selected.operationId, proposalDigest: selected.proposalDigest };
+  const openInput = originalReply ? { messageId: originalReply.messageId, sourceRevision: originalReply.sourceRevision } : original;
+  const sameReply = () => !originalReply || isCurrent?.() === true;
+  const acceptOpen = (result: Data) => {
+    if (originalReply) {
+      const next = originalReplyTarget(result.originalTarget, originalReply);
+      if (!next || original && (original.operationId !== next.operationId || original.proposalDigest !== next.proposalDigest)) {
+        if (result.handle) void bridge.command('memoryDraft.close', { handle: result.handle }).catch(() => {});
+        throw new Error('没有核对到这条回答的原记忆提案，未打开其他提案。');
+      }
+      setResolved(next);
+    }
+    handle.current = result.handle || ''; setValue(result);
+  };
   useEffect(() => {
     alive.current = true;
-    void bridge.command('memoryDraft.open', original).then(result => {
-      if (alive.current) { setValue(result); handle.current = result.handle || ''; }
+    if (!openInput || !sameReply()) { setBusy(false); return; }
+    void bridge.command('memoryDraft.open', openInput).then(result => {
+      if (alive.current && sameReply()) acceptOpen(result);
       else if (result.handle) void bridge.command('memoryDraft.close', { handle: result.handle }).catch(() => {});
-    }).catch(failure => { if (alive.current) setError(failure.message); }).finally(() => { if (alive.current) setBusy(false); });
+    }).catch(failure => { if (alive.current && sameReply()) setError(failure.message); }).finally(() => { if (alive.current) setBusy(false); });
     return () => { alive.current = false; const id = handle.current; handle.current = ''; if (id) void bridge.command('memoryDraft.close', { handle: id }).catch(() => {}); };
   }, []);
   const request = async (name: string, args: Data, accept: (result: Data) => void, uncertain?: () => void) => {
-    if (entered.current || busy) return;
+    if (entered.current || busy || !sameReply()) return;
     entered.current = true; setBusy(true); setError('');
     try {
       const result = await bridge.command(name, args);
-      if (alive.current) accept(result);
+      if (alive.current && sameReply()) accept(result);
       else if (name === 'memoryDraft.open' && result.handle) void bridge.command('memoryDraft.close', { handle: result.handle }).catch(() => {});
     } catch (failure) {
-      if (alive.current) { uncertain?.(); setError(failure instanceof Error ? failure.message : String(failure)); }
+      if (alive.current && sameReply()) { uncertain?.(); setError(failure instanceof Error ? failure.message : String(failure)); }
     } finally { entered.current = false; if (alive.current) setBusy(false); }
   };
   const review = value?.review, proposal = value?.proposal || review?.proposal || {}, apply = value?.apply || (value?.status ? value : {});
@@ -86,7 +112,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory, originalWorkR
     Number.isSafeInteger(receiptRecord.revision) && receiptRecord.revision > 0;
   const savedReceipt = value?.receipt || apply.receipt || apply;
   // This immutable receipt can identify its original conversation, not the record's current state.
-  const returnToSource = canReadSaved && saved && !undoPending && value?.queryOriginalReceipt !== true &&
+  const returnToSource = original && canReadSaved && saved && !undoPending && value?.queryOriginalReceipt !== true &&
     (action === 'create' || action === 'update') && proposal.format === 'pocketworld.conversation-memory-draft.v1' &&
     typeof proposal.conversationId === 'string' && proposal.conversationId.trim() && proposal.conversationId.length <= 240 &&
     savedReceipt.status === 'saved' && savedReceipt.action === action && savedReceipt.journalRecorded !== false &&
@@ -100,13 +126,13 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory, originalWorkR
   const candidatePin = action === 'create' ? proposal.candidate : undefined;
   const candidateUntil = pending && review?.after?.status === 'pending' && typeof candidatePin?.id === 'string' && Number.isSafeInteger(candidatePin.revision) && candidatePin.revision > 0 && candidatePin.id === review.after.id && candidatePin?.revision === review.after.revision && Number.isSafeInteger(expiry) && expiry > 0 ? expiry : 0;
   const candidateExpired = usePendingCandidateDeadline(candidateUntil);
-  const expiredReceipt = outcomeStatus === 'rejected' && apply.outcome === 'candidate_expired_before_save' && apply.action === 'create' &&
+  const expiredReceipt = original && outcomeStatus === 'rejected' && apply.outcome === 'candidate_expired_before_save' && apply.action === 'create' &&
     Object.entries(original).every(([key, field]) => apply[key] === field) && apply.accepted === false && apply.mutationApplied === false && apply.formalMemorySaved === false && apply.undoAvailable === false &&
     typeof candidatePin?.id === 'string' && candidatePin.id === apply.candidateId && Number.isSafeInteger(candidatePin.revision) && candidatePin.revision > 0 && candidatePin.revision === apply.candidateRevision &&
     Number.isSafeInteger(apply.expiresAt) && apply.expiresAt > 0 && Number.isSafeInteger(apply.checkedAt) && apply.expiresAt <= apply.checkedAt;
 
   const expiryLabel = typeof expiry === 'number' && Number.isSafeInteger(expiry) && expiry > 0 ? new Date(expiry).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-  const title = dismissOnly ? '这份旧提案不能采纳' : undoPending ? '撤销结果待核对' : duplicate ? '已有相同内容' : reverted ? '已撤销这次保存' : saved ? action === 'forget' ? '已忘记这条记忆' : action === 'update' ? '已更新记忆' : '已记住'
+  const title = originalReply && !value ? '核对记忆提案' : dismissOnly ? '这份旧提案不能采纳' : undoPending ? '撤销结果待核对' : duplicate ? '已有相同内容' : reverted ? '已撤销这次保存' : saved ? action === 'forget' ? '已忘记这条记忆' : action === 'update' ? '已更新记忆' : '已记住'
     : action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新这条记忆' : '记住这件事';
   const status: Record<string, string> = { pending_owner: '待你确认', saved: action === 'forget' ? '这次遗忘已完成' : '这次记忆已保存', already_saved: '已有相同内容，本次没有重复保存', reverted: '这次保存已撤销', cancelled: '已放弃这个提案', rejected: '本次没有修改记忆', unknown: '修改结果待核对', applying_unknown: '修改结果待核对', conflict: '记忆已有后续变化，请查看最新内容' };
   const close = () => { if (!busy) onClose(); };
@@ -116,7 +142,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory, originalWorkR
     handle.current = ''; setValue({ ...result, proposal: result.proposal || proposal }); setReviewClosed(false); setUndoUncertain(false);
   };
   const queryOriginal = () => {
-    if (entered.current || busy) return;
+    if (!original || entered.current || busy) return;
     // Querying retires the native review window: don't leave its old page visible while waiting.
     if (handle.current) { handle.current = ''; setValue(null); setReviewClosed(true); }
     void request('memoryDraft.query', original, acceptOutcome);
@@ -127,7 +153,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory, originalWorkR
       <div className="pw-drawer-handle" />
       <header className="pw-drawer-header"><div><Drawer.Title>{focused ? '这条个人记忆' : title}</Drawer.Title><Drawer.Description id="memory-draft-description">{focused ? '只核对原回执指向的正式记录，不打开个人目录。' : dismissOnly ? '原来源不允许用于记忆整理。你仍可以忽略这份提案。' : undoPending ? '原保存已完成，请查询这次撤销的实际结果。' : saved || reverted || duplicate ? '查看这次修改的实际结果。' : '查看内容与来源，决定是否保存。'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
       <div className="pw-drawer-body pw-memory-draft-review pw-knowledge-workspace">
-        {focused ? <OriginalSavedMemory {...focused} target={original} close={onClose} manage={onOpenMemory ? () => { onOpenMemory({ id: focused.id, candidate: false }); onClose(); } : undefined} /> : <>
+        {focused && original ? <OriginalSavedMemory {...focused} target={original} close={onClose} manage={onOpenMemory ? () => { onOpenMemory({ id: focused.id, candidate: false }); onClose(); } : undefined} /> : <>
         {busy && <ShimmerText>正在读取记忆…</ShimmerText>}
         {error && <p className="pw-memory-draft-error" role="alert">{error}</p>}
         {outcomeStatus && <p className="pw-memory-draft-result" role="status">{dismissOnly ? '只可忽略，不显示原话或建议正文。' : undoPending ? '撤销结果待核对，请查询这次修改。' : status[outcomeStatus] || '提案状态待核对'}</p>}
@@ -144,7 +170,7 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory, originalWorkR
                 : <span className="pw-muted" role="status">请在原对话核对这条记忆。当前不能切换。</span>
               : <Button variant="secondary" disabled={busy} onClick={() => { setFocused({ id: receiptRecord.id, revision: receiptRecord.revision, duplicate, windowKey: originalMemoryWindow() }); setValue(null); }}>只看这条记忆</Button>)}
             {duplicate && !receiptRecord && typeof candidate?.id === 'string' && onOpenMemory && <Button variant="secondary" disabled={busy} onClick={() => { onOpenMemory({ id: candidate.id, candidate: true }); onClose(); }}>查看待确认内容</Button>}
-            {saved && action === 'create' && undoAvailable && !undoPending && <Button variant="ghost" leadingIcon={IconUndo} disabled={busy} onClick={() => { void request('memoryDraft.undo', original, acceptOutcome, () => setUndoUncertain(true)); }}>撤销这次保存</Button>}
+            {original && saved && action === 'create' && undoAvailable && !undoPending && <Button variant="ghost" leadingIcon={IconUndo} disabled={busy} onClick={() => { void request('memoryDraft.undo', original, acceptOutcome, () => setUndoUncertain(true)); }}>撤销这次保存</Button>}
           </div>
         </section>}
         {proposal.reason && !saved && !reverted && !duplicate && <p>{proposal.reason}</p>}
@@ -167,8 +193,8 @@ export function MemoryDraftReview({ target, onClose, onOpenMemory, originalWorkR
           </Accordion>
         </>}
         {reviewClosed && <p className="pw-muted" role="status">原审阅窗口已关闭。没有因此确认或忽略提案。</p>}
-        {reviewClosed || canReopen ? <Button variant="secondary" disabled={busy} onClick={() => { void request('memoryDraft.open', original, result => { handle.current = result.handle || ''; setValue(result); setReviewClosed(false); setAttempted(false); setUndoUncertain(false); }); }}>重新核对原提案</Button>
-          : (!pending || attempted || error || undoUncertain) && <Button variant="ghost" disabled={busy} onClick={queryOriginal}>查询这次修改</Button>}
+        {openInput && (reviewClosed || canReopen || originalReply && !original && error) ? <Button variant="secondary" disabled={busy} onClick={() => { void request('memoryDraft.open', openInput, result => { acceptOpen(result); setReviewClosed(false); setAttempted(false); setUndoUncertain(false); }); }}>重新核对原提案</Button>
+          : original && (!pending || attempted || error || undoUncertain) && <Button variant="ghost" disabled={busy} onClick={queryOriginal}>查询这次修改</Button>}
         </>}
       </div>
       {!focused && pending && <section className="pw-memory-draft-confirmation"><div className="pw-action-row">

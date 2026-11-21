@@ -1106,6 +1106,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null, "原构建窗口已关闭") }
     }
 
+    /** Discard only this Work reader's cached archive bytes; a newer request may be in flight. */
+    internal fun releaseLocalWorkPreviewCache(original: RegisteredProjectPreview) {
+        if (original.fromLocalWebWork && projectPreview === original.bundle && projectPreviewTaskId == original.taskId) {
+            projectPreview = null; projectPreviewTaskId = null
+        }
+    }
     /** Archive/source IO stays on the original worker and outside every TaskStore monitor. */
     internal fun checkProjectPreviewSelection(original: RegisteredProjectPreview, ownerCurrent: () -> Boolean, done: (Boolean, String?) -> Unit) {
         val request = projectPreviewRequest

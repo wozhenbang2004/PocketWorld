@@ -26,6 +26,8 @@ public final class ConversationRepository {
     private static final String FINAL_PUBLIC_ANSWER="nativeAnonymousAnswerFinal";
     private static final String ORIGINAL_REMINDER_OPERATION="nativeOriginalReminderOperation";
     static final String ORIGINAL_REMINDER_RECORDED="originalReminderRecorded";
+    private static final String ORIGINAL_MEMORY_DRAFT="nativeOriginalMemoryDraft";
+    static final String ORIGINAL_MEMORY_DRAFT_RECORDED="originalMemoryDraftRecorded";
     static void requireReplyContent(String text){
         if(text==null||text.isBlank())throw new IllegalArgumentException("模型没有返回文字答复");
         if(!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new IllegalArgumentException("答复含不完整Unicode字符，未替换后保存");
@@ -201,6 +203,20 @@ public final class ConversationRepository {
     private static boolean sameSavedAssistantReply(JSONObject row,String conversation,String task,String run,int epoch,String reply){
         return !reply.isEmpty()&&conversation.equals(row.optString("conversationId"))&&task.equals(row.optString("nativeTaskId"))
                 &&run.equals(row.optString("nativeRunId"))&&epoch==row.optInt("nativeEpoch")&&reply.equals(row.optString("nativeReplyId"));
+    }
+    private static JSONObject originalMemoryDraftPin(JSONObject source){
+        JSONObject pin=source.optJSONObject(ORIGINAL_MEMORY_DRAFT);
+        return pin!=null&&pin.length()==2&&pin.opt("operationId") instanceof String operation&&operation.matches("[a-f0-9-]{36}")&&
+                pin.opt("proposalDigest") instanceof String digest&&digest.matches("[a-f0-9]{64}")?pin:null;
+    }
+    public JSONObject originalMemoryDraftForReply(String conversation,String message,long revision,String task,String run,int epoch,String reply)throws Exception{
+        return read(()->{
+            JSONObject source=source(message);
+            if(revision!=1||!originalSavedAssistantSource(source,revision)||!message.equals(source.opt("sourceId"))||
+                    !sameSavedAssistantReply(source,conversation,task,run,epoch,reply))return null;
+            JSONObject pin=originalMemoryDraftPin(source);
+            return pin==null?null:new JSONObject(pin.toString()).put("taskId",task).put("runId",run).put("epoch",epoch);
+        });
     }
     /** Companion to the original final checkpoint write. Only this one saved source's metadata
      * is promoted; not the message body, the current task, or all replies from this run. */
@@ -817,6 +833,7 @@ public final class ConversationRepository {
         String id=message.getString("id");JSONObject state=source(gen,id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId"))||integer(message,"revision",1)!=state.getLong("revision")||!message.getString("role").equals(state.getString("role")))throw new SecurityException("原消息/来源修订不一致，未保存副本");
         JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");meta.remove("ownerOriginalLocator");long sequence=importedSequence;
         meta.remove(ORIGINAL_REMINDER_RECORDED); // Derived from the private source row, never from message JSON.
+        meta.remove(ORIGINAL_MEMORY_DRAFT);meta.remove(ORIGINAL_MEMORY_DRAFT_RECORDED);
         boolean existing=false;
         try(Cursor row=db.rawQuery("SELECT sequence,meta_json FROM assistant_messages WHERE generation=? AND source_id=? LIMIT 1",new String[]{gen,id})){if(row.moveToFirst()){existing=true;sequence=row.getLong(0);if(new JSONObject(row.getString(1)).optBoolean("personalMemoryExcluded"))meta.put("personalMemoryExcluded",true);}}
         if(!existing&&importedSequence<0&&"user".equals(message.getString("role"))&&gen.equals(activeGeneration())){
@@ -877,6 +894,10 @@ public final class ConversationRepository {
                 &&state.opt(ORIGINAL_REMINDER_OPERATION) instanceof String operation&&operation.matches("[a-f0-9-]{36}"))
             message.put(ORIGINAL_REMINDER_RECORDED,true);
         else message.remove(ORIGINAL_REMINDER_RECORDED);
+        if(originalReply&&row.getLong(2)==1&&!message.optBoolean("importAssignedIdentity")&&!message.has("nativeDeliveryKind")
+                &&originalMemoryDraftPin(state)!=null)message.put(ORIGINAL_MEMORY_DRAFT_RECORDED,true);
+        else message.remove(ORIGINAL_MEMORY_DRAFT_RECORDED);
+        message.remove(ORIGINAL_MEMORY_DRAFT);
         if(message.has("projectConventionRecorded")){
             JSONObject proof=state.optJSONObject("nativeProjectConventionReceipt");String reply=state.optString("nativeReplyId");
             boolean original=Boolean.TRUE.equals(message.opt("projectConventionRecorded"))&&proof!=null
@@ -999,6 +1020,8 @@ public final class ConversationRepository {
         // Historical journal fact only; eligibility and the actual Book record are reread on the owner's click.
         String reminderOperation=selected.originalReminderOperation();
         if(reminderOperation!=null)state.put(ORIGINAL_REMINDER_OPERATION,reminderOperation);
+        JSONObject originalMemoryDraft=selected.originalMemoryDraft();
+        if(originalMemoryDraft!=null)state.put(ORIGINAL_MEMORY_DRAFT,originalMemoryDraft);
         if(selected.completed.publicAnswerSources&&text.equals(selected.completed.text))state.put(PENDING_PUBLIC_ANSWER,CompactionPlan.fingerprint(text));
         JSONObject quote=selected.completed.projectConvention();
         if(quote!=null&&selected.taskId.equals(quote.optString("taskId"))&&selected.runId.equals(quote.optString("runId"))&&selected.epoch==quote.optInt("epoch")&&selected.completed.id.equals(quote.optString("replyId"))&&

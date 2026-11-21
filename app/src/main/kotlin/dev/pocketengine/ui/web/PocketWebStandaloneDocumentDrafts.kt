@@ -58,7 +58,9 @@ internal class PocketWebStandaloneDocumentDrafts(
     data class Edit(val editorHandle: String, val versionHandle: String)
     data class NewDraft(val editorHandle: String, val fields: Fields)
     data class Opened(val state: State, val edit: Edit? = null, val fields: Fields? = null,
-                      val sourceName: String? = null, val sourceUnavailable: Boolean = false)
+                      val sourceName: String? = null, val sourceUnavailable: Boolean = false, val warmResumeKey: String? = null)
+    // A prior verified storage pin is only a locator; a fresh ordinary owner frame must read it again.
+    data class WarmEditor(val key: String, val pin: Pin, val pendingDocument: String?)
     data class Saved(val state: State, val edit: Edit? = null, val sourceUnavailable: Boolean = false)
     data class GenerationInput(val fields: Fields, val source: RevisionSource?, val pin: Pin)
     data class GenerationRead(val input: GenerationInput? = null, val sourceUnavailable: Boolean = false)
@@ -67,7 +69,8 @@ internal class PocketWebStandaloneDocumentDrafts(
 
     private data class Scope(val windowId: String, val ticket: PocketWebWindowTicket, val linkedEditor: Boolean,
         val textSource: TextSeed?, val pendingDocument: String?)
-    private data class Editor(val edit: Edit, val pin: Pin, val source: RevisionSource? = null, val removalOnly: Boolean = false)
+    private data class Editor(val edit: Edit, val pin: Pin, val source: RevisionSource? = null,
+                              val removalOnly: Boolean = false, val warmResumeKey: String? = null)
     private class FirstAttempt(val handle: String, var pin: Pin? = null)
     private class LinkedAttempt(val source: RevisionSource, var pin: Pin? = null)
     private class TextAttempt(val source: TextSeed, var pin: Pin? = null, var receipt: TextRetention? = null)
@@ -191,7 +194,7 @@ internal class PocketWebStandaloneDocumentDrafts(
         check(scope == current && editor == null && blank == null) { "请从当前本机草稿列表打开原版本" }
         require(canonicalId(rowHandle)) { "原草稿列表位置无效" }
         val pin = rows[rowHandle] ?: error("该版本不在当前已核对的本机草稿中")
-        openExact(current, frame, pin, done)
+        openExact(current, frame, pin, done, allowWarm = true)
     }
 
     /** Called only after the exact fresh generated original returned to its already-admitted Library. */
@@ -202,7 +205,25 @@ internal class PocketWebStandaloneDocumentDrafts(
         openExact(current, frame, pin, done)
     }
 
-    private fun openExact(current: Scope, frame: Frame, pin: Pin, done: (Opened?) -> Unit) {
+    /** The old frame is retiring. Capture only a positively open, untouched ordinary saved version. */
+    fun warmEditor(windowId: String, ticket: PocketWebWindowTicket, pendingDocument: String?): WarmEditor? {
+        checkMain()
+        val current = scope ?: return null
+        val opened = editor ?: return null
+        val key = opened.warmResumeKey ?: return null
+        if (pending != null || current.linkedEditor || current.textSource != null || opened.source != null || opened.removalOnly ||
+            current.windowId != windowId || current.ticket != ticket || current.pendingDocument != pendingDocument) return null
+        return WarmEditor(key, opened.pin, current.pendingDocument)
+    }
+
+    fun resumeWarmEditor(frame: Frame, saved: WarmEditor, done: (Opened?) -> Unit) {
+        val current = admission(frame, allowPendingDocument = true)
+        check(scope == null && pending == null && current.pendingDocument == saved.pendingDocument)
+        scope = current
+        openExact(current, frame, saved.pin, done, allowWarm = true)
+    }
+
+    private fun openExact(current: Scope, frame: Frame, pin: Pin, done: (Opened?) -> Unit, allowWarm: Boolean = false) {
         enqueue(current, frame, fallback = { Read(unknown()) },
             call = { storage, window -> readExact(storage, window, pin) }) { actual ->
             done(actual?.let { result ->
@@ -212,8 +233,9 @@ internal class PocketWebStandaloneDocumentDrafts(
                 val edit = Edit(token(), token())
                 val source = draft.metadata().revisionSource()
                 val unavailable = source != null && result.sourceName == null
-                editor = Editor(edit, pin, source, removalOnly = unavailable)
-                Opened(State.VERIFIED, edit, draft.fields().takeUnless { unavailable }, result.sourceName, unavailable)
+                val warmKey = if (allowWarm && source == null) token() else null
+                editor = Editor(edit, pin, source, removalOnly = unavailable, warmResumeKey = warmKey)
+                Opened(State.VERIFIED, edit, draft.fields().takeUnless { unavailable }, result.sourceName, unavailable, warmKey)
             })
         }
     }
@@ -222,9 +244,10 @@ internal class PocketWebStandaloneDocumentDrafts(
     fun save(frame: Frame, shown: Edit, fields: Fields, done: (Saved?) -> Unit) {
         val current = admission(frame, allowPendingDocument = true)
         require(canonicalId(shown.editorHandle) && canonicalId(shown.versionHandle)) { "原草稿编辑版本无效" }
-        val original = editor?.takeIf { scope == current && it.edit == shown && !it.removalOnly }
+        val original = editor?.takeIf { scope == current && it.edit == shown && !it.removalOnly }?.copy(warmResumeKey = null)
             ?: error("这份本机草稿的编辑版本已变化")
         check(pending == null)
+        editor = original // A save attempt (including an uncertain result) is not an untouched warm editor.
         first = null
         blank = null
         val pin = original.pin

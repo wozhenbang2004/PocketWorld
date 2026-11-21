@@ -5,7 +5,7 @@ import {fileObject as obj,type FileJson as Json} from './attachment-workspace';
 import {registerOverlayBack} from './overlay-back';
 
 type Fields={format:'docx'|'pdf';name:string;title:string;body:string;fontPoints:number};
-type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update';sourceName?:string};
+type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update';sourceName?:string;warmResumeKey?:string};
 type Row={rowHandle:string;name:string;format:Fields['format'];savedAt:number;linkedRevision?:true;justCopiedMarkdown?:true;justCopiedPdfPage?:true};
 type OutputChoice={editorHandle:string;versionHandle:string;format:Fields['format']};
 type GenerationReview={id:string;editorHandle:string;versionHandle:string;fileName:string;format:Fields['format']};
@@ -41,8 +41,10 @@ function acknowledgedResume(value:Json|undefined):Editor|undefined{
 }
 
 /** This editor owns only the current Web document's input. Native versions are opaque handles. */
-export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,generationPending,initialBlank=false,initialResume=false,invoke,registerExit,onExit}:{
- active:boolean;recoverable:boolean;loading:boolean;initial?:Json;generationPending:boolean;initialBlank?:boolean;initialResume?:boolean;invoke:Invoke;
+export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,generationPending,initialBlank=false,initialResume=false,
+ warmResumeKey,onWarmResume,invoke,registerExit,onExit}:{
+ active:boolean;recoverable:boolean;loading:boolean;initial?:Json;generationPending:boolean;initialBlank?:boolean;initialResume?:boolean;
+ warmResumeKey?:string;onWarmResume:(key:string)=>Promise<Json>;invoke:Invoke;
  registerExit:(handle:((close:boolean)=>void)|null)=>void;onExit:(close:boolean)=>Promise<void>;
 }){
  const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor|undefined>(()=>!active?undefined:initialBlank?acknowledgedBlank(initial):initialResume?acknowledgedResume(initial):undefined);
@@ -52,12 +54,16 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
  const [review,setReview]=useState<GenerationReview>(),[ack,setAck]=useState(false),[generation,setGeneration]=useState<'submitting'|'accepted'|'unknown'>();
  const [removalReview,setRemovalReview]=useState<RemovalReview>(),[removal,setRemoval]=useState<'removing'|'changed'|'unknown'>();
  const [unavailable,setUnavailable]=useState<RemovalReview>();
+ const [warming,setWarming]=useState<'checking'|'unknown'>(),writeAttempt=useRef<string|undefined>(undefined),currentEditor=useRef(editor);
  const flight=useRef(false),mounted=useRef(true),heading=useRef<HTMLHeadingElement>(null),current=useRef(active),focusList=useRef(false);
- current.current=active;
+ current.current=active;currentEditor.current=editor;
  const dirty=!!editor&&JSON.stringify(editor.input)!==JSON.stringify(editor.original);
  // A reopened saved draft brought native text into the page; never reveal that body after revocation.
  const typed=(!active&&recoverable&&!busy&&editor&&!editor.version&&!editor.uncertain&&editor.original.title===''&&editor.original.body===''&&
   (editor.input.name!==editor.original.name||!!editor.input.title||!!editor.input.body))?editor.input:undefined;
+ const canWarmResume=!active&&recoverable&&!warming&&!busy&&!exit&&dirty&&editor?.version!=null&&
+  !editor.sourceName&&!editor.uncertain&&!generation&&!removal&&writeAttempt.current!==editor.handle&&
+  isHandle(warmResumeKey)&&editor.warmResumeKey===warmResumeKey;
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  useLayoutEffect(()=>{
   if(!editor&&focusList.current){focusList.current=false;heading.current?.scrollIntoView({block:'start'});}
@@ -116,12 +122,33 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
    setError('没有核对到所选的本机草稿。请重新读取清单，没有打开同名稿件。');return;
   }
   setNotice(row?'已打开本机保留版':'');
-  setEditor({handle:result.editorHandle,version:row?result.versionHandle:undefined,original:input,input,sourceName});
+  setEditor({handle:result.editorHandle,version:row?result.versionHandle:undefined,original:input,input,sourceName,
+   warmResumeKey:row&&!sourceName&&isHandle(result.warmResumeKey)?result.warmResumeKey:undefined});
+ });
+ const resume=()=>perform(async()=>{
+  if(!canWarmResume||!editor||!warmResumeKey)return;
+  const original=editor;
+  setWarming('checking');
+  try{
+   const result=await onWarmResume(warmResumeKey),baseline=fields(result.fields);
+   if(!mounted.current)return;
+   if(currentEditor.current!==original||result.status!=='VERIFIED'||result.resumedKey!==warmResumeKey||result.sourceUnavailable===true||result.sourceName!=null||
+      !isHandle(result.editorHandle)||result.editorHandle===original.handle||!isHandle(result.versionHandle)||result.versionHandle===original.version||
+      !isHandle(result.warmResumeKey)||result.warmResumeKey===warmResumeKey||!baseline||
+      JSON.stringify(baseline)!==JSON.stringify(original.original))throw new Error();
+   // Keep the Web input in memory. Only the positively reread base version and editor handles are replaced.
+   setEditor(value=>value===original?{...original,handle:result.editorHandle,version:result.versionHandle,
+    original:baseline,warmResumeKey:result.warmResumeKey}:value);
+   setNotice('已回到同一份草稿，本页改动尚未保留。');setWarming(undefined);
+  }catch{
+   if(mounted.current){setWarming('unknown');setError('未核对到同一份已保留的草稿，没有重新保存或合并本页修改。');}
+  }
  });
  const save=(checking=false)=>perform(async()=>{
-  if(!active||!editor||(generationPending&&(!editor.version||checking))||
+  if(!active||warming||!editor||(generationPending&&(!editor.version||checking))||
      (!checking&&(!dirty||editor.uncertain))||(checking&&editor.uncertain!=='first'))return;
   const original=editor,first=!original.version;
+  writeAttempt.current=original.handle;
   const hold=()=>{if(mounted.current){
    setEditor(value=>value===original?{...value,uncertain:first?'first':'update'}:value);
    setNotice(first?'这次保留结果尚未核对，没有重复写入。':'保存结果尚未核对。请重新打开原稿核对本机版本。');
@@ -154,7 +181,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
  const shown=catalog===undefined?(initialBlank||initialResume?undefined:initial):catalog??undefined,rows=rowList(shown);
  const blankUnconfirmed=initialBlank&&!editor&&catalog===undefined,resumeUnconfirmed=initialResume&&!editor&&catalog===undefined;
  const retry=()=>perform(async()=>{if(active){const value=await invoke('drafts.list');if(mounted.current&&current.current)setCatalog(value)}});
- const editable=active&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation&&!removalReview&&!removal;
+ const editable=active&&!warming&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation&&!removalReview&&!removal;
  const canReviewGeneration=!generationPending&&!!editor?.version&&!dirty&&!!editor.original.name.trim()&&!!editor.original.body.trim();
  const outputFormat=editor&&outputChoice?.editorHandle===editor.handle&&outputChoice.versionHandle===editor.version?
   outputChoice.format:editor?.original.format;
@@ -233,12 +260,16 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
   await readListAfterRemoval(removal==='unknown'?'本次删除没有收到确认；这里只显示当前可核对的草稿。':'请在当前清单核对原草稿。');
  });
  return <section className="pw-document-editor" aria-label="本机文档草稿">
-  <h3 ref={heading} tabIndex={-1}>{typed?'本页还在的输入':active&&removal?'删除本机草稿':active&&unavailable?'原文件暂不能核对':active&&editor?'编辑本机草稿':blankUnconfirmed?'新建文档':resumeUnconfirmed?'回到原草稿':'已保留的草稿'}</h3>
+  <h3 ref={heading} tabIndex={-1}>{typed?'本页还在的输入':warming||canWarmResume?'继续本机草稿':active&&removal?'删除本机草稿':active&&unavailable?'原文件暂不能核对':active&&editor?'编辑本机草稿':blankUnconfirmed?'新建文档':resumeUnconfirmed?'回到原草稿':'已保留的草稿'}</h3>
   {active&&<p className="pw-muted">{editor?.sourceName?<>修改草稿源自固定文件「{editor.sourceName}」，原件不变。</>:'只保存在本机。草稿不是已生成的文件。'}</p>}
   {active&&generationPending&&<p className="pw-muted">原文档结果仍待核对。可以继续编辑并保留已有草稿，暂不能生成新文件。</p>}
   {active&&!editor&&!unavailable&&!removal&&notice&&<p role="status">{notice}</p>}
   {error&&<p className="pw-error" role="alert">{error}</p>}
-  {!active?typed?<><p role="status">这些文字仍在本页，可以选中复制。原编辑窗口已关闭，不能从这里保存。</p>
+  {warming==='checking'?<p role="status">正在核对同一份已保留的草稿…</p>:
+   warming==='unknown'?<p>可返回「本机文档草稿」查看已保存版本；不会自动恢复这次输入。</p>:
+   canWarmResume?<><p>本页还有未保留的修改。核对原保存版后，可以继续编辑。</p>
+    <Button variant="secondary" onClick={resume}>核对并继续这份草稿</Button></>:
+   !active?typed?<><p role="status">这些文字仍在本页，可以选中复制。原编辑窗口已关闭，不能从这里保存。</p>
     {typed.name!==editor?.original.name&&<TextField label="文件名" value={typed.name} isReadOnly/>}
     {typed.title!==''&&<TextField label="标题" value={typed.title} isReadOnly/>}
     {typed.body!==''&&<TextAreaField className="pw-document-body" label="正文" value={typed.body} isReadOnly/>}

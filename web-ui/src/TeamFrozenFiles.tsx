@@ -9,7 +9,15 @@ type Data = Record<string, any>;
 type FileRow = {artifactId:string;assignmentId:string;memberId:string;path:string;kind:'text'|'deletion'|'binary_or_large';sha256:string;retainedChars?:number;currentVersion:number;currentExists:boolean;matchesOwnerBase:boolean;retainedApplied:boolean;truncated:boolean;beforeBytes?:number;afterBytes?:number};
 export type FrozenMemberFile = Pick<FileRow,'artifactId'|'assignmentId'|'memberId'|'path'|'sha256'> & {projectId:string};
 type MemberEntry = {requestId:string; documentEpoch:number; file:FrozenMemberFile; consume:(requestId:string)=>void};
-type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewRouteCaptured?:boolean;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false};
+type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewRouteCaptured?:boolean;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false;originalReviewerFindings?:OriginalReviewerFinding};
+type OriginalReviewerFinding={teamRunId:string;planHash:string;taskId:string;runId:string;epoch:number;role:'reviewer';verdict:'no_blocking_findings';findings:string;readOnly:true;executionAuthorized:false;businessVerified:false};
+function originalReviewerFinding(approval:Approval|null):OriginalReviewerFinding|null{
+  const row=approval?.originalReviewerFindings;
+  return approval&&!approval.firstProject&&row?.role==='reviewer'&&row.verdict==='no_blocking_findings'&&row.readOnly===true&&
+    row.executionAuthorized===false&&row.businessVerified===false&&row.teamRunId===approval.teamRunId&&row.planHash===approval.planHash&&
+    !!row.taskId&&row.taskId===approval.reviewerTaskId&&!!row.runId&&row.runId===approval.reviewerRunId&&
+    Number.isSafeInteger(row.epoch)&&row.epoch>0&&typeof row.findings==='string'&&!!row.findings.trim()&&row.findings.length<=4000?row:null;
+}
 type IntegrationCapture={integrationTaskId:string;reviewId:string;planHash:string;matchingFiles:number;total:number;active:boolean;unresolved:boolean;status:string;businessVerified:false};
 type Finding={verdict:'changes_requested'|'inconclusive';findings:string;businessVerified:false;executionAuthorized:false;originalReviewer:{teamRunId:string;taskId:string;runId:string;epoch:number;role:'reviewer';planHash:string;canOpen:true}};
 type IndependentReview = {reviewHandle:string;fileHandle:string;teamRunId:string;planHash:string;projectId:string;model:string;provider:string;
@@ -218,6 +226,7 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
   };
 
   const finding=source?blockedFinding(source.ownerDecision,team,source.planHash):null;
+  const priorReview=originalReviewerFinding(approval);
   const files=source?.files??[];
   const orderedFiles=memberFirst?[...files.filter(file=>file.artifactId===memberFirst),...files.filter(file=>file.artifactId!==memberFirst)]:files;
   const coverage=source&&completeFiles&&completeFiles.fileHandle===source.fileHandle?completeFiles.ids:undefined;
@@ -229,6 +238,10 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
     <SettingsDialog isOpen={shown} title={approval?approval.firstProject?"核对完整项目的首版文件许可":"核对这份写回许可":independent?"核对独立审查":source?.revisionComparison?"核对原分工修订":"原协作的冻结文件"} onClose={dismiss} className="pw-team-modal">
       <div className="pw-form-stack">{approval?<><p>{approval.firstProject?'你正在给下列原冻结文本登记首版许可。这份登记不可用于发起整合。':'这份许可只适用于下列原冻结文本。批准后，管家可在原授权内请求唯一整合者将它们写回原项目；本次不会启动整合或写入文件。'}</p>
         <p className="pw-field-hint">原项目：<code>{approval.projectId}</code> · 计划 {approval.planHash.slice(0,12)}</p>
+        {priorReview&&<details><summary>查看这版文件的原独审意见</summary>
+          <p className="pw-field-hint">独审没有报告阻断项。这是原审阅意见，不代表项目验收或写回许可。</p>
+          <p dir="auto" style={{whiteSpace:'pre-wrap'}}>{priorReview.findings}</p>
+        </details>}
         {approval.firstProject&&<><p>仅登记这版已独审的原文件。不会启动整合者、执行检查或打包，每项后续写回仍须原操作单独批准。</p>
           <details><summary>核对原项目固定基线与独审记录</summary>
             <p>原项目副本：<code>{approval.parentCheckoutId}</code></p><p>源码摘要：<code>{approval.sourceDigest}</code></p>
