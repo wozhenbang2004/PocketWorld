@@ -1358,6 +1358,15 @@ public final class LocalModule implements EngineModule {
         return OwnerDirectNodeBuild.ordinaryCheckout(metadata)&&!metadata.has(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD)&&
                 !metadata.has("collectedFromCheckoutId")&&!metadata.has("collectionOperationId");
     }
+    /** Body-free hint on the ordinary editor's existing physical file read, not execution approval. */
+    public static final String OWNER_PYTHON_SAVED_READ="ownerPythonSavedRead";
+    private static boolean ordinaryPythonFileCheckout(JSONObject scope,String project,String checkout){
+        JSONObject imported=scope.optJSONObject("sourceImport");
+        return project.equals(scope.opt("projectId"))&&checkout.equals(scope.opt("id"))&&ordinaryDirectNodeCheckout(scope)&&
+                (!scope.has("sourceImport")||imported!=null&&!imported.has("deviceSource")&&
+                    (imported.optJSONObject("gitOriginal")!=null||
+                     java.util.Set.of("external_zip","saf_tree").contains(imported.optString("sourceKind"))));
+    }
     /** Capture only this selected saved UTF-8 file, not the checkout tree or a host source.
      * The typed reviewed bytes live only until this one native owner confirmation or dismissal. */
     public synchronized dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(
@@ -1372,12 +1381,8 @@ public final class LocalModule implements EngineModule {
                 !Files.isRegularFile(record.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))
             throw new SecurityException("无法核对原私人副本目录");
         OwnerDraftCopyShelf.requireOpenedForContent(home);
-        JSONObject scope=JsonFiles.read(record),imported=scope.optJSONObject("sourceImport");
-        if(!file.projectId.equals(scope.opt("projectId"))||!file.checkoutId.equals(scope.opt("id"))||
-                !ordinaryDirectNodeCheckout(scope)||
-                scope.has("sourceImport")&&(imported==null||imported.has("deviceSource")||
-                        (imported.optJSONObject("gitOriginal")==null&&
-                         !java.util.Set.of("external_zip","saf_tree").contains(imported.optString("sourceKind")))))
+        JSONObject scope=JsonFiles.read(record);
+        if(!ordinaryPythonFileCheckout(scope,file.projectId,file.checkoutId))
             throw new SecurityException("这不是所选的普通私人开发副本");
         Object checkoutKey=pythonDirectoryKey(home.getParentFile()),homeKey=pythonDirectoryKey(home),filesKey=pythonDirectoryKey(files);
         var target=NativeCommandExecutor.within(files,file.path).toPath();
@@ -1896,9 +1901,14 @@ public final class LocalModule implements EngineModule {
     /** Native owner editor reads the active private tree, not the separately
      * versioned project. A missing source path is an explicit new-file draft. */
     public synchronized JSONObject readDevelopmentFileForOwner(String project,String id,String path)throws Exception {
-        if(closed||!project.equals(checkout(id).getString("projectId")))throw new SecurityException("原私人副本项目已变化");
+        if(closed)throw new SecurityException("原私人副本项目已变化");
+        JSONObject selected=checkout(id);
+        if(!project.equals(selected.getString("projectId")))throw new SecurityException("原私人副本项目已变化");
         VersionedWorkspace.path(path);if(!ProjectSources.sourcePath(path))throw new SecurityException("请在源码文件中编辑，不改写运行缓存或Git内部文件");
         JSONObject actual=localFile(id,path);if(actual.getLong("bytes")>262144)throw new IllegalArgumentException("这份文件超过256KiB编辑上限，原字节保留；可使用原任务有界读取或导出");
+        if(Boolean.FALSE.equals(actual.opt("deleted"))&&id.equals(actual.opt("checkoutId"))&&path.equals(actual.opt("path"))&&
+                dev.pocketengine.features.local.runtime.OwnerPythonRun.supportsPath(path)&&ordinaryPythonFileCheckout(selected,project,id))
+            actual.put(OWNER_PYTHON_SAVED_READ,true);
         return actual.put("projectId",project).put("expectedHash",actual.getString("sha256"));
     }
     /** Reuses the original manual SHA-CAS writer, with the native page fenced

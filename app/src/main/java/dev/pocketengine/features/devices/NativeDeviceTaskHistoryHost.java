@@ -180,17 +180,33 @@ public final class NativeDeviceTaskHistoryHost {
          * Only a small presentation of this exact phone result crosses the Web bridge. No lease,
          * owner input, evidence object, storage write, retry or new run. */
         public JSONObject queryPhoneGoalResult()throws Exception{
-            JSONObject wire=original.originalWire(),binding=phoneGoalBinding(wire);PairingCoordinator.HistoryQuery query;
+            return queryPhoneGoalResult(null,()->{});
+        }
+        /** Same decoder and task.get, with the selected Work's stronger local pin. No
+         * archive selector, generic HistoryAction, stop or acceptance query is returned. */
+        JSONObject queryPhoneGoalResult(TaskStoreDeviceTasks.OwnerSentPhoneText pinned,DeviceArtifactTransfer.Current ownerCurrent)throws Exception{
+            JSONObject wire=original.originalWire();
+            ownerCurrent.require();
+            if(pinned!=null && !DeviceProtocol.canonical(wire).equals(DeviceProtocol.canonical(pinned.wire().json())))
+                throw new SecurityException("原工作与派单不再匹配，未联系手机。");
+            JSONObject binding=pinned==null?phoneGoalBinding(wire):pinned.originalChild();
+            PairingCoordinator.HistoryQuery query;
             try {
                 PairingCoordinator.HistoryRoute route=source.currentHistoryRoute(original.targetDeviceId(),original.grantId());
-                query=route.historyQuery(local,"task.get",binding.getString("taskId"),original.resourceBinding(),System.currentTimeMillis(),5000,null);
+                long now=System.currentTimeMillis();
+                query=pinned==null?route.historyQuery(local,"task.get",binding.getString("taskId"),original.resourceBinding(),now,5000,null)
+                        :route.originalAndroidTextQuery(local,pinned.wire(),binding.getString("taskId"),binding.getString("runId"),
+                                binding.getLong("executorEpoch"),now);
             } catch(java.io.IOException offline){throw new java.io.IOException("原手机未连接，未读取结果。",offline);}
             catch(SecurityException denied){throw new SecurityException("原设备身份或授权已变化，或原授权不含任务结果读取（task.get）。未向对端发送读取请求。",denied);}
             if(!wire.getString("instanceId").equals(query.envelope().instanceId()))throw new SecurityException("原手机实例已变化，未读取结果。");
+            if(pinned!=null && pinned.wire().authorizationEpoch()!=query.envelope().authorizationEpoch())
+                throw new SecurityException("原手机读取授权已变化，未联系手机。");
+            ownerCurrent.require();
             DeviceCapabilityPort.Reply actual;
             try{actual=source.readPhoneGoal(query,io);}
             catch(java.io.IOException|java.util.concurrent.TimeoutException|java.util.concurrent.ExecutionException unavailable){throw new java.io.IOException("没有收到原手机的可核对答复。连接可能中断，对端也可能未放行；不能判为没有成果。",unavailable);}
-            require();
+            require();ownerCurrent.require();
             try{query.requireTargetPeer(actual.peer(),System.currentTimeMillis());}
             catch(SecurityException changed){throw new SecurityException("原手机身份或读取权限已变化，不展示结果。",changed);}
             JSONObject response=DeviceProtocol.validateMessage(actual.response());
@@ -215,7 +231,7 @@ public final class NativeDeviceTaskHistoryHost {
                 ||!local.deviceId().equals(origin.optString("originDeviceId"))||!local.deviceId().equals(origin.optString("callerDeviceId"))
                 ||!original.targetDeviceId().equals(origin.optString("targetDeviceId"))||!original.grantId().equals(origin.optString("grantId"))
                 ||wire.getLong("authorizationEpoch")!=origin.optLong("authorizationEpoch",-1)
-                ||!DeviceProtocol.canonical(binding).equals(DeviceProtocol.canonical(phoneGoalBinding(wire))))
+                ||!DeviceProtocol.canonical(binding).equals(DeviceProtocol.canonical(pinned==null?phoneGoalBinding(wire):pinned.originalChild())))
                 throw new SecurityException("不是同一派发、同一设备和同一次执行的目标结果，不展示内容。");
             JSONObject outcome=detail.optJSONObject("phoneGoalOutcome");
             String review=outcome==null?"unavailable":outcome.optString("review");
@@ -229,7 +245,7 @@ public final class NativeDeviceTaskHistoryHost {
             if(confirmed&&(!"succeeded".equals(task.optString("state"))||summary.codePointCount(0,summary.length())>2048))
                 throw new SecurityException("对端确认状态与原目标的结束状态或摘要范围不一致。");
             if(!summary.isEmpty()){
-                require();long now=System.currentTimeMillis(),until=query.originalTextDisplayUntil(actual.peer(),now);
+                require();ownerCurrent.require();long now=System.currentTimeMillis(),until=query.originalTextDisplayUntil(actual.peer(),now);
                 if(until<=now)throw new SecurityException("这次原结果读取已到期，未展示旧文字；请手动重新读取。");
                 binding.put("textReadUntil",until).put("textReadRemainingMs",until-now).put("textTargetFingerprint",actual.peer().certificateFingerprint());
             }

@@ -554,6 +554,34 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             if(existingIdentity()!=local)throw new SecurityException("本机原身份已变化，未显示结果。");
             return value;
         }
+        public JSONObject readOriginalSentPhoneResult(String task,String run,int epoch,String operation,String child,String childRun,
+                                                        long childEpoch,DeviceArtifactTransfer.Current current)throws Exception {
+            current.require(); DeviceIdentity.LocalIdentity local=existingIdentity();
+            if(local==null)throw new SecurityException("本机原身份不可核对，未联系手机。");
+            var pinned=tasks.deviceTasks().ownerSentPhoneText(task,run,epoch,operation,local.deviceId());
+            JSONObject accepted=pinned.originalChild();
+            if(!child.equals(accepted.opt("taskId"))||!childRun.equals(accepted.opt("runId"))||childEpoch!=accepted.optLong("executorEpoch"))
+                throw new SecurityException("现在的原手机执行与刚才所选不同，未向手机发起读取。");
+            NativeDeviceTaskHistoryHost reader=new NativeDeviceTaskHistoryHost(tasks,local,new NativeDeviceTaskHistoryHost.NativeReads(){
+                public PairingCoordinator.HistoryRoute currentHistoryRoute(String target,String grant)throws Exception{
+                    current.require(); return network.currentHistoryRoute(target,grant);
+                }
+                public DeviceCapabilityPort.Reply readHistory(DeviceTaskEnvelope query,RunControl io)throws Exception{
+                    throw new SecurityException("原工作只读取已接手执行的结果。");
+                }
+                public DeviceCapabilityPort.Reply readPhoneGoal(PairingCoordinator.HistoryQuery query,RunControl io)throws Exception{
+                    // Native SQL must still name the same A/B immediately before the existing send.
+                    return network.readHistory(query,()->{current.require();io.check();pinned.originalChild();},pinned.target());
+                }
+            });
+            JSONObject result;
+            try(var window=reader.open(task,operation)){result=window.queryPhoneGoalResult(pinned,current);}
+            if(existingIdentity()!=local)throw new SecurityException("本机原身份已变化，未显示成果。");
+            pinned.originalChild();
+            current.require();
+            return new JSONObject().put("kind","originalSentPhoneTextResult").put("taskId",task).put("runId",run).put("epoch",epoch)
+                    .put("operationId",operation).put("targetDeviceId",pinned.target().deviceId()).put("result",result);
+        }
         public NativeDeviceWorkspaceHost.HistoryAction openHistory(String id, String operation) throws Exception {
             DeviceIdentity.LocalIdentity local = existingIdentity(); if (local == null) throw new SecurityException("本机设备身份不存在，不能继承原结果读取范围");
             NativeDeviceTaskHistoryHost original = new NativeDeviceTaskHistoryHost(tasks, local, new NativeDeviceTaskHistoryHost.NativeReads() {

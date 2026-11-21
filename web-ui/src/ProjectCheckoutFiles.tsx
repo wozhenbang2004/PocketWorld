@@ -25,6 +25,7 @@ export type CheckoutSavedPosition = { projectId: string; checkoutId: string; pat
 export type CheckoutBuildEditorResume = Omit<CheckoutSavedPosition,'caret'> & { sourceDigest: string };
 export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandle: string; id: string; closeEditor:()=>Promise<boolean> };
 export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
+type PythonEditorSource = {path:string;sha256:string;content:string;clickKey:string;selection:{saveId:string}|{readRevision:number}};
 type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
@@ -95,7 +96,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
   const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
   const [checkingSavedSource, setCheckingSavedSource] = useState(false);
-  const [pythonRunReview, setPythonRunReview] = useState<PythonReview>(), [uncertainPythonSave, setUncertainPythonSave] = useState('');
+  const [pythonRunReview, setPythonRunReview] = useState<PythonReview>(), [uncertainPythonSource, setUncertainPythonSource] = useState('');
   const pythonReviewNow = useRef<PythonReview | undefined>(undefined), pythonHeading = useRef<HTMLHeadingElement>(null);
   const editorHeading = useRef<HTMLHeadingElement>(null);
   const [orphan, setOrphan] = useState<string | null>(null), [choice, setChoice] = useState<'keep_mine' | 'use_latest' | null>(null);
@@ -181,7 +182,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const apply = (value: Data, body = true) => {
     if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('回执不属于这个原私人副本。');
     const next = { ...(currentFile.current?.fileHandle === value.fileHandle ? currentFile.current : {}), ...value };
-    if (body) for (const key of ['saveStatus', 'message', 'saveError', 'importStatus', 'importReceipt', 'importMessage', 'importError', 'projectListRefreshMessage']) if (!(key in value)) delete next[key];
+    if (body) for (const key of ['saveStatus', 'message', 'saveError', 'importStatus', 'importReceipt', 'importMessage', 'importError', 'projectListRefreshMessage','pythonReadRevision']) if (!(key in value)) delete next[key];
     if (!('sourceHit' in value)) delete next.sourceHit;
     if (!('formalFile' in value)) delete next.formalFile;
     if (currentFile.current?.fileHandle!==value.fileHandle) setFileFind(null);
@@ -362,18 +363,30 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       .finally(() => { edits.current--; if (alive.current) setEditing(edits.current > 0); });
   };
   const dismissAdoption = () => { if (entered.current || edits.current) return; const selected = activeAdoption.current; activeAdoption.current = null; setAdoption(null); if (selected) void latest.current.run(command + 'dismissImport', { viewHandle, filesHandle: handle.current, importHandle: selected.importHandle }).catch(() => {}); };
-  const canReviewPython = !hostFile && !sourceMember && !!onOpenPythonWork && !!file && showingSavedFile &&
-    !!recentSave && savedPythonPath(recentSave.path) && uncertainPythonSave!==recentSave.id &&
+  const observedPythonRead:PythonEditorSource|undefined = !hostFile && !sourceMember && file && orphan===null && !blockedEdit.current &&
+    file.filesHandle===handle.current && file.projectId===projectId && file.checkoutId===checkoutId &&
+    file.dirty===false && file.conflict===false && file.saveUnknown===false &&
+    Number.isSafeInteger(file.pythonReadRevision) && file.pythonReadRevision===file.revision &&
+    savedPythonPath(file.path) && file.latest?.path===file.path && file.latest?.projectId===projectId &&
+    file.latest?.checkoutId===checkoutId && file.latest?.deleted===false && fileHash(file.baseHash) &&
+    file.latest?.sha256===file.baseHash && file.latest?.expectedHash===file.baseHash &&
+    typeof file.latest?.content==='string' && file.baseContent===file.latest.content && file.text===file.latest.content && text===file.latest.content
+    ? {path:file.path,sha256:file.baseHash,content:text,clickKey:file.fileHandle+':'+file.revision,selection:{readRevision:file.pythonReadRevision}} : undefined;
+  const pythonSource:PythonEditorSource|undefined=showingSavedFile && recentSave && savedPythonPath(recentSave.path)
+    ? {path:recentSave.path,sha256:recentSave.savedHash,content:recentSave.after,clickKey:recentSave.id,selection:{saveId:recentSave.id}}
+    : observedPythonRead;
+  const canReviewPython = !hostFile && !sourceMember && !!onOpenPythonWork && !!file && !!pythonSource &&
+    uncertainPythonSource!==pythonSource.clickKey &&
     ['reviewPython','confirmPython','dismissPython'].every(action=>bridge.getState().capabilities.commands.includes(ownerPythonFiles+action));
-  const exactPythonEditor = () => canReviewPython && !!file && !!recentSave && live(generation.current) &&
-    currentFile.current===file && file.filesHandle===handle.current && currentText.current===recentSave.after &&
-    editorInput.current?.value===textareaText(recentSave.after) && !entered.current && !edits.current &&
+  const exactPythonEditor = () => canReviewPython && !!file && !!pythonSource && live(generation.current) &&
+    currentFile.current===file && file.filesHandle===handle.current && currentText.current===pythonSource.content &&
+    editorInput.current?.value===textareaText(pythonSource.content) && !entered.current && !edits.current &&
     !activeAdoption.current && !activeMarkdown.current && !choice && !file.draftError;
   const readPythonReview = () => {
-    if (!exactPythonEditor() || !file || !recentSave || pythonReviewNow.current) return;
-    void invoke('reviewPython', {fileHandle:file.fileHandle,saveId:recentSave.id}, value=>{
-      const review=pythonReview(value,{projectId,checkoutId,path:recentSave.path,sha256:recentSave.savedHash});
-      if (!review) throw Error('未核对到刚保存的原脚本，没有运行。');
+    if (!exactPythonEditor() || !file || !pythonSource || pythonReviewNow.current) return;
+    void invoke('reviewPython', {fileHandle:file.fileHandle,...pythonSource.selection}, value=>{
+      const review=pythonReview(value,{projectId,checkoutId,path:pythonSource.path,sha256:pythonSource.sha256});
+      if (!review) throw Error('未核对到当前已保存的原脚本，没有运行。');
       pythonReviewNow.current=review;setPythonRunReview(review);
       requestAnimationFrame(()=>pythonHeading.current?.focus());
     });
@@ -386,11 +399,11 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const confirmSavedPython = () => {
     const review=pythonReviewNow.current;
-    if (!review || !file || !recentSave || !exactPythonEditor() ||
-        review.path!==recentSave.path || review.sha256!==recentSave.savedHash) return;
+    if (!review || !file || !pythonSource || !exactPythonEditor() ||
+        review.path!==pythonSource.path || review.sha256!==pythonSource.sha256) return;
     pythonReviewNow.current=undefined;setPythonRunReview(undefined);
     // The native single-use receipt could be lost after the run was admitted.
-    setUncertainPythonSave(recentSave.id);
+    setUncertainPythonSource(pythonSource.clickKey);
     void invoke('confirmPython', {fileHandle:file.fileHandle,reviewHandle:review.reviewHandle}, value=>{
       const work=originalPythonRun(value,review);
       if (!work) throw Error('未收到本次原工作回执。请到「我的工作」核对，不会重复提交。');
@@ -651,12 +664,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {choice ? <div role="region" aria-label="处理文件冲突"><p>{choice === 'keep_mine' ? '把当前副本作为新基线，保留我的草稿文字？下一次保存才会改写文件。' : '放弃这份草稿，采用刚读取的副本内容？不会写入文件。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => setChoice(null)}>返回</Button><Button disabled={locked} onClick={() => void invoke('resolve', { fileHandle: file.fileHandle, revision: file.revision, choice }, value => { interfaceDrafts.delete(keyFor(file.path)); setChoice(null); apply(value); })}>确认这个选择</Button></div></div> : <div className="pw-form-actions">
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
-          {showingSavedFile ? <>{canReviewPython && !pythonRunReview && <Button disabled={locked} onClick={readPythonReview}>运行已保存的脚本…</Button>}
+          {canReviewPython && !pythonRunReview && <Button disabled={locked} onClick={readPythonReview}>运行已保存的脚本…</Button>}
+          {showingSavedFile ? <>
             <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
             {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' : '已保存，回到项目工作区'}
           </Button>{finder==='directory'&&directory&&!treeOpen&&<Button variant="ghost" disabled={locked} onClick={()=>{
             setTreeOpen(true);requestAnimationFrame(()=>directoryAnchor.current?.scrollIntoView({block:'start'}));
-          }}>返回所选目录</Button>}</> :
+          }}>返回所选目录</Button>}</> : !canReviewPython&&!pythonRunReview&&
             <Button disabled={locked || orphan !== null || blockedEdit.current || (!file.dirty && !canCreateEmpty) || file.conflict || file.saveUnknown}
               onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
         </div>}
@@ -667,7 +681,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           <div className="pw-form-actions"><Button variant="secondary" disabled={busy || editing} onClick={dismissPythonReview}>返回编辑</Button>
             <Button disabled={busy || editing || !canReviewPython} onClick={confirmSavedPython}>在本机运行</Button></div>
         </section>}
-        {!!recentSave && uncertainPythonSave===recentSave.id && <p role="status">已提交运行确认。若未进入原工作，请到「我的工作」核对。</p>}
+        {pythonSource && uncertainPythonSource===pythonSource.clickKey && <p role="status">已提交运行确认。若未进入原工作，请到「我的工作」核对。</p>}
         <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null || blockedEdit.current || file.dirty || file.saveUnknown} onClick={() => void invoke('reviewImport', { fileHandle: file.fileHandle }, value => {
           if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.fileHandle !== file.fileHandle || value.path !== file.path || value.filesHandle !== handle.current || !value.importHandle) throw new Error('采纳审阅不属于原文件。');
           setAdoption(value);

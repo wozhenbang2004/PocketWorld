@@ -157,6 +157,20 @@ public final class PairingCoordinator {
         private final OutgoingGrant route;private HistoryRoute(OutgoingGrant route){this.route=route;}
         public String targetDeviceId(){return route.targetDeviceId();}public String targetInstanceId(){return route.targetInstanceId();}
         public HistoryQuery historyQuery(DeviceIdentity.LocalIdentity local,String method,String objectId,JSONObject exactResource,long now,long ttlMs,JSONObject options)throws Exception{return route.historyQuery(local,method,objectId,exactResource,now,ttlMs,options);}
+        /** Same task.get authorization, restricted to the original authenticated Android result.
+         * Existing envelope fields let the receiver reject a different run before publishing anything. */
+        HistoryQuery originalAndroidTextQuery(DeviceIdentity.LocalIdentity local,DeviceTaskEnvelope original,
+                                              String child,String run,long epoch,long now)throws Exception {
+            if(local==null||!DeviceProtocol.isAndroidTextReturn(original.json())||!local.deviceId().equals(original.originDeviceId())
+                    ||!local.deviceId().equals(original.callerDeviceId())||!targetDeviceId().equals(original.targetDeviceId())
+                    ||!targetInstanceId().equals(original.instanceId())||!route.grantId().equals(original.grantId())
+                    ||route.authorizationEpoch()!=original.authorizationEpoch()||!DeviceProtocol.receiverTaskId(original).equals(child))
+                throw new SecurityException("Original Android text result must retain the direct device and authorization");
+            HistoryQuery base=historyQuery(local,"task.get",child,original.resourceBinding(),now,5000,null);
+            JSONObject exact=base.envelope().json().put("rootTaskId",original.rootTaskId()).put("localTaskId",original.localTaskId())
+                    .put("runId",run).put("executorEpoch",epoch);
+            return new HistoryQuery(route,DeviceProtocol.parseRequest(DeviceProtocol.canonicalBytes(exact)));
+        }
     }
     public HistoryRoute historyRoute(DeviceIdentity.AuthenticatedPeer target,String grantId,long now)throws Exception{
         return new HistoryRoute(restoreOutgoingGrant(target,grantId,now,true));

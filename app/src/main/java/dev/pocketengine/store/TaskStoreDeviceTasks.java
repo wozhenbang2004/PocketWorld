@@ -405,6 +405,126 @@ public final class TaskStoreDeviceTasks {
     public OwnerHistoryEvidence ownerHistoryEvidence(String id,String originalOperation)throws Exception{
         synchronized(owner){JSONObject wire=childAllocationForOperation(id,originalOperation).getJSONObject("boundWire");OwnerHistoryEvidence evidence=new OwnerHistoryEvidence(this,id,originalOperation,wire);requireOwnerHistory(evidence);return evidence;}
     }
+    /** One already accepted B run for this exact currently shown A work. A Web operation ID
+     * only checks the independently selected SQL anchor; it cannot select a broader reader. */
+    public final class OwnerSentPhoneText {
+        private final String task,run,operation,here;
+        private final int epoch;
+        private final SentPhoneTextClaim claim;
+        private OwnerSentPhoneText(String task,String run,int epoch,String operation,String here,SentPhoneTextClaim claim) {
+            this.task=task;this.run=run;this.epoch=epoch;this.operation=operation;this.here=here;this.claim=claim;
+        }
+        public DirectedPhoneTarget target(){return claim.target();}
+        public DeviceTaskEnvelope wire(){return claim.wire();}
+        public JSONObject originalChild()throws Exception{
+            SentPhoneTextClaim fresh=sentPhoneTextClaim(task,run,epoch,operation,here);
+            if(!claim.target().equals(fresh.target())||claim.pairEpoch()!=fresh.pairEpoch()
+                    ||!claim.requestDigest().equals(fresh.requestDigest())||!claim.wireHash().equals(fresh.wireHash())
+                    ||!claim.child().equals(fresh.child()))throw new SecurityException("原工作、手机或接手轮次已变化，未使用其他记录。");
+            return claim.child().view();
+        }
+    }
+    private record SentPhoneRun(String taskId,String runId,long epoch){
+        JSONObject view()throws Exception{return new JSONObject().put("taskId",taskId).put("runId",runId).put("executorEpoch",epoch);}
+    }
+    private record SentPhoneTextClaim(DirectedPhoneTarget target,long pairEpoch,String requestDigest,
+                                      DeviceTaskEnvelope wire,String wireHash,SentPhoneRun child){}
+    public OwnerSentPhoneText ownerSentPhoneText(String task,String run,int epoch,String operation,String here)throws Exception {
+        DeviceProtocol.identifier(task,"taskId");DeviceProtocol.identifier(run,"runId");
+        DeviceProtocol.identifier(operation,"operationId");DeviceProtocol.deviceId(here,"ownerDeviceId");
+        return new OwnerSentPhoneText(task,run,epoch,operation,here,sentPhoneTextClaim(task,run,epoch,operation,here));
+    }
+    private SentPhoneTextClaim sentPhoneTextClaim(String id,String run,int epoch,String expectedOperation,String here)throws Exception {
+        synchronized(owner){
+            String unavailable="本机不能核对这一轮唯一的原文字派单和接手执行，未改读其他记录。";
+            JSONObject parent;
+            // Same physical core bound as the already-open Work detail. Do not open events,
+            // operation pages, another task, or the full long-document reader for this pin.
+            String core="SELECT CASE WHEN length(CAST(document AS BLOB))<="+TaskAuditStore.MAX_CORE_BYTES+
+                    " THEN document END FROM tasks WHERE task_id=? AND audit_format=1";
+            try(Cursor row=db.rawQuery(core,new String[]{id})){
+                if(!row.moveToFirst()||row.isNull(0))throw new SecurityException(unavailable);
+                parent=new JSONObject(row.getString(0));
+            }
+            JSONObject marker=parent.optJSONObject("ownerDeviceWork");
+            if(!id.equals(parent.opt("id"))||!"owner".equals(parent.opt("actorId"))||!"private".equals(parent.opt("spaceId"))
+                    ||!parent.isNull("origin")||!parent.isNull("parentTaskId")||parent.has("ownerPhoneControl")
+                    ||!"assistant".equals(parent.opt("kind"))||!"capabilities".equals(parent.opt("executionMode"))
+                    ||!"".equals(parent.opt("conversationId"))||!run.equals(parent.opt("runId"))||epoch<1||epoch!=parent.optInt("coordinatorEpoch",-1)
+                    ||Boolean.FALSE.equals(parent.opt("contextAvailable"))||parent.optBoolean("contextWithdrawn")||parent.optBoolean("sourceCurrentReadRequired")
+                    ||"source_unavailable".equals(parent.opt("taskProjection"))
+                    ||marker==null||!"pocketworld.owner-device-work.v1".equals(marker.opt("format"))||!id.equals(marker.opt("requestId"))
+                    ||marker.has("directWorkspace")||!marker.optString("requestDigest").matches("[a-f0-9]{64}"))throw new SecurityException(unavailable);
+            DirectedPhoneTarget target=DirectedPhoneTarget.fromTask(parent);
+            if(target==null||here.equals(target.deviceId()))throw new SecurityException(unavailable);
+            long pairEpoch;
+            try(Cursor pair=db.rawQuery("SELECT instance_id,fingerprint,authorization_epoch,revoked FROM device_peers WHERE device_id=?",new String[]{target.deviceId()})){
+                if(!pair.moveToFirst()||!target.instanceId().equals(pair.getString(0))||!target.certificateFingerprint().equals(pair.getString(1))
+                        ||pair.getInt(3)!=0||(pairEpoch=pair.getLong(2))<1)throw new SecurityException("原手机配对已变化，未联系其他设备。");
+            }
+            String sql="SELECT o.operation_id,o.state,r.epoch,b.target_device_id,l.allocation_id,l.intent_digest,l.wire_digest,b.arguments_digest,"
+                    +"CASE WHEN length(CAST(l.wire_json AS BLOB))<="+DeviceProtocol.MAX_CONTROL_BYTES+" THEN l.wire_json END,"
+                    +"CASE WHEN length(CAST(o.receipt AS BLOB))<=131072 THEN o.receipt END,"
+                    +"CASE WHEN length(CAST(b.child_binding AS BLOB))<=32768 THEN b.child_binding END"
+                    +" FROM operations o JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id"
+                    +" JOIN device_child_links l ON l.parent_task_id=o.task_id AND l.parent_operation_id=o.operation_id"
+                    +" JOIN device_child_budget b ON b.parent_task_id=l.parent_task_id AND b.parent_operation_id=l.parent_operation_id"
+                    +" AND b.allocation_id=l.allocation_id AND b.parent_run_id=o.run_id AND b.parent_epoch=r.epoch"
+                    +" WHERE o.task_id=? AND o.run_id=? AND o.tool='device_delegate_goal' LIMIT 2";
+            try(Cursor row=db.rawQuery(sql,new String[]{id,run})){
+                if(!row.moveToFirst()||!expectedOperation.equals(row.getString(0))||!row.getString(1).matches("unknown|receipt")
+                        ||row.getInt(2)!=epoch||!target.deviceId().equals(row.getString(3))||row.isNull(4)||row.isNull(5)||
+                        row.isNull(6)||row.isNull(7)||row.isNull(8)||row.isNull(9)||row.isNull(10))
+                    throw new SecurityException(unavailable);
+                String allocation=row.getString(4),intent=row.getString(5),digest=row.getString(6);
+                byte[] bytes=row.getString(8).getBytes(StandardCharsets.UTF_8);
+                JSONObject journal=new JSONObject(row.getString(9)), child=new JSONObject(row.getString(10));
+                if(!digest.equals(row.getString(7))||row.moveToNext())throw new SecurityException(unavailable);
+                DeviceTaskEnvelope wire=DeviceProtocol.parseRequest(bytes);
+                JSONObject frozen=wire.json(),send=journal.optJSONObject("nativeDeviceSend");
+                String hash=DeviceProtocol.sha256(bytes);
+                if(!DeviceProtocol.isAndroidTextReturn(frozen)||!id.equals(wire.parentTaskId())||!expectedOperation.equals(wire.operationId())
+                        ||!here.equals(wire.callerDeviceId())||!here.equals(wire.originDeviceId())||!run.equals(wire.runId())||epoch!=wire.executorEpoch()
+                        ||!target.deviceId().equals(wire.targetDeviceId())||!target.instanceId().equals(wire.instanceId())
+                        ||!allocation.equals(wire.localTaskId())||!digest.equals(wire.argumentsDigest())||!digest.equals(DeviceProtocol.argumentsDigest(frozen))
+                        ||send==null||!"pocketworld.native-device-send.v1".equals(send.opt("format"))||!"write_claimed".equals(send.opt("state"))
+                        ||send.optLong("claimedAt")<1||!hash.equals(send.opt("wireSha256"))||!allocation.equals(send.opt("allocationId"))||!intent.equals(send.opt("intentDigest")))
+                    throw new SecurityException(unavailable);
+                SentPhoneRun actual=acceptedSentPhoneRun(child,wire);
+                if(actual==null||!actual.equals(acceptedSentPhoneRun(journal.optJSONObject("nativeDeviceAcceptedBinding"),wire)))
+                    throw new SecurityException(unavailable);
+                return new SentPhoneTextClaim(target,pairEpoch,marker.getString("requestDigest"),wire,hash,actual);
+            }
+        }
+    }
+    private static SentPhoneRun acceptedSentPhoneRun(JSONObject binding,DeviceTaskEnvelope wire)throws Exception {
+        if(binding==null||!Boolean.TRUE.equals(binding.opt("accepted"))||!"task".equals(binding.opt("acceptedObjectKind"))
+                ||binding.optLong("acceptedAt")<1||!wire.operationId().equals(binding.opt("sourceOperationId"))
+                ||!wire.operationId().equals(binding.opt("parentOperationId"))||!wire.operationId().equals(binding.opt("targetOperationId"))
+                ||!wire.parentTaskId().equals(binding.opt("parentTaskId"))||!wire.argumentsDigest().equals(binding.opt("operationArgumentsDigest"))
+                ||!wire.argumentsDigest().equals(binding.opt("argumentsDigest"))||!wire.targetDeviceId().equals(binding.opt("executorDeviceId"))
+                ||!wire.instanceId().equals(binding.opt("instanceId")))return null;
+        String child=DeviceProtocol.receiverTaskId(wire), run=binding.optString("runId");
+        Object epoch=binding.opt("executorEpoch");
+        if(!child.equals(binding.opt("localTaskId"))||!child.equals(binding.opt("objectId"))||run.isEmpty()||epoch==null)return null;
+        long actualEpoch=DeviceProtocol.integer(epoch,"acceptedChildEpoch",1,Integer.MAX_VALUE);
+        JSONObject actual=binding.optJSONObject("verifiedReceipt");
+        JSONObject audience=actual==null?null:actual.optJSONObject("audience");
+        if(actual==null||!"OperationReceipt".equals(actual.opt("messageType"))||!Boolean.TRUE.equals(actual.opt("accepted"))
+                ||!wire.operationId().equals(actual.opt("operationId"))||!wire.argumentsDigest().equals(actual.opt("argumentsDigest"))
+                ||!wire.targetDeviceId().equals(actual.opt("executorDeviceId"))||!wire.instanceId().equals(actual.opt("instanceId"))
+                ||!child.equals(actual.opt("localTaskId"))||!run.equals(actual.opt("runId"))||actualEpoch!=actual.optLong("executorEpoch",-1)
+                ||audience==null||!"operation".equals(audience.opt("kind"))||!wire.operationId().equals(audience.opt("objectId"))
+                ||!child.equals(audience.opt("taskId"))||!run.equals(audience.opt("runId"))||actualEpoch!=audience.optLong("executorEpoch",-1))
+            return null;
+        JSONObject original=wire.json();
+        for(String key:new String[]{"originDeviceId","callerDeviceId","targetDeviceId","instanceId","rootTaskId","localTaskId","grantId","authorizationEpoch"})
+            if(!DeviceProtocol.canonical(original.opt(key)).equals(DeviceProtocol.canonical(audience.opt(key))))return null;
+        if(!wire.runId().equals(audience.opt("requestRunId"))||wire.executorEpoch()!=audience.optLong("requestExecutorEpoch",-1)
+                ||!DeviceProtocol.resourceEquals(wire.resourceBinding(),audience.optJSONObject("resourceBinding"))||audience.has("sourceShareId"))
+            return null;
+        return new SentPhoneRun(child,DeviceProtocol.identifier(run,"acceptedChildRun"),actualEpoch);
+    }
     private record OwnerHistoryRead(JSONObject task,JSONObject allocation){}
     private OwnerHistoryRead requireOwnerHistory(OwnerHistoryEvidence evidence)throws Exception{
         if(evidence==null||evidence.issuer!=this)throw new SecurityException("不是本原TaskStore历史读取证据");synchronized(owner){JSONObject current=task(evidence.id),linked=childAllocationForOperation(evidence.id,evidence.operation),wire=linked.getJSONObject("boundWire");if(!evidence.wire.equals(dev.pocketengine.features.devices.DeviceProtocol.canonical(wire)))throw new SecurityException("原已发送wire/目标/摘要已改变");JSONObject origin=current.optJSONObject("origin");if(origin==null){if(!"owner".equals(current.optString("actorId"))||!"private".equals(current.optString("spaceId")))throw new SecurityException("不是原本机owner历史任务");return new OwnerHistoryRead(current,linked);}

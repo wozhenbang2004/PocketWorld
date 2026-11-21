@@ -245,6 +245,10 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default JSONObject readOriginalWindowsText(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current current)throws Exception {
             throw new SecurityException("此宿主未开放原电脑文本读取。");
         }
+        default JSONObject readOriginalSentPhoneResult(String task,String run,int epoch,String operation,String child,String childRun,
+                                                      long childEpoch,DeviceArtifactTransfer.Current current)throws Exception {
+            throw new SecurityException("此宿主未开放原手机文字成果读取。");
+        }
         void pause(String originalTaskId) throws Exception;
         void resume(String originalTaskId) throws Exception;
         default JSONObject resumeRequest(String originalTaskId)throws Exception{return null;}
@@ -654,6 +658,12 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
             DeviceArtifactTransfer.Current bound=()->{current();ownerCurrent.require();};
             bound.require(); JSONObject value=control.readOriginalWindowsText(task,run,epoch,operation,bound);
             bound.require(); return copy(value);
+        }
+        public JSONObject readOriginalSentPhoneResult(String task,String run,int epoch,String operation,String child,String childRun,
+                                                      long childEpoch,DeviceArtifactTransfer.Current ownerCurrent)throws Exception {
+            DeviceArtifactTransfer.Current bound=()->{current();ownerCurrent.require();};
+            bound.require(); JSONObject value=control.readOriginalSentPhoneResult(task,run,epoch,operation,child,childRun,childEpoch,bound);
+            bound.require(); return value; // One presentation, not a retained native history/review.
         }
         public Availability stopAvailability(String id) throws Exception { current(); return control.stopAvailability(id); }
         public void requestStop(String id) throws Exception { current(); stopAvailability(id).require(); control.requestStop(id); }

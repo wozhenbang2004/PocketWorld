@@ -3,6 +3,7 @@ import { IconAdd, IconChevronLeft, IconChevronRight, IconRefresh } from './icons
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { PressButton } from './library';
 import { CalendarDateTimeFields } from './CalendarDateTimeFields';
+import { bridge } from './bridge';
 import { ReminderCalendarReview } from './ReminderCalendarReview';
 import { OwnerWorkspaceRequest } from './commitment-contract';
 import { isOrdinaryReminderReview, newPlanStep, ordinaryReminderReview, ordinaryReminderSaved, planCreateInput, planGroup, planMutationReceipt, planProgressReason, planProgressView, planState, planStepDraft, planStepInput, planTimingDraft, planTimingInput, planWaitingReason, type PlanStepDraft, type PlanTimingDraft } from './plan-contract';
@@ -45,7 +46,25 @@ function StepFields({ draft, index, earlier, projects, snapshot, busy, change }:
     </Accordion></div>;
 }
 
-function PlanProgress({ plan, run, supported }: { plan: Data; run: Props['run']; supported: Props['supported'] }) {
+type PlanWorkTarget = { stepId: string; taskId: string; runId: string; epoch: number };
+const planWorkId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+function actionablePlanWork(plan: Data): PlanWorkTarget | undefined {
+  const progress = planProgressView(plan), current = progress?.currentStep, index = current?.index;
+  if (progress?.readState !== 'current' || progress.executionAuthorized !== false || progress.notificationKind !== 'attention' ||
+      current?.readState !== 'current' || current.stepId !== progress.anchorStepId || current.status !== progress.stopReason ||
+      !['awaiting_user', 'waiting_user', 'needs_confirmation', 'waiting_approval', 'awaiting_approval'].includes(current.status) ||
+      current.terminalVerified !== false || current.resultVerified !== false ||
+      !planWorkId(current.taskId) || !planWorkId(current.runId) || !planWorkId(current.occurrenceId) ||
+      !Number.isSafeInteger(current.epoch) || current.epoch <= 0 || !Number.isSafeInteger(index) || index < 0 ||
+      !Array.isArray(plan.steps) || plan.steps.length > 50) return;
+  const step = plan.steps[index], admission = step?.taskAdmission;
+  if (!planWorkId(step?.id) || step.id !== current.stepId || step.taskId !== current.taskId ||
+      admission?.state !== 'bound' || admission.occurrenceId !== current.occurrenceId ||
+      plan.steps.filter((row: Data) => row?.id === step.id || row?.taskId === current.taskId).length !== 1) return;
+  return { stepId: step.id, taskId: current.taskId, runId: current.runId, epoch: current.epoch };
+}
+
+function PlanProgress({ plan, run, supported, currentAction }: { plan: Data; run: Props['run']; supported: Props['supported']; currentAction?: ReactNode }) {
   const observed = planProgressView(plan); if (!observed) return null;
   const current = observed.currentStep, last = observed.lastResult, notification = observed.notification || {};
   const reason = planProgressReason(plan);
@@ -58,6 +77,7 @@ function PlanProgress({ plan, run, supported }: { plan: Data; run: Props['run'];
       <div><dt>接下来</dt><dd>{reason || (current?.taskId ? '等待原工作的新状态' : '等待原调度核对时间与前置条件')}</dd></div>
       {observed.nextCheckAt > 0 && <div><dt>下次核对</dt><dd>{time(observed.nextCheckAt)}</dd></div>}
     </dl>
+    {currentAction && <div className="pw-followup-primary-actions">{currentAction}</div>}
     {last && <div className="pw-followup-context"><h4>最近一项结果 · 步骤 {last.index + 1}</h4><p>{last.title} · {last.resultVerified ? '已核验' : last.status === 'failed' ? '未完成' : last.status === 'cancelled' ? '已取消' : '已结束'}</p>
       {last.summary && <p className="pw-user-text">{last.summary}{last.summaryTruncated ? '…' : ''}</p>}
       {last.resultBasis?.kind === 'native_workspace_artifact_standard' && <p className="pw-field-hint">按原约定核验了文件身份、可读性、首行和大小；内容质量仍需验收。</p>}
@@ -69,7 +89,10 @@ function PlanProgress({ plan, run, supported }: { plan: Data; run: Props['run'];
   </section>;
 }
 
-function PlanContents({ plan, run, supported, discloseSteps = false, renderStepActions }: { plan: Data; run: Props['run']; supported: Props['supported']; discloseSteps?: boolean; renderStepActions?: (step: Data, index: number) => ReactNode }) {
+function PlanContents({ plan, run, supported, discloseSteps = false, renderStepActions, promotedWork }: {
+  plan: Data; run: Props['run']; supported: Props['supported']; discloseSteps?: boolean; renderStepActions?: (step: Data, index: number) => ReactNode;
+  promotedWork?: PlanWorkTarget;
+}) {
   const steps = rows(plan.steps);
   const stepStatus = (step: Data) => ({ pending: '待执行', running: '执行中', waiting: '等待中', completed: '已完成', failed: '失败', cancelled: '已取消', skipped: '未采用' } as Data)[step.status] || step.status || '待审阅';
   const stepKey = (step: Data, index: number) => String(step.id || index);
@@ -93,7 +116,7 @@ function PlanContents({ plan, run, supported, discloseSteps = false, renderStepA
       {step.taskAdmission.admissionBasis.businessWaitEvidence && <p>本次使用的认证事件：{step.taskAdmission.admissionBasis.businessWaitEvidence.eventId}</p>}
     </AccordionItem></Accordion>}
     {step.taskId && !step.taskAdmission?.admissionBasis && <p className="pw-field-hint">这条较早的工作未保存完整启动依据；原任务记录仍保留。</p>}
-    <div className="pw-form-actions">{step.taskId && <Button variant="secondary" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: step.taskId }); }}>查看这一步的工作与成果</Button>}{renderStepActions?.(step, at)}</div>
+    <div className="pw-form-actions">{step.taskId && !(promotedWork?.stepId === step.id && promotedWork?.taskId === step.taskId) && <Button variant="secondary" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: step.taskId }); }}>查看这一步的工作与成果</Button>}{renderStepActions?.(step, at)}</div>
     {rows(step.priorTaskRefs).length > 0 && <Accordion className="pw-followup-disclosures"><AccordionItem id="previous" title={`之前的尝试与结果 · ${step.priorTaskRefs.length} 项`}>{rows(step.priorTaskRefs).map((ref, index) => <Button key={index} variant="ghost" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: ref.taskId }); }}>第 {index + 1} 次工作</Button>)}</AccordionItem></Accordion>}
   </>;
   return <div className="pw-followup-plan-contents">
@@ -183,6 +206,17 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     }, true);
   };
   const plan = reading?.plan, validRead = !!reading?.viewHandle, terminal = ['completed', 'cancelled', 'finished_with_failures'].includes(plan?.state), paused = plan?.execution?.state === 'paused';
+  const promotedWork = plan && supported('tasks.open') ? actionablePlanWork(plan) : undefined;
+  const planDocument = bridge.getDocumentEpoch();
+  const openPromotedWork = () => {
+    const live = bridge.getState(), view = live.view as Data | undefined;
+    if (!promotedWork || !validRead || busy || editor || settings || review || selected.current !== reading ||
+        bridge.getDocumentEpoch() !== planDocument || view?.section !== 'commitments' || view.taskId !== null ||
+        view.resumeRevision !== state.webWorkspaceResumeRevision || !live.capabilities.commands.includes('tasks.open')) return;
+    // Navigation to the original Work, not plan "continue", which can start another step.
+    const { taskId, runId, epoch } = promotedWork;
+    void invoke('tasks.open', { id: taskId, expectedRunId: runId, expectedEpoch: epoch });
+  };
   const projects = rows(state.features?.workspace?.projects);
   const openSettings = () => { if (!plan || !validRead) return; const p = plan.execution?.policy || {}; setSettings({ viewHandle: reading?.viewHandle, planId: plan.id, revision: plan.revision, mode: plan.execution?.mode || 'manual', maxTaskAdmissions: String(plan.execution?.maxTaskAdmissions || Math.max(1, rows(plan.steps).length)), phoneMode: plan.execution?.phoneMode || 'background', modelObservationConsent: false, allowPrivateArtifactFreeze: false, businessEventConsent: false, notifyChanges: plan.execution?.notifyChanges === true, hours: '168', zoneId: p.zoneId || Intl.DateTimeFormat().resolvedOptions().timeZone, requiresNetwork: p.requiresNetwork !== false, requiresCharging: p.requiresCharging === true, minBatteryPercent: String(p.minBatteryPercent || 0), quiet: !!p.quietHours, start: p.quietHours?.start || '22:00', end: p.quietHours?.end || '08:00' }); };
   const recheckEditor = () => { const original = editor?.original || (settings ? { id: settings.planId, revision: settings.revision } : null); if (!original) return; void invoke('plans.read', { id: original.id }, value => { if (value.plan?.revision !== original.revision) { release(value, 'viewHandle'); throw new Error('原目标版本已变化，草稿保留。请返回当前目标核对新版本，未覆盖你的修改。'); } acceptReading(value); setEditor(old => old ? { ...old, viewHandle: value.viewHandle } : null); setSettings(old => old ? { ...old, viewHandle: value.viewHandle } : null); }); };
@@ -229,7 +263,8 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
       {plan.execution && <dl className="pw-followup-facts"><div><dt>剩余可启动次数</dt><dd>{Number.isSafeInteger(plan.execution.admissions) && Number.isSafeInteger(plan.execution.maxTaskAdmissions) ? Math.max(0, plan.execution.maxTaskAdmissions - plan.execution.admissions) : '尚未读取'} 次 · 已使用 {count(plan.execution.admissions)}/{count(plan.execution.maxTaskAdmissions)}，修改不会重置</dd></div><div><dt>本次授权到期</dt><dd>{expiry(plan.execution.policy)}</dd></div></dl>}
       {plan.originalTasksUnsettled && <p className="pw-followup-context">仍有工作正在结束或等待核对；暂停结果尚未确认。</p>}
       {(Array.isArray(plan.requirements?.blockers) ? plan.requirements.blockers : []).map((reason: any, index: number) => <p className="pw-followup-context" key={index}>{String(reason)}</p>)}
-      {planProgressView(plan) ? <PlanProgress plan={plan} run={run} supported={supported} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
+      {planProgressView(plan) ? <PlanProgress plan={plan} run={run} supported={supported} currentAction={promotedWork &&
+        <Button disabled={busy || !validRead || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen} onClick={openPromotedWork}>打开原工作</Button>} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
       {!validRead && <div className="pw-followup-attention"><p>详情已保留，操作前需要重新读取原版本。</p><Button variant="secondary" disabled={busy} onClick={() => read(plan.id)}>重新核对这个目标</Button></div>}
       <div className="pw-followup-primary-actions">
         {(!plan.execution || !plan.approvalValid) && !terminal && <Button disabled={busy || uncertain || !validRead} onClick={openSettings}>审阅目标与执行范围</Button>}
@@ -239,7 +274,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
         {plan.execution?.started && !paused && !terminal && <Button variant="secondary" disabled={busy || uncertain || !validRead} onClick={() => prepare('plans.reviewAction', { viewHandle: reading?.viewHandle, operation: 'refresh' })}>核对并继续此目标</Button>}
 
       </div>
-      <PlanContents key={plan.id} plan={plan} run={run} supported={supported} discloseSteps renderStepActions={(step, index) => paused && <>
+      <PlanContents key={plan.id} plan={plan} run={run} supported={supported} discloseSteps promotedWork={promotedWork} renderStepActions={(step, index) => paused && <>
         {!step.taskId && !step.taskAdmission && !['completed', 'failed', 'cancelled', 'skipped'].includes(step.status) && <Button variant="secondary" disabled={busy || uncertain || !validRead} onClick={() => openStep(step, index)}>修改步骤 {index + 1}</Button>}
         {['failed', 'cancelled'].includes(step.status) && step.taskObservation?.terminalVerified === true && <Button variant="secondary" disabled={busy || uncertain || !validRead} onClick={() => prepare('plans.reviewAction', { viewHandle: reading?.viewHandle, operation: 'retry', stepId: step.id })}>重新审阅步骤 {index + 1} 的重试</Button>}
       </>} />

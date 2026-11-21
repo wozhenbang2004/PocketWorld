@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.project.CheckoutTextMatches
 import dev.pocketengine.features.local.project.CheckoutPathMatches
 import dev.pocketengine.features.local.project.ProjectFileDraft
@@ -40,7 +41,11 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     private data class ListedSave(val id: String, val path: String, val sha: String)
     private class Adoption(val handle: String, val file: Opened, val revision: Long, val review: JSONObject, val expires: Long)
     private class PythonReview(val id: String, val opened: Opened, val native: OwnerPythonRun.Review, val stillCurrent: () -> Boolean)
-    private class Opened(val handle: String, @Volatile var draft: ProjectFileDraft) {
+    private data class PythonSavedRead(val revision: Long, val path: String, val sha: String) {
+        fun matches(value: ProjectFileDraft) = revision == value.revision && path == value.path && sha == value.baseHash &&
+            !value.creating && !value.dirty() && !value.conflict()
+    }
+    private class Opened(val handle: String, @Volatile var draft: ProjectFileDraft, val pythonRead: PythonSavedRead? = null) {
         var sequence = 0L
         @Volatile var saveUnknown = false
         @Volatile var formal: ProjectAdoptedFormalFile? = null
@@ -107,6 +112,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             .put("draftDurable", store.durable(value)).put("draftError", store.persistenceError(value) ?: "")
             .put("projectVersionWritten", false).put("executionAuthorized", false)
         file.formal?.let { result.put("formalFile", it.position()) }
+        if (!file.saveUnknown && file.pythonRead?.matches(value) == true) result.put("pythonReadRevision", value.revision)
         if (body) result.put("text", value.text).put("baseContent", value.baseContent).put("latest", value.latestReview() ?: JSONObject.NULL)
         return result
     }
@@ -137,19 +143,25 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         }
         val file = opened(original, args)
         if (action == PYTHON_REVIEW) {
-            fields(args, "viewHandle", "filesHandle", "fileHandle", "saveId")
+            val keys = args.keys().asSequence().toSet()
+            val common = setOf("viewHandle", "filesHandle", "fileHandle")
+            val fromSave = keys == common + "saveId"
+            require(fromSave || keys == common + "readRevision") { "请核对这次原文件读取或保存，不能混用" }
             clearPython(original)
-            val receipt = original.savedEdit
+            val saved = if (fromSave) original.savedEdit?.takeIf { it.id == text(args, "saveId") } else null
+            val read = if (fromSave) null else file.pythonRead?.takeIf { it.revision == number(args, "readRevision") }
             val draft = synchronized(store) {
                 requireDraft(file)
                 file.draft.also { value ->
-                    check(receipt != null && receipt.id == text(args, "saveId") && !file.saveUnknown &&
-                        !value.dirty() && !value.conflict() && !value.creating && OwnerPythonRun.supportsPath(value.path) &&
-                        value.path == receipt.path && value.baseHash == receipt.savedHash) { "请先在原副本保存并核对这一个 Python 文件" }
+                    val pinned = if (fromSave) saved != null && value.path == saved.path && value.baseHash == saved.savedHash
+                        else read?.matches(value) == true
+                    check(pinned && !file.saveUnknown && !value.dirty() && !value.conflict() && !value.creating &&
+                        OwnerPythonRun.supportsPath(value.path)) { "请从同一副本核对这一个已保存的 Python 文件" }
                 }
             }
             fun stillCurrent() = current(original) && controller.state.filePath == null && original.opened === file &&
-                original.savedEdit === receipt && !file.saveUnknown && file.draft.let { now ->
+                (if (fromSave) original.savedEdit === saved else file.pythonRead === read) &&
+                !file.saveUnknown && file.draft.let { now ->
                     now.revision == draft.revision && now.path == draft.path && now.baseHash == draft.baseHash &&
                         !now.creating && !now.dirty() && !now.conflict()
                 }
@@ -506,6 +518,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                             "刚核对的本机版本已经改变，未打开或保存任何替代文件。请返回重新比较。"
                         }
                     }
+                    val pythonReadCandidate = actual.remove(LocalModule.OWNER_PYTHON_SAVED_READ) == true
                     val value = synchronized(store) {
                         if(browsed!=null)check(current(original)&&original.directory===browsed){"原目录页面已关闭，未打开其他文件"}
                         // Do not touch even the existing draft/cache for a deleted or replacement version.
@@ -528,7 +541,13 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     }
                     if (!current(original)) { store.release(value); error("原文件读取窗口已变化，草稿已保留") }
                     original.opened?.let { store.release(it.draft) }
-                    val file = Opened(UUID.randomUUID().toString(), value); original.opened = file
+                    val pythonRead = if (original.sourcePath == null && pythonReadCandidate &&
+                        actual.opt("deleted") == false && actual.opt("projectId") == original.project &&
+                        actual.opt("checkoutId") == original.checkout && actual.opt("path") == value.path &&
+                        actual.opt("sha256") == value.baseHash && actual.opt("expectedHash") == value.baseHash &&
+                        value.baseHash.matches(Regex("[a-f0-9]{64}")) && actual.opt("content") == value.baseContent &&
+                        !value.creating && !value.dirty() && !value.conflict()) PythonSavedRead(value.revision,value.path,value.baseHash) else null
+                    val file = Opened(UUID.randomUUID().toString(), value, pythonRead); original.opened = file
                     val shown = info(original, file, true)
                     if(anchor!=null)shown.put("sourceHit",anchor)
                     if(hit!=null)shown.put("matchedFileSha256",hit.sha())

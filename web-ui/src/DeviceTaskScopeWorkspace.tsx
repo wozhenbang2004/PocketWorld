@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextField } from './forms-library';
 import { bridge } from './bridge';
 import { deviceChoiceCode, materialPath, phoneTextOnly, routeDraft, routeTitle, routeUseSummary, scopeRows as rows, scopeSelection, type RouteDraft, type ScopeData as Data } from './device-task-scope';
@@ -97,6 +97,8 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const mounted = useRef(true), working = useRef(false), generation = useRef(0), page = useRef(''), reviewHandle = useRef('');
   const pendingSave = useRef(false), initialDraft = useRef('');
+  const resultBack = useRef<(() => boolean) | null>(null);
+  const registerResultBack = useCallback((next: (() => boolean) | null) => { resultBack.current = next; }, []);
   const [discard, setDiscard] = useState<'close' | 'reload' | 'devices' | null>(null);
   const dirty = !!view && (JSON.stringify(drafts) !== initialDraft.current || removeUnavailable);
   const requestExit = (next: 'close' | 'reload' | 'devices') => { if (working.current) return; if (dirty) setDiscard(next); else exit(next); };
@@ -119,7 +121,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     document.addEventListener('visibilitychange', hide); window.addEventListener('pagehide', pageHidden);
     return () => { unsubscribe(); document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', pageHidden); };
   }, []);
-  useEffect(() => { onBackChange?.(() => { if (!open) return false; if (busy) return true; if (discard) setDiscard(null); else if (review) dismissReview(); else requestExit('close'); return true; }); return () => onBackChange?.(null); }, [open, busy, review, discard, dirty, onBackChange]);
+  useEffect(() => { onBackChange?.(() => { if (!open) return resultBack.current?.() === true; if (busy) return true; if (discard) setDiscard(null); else if (review) dismissReview(); else requestExit('close'); return true; }); return () => onBackChange?.(null); }, [open, busy, review, discard, dirty, onBackChange]);
   useEffect(() => {
     if (!review) return;
     const timer = window.setTimeout(() => { dismissReview(); setError('这次范围审阅已到期，请重新核对。'); }, Math.max(0, Number(review.reviewExpiresAt || Date.now() + 120_000) - Date.now()));
@@ -212,7 +214,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const devicesLabel = openWindowsConnection ? '核对原电脑连接记录' : directedId ? '查看这份工作的原设备连接' : '管理设备与连接';
   const scopeReadNote = directedId ? '点击可向原设备核对范围，只用已有的连接。' : '点击可向已有连接的候选设备核对范围。';
   return <section className="pw-task-capabilities" aria-label="本任务的远端设备范围">
-    {showDispatch && <OriginalPhoneDispatchStatus key={`${taskId}:${directed.deviceId}:${directed.instanceId}:${directed.certificateFingerprint}`} source={{taskId, ...directed}} canRead={canReadDispatch === true} onOpen={onOpenOriginal} />}
+    {showDispatch && <OriginalPhoneDispatchStatus key={`${taskId}:${directed.deviceId}:${directed.instanceId}:${directed.certificateFingerprint}`} source={{taskId, ...directed}} canRead={canReadDispatch === true} onOpen={onOpenOriginal} registerResultBack={registerResultBack} />}
     <Button variant={showDispatch ? 'ghost' : 'secondary'} onClick={read} disabled={busy}>{directedId ? '核对' + scopeLabel : '核对已连接设备的范围'}</Button>
     {!open && openWindowsConnection && <Button variant="ghost" disabled={busy} onClick={openWindowsConnection}>{devicesLabel}</Button>}
     {!startedPhone && directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看原派单与结果</Button>}

@@ -798,11 +798,19 @@ public final class DeviceWorkspaceLanRuntime implements AutoCloseable, DeviceTra
         return owner.pairing().historyRoute(exact.peer, originalGrantId, System.currentTimeMillis());
     }
     public DeviceCapabilityPort.Reply readHistory(PairingCoordinator.HistoryQuery query, DeviceArtifactTransfer.Current ioCancellation) throws Exception {
+        return readHistory(query,ioCancellation,null);
+    }
+    /** For the Work observer, capture the exact existing original phone channel; do not
+     * resolve, connect, describe, retry or borrow another channel after checking this pin. */
+    DeviceCapabilityPort.Reply readHistory(PairingCoordinator.HistoryQuery query,DeviceArtifactTransfer.Current ioCancellation,DirectedPhoneTarget pinned) throws Exception {
         java.util.Objects.requireNonNull(query); java.util.Objects.requireNonNull(ioCancellation).require();
         DeviceTaskEnvelope request = query.envelope(); PeerChannel exact = controlChannel(request.targetDeviceId());
         if (!channelOnline(exact)) throw new IOException("设备尚未连接，未读取结果");
+        if(pinned!=null&&(!"task.get".equals(request.method())||!pinned.deviceId().equals(request.targetDeviceId())
+                ||!pinned.instanceId().equals(request.instanceId())||!pinned.certificateFingerprint().equals(exact.peer.certificateFingerprint())))
+            throw new SecurityException("不是原工作固定手机的连接，未发送读取请求。");
         query.requireTargetPeer(exact.peer, System.currentTimeMillis());
-        return exchange(request.targetDeviceId(), request, null, () -> { ioCancellation.require(); query.requireTargetPeer(exact.peer, System.currentTimeMillis()); if (controlChannel(request.targetDeviceId()) != exact) throw new IOException("原结果读取通道已变化"); }, request.deadline());
+        return exchange(request.targetDeviceId(), request, null, () -> { ioCancellation.require(); query.requireTargetPeer(exact.peer, System.currentTimeMillis()); if (controlChannel(request.targetDeviceId()) != exact) throw new IOException("原结果读取通道已变化"); }, request.deadline(),pinned==null?null:exact);
     }
     /** Only the original native HistoryHost owns this read-only envelope/cancellation pair.
      * Its SQL evidence and opaque HistoryRoute mint the request; no UI or model wire is accepted. */
