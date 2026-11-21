@@ -161,7 +161,7 @@ function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean
   </>;
 }
 
-export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus, onReturnToPartnerTask, reading }: { reading?: DeviceReadingSlot; sourceFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
+export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus, onReturnToPartnerTask, onOpenLocalBackgroundSetup, reading }: { reading?: DeviceReadingSlot; onOpenLocalBackgroundSetup?: () => void; sourceFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
   const pinnedConnection=sourceFocus?.purpose==='partner_connection';
   const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown }>();
   const peerPlace = useRef(!sourceFocus && !modelReturn ? reading?.selected : undefined);
@@ -550,7 +550,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const reason = checks.find(check => check.state === group?.state && check.state !== 'ready' && check.message) || checks.find(check => check.state !== 'ready' && check.message);
     return reason ? phoneStatus(id) + ' · ' + reason.message : phoneStatus(id);
   };
-  const openPhoneSetup = (section: 'accessibility' | 'background' | 'notifications') => { if (busy) return; clearSensitive(true, form === 'invite'); void run('settings.openSystem', { section }).catch(async failure => { await invoke('devices.snapshot'); if (alive.current && document.visibilityState === 'visible') setError(failure instanceof Error ? failure.message : String(failure)); }); };
+  const openPhoneSetup = (section: 'accessibility' | 'notifications') => { if (busy) return; clearSensitive(true, form === 'invite'); void run('settings.openSystem', { section }).catch(async failure => { await invoke('devices.snapshot'); if (alive.current && document.visibilityState === 'visible') setError(failure instanceof Error ? failure.message : String(failure)); }); };
   const actionReview = (operation: string, extra: Data = {}) => { void invoke('devices.reviewAction', { operation, ...extra }, acceptReview, operation.startsWith('task.') ? 'control' : 'work'); };
   const reviewPeerConnection = (target: Data) => {
     if (busy || retired(target) || !available(target.actions?.connect) || !supported('devices.reviewAction')) return;
@@ -1254,7 +1254,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 <dl className="pw-facts">{[['mainObservation', '主屏读屏'], ['mainExecution', '主屏操作'], ['mainScreenshot', '主屏截图'],
                   ['backgroundPreparation', '独立屏准备'], ['backgroundExecution', '独立屏执行'], ['backgroundInput', '独立屏输入'], ['backgroundCapture', '独立屏截图']].map(([id, title]) =>
                   <div key={id}><dt>{title}</dt><dd>{localScreenDetail(id)}</dd></div>)}</dl>
-                <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !supported('settings.openSystem')} onClick={() => openPhoneSetup('accessibility')}>准备主屏访问</Button><Button variant="secondary" disabled={busy || !supported('settings.openSystem')} onClick={() => openPhoneSetup('background')}>准备独立屏连接</Button></div>
+                <div className="pw-form-actions"><Button variant="secondary" disabled={busy || !supported('settings.openSystem')} onClick={() => openPhoneSetup('accessibility')}>准备主屏访问</Button><Button variant="secondary" disabled={busy || !onOpenLocalBackgroundSetup} onClick={onOpenLocalBackgroundSetup}>准备独立屏连接</Button></div>
                 <p>独立屏连接成功不等于已建立显示、输入与截图能力。主屏会影响你正在用的界面；整屏截图与整屏输入分别授权。</p>
               </AccordionItem>
               <AccordionItem id="receiver" title="本机接收服务" description={receiverLabel} icon={IconPhone}>
