@@ -42,13 +42,14 @@ export function currentHomeReport(report:VerifiedHomeReport){
 }
 type ReturnedReportProps={
   report:VerifiedHomeReport|null; task:ButlerHomeTask; active:boolean;
-  onCopy:(text:string)=>Promise<unknown>; onOriginal:()=>void; onFollowUp?:()=>void; onConversation?:()=>void;
+  onCopy:(text:string)=>Promise<unknown>; onOriginal:()=>void; onConversation?:()=>void;
+  onIndependentFollowUp?:(handle:string)=>Promise<boolean>;
   onLocateReport?:(report:VerifiedHomeReport)=>Promise<void>;
   onFiles?:(report:VerifiedHomeReport,target:HTMLButtonElement)=>Promise<void>;
 };
-export function ButlerReturnedReport({report,task,active,onCopy,onOriginal,onFollowUp,onConversation,onLocateReport,onFiles}:ReturnedReportProps){
+export function ButlerReturnedReport({report,task,active,onCopy,onOriginal,onIndependentFollowUp,onConversation,onLocateReport,onFiles}:ReturnedReportProps){
   const [notice,setNotice]=useState('');
-  const [opening,setOpening]=useState<'files'|'history'|null>(null),flight=useRef(false);
+  const [opening,setOpening]=useState<'files'|'history'|'followup'|null>(null),flight=useRef(false);
   const work=ownerWorkPresentation(task);
   if(!report||bridge.getDocumentEpoch()!==report.documentEpoch||resume()!==report.resume||!sameHomeReport(reportedHomeWork(task,work),report.target))
     return <p className="pw-reading-note" role="status">原工作或汇报已变化，没有改读其他轮次。请返回管家首页核对。</p>;
@@ -64,8 +65,17 @@ export function ButlerReturnedReport({report,task,active,onCopy,onOriginal,onFol
     catch(error){if(currentHomeReport(report)&&target.isConnected)setNotice(error instanceof Error?error.message:kind==='history'?'未能定位这条原消息。':'未能打开本轮文件。')}
     finally{flight.current=false;setOpening(null)}
   };
+  const followUp=onIndependentFollowUp&&task.status==='completed'&&task.raw?.executionRole==='owner_work'&&
+    !task.raw.developmentContext&&!task.raw.ownerPhoneControl&&!task.raw.ownerDeviceWork?async(handle:string)=>{
+    if(!active||flight.current)return false;
+    if(!currentHomeReport(report))throw Error('原汇报已变化，没有打开其他报告的追问。');
+    flight.current=true;setOpening('followup');setNotice('');
+    try{return await onIndependentFollowUp(handle)}
+    finally{flight.current=false;setOpening(null)}
+  }:undefined;
   return <>{work?.ownerDecision&&<p className="pw-reading-note">{work.ownerDecision.label}。阅读已保存的汇报不会替你确认或授权。</p>}
-    <OwnerWorkReport key={identity} identity={identity} target={report.target} originalVersion={report.pin} active={active} supported={bridge.getState().capabilities.commands.includes('ownerWork.report.read')} onCopy={onCopy}/>
+    <OwnerWorkReport key={identity} identity={identity} target={report.target} originalVersion={report.pin} active={active} supported={bridge.getState().capabilities.commands.includes('ownerWork.report.read')} onCopy={onCopy}
+      onIndependentFollowUp={followUp} followUpState={opening==='followup'?'pending':blocked?'blocked':undefined}/>
     <div className="pw-action-row">
       {onLocateReport&&<Button variant="secondary" disabled={blocked} aria-busy={opening==='history'||undefined} onClick={event=>void open('history',event.currentTarget)}>
         {opening==='history'?'正在定位原消息…':'在原对话定位汇报'}
@@ -73,8 +83,7 @@ export function ButlerReturnedReport({report,task,active,onCopy,onOriginal,onFol
       {onFiles&&<Button variant="secondary" leadingIcon={IconFolder} disabled={blocked} aria-busy={opening==='files'||undefined} onClick={event=>void open('files',event.currentTarget)}>
         {opening==='files'?'正在打开文件…':'查看本次文件'}
       </Button>}
-      {onFollowUp?<Button variant={onLocateReport?'ghost':'secondary'} disabled={blocked} onClick={()=>{if(currentHomeReport(report))onFollowUp();else setNotice('原汇报已变化，未关联到其他对话。')}}>在原对话追问</Button>
-        :!onLocateReport&&onConversation&&<Button variant="secondary" disabled={blocked} onClick={()=>{if(currentHomeReport(report))onConversation();else setNotice('原汇报已变化，没有打开其他对话。')}}>打开原对话</Button>}
+      {!onLocateReport&&onConversation&&<Button variant="secondary" disabled={blocked} onClick={()=>{if(currentHomeReport(report))onConversation();else setNotice('原汇报已变化，没有打开其他对话。')}}>打开原对话</Button>}
       <Button variant="ghost" disabled={blocked} onClick={()=>{if(currentHomeReport(report))onOriginal();else setNotice('原工作已变化，没有打开其他执行。')}}>{work?.ownerDecision?'回原工作处理待办':'查看原工作详情'}</Button>
     </div>
     {notice&&<p className="pw-reading-note" role="status">{notice}</p>}</>;

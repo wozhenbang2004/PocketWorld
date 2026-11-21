@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.assistant.AssistantModule
+import dev.pocketengine.store.TaskStore
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.UiTaskResult
@@ -33,12 +34,14 @@ internal class PocketWebWorkSearch(
 
     fun clear() { pending.toList().forEach { it.cancel() }; pending.clear() }
 
-    fun dispatch(action: String, args: JSONObject, conversationResult: UiTaskResult? = null, done: (JSONObject?, String?) -> Unit) {
+    fun dispatch(action: String, args: JSONObject, conversationResult: UiTaskResult? = null,
+                 reportQuote: ((TaskStore.OwnerWorkReportQuote) -> Unit)? = null, done: (JSONObject?, String?) -> Unit) {
         try {
             check(controller.webPrivateOwnerVisible()) { "请回到私人工作区查找自己的记录" }
             val window = captureWindow()
             val control = RunControl()
             pending.add(control)
+            var proof: TaskStore.OwnerWorkReportQuote? = null
             try {
                 controller.runPluginCatalogWork(Runnable {
                     val result = runCatching {
@@ -54,8 +57,10 @@ internal class PocketWebWorkSearch(
                                 JSONObject()
                             }
                             "ownerWork.report.read" -> {
-                                fields(args, setOf("taskId", "runId", "epoch", "reportMessageId", "offset", "maxChars", "expectedReportRevision", "expectedReportFingerprint"))
-                                host.tasks.ownerWorkReportForOwner(args, control)
+                                fields(args, setOf("taskId", "runId", "epoch", "reportMessageId", "offset", "maxChars", "expectedReportRevision", "expectedReportFingerprint", "independentFollowUp"))
+                                val selection=JSONObject(args.toString()).also { it.remove("independentFollowUp") }
+                                if (reportQuote == null) host.tasks.ownerWorkReportForOwner(selection, control)
+                                else host.tasks.ownerWorkReportForOwner(selection, control) { proof=it }
                             }
                             "tasks.projectPackages" -> {
                                 fields(args, setOf("taskId", "cursor"))
@@ -150,6 +155,7 @@ internal class PocketWebWorkSearch(
                                 }
                                 value.optJSONObject("taskPage")?.let(rememberTasks)
                                 value.remove("taskPage")
+                                proof?.let { reportQuote?.invoke(it) }
                                 done(PocketWebState.publicValue(value) as JSONObject, null)
                             } catch (failure: Exception) { done(null, failure.message ?: "原记录不可核对") }
                         }, { done(null, it.message ?: "记录暂时无法读取，请重试") })

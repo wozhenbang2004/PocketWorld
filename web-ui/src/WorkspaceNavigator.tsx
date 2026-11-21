@@ -15,6 +15,7 @@ type Props = {
   searchOpen: boolean; openSearch: () => void; closeSearch: () => void; search: ReactNode; searchTrigger: Ref<HTMLButtonElement>;
   memory: OwnerNavigationMemory; navigate: (key: string) => void; openConversation?: (id: string) => void;
   organizeConversation?: (id: string) => void; newConversation?: () => void; newPending: boolean;
+  onResumeIndependentReportFollowUp?: () => void;
   profileName: string; avatar?: string; canProfile: boolean; openUnread?: () => void;
 };
 
@@ -41,7 +42,8 @@ const withoutUnreadBadge = (item: WorkNavItem): WorkNavItem =>
  * items and conversation IDs onto three faces of its existing drawer or desktop rail. */
 export function WorkspaceNavigator({items, selected, recent, selectedConversation, desktop, compact, onToggleCompact,
   directoryOpen, setDirectoryOpen, searchOpen, openSearch, closeSearch, search, searchTrigger, memory, navigate,
-  openConversation, organizeConversation, newConversation, newPending, profileName, avatar, canProfile, openUnread}: Props) {
+  openConversation, organizeConversation, newConversation, newPending, onResumeIndependentReportFollowUp,
+  profileName, avatar, canProfile, openUnread}: Props) {
   const face: Face = searchOpen ? 'records' : directoryOpen ? 'directory' : 'home';
   const mini = compact && face === 'home';
   const scroll = useRef<HTMLDivElement>(null), directoryButton = useRef<HTMLButtonElement>(null), back = useRef<HTMLButtonElement>(null);
@@ -117,6 +119,10 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
           aria-label={onDirectoryRoute ? '全部功能，当前位置：' + onDirectoryRoute.label : '全部功能'} title="全部功能" onClick={() => enter('directory')}>
           <span>全部功能</span>{onDirectoryRoute && !mini && <small>{onDirectoryRoute.label}</small>}
         </Button>
+        {!mini && onResumeIndependentReportFollowUp && <Button variant="ghost" className="pw-owner-all" leadingIcon={IconChat}
+          trailingIcon={IconChevronRight} disabled={newPending} onClick={() => { remember(); onResumeIndependentReportFollowUp(); }}>
+          <span>继续未发追问</span>
+        </Button>}
         {!mini && (pinned.length > 0 || unpinned.length > 0) && <section className="pw-work-recent pw-owner-recent" aria-label="最近对话">
           {pinned.length > 0 && <div className="pw-conversation-group"><div className="pw-owner-recent-heading"><h3>置顶</h3>
             {pinned.length > 3 && <Button size="small" variant="ghost" trailingIcon={IconChevronDown} aria-expanded={showPinned}

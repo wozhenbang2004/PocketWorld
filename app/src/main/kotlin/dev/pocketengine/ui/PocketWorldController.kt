@@ -1336,6 +1336,122 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             completed?.invoke(error)
         } }
     }
+    private var independentReportDraftBusy=false
+
+    internal fun currentIndependentReportDraftKey():String?=ownerComposer?.independentReportFollowUpKey()?.takeIf {
+        ownerComposer?.independentReportFollowUpPersisted()==true
+    }
+
+    internal fun independentReportDraftAvailable():Boolean {
+        val model=ownerComposer?:return false
+        return webPrivateOwnerVisible()&&model.independentReportFollowUpKey()?.let { it!=model.activeKey() }==true
+    }
+
+    internal fun canDiscardIndependentReportDraft():Boolean {
+        val model=ownerComposer?:return false
+        return webPrivateOwnerVisible()&&!state.chatSubmitting&&!state.phoneSubmitting&&!state.chatAttachmentPickerOpen&&
+            !state.listening&&!voiceInput.active()&&!voiceInput.snapshot().optBoolean("reviewAvailable")&&
+            conversationReader==null&&!hasChannelPhoneOrigin&&firstHostSave==null&&!independentReportDraftBusy&&
+            model.independentReportFollowUpKey()==model.activeKey()&&
+            model.canDiscardIndependentReportFollowUp()
+    }
+
+    internal fun discardEmptyIndependentReportDraft(key:String,epoch:Int,revision:Long,visible:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val model=ownerComposer?:error("原追问尚未恢复")
+        require(visible()&&canDiscardIndependentReportDraft()&&webTaskViewId==null&&chatViewEpoch==epoch&&model.activeKey()==key) {
+            "请回到尚未写入的原追问；没有删除任何输入"
+        }
+        model.discardIndependentReportFollowUp(key,revision)
+        independentReportDraftBusy=true
+        voiceInputModeChanged();chatViewEpoch++;publishComposer(true)
+        state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false)
+        refreshCurrentConversationTurn();voiceInputViewChanged()
+        persistComposer(model){ failure ->
+            independentReportDraftBusy=false
+            if(failure!=null)done(null,"未能确认空追问已放弃，请重开后核对")
+            else done(JSONObject().put("discarded",true),null)
+        }
+    }
+
+    internal fun independentReportSourceIndex():Int =
+        if(webPrivateOwnerVisible())ownerComposer?.independentReportSourceIndex()?:-1 else -1
+
+    internal fun prepareIndependentReportFollowUp(task:String,proof:TaskStore.OwnerWorkReportQuote,
+                                                  visible:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val model=ownerComposer?:error("原草稿还在恢复")
+        val store=app.tasks
+        fun current()=visible()&&webPrivateOwnerVisible()&&webTaskViewId==task&&conversationReader==null&&
+            !hasChannelPhoneOrigin&&!state.chatSubmitting&&ownerComposer===model&&app.tasks===store
+        require(current()&&!independentReportDraftBusy) { "请从当前私人汇报另写追问" }
+        independentReportDraftBusy=true
+        try {
+            io.execute {
+                val checked=runCatching {
+                    val owner=dev.pocketengine.core.RunControl()
+                    val native=store.revalidateOwnerWorkReportQuote(proof,owner)
+                    val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule
+                        ?:error("原汇报暂时不可引用")
+                    assistant.checkIndependentReportDraftSource(native,owner)
+                    store.revalidateOwnerWorkReportQuote(proof,owner)
+                }
+                main.post {
+                    if(closed)return@post
+                    if(!current()){
+                        independentReportDraftBusy=false;done(null,"原汇报窗口已变化，未另写追问");return@post
+                    }
+                    val staged=runCatching {
+                        val reference=checked.getOrThrow()
+                        val revision=model.revision()
+                        val candidate=model.prepareIndependentReportFollowUp(proof.originFingerprint(),reference)
+                        model.adoptIndependentReportFollowUp(candidate,revision)
+                    }
+                    val failure=staged.exceptionOrNull()
+                    if(failure!=null){
+                        independentReportDraftBusy=false;done(null,composerFailure(failure));return@post
+                    }
+                    persistComposer(model){ saveError ->
+                        independentReportDraftBusy=false
+                        if(saveError!=null||!model.independentReportFollowUpPersisted())
+                            done(null,"未确认保存，请稍后从导航核对未发追问")
+                        else if(!current())done(null,"追问已保存，可从导航继续；没有切换或发送")
+                        else done(JSONObject().put("prepared",true),null)
+                    }
+                }
+            }
+        } catch(failure:Exception) {
+            independentReportDraftBusy=false
+            done(null,composerFailure(failure))
+        }
+    }
+
+    internal fun resumeIndependentReportFollowUp(visible:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val model=ownerComposer?:error("原草稿还在恢复")
+        val key=model.independentReportFollowUpKey()?:error("没有未发的追问")
+        fun current()=visible()&&webPrivateOwnerVisible()&&webTaskViewId==null&&conversationReader==null&&
+            !hasChannelPhoneOrigin&&!state.chatSubmitting&&!state.phoneSubmitting&&!state.chatAttachmentPickerOpen&&
+            !state.listening&&!voiceInput.active()&&!voiceInput.snapshot().optBoolean("reviewAvailable")&&
+            firstHostSave==null&&ownerComposer===model&&model.independentReportFollowUpKey()==key
+        require(current()&&!independentReportDraftBusy) { "请从私人对话继续这份追问" }
+        independentReportDraftBusy=true
+        persistComposer(model){ failure ->
+            independentReportDraftBusy=false
+            if(failure!=null||!current()||!model.independentReportFollowUpPersisted()){
+                done(null,"原追问未能确认打开，请从导航重试；没有发送");return@persistComposer
+            }
+            runCatching {
+                val draft=model.draft(key)?:error("未发追问已变化")
+                val changed=model.activeKey()!=key
+                if(changed){
+                    model.activateIndependentReportFollowUp(key,draft.revision)
+                    voiceInputModeChanged();chatViewEpoch++;publishComposer(true)
+                    state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false)
+                    refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer()
+                }
+                JSONObject().put("opened",true).put("changed",changed)
+            }.fold({done(it,null)},{done(null,composerFailure(it))})
+        }
+    }
+
     fun editComposerText(key:String,viewEpoch:Int,text: String) {
         val model=ownerComposer ?: return;val draft=model.active()
         if(draft.key!=key||chatViewEpoch!=viewEpoch)return

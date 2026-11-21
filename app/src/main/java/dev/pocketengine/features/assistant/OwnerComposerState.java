@@ -1,5 +1,7 @@
 package dev.pocketengine.features.assistant;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -16,6 +18,7 @@ public final class OwnerComposerState {
     private static final String RESTRICTED_FORMAT="pocketworld.owner-composer.v1.first-message-paused";
     private static final String TASK_ONLY_FORMAT="pocketworld.owner-composer.v1.first-task-defaults-locked";
     private static final String ONE_MESSAGE_FORMAT="pocketworld.owner-composer.v1.one-message-learning-exclusion";
+    private static final String REPORT_FOLLOW_UP_FORMAT="pocketworld.owner-composer.v1.independent-report-follow-up";
     public static final int MAX_DRAFTS=64,MAX_PENDING=64,MAX_TEXT=48_000,MAX_STATE_BYTES=1_048_576;
     /** Absence is the older query-only format. FENCED is not evidence of a send. */
     public enum FirstChatPhase { PREPARED, FENCED, RELEASED }
@@ -108,12 +111,35 @@ public final class OwnerComposerState {
         public final String previousKey,currentKey;
         private Acknowledgement(boolean matched,boolean cleared,boolean migrated,String before,String after){this.matched=matched;this.cleared=cleared;this.migrated=migrated;previousKey=before;currentKey=after;}
     }
+    /** Presentation identity only. The exact selected range lives in the existing sourceRefs field. */
+    private record IndependentReportFollowUp(String key,String originFingerprint,String referenceFingerprint) {
+        private IndependentReportFollowUp {
+            if(key==null||!key.startsWith("new:")||!uuid(key.substring(4))||!digest(originFingerprint)||!digest(referenceFingerprint))
+                throw new IllegalArgumentException("原汇报追问草稿定位不可核对");
+        }
+        private JSONObject json()throws Exception{return new JSONObject().put("draftKey",key).put("originFingerprint",originFingerprint).put("referenceFingerprint",referenceFingerprint);}
+        private static IndependentReportFollowUp read(JSONObject value)throws Exception{
+            if(value.length()!=3||!(value.opt("draftKey") instanceof String key)||!(value.opt("originFingerprint") instanceof String origin)||!(value.opt("referenceFingerprint") instanceof String reference))
+                throw new IllegalArgumentException("原汇报追问只保留固定草稿定位");
+            return new IndependentReportFollowUp(key,origin,reference);
+        }
+    }
+    private record PreparedReportFollowUp(OwnerComposerState issuer,long revision,IndependentReportFollowUp followUp,Draft draft) {}
+    static final class StoreSnapshot {
+        final JSONObject document;
+        private final IndependentReportFollowUp followUp,added,retired;
+        private StoreSnapshot(JSONObject document,IndependentReportFollowUp followUp,IndependentReportFollowUp added,IndependentReportFollowUp retired){
+            this.document=document;this.followUp=followUp;this.added=added;this.retired=retired;
+        }
+    }
     private final LinkedHashMap<String,Draft> drafts=new LinkedHashMap<>();
     private final LinkedHashMap<String,Pending> pending=new LinkedHashMap<>();
     // Optional restriction of an original unbound draft, never a grant or a global default.
     private final java.util.LinkedHashSet<String> firstMessagePaused=new java.util.LinkedHashSet<>();
     private final java.util.LinkedHashSet<String> firstTaskDefaultsLocked=new java.util.LinkedHashSet<>();
     private final java.util.LinkedHashSet<String> oneMessageExcluded=new java.util.LinkedHashSet<>();
+    private IndependentReportFollowUp independentReportFollowUp,storedReportFollowUp,addedReportFollowUp,retiredReportFollowUp;
+    private PreparedReportFollowUp preparedReportFollowUp;
     private String activeKey;
     private long revision;
     private OwnerComposerState(){}
@@ -149,9 +175,87 @@ public final class OwnerComposerState {
         return Collections.unmodifiableList(result);
     }
     public synchronized Draft newConversation()throws Exception {
-        if(active().conversationId.isEmpty())return active();
-        for(Draft draft:drafts.values())if(draft.conversationId.isEmpty()&&!hasPending(draft.key)){activeKey=draft.key;revision=increment(revision);return draft;}
+        if(active().conversationId.isEmpty()&&!isIndependentReportFollowUp(activeKey))return active();
+        for(Draft draft:drafts.values())if(draft.conversationId.isEmpty()&&!isIndependentReportFollowUp(draft.key)&&!hasPending(draft.key)){activeKey=draft.key;revision=increment(revision);return draft;}
         makeRoom();activeKey="new:"+UUID.randomUUID();Draft draft=blank(activeKey,"");drafts.put(activeKey,draft);revision=increment(revision);return draft;
+    }
+    /** Receives an already verified native report pin and whole range, not a Web source claim. */
+    public synchronized OwnerComposerState prepareIndependentReportFollowUp(String originFingerprint,JSONObject reference)throws Exception {
+        if(!digest(originFingerprint)||reference==null)throw new SecurityException("未核对到准确原汇报，没有新建草稿");
+        JSONArray selection=independentReportReference(new JSONArray().put(reference));
+        String referenceFingerprint=reportFingerprint(selection.toString());
+        if(independentReportFollowUp!=null){
+            if(!independentReportFollowUp.originFingerprint.equals(originFingerprint)||!independentReportFollowUp.referenceFingerprint.equals(referenceFingerprint))
+                throw new IllegalStateException("已有一份不同的汇报追问草稿，未把这次汇报加入它");
+            // An explicit detach is not undone by returning from the same report.
+            if(drafts.get(independentReportFollowUp.key).sourceRefs.equals("[]"))
+                throw new IllegalStateException("追问已移除引用，请从导航继续原草稿，或先放弃空追问。");
+            return this;
+        }
+        if(retiredReportFollowUp!=null)throw new IllegalStateException("上一份追问草稿的移除尚未保存，请先核对");
+        if(drafts.size()>=MAX_DRAFTS)throw new IllegalStateException("已保留64份原草稿，没有丢弃其他输入来新建追问");
+        String key="new:"+UUID.randomUUID();
+        if(drafts.containsKey(key))throw new IllegalStateException("新草稿身份重复，未覆盖原草稿");
+        Draft draft=new Draft(key,"",1,"","queue",new JSONArray(),0,0,"","",false,"","",selection,new JSONArray(),new JSONArray());
+        IndependentReportFollowUp followUp=new IndependentReportFollowUp(key,originFingerprint,referenceFingerprint);
+        OwnerComposerState candidate=new OwnerComposerState();
+        candidate.drafts.putAll(drafts);candidate.drafts.put(key,draft);candidate.pending.putAll(pending);
+        candidate.firstMessagePaused.addAll(firstMessagePaused);candidate.oneMessageExcluded.addAll(oneMessageExcluded);
+        candidate.firstTaskDefaultsLocked.addAll(firstTaskDefaultsLocked);
+        candidate.activeKey=activeKey;candidate.revision=increment(revision);candidate.independentReportFollowUp=followUp;
+        candidate.preparedReportFollowUp=new PreparedReportFollowUp(this,revision,followUp,draft);
+        return candidate;
+    }
+    /** Add only the prepared dormant row to this still-current live model before disk work. */
+    public synchronized void adoptIndependentReportFollowUp(OwnerComposerState candidate,long expectedGlobalRevision){
+        if(candidate==null||revision!=expectedGlobalRevision)throw new IllegalStateException("原输入已变化，未改动草稿");
+        if(candidate==this&&independentReportFollowUp!=null)return;
+        PreparedReportFollowUp prepared=candidate.preparedReportFollowUp;
+        if(prepared==null||prepared.issuer!=this||prepared.revision!=revision||independentReportFollowUp!=null||retiredReportFollowUp!=null||
+                drafts.size()>=MAX_DRAFTS||drafts.containsKey(prepared.draft.key))throw new SecurityException("原汇报追问准备已变化，没有覆盖草稿");
+        long next=increment(revision);
+        drafts.put(prepared.draft.key,prepared.draft);independentReportFollowUp=prepared.followUp;addedReportFollowUp=prepared.followUp;revision=next;
+    }
+    public synchronized String independentReportFollowUpKey(){return independentReportFollowUp==null?null:independentReportFollowUp.key;}
+    public synchronized boolean independentReportFollowUpPersisted(){return independentReportFollowUp!=null&&independentReportFollowUp.equals(storedReportFollowUp);}
+    public synchronized int independentReportSourceIndex(){return isIndependentReportFollowUp(activeKey)&&!active().sourceRefs.equals("[]")?0:-1;}
+    public synchronized Draft activateIndependentReportFollowUp(String key,long expected)throws Exception {
+        if(!isIndependentReportFollowUp(key)||!independentReportFollowUpPersisted())throw new SecurityException("原汇报追问草稿保存尚未核对，没有切换输入");
+        Draft draft=require(key,expected);
+        if(!activeKey.equals(key)){long next=increment(revision);activeKey=key;revision=next;}
+        return draft;
+    }
+    public synchronized boolean canDiscardIndependentReportFollowUp(){
+        if(!independentReportFollowUpPersisted())return false;
+        String key=independentReportFollowUp.key;Draft draft=drafts.get(key);
+        return draft!=null&&draft.conversationId.isEmpty()&&!hasPending(key)&&draft.text.isEmpty()&&draft.attachments.equals("[]")&&
+                draft.voiceText.isEmpty()&&draft.previewRefs.equals("[]")&&draft.objectRefs.equals("[]")&&!firstMessagePaused.contains(key)&&
+                !oneMessageExcluded.contains(key)&&!firstTaskDefaultsLocked.contains(key);
+    }
+    /** Release only the explicit unused slot, without removing or editing another draft. */
+    public synchronized void discardIndependentReportFollowUp(String key,long expected)throws Exception {
+        require(key,expected);
+        if(!isIndependentReportFollowUp(key)||!canDiscardIndependentReportFollowUp())
+            throw new SecurityException("原追问有输入、设置或待核对回执，没有丢弃原草稿");
+        Draft replacement=null;
+        if(key.equals(activeKey)){
+            // Retention order, not a guess about the user's last edit or last viewed conversation.
+            for(Draft draft:drafts.values())if(!draft.key.equals(key)&&draft.key.startsWith("new:")&&draft.conversationId.isEmpty()&&!hasPending(draft.key))
+                replacement=draft;
+            if(replacement==null){
+                String normal="new:"+UUID.randomUUID();
+                if(drafts.containsKey(normal))throw new IllegalStateException("新草稿身份重复，未覆盖原草稿");
+                replacement=blank(normal,"");
+            }
+        }
+        long next=increment(revision);drafts.remove(key);retireIndependentReportFollowUp(key);
+        if(replacement!=null){drafts.putIfAbsent(replacement.key,replacement);activeKey=replacement.key;}
+        revision=next;
+    }
+    private boolean isIndependentReportFollowUp(String key){return independentReportFollowUp!=null&&independentReportFollowUp.key.equals(key);}
+    private void retireIndependentReportFollowUp(String key){
+        if(!isIndependentReportFollowUp(key))return;
+        retiredReportFollowUp=independentReportFollowUp;independentReportFollowUp=null;storedReportFollowUp=null;addedReportFollowUp=null;
     }
     /** A freshly selected editor, not a send receipt or an execution grant. */
     public static final class FirstHostAnchor {
@@ -193,12 +297,13 @@ public final class OwnerComposerState {
         long nextVersion=increment(revision);
         Draft moved=new Draft(target,conversation,increment(old.revision),"","queue",old.attachments(),
                 0,0,"","",false,"","",old.sourceRefs(),old.previewRefs(),old.objectRefs());
-        drafts.remove(old.key);drafts.put(target,moved);activeKey=target;revision=nextVersion;
+        drafts.remove(old.key);retireIndependentReportFollowUp(old.key);drafts.put(target,moved);activeKey=target;revision=nextVersion;
     }
     /** Explicitly return to an original pending editor, not whichever conversation is now visible. */
     public synchronized Draft selectPending(String client)throws Exception{
         Pending p=pending.get(client);if(p==null||!drafts.containsKey(p.draftKey))throw new IllegalArgumentException("原待核对输入不存在");
         if(isWorkKey(p.draftKey))throw new IllegalArgumentException("请回到原工作核对这份独立补充");
+        if(isIndependentReportFollowUp(p.draftKey)&&!independentReportFollowUpPersisted())throw new SecurityException("原汇报追问草稿保存尚未核对");
         if(!activeKey.equals(p.draftKey)){activeKey=p.draftKey;revision=increment(revision);}return active();
     }
     public synchronized Draft edit(String key,long expected,String text,String mode,JSONArray files)throws Exception {
@@ -210,6 +315,7 @@ public final class OwnerComposerState {
     public synchronized Draft editSources(String key,long expected,JSONArray nativeSelections)throws Exception {
         Draft prior=require(key,expected);JSONArray checked=OwnerSourceReferences.checked(nativeSelections);
         if(prior.sourceRefs.equals(checked.toString()))return prior;
+        if(isIndependentReportFollowUp(key)&&checked.length()!=0)throw new SecurityException("这份原追问只可明确移除已选汇报，不会换用其他来源");
         Draft next=new Draft(key,prior.conversationId,increment(prior.revision),prior.text,prior.mode,prior.attachments(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,prior.voiceText,prior.voiceInputId,checked,prior.previewRefs(),prior.objectRefs());
         drafts.put(key,next);revision=increment(revision);return next;
     }
@@ -302,6 +408,8 @@ public final class OwnerComposerState {
         if(excluded!=oneMessageExcluded.contains(key))throw new IllegalStateException("原草稿的单条记忆限制不适用于另一提交入口，没有发送");
         Draft draft=require(key,expected);if((blank(draft.text)&&draft.attachments().length()==0)||draft.text.trim().length()>12000)throw new IllegalArgumentException("请保留草稿并将本条输入缩至12000字内；纯附件消息必须已有真实附件选择");
         Pending duplicate=matchingPending(key,fingerprint);if(duplicate!=null)return duplicate;
+        if(isIndependentReportFollowUp(key)&&(!activeKey.equals(key)||!independentReportFollowUpPersisted()||hasPending(key)))
+            throw new IllegalStateException("请在已保存的原汇报追问草稿核对输入，没有发送第二条");
         if(excluded&&hasPending(key))throw new IllegalStateException("本条排除自动整理的原输入尚待核对，未发送第二条");
         if(pending.containsKey(client)||pending.size()>=MAX_PENDING)throw new IllegalStateException("待核对输入已达本机上限，请先查询原回执；未发送新输入");
         Pending next=new Pending(client,key,draft.revision,fingerprint,draft.conversationId,draft.mode,target,localRead,firstChatPhase);pending.put(client,next);revision=increment(revision);return next;
@@ -396,7 +504,7 @@ public final class OwnerComposerState {
         // conversations. One receipt cannot bind another uncertain input to its target.
         boolean keepOriginal=migrate&&pending.values().stream().anyMatch(other->!other.clientId.equals(client)&&other.draftKey.equals(prior.key));
         if(keepOriginal&&collision==null)makeRoom();
-        if(keepOriginal)drafts.put(prior.key,remaining);else {drafts.remove(prior.key);firstMessagePaused.remove(prior.key);}
+        if(keepOriginal)drafts.put(prior.key,remaining);else {drafts.remove(prior.key);firstMessagePaused.remove(prior.key);retireIndependentReportFollowUp(prior.key);}
         drafts.put(target,next);pending.remove(client);if(releaseOne){oneMessageExcluded.remove(prior.key);firstTaskDefaultsLocked.remove(prior.key);}
         if(activeKey.equals(prior.key))activeKey=target;
         revision=increment(revision);return new Acknowledgement(true,clear,migrate,prior.key,target);
@@ -407,9 +515,24 @@ public final class OwnerComposerState {
         if(!oneMessageExcluded.isEmpty())result.put("oneMessageExcluded",new JSONArray(oneMessageExcluded));
         if(!firstTaskDefaultsLocked.isEmpty())result.put("firstTaskDefaultsLocked",new JSONArray(firstTaskDefaultsLocked));
         if(!firstMessagePaused.isEmpty())result.put("firstMessagePaused",new JSONArray(firstMessagePaused));
-        return result;
+        return independentReportFollowUp==null?result:new JSONObject().put("format",REPORT_FOLLOW_UP_FORMAT).put("composer",result)
+                .put("independentReportFollowUp",independentReportFollowUp.json());
     }
     public static OwnerComposerState fromJson(JSONObject json)throws Exception {
+        if(REPORT_FOLLOW_UP_FORMAT.equals(json.opt("format"))){
+            if(json.length()!=3)throw new IllegalArgumentException("原汇报追问草稿文件格式不可核对");
+            OwnerComposerState state=fromBaseJson(json.getJSONObject("composer"));
+            IndependentReportFollowUp followUp=IndependentReportFollowUp.read(json.getJSONObject("independentReportFollowUp"));
+            Draft draft=state.drafts.get(followUp.key);
+            if(draft==null||!draft.conversationId.isEmpty()||state.pending.values().stream().filter(p->p.draftKey.equals(followUp.key)).count()>1||
+                    !draft.sourceRefs.equals("[]")&&!followUp.referenceFingerprint.equals(reportFingerprint(independentReportReference(draft.sourceRefs()).toString())))
+                throw new SecurityException("原追问草稿、汇报来源或待核对身份不一致");
+            state.independentReportFollowUp=followUp;return state;
+        }
+        return fromBaseJson(json);
+    }
+    private static OwnerComposerState fromBaseJson(JSONObject json)throws Exception {
+        if(json.has("independentReportFollowUp")||json.has("composer"))throw new IllegalArgumentException("原汇报追问须使用专用草稿文件格式");
         String format=json.getString("format");boolean restricted=RESTRICTED_FORMAT.equals(format);
         boolean taskOnly=TASK_ONLY_FORMAT.equals(format),one=ONE_MESSAGE_FORMAT.equals(format)||taskOnly;
         if(taskOnly!=json.has("firstTaskDefaultsLocked")||!FORMAT.equals(format)&&!restricted&&!one||one!=json.has("oneMessageExcluded")||!one&&restricted!=json.has("firstMessagePaused"))throw new IllegalArgumentException("草稿版本或首条记忆范围不受支持，请保留原文件");
@@ -437,9 +560,34 @@ public final class OwnerComposerState {
         for(String key:state.oneMessageExcluded)if(state.pending.values().stream().filter(item->item.draftKey.equals(key)).count()>1)throw new IllegalArgumentException("单条记忆限制不能绑定多条待核对输入");
         return state;
     }
+    synchronized StoreSnapshot storeSnapshot()throws Exception{return new StoreSnapshot(toJson(),independentReportFollowUp,addedReportFollowUp,retiredReportFollowUp);}
+    void requireReportFollowUpTransition(OwnerComposerState disk,StoreSnapshot proposed){
+        IndependentReportFollowUp before=disk==null?null:disk.independentReportFollowUp,after=independentReportFollowUp;
+        if(Objects.equals(before,after)||before==null&&after.equals(proposed.added)||after==null&&before.equals(proposed.retired))return;
+        throw new SecurityException("原汇报追问草稿已变化，未覆盖或悄悄移除");
+    }
+    synchronized void confirmStoredReportFollowUp(StoreSnapshot snapshot){
+        if(Objects.equals(independentReportFollowUp,snapshot.followUp)){
+            storedReportFollowUp=independentReportFollowUp;
+            if(Objects.equals(addedReportFollowUp,snapshot.followUp))addedReportFollowUp=null;
+            if(snapshot.followUp==null&&Objects.equals(retiredReportFollowUp,snapshot.retired))retiredReportFollowUp=null;
+        }
+    }
+    synchronized void confirmLoadedReportFollowUp(){storedReportFollowUp=independentReportFollowUp;}
+    private static JSONArray independentReportReference(JSONArray refs)throws Exception{
+        JSONArray checked=OwnerSourceReferences.checked(refs);
+        if(checked.length()!=1||checked.getJSONObject(0).getInt("offset")!=0||!conversationId(checked.getJSONObject(0).getString("sourceConversationId")))
+            throw new SecurityException("追问只选同一完整的短汇报，未附其他原文");
+        return checked;
+    }
+    private static boolean digest(String value){return value!=null&&value.matches("[0-9a-f]{64}");}
+    private static String reportFingerprint(String value)throws Exception{
+        byte[] bytes=MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));StringBuilder result=new StringBuilder(64);
+        for(byte item:bytes)result.append(Character.forDigit((item>>>4)&15,16)).append(Character.forDigit(item&15,16));return result.toString();
+    }
     private Draft require(String key,long expected){Draft d=drafts.get(key);if(d==null||d.revision!=expected)throw new IllegalStateException("原草稿已变化，未覆盖新输入");return d;}
     private boolean hasPending(String key){for(Pending p:pending.values())if(p.draftKey.equals(key))return true;return false;}
-    private void makeRoom(){if(drafts.size()<MAX_DRAFTS)return;for(Draft d:new ArrayList<>(drafts.values()))if(!d.key.equals(activeKey)&&!d.hasInput()&&!hasPending(d.key)&&!firstMessagePaused.contains(d.key)&&!oneMessageExcluded.contains(d.key)){drafts.remove(d.key);return;}throw new IllegalStateException("已保留64份原草稿，请先处理已有输入；没有丢弃未发送文字或待核对身份");}
+    private void makeRoom(){if(drafts.size()<MAX_DRAFTS)return;for(Draft d:new ArrayList<>(drafts.values()))if(!d.key.equals(activeKey)&&!isIndependentReportFollowUp(d.key)&&!d.hasInput()&&!hasPending(d.key)&&!firstMessagePaused.contains(d.key)&&!oneMessageExcluded.contains(d.key)){drafts.remove(d.key);return;}throw new IllegalStateException("已保留64份原草稿，请先处理已有输入；没有丢弃未发送文字或待核对身份");}
     private static Draft blank(String key,String conversation)throws Exception{return new Draft(key,conversation,1,"","queue",new JSONArray(),0,0,"","",false,"","",new JSONArray(),new JSONArray(),new JSONArray());}
     public static boolean isWorkKey(String value){return value!=null&&value.startsWith("work:");}
     public static String workKey(String task,String run,long epoch){

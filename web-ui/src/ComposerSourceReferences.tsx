@@ -105,10 +105,18 @@ export function ComposerObjectReferences({ composer, disabled }: { composer: Dat
   </section>;
 }
 
+function independentReportIndex(composer:Data|null):number {
+  const index=composer?.independentReportSourceIndex, refs=composer?.sourceRefs;
+  if(composer?.ready!==true||typeof composer.conversationId!=='string'||!Number.isSafeInteger(index)||
+    index<0||!Array.isArray(refs)||index>=refs.length)return -1;
+  const pin=draftQuotePin(refs[index]);
+  return pin&&pin.conversation!==composer.conversationId?index:-1;
+}
 /** BoardUI disclosure with OpenMuse's compact rows. The local review joins only
  * the selected reference with an original already published in this private chat. */
 export function ComposerSourceReferences({ composer, disabled }: { composer: Data; disabled: boolean }) {
   const refs: Data[] = Array.isArray(composer.sourceRefs) ? composer.sourceRefs : [];
+  const reportIndex=independentReportIndex(composer);
   const removal = useComposerReferenceRemoval(composer, disabled, 'source');
   const [selection,setSelection] = useState<ComposerQuoteSelection|null>(null);
   const [stored,setStored] = useState<StoredQuoteReview|null>(null);
@@ -122,6 +130,7 @@ export function ComposerSourceReferences({ composer, disabled }: { composer: Dat
   const open = (pin:DraftQuotePin,index:number,trigger:HTMLButtonElement)=>{
     if(document.hidden||!trigger.isConnected||storedOwner.current)return;
     const native=bridge.getState(),owner={key:String(composer.key||''),epoch:Number(composer.epoch),conversation:String(composer.conversationId||'')};
+    if(independentReportIndex(native.composer)===index)return;
     const receipt=loadedQuoteReceipt(native,owner.conversation),sourceRevision=native.state.traceSourceRevision,documentEpoch=bridge.getDocumentEpoch();
     const form=trigger.closest('.pw-composer-region'),editors=form?.querySelectorAll<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)');
     const input=editors?.length===1?editors[0]:null,view=draftQuoteView(native,owner,pin,receipt);
@@ -146,19 +155,23 @@ export function ComposerSourceReferences({ composer, disabled }: { composer: Dat
     },()=>{if(current())setStored({selection,request,state:'unavailable'})});
   };
   if (!refs.length && !removal.error && !removal.busy && !removal.removed && !selection) return null;
+  const onlyReport=refs.length===1&&reportIndex===0;
+  const referenceRows=refs.map((ref,index)=>{
+    const pin=draftQuotePin(ref), id=pin?draftQuoteKey(pin):`unverified:${index}`, report=index===reportIndex;
+    return <div className="pw-composer-context-row" key={id}>
+      {report?<p className="pw-composer-context-object pw-composer-context-hint">已附原汇报（发送时核对）</p>:
+       pin?<Button variant="ghost" size="small" className="pw-composer-context-object pw-composer-context-read" leadingIcon={IconQuote}
+        disabled={removal.busy} onClick={event=>open(pin,index,event.currentTarget)}>查看引用 {index+1} · {pin.chars} 位</Button>:
+        <p className="pw-composer-context-object pw-composer-context-hint">引用 {index+1} · 原范围待核对</p>}
+      <Button variant="ghost" size="small" className="pw-composer-context-remove" disabled={disabled || removal.busy || removal.unknown}
+        onClick={()=>removal.remove(index)} aria-label={report?'取消原汇报引用':`取消原文引用 ${index + 1}`}>取消引用</Button>
+    </div>;
+  });
   return <section className="pw-composer-context" aria-label="草稿中的原文引用">
-    {refs.length > 0 && <Accordion className="pw-composer-context-disclosure"><AccordionItem id="source-references" title={`原文引用 · ${refs.length}`} description={composer.saving===true ? "引用已在当前草稿，本机保存待确认。" : "已关联到这份草稿，发送时会核对原消息。"}>
+    {onlyReport?referenceRows:refs.length > 0 && <Accordion className="pw-composer-context-disclosure"><AccordionItem id="source-references" title={`原文引用 · ${refs.length}`} description={composer.saving===true ? "引用已在当前草稿，本机保存待确认。" : "已关联到这份草稿，发送时会核对原消息。"}>
       <div className="pw-composer-context-scroll" role="region" aria-label="原文引用清单" tabIndex={0}>
         <p className="pw-composer-context-hint">只查看实际关联的选段。取消引用只影响这份草稿，问题正文和原消息都保留。</p>
-        {refs.map((ref, index) => {
-          const pin = draftQuotePin(ref), id = pin ? draftQuoteKey(pin) : `unverified:${index}`;
-          return <div className="pw-composer-context-row" key={id}>
-            {pin?<Button variant="ghost" size="small" className="pw-composer-context-object pw-composer-context-read" leadingIcon={IconQuote}
-              disabled={removal.busy} onClick={event=>open(pin,index,event.currentTarget)}>查看引用 {index+1} · {pin.chars} 位</Button>:
-              <p className="pw-composer-context-object pw-composer-context-hint">引用 {index+1} · 原范围待核对</p>}
-            <Button variant="ghost" size="small" className="pw-composer-context-remove" disabled={disabled || removal.busy || removal.unknown} onClick={() => removal.remove(index)} aria-label={`取消原文引用 ${index + 1}`}>取消引用</Button>
-          </div>;
-        })}
+        {referenceRows}
       </div>
     </AccordionItem></Accordion>}
     {removal.busy && <p className="pw-composer-context-feedback" role="status">{removal.phase === 'refreshing' ? '原草稿已保存，正在核对引用清单…' : '正在从本机草稿移除引用…'}</p>}

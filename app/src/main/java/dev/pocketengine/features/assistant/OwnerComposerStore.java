@@ -24,7 +24,8 @@ public final class OwnerComposerStore {
     OwnerComposerStore(AtomicFile original){file=java.util.Objects.requireNonNull(original);}
     public CompletableFuture<OwnerComposerState> load(){return submit(()->{
         JSONObject existing=read();OwnerComposerState state=existing==null?OwnerComposerState.empty():OwnerComposerState.fromJson(existing);
-        persistedRevision=existing==null?0:state.revision();confirmedFingerprint=fingerprint(existing);attemptedFingerprint="";healthy=true;loaded=true;return state;
+        persistedRevision=existing==null?0:state.revision();confirmedFingerprint=fingerprint(existing);attemptedFingerprint="";healthy=true;loaded=true;
+        state.confirmLoadedReportFollowUp();return state;
     });}
     /** Capture metadata/text now; actual bounded write is serialized off the UI thread. */
     public CompletableFuture<Void> save(OwnerComposerState state){return save(state,false,null,null);}
@@ -36,7 +37,8 @@ public final class OwnerComposerStore {
         return save(state,false,java.util.Objects.requireNonNull(before),java.util.Objects.requireNonNull(after));
     }
     private CompletableFuture<Void> save(OwnerComposerState state,boolean localUnsentRetry,OwnerComposerState.Pending before,OwnerComposerState.Pending after){
-        final JSONObject snapshot;try{snapshot=state.toJson();}catch(Exception invalid){CompletableFuture<Void> failure=new CompletableFuture<>();failure.completeExceptionally(invalid);return failure;}
+        final OwnerComposerState.StoreSnapshot captured;try{captured=state.storeSnapshot();}catch(Exception invalid){CompletableFuture<Void> failure=new CompletableFuture<>();failure.completeExceptionally(invalid);return failure;}
+        final JSONObject snapshot=captured.document;
         return submit(()->{
             if(localUnsentRetry&&loaded&&!healthy){JSONObject disk=read();String actual=fingerprint(disk);if(!actual.equals(confirmedFingerprint)&&!actual.equals(attemptedFingerprint))throw new IllegalStateException("原草稿文件已被其他窗口改变，未以重试覆盖；请保留本页输入");persistedRevision=disk==null?0:OwnerComposerState.fromJson(disk).revision();confirmedFingerprint=actual;healthy=true;}
             if(!loaded||!healthy)throw new IllegalStateException("原草稿尚未读取或上次保存未确认，未覆盖本机文件");
@@ -48,8 +50,9 @@ public final class OwnerComposerStore {
             if(actual!=persistedRevision)throw new IllegalStateException("另一原输入窗口已更新草稿；本页文字保留，未覆盖新版本或自动发送");
             if(before!=null&&!fingerprint(current).equals(confirmedFingerprint))throw new IllegalStateException("原首次输入的已确认快照已变化");
             proposed.requireFirstChatTransitions(disk,before,after);
-            if(next==persistedRevision){if(disk==null||!disk.toJson().toString().equals(snapshot.toString()))throw new IllegalStateException("相同草稿版本的内容不同，未覆盖或发送");java.util.Arrays.fill(bytes,(byte)0);return null;}
-            attemptedFingerprint=fingerprint(snapshot);FileOutputStream out=null;try{out=file.startWrite();out.write(bytes);file.finishWrite(out);out=null;byte[] actualBytes=readBytes();try{if(actualBytes==null||!java.util.Arrays.equals(bytes,actualBytes))throw new IllegalStateException("原草稿原子保存未能逐字节确认；未发送新输入");}finally{if(actualBytes!=null)java.util.Arrays.fill(actualBytes,(byte)0);}persistedRevision=next;confirmedFingerprint=attemptedFingerprint;attemptedFingerprint="";return null;}
+            proposed.requireReportFollowUpTransition(disk,captured);
+            if(next==persistedRevision){if(disk==null||!disk.toJson().toString().equals(snapshot.toString()))throw new IllegalStateException("相同草稿版本的内容不同，未覆盖或发送");java.util.Arrays.fill(bytes,(byte)0);state.confirmStoredReportFollowUp(captured);return null;}
+            attemptedFingerprint=fingerprint(snapshot);FileOutputStream out=null;try{out=file.startWrite();out.write(bytes);file.finishWrite(out);out=null;byte[] actualBytes=readBytes();try{if(actualBytes==null||!java.util.Arrays.equals(bytes,actualBytes))throw new IllegalStateException("原草稿原子保存未能逐字节确认；未发送新输入");}finally{if(actualBytes!=null)java.util.Arrays.fill(actualBytes,(byte)0);}persistedRevision=next;confirmedFingerprint=attemptedFingerprint;attemptedFingerprint="";state.confirmStoredReportFollowUp(captured);return null;}
             catch(Exception failed){healthy=false;throw failed;}
             finally{if(out!=null)file.failWrite(out);java.util.Arrays.fill(bytes,(byte)0);}
         });

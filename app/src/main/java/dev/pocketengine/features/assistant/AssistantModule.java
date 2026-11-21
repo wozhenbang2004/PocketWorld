@@ -280,6 +280,16 @@ public final class AssistantModule implements EngineModule {
     }
     ConversationRepository.OwnerSourceInspection inspectOwnerSources(){if(!durable())throw new IllegalStateException("原DB来源权威未激活，未提升旧引用");return historyRepository.inspectOwnerSources();}
     ConversationRepository.OwnerSourceInspection inspectOwnerSources(dev.pocketengine.features.memory.ConversationHistory.SourceBytes bytes){if(!durable())throw new IllegalStateException("原DB来源权威未激活，未提升旧引用");return historyRepository.inspectOwnerSources(bytes);}
+    /** Exact native report pin check; no source body or model grant leaves the assistant. */
+    public void checkIndependentReportDraftSource(JSONObject nativeRef,RunControl owner)throws Exception{
+        requireLocalShelfOwner(owner);
+        JSONObject row=OwnerSourceReferences.checked(new JSONArray().put(nativeRef)).getJSONObject(0);
+        SourceRef ref=SourceRef.fromJson(row.getJSONObject("sourceRef"));
+        requireOwnerSourceNotForgotten(ref);
+        try(var inspection=inspectOwnerSources()){inspection.requireSource(row);}
+        requireOwnerSourceNotForgotten(ref);
+        owner.check();
+    }
     void requireOwnerSourceNotForgotten(SourceRef ref)throws Exception{
         if(!(memory instanceof dev.pocketengine.features.memory.MemoryModule))throw new IllegalStateException("原记忆来源遗忘门未安装");
         if(((dev.pocketengine.features.memory.MemoryModule)memory).isSourceForgotten(privateScope(),ref))throw new IllegalStateException("此来源版本已遗忘，不能通过重新选择原文复活");
