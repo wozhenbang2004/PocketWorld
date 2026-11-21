@@ -21,6 +21,51 @@ type Head = { identity: string; page: AuditPage; seed?: AuditPage; headerStamp: 
 const sourceRevision = () => String(bridge.getState().state.traceSourceRevision ?? 0);
 const recordKey = (run: string, id: string) => JSON.stringify([run, id]);
 
+export type OriginalPhoneToolRecord = { taskId: string; runId: string; epoch: number; operationId: string;
+  requestDigest: string; wireSha256: string; deviceId: string; instanceId: string; fingerprint: string };
+const originalId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
+const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const deviceId = (value: unknown): value is string => typeof value === 'string' && /^pw1_[a-f0-9]{64}$/.test(value);
+const positiveNumber = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+/** A stored native invocation on the exact original phone, not an inference from the currently selected scope. */
+export function originalPhoneToolRecord(task: TaskHeader, operationId?: string): OriginalPhoneToolRecord | undefined {
+  const raw = task.raw, work = raw?.ownerDeviceWork, peer = work?.directPhone;
+  if (!raw || raw.id !== task.id || raw.status !== task.status || raw.actorId !== 'owner' || raw.spaceId !== 'private'
+    || raw.kind !== 'assistant' || raw.executionMode !== 'capabilities' || raw.conversationId !== '' || raw.origin != null
+    || raw.parentTaskId != null || raw.ownerPhoneControl != null || raw.contextAvailable === false || raw.contextWithdrawn === true
+    || raw.sourceCurrentReadRequired === true || raw.taskProjection !== 'detail_window' || raw.auditBodyIncluded !== true || raw.taskCoreReadLimited !== false
+    || work?.format !== 'pocketworld.owner-device-work.v1' || work.requestId !== task.id || !digest(work.requestDigest) || work.directWorkspace != null
+    || !originalId(task.id) || !originalId(raw.runId) || !positiveNumber(raw.coordinatorEpoch)
+    || !deviceId(peer?.deviceId) || !originalId(peer.instanceId) || !digest(peer.certificateFingerprint)) return;
+  let page: AuditPage;
+  try { page = taskAuditPage(raw.historyOperationPage, task.id, 'operations'); } catch { return; }
+  for (const op of page.entries) {
+    if (!originalId(op.operationId) || operationId !== undefined && op.operationId !== operationId || op.runId !== raw.runId
+      || op.tool !== 'device_invoke_tool' || op.state !== 'receipt' || op.status !== 'available' || op.bodyAvailable === false
+      || op.readLimited === true || op.arguments?.targetDeviceId !== peer.deviceId || !originalId(op.arguments?.toolName)) continue;
+    const send = op.receipt?.nativeDeviceSend, accepted = op.receipt?.nativeDeviceAcceptedBinding;
+    const receipt = accepted?.verifiedReceipt, audience = receipt?.audience;
+    // Android tool sessions also have a receiver task ID. Only the invoker's original SQL tool
+    // above distinguishes a tool invocation from a Goal; their accepted object kind alone does not.
+    if (send?.format !== 'pocketworld.native-device-send.v1' || send.state !== 'write_claimed' || !positiveNumber(send.claimedAt)
+      || !digest(send.wireSha256) || !originalId(send.allocationId) || accepted?.accepted !== true || accepted.parentTaskId !== task.id
+      || accepted.sourceOperationId !== op.operationId || accepted.targetOperationId !== op.operationId
+      || accepted.instanceId !== peer.instanceId || accepted.executorDeviceId !== peer.deviceId || !positiveNumber(accepted.acceptedAt)
+      || receipt?.protocolVersion !== '1.0' || receipt.messageType !== 'OperationReceipt' || receipt.accepted !== true
+      || receipt.effectState !== 'reported' || receipt.operationId !== op.operationId || receipt.instanceId !== peer.instanceId
+      || receipt.executorDeviceId !== peer.deviceId || receipt.acceptedAt !== accepted.acceptedAt
+      || !digest(receipt.argumentsDigest) || receipt.argumentsDigest !== accepted.operationArgumentsDigest
+      || audience?.kind !== 'operation' || audience.objectId !== op.operationId || audience.rootTaskId !== task.id
+      || audience.localTaskId !== send.allocationId || audience.targetDeviceId !== peer.deviceId || audience.instanceId !== peer.instanceId
+      || !deviceId(audience.callerDeviceId) || audience.originDeviceId !== audience.callerDeviceId
+      || audience.requestRunId !== raw.runId || audience.requestExecutorEpoch !== raw.coordinatorEpoch
+      || audience.argumentsDigest !== receipt.argumentsDigest || !['main_screen', 'background'].includes(audience.resourceBinding?.screenMode)) continue;
+    return { taskId: task.id, runId: raw.runId, epoch: raw.coordinatorEpoch, operationId: op.operationId, requestDigest: work.requestDigest,
+      wireSha256: send.wireSha256, deviceId: peer.deviceId, instanceId: peer.instanceId, fingerprint: peer.certificateFingerprint };
+  }
+}
+
 function useAuditWindow(task: TaskHeader, identity: string, section: AuditSection, enabled: boolean, active: boolean, documentEpoch: number, revision: string) {
   const [loaded, setLoaded] = useState<Window | null>(null), [head, setHead] = useState<Head | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -69,9 +114,10 @@ function useAuditWindow(task: TaskHeader, identity: string, section: AuditSectio
 }
 
 /** The adopted task disclosures now navigate their original bounded audit windows. */
-export function TaskHistory({ task, canRead, canReadTrace = false, active = true, registerTransientBack, renderOperation }: {
+export function TaskHistory({ task, canRead, canReadTrace = false, active = true, registerTransientBack, registerOriginalPhoneTool, renderOperation }: {
   task: TaskHeader; canRead: boolean; canReadTrace?: boolean; active?: boolean;
   registerTransientBack?: (handler: (() => boolean) | null) => void;
+  registerOriginalPhoneTool?: (handler: ((pin: OriginalPhoneToolRecord) => boolean) | null) => void;
   renderOperation: (operation: unknown, index: number, scope: string) => ReactNode;
 }) {
   const [selectedTab, setSelectedTab] = useState('trace');
@@ -87,7 +133,7 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
   const events = useAuditWindow(task, identity, 'events', canRead && !unavailable, active, documentEpoch, revision);
   const operations = useAuditWindow(task, identity, 'operations', canRead && !unavailable, active, documentEpoch, revision);
   const [expanded, setExpanded] = useState<{scope: string; keys: Set<string | number>}>({scope: '', keys: new Set()});
-  const [target, setTarget] = useState<{scope: string; record: ProcessRecord} | null>(null);
+  const [target, setTarget] = useState<{scope: string; record: ProcessRecord; originalPhone?: true} | null>(null);
   const [drill, setDrill] = useState<{scope: string; section: AuditSection} | null>(null);
   const [locateMiss, setLocateMiss] = useState(''), surface = useRef<HTMLElement>(null), focusReturn = useRef(''), releaseReturn = useRef('');
   const backToCheckpoint = useCallback(() => {
@@ -113,16 +159,45 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
   }, [active, identity, selectedTab]);
   useLayoutEffect(() => {
     if (!target) return;
-    if (!active || target.scope !== identity || selectedTab !== target.record.section || bridge.getDocumentEpoch() !== documentEpoch || sourceRevision() !== revision) { setTarget(null); return; }
-    const key = recordKey(target.record.runId, target.record.id);
-    const row = [...(surface.current?.querySelectorAll<HTMLElement>('[data-audit-key]') ?? [])].find(el =>
-      el.dataset.auditKey === key && el.dataset.auditSection === target.record.section);
-    if (row) {
-      const control = row.querySelector<HTMLElement>('[slot="trigger"], .ui-tcc__head') ?? row;
-      control.focus({ preventScroll: true }); row.scrollIntoView({ block: 'nearest' });
-    } else setLocateMiss(identity);
-    setTarget(null);
-  }, [target, active, identity, selectedTab, documentEpoch, revision]);
+    const current = () => active && target.scope === identity && selectedTab === target.record.section &&
+      bridge.getDocumentEpoch() === documentEpoch && sourceRevision() === revision;
+    const reveal = () => {
+      const live = target.originalPhone ? bridge.getState() : undefined;
+      const view = live?.view as {section?: unknown; taskId?: unknown} | undefined;
+      if (current() && (!live || !document.hidden && view?.section == null && view?.taskId === task.id && live.capabilities.commands.includes('history.read'))) {
+        const key = recordKey(target.record.runId, target.record.id);
+        const row = [...(surface.current?.querySelectorAll<HTMLElement>('[data-audit-key]') ?? [])].find(el =>
+          el.dataset.auditKey === key && el.dataset.auditSection === target.record.section);
+        if (row) {
+          const control = row.querySelector<HTMLElement>('[slot="trigger"], .ui-tcc__head') ?? row;
+          control.focus({ preventScroll: true }); row.scrollIntoView({ block: 'nearest' });
+        } else setLocateMiss(identity);
+      }
+      setTarget(previous => previous === target ? null : previous);
+    };
+    if (target.originalPhone && current()) {
+      // Let the drawer restore its Process scroll before locating the existing tool row.
+      const frame = requestAnimationFrame(reveal);
+      return () => cancelAnimationFrame(frame);
+    }
+    reveal();
+  }, [target, active, identity, selectedTab, documentEpoch, revision, task.id]);
+  useLayoutEffect(() => {
+    if (!registerOriginalPhoneTool) return;
+    registerOriginalPhoneTool(pin => {
+      if (active || unavailable || !canRead || !inOriginalTask || document.hidden || bridge.getDocumentEpoch() !== documentEpoch
+        || sourceRevision() !== revision || !dequal(pin, originalPhoneToolRecord(task, pin.operationId))) return false;
+      operations.showLatest();
+      setDrill(null); setSelectedTab('operations');
+      const here = operations.latest?.entries.some(row => row.operationId === pin.operationId && row.runId === pin.runId &&
+        row.status === 'available' && row.tool === 'device_invoke_tool');
+      setLocateMiss(here ? '' : identity);
+      setTarget(here ? {scope: identity, originalPhone: true,
+        record: {section: 'operations', id: pin.operationId, runId: pin.runId, locatable: true, label: '', body: ''}} : null);
+      return true;
+    });
+    return () => registerOriginalPhoneTool(null);
+  });
   if (unavailable) return <section className="pw-task-process" aria-label="执行过程"><p className="pw-muted">原任务来源已变化或暂不可核对，请回任务概览核对来源。</p></section>;
 
   const projected = (eventPage?: AuditPage, operationPage?: AuditPage) => ({ ...task, raw: { ...task.raw,

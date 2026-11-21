@@ -406,7 +406,28 @@ public final class FeatureHost implements AutoCloseable {
     public JSONObject documentResultForOwner(String id,dev.pocketengine.core.RunControl original)throws Exception{
         JSONObject task=tasks.get(id,false);if(task==null||!"owner".equals(task.optString("actorId"))||!"private".equals(task.optString("spaceId"))||task.optJSONObject("origin")!=null||!"attachments".equals(task.optString("feature"))||!"createDocument".equals(task.optString("command")))throw new SecurityException("不是原主人文档动作");
         JSONObject record=task.getJSONObject("externalRefs").getJSONObject("documentCreation");var attachments=(dev.pocketengine.features.attachments.AttachmentsModule)module("attachments");
-        JSONObject result=attachments.documentResultForHost(task.getString("operationId"),id,task.getString("runId"),record.getString("planDigest"),original);if(result.optBoolean("found")){result.put("status","completed").put("receiptReceived",true).put("accepted",true);updateTask(id,result);sendState();}return result.put("taskId",id).put("replayAllowed",false);
+        String plan=record.getString("planDigest");
+        JSONObject result=attachments.documentResultForHost(task.getString("operationId"),id,task.getString("runId"),plan,original);
+        if(result.optBoolean("found")){
+            result.put("status","completed").put("receiptReceived",true).put("accepted",true);
+            if(!settledOwnerDocumentResult(task,id,plan,result)){updateTask(id,result);sendState();}
+        }
+        return result.put("taskId",id).put("replayAllowed",false);
+    }
+    /** Only after the existing Book lookup has verified the original publication and bytes.
+     * A recheck of that same settled producer must not replace its receipt with file metadata. */
+    private static boolean settledOwnerDocumentResult(JSONObject task,String id,String plan,JSONObject result){
+        String status=task.optString("status");
+        if(!("needs_confirmation".equals(status)||"completed".equals(status))||!"completed".equals(task.opt("executionStatus"))
+                ||task.has("origin")||task.has("conversationId")||!id.equals(task.opt("id"))||!id.equals(task.opt("operationId"))
+                ||!id.equals(task.opt("runId"))||task.optInt("coordinatorEpoch",-1)!=1)return false;
+        JSONObject evidence=task.optJSONObject("evidence"),source=result.optJSONObject("source");
+        return result.opt("originalPublication")==Boolean.TRUE&&result.opt("id") instanceof String artifactId
+                &&!artifactId.isEmpty()&&evidence!=null&&"completed".equals(evidence.opt("executorStatus"))
+                &&artifactId.equals(task.opt("externalId"))&&artifactId.equals(evidence.opt("id"))
+                &&id.equals(task.opt("externalOperationId"))&&id.equals(evidence.opt("operationId"))
+                &&source!=null&&"created_document".equals(source.opt("kind"))&&id.equals(source.opt("taskId"))
+                &&id.equals(source.opt("runId"))&&id.equals(source.opt("operationId"))&&plan.equals(source.opt("planDigest"));
     }
     public JSONObject observeMediaForOwner(String taskId,String operationId,dev.pocketengine.core.RunControl control,dev.pocketengine.media.jobs.ComfyUiProgressObserver.Listener listener)throws Exception{
         EngineModule module=module("media");if(mediaWorkflows==null||!(module instanceof dev.pocketengine.media.MediaModule))throw new IllegalStateException("原媒体宿主尚未就绪");

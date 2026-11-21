@@ -3,6 +3,7 @@ import { IconChevronRight, IconInfo, IconTeam } from './icons';
 import { ProgressCircle } from './library';
 import { teamPhaseLabel, teamStatusLabel } from './team-presentation';
 import { settledTeamResultEntry } from './team-result-reading';
+import { workTeamResultEntryKey } from './team-navigation';
 import type { OwnerWorkTeam } from './owner-work-presentation';
 
 /** The retained AgentRun progress-row composition, driven only by the
@@ -25,7 +26,7 @@ export function OwnerWorkTeams({ teams, onOpen }: { teams: OwnerWorkTeam[]; onOp
           : '',
       ].filter(Boolean).join(' · ');
       return <li key={team.teamRunId}>
-        <Button variant="ghost" className="pw-owner-work-team-row" disabled={!onOpen} data-workspace-entry={primaryPackage?`team-package:${team.teamRunId}:${team.deliveredPackage!.operationId}`:undefined}
+        <Button variant="ghost" className="pw-owner-work-team-row" disabled={!onOpen} data-workspace-entry={primaryPackage?`team-package:${team.teamRunId}:${team.deliveredPackage!.operationId}`:lookForResults&&team.status==='completed'?workTeamResultEntryKey(team):undefined}
           onClick={() => onOpen?.(team,primaryPackage)}
           aria-label={`${primaryPackage ? '打开原团队的完整项目包' : team.needsAttention ? '处理团队问题' : lookForResults ? '查看分工与成果' : '查看协作进展'}：${team.goal || '这件工作'}`}>
           <span className="pw-owner-work-team-mark" data-attention={team.needsAttention || undefined} aria-hidden="true">

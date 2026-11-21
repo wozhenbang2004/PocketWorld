@@ -34,7 +34,7 @@ import { ReadingContext } from './reading-context';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
 import {sameTeamPackage} from './team-delivered-package';
-import {sameTeamFiles,sameTeamProposal,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource} from './team-navigation';
+import {matchesWorkTeamResult,sameTeamFiles,sameTeamProposal,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
@@ -91,6 +91,22 @@ function acceptingOriginalParent(reading: Data | null, tasks: unknown): boolean 
 }
 const newerTeamReading = (run: Data, live: Data) => live.id === run.id && (live.generation > run.generation ||
   live.generation === run.generation && live.revision > run.revision);
+const originalHotCompletedTeam = (catalog:Data, id:string) => {
+  // An archived read returns its original body without the catalogue's archived flag.
+  if(!Array.isArray(catalog.history)||rows(catalog.history).some(row=>row.id===id))return false;
+  const matches=rows(catalog.runs).filter(row=>row.id===id), run=matches[0], roster=rows(run?.members);
+  return matches.length===1&&run.archived!==true&&run.status==='completed'&&run.mode==='collaborate'&&!!label(run.teamId)&&
+    run.definitionKind==null&&(run.discussionFormat??'classic')==='classic'&&!run.discussion&&!run.workPlan&&!run.productionScope&&
+    !run.nativeWorkProfileModels&&run.researchExecutionFormat==='pocketworld.team-research-agent.v1'&&roster.length>0&&roster.length<=4&&
+    roster.every(slot=>(slot.runner||'model')==='model'&&(!slot.device||slot.device==='phone'));
+};
+const originalWorkTeamResult = (reading:Data|null, source:WorkTeamResultSource) => {
+  if(!classicAnswerOwner(reading)||reading?.run.status!=='completed'||!Array.isArray(reading.attention)||reading.attention.length)return;
+  if(!matchesWorkTeamResult(source,reading.ownerWorkLink))return;
+  const live=object(object(bridge.getState().state.teamRuns)[source.teamRunId]);
+  if(newerTeamReading(reading.run,live))return;
+  const result=teamResultReading(reading.run,reading.messages);return result.original?result.messageId:undefined;
+};
 const blankMember = (id: string, index: number) => teamProductionEditorMember({ id, name: `成员 ${index + 1}`, role: '', model: '', runner: 'model' });
 const starterMembers = (template: string): Data[] => [
   { ...blankMember('member-0', 0), name: template === 'options' ? '方案设计' : '资料研究', role: template === 'options' ? '围绕共同目标提出不同方案，说明依据与限制。' : '围绕共同目标搜集和整理信息，标明来源与不确定性。' },
@@ -174,6 +190,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
   const handledRunFocus = useRef('');
+  const workResultReturn = useRef<WorkTeamResultReturn|null>(null);
+  const retireWorkResult = () => { workResultReturn.current?.retire(); workResultReturn.current=null; };
   const [fileEntry,setFileEntry]=useState<{view:string;requestId:string;source:WorkFileSource|ProjectTeamReviewOrigin;returnToWork?:(reason?:string)=>void}|null>(null);
   const [proposalEntry,setProposalEntry]=useState<{source:WorkProposalSource;returnToWork?:(reason?:string)=>void}|null>(null);
   const [workPackage,setWorkPackage]=useState<{view:string;returnToWork:(reason?:string)=>void}|null>(null);
@@ -309,6 +327,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledRunFocus.current = requestId;
     const project=runFocus?.fromProject,from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined,pack=from&&'deliveredPackage' in from?from:undefined;
+    const originalResult=runFocus?.fromWorkResult;
+    retireWorkResult();
+    const originalAnchor=originalResult&&onOpenWork&&originalResult.source.teamRunId===runId&&originalHotCompletedTeam(catalog,runId)?originalResult:null;
+    const documentEpoch=bridge.getDocumentEpoch(),resume=object(bridge.getState().view).resumeRevision;
+    const inSameVisit=()=>alive.current&&!document.hidden&&!backgrounded.current&&ownsNativeWindow()&&Number.isSafeInteger(resume)&&
+      bridge.getDocumentEpoch()===documentEpoch&&object(bridge.getState().view).resumeRevision===resume;
     void invoke('teams.readRun', { runId,...(proposal?{proposalOrigin:proposal}:{}) }, result => {
       const next=result.reading;
       if (next?.kind!=='run'||next.run?.id !== runId||!next.viewHandle||project&&(from||project.teamRunId!==runId||!next.run.productionScope||!next.run.workPlan)) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
@@ -332,7 +356,15 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         row.teamRunId === runId && row.taskId === link.teamTaskId && row.parentRunId === link.runId &&
         row.parentEpoch === link.epoch && row.conversationId === link.conversationId);
       const settled = originalTeam ? settledTeamResultEntry(originalTeam) : originalWork && ownerPublishedOrdinaryTeamResult(next);
-      const entry = from || project ? 'result' : settled ? teamRunEntrySection(next) : 'progress';
+      const originalMessage=originalAnchor&&inSameVisit()&&originalWorkTeamResult(next,originalAnchor.source);
+      if(originalAnchor&&originalMessage){
+        const generation=next.run.generation;
+        workResultReturn.current=originalAnchor.arm(()=>{
+          const shown=currentReading.current;
+          return inSameVisit()&&shown?.run?.generation===generation&&originalWorkTeamResult(shown,originalAnchor.source)===originalMessage;
+        });
+      }
+      const entry = from || project || workResultReturn.current ? 'result' : settled ? teamRunEntrySection(next) : 'progress';
       setRunSections(old => ({ ...old, [runId]: entry }));
       setComposeOpen(false);
       onRunFocusConsumed?.(requestId);
@@ -382,7 +414,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const switchTab = (value: TeamTab) => { if (busy) return; rememberView(); setTab(value); setError(''); setNotice(''); };
   const closeReview = () => { const original = currentReview.current; currentReview.current = null; release(original, 'reviewHandle'); setReview(null); setAcknowledged(false); };
   const closePhoneSelection = () => { const original = currentPhoneSelection.current; currentPhoneSelection.current = null; release(original, 'phoneHandle'); setPhoneSelection(null); };
-  useEffect(() => { alive.current = true; return () => { alive.current = false; requestGeneration.current++; release(currentReading.current); release(currentReview.current, 'reviewHandle'); release(currentPhoneSelection.current, 'phoneHandle'); }; }, []);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; requestGeneration.current++; retireWorkResult(); release(currentReading.current); release(currentReview.current, 'reviewHandle'); release(currentPhoneSelection.current, 'phoneHandle'); }; }, []);
   const restoreWorkspace = () => {
     if (backgrounded.current || !ownsNativeWindow()) return;
     // A retired read did not consume its notification; a fresh owner window may locate it again.
@@ -460,7 +492,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     document.addEventListener('visibilitychange', visibility); window.addEventListener('pagehide', hide);
     return () => { document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hide); };
   });
-  useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if(focusedPackage){leaveWithDrafts(focusedPackage.returnToWork);return true;} if (focusedProposal?.returnToWork) { leaveWithDrafts(focusedProposal.returnToWork); return true; } if (reading) { back(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, focusedPackage, focusedProposal, registerTransientBack]);
+  const verifiedWorkResultReturn = () => onOpenWork&&workResultReturn.current?.current()===true;
+  useLayoutEffect(() => { if(workResultReturn.current&&!verifiedWorkResultReturn())retireWorkResult(); });
+  const backFromRun = () => {
+    if(!verifiedWorkResultReturn()){retireWorkResult();back();return;}
+    // App uses the same registered Team draft guard as the normal outer Back.
+    onOpenWork?.(currentReading.current!.ownerWorkLink,'returnResult');
+  };
+  useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if(focusedPackage){leaveWithDrafts(focusedPackage.returnToWork);return true;} if (focusedProposal?.returnToWork) { leaveWithDrafts(focusedProposal.returnToWork); return true; } if (reading) { backFromRun(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, focusedPackage, focusedProposal, onOpenWork, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
   const definitionMembers = rows(definition?.members);
@@ -1173,7 +1212,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   return <section ref={root} className="pw-team-workspace pw-depth-collaboration" data-team-layer={reading ? 'detail' : 'list'} data-team-view={viewKey} inert={!workspaceActive} aria-busy={!workspaceActive || busy}>
     <div className="pw-team-loading">{(!workspaceActive || busy) && <ProgressBar aria-label={workspaceActive ? '正在读取原团队回执' : '正在进入团队工作区'} isIndeterminate showValueLabel={false} size="sm" />}</div>
     {error && error !== alreadyShownError && !editor && !memberDraft && !review && !phoneSelection && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}{notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
-    {reading && <nav className="pw-team-location" aria-label="协作记录导航"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={back}>{current ? '协作记录' : '全部编组'}</Button></nav>}
+    {reading && <nav className="pw-team-location" aria-label="协作记录导航"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={backFromRun}>{verifiedWorkResultReturn() ? '返回原工作' : current ? '协作记录' : '全部编组'}</Button></nav>}
     {!reading && <div className="pw-team-directory-intro"><div><h2>一起完成</h2><p>{onAskButler && !entries.length && directoryState === 'empty' ? '先写目标，不用先建编组。管家提出分工后，在原工作里核对。' : '分工、进展与成果，都在这里。'}</p></div>{onAskButler && <Button variant="secondary" trailingIcon={IconChevronRight} disabled={busy} onClick={() => askButler()}>{!entries.length && directoryState === 'empty' ? '到管家写目标' : '交给管家'}</Button>}</div>}
     {!reading && (showDirectoryTools ? <Tabs selectedKey={tab} onSelectionChange={value => { if (value === 'runs' || value === 'teams') switchTab(value); }} className="pw-team-tabs">
       <div className="pw-object-toolbar pw-material-navigation"><TabList aria-label="协作记录与配置"><Tab id="runs">协作记录</Tab><Tab id="teams">我的团队</Tab></TabList>

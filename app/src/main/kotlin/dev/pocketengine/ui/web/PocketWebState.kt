@@ -216,6 +216,8 @@ internal object PocketWebState {
             .put("newTaskScopeMinutes", controller.newTaskScopeMinutes)
             .put("newTaskToolBudget", controller.displayNewTaskToolBudget).put("newTaskModelBudget", controller.displayNewTaskModelBudget)
         data.put("phoneReadiness", JSONObject().put("checkedAtUptimeMs", state.phoneReadiness.checkedAtUptimeMs)
+            .put("mainStartPreparation", state.phoneReadiness.mainStartPreparation.name.lowercase())
+            .put("backgroundStartPreparation", state.phoneReadiness.backgroundStartPreparation.name.lowercase())
             .put("groups", JSONArray().also { groups -> state.phoneReadiness.groups.forEach { group ->
                 groups.put(JSONObject().put("id", group.id).put("title", group.title).put("state", group.state.name.lowercase())
                     .put("checks", JSONArray().also { checks -> group.checks.forEach { check -> checks.put(JSONObject()

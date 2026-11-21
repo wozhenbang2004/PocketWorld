@@ -709,6 +709,8 @@ function ExecutionControls({ state, supported, run }: { state: Data; supported: 
 
 function PhoneSettings({ state, supported, run, navigate, registerTransientBack, initialView = 'list', onViewChange, direct = false }: { state: Data; supported: (action: string) => boolean; run: Run; navigate: (route: string) => void; registerTransientBack: BackHandlerRegistration; initialView?: string; onViewChange?: (view: string) => void; direct?: boolean }) {
   const ready = object(state.phoneReadiness), screenshotPolicy = object(state.taskScreenshotPolicy);
+  const preparationLabel = (value: unknown) => value === 'ready' ? '准备条件满足' : value === 'blocked' ? '需准备' : value === 'unsupported' ? '本机不支持' : '尚未核实';
+  const screenPreparation = `手机主屏：${preparationLabel(ready.mainStartPreparation)} · 后台独立屏：${preparationLabel(ready.backgroundStartPreparation)}`;
   const latestReply = list(state.messages).filter(row => row.role === 'assistant' && typeof row.id === 'string' && row.content).at(-1);
   const appearance = text(object(state.appearance).mode), readout = object(object(state.taskAnnouncements).readout);
   const journey = useDataSettingsJourney(initialView);
@@ -725,7 +727,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
   };
   return <div ref={journey.root} tabIndex={-1} className="pw-phone-workspace" data-phone-view={journey.view}>
     {journey.view === 'list' ? <>
-      <header className="pw-phone-overview"><span className="pw-phone-status-label">这台手机</span><p role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p></header>
+      <header className="pw-phone-overview"><span className="pw-phone-status-label">这台手机</span><p role="status">{screenPreparation}</p></header>
       <section className="pw-phone-entry-group" aria-label="设备能力"><h2>设备能力</h2><div className="pw-settings-links pw-phone-entries">
         <DataOperationRow id="execution" title="执行权限与连接" detail={`界面读取 ${flag(state.accessibilityEnabled, '已连接', '未连接')} · 任务通知 ${flag(state.notificationsEnabled)}`} onOpen={journey.open}/>
         <DataOperationRow id="observation" title="本地观察与截图" detail={`取图 ${flag(state.localCaptureAllowed)} · OCR ${flag(state.localOcrAllowed)}`} onOpen={journey.open}/>
@@ -739,7 +741,8 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
     </> : !direct && <DataOperationHeading title={sections[journey.view]?.title || '手机能力'} parent="手机能力" description="" onBack={() => journey.open('list')}/>}
     {journey.view !== 'speech' && (state.speaking || readout.active) && <section className="pw-phone-live-audio" aria-label="当前朗读"><span role="status">{state.speaking ? '正在朗读回复' : '正在播报任务状态'}</span><div>{state.speaking && <CapabilityAction action="speech.stop" supported={supported} run={run}>停止朗读</CapabilityAction>}{readout.active && <CapabilityAction action="speech.stopTaskAnnouncement" args={{ readoutId: readout.readoutId }} supported={supported} run={run}>停止这次状态提示</CapabilityAction>}</div></section>}
     {journey.view === 'execution' && <section className="pw-phone-detail pw-phone-permissions" aria-label="执行权限与连接">
-      <p className="pw-detail-status" role="status">{first(ready, ['message', 'summary', 'status'], '尚未核对执行能力')}</p>
+      <p className="pw-detail-status" role="status">{screenPreparation}</p>
+      <p className="pw-field-hint">这里只显示本机准备检查。回到原目标选择执行位置，提交时再核对。</p>
       <section className="pw-phone-permission-group" aria-label="手机操作"><h2>手机操作</h2><div className="pw-settings-links">
         {[
           ['accessibility', '界面读取与主屏控制', flag(state.accessibilityEnabled, '已连接', '未连接')],
