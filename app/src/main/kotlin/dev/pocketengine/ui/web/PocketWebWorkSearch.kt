@@ -174,7 +174,9 @@ internal class PocketWebWorkSearch(
             return task
         }
         val selectedTask = requireVisibleTask()
-        val snapshot = host.ownerOutcomeSnapshot(taskId, control)
+        val readExcerptStarts = conversationResult == null && selectedTask.opt("status") == "completed"
+        val snapshot = if (readExcerptStarts) (host.attachmentOutcomes ?: error("附件成果宿主尚未就绪")).workResultFilesSnapshot(taskId, control)
+            else host.ownerOutcomeSnapshot(taskId, control)
         check(snapshot.getString("taskId") == taskId) { "原工作成果身份不符" }
         val runFiles = if (conversationResult != null)
             AttachmentResultRun(taskId, conversationResult.runId, conversationResult.epoch).files(snapshot)
@@ -205,6 +207,14 @@ internal class PocketWebWorkSearch(
         val page = JSONObject().put("taskId", taskId).put("files", files)
             .put("readLimited", readLimited || artifacts.size != available.size || available.size > limit)
         val current = requireVisibleTask()
+        if (readExcerptStarts && current.opt("status") == "completed" && snapshot.opt("taskStatus") == "completed" &&
+            !current.optBoolean("contextWithdrawn") && !current.optBoolean("sourceCurrentReadRequired") &&
+            selectedTask.opt("runId") == current.opt("runId") && snapshot.opt("taskRunId") == current.opt("runId") &&
+            selectedTask.opt("coordinatorEpoch") == current.opt("coordinatorEpoch") && snapshot.opt("coordinatorEpoch") == current.opt("coordinatorEpoch")) {
+            for (index in 0 until files.length()) available[index].optJSONObject("pdfExcerptStart")?.let {
+                files.getJSONObject(index).put("pdfExcerptStart", it)
+            }
+        }
         if (conversationResult == null) {
             // Only the original private work can offer inputs. A chat completion receipt
             // remains scoped to that run's outputs, even for a work with input but no output.

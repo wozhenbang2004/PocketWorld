@@ -38,18 +38,24 @@ function originalModelTeamStart(capability:Json,args:Json,oneTime:boolean){
  const ids=new Set(members.map(member=>member.id));
  if(ids.size!==members.length||!ids.has(definition.leaderId)||members.some(member=>member.dependsOn!=null&&
     (!Array.isArray(member.dependsOn)||member.dependsOn.some((id:unknown)=>typeof id!=='string'||!ids.has(id)||id===member.id))))return null;
+ const savedClassic=!oneTime&&definition.mode==='collaborate'&&
+   (!Object.hasOwn(definition,'discussionFormat')||definition.discussionFormat==='classic')&&
+   !Object.hasOwn(definition,'definitionKind')&&!Object.hasOwn(definition,'nativeWorkProfileModels')&&
+   members.every(member=>member.runner==='model'&&member.device==='phone'&&!Object.hasOwn(member,'writeFiles')&&!Object.hasOwn(member,'remoteProduction'));
  const name=(member:Json,index:number)=>members.filter(row=>row.name===member.name).length===1
    ? member.name as string : String(member.name)+(oneTime?'（第 ':'（编组第 ')+(index+1)+' 位）';
- return {oneTime,name:definition.name,steps:oneTime?(definition.mode==='debate'?'独立提出观点、相互核对、原作者回应，最后整理结论。':
+ return {oneTime,savedClassic,name:definition.name,steps:oneTime?(definition.mode==='debate'?'独立提出观点、相互核对、原作者回应，最后整理结论。':
    rounds===2?'成员按分工协作两轮，然后汇总。':''): '',members:members.map((member,index)=>({
   id:member.id as string,name:name(member,index),role:member.role as string,assignment:nonEmptyText(member.assignment)?member.assignment as string:'',
   leads:member.id===definition.leaderId,
-  model:teamPlannedModel(member,oneTime?'沿用原工作主模型（这份分工未列型号）':'编组未指定型号，沿用本次工作模型设置'),
+  model:teamPlannedModel(member,oneTime?'沿用原工作主模型（这份分工未列型号）':savedClassic?
+   '编组未指定型号，启动时按应用模型设置解析':'编组未指定型号，沿用本次工作模型设置'),
   dependencies:(member.dependsOn||[]).map((id:string)=>{const i=members.findIndex(row=>row.id===id);return name(members[i],i);}) as string[],
  }))};
 }
 
 type ModelTeamRoster=NonNullable<ReturnType<typeof originalModelTeamStart>>;
+type ApprovedSavedTeamPlan={approvalId:string;goal:string;roster:ModelTeamRoster};
 
 function TeamStartRoster({roster}:{roster:ModelTeamRoster}) {
  return <><ol className="pw-decision-worklist" role="list">{roster.members.map(member=><li key={member.id}>
@@ -91,6 +97,18 @@ export function DeclinedTeamStart({decision}:{decision:NonNullable<ReturnType<ty
  </section>;
 }
 
+export function ApprovedSavedTeamRoster({plan}:{plan:ApprovedSavedTeamPlan}) {
+ return <Accordion className="pw-decision-disclosure" variant="divided">
+  <AccordionItem id={plan.approvalId+':saved'} headingLevel={5} title="查看已批准的分工">
+   <section className="pw-decision-section" aria-label="本次批准的原分工">
+    <h5><bdi>{plan.roster.name}</bdi></h5>
+    <p className="pw-decision-goal pw-approval-copy" dir="auto">{plan.goal}</p>
+    <TeamStartRoster roster={plan.roster}/>
+   </section>
+  </AccordionItem>
+ </Accordion>;
+}
+
 /** Join the saved human decision to its original refusal, not to the task's
  * general approval flag or a recent progress sentence. Reading changes nothing. */
 export function originalTeamStartDecisionReadback(task:unknown) {
@@ -100,13 +118,15 @@ export function originalTeamStartDecisionReadback(task:unknown) {
     !Array.isArray(raw.ownerWorkTeams)||raw.ownerWorkTeams.length!==0||!Array.isArray(raw.approvals)||raw.approvals.length>100||
     page.format!=='pocketworld.task-audit-page.v1'||page.taskId!==identity.taskId||page.section!=='operations'||
     page.executionAuthorized!==false||!Array.isArray(page.entries)||page.entries.length>24)return null;
- const rows=list(raw.approvals).map(object),ordinary=(row:Json)=>{
+ const rows=list(raw.approvals).map(object),plans=rows.map(row=>{
   const capability=object(row.capability),args=object(row.arguments),kind=teamStartKind(row.tool,capability,args);
-  return row.runId===identity.runId&&nonEmptyText(row.id)&&nonEmptyText(args.goal)&&kind!==null&&!!originalModelTeamStart(capability,args,kind==='one_time');
- };
- const positive=rows.filter(row=>ordinary(row)&&['approved','consumed'].includes(row.state)&&row.policyDecision==null&&row.researchStartOperationId==null);
+  const goal=nonEmptyText(args.goal)?args.goal:'';
+  return {row,goal,roster:row.runId===identity.runId&&nonEmptyText(row.id)&&goal&&kind!==null?
+   originalModelTeamStart(capability,args,kind==='one_time'):null};
+ });
+ const positive=plans.filter(({row,roster})=>roster&&['approved','consumed'].includes(row.state)&&row.policyDecision==null&&row.researchStartOperationId==null);
  if(positive.length!==1)return null;
- const approval=positive[0];
+ const {row:approval,goal,roster}=positive[0];
  if(rows.filter(row=>row.id===approval.id).length!==1)return null;
  const matched=list(page.entries).map(object).filter(row=>{
   const receipt=object(row.receipt);
@@ -119,7 +139,8 @@ export function originalTeamStartDecisionReadback(task:unknown) {
  });
  if(matched.length!==1)return null;
  return {used:approval.state==='consumed',priorRun:matched[0].runId!==identity.runId,
-  anotherPending:rows.some(row=>row.id!==approval.id&&ordinary(row)&&row.state==='pending'&&Number.isSafeInteger(row.expiresAt)&&row.expiresAt>Date.now())};
+  savedPlan:roster?.savedClassic&&goal.length<=8000?{approvalId:approval.id as string,goal,roster}:undefined,
+  anotherPending:plans.some(({row,roster})=>row.id!==approval.id&&!!roster&&row.state==='pending'&&Number.isSafeInteger(row.expiresAt)&&row.expiresAt>Date.now())};
 }
 
 type NodeCommandReview = { approvalId:string; runId:string; epoch:number; operationId:string; action:'dependencies'|'build' };

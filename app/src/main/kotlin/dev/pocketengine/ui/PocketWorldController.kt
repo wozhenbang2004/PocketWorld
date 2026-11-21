@@ -5362,10 +5362,31 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun readTaskForReview(id: String, complete: (UiTask?, String?) -> Unit) =
         readTaskForWeb(id, true, { true }, complete)
     /** A large task can disclose one exact approval without becoming a complete result review. */
-    internal fun readTaskForActionReview(id: String, approvalId: String?, current: () -> Boolean, complete: (UiTask?, String?) -> Unit) =
-        readTaskForWeb(id, true, current, complete, true, approvalId)
+    internal fun readTaskForActionReview(id: String, approvalId: String?, current: () -> Boolean, complete: (UiTask?, String?) -> Unit,
+                                         onSavedTeamDefaultMissing: ((JSONObject) -> Unit)? = null) =
+        readTaskForWeb(id, true, current, complete, true, approvalId, onSavedTeamDefaultMissing = onSavedTeamDefaultMissing)
+
+    /** A typed native refusal from the current completed attempt, not a guess from summary copy or an old event. */
+    private fun savedTeamDefaultWait(task: JSONObject): Boolean {
+        val receipt = task.optJSONObject("evidence") ?: return false
+        val work = task.optJSONObject("ownerWork") ?: return false
+        return dev.pocketengine.store.OwnerWorkTask.isOwnerWork(task) &&
+            task.opt("kind") == "assistant" && task.opt("executionMode") == "capabilities" &&
+            task.opt("actorId") == "owner" && task.opt("spaceId") == "private" && task.isNull("origin") &&
+            task.isNull("parentTaskId") && task.isNull("teamAssignment") && task.isNull("teamRunId") && task.isNull("developmentContext") &&
+            work.opt("workTaskId") == task.opt("id") && work.opt("conversationId") == task.opt("conversationId") &&
+            task.optString("conversationId").isNotBlank() && task.optString("runId").isNotBlank() && task.optInt("coordinatorEpoch") > 0 &&
+            task.opt("taskProjection") == "detail_window" && task.opt("taskCoreReadLimited") == false &&
+            task.opt("contextAvailable") == true && !task.optBoolean("contextWithdrawn") && !task.optBoolean("sourceCurrentReadRequired") &&
+            task.opt("status") == "awaiting_user" && !task.optBoolean("cancelRequested") && task.opt("hasUnresolvedOperations") == false &&
+            receipt.opt("code") == "saved_team_default_model_unconfigured" && receipt.opt("status") == "not_dispatched" &&
+            receipt.opt("ok") == false && receipt.opt("accepted") == false && receipt.opt("nativeDispatched") == false &&
+            receipt.opt("requiresPause") == true && receipt.opt("automaticReplayAllowed") == false
+    }
+
     private fun readTaskForWeb(id: String, requireComplete: Boolean, current: () -> Boolean, complete: (UiTask?, String?) -> Unit,
-                               allowApprovalProjection: Boolean = false, approvalId: String? = null, verifySource: ((JSONObject) -> Unit)? = null) {
+                               allowApprovalProjection: Boolean = false, approvalId: String? = null, verifySource: ((JSONObject) -> Unit)? = null,
+                               onSavedTeamDefaultMissing: ((JSONObject) -> Unit)? = null) {
         if (closed) { complete(null, "原任务读取窗口已关闭"); return }
         if (id.isBlank()) { complete(null, "原任务身份缺失"); return }
         val ownerWindow = if (allowApprovalProjection) webWindowTicket() else null
@@ -5395,6 +5416,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         check(task.optString("taskProjection") != "summary") { "原任务只返回了摘要，请重新读取核对信息" }
                         check(!task.optBoolean("taskCoreReadLimited")) { "当前任务内容较多，本次只读到摘要，未取得完整成果，不能确认结果。请返回查看原任务记录。" }
                     }
+                    val missingDefault = if (onSavedTeamDefaultMissing != null && approval == null && savedTeamDefaultWait(task) &&
+                        webPrivateOwnerVisible() && webWindowTicket() == ownerWindow && current()) {
+                        runCatching { app.settings.missingSavedTeamDefault() }.getOrNull()
+                    } else null
                     val detail = JSONObject(task.toString())
                     main.post {
                         if (closed) { finish(null, "原任务读取窗口已关闭"); return@post }
@@ -5417,6 +5442,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                                     selected.updatedAt == approval.getLong("updatedAt")) { "原审批任务已变化，请重新核对" }
                             }
                             state = state.copy(taskActionErrors = state.taskActionErrors - id)
+                            if (missingDefault != null && webPrivateOwnerVisible() && webWindowTicket() == ownerWindow && current() &&
+                                app.settings.modelSelection().status() == missingDefault && savedTeamDefaultWait(selected.raw) &&
+                                selected.updatedAt == detail.optLong("updatedAt", -1) && selected.raw.opt("runId") == detail.opt("runId") &&
+                                selected.raw.opt("coordinatorEpoch") == detail.opt("coordinatorEpoch")) {
+                                onSavedTeamDefaultMissing?.invoke(JSONObject().put("state", "unconfigured").put("taskId", id)
+                                    .put("runId", selected.raw.getString("runId")).put("epoch", selected.raw.getInt("coordinatorEpoch"))
+                                    .put("modelSelectionRevision", missingDefault.revision()))
+                            }
                             // Preserve the ordinary task state. Only the consumed approval handle
                             // retains this complete item; it cannot confirm a truncated result.
                             if (approval == null) selected else taskFromJson(approval)

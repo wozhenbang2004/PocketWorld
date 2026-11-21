@@ -95,8 +95,9 @@ internal class PocketWebTaskActions(
 
     /** tasks.open only schedules a read. A review handle requires the actual complete native result. */
     fun read(taskId: String, approvalId: String?, closed: () -> Boolean, current: () -> Boolean, complete: (JSONObject?, String?) -> Unit) {
-        controller.readTaskForActionReview(taskId, approvalId, { !closed() && current() }) { task, error ->
-            if (closed()) return@readTaskForActionReview
+        var missingSavedTeamDefault: JSONObject? = null
+        controller.readTaskForActionReview(taskId, approvalId, { !closed() && current() }, complete = original@ { task, error ->
+            if (closed()) return@original
             if (!current()) {
                 complete(null, "原任务窗口已关闭，请重新打开后核对")
             } else if (error != null || task == null) {
@@ -110,7 +111,10 @@ internal class PocketWebTaskActions(
                             controller.state.tasks.firstOrNull { it.id == captured.id } ?: throw IllegalStateException("原审批任务窗口已关闭") else captured
                         val currentOwnerWorkWait = !specialOwnerTask(captured) && PocketWebOwnerQuestions.isOrdinaryOwnerWorkWait(captured.raw) &&
                             controller.hasCurrentOriginalOwnerWorkQuestion(captured)
-                        complete(review(captured, approvals, reviews, controller.state.activeTaskId, canUseTaskControls(captured), binding, currentOwnerWorkWait), null)
+                        val result = review(captured, approvals, reviews, controller.state.activeTaskId, canUseTaskControls(captured), binding, currentOwnerWorkWait)
+                        // This optional presentation fact is not part of the task or its single-use review handle.
+                        if (approvals.length() == 0) result.putOpt("savedTeamDefaultModel", missingSavedTeamDefault)
+                        complete(result, null)
                     }
                 }
                 try {
@@ -131,7 +135,7 @@ internal class PocketWebTaskActions(
                     readFailed("TASK_REVIEW_READ_FAILED", "任务结果暂时无法核对", failure, complete)
                 }
             }
-        }
+        }, onSavedTeamDefaultMissing = { missingSavedTeamDefault = it })
     }
 
     private fun readFailed(code: String, fallback: String, failure: Throwable, complete: (JSONObject?, String?) -> Unit) {

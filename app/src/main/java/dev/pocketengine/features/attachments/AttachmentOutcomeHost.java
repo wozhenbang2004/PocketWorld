@@ -6,7 +6,11 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
 import dev.pocketengine.media.MediaModule;
 import dev.pocketengine.store.TaskStore;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -24,14 +28,25 @@ public final class AttachmentOutcomeHost {
     }
 
     public JSONObject snapshot(String taskId,RunControl control)throws Exception {
+        return snapshot(taskId,control,false);
+    }
+    /** Extra display facts for the original Work file list, not the general attachment snapshot. */
+    public JSONObject workResultFilesSnapshot(String taskId,RunControl control)throws Exception {
+        return snapshot(taskId,control,true);
+    }
+    private record PdfExcerpt(JSONObject result,JSONObject source){}
+    private JSONObject snapshot(String taskId,RunControl control,boolean workFileList)throws Exception {
         control.check();JSONObject task=ownerTask(taskId);JSONArray selected=task==null?new JSONArray():tasks.ownerAttachmentReferences(taskId);
         JSONObject inventory=documents.ownerAttachmentInventoryForHost();JSONArray files=inventory.getJSONArray("attachments"),sources=new JSONArray(),results=new JSONArray(),jobs=new JSONArray();Set<String> included=new HashSet<>();
+        boolean showPdfStarts=workFileList&&ordinaryCompletedWork(task);
+        Map<String,String> pdfInputs=showPdfStarts?new HashMap<>():null;
+        List<PdfExcerpt> excerpts=showPdfStarts?new ArrayList<>():null;
         var captured=new dev.pocketengine.features.remote.RemoteFileCaptureAttempt(task,tasks::remoteOwnerOperation);
         int receivedChecks=0;boolean receivedLimited=false;
         for(int i=0;i<selected.length();i++){
             JSONObject pinned=selected.getJSONObject(i),meta=find(files,pinned.getString("id"));
             if(meta==null||!sameReference(pinned,meta))sources.put(new JSONObject(pinned.toString()).put("availability","input_changed").put("name","原来源文件不可读"));
-            else {sources.put(row(meta,"source"));included.add(meta.getString("id"));}
+            else {sources.put(row(meta,"source"));included.add(meta.getString("id"));rememberPdfInput(pdfInputs,meta);}
         }
         for(int i=0;i<files.length();i++) {
             control.check();JSONObject meta=files.getJSONObject(i);if(!privateFile(meta))continue;
@@ -67,9 +82,12 @@ public final class AttachmentOutcomeHost {
                     }else result.put("runProvenance",artifactRun.isBlank()?"unrecorded":artifactRun.equals(currentRun)?"current":"earlier");
                     if("created_document".equals(kind)&&recordedDocumentOriginal(task,meta))result.put("recordedDocumentOriginal",true);
                 }
+                if(excerpts!=null&&kind.equals("document_extract")&&"text/plain".equals(meta.opt("mimeType"))&&
+                        !meta.optBoolean("outputSourceRetired")&&!origin.has("archiveEvidence")&&
+                        origin.isNull("runId")&&origin.isNull("operationId"))excerpts.add(new PdfExcerpt(result,origin));
                 results.put(result);
             }
-            else if(included.add(meta.getString("id")))sources.put(row(meta,"source"));
+            else if(included.add(meta.getString("id"))){sources.put(row(meta,"source"));rememberPdfInput(pdfInputs,meta);}
         }
         if(task!=null){
             JSONArray operations=task.getJSONArray("operations");
@@ -84,11 +102,49 @@ public final class AttachmentOutcomeHost {
             }
         }
         if(receivedLimited)inventory.getJSONObject("indexDiagnostics").put("incomplete",true);
-        ownerTask(taskId);control.check();JSONObject result=new JSONObject().put("taskId",taskId==null?"":taskId).put("sources",sources).put("artifacts",results)
+        JSONObject current=ownerTask(taskId);control.check();
+        if(showPdfStarts&&ordinaryCompletedWork(current)&&task.getString("runId").equals(current.opt("runId"))&&
+                task.getInt("coordinatorEpoch")==current.optInt("coordinatorEpoch")){
+            for(PdfExcerpt excerpt:excerpts){
+                control.check();
+                JSONObject start=pdfExcerptStart(excerpt.source(),pdfInputs);
+                if(start!=null)excerpt.result().put("pdfExcerptStart",start);
+            }
+        }
+        JSONObject result=new JSONObject().put("taskId",taskId==null?"":taskId).put("sources",sources).put("artifacts",results)
                 .put("media",jobs).put("documentCapabilities",documents.documentCapabilities()).put("indexDiagnostics",inventory.getJSONObject("indexDiagnostics")).put("verifiedBusinessSuccess",false);
         if(task!=null){result.put("taskRunId",task.optString("runId")).put("coordinatorEpoch",task.optInt("coordinatorEpoch")).put("taskStatus",task.optString("status"));if("attachments".equals(task.optString("feature"))&&"createDocument".equals(task.optString("command")))result.put("originalDocumentActionId",task.getString("operationId"));}
         else result.put("documentActions",documentActions("",control));
         return result;
+    }
+    private static boolean ordinaryCompletedWork(JSONObject task){
+        return task!=null&&"assistant".equals(task.opt("kind"))&&"completed".equals(task.opt("status"))&&
+                task.isNull("origin")&&task.isNull("parentTaskId")&&task.isNull("teamRunId")&&task.isNull("memberId")&&
+                task.isNull("developmentContext")&&task.isNull("ownerDeviceWork")&&task.isNull("ownerPhoneControl")&&
+                task.isNull("directWorkspace")&&task.isNull("directPhone")&&
+                task.optBoolean("contextAvailable",true)&&!task.optBoolean("contextWithdrawn")&&
+                !task.optBoolean("sourceCurrentReadRequired")&&!"source_unavailable".equals(task.opt("taskProjection"))&&
+                task.opt("runId") instanceof String run&&!run.isBlank()&&boundedInteger(task.opt("coordinatorEpoch"),1,Integer.MAX_VALUE);
+    }
+    private static void rememberPdfInput(Map<String,String> inputs,JSONObject meta){
+        if(inputs!=null&&privateFile(meta)&&"application/pdf".equals(meta.opt("mimeType"))&&
+                !meta.optBoolean("outputSourceRetired"))inputs.put(meta.optString("id"),meta.optString("sha256"));
+    }
+    /** The saved read's start is not a claim about which pages were covered or whether the PDF is currently readable. */
+    private static JSONObject pdfExcerptStart(JSONObject source,Map<String,String> inputs)throws Exception{
+        if(!(source.opt("sourceAttachmentId") instanceof String id)||id.isBlank()||
+                !(source.opt("sourceSha256") instanceof String sha)||!sha.matches("[a-f0-9]{64}")||
+                !(source.opt("readReceiptId") instanceof String receipt)||!receipt.matches("[a-f0-9-]{36}"))return null;
+        JSONObject range=source.optJSONObject("readRange");
+        if(!sha.equals(inputs.get(id))||range==null)return null;
+        Object page=range.opt("startUnit"),chunk=range.opt("startChunk"),extraction=range.opt("extraction");
+        if(!boundedInteger(page,1,1_000_000)||!boundedInteger(chunk,0,1_000_000)||!java.util.Objects.equals(extraction,source.opt("extraction")))return null;
+        String method="rendered_page_ocr".equals(source.opt("coverage"))&&"ocr".equals(extraction)?"ocr":
+                "pdf_text_layer".equals(source.opt("coverage"))&&("text".equals(extraction)||"auto".equals(extraction))?"text_layer":null;
+        return method==null?null:new JSONObject().put("page",page).put("chunk",chunk).put("method",method);
+    }
+    private static boolean boundedInteger(Object value,int min,int max){
+        return (value instanceof Long||value instanceof Integer)&&((Number)value).longValue()>=min&&((Number)value).longValue()<=max;
     }
     private JSONObject originalReceivedFile(JSONObject task,JSONObject meta,JSONObject origin,RunControl control)throws InterruptedException{
         if(task.has("origin")||task.optBoolean("contextWithdrawn")||!task.optBoolean("contextAvailable",true)

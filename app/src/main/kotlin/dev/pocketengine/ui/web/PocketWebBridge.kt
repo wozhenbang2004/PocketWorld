@@ -1277,7 +1277,7 @@ internal class PocketWebBridge(
                     taskViewId == taskId && controller.webUiCanInteract() && generation == taskReviewGeneration && document == documentId &&
                         navigation == Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision)
                 }) { result, error ->
-                    complete(id, result, error, retainValue = result?.has("capabilityApprovalRead") != true)
+                    complete(id, result, error, retainValue = result?.has("capabilityApprovalRead") != true && result?.has("savedTeamDefaultModel") != true)
                     if (error == null) publishState()
                 }
                 return

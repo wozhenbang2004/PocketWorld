@@ -73,7 +73,7 @@ type Data = Record<string, any>;
 type Snapshot = { state?: Data; view?: { section?: string | null; resumeRevision?: number; taskId?: string | null }; composer?: Data | null; capabilities?: { commands?: string[] } };
 type BackHandlerRegistration = (handler: (() => boolean) | null) => void;
 type TeamNavigationProps = { teamRunFocus?: TeamRunFocus; onTeamRunFocusConsumed?: (requestId: string) => void; onAskButlerForTeam?: (request: TeamButlerRequest) => void; originalWorkDraft?: boolean; onOpenTeamOwnerWork?: (link: TeamOwnerWorkLink, intent: TeamOwnerWorkIntent) => void };
-type PhoneNavigationProps = { onChoosePhonePlace?: () => void; sentPhoneFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void };
+type PhoneNavigationProps = { onChoosePhonePlace?: () => void; onReturnConnectedPhoneDraft?: () => void; sentPhoneFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void };
 type Props = PhoneNavigationProps & TeamNavigationProps & { reviewedSkill?: ReviewedSkillTarget; cloudGoal?: CloudGoal; onCloudGoalUsed?: (id:string)=>void; capabilityMemory?: CapabilityWorkspaceMemory; onStartCapability?: (purpose: CapabilityPurpose) => void; teamAttentionFocus?: Data; onTeamAttentionConsumed?:(requestId:string)=>void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void; route: string; onBack: () => void; snapshot: Snapshot; registerBackHandler?: BackHandlerRegistration; navigationTrigger?: ReactNode; navigationRevision?: number; onNavigationPageChange?: (page: string) => void; onOpenSetup?: (capability?: SetupCapability, origin?: SettingsDirectoryOrigin) => void; settingsRestore?: SettingsDirectoryOrigin; onReturnToSetup?: () => void; onReturnOriginalModelInput?: (choice: AIChoice) => Promise<boolean>; onOpenProjectDraft?: OpenProjectDraft; onOpenProjects?: () => void; originGoal?: string; returnLabel?: string; initialProjectId?: string; terminalCheckout?: LocalTerminalCheckout; localDraft?: LocalWorkspaceDraft; onLocalDraftChange?: (draft: LocalWorkspaceDraft) => void };
 type Run = (action: string, args?: Data) => Promise<any>;
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -787,7 +787,7 @@ function PhoneSettings({ state, supported, run, navigate, registerTransientBack,
 /** Original BackgroundPhoneSetup flow composed with the selected BoardUI
  * fields, radio options, accordion and SettingsModal. It reads the existing
  * display state; this page does not create a task or a second connection. */
-function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onReturn, returnLabel = '手机能力', registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; onChoosePhonePlace?:()=>void; returnLabel?: string; registerTransientBack: BackHandlerRegistration }) {
+function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onReturn, onReturnConnectedPhoneDraft, returnLabel = '手机能力', registerTransientBack }: { state: Data; supported: (action: string) => boolean; run: Run; onReturn: () => void; onChoosePhonePlace?:()=>void; onReturnConnectedPhoneDraft?:()=>void; returnLabel?: string; registerTransientBack: BackHandlerRegistration }) {
   const display = object(object(state.features).display), adb = object(display.adb), discovery = object(adb.discovery), shizuku = object(display.shizuku);
   const phoneSetup = object(object(state.features).phone_setup), pairing = object(phoneSetup.pairing), autoCapture = object(pairing.autoCapture);
   const audioRecovery = object(phoneSetup.audioRecovery), audioPending = audioRecovery.pendingCount;
@@ -899,6 +899,7 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
     { title: '返回原目标', done: false, detail: display.taskOwned === true ? '有任务持有后台资源，查看可核对的原工作' : connection.taskOwned ? '此页未核实后台资源属于哪项工作' : '完成设置后返回，由你确认是否开始原目标' },
   ];
   const locked = connection.taskOwned || connection.busy || requesting || awaiting !== null;
+  const returnToDraft = connection.helperConnected && !requiresCheck && !locked ? onReturnConnectedPhoneDraft : undefined;
   const canUseExistingShizuku = !locked && !connection.displayBarrier && !connection.recoveryRequired && !requiresCheck;
   const reconnectSaved = async () => {
     if (locked || pairGuard.current || !wirelessSaved || !connection.canConnect || savedEndpoints.length !== 1 ||
@@ -1002,7 +1003,9 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
       {(text(display.message) || text(adb.message)) && <Accordion variant="divided" className="pw-background-native-details"><AccordionItem id="background-native-state" title="连接说明与原状态">{Array.from(new Set([text(display.message), text(adb.message)].filter(Boolean))).map(message => <p key={message} className="pw-background-native-message">{message}</p>)}</AccordionItem></Accordion>}
     </div></section>
     <section className="pw-background-preferences" aria-label="后台偏好"><h3>后台偏好</h3><BackgroundAudioSettings state={state} supported={supported} run={run} registerBack={handler => { ownerBack.current.audio = handler; }}/></section>
-    <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); onReturn(); }}>{connection.helperConnected && !requiresCheck ? `助手已连接，返回${returnLabel}` : `返回${returnLabel}`}</Button></div>
+    <div className="pw-background-return"><Button variant={connection.helperConnected && !requiresCheck ? 'primary' : 'ghost'} onClick={() => { setCode(''); (returnToDraft || onReturn)(); }}>
+      {returnToDraft ? '返回原手机目标' : connection.helperConnected && !requiresCheck ? `助手已连接，返回${returnLabel}` : `返回${returnLabel}`}
+    </Button></div>
   </div>;
 }
 function HistoryPage({ usage, supported, run }: { usage: boolean; supported: (action: string) => boolean; run: Run }) {
@@ -1728,7 +1731,7 @@ function settingsEntryDetail(id: string, state: Data): string {
   return '';
 }
 
-export default function Secondary({ reviewedSkill, onChoosePhonePlace, sentPhoneFocus, cloudGoal, onCloudGoalUsed, teamRunFocus, onTeamRunFocusConsumed, onAskButlerForTeam, originalWorkDraft, onOpenTeamOwnerWork, capabilityMemory, onStartCapability, teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, settingsRestore, onReturnToSetup, onReturnOriginalModelInput, onOpenProjectDraft, onOpenProjects, originGoal, returnLabel, initialProjectId, terminalCheckout, localDraft, onLocalDraftChange }: Props) {
+export default function Secondary({ reviewedSkill, onChoosePhonePlace, onReturnConnectedPhoneDraft, sentPhoneFocus, cloudGoal, onCloudGoalUsed, teamRunFocus, onTeamRunFocusConsumed, onAskButlerForTeam, originalWorkDraft, onOpenTeamOwnerWork, capabilityMemory, onStartCapability, teamAttentionFocus, onTeamAttentionConsumed, registerBeforeLeave, route, onBack, snapshot, registerBackHandler, navigationTrigger, navigationRevision, onNavigationPageChange, onOpenSetup, settingsRestore, onReturnToSetup, onReturnOriginalModelInput, onOpenProjectDraft, onOpenProjects, originGoal, returnLabel, initialProjectId, terminalCheckout, localDraft, onLocalDraftChange }: Props) {
   const pageLeaveGuard = useRef<PermissionLeaveGuard | null>(null);
   const registerPageLeave = useCallback((guard: PermissionLeaveGuard | null) => {
     pageLeaveGuard.current = guard; registerBeforeLeave?.(guard);
@@ -1975,7 +1978,7 @@ export default function Secondary({ reviewedSkill, onChoosePhonePlace, sentPhone
               renderProxy={registerBack => <ProxyWorkspace state={state} run={run} registerTransientBack={registerBack} />} />
           : page === 'phone' ? <PhoneSettings state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phonePresentation.current} onViewChange={view => { phonePresentation.current = view; }} />
           : isPhonePage ? <PhoneSettings key={page} state={state} supported={supported} run={run} navigate={navigate} registerTransientBack={registerTransientBack} initialView={phoneView} direct />
-          : page === 'background' ? <BackgroundSettings onChoosePhonePlace={onChoosePhonePlace} state={state} supported={supported} run={run} onReturn={backgroundFromDevices ? returnBackgroundToDevices : onReturnToSetup || returnToPhone} returnLabel={backgroundFromDevices ? '设备' : onReturnToSetup ? '准备中心' : trail.current.at(-1)?.settingId === 'background' ? '设置' : '手机能力'} registerTransientBack={registerTransientBack} />
+          : page === 'background' ? <BackgroundSettings onChoosePhonePlace={onChoosePhonePlace} state={state} supported={supported} run={run} onReturn={backgroundFromDevices ? returnBackgroundToDevices : onReturnToSetup || returnToPhone} onReturnConnectedPhoneDraft={!backgroundFromDevices && onReturnToSetup ? onReturnConnectedPhoneDraft : undefined} returnLabel={backgroundFromDevices ? '设备' : onReturnToSetup ? '准备中心' : trail.current.at(-1)?.settingId === 'background' ? '设置' : '手机能力'} registerTransientBack={registerTransientBack} />
           : page === 'usage' ? renderUsage(registerTransientBack)
           : page === 'history' ? <HistoryPage key={page} usage={false} supported={supported} run={run} />
           : page === 'archives' || page === 'storage' ? <DataManagement key={page} kind={page} data={object(page === 'archives' ? state.ownerArchives : state.projectStorage)} supported={supported} run={run} registerTransientBack={registerTransientBack} navigate={navigate} />

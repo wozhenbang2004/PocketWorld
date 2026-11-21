@@ -4,7 +4,8 @@ import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 
-export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive'; hasSavedSupplement?: boolean };
+type PdfExcerptStart = { page: number; chunk: number; method: 'text_layer' | 'ocr' };
+export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive'; hasSavedSupplement?: boolean; pdfExcerptStart?: PdfExcerptStart };
 
 type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string };
 
@@ -14,6 +15,14 @@ function usableFile(value: unknown): value is TaskResultFile {
   return typeof file.id === 'string' && !!file.id && file.id.length <= 240 && !file.id.includes('\0') &&
     typeof file.sha256 === 'string' && /^[a-f0-9]{64}$/.test(file.sha256) && typeof file.name === 'string' && !!file.name &&
     typeof file.mimeType === 'string' && typeof file.size === 'number' && Number.isSafeInteger(file.size) && file.size >= 0;
+}
+
+function pdfExcerptLabel(file: TaskResultFile) {
+  const start = file.pdfExcerptStart;
+  if (file.mimeType !== 'text/plain' || !start || !Number.isSafeInteger(start.page) || start.page < 1 || start.page > 1_000_000 ||
+      !Number.isSafeInteger(start.chunk) || start.chunk < 0 || start.chunk > 1_000_000 ||
+      (start.method !== 'text_layer' && start.method !== 'ocr')) return '';
+  return `PDF ${start.method === 'ocr' ? 'OCR' : '文字层'}摘录 · 当时从第 ${start.page} 页开始读取`;
 }
 
 export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpen, onBrowse, onOriginalRequest }: {
@@ -82,7 +91,7 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error) return null;
   const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
       const format = attachmentFileFormat(file.mimeType,file.name).label;
-      const metadata = [format, input ? '' : fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录', fileBytes(file.size)].filter(Boolean).join(' · ');
+      const metadata = [format, input ? '' : pdfExcerptLabel(file) || fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录', fileBytes(file.size)].filter(Boolean).join(' · ');
       return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
       aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}${!input && file.hasSavedSupplement === true ? '，有补充草稿' : ''}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
         <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}{!input && file.hasSavedSupplement === true && ' · 有补充草稿'}</small></span>
