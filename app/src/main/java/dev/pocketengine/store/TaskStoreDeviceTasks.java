@@ -1306,6 +1306,68 @@ public final class TaskStoreDeviceTasks {
             }
         }
     }
+    /** Exact receiving Work read. No generic task projection, screenshots, events, or other operation bodies. */
+    public GoalResultReview reviewReceivedTextResult(
+            dev.pocketengine.features.devices.NativeDeviceWorkspaceHost.ReceivedTextResultOrigin selected,String receiverInstance)throws Exception{
+        synchronized(owner){
+            JSONObject current=receivedTextResultCore(selected,receiverInstance);
+            JSONObject result=requirePendingTextResult(selected,current);
+            GoalResultReview review=reviewGoalResult(selected.taskId(),selected.runId(),selected.epoch());
+            if(!review.mayDecide||!review.digest.equals(TaskStore.capabilityFingerprint(result)))
+                throw new SecurityException("原执行已离开可核对状态");
+            return review;
+        }
+    }
+    public JSONObject receivedTextResultProof(dev.pocketengine.features.devices.NativeDeviceWorkspaceHost.ReceivedTextResultOrigin selected,
+            String receiverInstance,String resultDigest,Boolean completed,boolean keepTextLocal)throws Exception{
+        synchronized(owner){
+            JSONObject current=receivedTextResultCore(selected,receiverInstance);
+            if(completed==null){
+                JSONObject result=requirePendingTextResult(selected,current);
+                if(!resultDigest.equals(TaskStore.capabilityFingerprint(result)))
+                    throw new SecurityException("这份原候选已变化");
+                return new JSONObject().put("current",true);
+            }
+            JSONObject result=current.optJSONObject("deviceGoalResult"),evidence=current.optJSONObject("evidence");
+            JSONObject review=evidence==null?null:evidence.optJSONObject("nativeDeviceGoalOwnerReview");
+            if(result==null||review==null||!(completed?"completed":"cancelled").equals(current.opt("status"))
+                    ||!Boolean.TRUE.equals(result.opt("closed"))||!completed.equals(result.opt("ownerVerified"))
+                    ||keepTextLocal!=Boolean.TRUE.equals(result.opt("ownerOnlyText"))||keepTextLocal!=Boolean.TRUE.equals(review.opt("ownerOnlyText"))
+                    ||!selected.runId().equals(result.opt("runId"))||selected.epoch()!=result.optInt("executorEpoch",-1)
+                    ||selected.recordedAt()!=result.optLong("recordedAt")||result.optLong("reviewedAt")<selected.recordedAt()
+                    ||!resultDigest.equals(review.opt("resultDigest"))||!completed.equals(review.opt("completed"))
+                    ||!Boolean.TRUE.equals(review.opt("sameRun"))||!Boolean.FALSE.equals(review.opt("remoteAuthorizationRevoked")))
+                throw new SecurityException("尚未核对到这份原成果的保存决定");
+            return new JSONObject().put("reviewedAt",result.getLong("reviewedAt")).put("decisionRecorded",true)
+                    .put("completed",completed).put("keepTextLocal",keepTextLocal);
+        }
+    }
+    private JSONObject receivedTextResultCore(
+            dev.pocketengine.features.devices.NativeDeviceWorkspaceHost.ReceivedTextResultOrigin selected,String receiverInstance)throws Exception{
+        JSONObject current=task(selected.taskId()), origin=current.optJSONObject("origin");
+        if(!selected.taskId().equals(current.opt("id"))||!selected.runId().equals(current.opt("runId"))
+                ||selected.epoch()!=current.optInt("coordinatorEpoch",-1)||!receiverInstance.equals(current.opt("deviceNativeInstanceId"))
+                ||!("paired_device:"+selected.sourceDeviceId()).equals(current.opt("actorId"))||!("device:"+selected.sourceDeviceId()).equals(current.opt("spaceId"))
+                ||!"assistant".equals(current.opt("kind"))||!"capabilities".equals(current.opt("executionMode"))
+                ||Boolean.FALSE.equals(current.opt("contextAvailable"))||current.optBoolean("contextWithdrawn")
+                ||current.optBoolean("sourceCurrentReadRequired")||"source_unavailable".equals(current.opt("taskProjection"))
+                ||origin==null||!DeviceProtocol.ANDROID_TEXT_RETURN.equals(origin.opt("textReturnContract"))||!DeviceProtocol.acceptedTextReturn(current)
+                ||!DevicePrivateText.mayKeepOriginalText(current)
+                ||!selected.sourceDeviceId().equals(origin.opt("callerDeviceId"))||!selected.targetDeviceId().equals(origin.opt("targetDeviceId"))
+                ||!selected.operationId().equals(origin.opt("remoteOperationId"))||!selected.originDigest().equals(DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin))))
+            throw new SecurityException("这不是接收手机当前显示的同一次原文字工作");
+        return current;
+    }
+    private static JSONObject requirePendingTextResult(
+            dev.pocketengine.features.devices.NativeDeviceWorkspaceHost.ReceivedTextResultOrigin selected,JSONObject task)throws Exception{
+        JSONObject slot=ReceivedPhoneGoalIndex.pendingSlot(task),result=task.optJSONObject("deviceGoalResult");
+        if(!"needs_confirmation".equals(task.opt("status"))||!Boolean.FALSE.equals(task.opt("cancelRequested"))
+                ||slot==null||result==null||slot.optLong("recordedAt")!=selected.recordedAt()
+                ||!selected.shownResultDigest().isEmpty()&&!selected.shownResultDigest().equals(TaskStore.capabilityFingerprint(result)))
+            throw new SecurityException("这次原成果已变化或已完成核对");
+        return result;
+    }
+
     private static boolean mayRecordOriginalDecision(JSONObject current,String runState){
         return "needs_confirmation".equals(current.opt("status"))&&Boolean.FALSE.equals(current.opt("cancelRequested"))
                 && ("running".equals(runState)||"interrupted".equals(runState)||"needs_confirmation".equals(runState));

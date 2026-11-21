@@ -75,6 +75,7 @@ import {DeviceTaskScopeWorkspace} from './DeviceTaskScopeWorkspace';
 import type {SentPhoneGoalFocus} from './devices-workspace';
 import {PhoneControlWorkspace} from './PhoneControlWorkspace';
 import {OriginalWindowsWorkspaceOverview} from './OriginalWindowsTextRead';
+import { OriginalReceivedTextResult } from './OriginalReceivedTextResult';
 import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
 import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
@@ -732,6 +733,8 @@ export default function App(){
   setMemoryDraftTarget(null);setSkillDraftTarget({...draft,chatWork});
  };
  const taskTransientBack=useRef<(()=>boolean)|null>(null);
+ const receivedTextResultBack=useRef<(()=>boolean)|null>(null);
+ const registerReceivedTextResultBack=useCallback((handler:(()=>boolean)|null)=>{receivedTextResultBack.current=handler},[]);
  const phoneWorkReportExit=useRef<{exited:()=>boolean;retire:()=>void}|null>(null);
  useEffect(()=>()=>phoneWorkReportExit.current?.retire(),[]);
  const originalPhoneToolOpen=useRef<((pin:OriginalPhoneToolRecord)=>boolean)|null>(null);
@@ -1790,7 +1793,7 @@ export default function App(){
  },[invalidateContinuation]);
  const backFromTask=useCallback(()=>{
   if(taskMenuOpen){setTaskMenuOpen(false);return}
-  if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||taskTransientBack.current?.()||closeCurrentWorkSupplement()||leaveTeamReport())return;
+  if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||receivedTextResultBack.current?.()||taskTransientBack.current?.()||closeCurrentWorkSupplement()||leaveTeamReport())return;
   if(taskLayer==='scope'){showTaskLayer('goal');return}
   const origin=taskReconciliationOrigin.current;
   if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}
@@ -4578,6 +4581,11 @@ export default function App(){
      {originalPhoneTool&&<div className="pw-action-row"><Button variant="secondary" leadingIcon={IconTool} onClick={event=>openOriginalPhoneTool(task,originalPhoneTool,event.currentTarget)}>查看本轮手机操作</Button></div>}
      {overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')&&<PhoneServiceRecovery key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} readiness={state.phoneReadiness} openSettings={can('settings.openSystem')?()=>act('settings.openSystem',{section:'accessibility'},task.id):undefined} review={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {taskOpen&&!taskOpening&&openedTaskId.current===task.id&&<PhoneMainOwnerStep key={'main-owner-step:'+task.id} task={task} visible={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&obj(snapshot?.view).taskId===task.id} run={act} can={can} onProcess={()=>showTaskLayer('process')}/>}
+     {taskOpen&&!taskOpening&&openedTaskId.current===task.id&&task.raw?.origin?.textReturnContract==='pocketworld.original-phone-allocation.owner-reviewed-text.v1'&&
+       ['receivedPhone.result.read','receivedPhone.result.confirm','receivedPhone.result.close'].every(can)&&
+       <OriginalReceivedTextResult key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task}
+        active={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&obj(snapshot?.view).section===null&&obj(snapshot?.view).taskId===task.id}
+        registerBack={registerReceivedTextResultBack}/>}
      {phoneInterrupted&&overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&<InterruptedPhoneRecord
        reviewed={!!review&&!reviewStale&&!readingReview} canStart={actionNames.includes('tasks.resume')} onHistory={can('history.read')?()=>showTaskLayer('process'):undefined}
        onReview={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
@@ -6182,7 +6190,7 @@ export default function App(){
    canChooseStandaloneDocument={!!existingPrivateAttachmentDraft}
    onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined} readWorkTextVisit={readWorkTextVisit}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
-  <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement()&&!leaveTeamReport())closeTask(true)}else setTaskOpen(true)}} direction="right" handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
+  <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!receivedTextResultBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement()&&!leaveTeamReport())closeTask(true)}else setTaskOpen(true)}} direction="right" handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
    if(phoneWorkReportExit.current?.exited()){chatWorkReturn.current=null;event.preventDefault();return;}
    const chatOrigin=chatWorkReturn.current;chatWorkReturn.current=null;

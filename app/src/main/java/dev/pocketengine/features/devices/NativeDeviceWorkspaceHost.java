@@ -9,6 +9,9 @@ import org.json.JSONObject;
  * executor, key creation, network connection or receiver opt-in is created by opening a page. */
 public final class NativeDeviceWorkspaceHost implements AutoCloseable {
     public static final String FORMAT = "pocketworld.device-workspace.v1";
+    /** The already displayed receiving Work's original source and candidate, never a grant. */
+    public record ReceivedTextResultOrigin(String taskId,String runId,int epoch,String operationId,long recordedAt,
+            String sourceDeviceId,String targetDeviceId,String originDigest,String shownResultDigest) {}
     /** A local endpoint observation must not be attached to a row from another trust revision. */
     private record MissingSavedEndpoint(String deviceId, String instanceId, String fingerprint, long epoch) {
         boolean matches(JSONObject peer) {
@@ -201,6 +204,13 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         Availability resultReviewAvailability(String originalTaskId) throws Exception;
         void cancelPendingGoal(String originalTaskId) throws Exception;
         ResultAction reviewResult(String originalTaskId) throws Exception;
+        default ResultAction reviewReceivedTextResult(ReceivedTextResultOrigin origin)throws Exception{
+            throw new SecurityException("原接收手机没有同一工作成果审阅入口");
+        }
+        default JSONObject receivedTextResultProof(ReceivedTextResultOrigin origin,String resultDigest,
+                Boolean completed,boolean keepTextLocal)throws Exception{
+            throw new SecurityException("原接收手机没有同一工作成果审阅入口");
+        }
         JSONObject historyLinks(String originalTaskId) throws Exception;
         default JSONObject historyPage(String originalTaskId,String target,String after) throws Exception {
             if (target.isEmpty() && after.isEmpty()) return historyLinks(originalTaskId);
@@ -505,7 +515,20 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public JSONObject taskActions(String id) throws Exception { current(); return new JSONObject().put("capturedAt", System.currentTimeMillis()).put("stop", availability(control.stopAvailability(id))).put("pause", availability(control.pauseAvailability(id))).put("resume", availability(control.resumeAvailability(id))).put("resumeRequest",control.resumeRequest(id)).put("goalReview", availability(goals.reviewAvailability(id))).put("pendingCancel", availability(control.pendingCancelAvailability(id))).put("resultReview", availability(control.resultReviewAvailability(id))); }
         public void cancelPendingGoal(String id) throws Exception { current(); control.pendingCancelAvailability(id).require(); control.cancelPendingGoal(id); }
         public ResultReview reviewResult(String id) throws Exception {
-            current(); control.resultReviewAvailability(id).require(); ResultAction source = Objects.requireNonNull(control.reviewResult(id)); JSONObject safe = source.view();
+            current(); control.resultReviewAvailability(id).require();
+            return keepResultReview(id,Objects.requireNonNull(control.reviewResult(id)));
+        }
+        public ResultReview reviewResult(ReceivedTextResultOrigin origin)throws Exception{
+            current(); ResultAction source=Objects.requireNonNull(control.reviewReceivedTextResult(origin));
+            current(); return keepResultReview(origin.taskId(),source);
+        }
+        public JSONObject receivedTextResultProof(ReceivedTextResultOrigin origin,String resultDigest,
+                Boolean completed,boolean keepTextLocal)throws Exception{
+            current(); JSONObject proof=copy(control.receivedTextResultProof(origin,resultDigest,completed,keepTextLocal));
+            current(); return proof;
+        }
+        private ResultReview keepResultReview(String id,ResultAction source)throws Exception{
+            JSONObject safe=source.view();
             if (!id.equals(safe.optString("taskId")) || blank(safe.optString("runId")) || safe.optInt("executorEpoch") < 1 || !safe.optString("resultDigest").matches("[a-f0-9]{64}") || !safe.optBoolean("historicalReviewOnly") || !safe.optBoolean("nativeRunnerExited") || !safe.optBoolean("nativeDispatchClosed")) throw new SecurityException("没有这次原执行已结束的准确结果");
             return new ResultReview(this, nextReview(), source, copy(safe));
         }

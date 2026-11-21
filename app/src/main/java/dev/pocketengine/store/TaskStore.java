@@ -19185,7 +19185,11 @@ public final class TaskStore {
         JSONObject workView=ownerWorkForUi(result);if(workView!=result)return workView;
         // Full cores derive the same navigation-only identity as summaries before any source gate
         // hides their body. Limited cores already carry the native header's verified projection.
-        if(!limited){result.remove("conversationPhoneLink");JSONObject link=TaskAuditStore.conversationPhoneLink(result);if(link!=null)result.put("conversationPhoneLink",link);OwnerSavedDeviceChoice.project(result,result);}
+        if(!limited){
+            result.remove("conversationPhoneLink");JSONObject link=TaskAuditStore.conversationPhoneLink(result);if(link!=null)result.put("conversationPhoneLink",link);
+            result.remove("originalHostChatActivity");JSONObject host=TaskAuditStore.originalHostChatActivity(result);if(host!=null)result.put("originalHostChatActivity",host);
+            OwnerSavedDeviceChoice.project(result,result);
+        }
         JSONObject sourceView=phoneOwnerQuestionForUi(result);if(sourceView!=result)return sourceView;
         if(OwnerWorkTask.isOwnerWork(result)&&result.optBoolean("contextAvailable")&&result.getJSONObject("controls").optBoolean("canContinue")){
             result.getJSONObject("controls").put("continuationHistory",TaskRunDocumentReader.resumeHistoryForUi(db,id,result.getString("runId"),result.getInt("coordinatorEpoch")));

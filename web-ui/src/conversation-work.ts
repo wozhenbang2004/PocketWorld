@@ -51,9 +51,24 @@ export const conversationNavigationStates = {
   running: { label: '进行中', priority: 2 },
   preparing: { label: '准备中', priority: 2 },
   queued: { label: '已排队', priority: 1 },
+  hostWaiting: { label: '主机上次待处理', priority: 2 },
+  hostActive: { label: '主机曾接单', priority: 1 },
 } as const;
 export type ConversationNavigationState = keyof typeof conversationNavigationStates;
 const waitingForOwner = new Set(['awaiting_user', 'waiting_user', 'awaiting_approval', 'waiting_approval', 'awaiting_permission', 'waiting_permission', 'needs_confirmation']);
+
+/** First original owner host turns publish only a retained observation, not live
+ * connectivity. Never elevate generic/unlinked remote work into a conversation. */
+function retainedOriginalHostActivity(row:Data,raw:Data):ConversationNavigationState|undefined {
+  const receipt=object(raw.originalHostChatActivity);
+  if(!receipt||receipt.format!=='pocketworld.original-private-host-chat-activity.v1'||
+     raw.kind!=='remote'||raw.feature!=='remote'||raw.command!=='submitJob'||
+     receipt.taskId!==row.id||raw.runId!==row.id||receipt.runId!==raw.runId||
+     raw.coordinatorEpoch!==0||receipt.epoch!==raw.coordinatorEpoch||receipt.conversationId!==raw.conversationId||
+     ['completed','failed','cancelled','canceled','stopped','interrupted'].includes(row.status))return;
+  if(receipt.lastObserved==='waiting')return 'hostWaiting';
+  if(receipt.lastObserved==='accepted')return 'hostActive';
+}
 
 /** Drawer-only discovery. Join native state by exact private conversation and
  * original run, never by title, last message, or a task's model-written summary. */
@@ -73,12 +88,16 @@ export function conversationNavigationActivity<T extends Data>(tasks: readonly T
     const raw = object(task.raw), conversation = raw?.conversationId, status = task.status;
     if (!raw || !id(task.id) || raw.id !== task.id || !id(conversation) || typeof status !== 'string' ||
         raw.actorId !== 'owner' || raw.spaceId !== 'private' ||
-        raw.kind !== 'assistant' || raw.executionMode !== 'capabilities' || raw.status !== status || raw.cancelRequested !== false ||
+        raw.status !== status || raw.cancelRequested !== false ||
         raw.metadataLimited === true || raw.contextAvailable === false || raw.contextWithdrawn === true ||
         raw.sourceCurrentReadRequired === true || raw.taskProjection === 'source_unavailable' || raw.origin != null ||
         raw.parentTaskId != null || raw.teamAssignment != null || raw.developmentContext != null) continue;
     let mark: ConversationNavigationState | undefined;
-    if (originalWork(task, conversation)) {
+    if (raw.kind==='remote') {
+      mark=retainedOriginalHostActivity(task,raw);
+    } else if (raw.kind!=='assistant'||raw.executionMode!=='capabilities') {
+      continue;
+    } else if (originalWork(task, conversation)) {
       if (waitingForOwner.has(status)) mark = 'waiting';
       else if (status === 'running' || status === 'preparing' || status === 'queued') mark = status;
     } else {

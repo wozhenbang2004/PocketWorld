@@ -96,6 +96,24 @@ public final class CloudWorkspaceJobs {
         for(String k:new String[]{"taskId","runId","epoch","stage","jobId","detailRetired","executorStatus","previouslySeenEnd"})if(row.has(k))out.put(k,row.get(k));
         return out;
     }
+    /** Existing durable admission and its last concrete observation, for navigation only.
+     * Never export the remote Job ID, endpoint, goal or any new read capability here. */
+    static JSONObject originalHostChatActivity(JSONObject task)throws Exception {
+        if(!firstReadOnlyHostTask(task)||task.opt("cancelRequested")!=Boolean.FALSE||
+            !task.optString("conversationId").matches(UUID)||
+            java.util.Set.of("completed","failed","cancelled","canceled","stopped","interrupted").contains(task.optString("status")))return null;
+        JSONObject observed=project(task);
+        if(!"host_acknowledged".equals(observed.opt("stage"))||observed.optBoolean("detailRetired")||observed.has("previouslySeenEnd"))return null;
+        String state=switch(observed.optString("executorStatus")){
+            case "queued","running" -> "accepted";
+            case "awaiting_approval","awaiting_input" -> "waiting";
+            default -> "";
+        };
+        if(state.isEmpty())return null;
+        return new JSONObject().put("format","pocketworld.original-private-host-chat-activity.v1")
+            .put("conversationId",task.getString("conversationId")).put("taskId",task.getString("id"))
+            .put("runId",task.getString("runId")).put("epoch",0).put("lastObserved",state);
+    }
     private static JSONObject project(JSONObject t)throws Exception {
         JSONObject s=t.getJSONObject("externalRefs").getJSONObject("hostWorkspace"),e=t.optJSONObject("evidence");
         String goal=t.optString("goal");int end=goal.length()>200&&Character.isHighSurrogate(goal.charAt(199))?199:200;

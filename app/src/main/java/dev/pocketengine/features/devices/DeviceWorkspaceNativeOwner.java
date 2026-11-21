@@ -398,6 +398,35 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
                 public void confirm(boolean completed,boolean keepTextLocal) throws Exception { app.confirmDeviceGoalResult(nativeReview, completed,keepTextLocal); changed(); }
             };
         }
+        private DeviceIdentity.LocalIdentity receiverFor(NativeDeviceWorkspaceHost.ReceivedTextResultOrigin selected)throws Exception{
+            DeviceIdentity.LocalIdentity here=existingIdentity();
+            if(here==null||!here.deviceId().equals(selected.targetDeviceId()))
+                throw new SecurityException("原接收手机身份已变化");
+            return here;
+        }
+        @Override public NativeDeviceWorkspaceHost.ResultAction reviewReceivedTextResult(
+                NativeDeviceWorkspaceHost.ReceivedTextResultOrigin selected)throws Exception{
+            DeviceIdentity.LocalIdentity here=receiverFor(selected);
+            var review=tasks.deviceTasks().reviewReceivedTextResult(selected,here.instanceId());
+            return receivedTextResultAction(review,selected.sourceDeviceId());
+        }
+        @Override public JSONObject receivedTextResultProof(NativeDeviceWorkspaceHost.ReceivedTextResultOrigin selected,
+                String resultDigest,Boolean completed,boolean keepTextLocal)throws Exception{
+            DeviceIdentity.LocalIdentity here=receiverFor(selected);
+            return tasks.deviceTasks().receivedTextResultProof(selected,here.instanceId(),resultDigest,completed,keepTextLocal);
+        }
+        private NativeDeviceWorkspaceHost.ResultAction receivedTextResultAction(TaskStoreDeviceTasks.GoalResultReview nativeReview,
+                String textReader){
+            return new NativeDeviceWorkspaceHost.ResultAction() {
+                public JSONObject view() throws Exception {
+                    JSONObject value=nativeReview.view();
+                    if(value.optBoolean("canRecordDecision"))value.put("textResultReader",textReader).put("canKeepOriginalText",true);
+                    return value;
+                }
+                public void confirm(boolean completed) throws Exception {confirm(completed,false);}
+                public void confirm(boolean completed,boolean keepTextLocal) throws Exception { app.confirmDeviceGoalResult(nativeReview, completed,keepTextLocal); changed(); }
+            };
+        }
         public JSONObject historyLinks(String id) throws Exception { tasks.get(id, false); return tasks.deviceTasks().childOverview(id, 24); }
         public JSONObject historyPage(String id,String target,String after) throws Exception { return tasks.deviceTasks().childHistoryPage(id,target,after,24); }
         public JSONObject closedReceivedPhoneGoals(String caller,String operation)throws Exception{return closedReceivedPhoneGoals(caller,operation,"");}

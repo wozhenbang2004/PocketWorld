@@ -48,7 +48,7 @@ function readingTextStart(body:HTMLDivElement){
  const bounds=textBounds(body),top=body.scrollTop;
  return bounds&&top>=bounds.top&&top<bounds.top+bounds.height?bounds.top:undefined;
 }
-function privateTxtLibraryWindow(view:Json){
+function privateLibraryWindow(view:Json){
  return view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&
   view.taskId==null&&obj(view.snapshot).taskId===''&&
   view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.fromWorkResult===false&&view.resultFilesOnly===false&&
@@ -56,11 +56,11 @@ function privateTxtLibraryWindow(view:Json){
 }
 function privateTxtPositionScope(view:Json){
  const file=obj(view.file),version=exactFileTarget(file);
- return privateTxtLibraryWindow(view)&&view.originalReturn==='list'&&typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
+ return privateLibraryWindow(view)&&view.originalReturn==='list'&&typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
   JSON.stringify([view.windowId,version.fileId,version.sha256]):'';
 }
 function privateTxtLibraryList(view:Json){
- return privateTxtLibraryWindow(view)&&!!attachmentFrame(view)&&view.originalReturn==='details'&&view.file==null&&view.originalFile==null&&
+ return privateLibraryWindow(view)&&!!attachmentFrame(view)&&view.originalReturn==='details'&&view.file==null&&view.originalFile==null&&
   view.documentOpen===false&&view.documentDraft==null&&view.processingOpen===false&&view.comparison==null;
 }
 function ordinaryLibraryOwner(native:ReturnType<typeof bridge.getState>){
@@ -163,6 +163,29 @@ function documentSourceKey(record:Json,source:Json=record){
  const file=exactFileTarget(source),scope=[record.sourceTaskId,record.sourceTaskRunId,record.sourceOperationId];
  return file&&scope.every(key=>typeof key==='string'&&key)?JSON.stringify([...scope,file.fileId,file.sha256]):'';
 }
+function libraryDocumentDetail(view:Json){
+ return privateLibraryWindow(view)&&!!attachmentFrame(view)&&view.restoredWorkReturn===false&&view.originalFile==null&&
+  view.documentOpen===false&&view.documentDraft==null&&view.processingOpen===false&&view.comparison==null;
+}
+function libraryGeneratedDocument(row:Json){
+ return row.role==='result'&&row.availability==='available'&&row.sourceKind==='created_document'&&
+  typeof row.sourceOperationId==='string'&&!!row.sourceOperationId&&!!documentVersionKey(row)&&
+  (row.mimeType==='application/pdf'||row.mimeType==='application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+}
+function listedLibraryDocument(view:Json,pin:ExactFile){
+ const catalog=obj(view.snapshot),matches=rows(catalog.artifacts).filter(row=>row.id===pin.fileId),record=matches[0];
+ return matches.length===1&&record.sha256===pin.sha256&&libraryGeneratedDocument(record)&&
+  !rows(catalog.sources).some(row=>row.id===pin.fileId)?record:undefined;
+}
+function listedDocumentParent(view:Json){
+ if(!libraryDocumentDetail(view)||view.originalReturn!=='list')return;
+ const file=obj(view.file),child=exactFileTarget(file),parent=exactFileTarget(obj(file.parentArtifact));
+ if(!child||!parent||parent.fileId===child.fileId||!libraryGeneratedDocument(file))return;
+ const listedChild=listedLibraryDocument(view,child),listedParent=listedLibraryDocument(view,parent);
+ if(!listedChild||!listedParent||listedChild.sourceOperationId!==file.sourceOperationId||
+    exactFileKey(obj(listedChild.parentArtifact))!==exactFileKey(obj(file.parentArtifact)))return;
+ return {child,parent,parentName:String(listedParent.name||'原件')};
+}
 function excerptPdfSource(view:Json,taskId?:string){
  const catalog=obj(view.snapshot),file=obj(view.file),excerpt=exactFileTarget(file);
  if(!attachmentFrame(view)||view.open!==true||catalog.taskId!==(taskId??'')||
@@ -226,6 +249,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const draftFlight=useRef<DraftHandoff|null>(null);
  const reportFlight=useRef(false);
  const attachmentFlight=useRef(false);
+ const documentParentFlight=useRef(false);
  const [previewContinuation,setPreviewContinuation]=useState('');
  useEffect(()=>{if(!view.open){setPreviewContinuation('');setCatalogFilter(null)}},[view.open]);
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
@@ -699,6 +723,31 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const allSources=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts);
  const privateLibrary=privateFiles&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
  const currentNative=bridge.getState(),libraryView=obj(currentNative.view);
+ const documentParent=privateLibrary&&!catalogUnread&&mode==='detail'&&ordinaryLibraryOwner(currentNative)&&currentNative.state.filePath==null?
+  listedDocumentParent(view):undefined;
+ const openDocumentParent=async()=>{
+  if(!documentParent||busy||draftBusy||backFlight.current||documentParentFlight.current)return;
+  const epoch=bridge.getDocumentEpoch();
+  const at=(file:ExactFile|null,target:ExactFile)=>!!file&&file.fileId===target.fileId&&file.sha256===target.sha256;
+  const liveDetails=()=>{
+   const native=bridge.getState(),shown=obj(native.state.attachmentWorkspace);
+   return alive.current&&!document.hidden&&bridge.getDocumentEpoch()===epoch&&native.host?.ready===true&&ordinaryLibraryOwner(native)&&native.state.filePath==null&&
+    shown.windowId===view.windowId&&shown.busy===false&&shown.exportPending===false&&libraryDocumentDetail(shown)?shown:undefined;
+  };
+  const before=liveDetails(),frame=attachmentFrame(before),fresh=before&&listedDocumentParent(before);
+  if(!frame||!fresh||!at(fresh.child,documentParent.child)||!at(fresh.parent,documentParent.parent))return;
+  documentParentFlight.current=true;textReturn.current=null;rememberPosition();
+  try{
+   const result=await act('selectFile',fresh.parent,frame),selected=obj(result.workspace),selectedFrame=attachmentFrame(selected);
+   const current=liveDetails(),currentFile=exactFileTarget(obj(current?.file)),selectedFile=exactFileTarget(obj(selected.file));
+   // The frame acknowledgement can arrive before the coalesced native state changes from B to A.
+   if(result.accepted!==true||!selectedFrame||selectedFrame.windowId!==frame.windowId||!libraryDocumentDetail(selected)||
+      selected.originalReturn!=='details'||!at(selectedFile,fresh.parent)||!libraryGeneratedDocument(obj(selected.file))||!listedLibraryDocument(selected,fresh.parent)||!current||
+      backFlight.current||!listedLibraryDocument(current,fresh.parent)||!at(currentFile,fresh.child)&&!at(currentFile,fresh.parent))return;
+   await act('openOriginal',{},selectedFrame);
+  }catch{/* The existing actions report their own errors; never try another version. */}
+  finally{documentParentFlight.current=false}
+ };
  const justSavedWorkPdf=!onReturnToSearch&&!catalogUnread&&mode==='detail'?justSavedWorkPdfSource(currentNative,view,openTaskId):undefined;
  const excerptPdf=privateLibrary&&!catalogUnread&&mode==='detail'&&libraryView.section===null&&libraryView.taskId===null&&
   state.chatAttachmentPickerOpen===false?excerptPdfSource(view):justSavedWorkPdf;
@@ -831,6 +880,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {reuseAction}
   {!scopedResultOnly&&exportAction}
   {canEditDocument&&editDocument('ghost')}
+  {documentParent&&<Button variant="ghost" aria-label={`查看原版本：${documentParent.parentName}`} disabled={busy||draftBusy||view.exportPending}
+   onClick={()=>void openDocumentParent()}>查看原版本</Button>}
   {excerptPdf&&<Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
    onClick={openExcerptSource}>{justSavedWorkPdf?'返回这份 PDF 的文件信息':'查看来源 PDF 信息'}</Button>}
   {mode==='detail'&&view.ready===true&&privateFiles&&!onReturnToSearch&&typeof view.libraryDocumentActionId==='string'&&

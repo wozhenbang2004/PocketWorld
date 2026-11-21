@@ -268,6 +268,11 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const previousWorksheet=ready&&type==='office'&&source.sourceUnavailable===false?previousWorksheetRange(actual):undefined;
  const shownText=ready&&!readerBusy&&!failed&&type==='text'&&source.sourceUnavailable===false&&typeof actual.content==='string'&&!!actual.content&&
   textEncodings.some(row=>row.id===actual.encoding)&&Number.isSafeInteger(actual.offset)&&actual.offset>=0;
+ const textRange={windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,encoding:actual.encoding,offset:actual.offset};
+ const previousText=trackTextAdvance&&ready&&!markdown&&source.sourceUnavailable===false&&
+  Number.isSafeInteger(actual.offset)&&Number.isSafeInteger(actual.previousOffset)&&actual.previousOffset>=0&&actual.previousOffset<actual.offset&&
+  details.previousOffset===actual.previousOffset&&textRangeMatches(actual,textRange)&&textRangeMatches(details,textRange)?
+  Number(actual.previousOffset):undefined;
  useLayoutEffect(()=>{
   if(!onTextDisplayed||!shownText||!textBody.current?.isConnected)return;
   onTextDisplayed({windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,encoding:actual.encoding,offset:actual.offset});
@@ -296,13 +301,15 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    interaction:readerInteraction.current,focus:document.activeElement,body,top:body.scrollTop,left:body.scrollLeft}:undefined;
   void invoke('read',{page},target);
  };
- const readNextText=()=>{
-  const args={encoding:actual.encoding,offset:actual.nextOffset};
+ const readTextSegment=(direction:'previous'|'next')=>{
+  const previous=direction==='previous',offset=previous?previousText:actual.nextOffset;
+  const args={encoding:textRange.encoding,offset};
   const pane=textBody.current?.closest<HTMLElement>('.pw-file-page-scroll');
-  const range={windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,encoding:actual.encoding,offset:actual.offset};
-  const native=trackTextAdvance&&shownText&&pane&&!document.hidden?currentTextRange(range):{};
-  const advance=pane&&Number.isSafeInteger(args.offset)&&args.offset>range.offset&&native.nextOffset===args.offset&&textRangeMatches(native,range)?
-   {range:{...range,offset:args.offset},epoch:bridge.getDocumentEpoch(),interaction:readerInteraction.current,focus:document.activeElement,pane}:undefined;
+  const native=trackTextAdvance&&shownText&&pane&&!document.hidden?currentTextRange(textRange):{};
+  const advance=pane&&Number.isSafeInteger(offset)&&(previous?offset>=0&&offset<textRange.offset:offset>textRange.offset)&&
+   native[previous?'previousOffset':'nextOffset']===offset&&textRangeMatches(native,textRange)?
+   {range:{...textRange,offset},epoch:bridge.getDocumentEpoch(),interaction:readerInteraction.current,focus:document.activeElement,pane}:undefined;
+  if(previous&&!advance)return;
   void invoke('read',args,undefined,advance);
  };
  const retry=()=>{
@@ -411,9 +418,11 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  </div>}
  {type==='pdf'&&ready&&<div hidden={!toolsVisible} className="pw-action-row pw-original-pagination pw-material-navigation"><TextField label="页码" value={position} onChange={setPosition}/><Button variant="secondary" disabled={readerBusy||!/^\d+$/.test(position)||Number(position)<1||Number(position)>pages} onClick={()=>readPdfPage(Number(position))}>跳转</Button></div>}
  {findBeforeBody&&findOriginal}
- {ready&&type==='text'&&<div ref={textBody} className="pw-original-text" data-find-before={findBeforeBody?true:undefined}>{markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text" tabIndex={trackTextAdvance?-1:undefined}>{actual.content}</pre>}
+ {ready&&type==='text'&&<div ref={textBody} className="pw-original-text" data-find-before={findBeforeBody?true:undefined}>
+  {previousText!==undefined&&<div className="pw-action-row"><Button variant="ghost" disabled={!shownText} onClick={()=>readTextSegment('previous')}>读取上一段</Button></div>}
+  {markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text" tabIndex={trackTextAdvance?-1:undefined}>{actual.content}</pre>}
   <div className="pw-action-row">{!!actual.offset&&<Button variant="ghost" disabled={busy} onClick={()=>read({encoding:actual.encoding,offset:0})}>从开头</Button>}
-   {actual.nextOffset!=null&&<Button variant="secondary" disabled={busy} onClick={readNextText}>读取后续</Button>}
+   {actual.nextOffset!=null&&<Button variant="secondary" disabled={busy} onClick={()=>readTextSegment('next')}>读取后续</Button>}
    {(!!actual.offset||actual.nextOffset!=null)&&<small>字符位置 {Number(actual.offset||0)+1}</small>}</div>
  </div>}
  {!findBeforeBody&&findOriginal}
