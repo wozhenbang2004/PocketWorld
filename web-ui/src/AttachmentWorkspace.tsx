@@ -16,6 +16,7 @@ export type FileResultTopic={taskId:string;conversationId:string;label:string};
 export type OriginalAttachmentChoice={fileId:string;sha256:string;name:string};
 type Props={
  state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event)=>void;openTaskId?:string;
+ canReturnToOpenWork?:(current:Json)=>boolean;
  draftTarget?:FileDraftTarget;resultTopic?:FileResultTopic;
  onStageFile?:(reference:Json,target:FileDraftTarget,stillCurrent:()=>boolean)=>Promise<boolean>;
  onOpenDraft?:(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
@@ -60,7 +61,7 @@ function documentSourceKey(record:Json,source:Json=record){
  return file&&scope.every(key=>typeof key==='string'&&key)?JSON.stringify([...scope,file.fileId,file.sha256]):'';
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onVerifyReportFileWork,onChooseAttachment}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onVerifyReportFileWork,onChooseAttachment}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -102,6 +103,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  },[view.open,view.ready,location]);
  useEffect(()=>{if(view.open)returningToSearch.current=false},[view.windowId]);
  const alive=useRef(true),tail=useRef<Promise<unknown>>(Promise.resolve()),beforeBack=useRef<(()=>Promise<AttachmentFrame|undefined>)|null>(null),latest=useRef(view);latest.current=view;
+ const exactWorkReturn=useRef(canReturnToOpenWork);exactWorkReturn.current=canReturnToOpenWork;
  const backFlight=useRef(false);
  const act=useCallback((command:string,args:Json={},after?:AttachmentFrame,showError=true)=>{
   let payload:Json;
@@ -110,7 +112,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   const operation=tail.current.catch(()=>{}).then(async()=>{
    const current=obj(bridge.getState().state.attachmentWorkspace);
    if(!alive.current||!current.open||!current.ready||current.windowId!==windowId||bridge.getDocumentEpoch()!==epoch||document.visibilityState==='hidden')throw new Error('原文件窗口已变化，请重新核对');
-   const result=obj(await bridge.command('attachmentWorkspace.action',payload));
+   // Return to a Work still directly underneath this exact frame as Back does, not by reopening it.
+   const closeOnly=command==='continueTask'&&current.busy===false&&current.exportPending===false&&exactWorkReturn.current?.(current);
+   const result=obj(await bridge.command('attachmentWorkspace.action',closeOnly?{...payload,command:'close'}:payload));
    if(!alive.current||bridge.getDocumentEpoch()!==epoch)throw new Error('原页面已变化，请回到文件库核对');
    return result;
   });

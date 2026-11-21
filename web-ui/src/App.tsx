@@ -27,6 +27,7 @@ import {WorkSearch,type WorkSearchItem,type WorkSearchMemory} from './WorkSearch
 import {WorkSearchOriginalReader} from './WorkSearchOriginalReader';
 import {ComposerWorkOptions} from './ComposerWorkOptions';
 import {ComposerAttachmentPicker,attachmentPagingTool} from './ComposerAttachmentPicker';
+import {exactFileTarget} from './attachment-workspace';
 import type {CapabilityWorkspaceMemory} from './CapabilitiesWorkspace';
 import {usePocketAppearance} from './usePocketAppearance';
 import {useClosingSnapshot,useMessageArrivals,useReviewFocus,useSurfaceEnter} from './library/surface-motion';
@@ -165,11 +166,13 @@ const Secondary=lazy(()=>import('./Secondary'));
 
 type Json=Record<string,any>;
 type Task={id:string;goal:string;status:string;summary?:string;executionMode?:string;updatedAt?:number;raw?:Json;hostReceipt?:Json};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string}};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
+type WorkFileVisit={owner:TaskReviewWindow;work:WorkIdentity;layer:TaskLayer;navigation:number;taskRequest:number;
+ file?:Pick<TaskResultFile,'id'|'sha256'>;afterAck?:number;windowId?:string};
 type DraftAcceptanceClick=OriginalProjectDraft&{window:TaskReviewWindow;reviewHandle:string;reviewDigest:string;reviewedRevision:number;completed:boolean};
 type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
@@ -180,13 +183,28 @@ type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigg
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
 type WorkspaceOrigin={route:string;label:string;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;terminalCheckout?:LocalTerminalCheckout;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
-type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number};
+type SavedAttachmentMessage={id:string;revision:number;resume:number;taskRequest:number};
+type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number;sourceMessage?:SavedAttachmentMessage};
 type FileAttachmentPickerLaunch={requestId:string;cancelled:boolean;settled:boolean;reopening?:boolean};
-type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'>&{resume:number;launch:FileAttachmentPickerLaunch};
+type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'|'sourceMessage'>&{resume:number;launch:FileAttachmentPickerLaunch};
 type ReopenedAttachmentPicker=OrdinaryAttachmentPickerScope&{requestId:string};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
+function savedOwnerAttachmentChoices(message:Message):OriginalAttachmentChoice[]{
+ if(message.role!=='user'||!message.id||!Number.isSafeInteger(message.sourceRevision)||Number(message.sourceRevision)<1)return [];
+ const refs=asArray<Json>(message.attachments),checked=asArray<Json>(message.attachmentFiles);
+ if(refs.length>4||checked.length>4)return [];
+ return refs.flatMap(ref=>{
+  const pin=exactFileTarget(obj(ref));
+  if(!pin||refs.filter(row=>row?.id===pin.fileId).length!==1)return [];
+  const matches=checked.filter(row=>row?.id===pin.fileId),file=matches.length===1?matches[0]:null;
+  // The original message projection includes a separate native private metadata check. It is not a read grant.
+  return file?.availability==='available'&&file.role==='source'&&file.contentReadConfirmed===false&&file.sha256===pin.sha256&&
+   file.mimeType===ref.mimeType&&file.size===ref.size&&typeof file.name==='string'&&file.name
+   ?[{...pin,name:file.name}]:[];
+ });
+}
 function openedRetainedDraftCopyKey({state,view}:ReturnType<typeof bridge.getState>){
  const pin=obj(state.openedRetainedDraftCopy),native=obj(view);
  const id=(value:unknown)=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
@@ -518,6 +536,8 @@ export default function App(){
  const taskScroll=useRef<HTMLDivElement>(null),taskReading=useRef(new Map<string,number>());
  const reviewRequest=useRef(0),openedTaskId=useRef<string|null>(null),secondaryBack=useRef<(()=>boolean)|null>(null);
  const openedTaskResumeRevision=useRef(0);
+ const acknowledgedWorkVisit=useRef<TaskReviewWindow|null>(null);
+ const workFileVisit=useRef<WorkFileVisit|null>(null);
  const taskHistoryOrigin=useRef<{taskId:string;origin:ConversationHistoryTaskOrigin}|null>(null);
  const taskReconciliationOrigin=useRef<{taskId:string;layer:TaskLayer;openedId:string;expected:{runId:string;epoch:number};history?:ConversationHistoryTaskOrigin}|null>(null);
  const [taskOpening,setTaskOpening]=useState(false);
@@ -1204,18 +1224,21 @@ export default function App(){
   const origin=historyOrigin||(searchQuery===undefined&&!nativeWindowAlreadyOpen&&taskHistoryOrigin.current?.taskId===id?taskHistoryOrigin.current.origin:undefined);
   taskHistoryOrigin.current=origin?{taskId:id,origin}:null;
   invalidateContinuation();
+  acknowledgedWorkVisit.current=null;workFileVisit.current=null;
   setFocusedOriginalDraft(expected?.draftId?{taskId:id,runId:expected.runId,epoch:expected.epoch,draftId:expected.draftId}:null);
   setTaskToolsPlace(null);
   rememberTaskPosition();const request=++reviewRequest.current;const readReview=entry!=='homeReport'&&(entry==='review'||entry==='scope'||tasks.some(task=>task.id===id&&attention(task)));openedTaskId.current=null;setReviewPending(false);setTaskOpening(true);setWorkOpen(false);setCommandOpen(false);setTaskId(id);setTaskLayer(entry==='review'?'overview':entry);setTaskOpen(true);setReview(null);setReviewNote('');setReviewFeedbackOpen(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
   // Open the original host window before obtaining its single-use review handle.
   // Internal task opens do not emit another external-navigation request.
+  let acknowledged=false;
   const openOriginal=async()=>{
    if(nativeWindowAlreadyOpen)return true;
    const nativeTask=String(obj(bridge.getState().view).taskId||'');
    if(origin&&nativeTask&&nativeTask!==id)await act('tasks.close',{},id);
    if(stillCurrent&&!stillCurrent()||reviewRequest.current!==request||bridge.getDocumentEpoch()!==window.documentEpoch||Number(obj(bridge.getState().view).resumeRevision||0)!==window.resumeRevision||document.hidden)return false;
-   await act('tasks.open',{id,requestNavigation:false,...origin,...(searchQuery===undefined?{}:{searchQuery}),...(projectSource&&!projectSource.sourcePackageRun?{expectedProjectId:projectSource.projectId,...(projectSource.checkoutId?{expectedCheckoutId:projectSource.checkoutId}:{})}:{}),...(expected?{expectedRunId:expected.runId,expectedEpoch:expected.epoch}:{})},id);return true;
+   const opened=await act('tasks.open',{id,requestNavigation:false,...origin,...(searchQuery===undefined?{}:{searchQuery}),...(projectSource&&!projectSource.sourcePackageRun?{expectedProjectId:projectSource.projectId,...(projectSource.checkoutId?{expectedCheckoutId:projectSource.checkoutId}:{})}:{}),...(expected?{expectedRunId:expected.runId,expectedEpoch:expected.epoch}:{})},id);
+   acknowledged=opened?.taskId===id&&opened.readOnly===true&&opened.executionAuthorized===false;return true;
   };
   const failedOpen=(reason?:unknown)=>{if(reviewRequest.current!==request)return;setTaskOpening(false);
    if(failed){if(obj(bridge.getState().view).taskId===id&&can('tasks.close'))void bridge.command('tasks.close').catch(()=>{});
@@ -1223,6 +1246,7 @@ export default function App(){
      setTaskOpen(false);setFocusedOriginalDraft(null);failed(reason);}
   };
   void openOriginal().then(opened=>{if(reviewRequest.current!==request)return;if(!opened||stillCurrent&&!stillCurrent()){failedOpen();return}
+   if(acknowledged)acknowledgedWorkVisit.current=window;
    openedTaskId.current=id;openedTaskResumeRevision.current=window.resumeRevision;setTaskOpening(false);
    if(chatWorkOpen)chatWorkReturn.current={...chatWorkOpen.returnTo,taskId:id,navigation:chatWorkOpen.navigation,resumeRevision:window.resumeRevision};
    else if(!taskOpen||searchQuery!==undefined)chatWorkReturn.current=null;
@@ -1722,7 +1746,17 @@ export default function App(){
   if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,navigationMoreOpen,chatMenuOpen,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
- useEffect(()=>{if(route==='projects'&&can('projects.refresh'))run('projects.refresh');},[route,can,run]);
+ useEffect(()=>{
+  if(route!=='projects'||!can('projects.refresh'))return;
+  const live=bridge.getState(),view=obj(live.view),current=live.state;
+  // Refresh reselects the project, which retires the native editor and its
+  // outstanding save. An already open private editor needs no list reload.
+  if(view.section===null&&view.taskId===null&&typeof current.projectId==='string'&&!!current.projectId&&
+     typeof current.filePath==='string'&&!!current.filePath&&Number.isSafeInteger(current.fileVersion)&&current.fileVersion>=0&&
+     (current.fileReady===true||current.fileLoading===true||current.fileSaving===true)&&
+     asArray<Json>(current.projects).some(project=>project?.id===current.projectId))return;
+  run('projects.refresh');
+ },[route,can,run]);
  useLayoutEffect(()=>{if(!taskOpen)return;const node=taskScroll.current;if(node)node.scrollTop=taskReading.current.get(`${taskId}:${taskLayer}`)??0},[taskOpen,taskId,taskLayer]);
  useEffect(()=>{setFileDisplayOpen(false);setProjectPickerOpen(false)},[state.projectId]);
  useSurfaceEnter(taskScroll,`${taskId}:${taskLayer}`,{selector:'',depth:taskLayer==='overview'?0:1,active:taskOpen&&!selectedTask?.raw?.developmentContext});
@@ -1899,13 +1933,69 @@ export default function App(){
    setWorkControls(old=>({...old,[key]:{pending:false,unknown:true,message:action==='continue'?ownerWorkContinuationReply(null,identity).feedback.message:error instanceof Error?error.message:'原工作控制回执尚未确认，请先核对原工作。'}}));
   }).finally(()=>{if(!keepOriginal)workControlEntered.current.delete(key)});
  };
+ const fileWorkLayer=useRef<{id:string;layer:TaskLayer}|null>(null);
+ fileWorkLayer.current=taskOpen&&taskId&&!taskOpening&&selectedTask?.id===taskId&&taskLayer!=='homeReport'?{id:taskId,layer:taskLayer}:null;
+ const readFileWorkParent=(id:string,live=bridge.getState())=>{
+  const owner=acknowledgedWorkVisit.current,screen=fileWorkLayer.current,view=obj(live.view),taskRequest=live.state.requestedTaskRevision;
+  if(!owner||owner.taskId!==id||openedTaskId.current!==id||screen?.id!==id||document.hidden||
+   owner.documentEpoch!==bridge.getDocumentEpoch()||owner.resumeRevision!==view.resumeRevision||view.section!=null||view.taskId!==id||
+   live.state.conversationReader||!Number.isSafeInteger(taskRequest))return null;
+  const matching=asArray<Task>(live.state.tasks).filter(row=>row.id===id),task=matching.length===1?matching[0]:undefined,raw=task?.raw;
+  const work=ownerWorkIdentity(task);
+  if(!work||work.epoch<1||!work.runId||raw?.kind!=='assistant'||raw.taskProjection!=='detail_window'||
+   raw.taskCoreReadLimited!==false||raw.auditBodyIncluded!==true||raw.contextAvailable!==true||raw.contextWithdrawn===true||
+   raw.sourceCurrentReadRequired===true||raw.origin!=null||raw.developmentContext!=null||raw.teamRunId!=null||
+   raw.memberId!=null||raw.parentTaskId!=null||raw.ownerPhoneControl||raw.ownerDeviceWork)return null;
+  return {owner,work,layer:screen.layer,navigation:navigationWindow.current,taskRequest:Number(taskRequest)};
+ };
+ const stillFileWorkParent=(pin:WorkFileVisit,live=bridge.getState())=>{
+  const parent=readFileWorkParent(pin.work.taskId,live);
+  return parent?.owner===pin.owner&&parent.layer===pin.layer&&parent.navigation===pin.navigation&&parent.taskRequest===pin.taskRequest&&
+   workIdentityKey(parent.work)===workIdentityKey(pin.work);
+ };
+ const observeFileWorkVisit=()=>{
+  const pin=workFileVisit.current;if(!pin)return;
+  const live=bridge.getState(),shown=obj(live.state.attachmentWorkspace),revision=live.revision;
+  if(!stillFileWorkParent(pin,live)||pin.windowId&&shown.open!==true){workFileVisit.current=null;return;}
+  // A generic open ACK does not name a native file window. Only bind an actual subsequent projection.
+  if(pin.afterAck===undefined||typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<=pin.afterAck||
+   shown.open!==true||shown.ready!==true)return;
+  const legitimate=shown.taskId===pin.work.taskId&&shown.fromWorkResult===!!pin.file&&shown.resultFilesOnly===false&&
+   shown.group===false&&shown.team===false&&shown.deviceOriginalOnly===false&&shown.historyResultOnly===false&&shown.reportResultOnly===false&&
+   shown.restoredWorkReturn===false&&typeof shown.windowId==='string'&&!!shown.windowId;
+  if(!legitimate||pin.windowId&&shown.windowId!==pin.windowId){workFileVisit.current=null;return;}
+  pin.windowId=shown.windowId;
+ };
+ useLayoutEffect(observeFileWorkVisit,[snapshot?.revision,taskOpen,taskOpening,taskId,taskLayer,navigationRevision]);
+ const openWorkFiles=(id:string,file?:TaskResultFile)=>{
+  const live=bridge.getState(),prior=workFileVisit.current;
+  const parent=readFileWorkParent(id,live);
+  if(parent&&(live.state.attachmentWorkspace?.open===true||prior&&!prior.windowId&&stillFileWorkParent(prior,live)))return Promise.resolve(undefined);
+  const pin:WorkFileVisit|null=parent?{...parent,file:file&&{id:file.id,sha256:file.sha256}}:null;
+  workFileVisit.current=pin;
+  return act('attachmentWorkspace.open',{taskId:id,...(file?{fileId:file.id,sha256:file.sha256,openOriginal:true}:{})},file?id:undefined).then(receipt=>{
+   if(pin&&workFileVisit.current===pin){
+    const at=bridge.getState();
+    if(receipt?.opened===true&&receipt.reading===true&&typeof at.revision==='number'&&Number.isSafeInteger(at.revision)&&stillFileWorkParent(pin,at))pin.afterAck=at.revision;
+    else workFileVisit.current=null;
+   }
+   return receipt;
+  },error=>{if(pin&&workFileVisit.current===pin)workFileVisit.current=null;throw error;});
+ };
+ const continueFromWorkFiles=(shown:Json)=>{
+  observeFileWorkVisit();
+  const pin=workFileVisit.current,scope=obj(shown.snapshot),selected=obj(shown.file);
+  return !!pin?.windowId&&shown.windowId===pin.windowId&&shown.taskId===pin.work.taskId&&scope.taskId===pin.work.taskId&&
+   scope.taskRunId===pin.work.runId&&scope.coordinatorEpoch===pin.work.epoch&&
+   (!pin.file||selected.id===pin.file.id&&selected.sha256===pin.file.sha256);
+ };
  const openTaskResultFile=(id:string,file:TaskResultFile,target:HTMLButtonElement)=>{
   const open=()=>{
    const native=bridge.getState();
    if(document.hidden||openedTaskId.current!==id||obj(native.view).taskId!==id||native.state.attachmentWorkspace?.open||resultFileReturnFocus.current)return;
    const origin={taskId:id,target};
    resultFileReturnFocus.current=origin;
-   void act('attachmentWorkspace.open',{taskId:id,fileId:file.id,sha256:file.sha256,openOriginal:true},id).catch(()=>{
+   void openWorkFiles(id,file).then(receipt=>{if(!receipt&&resultFileReturnFocus.current===origin)resultFileReturnFocus.current=null;}).catch(()=>{
     if(resultFileReturnFocus.current===origin)resultFileReturnFocus.current=null;
    });
   };
@@ -1916,6 +2006,7 @@ export default function App(){
   return reader.window===origin.window&&reader.conversation===origin.conversationId&&!reader.loading&&!reader.error&&!reader.limited?reader:null;
  };
  const restoreTaskFileFocus=(event:Event)=>{
+  if(bridge.getState().state.attachmentWorkspace?.open!==true)workFileVisit.current=null;
   const origin=resultFileReturnFocus.current;
   resultFileReturnFocus.current=null;
   if(!origin||event.defaultPrevented||document.hidden)return;
@@ -2097,11 +2188,20 @@ export default function App(){
    phone.phone===false&&phone.channelOrigin===false&&!owner.conversationReader&&!owner.chatBusy&&!owner.chatSubmitting&&!owner.phoneSubmitting&&input.ready===true&&input.key===draft.key&&
    input.epoch===draft.epoch&&input.conversationId===draft.conversationId&&String(owner.conversationId||'')===draft.conversationId;
  };
- const fileInPicker=(file:OriginalAttachmentChoice,requestId:string)=>{
+ const savedMessageAttachmentCurrent=(draft:FileDraftTarget,source:SavedAttachmentMessage,file:OriginalAttachmentChoice)=>{
+  const native=bridge.getState(),view=obj(native.view),owner=native.state;
+  if(view.resumeRevision!==source.resume||reviewRequest.current!==source.taskRequest||owner.conversationId!==draft.conversationId||
+     owner.attachmentWorkspace?.open||owner.queuedInputsPage||owner.filePath)return false;
+  const rows=asArray<Message>(owner.messages).filter(row=>row.id===source.id);
+  return rows.length===1&&rows[0].sourceRevision===source.revision&&savedOwnerAttachmentChoices(rows[0]).some(original=>
+   original.fileId===file.fileId&&original.sha256===file.sha256);
+ };
+ const fileInPicker=(file:OriginalAttachmentChoice,requestId:string,fromMessage=false)=>{
   const frame=bridge.getState().state,inputs=obj(obj(frame.moduleResultInputs)['attachments.list']);
   if(frame.chatAttachmentPickerRequest!==requestId||inputs._requestId!==requestId||asArray<string>(frame.moduleBusy).includes('attachments.list'))return;
-  const rows=asArray<Json>(obj(obj(frame.moduleResults)['attachments.list']).attachments).filter(row=>row.id===file.fileId&&row.sha256===file.sha256);
-  return inputs._failed!==true&&rows.length===1&&rows[0].outputSourceRetired!==true;
+  const rows=asArray<Json>(obj(obj(frame.moduleResults)['attachments.list']).attachments).filter(row=>row?.id===file.fileId&&(fromMessage||row.sha256===file.sha256));
+  return inputs._failed!==true&&rows.length===1&&rows[0].sha256===file.sha256&&rows[0].outputSourceRetired!==true&&
+   (!fromMessage||rows[0].principalId==='owner'&&rows[0].spaceId==='private'&&!!exactFileTarget(rows[0])&&!Object.hasOwn(obj(rows[0].source),'groupSpaceId'));
  };
  const awaitPickerProjection=<T,>(current:()=>boolean,observe:()=>T|undefined)=>new Promise<T|undefined>(resolve=>{
   let unsubscribe=()=>{};
@@ -2113,7 +2213,7 @@ export default function App(){
   };
   unsubscribe=bridge.subscribe(check);check();
  });
- const startFileAttachmentPicker=async(file:OriginalAttachmentChoice,draft:FileDraftTarget,sourceCurrent:()=>boolean,closeOriginal?:()=>Promise<void>)=>{
+ const startFileAttachmentPicker=async(file:OriginalAttachmentChoice,draft:FileDraftTarget,sourceCurrent:()=>boolean,closeOriginal?:()=>Promise<void>,sourceMessage?:SavedAttachmentMessage)=>{
   const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current,initial=bridge.getState();
   const liveDraft=()=>filePickerDraftCurrent(draft,documentEpoch,navigation)&&bridge.getState().composer?.revision===draft.revision;
   const launch:FileAttachmentPickerLaunch={requestId:'',cancelled:false,settled:false};
@@ -2128,13 +2228,13 @@ export default function App(){
    const launched=await bridge.command('attachments.openPicker',{key:draft.key,epoch:draft.epoch,revision:draft.revision});
    if(typeof launched?.requestId!=='string'||!launched.requestId)throw new Error('未打开这份文件的附件选择，草稿保留。');
    const requestId=launch.requestId=launched.requestId;
-   const matching=await awaitPickerProjection(current,()=>fileInPicker(file,requestId));
+   const matching=await awaitPickerProjection(current,()=>fileInPicker(file,requestId,!!sourceMessage));
    if(!matching||!current())throw new Error('尚未在普通附件清单核对到这份原件，没有修改草稿。');
    if(closeOriginal)await closeOriginal();
-   if(launch.cancelled||!liveDraft()||!closeOriginal&&!sourceCurrent()||fileInPicker(file,requestId)!==true)
+   if(launch.cancelled||!liveDraft()||!closeOriginal&&!sourceCurrent()||fileInPicker(file,requestId,!!sourceMessage)!==true)
     throw new Error('原草稿或附件选择已变化，没有加入文件。');
    // Only reveal the existing picker once the exact source, draft and list are known.
-   setFileAttachmentPicker({file,draft,requestId,documentEpoch,navigation});
+   setFileAttachmentPicker({file,draft,requestId,documentEpoch,navigation,sourceMessage});
    shown=true;
   }catch(error){
    if(!launch.requestId&&obj(error).code==='outcome_unknown')throw new Error('这次附件选择未确认，没有加入文件。可回输入框重新点「添加附件」。');
@@ -2144,10 +2244,34 @@ export default function App(){
    if(!shown&&launch.requestId)void bridge.command('attachments.closePicker',{pickerRequestId:launch.requestId}).catch(()=>{});
   }
  };
+ const messageAttachmentDraft=route==='chat'&&!!state.conversationId&&canChooseFileForDraft&&!draftSwitching&&!state.attachmentWorkspace?.open&&
+  !state.queuedInputsPage&&!state.filePath&&phoneDraft.phone===false&&phoneDraft.channelOrigin===false&&
+  fileDraftTarget?.key===`conversation:${state.conversationId}`&&ordinaryDraftRevision===fileDraftTarget?.revision?fileDraftTarget:undefined;
+ const chooseSavedMessageAttachment=async(message:Message,file:OriginalAttachmentChoice,draft:FileDraftTarget)=>{
+  const documentEpoch=personalDocumentEpoch,navigation=navigationRevision;
+  const resume=obj(snapshot?.view).resumeRevision;
+  const atDraft=()=>!draftSwitchPending()&&filePickerDraftCurrent(draft,documentEpoch,navigation)&&obj(bridge.getState().view).resumeRevision===resume;
+  if(!message.id||!Number.isSafeInteger(message.sourceRevision)||!Number.isSafeInteger(resume)||!atDraft())return;
+  const source={id:message.id,revision:Number(message.sourceRevision),resume:Number(resume),taskRequest:reviewRequest.current};
+  const current=()=>atDraft()&&savedMessageAttachmentCurrent(draft,source,file);
+  setMessageMenu(null);setLocalError('');
+  try{
+   if(!current())throw new Error('原消息或附件版本已变化，没有加入草稿。');
+   stopFollowing();rememberChatPosition();
+   await startFileAttachmentPicker(file,draft,current,undefined,source);
+  }catch(error){
+   if(atDraft()&&reviewRequest.current===source.taskRequest)
+    setLocalError(error instanceof Error?error.message:'尚未核对到原附件，草稿保留。');
+  }
+ };
+ const focusedFileDraftCurrent=(picker:FileAttachmentPickerOrigin)=>
+  filePickerDraftCurrent(picker.draft,picker.documentEpoch,picker.navigation)&&
+  (!picker.sourceMessage||savedMessageAttachmentCurrent(picker.draft,picker.sourceMessage,picker.file));
  const filePickerVisible=!!fileAttachmentPicker&&!fileAttachmentPickerLaunch.current?.cancelled&&state.chatAttachmentPickerRequest===fileAttachmentPicker.requestId&&
-  filePickerDraftCurrent(fileAttachmentPicker.draft,fileAttachmentPicker.documentEpoch,fileAttachmentPicker.navigation);
+  focusedFileDraftCurrent(fileAttachmentPicker);
  const focusedInventoryReady=filePickerVisible&&obj(obj(state.moduleResultInputs)['attachments.list'])._requestId===fileAttachmentPicker?.requestId&&
-  !asArray<string>(state.moduleBusy).includes('attachments.list');
+  !asArray<string>(state.moduleBusy).includes('attachments.list')&&(!fileAttachmentPicker?.sourceMessage||
+   fileInPicker(fileAttachmentPicker.file,fileAttachmentPicker.requestId,true)===true);
  useEffect(()=>{
   if(!fileAttachmentPicker)return;
   const {requestId}=fileAttachmentPicker;
@@ -2177,8 +2301,9 @@ export default function App(){
  },[reopenedAttachmentPicker,state.chatAttachmentPickerOpen,state.chatAttachmentPickerRequest]);
  const toggleFocusedFileAttachment=(id:string,sha256:string,selected:boolean)=>{
   const origin=fileAttachmentPicker,native=bridge.getState(),input=obj(native.composer);
-  if(!origin||fileAttachmentPickerLaunch.current?.cancelled||id!==origin.file.fileId||sha256!==origin.file.sha256||!filePickerDraftCurrent(origin.draft,origin.documentEpoch,origin.navigation)||
-     native.state.chatAttachmentPickerRequest!==origin.requestId||!Number.isSafeInteger(input.revision))return;
+  if(!origin||fileAttachmentPickerLaunch.current?.cancelled||id!==origin.file.fileId||sha256!==origin.file.sha256||!focusedFileDraftCurrent(origin)||
+     native.state.chatAttachmentPickerRequest!==origin.requestId||!Number.isSafeInteger(input.revision)||
+     origin.sourceMessage&&(input.revision!==composer.revision||fileInPicker(origin.file,origin.requestId,true)!==true))return;
   run('attachments.toggle',{id,sha256,selected,key:origin.draft.key,epoch:origin.draft.epoch,revision:input.revision,pickerRequestId:origin.requestId});
  };
  const fileDraftConversationLoaded=(native:Json,conversationId:string,earlierRead?:string)=>{
@@ -3060,7 +3185,7 @@ export default function App(){
   const taskFiles=obj(snapshot?.view).taskId===task.id&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.kind!=='inference'&&can('attachmentWorkspace.open')
    ? {taskId:task.id,supported:can('tasks.resultFiles'),onOpen:(file:TaskResultFile,target:HTMLButtonElement)=>openTaskResultFile(task.id,file,target),
       onOriginalRequest: originatingRequestConversation(task) && can('conversation.select') && !state.chatSubmitting && !returningConversation ? () => void returnToTaskConversation(task) : undefined,
-      onBrowse:()=>run('attachmentWorkspace.open',{taskId:task.id})}
+      onBrowse:()=>{void openWorkFiles(task.id).catch(error=>setLocalError(error instanceof Error?error.message:String(error)));}}
    : undefined;
   const latestProgress=stage==='running'&&running(task)&&<section key="task-current-progress" className="pw-work-current-progress">
    <h3>目前进展</h3>
@@ -4037,6 +4162,7 @@ export default function App(){
       conversationNext(originalProject,can).action!=='draft'?{row:originalProject,target:originalProject.originalTask,draftId:originalProject.originalDraft.draftId,
        label:originalProject.acceptedDraft?'查看已验收的原改稿':'查看原改稿'}:undefined;
     const canQuote=intent==='chat'&&m.quoteAvailable&&can('messageQuote.open')&&can('messageQuote.stage')&&can('messageQuote.close');
+    const savedAttachmentChoices=messageAttachmentDraft?savedOwnerAttachmentChoices(m):[];
     const memoryShortcut=intent==='chat'&&row.lastOfRole&&!phoneResult&&!taskResult&&can('taskMemory.answer')?originalAnswerMemoryMessage(m,replyContext):null;
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
@@ -4072,7 +4198,7 @@ export default function App(){
      {m.role==='user'&&linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&
       <ConversationLinkedReason conversation={String(state.conversationId||'')} task={linkedFeedback}/>}
      {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
-     {(m.content||delivery||m.role==='assistant'||canQuote||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
+     {(m.content||delivery||m.role==='assistant'||canQuote||savedAttachmentChoices.length>0||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
        {returnedWork&&(!phoneResult||!m.id||m.sourceRevision!==1)&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder} disabled={inlineResult&&!!openingChatResultId}
         onClick={event=>{
           if(inlineResult&&taskResult&&m.id)void openChatResult(m.id,taskResult,event.currentTarget);
@@ -4105,6 +4231,9 @@ export default function App(){
         {m.id&&replyContext?.replyToMessageIds.length&&can('message.origin')?<Button variant="ghost" leadingIcon={IconHistory} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);rememberChatPosition();setMessageOriginTarget({conversationId:String(state.conversationId),messageId:m.id!,sourceMessageIds:replyContext.replyToMessageIds,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>查看对应原请求</Button>:null}
         {m.role==='user'&&m.submission?.taskId&&can('queued.open')&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{setMessageMenu(null);run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}}>原任务的输入队列</Button>}
         {canQuote&&<Button variant="ghost" leadingIcon={IconQuote} disabled={!draftKey||!!state.chatSubmitting} onClick={()=>{setMessageMenu(null);openQuote(m)}}>引用到草稿</Button>}
+        {messageAttachmentDraft&&savedAttachmentChoices.map((file,index)=><Button key={file.fileId} variant="ghost" leadingIcon={IconFile} title={file.name}
+         disabled={fileAttachmentPickerLaunch.current?.settled===false} onClick={()=>void chooseSavedMessageAttachment(m,file,messageAttachmentDraft)}>
+         选作草稿附件{savedAttachmentChoices.length>1?` ${index+1}`:''} · {file.name}</Button>)}
         {m.retainedSources&&can('sources.open')&&<Button variant="ghost" leadingIcon={IconLink} onClick={()=>{setMessageMenu(null);openSource(m)}}>回答来源</Button>}
         {m.projectConventionRecorded===true&&m.id&&can('conversation.projectConvention.read')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProjectConventionMessage(m.id!)}}>核对本次项目约定</Button>}
         {!memoryShortcut&&m.memoryReference&&m.id&&can('taskMemory.answer')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProvidedMemoryMessage(m.id!)}}>核对本次记忆</Button>}
@@ -4386,6 +4515,7 @@ export default function App(){
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
   {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={restoreTaskFileFocus} openTaskId={taskOpen?taskId||undefined:undefined} onReturnToSearch={searchReturn?showWorkSearch:undefined}
+   canReturnToOpenWork={continueFromWorkFiles}
    draftTarget={fileDraftTarget} resultTopic={fileResultTopic} onStageFile={can('composer.object.add')?stageFileInDraft:undefined} onOpenDraft={showFileDraft} onUseResult={useFileInOriginalTopic}
    onChooseResultAttachment={resultAttachmentAvailable?chooseFileInOriginalTopic:undefined}
    onVerifyReportFileWork={taskLayer==='homeReport'&&can('ownerWork.report.read')?verifyReportFileWork:undefined}
@@ -4444,7 +4574,10 @@ export default function App(){
     {selectedTask&&<WorkObjectMenu isOpen={taskMenuOpen} onOpenChange={setTaskMenuOpen} disabled={selectedTaskUnavailable} conversationPending={!!state.chatSubmitting||!!returningConversation} scopeDisabled={reviewPending||questionPending}
      onConversation={originatingRequestConversation(selectedTask)&&can('conversation.select')?()=>{void returnToTaskConversation(selectedTask)}:undefined}
      onProject={projects.some(project=>project.id===selectedTask.raw?.developmentContext?.projectId)&&can('projects.select')?()=>{void openTaskProject(selectedTask)}:undefined}
-     onFiles={can('attachmentWorkspace.open')&&selectedTask.raw?.actorId==='owner'&&selectedTask.raw?.spaceId==='private'?()=>{const open=()=>run('attachmentWorkspace.open',{taskId:selectedTask.id});if(!guardTaskLeave(open))open()}:undefined}
+     onFiles={can('attachmentWorkspace.open')&&selectedTask.raw?.actorId==='owner'&&selectedTask.raw?.spaceId==='private'?()=>{
+      const open=()=>{void openWorkFiles(selectedTask.id).catch(error=>setLocalError(error instanceof Error?error.message:String(error)));};
+      if(!guardTaskLeave(open))open();
+     }:undefined}
      onScope={can('tasks.review')?()=>{showTaskLayer('scope');if(!review||reviewStale)refreshReview()}:undefined}/>}
    </div>}
   </header>{selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={()=>openTask(selectedTask.id,taskLayer)}>核对原任务状态</Button>}</div>}{taskLayer!=='homeReport'&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:<section className="pw-empty-small"><p className="pw-error" role="alert">{taskLayer==='homeReport'?'原工作或汇报已变化，请返回管家首页核对。':taskId&&taskErrors[taskId]||(expectedProjectRun?'原运行暂不可读取，没有用其他轮次代替。':'原任务暂不可读取，请重新读取原历史窗口。')}</p>{taskLayer!=='homeReport'&&!noticeBinding&&!expectedProjectRun&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>

@@ -35,6 +35,14 @@ import './device-workspace-overview.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
 type AddressRepair = { place: DeviceReadingPlace; epoch: number };
+type PresentedReceivedGoal = ReceivedPhoneGoalReturn & {
+  waitingBack?: { waitingHandle: string; windowKey: string; trigger: HTMLButtonElement };
+};
+function waitingGoalWindow() {
+  const view = bridge.getState().view as Data | undefined;
+  return document.visibilityState === 'visible' && view?.section === 'devices' && !view.taskId && Number.isSafeInteger(view.resumeRevision)
+    ? JSON.stringify([bridge.getDocumentEpoch(), view.resumeRevision]) : '';
+}
 type PhoneArchiveRead = 'devices.queryHistory' | 'devices.queryPhoneGoalResult';
 const sentPhoneRead = (row: Data): PhoneArchiveRead | undefined => row.targetRunRecorded === true ? 'devices.queryPhoneGoalResult'
   : (Number.isSafeInteger(row.targetAcceptedAt) && row.targetAcceptedAt > 0 || row.sourceSendPhase === 'write_claimed') ? 'devices.queryHistory' : undefined;
@@ -205,7 +213,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [discoveryAck, setDiscoveryAck] = useState(false), [advertise, setAdvertise] = useState(false), [discoveryPeer, setDiscoveryPeer] = useState('');
   const [desktopOpen, setDesktopOpen] = useState(false), [query, setQuery] = useState('');
   const restoredModelReturn = useRef<ReceivedPhoneGoalReturn | undefined>(undefined);
-  const [modelReturnFocus, setModelReturnFocus] = useState<ReceivedPhoneGoalReturn>();
+  const [modelReturnFocus, setModelReturnFocus] = useState<PresentedReceivedGoal>();
   const focusedModelReturn = useRef<ReceivedPhoneGoalReturn | undefined>(undefined);
   const [manualFocus, setManualFocus] = useState<{ taskId: string; deadlineAt: number; place: DeviceReadingPlace }>();
   const [localExpanded, setLocalExpanded] = useState(false), [moreWork, setMoreWork] = useState({ key: '', count: 0 });
@@ -303,18 +311,6 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (busy || nativeRevision.current === state.deviceWorkspaceRevision || document.visibilityState !== 'visible') return;
     nativeRevision.current = state.deviceWorkspaceRevision; setClosedReceipt(null); refresh();
   }, [state.deviceWorkspaceRevision, busy]);
-  useEffect(() => { registerTransientBack(() => {
-    if (preparingDeviceWork) return true;
-    if (closedReceipt) {setClosedReceipt(null);return true;}
-    if (ownText) {closeOwnText();return true;}
-    if (review) { closeReview(); return true; }
-    if (invitation) { setInvitation(null); return true; }
-    if (form) { clearSensitive(true); refresh(); return true; }
-    if (desktopOpen) { setDesktopOpen(false); return true; }
-    if (sourceFocus) return false; // Return to the same owner task instead of stepping to another peer.
-    if (peerId) { selectPeer(''); return true; }
-    return false;
-  }); return () => registerTransientBack(null); }, [review, invitation, form, desktopOpen, peerId, sourceFocus, ownText, closedReceipt, preparingDeviceWork, registerTransientBack]);
   useEffect(() => {
     if (!snapshot?.lanDiscovery?.active && !snapshot?.lanDiscovery?.stopPending) return;
     const timer = window.setInterval(() => {
@@ -753,12 +749,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       acceptReview(value);
     });
   };
-  const returnWaiting = (row: Data) => {
+  const returnWaiting = (row: Data, trigger: HTMLButtonElement) => {
     if (busy || selectedPeer.current || !waitingPage || waitingPage.declinedOnly || waitingPage.withdrawnOnly || !rows(waitingPage.rows).some(it => it.taskId === row.taskId && it.operationId === row.operationId && it.sourceDeviceId === row.sourceDeviceId)) return;
-    void invoke('devices.returnToReceivedPhoneGoal', { taskId: row.taskId, operationId: row.operationId, waitingHandle: waitingPage.waitingHandle }, value => {
+    const waitingHandle = waitingPage.waitingHandle, windowKey = pendingInbox && !sourceFocus ? waitingGoalWindow() : '';
+    void invoke('devices.returnToReceivedPhoneGoal', { taskId: row.taskId, operationId: row.operationId, waitingHandle }, value => {
       if (selectedPeer.current) return;
       const source = receivedPhoneArchiveReturn(value,row,{ deviceId: row.sourceDeviceId },local);
-      setModelReturnFocus({ ...source, peerDetail: false }); setNotice(waitingPage.failedOnly?'已定位这次失败的原执行，只读取本机记录；没有恢复或重派。':waitingPage.startedOnly?'已定位这次原执行，没有向任何设备发出恢复、停止或重派请求。':waitingPage.resultOnly ? row.candidateState?'已定位原执行。只可查看留在本机的候选；未交回摘要。':'已打开仍待核对的原执行。请查看成果后再决定是否确认；尚未交回摘要。' : '已找回本机接纳的原工作，以它当前的可用操作为准。没有重新启动。');
+      const waitingBack = windowKey && windowKey === waitingGoalWindow() ? { waitingHandle, windowKey, trigger } : undefined;
+      setModelReturnFocus({ ...source, peerDetail: false, waitingBack }); setNotice(waitingPage.failedOnly?'已定位这次失败的原执行，只读取本机记录；没有恢复或重派。':waitingPage.startedOnly?'已定位这次原执行，没有向任何设备发出恢复、停止或重派请求。':waitingPage.resultOnly ? row.candidateState?'已定位原执行。只可查看留在本机的候选；未交回摘要。':'已打开仍待核对的原执行。请查看成果后再决定是否确认；尚未交回摘要。' : '已找回本机接纳的原工作，以它当前的可用操作为准。没有重新启动。');
     });
   };
   const reviewWaitingResult = (row: Data) => {
@@ -1028,6 +1026,38 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (!heading) return;
     focusedModelReturn.current = modelReturnFocus; heading.focus({ preventScroll: true }); heading.scrollIntoView({ block: 'nearest' });
   }, [modelReturnFocus, returnedTask?.id]);
+  useEffect(() => { registerTransientBack(() => {
+    if (preparingDeviceWork) return true;
+    if (closedReceipt) {setClosedReceipt(null);return true;}
+    if (ownText) {closeOwnText();return true;}
+    if (review) { closeReview(); return true; }
+    if (invitation) { setInvitation(null); return true; }
+    if (form) { clearSensitive(true); refresh(); return true; }
+    if (desktopOpen) { setDesktopOpen(false); return true; }
+    if (sourceFocus) return false; // Return to the same owner task instead of stepping to another peer.
+    if (peerId) { selectPeer(''); return true; }
+    // The original receipt only jumped within this page; Back only restores its already-rendered source.
+    const focus = modelReturnFocus, back = focus?.waitingBack;
+    if (!focus || !back || !returnedTask || focusedModelReturn.current !== focus || !pendingInbox ||
+      scope.current.hasPending('work') || scope.current.hasPending('control') ||
+      waitingPage?.waitingHandle !== back.waitingHandle || back.windowKey !== waitingGoalWindow() ||
+      !rows(waitingPage.rows).some(row => row.taskId === focus.taskId && row.operationId === focus.operationId && row.sourceDeviceId === focus.sourceId) ||
+      !readingRoot.current?.contains(back.trigger) || back.trigger.closest('[hidden], [inert]')) return false;
+    // A pending page can outlive the start decision. Check the latest published original, not its cached page row.
+    const original = rows(bridge.getState().state.tasks).find(task => task.id === focus.taskId), raw = original?.raw;
+    if (!original || unreadSource(original) || raw?.id !== focus.taskId || raw.contextWithdrawn === true ||
+      raw.deviceExecutionKind !== 'GOAL' || raw.deviceNativeInstanceId !== focus.instanceId ||
+      raw.actorId !== `paired_device:${focus.sourceId}` || raw.spaceId !== `device:${focus.sourceId}` ||
+      (raw.runId !== undefined && raw.runId !== '') || raw.coordinatorEpoch !== 0 || raw.cancelRequested !== false ||
+      !['queued', 'awaiting_user', 'interrupted'].includes(raw.status) || !matchesReceivedPhoneGoal(original, snapshot, focus)) return false;
+    const target = back.trigger.disabled ? back.trigger.closest('.pw-device-history-entry')?.querySelector<HTMLElement>('h4[tabindex="-1"]') : back.trigger;
+    if (!target) return false;
+    focusedModelReturn.current = undefined;
+    setModelReturnFocus(undefined);
+    target.focus({ preventScroll: true }); target.scrollIntoView({ block: 'nearest' });
+    return true;
+  }); return () => registerTransientBack(null); }, [review, invitation, form, desktopOpen, peerId, sourceFocus, ownText, closedReceipt, preparingDeviceWork, registerTransientBack,
+    modelReturnFocus, returnedTask?.id, pendingInbox, waitingPage, snapshot]);
   useLayoutEffect(() => {
     if (!focusedManualTask || document.hidden) return;
     const heading = Array.from(readingRoot.current?.querySelectorAll<HTMLElement>('[data-original-manual-preparation]') || [])
@@ -1369,7 +1399,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 const cannotPickUp=pickupUnavailable(row,now);
                 const sameRunReview=waitingPage.startedOnly&&row.taskState==='needs_confirmation';
                 return <div className="pw-device-history-entry" key={JSON.stringify([row.taskId,row.operationId])}>
-                <h4 dir="auto">{row.goal}</h4><p>来自 {sourceLabel(row.sourceDeviceId,row.sourceIdentity)} · {waitingPage.failedOnly?'最后登记失败 '+time(row.stateRecordedAt):waitingPage.declinedOnly||waitingPage.withdrawnOnly?'本机接纳 '+time(row.createdAt):waitingPage.startedOnly?'本机登记执行 '+time(row.registeredAt):waitingPage.resultOnly ? (row.candidateState?'原工作'+taskLabels[row.candidateState]+' · 本机候选 ':'产生结果 ') + time(row.reviewRecordedAt) : time(row.createdAt)}{row.waitingState === 'interrupted_before_start' && ' · 本机已中断，未启动'}</p>
+                <h4 dir="auto" tabIndex={pendingInbox ? -1 : undefined}>{row.goal}</h4><p>来自 {sourceLabel(row.sourceDeviceId,row.sourceIdentity)} · {waitingPage.failedOnly?'最后登记失败 '+time(row.stateRecordedAt):waitingPage.declinedOnly||waitingPage.withdrawnOnly?'本机接纳 '+time(row.createdAt):waitingPage.startedOnly?'本机登记执行 '+time(row.registeredAt):waitingPage.resultOnly ? (row.candidateState?'原工作'+taskLabels[row.candidateState]+' · 本机候选 ':'产生结果 ') + time(row.reviewRecordedAt) : time(row.createdAt)}{row.waitingState === 'interrupted_before_start' && ' · 本机已中断，未启动'}</p>
                 {waitingPage.searchText&&row.matchedLater===true&&<p>匹配在上方预览之后的原目标文字里。</p>}
                 {waitingPage.failedOnly&&<p>本机登记执行 {time(row.registeredAt)} · 第 {row.epoch} 轮；不代表成果已交回。</p>}
                 {waitingPage.withdrawnOnly&&<p>{time(row.withdrawnAt)} 原发起设备已撤回 · 本机未启动</p>}
@@ -1392,7 +1422,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                     onClick={()=>actionReview('task.cancelPending',{waitingHandle:waitingPage.waitingHandle,taskId:row.taskId,operationId:row.operationId})}>不接手</Button>}
                   {(waitingPage.resultOnly||sameRunReview) && <Button disabled={busy || !supported('devices.reviewResult')} onClick={() => reviewWaitingResult(row)}>
                     {row.candidateState?'在本机查看未核对候选':'核对这份成果'}</Button>}
-                  <Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={() => returnWaiting(row)}>{waitingPage.failedOnly?'查看这次失败的原工作':waitingPage.startedOnly?'回到这次原执行':'查看原工作'}</Button></div>}
+                  <Button variant="secondary" disabled={busy || !supported('devices.returnToReceivedPhoneGoal')} onClick={event => returnWaiting(row, event.currentTarget)}>{waitingPage.failedOnly?'查看这次失败的原工作':waitingPage.startedOnly?'回到这次原执行':'查看原工作'}</Button></div>}
               </div>})}
               <div className="pw-form-actions">{(waitingPage.startedOnly||waitingPage.failedOnly)&&<Button variant="ghost" disabled={busy}
                 onClick={()=>readWaiting(undefined,waitingPage.failedOnly?'started':'failed')}>{waitingPage.failedOnly?'回到处理中的工作':'查看执行失败的记录'}</Button>}
