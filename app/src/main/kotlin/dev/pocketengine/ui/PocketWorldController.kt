@@ -5969,6 +5969,36 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             observed?.toString() == reviewed.toString() && app.hasCurrentOriginalOwnerWorkQuestion(current.raw)
         }.getOrDefault(false)
     }
+    internal fun readColdOwnerQuestion(task: UiTask, current: () -> Boolean): dev.pocketengine.store.TaskStore.ColdOwnerQuestionReview? {
+        if (!current() || !webPrivateOwnerVisible() || webTaskViewId != task.id || conversationReader != null || hasChannelPhoneOrigin)
+            return null
+        val raw = task.raw
+        val review = app.reviewColdOwnerQuestion(task.id, raw.getString("runId"), raw.getInt("coordinatorEpoch"), raw.getString("conversationId"))
+        return review?.takeIf { current() }
+    }
+    internal fun submitColdOwnerQuestion(task: UiTask, review: dev.pocketengine.store.TaskStore.ColdOwnerQuestionReview,
+                                         option: String?, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val ticket = webWindowTicket()
+        val source = conversationSourceRevision
+        fun showing() = current() && webPrivateOwnerVisible() && webTaskViewId == task.id && webWindowTicket() == ticket &&
+            conversationReader == null && !hasChannelPhoneOrigin &&
+            review.taskId() == task.id && review.runId() == task.raw.opt("runId") && review.epoch() == task.raw.optInt("coordinatorEpoch")
+        fun valid() = showing() && conversationSourceRevision == source
+        if (!valid()) { done(null, "原问题窗口已关闭，请重新核对"); return }
+        try { io.execute {
+            val result = runCatching {
+                check(valid()) { "原问题窗口已关闭" }
+                if (option == null) app.continueColdOwnerQuestion(review, ::valid)
+                else app.saveColdOwnerQuestionChoice(review, option, ::valid)
+            }
+            main.post {
+                if (closed) return@post
+                // A committed answer itself advances the assistant source revision.
+                if (!showing()) done(null, "原问题窗口已变化，请回原工作核对；没有自动重复提交")
+                else result.fold({ done(it, null) }, { done(null, "这次操作的回执尚未确认，请核对原工作；不会自动重试") })
+            }
+        } } catch (unavailable: Exception) { done(null, "原问题操作暂时不可用，请重新核对") }
+    }
     internal fun answerOwnerQuestion(question: JSONObject, text: String, done: (JSONObject?, String?) -> Unit) {
         if (text.isBlank() || text.length > 4000) { done(null, "请填写不超过4000字的回答"); return }
         submitOwnerQuestion("answerOwnerQuestion", question, JSONObject().put("text", text), done)

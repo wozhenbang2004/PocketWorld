@@ -41,6 +41,56 @@ public final class EngineApplication extends Application implements dev.pocketen
     private final java.util.Set<String> taskNoticePending=java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final java.util.Set<String> taskNoticeDirty=java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /** Exact private Work inspection only. A missed proof does not imply expiration. */
+    public TaskStore.ColdOwnerQuestionReview reviewColdOwnerQuestion(String id,String run,int epoch,String conversation)throws Exception{
+        if(!businessReady()||capabilityControls.containsKey(id))return null;
+        var review=tasks.reviewColdOwnerQuestion(id,run,epoch,conversation);
+        return review!=null&&review.saved()&&!executionAllowed()?null:review;
+    }
+    private void requireColdOwnerQuestionWindow(java.util.function.BooleanSupplier current)throws Exception{
+        var keyguard=getSystemService(android.app.KeyguardManager.class);
+        if(!businessReady()||current==null||!current.getAsBoolean()||keyguard!=null&&keyguard.isDeviceLocked())
+            throw new SecurityException("请回到原私人工作核对这条问题");
+    }
+    public JSONObject saveColdOwnerQuestionChoice(TaskStore.ColdOwnerQuestionReview review,String option,
+                                                   java.util.function.BooleanSupplier current)throws Exception{
+        requireColdOwnerQuestionWindow(current);
+        TaskStore original=tasks;JSONArray refs=original.coldOwnerQuestionSources(review);
+        JSONObject accepted=memorySources.withCurrentUserSources(refs,()->{
+            requireColdOwnerQuestionWindow(current);
+            if(original!=tasks||capabilityControls.containsKey(review.taskId()))throw new SecurityException("原工作状态已变化");
+            return original.saveColdOwnerQuestionChoice(review,option,current);
+        });
+        try{ownerWorkAssistant().ownerQuestionInputSaved(accepted);}
+        catch(Exception unavailable){/* The native original USER source and reply are already saved. The usual source barrier still applies to any continuation. */}
+        pushTask(review.taskId());features.sendState();return accepted;
+    }
+    public JSONObject continueColdOwnerQuestion(TaskStore.ColdOwnerQuestionReview review,
+                                                 java.util.function.BooleanSupplier current)throws Exception{
+        requireColdOwnerQuestionWindow(current);
+        TaskStore original=tasks;String id=review.taskId();RunControl control=new RunControl();
+        JSONArray refs=original.coldOwnerQuestionSources(review);
+        var admitted=memorySources.withCurrentUserSources(refs,()->{
+            requireColdOwnerQuestionWindow(current);
+            if(original!=tasks||capabilityControls.containsKey(id))throw new SecurityException("原工作状态已变化");
+            return original.continueColdOwnerQuestion(review,control,current);
+        });
+        // No model/config acquisition before the durable, exact B admission above.
+        // A changed source or missing original route settles B without retry.
+        try{synchronized(assistantAdmissions){
+            if(original!=tasks||capabilityControls.containsKey(id))throw new SecurityException("原工作已有执行器");
+            original.requireCapabilityAttempt(id,control);
+            JSONObject model=admitted.model(),target=model.getJSONObject("target");
+            ModelConfig selected="legacy_current".equals(target.optString("kind"))?settings.get():captureConversationTarget(target,false);
+            requireOwnerWorkTakeoverModel(model,selected);SettingsStore.validate(selected);dev.pocketengine.runtime.ModelGateway.validate(selected);
+            executeAdmittedOwnerWork(admitted.attempt(),selected,control,null);
+        }}catch(Exception unavailable){
+            original.endUnstartedCapabilityAttempt(id,control,"原回答已保存，新一轮未获执行器接手；请核对原工作，没有重试");
+            if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();
+        }finally{pushTask(id);}
+        return admitted.receipt();
+    }
+
     /** Used only with the already-read original Work review; this is not an owner command. */
     public boolean hasCurrentOriginalOwnerWorkQuestion(JSONObject task)throws Exception{
         return businessReady()&&ownerQuestionInputs.hasCurrentOriginal(task,System.currentTimeMillis());

@@ -2695,7 +2695,8 @@ public final class TaskStore {
         int results=state.optInt("resultDeliveryCount",-1);boolean capacityKnown=results>=0,capacityAvailable=capacityKnown&&results<OWNER_WORK_RESULT_LIMIT;
         boolean relatedPending=state.optInt("pendingChildCount")>0||state.optBoolean("relatedStateUnavailable"),canStop=(!status.matches("completed|failed|cancelled")||relatedPending||state.optBoolean("resultHandlingActive"))&&!task.optBoolean("cancelRequested");
         boolean stopped=status.matches("interrupted|paused|awaiting_user|needs_confirmation|failed");
-        boolean canContinue=!run.isEmpty()&&stopped&&!task.optBoolean("cancelRequested")&&!unresolved&&!relatedPending&&remaining&&capacityAvailable;
+        boolean coldAnswer=state.optBoolean("coldAnswerWaitingOnThisRound");
+        boolean canContinue=!run.isEmpty()&&stopped&&!task.optBoolean("cancelRequested")&&!unresolved&&!relatedPending&&remaining&&capacityAvailable&&!coldAnswer;
         JSONObject controls=new JSONObject().put("resultCapacityAvailable",capacityAvailable).put("resultCapacityState",!capacityKnown?"requires_original_read":capacityAvailable?"available":"full").put("canStop",canStop).put("canCancel",canStop)
                 .put("canInput",!run.isEmpty()&&status.matches("preparing|running|paused|pausing")&&!task.optBoolean("cancelRequested")&&state.optBoolean("mailboxOpen"))
                 .put("canContinue",canContinue);
@@ -2705,6 +2706,7 @@ public final class TaskStore {
             if(canContinue)reason="next_attempt";
             else if(task.optBoolean("cancelRequested"))reason="stop_requested";
             else if(unresolved)reason="unresolved_effect";
+            else if(coldAnswer)reason="cold_answer_owner_review";
             else if(state.optBoolean("relatedStateUnavailable"))reason="related_unavailable";
             else if(relatedPending)reason="waiting_children";
             else if(capacityKnown&&!capacityAvailable)reason="result_limit";
@@ -2727,7 +2729,8 @@ public final class TaskStore {
         JSONObject handling=meta==null?null:meta.optJSONObject("takeover");boolean activeHandling=handling!=null&&!handling.optBoolean("tokenEscrowReleased")&&handling.optString("state").matches("reserved|claimed");
         return new JSONObject().put("resultDeliveryCount",resultCount).put("budgetRemaining",scope.getInt("toolsUsed")<scope.getInt("toolLimit")&&scope.getInt("modelCallsUsed")<scope.getInt("modelCallLimit"))
                 .put("effectiveDeadline",TaskExecutionScope.effectiveDeadline(scope)).put("mailboxOpen",task.optJSONObject("ownerInputMailbox")!=null&&task.getJSONObject("ownerInputMailbox").optBoolean("open"))
-                .put("pendingChildCount",pending).put("relatedStateUnavailable",unavailable).put("resultHandlingActive",activeHandling);
+                .put("pendingChildCount",pending).put("relatedStateUnavailable",unavailable).put("resultHandlingActive",activeHandling)
+                .putOpt("coldAnswerWaitingOnThisRound",coldAnswerWaitingOnThisRound(task)?Boolean.TRUE:null);
     }
     /** Associating an ordinary private Work needs its current identity and source, not an audit page.
      * Null means absent, outside the ordinary shape, or beyond the full-core bound; a known stale source rejects. */
@@ -3101,7 +3104,10 @@ public final class TaskStore {
                 }
                 if(!stopped&&!unresolved){int proposals=progress==null?0:progress.optInt("pendingParentRevisionCount",0);
                     if(proposals>0&&proposals<=16&&!work.optString("status").matches("completed|stopping|cancelled|paused|pausing|interrupted")&&team.optJSONObject("teamWorkPlan")!=null&&team.getJSONObject("teamWorkPlan").optLong("expiresAt")>System.currentTimeMillis())row.put("pendingParentRevisionCount",proposals).put("needsAttention",true);
-                    JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null)row.put("fileReview",marker).put("needsAttention",true);
+                    JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null){
+                        row.put("fileReview",marker).put("needsAttention",true);
+                        if(progress!=null&&Integer.valueOf(0).equals(progress.opt("pendingParentRevisionCount")))row.put("pendingParentRevisionCount",0);
+                    }
                     JSONObject file=ownerWorkOriginalFileDecision(work,team);if(file!=null){if(!row.optBoolean("needsAttention"))row.put("attentionFromFileOnly",true);row.put("pendingFileOperation",file).put("needsAttention",true);}
                     JSONObject pack=ownerWorkTeamPackageMark(team);
                     if(pack!=null){row.put("deliveredPackage",pack);
@@ -5382,10 +5388,299 @@ public final class TaskStore {
         }
     }
 
+    private static final String OWNER_COLD_QUESTION_FORMAT="pocketworld.owner-cold-question.v1";
+    // A new Activity, WebView, TaskStore or wall clock does not imply process loss.
+    private static final String OWNER_QUESTION_PROCESS=UUID.randomUUID().toString();
+    private static String ownerColdQuestionKey(String run){return "owner_cold_question:"+run;}
+
+    /** Opaque exact review, with no checkpoint text, grant, option label or reply body. */
+    public static final class ColdOwnerQuestionReview {
+        private final TaskStore issuer;
+        private final String task,run,conversation,fence,messageId,optionId,sourceRefs;
+        private final int epoch;
+        private ColdOwnerQuestionReview(TaskStore issuer,String task,String run,int epoch,String conversation,String fence,String messageId,String optionId,JSONArray sourceRefs){
+            this.issuer=issuer;this.task=task;this.run=run;this.epoch=epoch;this.conversation=conversation;this.fence=fence;
+            this.messageId=messageId;this.optionId=optionId;this.sourceRefs=sourceRefs.toString();
+        }
+        public String taskId(){return task;}
+        public String runId(){return run;}
+        public int epoch(){return epoch;}
+        public boolean saved(){return messageId!=null;}
+        public String selectedOptionId(){return optionId;}
+    }
+
+    private static boolean ordinaryColdQuestionWork(JSONObject task) {
+        if(!OwnerWorkTask.isOwnerWork(task)||!"assistant".equals(task.opt("kind"))||!"capabilities".equals(task.opt("executionMode"))
+                ||!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))||!"awaiting_user".equals(task.opt("status"))
+                ||!Boolean.FALSE.equals(task.opt("cancelRequested"))||task.optInt("coordinatorEpoch")!=1||task.optString("conversationId").isBlank())return false;
+        for(String name:new String[]{"origin","parentTaskId","developmentContext","ownerPhoneControl","ownerDeviceWork","ownerWorkPreparation",
+                "ownerResultHandling","ownerWorkTakeover","teamAssignment","teamRunId","teamWriteScope","teamReservationPool","workProfileRef",
+                "workProfileIntent","projectMemoryRead","sourceLearningJob","sshSelection","extensionSelection"})
+            if(!task.isNull(name))return false;
+        for(String name:new String[]{"approvals","relatedTasks"})if(!task.isNull(name)&&(!(task.opt(name) instanceof JSONArray rows)||rows.length()!=0))return false;
+        return Boolean.FALSE.equals(task.optJSONObject("ownerWork").opt("hasInitialAttachments"));
+    }
+
+    /** EXACT actual settled attempt. The cursor never fetches an unbounded checkpoint
+     * or substitutes a recent attempt on another task. A missing record stays unknown. */
+    private JSONObject coldQuestionFence(JSONObject task)throws Exception{
+        if(!ordinaryColdQuestionWork(task))return null;
+        String id=task.getString("id"),run=task.getString("runId");int epoch=task.getInt("coordinatorEpoch");
+        JSONObject questionView=dev.pocketengine.features.assistant.OwnerQuestionInputs.pageQuestion(task);
+        if(questionView==null||questionView.getJSONArray("options").length()<2)return null;
+        JSONObject evidence=task.getJSONObject("evidence"),question=new JSONObject(evidence.getJSONObject("ownerQuestion").toString());
+        for(String name:new String[]{"extensionEndUnavailable","extensionCleanupPending","projectServiceDrainPending","projectServiceDrainEvidenceUnavailable"})
+            if(evidence.has(name)&&!Boolean.FALSE.equals(evidence.opt(name)))return null;
+        for(String name:new String[]{"replyConsumed","replyMessageId","replyConsumedAt"})question.remove(name);
+        JSONObject saved;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(checkpoint AS BLOB))<=65536 THEN checkpoint END FROM runs "+
+                "WHERE task_id=? AND run_id=? AND epoch=? AND status='awaiting_user' "+
+                "AND NOT EXISTS(SELECT 1 FROM runs other WHERE other.task_id=? AND other.run_id<>?)",
+                new String[]{id,run,Integer.toString(epoch),id,run})){
+            if(!row.moveToFirst()||row.isNull(0))return null;
+            saved=new JSONObject(row.getString(0));
+        }
+        JSONArray inertOperations=coldQuestionInertOperations(task,id,run,epoch);
+        if(inertOperations==null||hasUnresolved(id))return null;
+        JSONObject work=OwnerWorkTask.require(task),scope=task.getJSONObject("executionScope"),permission=grant(run);
+        executionScopeCurrent(task,run,permission);
+        long now=System.currentTimeMillis(),deadline=permission.getLong("expiresAt");
+        if(TaskExecutionScope.planning(scope)||!scope.getBoolean("toolsPinned")||deadline<=now||TaskExecutionScope.effectiveDeadline(scope)!=deadline
+                ||!"owner".equals(permission.opt("principalId"))||!"private".equals(permission.opt("spaceId"))
+                ||!"capabilities".equals(permission.opt("mode"))||permission.optJSONArray("tools")==null
+                ||permission.getInt("remainingOperations")<1||saved.getInt("steps")<0||saved.getInt("steps")>=permission.getInt("stepCeiling")
+                ||saved.getJSONArray("messages").length()!=questionView.getJSONObject("identity").getLong("waitRevision"))return null;
+        JSONObject controls=ownerWorkControlState(task);
+        if(!controls.getBoolean("budgetRemaining")||controls.optBoolean("relatedStateUnavailable")||controls.optInt("pendingChildCount")!=0
+                ||controls.optInt("resultDeliveryCount",-1)<0||controls.getInt("resultDeliveryCount")>=OWNER_WORK_RESULT_LIMIT)return null;
+        // First admission reserves report budget, but no report worker can claim
+        // the ordinary question result. A claimed slot is not the same fact.
+        JSONObject report=work.getJSONObject("takeover");
+        if(!OwnerWorkTask.TAKEOVER_FORMAT.equals(report.opt("format"))||!"reserved".equals(report.opt("state"))
+                ||!report.isNull("taskId")||!report.isNull("deliveryId"))return null;
+        JSONObject model=checkedOwnerWorkTakeoverModel(report.getJSONObject("modelTarget"));
+        return new JSONObject().put("identity",questionView.getJSONObject("identity")).put("conversationId",task.getString("conversationId"))
+                .put("question",capabilityFingerprint(question)).put("checkpoint",capabilityFingerprint(saved))
+                .put("inertOperations",capabilityFingerprint(new JSONObject().put("rows",inertOperations)))
+                .put("allowance",capabilityFingerprint(new JSONObject().put("scope",scope).put("permission",permission).put("model",model)))
+                .put("source",capabilityFingerprint(new JSONObject().put("generation",work.getString("generation"))
+                        .put("taskId",work.getString("sourceTaskId")).put("runId",work.getString("sourceRunId"))
+                        .put("epoch",work.getInt("sourceEpoch")).put("refs",work.getJSONArray("sourceMessageRefs"))));
+    }
+
+    /** Normal empty personal recall records an inert audit receipt. Do not
+     * treat any actual tool, memory reference body, or unsettled receipt as empty. */
+    private JSONArray coldQuestionInertOperations(JSONObject task,String id,String run,int epoch)throws Exception {
+        var result=new JSONArray();
+        String memory=dev.pocketengine.features.memory.TaskMemoryJournal.TOOL;
+        String provided=dev.pocketengine.features.memory.TaskMemoryJournal.PROVIDED;
+        var ref=new dev.pocketengine.features.memory.TaskMemoryUse.TaskRef(id,run,epoch,"owner","private");
+        Set<String> requests=new java.util.HashSet<>();
+        try(Cursor rows=db.rawQuery("SELECT operation_id,tool,state,run_id,"+
+                "CASE WHEN tool=? AND length(CAST(arguments AS BLOB))<=16384 THEN arguments END,"+
+                "CASE WHEN tool=? AND length(CAST(receipt AS BLOB))<=4096 THEN receipt END "+
+                "FROM operations WHERE task_id=? ORDER BY operation_id LIMIT 5",new String[]{memory,memory,id})){
+            while(rows.moveToNext()){
+                if(result.length()>=4||!memory.equals(rows.getString(1))||!provided.equals(rows.getString(2))
+                        ||!run.equals(rows.getString(3))||rows.isNull(4)||rows.isNull(5))return null;
+                JSONObject args=new JSONObject(rows.getString(4)),receipt=new JSONObject(rows.getString(5));
+                if(args.getInt("format")!=2||args.getJSONArray("records").length()!=0||
+                        !"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".equals(args.opt("contextDigest"))
+                        ||!requests.add(receipt.getString("requestId")))return null;
+                var receiptRef=new dev.pocketengine.features.memory.TaskMemoryUse.ReceiptRef(ref,receipt.getString("requestId"),receipt.getString("answerId"));
+                JSONObject op=new JSONObject().put("tool",memory).put("runId",run).put("state",provided).put("arguments",args).put("receipt",receipt);
+                JSONObject nativeAudit=new JSONObject().put("id",id).put("actorId",task.getString("actorId")).put("spaceId",task.getString("spaceId"))
+                        .put("operations",new JSONArray().put(op));
+                if(dev.pocketengine.features.memory.TaskMemoryJournal.readProvided(nativeAudit,receiptRef)==null)return null;
+                result.put(new JSONObject().put("operationId",rows.getString(0)).put("audit",capabilityFingerprint(op)));
+            }
+        }
+        return result;
+    }
+
+    /** Optional proof for a future process. If this can't be retained, warm settlement
+     * is already committed and the historical question keeps the old read-only behavior. */
+    private void retainColdOwnerQuestionFence(String id,String run,int epoch,RunControl original){
+        if(epoch!=1||original.isCancelled()||original.isPaused()||!original.matchesHostRun(id,run,epoch))return;
+        try{
+            JSONObject task=boundedHostWorkCore(id,false);
+            if(!ordinaryColdQuestionWork(task)||!run.equals(task.opt("runId"))||task.getJSONArray("ownerInputs").length()!=0
+                    ||dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.reference(task)==null)return;
+            JSONObject fence=coldQuestionFence(task);if(fence==null)return;
+            ContentValues row=new ContentValues();row.put("key",ownerColdQuestionKey(run));
+            row.put("value",new JSONObject().put("format",OWNER_COLD_QUESTION_FORMAT).put("process",OWNER_QUESTION_PROCESS)
+                    .put("fence",capabilityFingerprint(fence)).toString());
+            db.insertWithOnConflict("meta",null,row,SQLiteDatabase.CONFLICT_IGNORE);
+        }catch(InterruptedException stopped){Thread.currentThread().interrupt();}
+        catch(Exception unavailable){/* Unverified proof never makes a cold question writable. */}
+    }
+
+    private static boolean isColdSavedAnswer(JSONObject row){
+        JSONObject reply=row.optJSONObject("ownerQuestionReply");
+        return reply!=null&&OWNER_COLD_QUESTION_FORMAT.equals(reply.opt("coldOrigin"));
+    }
+
+    private static boolean coldAnswerWaitingOnThisRound(JSONObject task){
+        JSONArray rows=task.optJSONArray("ownerInputs");
+        for(int i=0;rows!=null&&i<rows.length();i++){
+            JSONObject row=rows.optJSONObject(i);
+            if(row!=null&&isColdSavedAnswer(row)&&task.optString("runId").equals(row.opt("acceptedRunId"))
+                    &&task.optInt("coordinatorEpoch")==row.optInt("acceptedEpoch")&&!OwnerInputQueue.withdrawn(row))return true;
+        }
+        return false;
+    }
+
+    private JSONObject coldQuestionAnswer(JSONObject task,JSONObject identity)throws Exception {
+        JSONArray rows=task.getJSONArray("ownerInputs");
+        if(rows.length()!=1)return null;
+        JSONObject row=rows.getJSONObject(0),saved=row.optJSONObject("ownerQuestionReply");
+        JSONObject question=task.getJSONObject("evidence").getJSONObject("ownerQuestion");
+        if(!isColdSavedAnswer(row)||!Boolean.TRUE.equals(question.opt("replyConsumed"))
+                ||!"saved".equals(saved.opt("phase"))||!identity.getString("requestId").equals(saved.opt("requestId"))
+                ||identity.getLong("waitRevision")!=saved.optLong("waitRevision")||!"queue".equals(row.opt("mode"))
+                ||!task.getString("id").equals(row.opt("acceptedTaskId"))||!task.getString("runId").equals(row.opt("acceptedRunId"))
+                ||task.getInt("coordinatorEpoch")!=row.optInt("acceptedEpoch")||!"pending".equals(OwnerInputQueue.state(row))
+                ||OwnerInputQueue.revision(row)!=1||OwnerInputQueue.integer(row.opt("ownerMessageRevision"))!=1
+                ||!row.getString("messageId").equals(question.opt("replyMessageId"))
+                ||!capabilityFingerprint(new JSONObject().put("text",row.getString("content"))).equals(saved.opt("textDigest")))return null;
+        String conversation=task.getString("conversationId");
+        conversationRepository.requireQueuedOwnerMessageCurrent(conversation,row);
+        var source=new dev.pocketengine.features.memory.SourceRef("message",row.getString("messageId"),1L,"owner","private");
+        return "current".equals(conversationRepository.state(conversation,source).optString("status"))?row:null;
+    }
+
+    private static String coldQuestionOption(JSONObject task,JSONObject row)throws Exception{
+        JSONArray options=dev.pocketengine.runtime.policy.OwnerQuestionChoices.options(task.getJSONObject("evidence").getJSONObject("ownerQuestion"));
+        for(int i=0;i<options.length();i++){
+            JSONObject option=options.getJSONObject(i);
+            if(option.getString("label").equals(row.opt("content")))return option.getString("id");
+        }
+        return null;
+    }
+
+    /** Optional native review from the existing complete original private Work, never a
+     * directory lookup or an authority derived from the mere absence of a live Wait. */
+    public synchronized ColdOwnerQuestionReview reviewColdOwnerQuestion(String id,String run,int epoch,String conversation)throws Exception {
+        if(epoch!=1||!run.matches("[a-fA-F0-9-]{36}")||!id.matches("[a-fA-F0-9-]{36}")||conversation.isBlank())return null;
+        // The original queue-source proof requires the original TaskStore monitor
+        // AND a database snapshot, including when all we are doing is reviewing.
+        boolean owns=!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
+        try{
+            ColdOwnerQuestionReview review=readColdOwnerQuestion(id,run,epoch,conversation);
+            if(owns)db.setTransactionSuccessful();return review;
+        }finally{if(owns)db.endTransaction();}
+    }
+
+    private ColdOwnerQuestionReview readColdOwnerQuestion(String id,String run,int epoch,String conversation)throws Exception{
+        JSONObject retained;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(value AS BLOB))<=512 THEN value END FROM meta WHERE key=?",
+                new String[]{ownerColdQuestionKey(run)})){
+            if(!row.moveToFirst()||row.isNull(0))return null;
+            retained=new JSONObject(row.getString(0));
+        }
+        if(!OWNER_COLD_QUESTION_FORMAT.equals(retained.opt("format"))||!retained.optString("process").matches("[a-f0-9-]{36}")
+                ||OWNER_QUESTION_PROCESS.equals(retained.opt("process")))return null;
+        JSONObject task=boundedHostWorkCore(id,false);
+        if(!ordinaryColdQuestionWork(task)||!id.equals(task.opt("id"))||!run.equals(task.opt("runId"))||!conversation.equals(task.opt("conversationId")))return null;
+        JSONObject fence=coldQuestionFence(task);if(fence==null)return null;
+        String fingerprint=capabilityFingerprint(fence);if(!fingerprint.equals(retained.opt("fence")))return null;
+        JSONArray refs=scheduleProposalUserRefs(task,id,run,epoch,conversation);
+        requireOwnerWorkAdoptedInputSources(task,run,epoch,refs);
+        JSONObject answer=null,identity=fence.getJSONObject("identity");
+        if(task.getJSONArray("ownerInputs").length()==0){
+            if(dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.reference(task)==null)return null;
+        }else if((answer=coldQuestionAnswer(task,identity))==null)return null;
+        String option=answer==null?null:coldQuestionOption(task,answer);
+        if(answer!=null&&option==null)return null;
+        String message=answer==null?null:answer.getString("messageId");
+        if(message!=null)refs.put(new dev.pocketengine.features.memory.SourceRef("message",message,1L,"owner","private").toJson());
+        return new ColdOwnerQuestionReview(this,id,run,epoch,conversation,fingerprint,message,option,refs);
+    }
+
+    private ColdOwnerQuestionReview requireColdOwnerQuestion(ColdOwnerQuestionReview expected,boolean answered)throws Exception{
+        if(expected==null||expected.issuer!=this||expected.saved()!=answered)throw new SecurityException("请先重新核对原问题");
+        ColdOwnerQuestionReview current=reviewColdOwnerQuestion(expected.task,expected.run,expected.epoch,expected.conversation);
+        if(current==null||!expected.fence.equals(current.fence)||!Objects.equals(expected.messageId,current.messageId)||!Objects.equals(expected.optionId,current.optionId))
+            throw new SecurityException("原问题、来源或范围已变化，请重新核对");
+        return current;
+    }
+
+    /** The caller holds the original MemorySourceBridge forget barrier; recheck the
+     * pinned native sources again inside the original reply transaction. */
+    public synchronized JSONObject saveColdOwnerQuestionChoice(ColdOwnerQuestionReview expected,String optionId,java.util.function.BooleanSupplier window)throws Exception{
+        db.beginTransaction();try{
+            if(window==null||!window.getAsBoolean())throw new SecurityException("原问题窗口已关闭");
+            ColdOwnerQuestionReview selected=requireColdOwnerQuestion(expected,false);
+            JSONObject task=required(selected.task),exact=dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.reference(task);
+            String answer=dev.pocketengine.runtime.policy.OwnerQuestionChoices.answer(task.getJSONObject("evidence").getJSONObject("ownerQuestion"),exact,optionId);
+            ownerTaskNotice(selected.task);JSONObject notice=required(selected.task).getJSONObject("ownerNotification");
+            String token=notice.getString("token");
+            if(openOwnerTaskNotice(selected.task,selected.run,selected.epoch,token).getBoolean("expired")||!window.getAsBoolean())
+                throw new SecurityException("原问题已变化，请重新核对");
+            JSONObject saved=consumeOwnerQuestionReply(selected.task,selected.run,selected.epoch,exact.getString("requestId"),exact.getLong("waitRevision"),token,answer,true);
+            if(!window.getAsBoolean()||saved.getBoolean("duplicate")||coldQuestionAnswer(required(selected.task),exact)==null)
+                throw new SecurityException("原回答尚未核对，未请求继续");
+            db.setTransactionSuccessful();return saved.put("continuationState","saved_cold_owner_confirmation_required");
+        }finally{db.endTransaction();}
+    }
+
+    /** Current sources for the existing native forget barrier; the commit rechecks the same original. */
+    public synchronized JSONArray coldOwnerQuestionSources(ColdOwnerQuestionReview expected)throws Exception{
+        return new JSONArray(requireColdOwnerQuestion(expected,expected!=null&&expected.saved()).sourceRefs);
+    }
+
+    public record ColdOwnerWorkAdmission(JSONObject attempt,JSONObject model,JSONObject receipt) {}
+
+    /** Only a second explicit reviewed owner gesture can authorize this particular
+     * pending answer on round B. A, the saved source and its original identity stay intact. */
+    public synchronized ColdOwnerWorkAdmission continueColdOwnerQuestion(ColdOwnerQuestionReview expected,RunControl control,
+                                                                          java.util.function.BooleanSupplier window)throws Exception{
+        db.beginTransaction();try{
+            if(window==null||!window.getAsBoolean()||control==null||control.hasHostRun()||control.isPaused())
+                throw new SecurityException("原回答续接审阅已关闭");
+            control.check();requireExecutionEnabled();
+            ColdOwnerQuestionReview selected=requireColdOwnerQuestion(expected,true);
+            JSONObject original=required(selected.task),priorGrant=grant(selected.run),
+                    model=ownerWorkExecutionModel(selected.task,selected.run,selected.epoch);
+            JSONObject attempt=startOwnerWorkAttempt(original,control),task=required(selected.task);
+            String run=attempt.getString("runId");int epoch=attempt.getInt("coordinatorEpoch");
+            if(epoch!=selected.epoch+1||run.equals(selected.run)||!selected.conversation.equals(task.opt("conversationId")))
+                throw new SecurityException("原工作没有登记准确的新一轮");
+            JSONObject row=task.getJSONArray("ownerInputs").getJSONObject(0);
+            if(!selected.messageId.equals(row.opt("messageId"))||!isColdSavedAnswer(row)
+                    ||!OwnerInputQueue.claim(row,run,epoch,System.currentTimeMillis()))
+                throw new SecurityException("原回答没有接入这一次原工作");
+            // The standard admission keeps cumulative scope. Additionally it must not
+            // advertise more than the physically offered tools/steps from this original wait.
+            JSONObject next=grant(run);
+            long deadline=priorGrant.getLong("expiresAt");
+            if(deadline!=next.getLong("expiresAt")||deadline<=System.currentTimeMillis()
+                    ||priorGrant.getLong("executionScopeRevision")!=next.getLong("executionScopeRevision"))
+                throw new SecurityException("继续不能延长或替换原授权");
+            int stepCeiling=Math.min(next.getInt("stepCeiling"),priorGrant.getInt("stepCeiling"));
+            next.put("stepCeiling",stepCeiling).put("remainingOperations",Math.min(next.getInt("remainingOperations"),priorGrant.getInt("remainingOperations")))
+                    .put("coldQuestionAllowedTools",priorGrant.getJSONArray("tools"));
+            ContentValues limits=new ContentValues();limits.put("grant_json",next.toString());
+            if(db.update("runs",limits,"task_id=? AND run_id=? AND epoch=? AND status='running'",new String[]{selected.task,run,Integer.toString(epoch)})!=1)
+                throw new SecurityException("原新一轮授权未确认");
+            task.put("stepCeiling",stepCeiling);write(task);
+            if(!window.getAsBoolean())throw new SecurityException("原回答续接审阅已关闭");
+            control.check();
+            JSONObject receipt=new JSONObject().put("controlRequested","continue").put("taskId",selected.task).put("newGrant",false)
+                    .put("continuationReceipt",new JSONObject().put("taskId",selected.task).put("fromRunId",selected.run)
+                            .put("fromEpoch",selected.epoch).put("runId",run).put("epoch",epoch)).put("answerMessageId",selected.messageId);
+            ColdOwnerWorkAdmission result=new ColdOwnerWorkAdmission(copy(required(selected.task),false),model,receipt);
+            db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
+    }
+
     /** The original question notice is consumed once in the same SQL transaction as its
      * original ownerInputs row and USER message/source. Saving an answer grants nothing. */
     public synchronized JSONObject consumeOwnerQuestionReply(String id,String run,int epoch,String requestId,long waitRevision,String noticeToken,String text)throws Exception {
         if("phone".equals(required(id).optString("kind")))return consumeOwnerPhoneQuestionReply(id,run,epoch,requestId,waitRevision,noticeToken,text);
+        return consumeOwnerQuestionReply(id,run,epoch,requestId,waitRevision,noticeToken,text,false);
+    }
+    private JSONObject consumeOwnerQuestionReply(String id,String run,int epoch,String requestId,long waitRevision,String noticeToken,String text,boolean cold)throws Exception{
         db.beginTransaction();try{
             JSONObject task=required(id);requirePrivateOwner(task);JSONObject permission=grant(run);executionScopeCurrent(task,run,permission);if(permission.getLong("expiresAt")<=System.currentTimeMillis())throw new SecurityException("原问题已到期；只可打开原任务");JSONArray sourceRefs=scheduleProposalUserRefs(id,run,epoch,task.getString("conversationId"));
             if(OwnerWorkTask.isOwnerWork(task))requireOwnerWorkAdoptedInputSources(task,run,epoch,sourceRefs);
@@ -5397,6 +5692,12 @@ public final class TaskStore {
             }
             JSONObject mailbox=ownerMailbox(task,run,epoch);if(mailbox.optBoolean("open")||!task.getString("conversationId").equals(mailbox.optString("conversationId")))throw new SecurityException("原问题邮箱未关闭或不属于原对话");
             JSONObject row=accepted.row();row.put("inputOriginClock",OwnerInputClock.capture(row.getLong("acceptedAt")));OwnerInputQueue.accepted(row,false);JSONArray rows=task.optJSONArray("ownerInputs");if(rows==null)rows=new JSONArray();rows.put(row);task.put("ownerInputs",rows);
+            if(cold){
+                row.getJSONObject("ownerQuestionReply").put("coldOrigin",OWNER_COLD_QUESTION_FORMAT);
+                task.put("ownerQuestionReplyState",new JSONObject().put("format","pocketworld.owner-question-reply-state.v1")
+                        .put("runId",run).put("epoch",epoch).put("requestId",requestId).put("messageId",row.getString("messageId"))
+                        .put("state","saved_cold_owner_confirmation_required").put("ownerAction","open_original_task").put("executionAuthorized",false));
+            }
             task.getJSONObject("evidence").getJSONObject("ownerQuestion").put("replyConsumed",true).put("replyMessageId",row.getString("messageId")).put("replyConsumedAt",row.getLong("acceptedAt"));
             task.getJSONObject("ownerNotification").put("phase","answered").put("answeredAt",row.getLong("acceptedAt"));write(task);
             conversationRepository.recordOwnerQuestionInput(this,accepted);
@@ -13120,6 +13421,9 @@ public final class TaskStore {
             JSONArray rows=task.optJSONArray("ownerInputs"),next=new JSONArray();boolean pending=false,changed=false;
             for(int i=0;rows!=null&&i<rows.length();i++){
                 JSONObject row=rows.getJSONObject(i);if(OwnerInputQueue.withdrawn(row)||included.contains(row.getString("messageId"))||"materialized".equals(OwnerInputQueue.state(row)))continue;
+                // An unadopted cold answer can never drift to a later generic round.
+                if(!phone&&isColdSavedAnswer(row)&&(!run.equals(row.opt("claimRunId"))||epoch!=row.optInt("claimEpoch")
+                        ||!"claimed".equals(OwnerInputQueue.state(row))))continue;
                 pending=true;if(turnBoundary||row.getString("mode").equals("steer")){
                     if(!phone&&OwnerInputQueue.tracked(row)&&OwnerInputQueue.integer(row.opt("ownerMessageRevision"))>0){
                         try{requireOwnerWorkInputSource(task,row);}
@@ -13908,7 +14212,14 @@ public final class TaskStore {
             if(!scope.getBoolean("toolsPinned")&&"preparing".equals(task.optString("status"))){boolean initialNativeCopy=scope.getInt("toolsUsed")==1&&scope.getInt("modelCallsUsed")==0&&settledInitialRoundCopyBeforeTools(task,runId,scope);if((scope.getInt("toolsUsed")!=0||scope.getInt("modelCallsUsed")!=0)&&!initialNativeCopy)throw new SecurityException("已经派发的任务工具清单必须冻结");scope.put("tools",new JSONArray(clean.toString()));if(initialNativeCopy)scope.put("toolsPinned",true);task.put("executionScope",scope);write(task);}
             else{scope.put("toolsPinned",true);task.put("executionScope",scope);write(task);JSONArray admitted=new JSONArray(),allowed=scope.getJSONArray("tools");for(int i=0;i<clean.length();i++)for(int j=0;j<allowed.length();j++)if(clean.getString(i).equals(allowed.getString(j))){admitted.put(clean.getString(i));break;}clean=admitted;}
         }
-        JSONObject grant=grant(runId);executionScopeCurrent(task,runId,grant);grant.put("tools",clean);ContentValues v=new ContentValues();v.put("grant_json",grant.toString());db.update("runs",v,"run_id=?",new String[]{runId});
+        JSONObject grant=grant(runId);executionScopeCurrent(task,runId,grant);
+        JSONArray reviewed=grant.optJSONArray("coldQuestionAllowedTools");
+        if(reviewed!=null){
+            Set<String> exact=new java.util.HashSet<>();for(int i=0;i<reviewed.length();i++)exact.add(reviewed.getString(i));
+            JSONArray bounded=new JSONArray();for(int i=0;i<clean.length();i++)if(exact.contains(clean.getString(i)))bounded.put(clean.getString(i));
+            clean=bounded;
+        }
+        grant.put("tools",clean);ContentValues v=new ContentValues();v.put("grant_json",grant.toString());db.update("runs",v,"run_id=?",new String[]{runId});
     }
     public synchronized JSONObject ownerWorkSearchPage(String query,String cursor,int limit)throws Exception {
         return ownerWorkSearchPage(query,cursor,limit,"all");
@@ -16888,6 +17199,7 @@ public final class TaskStore {
     }
     /** Publishes one result in the transaction that settles the original attempt and outbox. */
     public synchronized void finishCapabilityAttempt(String id,String runId,int epoch,RunControl original,dev.pocketengine.core.RunOutcome outcome)throws Exception {
+        boolean originalQuestion=false;
         db.beginTransaction();try{
             JSONObject task=required(id);
             if(original==null||!original.matchesHostRun(id,runId,epoch)||!runId.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("完成回执不是当前原能力执行");
@@ -16909,8 +17221,11 @@ public final class TaskStore {
                     .put("type","result").put("status",settled.getString("status"))
                     .put("message",settled.optString("summary")).put("timestamp",System.currentTimeMillis())
                     .putOpt(MANAGED_DEPENDENCY_WAIT,managedDependencyWaitWitness(settled,status,original)));
+            originalQuestion=epoch==1&&"awaiting_user".equals(status)&&OwnerWorkTask.isOwnerWork(settled)
+                    &&settled.getJSONObject("evidence").has("ownerQuestion");
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
+        if(originalQuestion)retainColdOwnerQuestionFence(id,runId,epoch,original);
     }
     public synchronized void endAttempt(String id,String runId,String status,String summary,JSONObject evidence)throws Exception{
         db.beginTransaction();try{JSONObject t=required(id);if(!runId.equals(t.optString("runId")))return;
@@ -18923,6 +19238,13 @@ public final class TaskStore {
             clean.put("at",System.currentTimeMillis());TaskAuditStore.append(db,task.getString("id"),clean);write(task);db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
+    private static final String PAIRED_TEAM_RECEIPTS_ONLY="pocketworld.team-paired-phone-receipts-only.v1";
+    private static boolean standaloneOwnerTeam(JSONObject task){
+        return "teams".equals(task.opt("feature"))&&"start".equals(task.opt("command"))&&"teams".equals(task.opt("kind"))&&"analysis".equals(task.opt("executionMode"))&&
+                "owner".equals(task.opt("actorId"))&&"private".equals(task.opt("spaceId"))&&task.isNull("origin")&&
+                task.isNull("parentTaskId")&&!task.optString("runId").isEmpty()&&task.optString("id").equals(task.opt("runId"))&&
+                task.optString("id").equals(task.opt("operationId"));
+    }
     /** A version of the actual displayed result, not a permission or model-supplied completion. */
     private static JSONObject resultReviewFacts(JSONObject task)throws Exception{
         JSONObject facts=new JSONObject();
@@ -18957,6 +19279,10 @@ public final class TaskStore {
                 db.setTransactionSuccessful();return proof==null?copy(task,false).put("alreadyConfirmed",true):confirmedOwnerTeamReport(task,true);
             }
             if(!"needs_confirmation".equals(task.optString("status"))||!digest.equals(resultReviewDigest(task)))throw new SecurityException("成果版本已变化，请重新打开当前成果后再确认");
+            JSONObject outcome=task.optJSONObject("evidence");
+            if(completed&&standaloneOwnerTeam(task)&&"partial".equals(task.opt("executionStatus"))&&outcome!=null&&
+                    PAIRED_TEAM_RECEIPTS_ONLY.equals(outcome.opt("teamResultAvailability")))
+                throw new SecurityException("本设备未取得原手机的成员答复，不能确认达到目标。仍可记录“目标尚未达到”。");
             if(feedback.length()>8000)throw new IllegalArgumentException("补充要求最多8000字");
             if(proof!=null){
                 OwnerWorkTeamReportOrigin source=proof.origin();
@@ -19288,11 +19614,28 @@ public final class TaskStore {
         if("ssh".equals(t.optString("feature"))&&t.optString("command").matches("inspectFile|downloadFile|uploadFile"))for(String key:new String[]{"path","exists","bytes","version","expectedVersion","currentVersion","expectedRemoteVersion","maxTransferBytes","modifiedAtSeconds","streamedHash","atomicRemoteSnapshot","artifactSaved","attachment","sourceAttachment","sourceSha256","bytesReadFromLocal","expectedBytes","verifiedBytes","verifiedBusinessSuccess","targetReplacementSent","stagingPath","lockPath","stagingCleanupConfirmed","lockCleanupConfirmed","lockOwnershipConfirmed","cleanupReviewRequired","partialRemoteFilePossible","sourceChanged","cooperativeConditionalWrite","externalWriterRacePossible","workspaceIsSandbox","transferExpiresAt","localTransferDeadline","automaticRetry","code"})if(receipt.has(key))evidence.put(key,receipt.get(key));
         if(t.optString("feature").equals("teams")&&receipt.optJSONArray("members")!=null){
             JSONArray nativeMembers=new JSONArray(),members=receipt.getJSONArray("members");int memberCount=0,completed=0;
+            boolean pairedOnly=members.length()>0&&"partial".equals(raw)&&standaloneOwnerTeam(t),pairedReceiptOnly=false;
             for(int m=0;m<members.length();m++){
                 JSONObject member=members.getJSONObject(m);
+                if(pairedOnly){
+                    JSONObject device=member.optJSONObject("device");
+                    pairedOnly="phone_agent".equals(member.opt("runner"))&&device!=null&&"paired_android".equals(device.opt("kind"));
+                    pairedReceiptOnly|=dev.pocketengine.features.teams.TeamWorkPlan.PHONE_OUTPUT_NOT_RETURNED.equals(member.opt("status"));
+                }
                 if(!member.optBoolean("exited")){memberCount++;if("completed".equals(member.optString("status")))completed++;}
                 if(m<8&&member.has("id")&&member.has("generation"))nativeMembers.put(new JSONObject().put("memberId",member.getString("id")).put("generation",member.getInt("generation"))
                         .put("paused",member.optBoolean("paused")).put("exited",member.optBoolean("exited")).put("status",member.optString("status")));
+            }
+            // Only the original coordinator's admitted paired-only no-body branch can disallow positive verification.
+            if(pairedOnly&&pairedReceiptOnly&&completed==0&&memberCount==members.length()&&
+                    "partial".equals(receipt.opt("phase"))&&"collaborate".equals(receipt.opt("mode"))&&
+                    receipt.optInt("rounds",-1)==1&&!receipt.has("workPlan")&&!receipt.has("productionScope")&&!receipt.has("summaryProducer")){
+                JSONObject phoneScope=t.optJSONObject("teamPhoneScope"),refs=t.optJSONObject("externalRefs");
+                String team=refs==null?"":refs.optString("teamId"),run=t.optString("runId");
+                if(run.equals(receipt.opt("id"))&&run.equals(receipt.opt("operationId"))&&!team.isEmpty()&&team.equals(receipt.opt("teamId"))&&
+                        phoneScope!=null&&team.equals(phoneScope.opt("teamId"))&&phoneScope.optInt("rounds",-1)==1&&
+                        t.optString("conversationId").equals(phoneScope.opt("conversationId")))
+                    evidence.put("teamResultAvailability",PAIRED_TEAM_RECEIPTS_ONLY);
             }
             evidence.put("nativeMemberGenerations",nativeMembers);
             // Reuse the same native attention selection shown by the original

@@ -145,13 +145,15 @@ export function useOwnerQuestionDraft(question: OwnerQuestionView | null, phone:
 }
 
 /** Uses the existing BoardUI controls and reviewed task surface; no parallel dialog/design. */
-export function OwnerTaskQuestion({question, text, onTextChange, disabled, canAnswer, canChoose, submit, onSaved}: {
+export function OwnerTaskQuestion({question, text, onTextChange, disabled, canAnswer, canChoose, saveOnly = false, onContinueSaved, submit, onSaved}: {
   question: OwnerQuestionView;
   text: string;
   onTextChange: (text: string) => void;
   disabled: boolean;
   canAnswer: boolean;
   canChoose: boolean;
+  saveOnly?: boolean;
+  onContinueSaved?: () => void;
   submit: OwnerQuestionCommand;
   onSaved?: (receipt: OwnerQuestionReceipt) => void;
 }) {
@@ -168,32 +170,40 @@ export function OwnerTaskQuestion({question, text, onTextChange, disabled, canAn
     // Never automatically replay after an unknown save. A fresh native review is required.
   };
   const saved = question.answered || receipt !== null;
-  const readOnly = question.replyAvailability !== undefined && (question.replyAvailability !== 'current_wait' || !canAnswer);
+  const readOnly = !saveOnly && question.replyAvailability !== undefined && (question.replyAvailability !== 'current_wait' || !canAnswer);
   const locked = disabled || pending || sent.current || saved;
+  const savedOption = question.answered && question.options?.find(option => option.id === question.savedOptionId);
   return <section className="pw-approval-item pw-task-decision pw-task-question" aria-label={readOnly && !saved ? '原问题' : '回答原问题'} aria-busy={pending}>
     <header className="pw-decision-heading">
       <span className="pw-decision-eyebrow">{saved ? '已回答' : readOnly ? '原问题' : '需要你的回答'}</span>
       <h4 className="pw-question-title">{question.question}</h4>
     </header>
-    {saved ? <p className="pw-decision-notice" role="status">{ownerQuestionSavedMessage(question, receipt)}</p> : readOnly ? <>
+    {saved ? <>
+      {savedOption && <p className="pw-decision-meta">你的回答：{savedOption.label}</p>}
+      <p className="pw-decision-notice" role="status">{ownerQuestionSavedMessage(question, receipt)}</p>
+      {onContinueSaved && question.answered && <div className="pw-decision-actions">
+        <p className="pw-field-hint">将用这条回答在同一件工作开启新一轮。沿用原来的范围和剩余额度，不会恢复上次执行。</p>
+        <PressButton label="确认用这条回答继续" disabled={disabled} onClick={onContinueSaved}/>
+      </div>}
+    </> : readOnly ? <>
       {question.options?.length ? <ul className="pw-decision-meta" aria-label="原问题选项">
         {question.options.map(option => <li key={option.id}>{option.label}</li>)}
       </ul> : null}
       <p className="pw-decision-notice" role="status">暂未核对到可接收回答的原执行。可重新核对。</p>
     </> : <>
-      <p className="pw-decision-caveat">回答只进入这个原等待项，不代表批准敏感操作。</p>
-      {canChoose && question.options?.length ? <div className="pw-question-choices" aria-label="原问题选项">
-        <p className="pw-decision-meta">选择一项即发送回答</p>
+      <p className="pw-decision-caveat">{saveOnly ? '上次执行已不在运行。选一项只保存回答，不会开始新一轮。' : '回答只进入这个原等待项，不代表批准敏感操作。'}</p>
+      {(canChoose || saveOnly) && question.options?.length ? <div className="pw-question-choices" aria-label="原问题选项">
+        <p className="pw-decision-meta">{saveOnly ? '选择一项保存到原工作' : '选择一项即发送回答'}</p>
         {question.options.map((option, index) => <Button key={option.id} variant="secondary" className="pw-question-choice" disabled={locked}
           onClick={() => void send({optionId: option.id})}><span className="pw-question-choice-number" aria-hidden="true">{index + 1}</span><span className="pw-question-choice-label">{option.label}</span></Button>)}
       </div> : null}
-      <div className="pw-question-compose">
+      {!saveOnly && <div className="pw-question-compose">
         <TextAreaField label={question.options?.length ? '也可以填写回答' : '你的回答'} value={text}
           onChange={value => onTextChange(value.slice(0, 4000))} maxLength={4000} rows={2} autoResize maxRows={8}
           isDisabled={pending} placeholder="输入回答"/>
         {canAnswer && <div className="pw-decision-actions"><PressButton label={pending ? '正在保存回答' : '发给原任务'}
           disabled={locked || !text.trim() || text.length > 4000} onClick={() => void send({text})}/></div>}
-      </div>
+      </div>}
     </>}
     {pending && <p className="pw-decision-caveat" role="status">正在核对原回答保存回执…</p>}
     {error && <div className="pw-decision-notice" role="alert"><h5>回答尚未确认保存</h5><p>{error}</p></div>}

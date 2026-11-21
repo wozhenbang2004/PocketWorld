@@ -14,6 +14,7 @@ import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ReasoningOptions
 import dev.pocketengine.store.OwnerPhoneControlScope
 import dev.pocketengine.store.TaskExecutionScope
+import dev.pocketengine.store.TaskStore
 import dev.pocketengine.features.teams.TeamCoordinator
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.ChatInputRules
@@ -38,11 +39,12 @@ import org.json.JSONObject
 internal class PocketWebTaskReviews(private val now: () -> Long = SystemClock::elapsedRealtime) {
     data class TeamReport(val proof: TeamCoordinator.OwnerWorkReport, val current: () -> Boolean)
     private data class Reviewed(val task: UiTask, val identity: String, val actions: Set<String>, val expires: Long,
-                                val positiveApprovalIds: Set<String>, val report: TeamReport?)
+                                val positiveApprovalIds: Set<String>, val report: TeamReport?,
+                                val coldQuestion: TaskStore.ColdOwnerQuestionReview?)
     private val entries = linkedMapOf<String, Reviewed>()
 
     fun create(task: UiTask, actions: Set<String>, positiveApprovalIds: Set<String> = emptySet(), bindingTask: UiTask = task,
-               report: TeamReport? = null): String {
+               report: TeamReport? = null, coldQuestion: TaskStore.ColdOwnerQuestionReview? = null): String {
         if (bindingTask !== task) {
             require(task.raw.optString("taskProjection") == "approval_only" && actions.all { it == "tasks.approve" } &&
                 task.id == bindingTask.id && task.status == bindingTask.status && task.updatedAt == bindingTask.updatedAt &&
@@ -53,7 +55,7 @@ internal class PocketWebTaskReviews(private val now: () -> Long = SystemClock::e
         while (entries.size >= 24) entries.remove(entries.keys.first())
         val copy = task.copy(raw = JSONObject(task.raw.toString()))
         val handle = UUID.randomUUID().toString()
-        entries[handle] = Reviewed(copy, identity(if (bindingTask === task) copy else bindingTask), actions.toSet(), now() + 120_000L, positiveApprovalIds.toSet(), report)
+        entries[handle] = Reviewed(copy, identity(if (bindingTask === task) copy else bindingTask), actions.toSet(), now() + 120_000L, positiveApprovalIds.toSet(), report, coldQuestion)
         return handle
     }
 
@@ -65,6 +67,13 @@ internal class PocketWebTaskReviews(private val now: () -> Long = SystemClock::e
         val actual = current.firstOrNull { it.id == reviewed.task.id }
         check(actual != null && identity(actual) == reviewed.identity) { "原任务已变化，未沿用旧审阅执行；请重新核对" }
         return reviewed.task
+    }
+
+    fun takeColdQuestion(handle: String, action: String, current: List<UiTask>): Pair<UiTask, TaskStore.ColdOwnerQuestionReview> {
+        val reviewed = entries[handle] ?: error("请先重新核对原问题")
+        val cold = reviewed.coldQuestion ?: error("原问题缺少当前核对")
+        check(action in PocketWebOwnerQuestions.coldCommands && cold.saved() == (action == PocketWebOwnerQuestions.CONTINUE_COLD))
+        return take(handle, action, current) to cold
     }
 
     fun teamReportParent(handle: String, taskId: String, current: List<UiTask>): UiTask {
@@ -470,7 +479,7 @@ internal class PocketWebBridge(
             "models.accounts.open", "models.accounts.review", "models.accounts.close",
             "models.groups.snapshot", "models.conversation.snapshot", "models.conversation.close"
         )
-        val commands: Set<String> = PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + PocketWebFirstNodeWebOutput.COMMANDS  + PocketWebNodeCompilerOutput.COMMANDS + PocketWebPythonOutput.COMMANDS + linkedSetOf(
+        val commands: Set<String> = PocketWebOwnerQuestions.coldCommands + PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + PocketWebFirstNodeWebOutput.COMMANDS  + PocketWebNodeCompilerOutput.COMMANDS + PocketWebPythonOutput.COMMANDS + linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal", "conversation.saveFirstHostRequest", "conversation.selectSavedHost",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
@@ -1505,6 +1514,27 @@ internal class PocketWebBridge(
                 controller.readMessageOrigin(requiredString(args, "messageId"), requiredString(args, "sourceMessageId"), requiredInt(args, "offset")) { result, error -> complete(id, result, error) }
                 return
             }
+            if (action in PocketWebOwnerQuestions.coldCommands) {
+                val save = action == PocketWebOwnerQuestions.SAVE_COLD
+                checkedPayload(args, setOf("reviewHandle", if (save) "optionId" else "confirmed"))
+                val option = if (save) requiredString(args, "optionId") else null
+                if (!save) require(requiredBoolean(args, "confirmed")) { "请单独确认用原回答继续这件工作" }
+                val selected = taskViewId ?: error("原任务窗口已关闭")
+                val current = coldOwnerQuestionWindow(selected, sourceStrict = false)
+                require(current()) { "请在原私人工作核对这个问题" }
+                val (task, review) = reviews.takeColdQuestion(requiredString(args, "reviewHandle"), action, controller.state.tasks)
+                require(task.id == selected && canUseTaskControls(task) && PocketWebOwnerQuestions.isOrdinaryOwnerWorkWait(task.raw))
+                if (option != null) PocketWebOwnerQuestions.prepare(task.raw, PocketWebOwnerQuestions.CHOOSE, JSONObject().put("optionId", option))
+                controller.submitColdOwnerQuestion(task, review, option, current) { result, error ->
+                    if (!current() || error != null || result == null)
+                        complete(id, null, error ?: "原问题窗口已变化，请重新核对", "outcome_unknown", retainValue = false)
+                    else runCatching { if (option == null) result else PocketWebOwnerQuestions.coldSaveReceipt(task.raw, option, result) }
+                        .fold({ complete(id, it, null, retainValue = false) },
+                            { complete(id, null, "原问题回执未确认，请重新核对", "outcome_unknown", retainValue = false) })
+                    publishState()
+                }
+                return
+            }
             if (action in PocketWebOwnerQuestions.commands) {
                 val field = if (action == PocketWebOwnerQuestions.CHOOSE) "optionId" else "text"
                 checkedPayload(args, setOf("reviewHandle", field))
@@ -1566,8 +1596,9 @@ internal class PocketWebBridge(
                     taskViewId == taskId && controller.webUiCanInteract() && generation == taskReviewGeneration &&
                         reportSelection == teamReportSelectionGeneration && document == documentId &&
                         navigation == Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision)
-                }) { result, error ->
-                    complete(id, result, error, retainValue = result?.has("capabilityApprovalRead") != true && result?.has("savedTeamDefaultModel") != true)
+                }, coldOwnerQuestionWindow(taskId)) { result, error ->
+                    val specialQuestion = result?.optJSONArray("actions").objects().any { it.optString("action") in PocketWebOwnerQuestions.coldCommands }
+                    complete(id, result, error, retainValue = !specialQuestion && result?.has("capabilityApprovalRead") != true && result?.has("savedTeamDefaultModel") != true)
                     if (error == null) publishState()
                 }
                 return
@@ -2596,6 +2627,19 @@ internal class PocketWebBridge(
                 publishState()
             }
         }
+    }
+
+    private fun coldOwnerQuestionWindow(task: String, sourceStrict: Boolean = true): () -> Boolean {
+        val ticket = captureWindow()
+        val generation = taskReviewGeneration
+        val document = documentId
+        val revision = controller.conversationSourceRevision
+        val navigation = Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision)
+        return { !closed && document != null && document == documentId && acceptsWindow(ticket) && taskViewId == task &&
+            section == null && taskReturnSection == null && controller.webPrivateOwnerVisible() &&
+            controller.conversationReader == null && !controller.hasChannelPhoneOrigin &&
+            (!sourceStrict || revision == controller.conversationSourceRevision) && generation == taskReviewGeneration &&
+            navigation == Triple(controller.state.requestedTaskRevision, controller.state.requestedProjectRevision, controller.state.requestedConnectionRevision) }
     }
 
     /** Keep the original foreground review valid through the existing native owner queue. */

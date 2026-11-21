@@ -12,6 +12,7 @@ import dev.pocketengine.ui.objects
 import dev.pocketengine.ui.pendingCapabilityApprovals
 import dev.pocketengine.ui.unresolvedOperations
 import dev.pocketengine.store.PhoneActionRecovery
+import dev.pocketengine.store.TaskStore
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -94,7 +95,8 @@ internal class PocketWebTaskActions(
     }
 
     /** tasks.open only schedules a read. A review handle requires the actual complete native result. */
-    fun read(taskId: String, approvalId: String?, closed: () -> Boolean, current: () -> Boolean, complete: (JSONObject?, String?) -> Unit) {
+    fun read(taskId: String, approvalId: String?, closed: () -> Boolean, current: () -> Boolean,
+             coldWindow: () -> Boolean, complete: (JSONObject?, String?) -> Unit) {
         var missingSavedTeamDefault: JSONObject? = null
         controller.readTaskForActionReview(taskId, approvalId, { !closed() && current() }, complete = original@ { task, error ->
             if (closed()) return@original
@@ -104,27 +106,35 @@ internal class PocketWebTaskActions(
                 complete(null, error ?: "任务结果尚未读取，请重试")
             } else {
                 val captured = task.copy(raw = JSONObject(task.raw.toString()))
-                fun finish(approvals: JSONArray) {
+                fun finish(approvals: JSONArray, cold: TaskStore.ColdOwnerQuestionReview? = null) {
                     if (!current()) complete(null, "原任务窗口已关闭，请重新打开后核对")
                     else {
                         val binding = if (captured.raw.optString("taskProjection") == "approval_only")
                             controller.state.tasks.firstOrNull { it.id == captured.id } ?: throw IllegalStateException("原审批任务窗口已关闭") else captured
                         val currentOwnerWorkWait = !specialOwnerTask(captured) && PocketWebOwnerQuestions.isOrdinaryOwnerWorkWait(captured.raw) &&
                             controller.hasCurrentOriginalOwnerWorkQuestion(captured)
-                        val result = review(captured, approvals, reviews, controller.state.activeTaskId, canUseTaskControls(captured), binding, currentOwnerWorkWait)
+                        val exactCold = cold?.takeIf { !currentOwnerWorkWait && coldWindow() }
+                        val result = review(captured, approvals, reviews, controller.state.activeTaskId, canUseTaskControls(captured), binding, currentOwnerWorkWait, exactCold)
                         // This optional presentation fact is not part of the task or its single-use review handle.
                         if (approvals.length() == 0) result.putOpt("savedTeamDefaultModel", missingSavedTeamDefault)
                         complete(result, null)
                     }
                 }
                 try {
-                    if (pendingCapabilityApprovals(captured).any { PocketWebApprovals.needsOriginalPlan(it)||it.optString("tool")=="team_integrate_file" }) {
+                    val coldCandidate = approvalId == null && coldWindow() && !specialOwnerTask(captured) &&
+                        PocketWebOwnerQuestions.isOrdinaryOwnerWorkWait(captured.raw) &&
+                        !controller.hasCurrentOriginalOwnerWorkQuestion(captured) &&
+                        captured.raw.opt("hasUnresolvedOperations") == false &&
+                        pendingCapabilityApprovals(captured).isEmpty() &&
+                        captured.raw.optJSONObject("evidence")?.optJSONObject("ownerQuestion")?.optJSONArray("options")?.length()?.let { it >= 2 } == true
+                    if (coldCandidate || pendingCapabilityApprovals(captured).any { PocketWebApprovals.needsOriginalPlan(it)||it.optString("tool")=="team_integrate_file" }) {
                         controller.runEcosystemControlWork(Runnable {
+                            val cold = if (coldCandidate) runCatching { controller.readColdOwnerQuestion(captured, coldWindow) }.getOrNull() else null
                             val result = runCatching { PocketWebApprovals.read(captured, controller) }
                                 .onFailure { RuntimeDiagnostics.event("diagnostics", "failed", "TASK_REVIEW_PLAN_READ_FAILED", null, it) }
                             postToMain(Runnable {
                                 if (!closed()) result.fold({ approvals ->
-                                    try { finish(approvals) } catch (failure: Exception) {
+                                    try { finish(approvals, cold) } catch (failure: Exception) {
                                         readFailed("TASK_REVIEW_PRESENTATION_FAILED", "任务结果暂时无法核对", failure, complete)
                                     }
                                 }, { failure -> complete(null, failure.message ?: "原计划暂时无法读取") })
@@ -148,7 +158,8 @@ internal class PocketWebTaskActions(
 
         /** Only original native task facts and original plan reads can add review actions. */
         fun review(task: UiTask, approvalViews: JSONArray, reviews: PocketWebTaskReviews, activeTaskId: String?, canUseTaskControls: Boolean,
-                   bindingTask: UiTask = task, currentOwnerWorkWait: Boolean = false): JSONObject {
+                   bindingTask: UiTask = task, currentOwnerWorkWait: Boolean = false,
+                   coldQuestion: TaskStore.ColdOwnerQuestionReview? = null): JSONObject {
             if (task.raw.optString("taskProjection") == "approval_only") {
                 val read = task.raw.getJSONObject("capabilityApprovalRead")
                 val original = pendingCapabilityApprovals(task).singleOrNull()
@@ -175,14 +186,20 @@ internal class PocketWebTaskActions(
             val unknown = unresolvedForReview(task)
             val approvals = pendingCapabilityApprovals(task)
             val projectContinuation = PocketWebProjectContinuation.view(task, task.id == activeTaskId)
+            val cold = coldQuestion?.takeIf { canUseTaskControls && !special && !currentOwnerWorkWait && unknown.isEmpty() &&
+                approvals.isEmpty() && it.taskId() == task.id && it.runId() == task.raw.opt("runId") && it.epoch() == task.raw.optInt("coordinatorEpoch") }
             val question = PocketWebOwnerQuestions.view(task.raw,
-                currentOwnerWorkWait.takeIf { !special && PocketWebOwnerQuestions.isOrdinaryOwnerWorkWait(task.raw) })
+                currentOwnerWorkWait.takeIf { !special && PocketWebOwnerQuestions.isOrdinaryOwnerWorkWait(task.raw) }, cold)
             val screenshot = task.raw.optJSONObject("evidence")?.optJSONObject("screenshot")
             if (task.raw.optString("actorId") == "owner" && task.raw.optString("spaceId") == "private" &&
                 task.raw.optJSONObject("origin")?.optString("kind") !in setOf("group", "paired_device") &&
                 screenshot?.optString("imageId")?.isNotBlank() == true && screenshot.optString("state") != "deleted") allowed["tasks.deleteScreenshot"] = "删除这张本机截图"
             if (canUseTaskControls && !special) {
                 PocketWebOwnerQuestions.actions(question).forEach { allowed[it] = if (it == PocketWebOwnerQuestions.CHOOSE) "选择原问题答案" else "回答原问题" }
+                if (cold?.saved() == false && question?.opt("replyAvailability") == "cold_save_only")
+                    allowed[PocketWebOwnerQuestions.SAVE_COLD] = "保存原问题回答"
+                if (cold?.saved() == true && question?.opt("answered") == true)
+                    allowed[PocketWebOwnerQuestions.CONTINUE_COLD] = "确认用原回答继续工作"
                 if (task.status == "needs_confirmation" && task.id != activeTaskId) allowed["tasks.confirm"] = "核对结果"
                 if (approvals.isNotEmpty()) allowed["tasks.approve"] = "审阅操作授权"
                 if (unknown.any { it.optString("tool") != "team_integrate_file" && !it.has(OwnerDraftFirstBuild.PENDING_FIELD) && it.optString("operationId", it.optString("id")).isNotBlank() && (it.optString("format")!=PhoneActionRecovery.FORMAT || it.optBoolean("canRecord")) }) allowed["tasks.resolve"] = "核对原操作"
@@ -209,7 +226,7 @@ internal class PocketWebTaskActions(
             }
             val positiveApprovalIds = approvalViews.objects().filter { it.optJSONObject("webReview")?.optBoolean("canApprove") == true }
                 .map { it.optString("approvalId", it.optString("id")) }.filter { it.isNotBlank() }.toSet()
-            val handle = reviews.create(task, allowed.keys, positiveApprovalIds)
+            val handle = reviews.create(task, allowed.keys, positiveApprovalIds, coldQuestion = cold)
             return JSONObject().put("reviewHandle", handle).put("expiresInMs", 120_000)
                 .put("task", PocketWebState.task(task, images = true))
                 .put("ownerQuestion", question ?: JSONObject.NULL)

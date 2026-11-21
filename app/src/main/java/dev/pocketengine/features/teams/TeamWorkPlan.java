@@ -9,7 +9,7 @@ import org.json.JSONObject;
 
 /** Owner-authored ordering within the existing bounded team run, never a product task queue. */
 public final class TeamWorkPlan {
-    static final String PHONE_OUTPUT_NOT_RETURNED="phone_output_not_returned";
+    public static final String PHONE_OUTPUT_NOT_RETURNED="phone_output_not_returned";
     private TeamWorkPlan(){}
     static void validate(JSONArray members)throws Exception {
         Map<String,JSONObject> slots=new HashMap<>();for(int i=0;i<members.length();i++){JSONObject slot=members.getJSONObject(i);if(slots.put(slot.getString("id"),slot)!=null)throw new IllegalArgumentException("成员ID重复");}

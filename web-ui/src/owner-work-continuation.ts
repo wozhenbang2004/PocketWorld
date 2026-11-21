@@ -6,6 +6,7 @@ const stopped = new Set(['paused', 'interrupted', 'failed', 'awaiting_user', 'ne
 const unavailable = '暂时无法核对原任务的续接条件。请重新读取原工作，不要重复发起。';
 const blocked: Record<string, string> = {
   stop_requested: '这件工作已经请求停止，不能开始新一轮。请查看原工作的停止记录。',
+  cold_answer_owner_review: '这条已保存的回答只能在原问题下单独确认继续。若当前没有确认入口，可重新读取原工作。',
   unresolved_effect: '有操作还没有确定结果。先在原工作核对是否已经发生，再决定要不要继续。',
   related_unavailable: '关联工作的状态还不能核对。先查看原协作记录，不要重复派发。',
   waiting_children: '关联工作还没结束，先等它交回结果，再决定要不要继续。',

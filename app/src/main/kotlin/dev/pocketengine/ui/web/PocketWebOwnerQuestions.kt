@@ -17,7 +17,10 @@ import org.json.JSONObject
 internal object PocketWebOwnerQuestions {
     const val ANSWER = "tasks.answerQuestion"
     const val CHOOSE = "tasks.answerQuestionChoice"
+    const val SAVE_COLD = "tasks.saveColdQuestionChoice"
+    const val CONTINUE_COLD = "tasks.continueColdQuestion"
     val commands = setOf(ANSWER, CHOOSE)
+    val coldCommands = setOf(SAVE_COLD, CONTINUE_COLD)
 
     private fun nativeQuestion(task: JSONObject): JSONObject? = when (task.optString("kind")) {
         "phone" -> OwnerPhoneQuestions.pageQuestion(task)
@@ -54,16 +57,23 @@ internal object PocketWebOwnerQuestions {
             .joinToString("") { "%02x".format(it.toInt() and 255) }
     }
 
-    fun view(task: JSONObject, currentOwnerWorkWait: Boolean? = null): JSONObject? {
+    fun view(task: JSONObject, currentOwnerWorkWait: Boolean? = null,
+             cold: dev.pocketengine.store.TaskStore.ColdOwnerQuestionReview? = null): JSONObject? {
         val question = nativeQuestion(task) ?: return null
         val view = JSONObject().put("questionKey", key(task, question.getJSONObject("identity")))
             .put("kind", kind(task)).put("question", question.getString("question"))
             .put("answered", question.getBoolean("answered")).put("executionAuthorized", false)
         if (currentOwnerWorkWait != null && !question.getBoolean("answered"))
-            view.put("replyAvailability", if (currentOwnerWorkWait) "current_wait" else "unconfirmed")
+            view.put("replyAvailability", when {
+                currentOwnerWorkWait -> "current_wait"
+                cold?.saved() == false -> "cold_save_only"
+                else -> "unconfirmed"
+            })
         // Deliberately omit native identity, notice tokens, holds, grants and controllers.
         for (name in listOf("options", "answerText", "continuationState", "ownerAction"))
             if (question.has(name)) view.put(name, question.get(name))
+        if (cold?.saved() == true && question.getBoolean("answered"))
+            view.put("continuationState", "saved_cold_owner_confirmation_required").put("savedOptionId", cold.selectedOptionId())
         return JSONObject(view.toString())
     }
 
@@ -137,6 +147,14 @@ internal object PocketWebOwnerQuestions {
         // No resume, new task, restored controller, grant or replacement phone port is created.
         if (original.optionId != null) controller.answerOwnerQuestionChoice(original.identity, original.optionId, receive)
         else controller.answerOwnerQuestion(original.identity, original.text!!, receive)
+    }
+
+    internal fun coldSaveReceipt(task: JSONObject, option: String, result: JSONObject?): JSONObject {
+        val original = prepare(task, CHOOSE, JSONObject().put("optionId", option))
+        val view = savedReceipt(original, result)
+        check(view.opt("continuationRequested") == false && view.opt("executionAuthorized") == false &&
+            view.opt("continuationState") == "saved_cold_owner_confirmation_required") { "尚未核对这条只保存的原回答" }
+        return view
     }
 
     internal fun savedReceipt(original: Submission, result: JSONObject?): JSONObject {

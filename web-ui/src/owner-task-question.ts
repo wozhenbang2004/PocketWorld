@@ -4,9 +4,10 @@ export type OwnerQuestionView = {
   kind: 'phone' | 'capabilities';
   question: string;
   answered: boolean;
-  replyAvailability?: 'current_wait' | 'unconfirmed';
+  replyAvailability?: 'current_wait' | 'unconfirmed' | 'cold_save_only';
   options?: OwnerQuestionOption[];
   answerText?: string;
+  savedOptionId?: string;
   continuationState?: string;
 };
 export type OwnerQuestionReceipt = {
@@ -47,8 +48,10 @@ export async function submitOwnerQuestion(question: OwnerQuestionView, answer: O
   if ('optionId' in answer) {
     if (typeof answer.optionId !== 'string' || !question.options?.some(option => option.id === answer.optionId))
       throw new Error('原问题中没有这个选项，请重新核对或填写回答。');
-    action = 'tasks.answerQuestionChoice'; args = {optionId: answer.optionId};
+    action = question.replyAvailability === 'cold_save_only' ? 'tasks.saveColdQuestionChoice' : 'tasks.answerQuestionChoice';
+    args = {optionId: answer.optionId};
   } else {
+    if (question.replyAvailability === 'cold_save_only') throw new Error('现在只能保存原问题列出的答案。');
     if (!answer.text.trim() || answer.text.length > 4000) throw new Error('请输入1至4000字的回答。');
     action = 'tasks.answerQuestion'; args = {text: answer.text};
   }
@@ -57,6 +60,7 @@ export async function submitOwnerQuestion(question: OwnerQuestionView, answer: O
 
 export function ownerQuestionSavedMessage(question: OwnerQuestionView, receipt?: OwnerQuestionReceipt | null): string {
   const state = receipt?.continuationState || question.continuationState;
+  if (state === 'saved_cold_owner_confirmation_required') return '回答已保存到原工作，工作尚未继续。';
   if (state === 'saved_budget_exhausted') return '回答已保存，原任务剩余预算不足；请核对本次范围。';
   if (state === 'saved_scope_expired') return '回答已保存，原任务授权已到期；请核对本次范围。';
   if (receipt?.continuationRequested || state === 'original_worker_requested')
