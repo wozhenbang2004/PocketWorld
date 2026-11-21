@@ -18596,7 +18596,7 @@ public final class TaskStore {
             if(TaskStoreDeviceTasks.deviceTask(value)){JSONObject previous=read(value.getString("id"));long revision=previous==null?0:previous.optLong("deviceStateRevision");value.put("deviceStateRevision",Math.addExact(revision,1));}
             if(channel||group){String key=group?"groupStateRevision":"channelStateRevision";JSONObject previous=read(value.getString("id"));long revision=previous==null?0:previous.optLong(key,0);if(revision==Long.MAX_VALUE)throw new IllegalStateException("渠道任务回执版本已耗尽");value.put(key,revision+1);}
             if(value.optJSONObject("origin")!=null&&"owner_reviewed_realtime".equals(value.getJSONObject("origin").optString("kind"))){JSONObject previous=read(value.getString("id"));long revision=previous==null?0:Math.max(1,previous.optLong("voiceStateRevision",previous.optLong("updatedAt",1)));if(revision==Long.MAX_VALUE)throw new IllegalStateException("语音任务记录版本已耗尽");value.put("voiceStateRevision",revision+1);}
-            value.put("updatedAt",System.currentTimeMillis());ContentValues v=new ContentValues();v.put("task_id",value.getString("id"));v.put("document",TaskAuditStore.coreAndImport(db,value));v.put("audit_format",1);JSONObject header=TaskAuditStore.header(db,value);MainPhoneOwnerStep.project(value,header);projectOwnerWorkHeader(value,header);projectOwnerResultHandlingHeader(value,header);projectOwnerWorkPreparationHeader(value,header);projectDeviceWorkspaceNavigation(value,header);OwnerSavedDeviceChoice.project(value,header);if("needs_confirmation".equals(value.optString("status")))header.put("resultReviewDigest",resultReviewDigest(value));projectResultImageIdentity(value,header);v.put("ui_header",header.toString());v.put("updated_at",value.getLong("updatedAt"));if(db.update("tasks",v,"task_id=?",new String[]{value.getString("id")})==0&&db.insertOrThrow("tasks",null,v)<0)throw new IllegalStateException("任务事务写入失败");TaskIdentityIndex.sync(db,value.getString("id"),value);
+            value.put("updatedAt",System.currentTimeMillis());ContentValues v=new ContentValues();v.put("task_id",value.getString("id"));v.put("document",TaskAuditStore.coreAndImport(db,value));v.put("audit_format",1);JSONObject header=TaskAuditStore.header(db,value);MainPhoneOwnerStep.project(value,header);projectOwnerWorkHeader(value,header);projectOwnerResultHandlingHeader(value,header);projectOwnerWorkPreparationHeader(value,header);projectDeviceWorkspaceNavigation(value,header);OwnerSavedDeviceChoice.project(value,header);if("needs_confirmation".equals(value.optString("status")))header.put("resultReviewDigest",resultReviewDigest(value));projectResultImageIdentity(value,header);projectOriginalLocalPhoneSavedResult(value,header);v.put("ui_header",header.toString());v.put("updated_at",value.getLong("updatedAt"));if(db.update("tasks",v,"task_id=?",new String[]{value.getString("id")})==0&&db.insertOrThrow("tasks",null,v)<0)throw new IllegalStateException("任务事务写入失败");TaskIdentityIndex.sync(db,value.getString("id"),value);
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
@@ -18618,6 +18618,24 @@ public final class TaskStore {
         }
     }
     private static String resultImageSha256(byte[] bytes)throws Exception{StringBuilder hash=new StringBuilder();for(byte value:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))hash.append(String.format(java.util.Locale.ROOT,"%02x",value&255));return hash.toString();}
+    /** A Home navigation fact from this write's original confirmed answer. No body, lookup or access grant. */
+    private static void projectOriginalLocalPhoneSavedResult(JSONObject task,JSONObject header){
+        if(!PhoneActionRecovery.local(task)||!"completed".equals(task.opt("status"))||Boolean.TRUE.equals(task.opt("cancelRequested"))||
+                Boolean.FALSE.equals(task.opt("contextAvailable"))||Boolean.TRUE.equals(task.opt("contextWithdrawn"))||
+                Boolean.TRUE.equals(task.opt("sourceCurrentReadRequired"))||"source_unavailable".equals(task.opt("taskProjection")))return;
+        JSONObject receipt=task.optJSONObject("resultConfirmation"),evidence=task.optJSONObject("evidence");
+        Object revision=task.opt("resultRevision"),confirmed=receipt==null?null:receipt.opt("confirmedResultRevision");
+        if(!(revision instanceof Integer||revision instanceof Long)||!(confirmed instanceof Integer||confirmed instanceof Long)||
+                ((Number)revision).longValue()<1||((Number)revision).longValue()!=((Number)confirmed).longValue()||
+                !Boolean.TRUE.equals(receipt.opt("completed"))||!(receipt.opt("resultReviewDigest") instanceof String review)||!review.matches("[a-f0-9]{64}")||
+                evidence==null||!(evidence.opt("modelSummary") instanceof String body)||body.isBlank()||body.length()>12000)return;
+        String id=task.optString("id"),run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");
+        try{
+            if(dev.pocketengine.phone.observation.PhoneFinalPageReceipt.retained(evidence,id,run,epoch)==null||
+                    !CompactionPlan.fingerprint(body).equals(evidence.getJSONObject("nativeFinalAnswer").opt("answerFingerprint")))return;
+            header.put("originalLocalPhoneSavedResult",new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("resultRevision",revision));
+        }catch(Exception unavailable){/* Optional presentation; leave the original confirmed result and directory unchanged. */}
+    }
     /** Read-only cache identity for these exact native result facts, never execution/confirmation authority. */
     private void projectResultImageIdentity(JSONObject task,JSONObject projection)throws Exception{
         projection.put("resultRevision",task.optLong("resultRevision"));projection.remove("resultImageDigest");JSONObject image=task.optJSONObject("evidence");

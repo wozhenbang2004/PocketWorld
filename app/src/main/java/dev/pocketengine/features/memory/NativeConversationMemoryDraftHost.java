@@ -316,11 +316,15 @@ public final class NativeConversationMemoryDraftHost {
         if(!id.matches("[a-f0-9-]{36}")||!ownerPersonalRecord(pin))throw new SecurityException("原回执未指向本人正式记忆");
         JSONObject out=origin(task,run,epoch,operation,digest).put("format","pocketworld.original-saved-personal-memory.v1")
                 .put("duplicate",duplicate).put("id",id).put("originalRevision",original);
-        JSONObject current=memory.handle("get",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("record");
+        JSONObject current=!duplicate&&chosenRevision==null&&requestedSpan==null
+                ? memory.originalSavedPersonalRecord(id,original)
+                : memory.handle("get",new JSONObject().put("scope",scope()).put("id",id)).getJSONObject("record");
         JSONObject after=tasks.conversationRepository().personalMemoryControls(foregroundConversation);
         if(!after.getBoolean("enabled")||after.getLong("readRevision")!=controls.getLong("readRevision"))throw new SecurityException("原对话的读取选择已变化");
+        long now=System.currentTimeMillis();
+        if(current==null)return out.put("status","retired").put("readExpiresAt",now+600_000L);
         if(!id.equals(current.getString("id"))||!ownerPersonalRecord(current))throw new SecurityException("不能核对原个人记忆");
-        long revision=positive(current,"revision"),now=System.currentTimeMillis();
+        long revision=positive(current,"revision");
         if(revision<original||revision==original&&!pin.getString("text").equals(current.getString("text")))throw new SecurityException("原版本内容不可核对");
         out.put("currentRevision",revision).put("readExpiresAt",now+600_000L);
         if(!Boolean.TRUE.equals(current.opt("active"))||current.optBoolean("archiveOnly")||!current.isNull("expiresAt")&&positive(current,"expiresAt")<=now)

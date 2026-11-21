@@ -5,7 +5,9 @@ import { ShimmerText } from './library';
 import { VisibleOriginalMemoryQuote } from './VisibleOriginalMemoryQuote';
 import type { ConversationDraftTarget } from './SkillDraftReview';
 
-type Read = { status: 'read' | 'changed' | 'not_active'; currentRevision: number; readExpiresAt: number; text?: string; visibleQuoteKey?: string };
+type Read = { status: 'retired'; readExpiresAt: number }
+  | { status: 'read' | 'changed' | 'not_active'; currentRevision: number; readExpiresAt: number; text?: string; visibleQuoteKey?: string };
+const retiredFields = new Set(['format', 'taskId', 'runId', 'epoch', 'operationId', 'proposalDigest', 'id', 'originalRevision', 'duplicate', 'status', 'readExpiresAt']);
 const positive = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
 export const originalMemoryWindow = () => {
   const snapshot = bridge.getState(), s = snapshot.state, v = snapshot.view as Record<string, unknown> | undefined;
@@ -32,14 +34,17 @@ export function OriginalSavedMemory({ target, id, revision, duplicate, windowKey
       const value = await bridge.command('memoryDraft.query', { ...target, view: 'saved_record', ...(chosenRevision == null ? {} : { chosenRevision }) });
       if (seq !== s.seq || !current()) return;
       if (value.format !== 'pocketworld.original-saved-personal-memory.v1' || Object.entries(target).some(([k, v]) => value[k] !== v)
-          || value.id !== id || value.originalRevision !== revision || value.duplicate !== duplicate || !positive(value.currentRevision) || value.currentRevision < revision
-          || !positive(value.readExpiresAt) || !['read', 'changed', 'not_active'].includes(value.status)
-          || (value.status === 'read' ? (value.currentRevision !== (chosenRevision ?? revision) || typeof value.text !== 'string' || !value.text.trim()) : value.text !== undefined)
-          || (value.status === 'changed' && value.currentRevision === (chosenRevision ?? revision))) throw new Error();
+          || value.id !== id || value.originalRevision !== revision || value.duplicate !== duplicate || !positive(value.readExpiresAt)) throw new Error();
+      const retired = value.status === 'retired';
+      if (retired ? duplicate || chosenRevision != null || Object.keys(value).some(key => !retiredFields.has(key))
+          : !positive(value.currentRevision) || value.currentRevision < revision || !['read', 'changed', 'not_active'].includes(value.status)
+            || (value.status === 'read' ? (value.currentRevision !== (chosenRevision ?? revision) || typeof value.text !== 'string' || !value.text.trim()) : value.text !== undefined)
+            || (value.status === 'changed' && value.currentRevision === (chosenRevision ?? revision))) throw new Error();
       const left = value.readExpiresAt - Date.now();
       if (left <= 0) { retire(); return; }
       s.timer = window.setTimeout(retire, left);
-      setRead({ status: value.status, currentRevision: value.currentRevision, readExpiresAt: value.readExpiresAt, text: value.text, visibleQuoteKey: typeof value.visibleQuoteKey === 'string' && /^[a-f0-9]{64}$/.test(value.visibleQuoteKey) ? value.visibleQuoteKey : undefined });
+      setRead(retired ? { status: 'retired', readExpiresAt: value.readExpiresAt }
+        : { status: value.status, currentRevision: value.currentRevision, readExpiresAt: value.readExpiresAt, text: value.text, visibleQuoteKey: typeof value.visibleQuoteKey === 'string' && /^[a-f0-9]{64}$/.test(value.visibleQuoteKey) ? value.visibleQuoteKey : undefined });
       setPhase('settled');
     } catch {
       if (seq === s.seq && current()) { setRead(null); setPhase('unavailable'); }
@@ -59,6 +64,7 @@ export function OriginalSavedMemory({ target, id, revision, duplicate, windowKey
     {phase === 'loading' && <ShimmerText>正在核对这条正式记忆…</ShimmerText>}
     {phase === 'closed' && <p role="status">原阅读窗口已关闭，未保留正文。回到原回答可重新核对。</p>}
     {phase === 'unavailable' && <p role="status">没能核对这条正式记忆，未显示旧正文。原保存回执不等于现在仍可读取。</p>}
+    {read?.status === 'retired' && <p role="status">这条已不在个人记忆中。原对话和当时的保存回执仍保留。</p>}
     {read?.status === 'not_active' && <p role="status">回读时，这条记忆不在当前可用范围，未显示正文。</p>}
     {read?.status === 'changed' && <><p role="status">回执是第 {revision} 版。这条记忆已变为第 {read.currentRevision} 版，没有显示旧版或新版正文。</p>
       <Button variant="secondary" onClick={() => withCurrentRead(() => { void load(read.currentRevision); })}>查看这一条的第 {read.currentRevision} 版</Button></>}

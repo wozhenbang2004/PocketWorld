@@ -59,8 +59,13 @@ type WorkReturn = {
 /** A private original may have a saved result without a butler message.
  * This is an entry to its existing result surface, never a write receipt. */
 function originalSavedResult(task: ButlerHomeTask, view = workCollectionPresentation(task)) {
-  const runId = task.raw?.runId, epoch = task.raw?.coordinatorEpoch;
-  const identity=homeWorkIdentity(task), nativeLabel=identity?homeDomainResult(task,identity.domain):'';
+  const raw=task.raw, runId=raw?.runId, epoch=raw?.coordinatorEpoch;
+  const identity=homeWorkIdentity(task), original=raw?.originalLocalPhoneSavedResult;
+  // The cold list only has the native header. Do not treat completed status or a task headline as an answer.
+  const savedPhone=identity?.domain==='phone'&&raw?.nativePrivatePhoneResultSource===true&&raw.status===task.status&&
+    raw.contextWithdrawn!==true&&original?.taskId===task.id&&original.runId===runId&&original.epoch===epoch&&
+    Number.isSafeInteger(raw.resultRevision)&&raw.resultRevision>0&&original.resultRevision===raw.resultRevision;
+  const nativeLabel=savedPhone?'原任务已记录结果':identity?homeDomainResult(task,identity.domain):'';
   const label=view.handling?.resultAvailable===true?'成果已保存':nativeLabel;
   return view.completed && !!label && !reportedHomeWork(task, view.handling) &&
     typeof runId === 'string' && runId.trim() && Number.isSafeInteger(epoch) && (epoch > 0 || epoch === 0 && !!identity?.direct) ? {runId, epoch, label} : null;

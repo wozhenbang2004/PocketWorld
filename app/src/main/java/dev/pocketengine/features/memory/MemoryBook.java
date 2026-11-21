@@ -1450,6 +1450,13 @@ public final class MemoryBook {
         JSONObject row=require(Scope.from(scope),id); // Reject out-of-scope IDs before any eligibility lookup.
         return inspectedRecord(row,activeInspection(System.currentTimeMillis()));
     }
+    /** Exact saved owner receipt only. Null proves retirement; other missing/unreadable records still fail. */
+    synchronized JSONObject originalSavedPersonalRecord(String id,long savedRevision)throws Exception{
+        if(!id.matches("[a-f0-9-]{36}")||savedRevision<1)throw new IllegalArgumentException("原个人记忆版本无效");
+        Scope owner=new Scope("owner","private");
+        if(!records.containsKey(id)&&recordVersionForgotten(owner,id,savedRevision))return null;
+        return inspectedRecord(require(owner,id),activeInspection(System.currentTimeMillis()));
+    }
     /** Inspection keeps expired records visible; only retrieval excludes them and their descendants. */
     public synchronized JSONArray list(JSONObject scope)throws Exception{
         Scope s=Scope.from(scope);ActiveInspection inspection=activeInspection(System.currentTimeMillis());List<JSONObject> rows=new ArrayList<>();

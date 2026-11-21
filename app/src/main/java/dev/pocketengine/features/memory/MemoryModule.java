@@ -133,6 +133,10 @@ public final class MemoryModule implements EngineModule {
     public JSONArray sourceRefsForSynchronization(JSONObject authenticatedScope)throws Exception {
         return book.sourceRefsForSynchronization(authenticatedScope);
     }
+    /** Host-only lookup for an already verified original saved personal receipt. */
+    JSONObject originalSavedPersonalRecord(String id,long savedRevision)throws Exception {
+        return book.originalSavedPersonalRecord(id,savedRevision);
+    }
     /** Host-only read; intentionally not exposed through handle() or model tools. */
     public boolean isSourceForgotten(JSONObject authenticatedScope,SourceRef ref)throws Exception {
         return book.isSourceForgotten(authenticatedScope,ref);
