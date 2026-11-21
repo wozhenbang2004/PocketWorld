@@ -188,6 +188,19 @@ public final class SettingsStore {
         return dev.pocketengine.features.capabilities.CapabilityApprovalPolicy.normalize(input);
     }
 
+    /** Positive absence only, for the saved-team base model prerequisite. Never resolves or opens a credential. */
+    public synchronized ModelSelectionCoordinator.Status missingSavedTeamDefault()throws Exception {
+        requireConfirmed();
+        var status=modelSelection.status();
+        if(status.pending()||!"api_key".equals(prefs.getString("modelRoute","api_key")))return null;
+        Profiles current=profiles();
+        // A legacy/unmigrated store or any selected connection is not an absent default.
+        if(current==null||!current.selected.isEmpty())return null;
+        JSONObject bindings=modelGroupsDocument().getJSONObject("purposeBindings");
+        requireConfirmed();
+        return !bindings.has("MAIN")&&!bindings.has("SUMMARY")&&status.equals(modelSelection.status())?status:null;
+    }
+
     public synchronized ModelConfig get() throws Exception {
         modelSelection.requireAvailable();
         ModelConfig selected=getSelected(),global=selected;

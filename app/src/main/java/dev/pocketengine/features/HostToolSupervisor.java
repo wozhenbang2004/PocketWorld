@@ -925,7 +925,40 @@ public final class HostToolSupervisor implements CapabilityPort {
         try{original.check();tasks.checkCapability(taskId,runId,epoch,name,original);return result;}
         catch(Exception stopped){throw new dev.pocketengine.core.CapabilityPort.ReceiptAfterStop(original,result,stopped);}
     }
-    @Override public JSONObject beforeTool(String name,JSONObject arguments,RunControl original)throws Exception{if(workProfile!=null)try{workProfile.checkCurrent();}catch(Exception withdrawn){original.check();return new JSONObject().put("ok",false).put("accepted",false).put("status","not_dispatched").put("code","work_profile_source_changed").put("message","原工作配置或来源已变化；本次尚未派发，请回原任务审阅。").put("replayAllowed",false);}return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.beforeTool(name,arguments,original):null;}
+    /** Ordinary saved roster only; this gate does not select a model or open a team operation. */
+    private JSONObject savedTeamPrerequisite(String name,JSONObject args,RunControl original)throws Exception{
+        if(!"teams_start".equals(name)||!allowWrites||original==null||original!=ownerWorkTeamControl
+                ||!original.matchesHostRun(taskId,runId,epoch)||original.isPaused())return null;
+        Tool route=routes.get(name);
+        if(route==null||route!=nativeRoutes.get(name)||!"teams".equals(route.feature)||!"start".equals(route.command)
+                ||args==null||!(args.opt("teamId") instanceof String id)||!id.matches("[a-f0-9-]{36}")
+                ||!(args.opt("goal") instanceof String goal)||goal.isBlank()||goal.length()>8000
+                ||args.length()!=(args.has("rounds")?3:2))return null;
+        if(args.has("rounds")){
+            Object rounds=args.opt("rounds");
+            if(!(rounds instanceof Integer||rounds instanceof Long)||((Number)rounds).longValue()<1||((Number)rounds).longValue()>2)return null;
+        }
+        if(!(host.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule teams))return null;
+        original.check();
+        long pause=original.pauseRevision();
+        try{
+            if(!ownerWorkExecutor(tasks.get(taskId,false)))return null;
+            tasks.checkCapability(taskId,runId,epoch,name,original);
+            if(!teams.savedLocalTeamMissingDefault(id))return null;
+        }catch(InterruptedException stopped){throw stopped;}
+        catch(Exception unavailable){original.check();return null;}
+        original.check();
+        if(original.isPaused()||original.pauseRevision()!=pause)return null;
+        return new JSONObject().put("ok",false).put("accepted",false).put("status","not_dispatched")
+                .put("code","saved_team_default_model_unconfigured").put("requiresPause",true).put("automaticReplayAllowed",false)
+                .put("message","这次团队未启动。这个已保存的本机编组需要应用默认模型；当前对话模型不会替代它。请在模型设置选择应用默认模型，再回原工作核对。");
+    }
+    @Override public JSONObject beforeTool(String name,JSONObject arguments,RunControl original)throws Exception{
+        if(workProfile!=null)try{workProfile.checkCurrent();}catch(Exception withdrawn){original.check();return new JSONObject().put("ok",false).put("accepted",false).put("status","not_dispatched").put("code","work_profile_source_changed").put("message","原工作配置或来源已变化；本次尚未派发，请回原任务审阅。").put("replayAllowed",false);}
+        JSONObject savedTeamGate=savedTeamPrerequisite(name,arguments,original);
+        if(savedTeamGate!=null)return savedTeamGate;
+        return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.beforeTool(name,arguments,original):null;
+    }
     @Override public dev.pocketengine.core.NativeToolObservation.Requirement observationRequirement(String name,JSONObject arguments,RunControl original)throws Exception{return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.observationRequirement(name,arguments,original):dev.pocketengine.core.NativeToolObservation.Requirement.NONE;}
     @Override public dev.pocketengine.core.NativeToolObservation takeToolObservation(String name,String operation,RunControl original)throws Exception{return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.takeToolObservation(name,operation,original):null;}
     /** Current pinned native routes plus stable plugin capability identities; this creates no grants. */

@@ -84,6 +84,23 @@ public final class TeamsModule implements EngineModule {
         }
     }
     private synchronized JSONObject definition(String id)throws Exception{JSONArray all=definitions();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return new JSONObject(all.getJSONObject(i).toString());throw new SecurityException("原已配置团队不存在");}
+    /** Metadata only: test the selected saved native roster, not current or historical runs. */
+    public synchronized boolean savedLocalTeamMissingDefault(String teamId)throws Exception {
+        if(researchHost==null||parentHost==null)return false;
+        var missing=context.settings.missingSavedTeamDefault();
+        if(missing==null)return false;
+        JSONObject team=definition(teamId);
+        if(!"collaborate".equals(team.opt("mode"))||!"classic".equals(team.optString("discussionFormat","classic"))
+                ||team.has("definitionKind")||team.has("nativeWorkProfileModels"))return false;
+        JSONArray members=team.optJSONArray("members");
+        if(members==null||members.length()<1||members.length()>4)return false;
+        for(int i=0;i<members.length();i++){
+            JSONObject member=members.getJSONObject(i);
+            if(!"model".equals(member.opt("runner"))||!"phone".equals(member.opt("device"))
+                    ||member.has("writeFiles")||member.has("remoteProduction"))return false;
+        }
+        return missing.equals(context.settings.modelSelection().status());
+    }
     /** Native private-owner read only, deliberately not a model command. */
     public JSONObject ownerAttention(String afterRunId,String afterItemId,int limit)throws Exception{return coordinator.ownerAttention(afterRunId,afterItemId,limit);}
     public JSONObject ownerDecisionPage(String runId)throws Exception{return coordinator.ownerDecisionPage(runId);}
