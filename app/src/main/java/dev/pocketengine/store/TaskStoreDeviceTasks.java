@@ -376,12 +376,24 @@ public final class TaskStoreDeviceTasks {
         public void requireCurrent()throws Exception{issuer.requireOwnerHistory(this);}
         /** Used only for a private owner's local Book lookup. No active receiving grant or route is issued. */
         public boolean directExportForLocalBook(String localDevice)throws Exception{
-            synchronized(issuer.owner){requireCurrent();JSONObject w=originalWire(),parent=issuer.task(id),a=w.getJSONObject("arguments");
-                return "owner".equals(parent.optString("actorId"))&&"private".equals(parent.optString("spaceId"))&&parent.optJSONObject("origin")==null
-                    &&"ToolInvocation".equals(w.optString("messageType"))&&"tool.invoke".equals(w.optString("method"))&&"workspace-v1".equals(w.optString("capabilityVersion"))
-                    &&"workspace".equals(w.getJSONObject("resourceBinding").optString("kind"))&&"workspace.export".equals(a.optString("toolName"))&&"read".equals(a.optString("effect"))
-                    &&localDevice.equals(w.optString("callerDeviceId"))&&localDevice.equals(w.optString("originDeviceId"))&&id.equals(w.optString("rootTaskId"))
-                    &&id.equals(w.optString("parentTaskId"))&&id.equals(w.optString("localTaskId"))&&operation.equals(w.optString("operationId"));
+            synchronized(issuer.owner){
+                var read=issuer.requireOwnerHistory(this);
+                JSONObject w=originalWire(),parent=read.task(),linked=read.allocation(),a=w.getJSONObject("arguments"),resource=w.getJSONObject("resourceBinding");
+                if(!id.equals(parent.opt("id"))||!"owner".equals(parent.opt("actorId"))||!"private".equals(parent.opt("spaceId"))||!parent.isNull("origin")
+                        ||parent.optBoolean("contextWithdrawn")||Boolean.FALSE.equals(parent.opt("contextAvailable"))||parent.optBoolean("sourceCurrentReadRequired")
+                        ||"source_unavailable".equals(parent.opt("taskProjection"))||!"ToolInvocation".equals(w.opt("messageType"))
+                        ||!"tool.invoke".equals(w.opt("method"))||!"workspace-v1".equals(w.opt("capabilityVersion"))
+                        ||!"workspace".equals(resource.opt("kind"))||!"workspace.export".equals(a.opt("toolName"))||!"read".equals(a.opt("effect"))
+                        ||!localDevice.equals(w.opt("callerDeviceId"))||!localDevice.equals(w.opt("originDeviceId"))
+                        ||!id.equals(w.opt("rootTaskId"))||!id.equals(w.opt("parentTaskId"))||!operation.equals(w.opt("operationId")))return false;
+                String allocation=linked.getString("allocationId"),target=w.getString("targetDeviceId"),digest=w.getString("argumentsDigest");
+                Object requestTask=w.opt("localTaskId");
+                // The receiver descriptor names the request slot, not the local Work.
+                // Keep the original parent-named layout, with the same retained native allocation proof.
+                return (allocation.equals(requestTask)||id.equals(requestTask))&&target.equals(linked.opt("targetDeviceId"))
+                        &&digest.equals(linked.opt("wireDigest"))&&digest.equals(DeviceProtocol.argumentsDigest(w))
+                        &&allocation.equals(w.getJSONObject("budget").opt("allocationId"))
+                        &&allocation.equals(DeviceProtocol.allocationId(id,target,resource,"tool_session",null));
             }
         }
         public JSONObject exportedFileForLocalBook(String localDevice)throws Exception{
@@ -393,11 +405,13 @@ public final class TaskStoreDeviceTasks {
     public OwnerHistoryEvidence ownerHistoryEvidence(String id,String originalOperation)throws Exception{
         synchronized(owner){JSONObject wire=childAllocationForOperation(id,originalOperation).getJSONObject("boundWire");OwnerHistoryEvidence evidence=new OwnerHistoryEvidence(this,id,originalOperation,wire);requireOwnerHistory(evidence);return evidence;}
     }
-    private void requireOwnerHistory(OwnerHistoryEvidence evidence)throws Exception{
-        if(evidence==null||evidence.issuer!=this)throw new SecurityException("不是本原TaskStore历史读取证据");synchronized(owner){JSONObject current=task(evidence.id),wire=childAllocationForOperation(evidence.id,evidence.operation).getJSONObject("boundWire");if(!evidence.wire.equals(dev.pocketengine.features.devices.DeviceProtocol.canonical(wire)))throw new SecurityException("原已发送wire/目标/摘要已改变");JSONObject origin=current.optJSONObject("origin");if(origin==null){if(!"owner".equals(current.optString("actorId"))||!"private".equals(current.optString("spaceId")))throw new SecurityException("不是原本机owner历史任务");return;}
+    private record OwnerHistoryRead(JSONObject task,JSONObject allocation){}
+    private OwnerHistoryRead requireOwnerHistory(OwnerHistoryEvidence evidence)throws Exception{
+        if(evidence==null||evidence.issuer!=this)throw new SecurityException("不是本原TaskStore历史读取证据");synchronized(owner){JSONObject current=task(evidence.id),linked=childAllocationForOperation(evidence.id,evidence.operation),wire=linked.getJSONObject("boundWire");if(!evidence.wire.equals(dev.pocketengine.features.devices.DeviceProtocol.canonical(wire)))throw new SecurityException("原已发送wire/目标/摘要已改变");JSONObject origin=current.optJSONObject("origin");if(origin==null){if(!"owner".equals(current.optString("actorId"))||!"private".equals(current.optString("spaceId")))throw new SecurityException("不是原本机owner历史任务");return new OwnerHistoryRead(current,linked);}
             requireDevice(current);JSONObject scope=current.getJSONObject("deviceExecutionScope"),source=scope.optJSONObject("forwardingProof");if(source==null||!source.getString("issuerDeviceId").equals(origin.getString("originDeviceId"))||!dev.pocketengine.features.devices.DelegationGrant.targetResourceContains(source.getJSONArray("targetResources"),wire.getString("targetDeviceId"),wire.getJSONObject("resourceBinding")))throw new SecurityException("没有原A准确分享来源，不能读取下游内容");
             String caller=origin.getString("callerDeviceId"),grantId=origin.getString("grantId");long now=System.currentTimeMillis();JSONObject grant;try(Cursor row=db.rawQuery("SELECT g.body_json,g.revoked,p.revoked,g.authorization_epoch,p.authorization_epoch FROM device_grants g JOIN device_peers p ON p.device_id=g.peer_device_id WHERE g.grant_id=? AND g.peer_device_id=?",new String[]{grantId,caller})){if(!row.moveToFirst()||row.getInt(1)!=0||row.getInt(2)!=0||row.getLong(3)!=row.getLong(4))throw new SecurityException("原A来源已撤回，历史内容不再可见");grant=new JSONObject(row.getString(0));}
             dev.pocketengine.features.devices.PairingCoordinator.validateRetainedGrant(grant,origin.getString("targetDeviceId"),caller,now);JSONObject history=grant.optJSONObject("historyRead"),forward=grant.optJSONObject("forwardingScope");boolean currentRead=now<grant.getLong("expiresAt")&&jsonSubset(new JSONArray().put("operation.get"),grant.getJSONArray("capabilities")),retainedRead=history!=null&&now<history.getLong("expiresAt")&&jsonSubset(new JSONArray().put("operation.get"),history.getJSONArray("methods"));if(!currentRead&&!retainedRead||!jsonSubset(new JSONArray().put(origin.getString("originDeviceId")),grant.getJSONArray("allowedOrigins"))||!jsonSubset(new JSONArray().put(scope.getJSONObject("resourceBinding")),grant.getJSONArray("resources"))||forward==null||!dev.pocketengine.features.devices.DelegationGrant.targetResourceContains(forward.getJSONArray("targetResources"),wire.getString("targetDeviceId"),wire.getJSONObject("resourceBinding")))throw new SecurityException("当前原生来源可见策略不再包含此准确分享；不复活执行权限");
+            return new OwnerHistoryRead(current,linked);
         }
     }
     public void recordOwnerHistory(OwnerHistoryEvidence evidence,dev.pocketengine.features.devices.DeviceIdentity.AuthenticatedPeer actualPeer,JSONObject typed)throws Exception{

@@ -82,6 +82,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     @Volatile private var workingTeamPage: AutoCloseable? = null
 
     companion object {
+        const val RESTORE_MEMBER_RESULT_RUN = "restoreMemberResultRunId"
         val COMMANDS = setOf("teams.openWorkFileDecision", "teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
             "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM, "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.reviewSoleFailedHandoff", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
@@ -113,6 +114,20 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         // Prefer a hot row if the same identity is already present there.
         val retained = current + value.optJSONArray("history").objects().filter { it.getString("id") !in currentIds }
         return JSONObject(value.toString()).put("runs", JSONArray(retained)).put("productionSources", productionSources())
+    }
+    // Only the native hot rows contain the original full run; archive summaries cannot stand in for it.
+    private fun hotMemberResultRun(directory: JSONObject, id: String): JSONObject? {
+        if (directory.optJSONArray("history").objects().any { it.opt("id") == id }) return null
+        val run = directory.optJSONArray("runs").objects().singleOrNull { it.opt("id") == id } ?: return null
+        val members = run.optJSONArray("members").objects()
+        return run.takeIf {
+            it.opt("archived") != true && it.opt("mode") == "collaborate" && it.opt("definitionKind") != "one_time" &&
+                !it.has("nativeWorkProfileModels") && !it.has("workPlan") && !it.has("productionScope") &&
+                it.opt("researchExecutionFormat") == TeamCoordinator.RESEARCH_FORMAT && it.optJSONArray("transcript") != null &&
+                members.isNotEmpty() && members.all { member ->
+                    member.optString("runner", "model") == "model" && member.opt("device").let { device -> device == null || device == "phone" }
+                }
+        }
     }
     private fun reading(handle: String, kind: String, consume: Boolean = false): JSONObject {
         val original = if (consume) readings.remove(handle)?.also { it.retire() } else readings[handle]
@@ -363,12 +378,12 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
         }
-        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, accept: (JSONObject?, JSONArray?, String?) -> Unit) {
+        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, catalogRun: JSONObject? = null, accept: (JSONObject?, JSONArray?, String?) -> Unit) {
             controller.runTeamPhoneWork {
                 val result = runCatching {
                     check(currentWindow()) { "原团队阅读窗口已关闭" }
                     val teams = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主尚未接入")
-                    val retained = teams.retainedOwnerReading(id).also {
+                    val retained = (catalogRun ?: teams.retainedOwnerReading(id)).also {
                         check(it.optString("id") == id) { "原团队运行身份不匹配" }
                         if (proposalOrigin != null) {
                             controller.requireWorkOrigin(proposalOrigin,id)
@@ -518,14 +533,33 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
             "teams.snapshot" -> {
-                fields(args, "restoreDefinitionId")
+                fields(args, "restoreDefinitionId", RESTORE_MEMBER_RESULT_RUN)
                 val restoreId = if (args.has("restoreDefinitionId")) text(args, "restoreDefinitionId") else null
+                val restoreRun = if (args.has(RESTORE_MEMBER_RESULT_RUN)) text(args, RESTORE_MEMBER_RESULT_RUN, 36).also {
+                    require(restoreId == null && runCatching { UUID.fromString(it).toString() == it }.getOrDefault(false)) { "原团队返回定位无效" }
+                } else null
                 controller.readWebTeamSnapshot { value, error ->
                     if (currentWindow()) {
                         if (value != null && error == null) {
                             snapshot = captureSnapshot(value)
                             val catalog = PocketWebState.publicValue(snapshot) as JSONObject
-                            if (restoreId == null) deliver(catalog, null)
+                            if (restoreRun != null) {
+                                val reply = JSONObject().put("catalog", catalog)
+                                val hot = hotMemberResultRun(value, restoreRun)
+                                val visible = catalog.getJSONArray("runs")
+                                val at = (0 until visible.length()).singleOrNull { visible.optJSONObject(it)?.opt("id") == restoreRun }
+                                if (hot == null || at == null) deliver(reply, null)
+                                else readOwnerRun(restoreRun, catalogRun = hot) { original, observations, failure ->
+                                    if (original == null || failure != null) deliver(reply, null)
+                                    else try {
+                                        // Keep the existing SQL/link checks and send the full run only in the detail.
+                                        val reading = view("run", original, observations)
+                                        visible.remove(at)
+                                        finishReceipt(reply.put("reading", reading))
+                                    } catch (invalid: Exception) { deliver(null, invalid.message ?: "原团队暂不可读") }
+                                }
+                            }
+                            else if (restoreId == null) deliver(catalog, null)
                             else {
                                 // Resolve the locator only in this window's freshly read private directory.
                                 val reply = JSONObject().put("catalog", catalog)

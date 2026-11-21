@@ -135,7 +135,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const [shownMemberSources,setShownMemberSources]=useState<Record<string,boolean>>({});
   const [shownArchives,setShownArchives]=useState<Record<string,boolean>>({});
   const [openingMemberResult, setOpeningMemberResult] = useState(false);
-  const deliveryReturn=useRef<{team:string;key:string;section:'progress'|'result';taskId:string;sourceHandle:string;scroll:number;entered:boolean;member?:ResultMember}|null>(null);
+  const deliveryReturn=useRef<{team:string;key:string;section:'progress'|'result';taskId:string;sourceHandle:string;scroll:number;entered:boolean;ordinary:boolean;documentEpoch:number;member?:ResultMember}|null>(null);
   const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
@@ -375,12 +375,26 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         acceptReading(next);
         return;
       }
-      const fresh = object(await run('teams.snapshot'));
-      if (!alive.current || generation !== requestGeneration.current) return;
+      const returning = deliveryReturn.current;
+      const restoreRun = original?.kind === 'run' && returning?.ordinary && returning.entered &&
+        returning.team === original.run.id && returning.documentEpoch === bridge.getDocumentEpoch() ? returning.team : '';
+      const memberReturnCurrent = () => !backgrounded.current && !document.hidden && ownsNativeWindow() &&
+        deliveryReturn.current === returning && returning?.documentEpoch === bridge.getDocumentEpoch() &&
+        currentReading.current?.kind === 'run' && currentReading.current.run?.id === restoreRun;
+      const value = object(await (restoreRun ? run('teams.snapshot', { restoreMemberResultRunId: restoreRun }) : run('teams.snapshot')));
+      const next = restoreRun ? value.reading : null;
+      if (!alive.current || generation !== requestGeneration.current || restoreRun && !memberReturnCurrent()) { release(next); return; }
+      const fresh = restoreRun ? object(value.catalog) : value;
+      if (restoreRun && (!Array.isArray(fresh.teams) || !Array.isArray(fresh.runs))) { release(next); throw new Error('原团队目录尚未读取'); }
       acceptCatalog(fresh);
+      if (restoreRun && next?.kind === 'run' && label(next.viewHandle) && next.viewHandle !== returning?.sourceHandle &&
+          next.run?.id === restoreRun) { acceptReading(next); return; }
+      release(next);
       if (original?.kind === 'run') {
         const value = object(await run('teams.readRun', proposalRead(original.run.id)));
-        if (alive.current && generation === requestGeneration.current && value.reading?.run?.id === original.run.id) acceptReading(value.reading);
+        if (alive.current && generation === requestGeneration.current && value.reading?.run?.id === original.run.id &&
+            (!restoreRun || memberReturnCurrent())) acceptReading(value.reading);
+        else if (restoreRun) release(value.reading);
       }
     })().catch(failure => { if (alive.current && generation === requestGeneration.current) setError(failure instanceof Error ? failure.message : String(failure)); })
       .finally(() => { if (generation === requestGeneration.current) { entered.current = false; if (alive.current) setBusy(false); } });
@@ -905,8 +919,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         acceptReading(next);
         if(!same){setNotice('这份成员原件已变化，请重新核对。没有打开另一阶段。');return}
         const member=Number.isSafeInteger(next.run.generation)?{id:same.memberId,generation:next.run.generation,deliveryKey:same.key,round:same.round}:undefined;
+        const ordinary = !same.archivedVersion && next.run.mode === 'collaborate' && next.run.definitionKind !== 'one_time' &&
+          !next.run.nativeWorkProfileModels && !next.run.workPlan && !next.run.productionScope &&
+          next.run.researchExecutionFormat === 'pocketworld.team-research-agent.v1' &&
+          rows(next.run.members).every(slot => (slot.runner || 'model') === 'model' && (!slot.device || slot.device === 'phone'));
         const origin={team:item.team,key:item.key,section,taskId:item.taskId,sourceHandle:next.viewHandle,
-          scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,member};
+          scroll:root.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop||0,entered:false,ordinary,documentEpoch:bridge.getDocumentEpoch(),member};
         if (section === 'progress') setResultSource(saved=>saved?.runId===item.team&&saved.member?.deliveryKey===same.key?saved:null);
         else if(same.archivedVersion)setShownArchives(old=>({...old,[item.team]:true}));
         else rememberSourcesOpened(item.team);

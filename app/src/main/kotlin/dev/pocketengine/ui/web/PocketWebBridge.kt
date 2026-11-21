@@ -1663,7 +1663,14 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebTeams.COMMANDS) {
-                requireSection("teams"); teamPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown", retainValue = action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")); if (action != "teams.readFinalPackageFiles") publishState() }; return
+                requireSection("teams")
+                val restoringMemberResult = action == "teams.snapshot" && args.has(PocketWebTeams.RESTORE_MEMBER_RESULT_RUN)
+                teamPages.dispatch(action, args) { result, error ->
+                    complete(id, result, error, "outcome_unknown", retainValue = !restoringMemberResult &&
+                        action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget"))
+                    if (action != "teams.readFinalPackageFiles") publishState()
+                }
+                return
             }
             if (action == "conversation.readPrivateHostFinal") {
                 val reader=if(args.has("readerWindow"))requiredLong(args,"readerWindow").also{ require(it>0) } else null

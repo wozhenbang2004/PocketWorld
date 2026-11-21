@@ -13,9 +13,9 @@ public final class OwnerReceivedFileBook {
         StringBuilder text=new StringBuilder();name.codePoints().forEach(c->{int t=Character.getType(c);text.appendCodePoint(
             t==Character.FORMAT||t==Character.CONTROL||t==Character.SURROGATE?0xfffd:c);});return text.toString();
     }
-    private static DeviceArtifactTransfer.Reference directFile(JSONObject w,String task,String op,JSONObject descriptor)throws Exception{
+    private static DeviceArtifactTransfer.Reference directFile(JSONObject w,String op,JSONObject descriptor)throws Exception{
         DeviceArtifactTransfer.Reference file=DeviceArtifactTransfer.fromWireDescriptor(descriptor);
-        if(!"file".equals(file.json().getString("kind"))||!file.sha256.equals(file.versionId)||!op.equals(file.operationId)||!task.equals(file.taskId)
+        if(!"file".equals(file.json().getString("kind"))||!file.sha256.equals(file.versionId)||!op.equals(file.operationId)||!w.getString("localTaskId").equals(file.taskId)
                 ||!w.getString("targetDeviceId").equals(file.sourceDeviceId)||!w.getString("runId").equals(file.json().getString("requestRunId"))
                 ||w.getInt("executorEpoch")!=file.json().getInt("requestExecutorEpoch"))throw new SecurityException("不是这次固定导出");
         return file;
@@ -28,7 +28,7 @@ public final class OwnerReceivedFileBook {
         if(!"owner".equals(metadata.opt("principalId"))||!"private".equals(metadata.opt("spaceId"))||metadata.optBoolean("outputSourceRetired")
                 ||!"device_received_file".equals(source.opt("kind"))||!"file".equals(source.opt("artifactKind"))||source.has("groupSpaceId")||epoch<1)
             throw new SecurityException("不是本机保留的原普通文件");
-        DeviceArtifactTransfer.Reference file=directFile(wire,task,op,original.exportedFileForLocalBook(wire.getString("callerDeviceId")));
+        DeviceArtifactTransfer.Reference file=directFile(wire,op,original.exportedFileForLocalBook(wire.getString("callerDeviceId")));
         String role=DeviceReceivedAttachmentPublisher.role(file),plan=DeviceReceivedAttachmentPublisher.plan(file,task,run,epoch);
         JSONObject exact=DeviceReceivedAttachmentPublisher.source(file,task,run,epoch).put("nativePublication",new JSONObject()
                 .put("operationId",op).put("role",role).put("taskId",task).put("runId",run).put("planDigest",plan));
@@ -49,7 +49,7 @@ public final class OwnerReceivedFileBook {
         try{descriptor=original.exportedFileForLocalBook(local);}
         catch(Exception unavailable){original.requireCurrent();io.checkpoint();return out.put("state","no_verified_descriptor");}
         try{
-            DeviceArtifactTransfer.Reference file=directFile(w,task,op,descriptor);
+            DeviceArtifactTransfer.Reference file=directFile(w,op,descriptor);
             AttachmentBook.VerifiedMetadata found=book.verifiedPrivateReceivedOriginal(op,DeviceReceivedAttachmentPublisher.role(file),task,run,
                 DeviceReceivedAttachmentPublisher.plan(file,task,run,epoch),DeviceReceivedAttachmentPublisher.source(file,task,run,epoch),file.sha256,file.bytes,io);
             original.requireCurrent();io.checkpoint();
