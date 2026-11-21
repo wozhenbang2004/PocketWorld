@@ -194,11 +194,18 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (entered.current || edits.current) return;
     if (activeAdoption.current) { dismissAdoption(); return; }
     if (choice) { setChoice(null); return; }
-    if (!showingSavedFile || !recentSave || !live(generation.current) || currentFile.current!==file) {
+    const sameOpenFile = currentFile.current === file;
+    const fromSavedFile = sameOpenFile && showingSavedFile;
+    // Reading a different file does not replace the last verified save. It
+    // cannot supply that file's caret or the current-editor proof for a build.
+    const fromAnotherFile = !next && sameOpenFile && !!file && file.path !== recentSave?.path &&
+      file.latest?.deleted === false && file.dirty === false && file.conflict === false && file.saveUnknown === false &&
+      orphan === null && !blockedEdit.current;
+    if (!recentSave || !live(generation.current) || (!fromSavedFile && !fromAnotherFile)) {
       if (!next) latest.current.onClose();
       return;
     }
-    const area = editorContainer.current?.querySelector('textarea');
+    const area = fromSavedFile ? editorContainer.current?.querySelector('textarea') : null;
     const caret = area?.value===textareaText(recentSave.after) ? {
       start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop, scrollLeft: area.scrollLeft,
     } : undefined;

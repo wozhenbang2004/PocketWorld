@@ -35,7 +35,7 @@ function latestRequestWork(tasks: Task[], pinned: Task | undefined, messages: re
 }
 
 /** A compact continuation of the conversation; the existing task drawer owns its details. */
-export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus, onTeamDecision, pinnedTask, allowMessageTail, messages }: { tasks: Task[]; onOpen: (task: Task) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void; onTeamDecision?:OpenTeamDecision; pinnedTask?:Task; allowMessageTail?:boolean; messages?:readonly ConversationMessage[] }) {
+export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyFocus, onTeamDecision, pinnedTask, allowMessageTail, messages }: { tasks: Task[]; onOpen: (task: Task, trigger: HTMLButtonElement) => void; canOpen: boolean; identity?:string; onEmptyFocus?:()=>void; onTeamDecision?:OpenTeamDecision; pinnedTask?:Task; allowMessageTail?:boolean; messages?:readonly ConversationMessage[] }) {
   const [expanded, setExpanded] = useState(false);
   const root=useRef<HTMLElement>(null),focused=useRef<{node:HTMLElement;id:string;identity:string}|null>(null);
   const listId = useId();
@@ -82,7 +82,7 @@ export function ConversationWork({ tasks, onOpen, canOpen, identity='', onEmptyF
     const StatusIcon = ['paused', 'interrupted'].includes(task.status) ? IconPauseCircle : task.status === 'failed' ? IconError : needsAttention ? IconInfo : IconClock;
     const recent = !needsAttention && progress.source !== 'task' && progress.title && progress.title !== task.goal && progress.title !== status ? `，最近记录：${progress.title}` : '';
     return <li key={task.id} data-motion-key={task.id} data-work-task-id={task.id} data-work-state={task.status} data-work-attention={needsAttention || undefined}>
-      <Button variant="ghost" className="pw-work-entry" aria-label={`${phone ? '查看手机任务' : '查看工作'}：${task.goal}`} aria-description={`${status}，${action}${recent}`} title={`${task.goal} · ${status}${recent}`} disabled={!canOpen} onClick={() => onOpen(task)}>
+      <Button variant="ghost" className="pw-work-entry" aria-label={`${phone ? '查看手机任务' : '查看工作'}：${task.goal}`} aria-description={`${status}，${action}${recent}`} title={`${task.goal} · ${status}${recent}`} disabled={!canOpen} onClick={event => onOpen(task, event.currentTarget)}>
         <span className="pw-work-mark" aria-hidden="true">{busy ? <ProgressCircle isIndeterminate size="sm" className="pw-work-progress" aria-label={status} /> : <StatusIcon size={16} />}</span>
         <span className="pw-work-entry-title">{task.goal}</span>
         <MotionFeedback as="span" identity={needsAttention ? action : status} initial={false} className="pw-work-entry-state">{needsAttention ? action : status}</MotionFeedback>
