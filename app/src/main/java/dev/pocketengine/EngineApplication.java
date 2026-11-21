@@ -358,6 +358,8 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private volatile String activeTaskId;
     private volatile RunControl activeControl;
+    /** Warm hold exists even between the durable first observation and the native service handoff. */
+    private final java.util.concurrent.atomic.AtomicReference<RunControl> firstMainDispatchBlocked=new java.util.concurrent.atomic.AtomicReference<>();
     private volatile ModelConfig activeConfig;
     private String activeMode;
     private PhonePort activePort;
@@ -1557,6 +1559,11 @@ public final class EngineApplication extends Application implements dev.pocketen
     private JSONObject existingTaskHarnessGateway(String task,String run)throws Exception {var module=features.module("proxy");if(!(module instanceof dev.pocketengine.features.proxy.ProxyModule))return null;var proxy=(dev.pocketengine.features.proxy.ProxyModule)module;var bridge=proxy.existingHarnessGateway(task,run);return bridge==null?null:bridge.snapshot().put("target",proxy.harnessGatewayTarget(bridge.leaseId()));}
     /** Display identity only. Never admits input; avoids taking the writer monitor on the accessibility UI thread. */
     public boolean retainsShownPhoneControl(String id,RunControl shown){return id!=null&&shown!=null&&currentPhoneControl(id)==shown;}
+    private boolean blocksOrdinaryFirstMainControl(RunControl original){return original!=null&&firstMainDispatchBlocked.get()==original;}
+    /** Called only by the original service after its one structural observation and durable same-run receipt. */
+    boolean releaseVerifiedFirstMainHold(String id,RunControl original){
+        return retainsShownPhoneControl(id,original)&&!original.isCancelled()&&firstMainDispatchBlocked.compareAndSet(original,null);
+    }
     public synchronized RunControl control(String id){return currentPhoneControl(id);}
     /** Native task-sheet scope page only; never exposed through feature/model JSON. */
     public dev.pocketengine.features.local.project.OwnerProjectEditScope.Page openOwnerEditScopePage(String id)throws Exception {
@@ -1776,6 +1783,18 @@ public final class EngineApplication extends Application implements dev.pocketen
     /** One native reviewed creation may enter phone admission once. An uncertain write is query-only. */
     public synchronized JSONObject startConversationPhone(ConversationPhoneStartReview review,boolean screenConsent,
                                                           java.util.function.BooleanSupplier ownerCurrent,java.util.function.Consumer<String> allocated)throws Exception {
+        return startConversationPhone(review,screenConsent,-1,ownerCurrent,allocated);
+    }
+    public long firstMainScreenPolicyRevision(){
+        if(android.os.Build.VERSION.SDK_INT<33)return -1;
+        var service=PhoneAccessibilityService.get();
+        if(service==null||service.observationSafetyFailure()!=null)return -1;
+        var appRules=new dev.pocketengine.phone.access.AndroidPhoneAccessStore(this).current();
+        // This route cannot replace the separate window/profile proof for configured app rules.
+        return appRules.available()&&appRules.rules().isEmpty()?appRules.revision():-1;
+    }
+    public synchronized JSONObject startConversationPhone(ConversationPhoneStartReview review,boolean screenConsent,long firstMainPolicyRevision,
+                                                          java.util.function.BooleanSupplier ownerCurrent,java.util.function.Consumer<String> allocated)throws Exception {
         if(review==null||review.issuer!=this||review.store!=tasks)throw new SecurityException("原手机任务审阅不可核对");
         JSONObject previous=queryConversationPhoneStart(review.requestId,review.conversationId);
         if(review.attempted||previous.optBoolean("accepted"))return previous.put("duplicate",true);
@@ -1783,6 +1802,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             conversationPhoneAssistant();tasks.requireExecutionEnabled();requireConversationPhoneReviewCurrent(review,ownerCurrent);
             requirePhoneStartReady(review.goal,screenConsent,review.mode);
             SettingsStore.validate(review.config);dev.pocketengine.runtime.ModelGateway.validate(review.config);
+            if(firstMainPolicyRevision>=0&&(!"main_screen".equals(review.mode)||firstMainScreenPolicyRevision()!=firstMainPolicyRevision))
+                throw new SecurityException("原主屏或本机应用规则已变化，原目标仍保留，请重新核对");
             requireConversationPhoneReviewCurrent(review,ownerCurrent);
             java.util.Objects.requireNonNull(allocated);
         }catch(Exception rejected){throw new ConversationPhoneStartRejected(rejected);}
@@ -1795,7 +1816,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             long confirmedAt=System.currentTimeMillis();
             java.util.concurrent.Callable<Boolean> current=()->{requireConversationPhoneReviewCurrent(review,ownerCurrent);return true;};
             admit(id,review.mode,review.config,false,null,0,"",new NewDraftPhoneAdmission(control->{
-                control.check();return tasks.beginReviewedConversationPhone(review.creation,confirmedAt,review.config.maxSteps,
+                control.check();return tasks.beginReviewedConversationPhone(review.creation,confirmedAt,review.config.maxSteps,firstMainPolicyRevision,
                         assigned->{writeEntered[0]=true;allocated.accept(assigned);},()->{control.check();return current.call();});
             },current,state->tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),state)));
             tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),"admitted");
@@ -1913,6 +1934,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             }
         }catch(Exception failure){resources.releasePhone(token);throw failure;}
         ModelConfig captured=c.withStepCeiling(t.getInt("stepCeiling"));
+        if(TaskStore.firstMainScreenPending(t))firstMainDispatchBlocked.set(nextControl);
         if(background)backgroundRuns.put(taskId,new BackgroundRun(nextControl,captured,token));
         else{activeResourceToken=token;activeTaskId=taskId;activeControl=nextControl;activeConfig=captured;activeMode=executionMode;activePort=null;}
         try{
@@ -1931,6 +1953,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                 nextControl.check();
             }
             Intent start=new Intent(this,PhoneRunService.class).setAction(PhoneRunService.START).putExtra("taskId",taskId).putExtra("phoneRunId",t.getString("runId")).putExtra("phoneEpoch",t.getInt("coordinatorEpoch")).putExtra("manualOnly",manualOnly);
+            if(TaskStore.firstMainScreenPending(t))start.putExtra(TaskStore.FIRST_MAIN_SCREEN,true);
             android.content.ComponentName requested;
             try{requested=startForegroundService(start);}
             catch(RuntimeException failure){
@@ -1958,6 +1981,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     public JSONObject pauseOriginalPhoneRun(String id,String run,int epoch)throws Exception {
         RunControl original=originalPhoneControl(id,run,epoch,false);TaskStore store=tasks;FeatureHost host=features;var streams=modelStreams;
+        if(blocksOrdinaryFirstMainControl(original))throw new SecurityException("原任务正等待你确认眼前页面，可以查看或停止。");
         store.recordOriginalPhoneControl(id,run,epoch,false);
         if(original.isCancelled())throw new SecurityException("原执行已经停止，未将停止呈现为暂停");
         if(!original.isPaused())original.pause();long pause=original.pauseRevision();
@@ -2176,6 +2200,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private JSONObject resumeOriginalPhoneRun(String id,String run,int epoch,String feedback,long reviewedPause,long scope,java.util.function.BooleanSupplier ownerWindow,String notificationHandle,String shownHandle,RunControl sourceOverlay)throws Exception {
         RunControl original=originalPhoneControl(id,run,epoch,false);long pause=original.pauseRevision();PhonePort port;
+        if(blocksOrdinaryFirstMainControl(original))throw new SecurityException("请在任务控制条确认眼前页面，不能用普通继续代替。");
         if(sourceOverlay!=null&&(original!=sourceOverlay||pause!=reviewedPause||!original.ownerPausedAt(pause)))throw new SecurityException("原来源暂停已变化");
         synchronized(this){port=control(id)==original?phonePort(id):null;if(ownerActionActive)throw new IllegalStateException("请等待原人工动作回执");}
         if(!original.phoneSurfaceActive())throw new SecurityException("请在原网页工作区交还，未恢复手机输入");
@@ -2254,6 +2279,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private synchronized String continuePhoneTask(String id,String feedback,boolean consent,String mode,String expectedRun,int expectedEpoch)throws Exception {
         JSONObject t=tasks.get(id,false);if(t==null||!"phone".equals(t.optString("kind")))throw new IllegalArgumentException("该任务不是可恢复的手机任务");if(expectedRun!=null&&(!expectedRun.equals(t.optString("runId"))||expectedEpoch!=t.optInt("coordinatorEpoch")))throw new SecurityException("原手机执行已变化，请刷新核对");if(dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(t)){if(feedback!=null&&!feedback.isBlank())throw new SecurityException("设备工具不导入私人反馈；原设备须提交准确新操作");if(!mode.equals(t.getString("executionMode")))throw new SecurityException("设备工具不能换显示");resumeDeviceExecution(id);return id;}
+        if(TaskStore.firstMainScreenPending(t))throw new SecurityException("原首次主屏确认未完成。原服务失去后不能借普通继续，目标仍留在原任务。");
         if(dev.pocketengine.phone.MainPhoneOwnerStep.needsOwner(t))throw new SecurityException("本人步骤需交还同一次主屏任务；原现场丢失不能另起执行。");
         JSONObject origin=t.optJSONObject("origin");if(origin!=null&&origin.optString("kind").equals("channel")){
             if(channelTaskHost==null)throw new SecurityException("原渠道授权不可用");phoneChannels().checkHostTaskAuthority(origin.getString("requestId"));tasks.channelTask(id,origin);
@@ -4739,6 +4765,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     }
     public synchronized void pause(String id){
         RunControl original=control(id);if(original==null)return;
+        if(blocksOrdinaryFirstMainControl(original)){error("原任务正等待你确认眼前页面，可以查看或停止。");return;}
         original.pause();if(features!=null)features.clearTaskWorkingMemory(id);if(modelStreams!=null)modelStreams.clear(id,original,"paused");
         PhonePort port=phonePort(id);if(port!=null)port.clearReferences();setStatus(id,"pausing","正在暂停，当前已派发的动作可能仍在结束",original);
     }
@@ -4748,6 +4775,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     public synchronized void resume(String id){
         RunControl original=control(id);if(original==null)return;
         try{
+            if(blocksOrdinaryFirstMainControl(original))throw new SecurityException("请在任务控制条确认眼前页面，不能用普通继续代替。");
             if(deviceGoalSessions.containsKey(id)||deviceToolSessions.containsKey(id)){resumeDeviceExecution(id);return;}
             if(automationPlanTask(tasks.get(id,false)))reviewedAutomationRequest(tasks.get(id,false));
             if(!original.phoneSurfaceActive())throw new SecurityException("请在原网页工作区交还；表面切换未确认时请停止并核对原任务");
@@ -4765,6 +4793,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             JSONObject task=tasks.get(id,false);
             if(!ownerCurrent.getAsBoolean()||task==null||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原接管任务已变化");
             RunControl original=control(id);if(original!=null&&!original.matchesHostRun(id,run,epoch))throw new SecurityException("原接管执行已变化");
+            if(TaskStore.firstMainScreenPending(task)||blocksOrdinaryFirstMainControl(original))throw new SecurityException("原任务尚未读取主屏，可在任务控制条确认或停止。");
             pending=original==null?null:deferredPhoneSessions.get(original);if(pending!=null&&pending.initialized())pending=null;
         }
         if(pending!=null)return preparePendingPhoneTakeover(id,pending,ownerCurrent);
@@ -4772,6 +4801,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             JSONObject task=tasks.get(id,false);if(task==null||!"phone".equals(task.optString("kind")))throw new IllegalArgumentException("只能接管原手机任务");
             if(!ownerCurrent.getAsBoolean()||!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch"))throw new SecurityException("原接管窗口或执行已变化");
             RunControl original=control(id);PhonePort retainedPort=phonePort(id);
+            if(TaskStore.firstMainScreenPending(task)||blocksOrdinaryFirstMainControl(original))throw new SecurityException("原任务尚未读取主屏，可在任务控制条确认或停止。");
             if(original==null){
                 if(!"background".equals(task.optString("executionMode")))throw new IllegalStateException("主屏任务可直接在手机操作；继续原任务后可暂停接管");
                 EngineModule display=features.module("display");if(!(display instanceof dev.pocketengine.phone.display.DisplayModule)||!((dev.pocketengine.phone.display.DisplayModule)display).isConnected())throw new IllegalStateException("请先连接后台助手");
@@ -4951,7 +4981,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         String resource=phoneResourceToken(id);if(resource!=null)resources.releasePhone(resource);
         BackgroundRun background=backgroundRuns.get(id);
         if(background!=null&&background.control==owner)backgroundRuns.remove(id);
-        else{activeResourceToken=null;activeTaskId=null;activeControl=null;activeConfig=null;activeMode=null;activePort=null;}
+        else{firstMainDispatchBlocked.compareAndSet(owner,null);activeResourceToken=null;activeTaskId=null;activeControl=null;activeConfig=null;activeMode=null;activePort=null;}
         queueAutomaticLearningIdle();queueConversationPhoneResults();
     }
     public void setStatus(String id,String status,String summary){try{tasks.status(id,status,summary);pushTask(id);}catch(Exception ex){error("任务记录保存失败，请检查可用空间");}}

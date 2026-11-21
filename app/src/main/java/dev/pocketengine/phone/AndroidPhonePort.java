@@ -502,6 +502,45 @@ public final class AndroidPhonePort implements PhonePort,NativeOcrTapPort,dev.po
         catch(PhoneFailure refused){clearReferences();return failure(refused.code,refused.getMessage());}
     }
 
+    /** First explicit current-page read. It publishes neither pixels nor a reusable native action reference. */
+    public synchronized JSONObject readFirstMainWindow(FirstMainScreenWindow page, long policyRevision, RunControl control) throws Exception {
+        workerOnly(); clearReferences();
+        PhoneAccessibilityService service = requireService();
+        long pause = control.pauseRevision();
+        var rules = new dev.pocketengine.phone.access.AndroidPhoneAccessStore(context);
+        OwnerScreenContext.ReadCheck check = () -> {
+            guard(service,control,pause); page.check(control);
+            var current = rules.current();
+            if (!current.available() || !current.rules().isEmpty() || current.revision()!=policyRevision)
+                throw new SecurityException("first_main_app_policy_changed");
+        };
+        check.check(); page.beginRead(control);
+        Tree observed = onTreeRead(check, () -> {
+            page.checkWindow(control);
+            Screen geometry = screen(service);
+            var tree = AccessibilityForest.readFirstMainWindow(service,page,geometry.width,geometry.height,check::check);
+            if(!geometry.same(screen(service)))throw new SecurityException("first_main_geometry_changed");
+            page.checkWindow(control);
+            return new Tree(geometry,tree);
+        });
+        if(!observed.available||observed.incomplete||observed.windowId!=page.windowId()||observed.jsonNodes.length()==0)
+            throw new SecurityException("first_main_structure_unavailable");
+        String id=UUID.randomUUID().toString(), session=service.observationSessionId();
+        var run=control.hostRunIdentity();
+        JSONObject result=new JSONObject().put("ok",true).put("observationId",id).put("displayId",Display.DEFAULT_DISPLAY)
+                .put("executionMode","main").put("sessionId",session).put("pauseRevision",pause).put("observedAtUptimeMs",SystemClock.uptimeMillis())
+                .put("screenWidth",observed.screen.width).put("screenHeight",observed.screen.height).put("packageName",observed.packageName)
+                .put("changedDuringRead",false).put("coordinateActionsAvailable",false)
+                .put("observationBinding",new JSONObject().put("taskId",run.taskId()).put("runId",run.runId()).put("epoch",run.epoch())
+                        .put("displayId",Display.DEFAULT_DISPLAY).put("observationId",id).put("sessionId",session).put("pauseRevision",pause));
+        observed.forest.attach(result);
+        ObservationReport.attach(result,true,"accessibility_tree",false,"not_requested");
+        if(!result.getJSONObject("observationSources").getBoolean("treeAdequate")||NativeSensitiveStep.historyContainsSensitiveStep(result))
+            throw new SecurityException("first_main_page_not_safe_to_read");
+        page.checkWindow(control); check.check();
+        return result;
+    }
+
     @Override public synchronized JSONObject observe(boolean includeImage, RunControl control) throws Exception {
         workerOnly();
         clearReferences();

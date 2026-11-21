@@ -58,6 +58,7 @@ public final class AccessibilityForest {
     private final int nodeLimit,windowNodeLimit,depthLimit,childrenLimit;
     private final Map<Integer,WindowIdentity> windowIdentities=new LinkedHashMap<>();
     private final Map<String,JSONObject> records=new LinkedHashMap<>();
+    private String firstMainPackage;
     private AccessibilityForest(int targetWindow) throws Exception {
         boolean targeted=targetWindow>=0;
         nodeLimit=targeted?TARGET_NODES:MAX_NODES;windowNodeLimit=targeted?TARGET_NODES:MAX_WINDOW_NODES;
@@ -66,25 +67,38 @@ public final class AccessibilityForest {
     }
 
     public static AccessibilityForest read(PhoneAccessibilityService service,int displayId,int width,int height,Check check)throws Exception {
-        return read(service,displayId,width,height,-1,check);
+        return read(service,displayId,width,height,-1,null,check);
     }
     /** Native revalidation only: complete the original target window, never select another target. */
     public static AccessibilityForest readForTarget(PhoneAccessibilityService service,int displayId,int width,int height,Ref expected,Check check)throws Exception {
         if(expected==null||expected.windowId<0||expected.path.length>TARGET_DEPTH)throw new IllegalArgumentException("original_native_target_required");
-        return read(service,displayId,width,height,expected.windowId,check);
+        return read(service,displayId,width,height,expected.windowId,null,check);
     }
-    private static AccessibilityForest read(PhoneAccessibilityService service,int displayId,int width,int height,int targetWindow,Check check)throws Exception {
+    /** Initial owner read only: do not request even a root from another window. */
+    public static AccessibilityForest readFirstMainWindow(PhoneAccessibilityService service,dev.pocketengine.phone.FirstMainScreenWindow page,int width,int height,Check check)throws Exception {
+        if(android.os.Build.VERSION.SDK_INT<33||page==null)throw new SecurityException("first_main_window_required");
+        return read(service,android.view.Display.DEFAULT_DISPLAY,width,height,page.windowId(),page,check);
+    }
+    private static AccessibilityForest read(PhoneAccessibilityService service,int displayId,int width,int height,int targetWindow,dev.pocketengine.phone.FirstMainScreenWindow firstPage,Check check)throws Exception {
         check.check();PhoneReadGate.checkCurrent();AccessibilityForest out=new AccessibilityForest(targetWindow);
+        boolean firstMain=firstPage!=null;
         out.mark(service.observationSessionId());out.mark(displayId+":"+width+":"+height);
         SparseArray<List<AccessibilityWindowInfo>> all=service.getWindowsOnAllDisplays();
+        if(firstMain&&all==null)throw new SecurityException("first_main_window_unavailable");
         try {
+            if(firstMain)firstPage.requireCaptureSnapshot(service,all);
             List<AccessibilityWindowInfo> selected=new ArrayList<>();
             List<AccessibilityWindowInfo> candidates=all.get(displayId);
             if(candidates!=null)for(AccessibilityWindowInfo window:candidates)
-                if(window.getDisplayId()==displayId)selected.add(window);
+                if(window.getDisplayId()==displayId&&(!firstMain||window.getId()==targetWindow))selected.add(window);
+            if(firstMain&&selected.size()!=1)throw new SecurityException("first_main_window_not_unique");
             selected.sort(Comparator.comparingInt(AccessibilityWindowInfo::getLayer).reversed().thenComparingInt(AccessibilityWindowInfo::getId));
             for(AccessibilityWindowInfo window:selected){
                 check.check();
+                if(firstMain){
+                    if(!window.isFocused()||window.getType()!=AccessibilityWindowInfo.TYPE_APPLICATION||window.isInPictureInPictureMode())
+                        throw new SecurityException("first_main_window_changed");
+                }
                 if(out.windowIdentities.size()>=MAX_WINDOWS){out.omittedWindows++;out.limit("window_limit");continue;}
                 Rect windowBounds=new Rect();window.getBoundsInScreen(windowBounds);
                 JSONObject record=new JSONObject().put("windowId",window.getId()).put("displayId",displayId)
@@ -95,7 +109,7 @@ public final class AccessibilityForest {
                 if(window.getType()==AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY){
                     out.windowIdentities.put(window.getId(),new WindowIdentity(record.toString(),window.getType(),window.getLayer(),windowBounds,null));continue;
                 }
-                out.mark(record.toString());AccessibilityNodeInfo root=window.getRoot();
+                out.mark(record.toString());AccessibilityNodeInfo root=firstMain?window.getRoot(0):window.getRoot();
                 out.windowIdentities.put(window.getId(),new WindowIdentity(record.toString(),window.getType(),window.getLayer(),windowBounds,root==null?null:nativeIdentity(root)));
                 try {
                     record.put("rootAvailable",root!=null);
@@ -103,6 +117,13 @@ public final class AccessibilityForest {
                     else {
                         out.available=true;
                         String pkg=limited(root.getPackageName(),250);
+                        if(firstMain){
+                            if(out.firstMainPackage!=null||root.getWindowId()!=targetWindow||pkg.isEmpty()||pkg.equals(service.getPackageName())||
+                                    "android".equals(pkg)||pkg.endsWith(".packageinstaller")||
+                                    pkg.matches("com\\.(?:android|google\\.android)\\.(?:systemui|permissioncontroller|documentsui|providers\\.media(?:\\.module)?)"))
+                                throw new SecurityException("first_main_app_window_required");
+                            out.firstMainPackage=pkg;
+                        }
                         record.put("packageName",pkg);
                         int priority=window.getType()==AccessibilityWindowInfo.TYPE_APPLICATION?(window.isFocused()?4:window.isActive()?3:2):1;
                         if(priority>out.primaryPriority){out.windowId=window.getId();out.packageName=pkg;out.primaryPriority=priority;}
@@ -129,6 +150,8 @@ public final class AccessibilityForest {
     private String walk(AccessibilityNodeInfo node,int window,int[] path,String parent,int depth,int width,int height,
                         int windowStart,List<AccessibilityNodeInfo> ancestors,List<String> ancestorIdentities,List<String> ancestorStructures,Set<String> local,Check check)throws Exception {
         check.check();PhoneReadGate.checkCurrent();
+        if(firstMainPackage!=null&&(node.getWindowId()!=window||!firstMainPackage.contentEquals(node.getPackageName()==null?"":node.getPackageName())))
+            throw new SecurityException("first_main_child_left_window");
         if(visited>=nodeLimit){limit("forest_node_limit",local);return null;}
         if(visited-windowStart>=windowNodeLimit){limit("window_node_limit",local);return null;}
         if(depth>depthLimit){limit("depth_limit",local);return null;}
@@ -136,7 +159,7 @@ public final class AccessibilityForest {
         if(ancestors.contains(node)){limit("cycle",local);return null;}
         ancestors.add(node);int ancestorCount=ancestorIdentities.size(),structureCount=ancestorStructures.size();
         try {
-            String label=node.isPassword()?"":relatedLabel(node);
+            String label=node.isPassword()||firstMainPackage!=null?"":relatedLabel(node);
             String id="n"+visited++;String ownIdentity=identity(node,label);mark(window+":"+Arrays.toString(path));mark(ownIdentity);
             Ref ref=new Ref(node,window,path,ownIdentity,ancestorIdentities,ancestorStructures,label);refs.put(id,ref);
             if(ref.sensitive.truncated)limit("identity_text_limit",local);
@@ -166,7 +189,7 @@ public final class AccessibilityForest {
             for(int i=0;i<Math.min(count,childrenLimit);i++){
                 check.check();PhoneReadGate.checkCurrent();
                 if(visited>=nodeLimit||visited-windowStart>=windowNodeLimit){limit(visited>=nodeLimit?"forest_node_limit":"window_node_limit",local);break;}
-                AccessibilityNodeInfo child=node.getChild(i);
+                AccessibilityNodeInfo child=firstMainPackage!=null?node.getChild(i,0):node.getChild(i);
                 if(child==null){limit("missing_child",local);mark("missing:"+i);continue;}
                 try{int[] next=Arrays.copyOf(path,path.length+1);next[path.length]=i;
                     String childId=walk(child,window,next,id,depth+1,width,height,windowStart,ancestors,ancestorIdentities,ancestorStructures,local,check);

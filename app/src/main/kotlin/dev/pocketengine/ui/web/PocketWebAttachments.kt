@@ -189,12 +189,31 @@ internal class PocketWebAttachments(
         return active.id == selected.windowId && acceptsWindow(active.ticket) && mayUseDraftLibrary() &&
             frames[selected.frameId]?.location == location(flow.state)
     }
+    // A normal system picker can retire the old draft lease without closing this exact ordinary Library.
+    // This predicate offers a page action only; it cannot admit a draft command by itself.
+    private fun warmPdfDraftSurface(state: AttachmentOutcomeState) =
+        globalDraftLibrary == null && state.documentOpen && state.pdfPageText != null &&
+            state.libraryImport?.phase !in setOf("selecting", "selection_unconfirmed", "registering") &&
+            libraryPdfSurface(state, allowPageText = true)
+
+    private fun warmPdfDraftOwner(freshOwner: () -> Boolean): () -> Boolean {
+        val active = window ?: error("原 PDF 窗口已离开")
+        val visit = flow.state.globalStandaloneDraftVisit ?: error("请从私人文件库打开原 PDF")
+        val current = {
+            window === active && acceptsWindow(active.ticket) && flow.state.globalStandaloneDraftVisit == visit &&
+                warmPdfDraftSurface(flow.state) && freshOwner()
+        }
+        check(current())
+        return current
+    }
+
     /** Only a live explicitly opened Library can retain text from its actually imported private original. */
-    private fun importedDraftFile(pdfPage: Boolean = false): JSONObject? {
+    private fun importedDraftFile(pdfPage: Boolean = false, allowWarmPdf: Boolean = false): JSONObject? {
         val state = flow.state
         val file = state.file ?: return null
         val visit = state.globalStandaloneDraftVisit ?: return null
-        if (!keepsDraftLibraryVisit(visit) || controller.conversationReader != null || controller.state.filePath != null ||
+        if (!(keepsDraftLibraryVisit(visit) || pdfPage && allowWarmPdf && warmPdfDraftSurface(state)) ||
+            controller.conversationReader != null || controller.state.filePath != null ||
             state.originalReturn != dev.pocketengine.ui.AttachmentOriginalReturn.LIST || state.originalFile == null || state.fromWorkResult ||
             state.restoredWorkReturn || state.libraryDocumentReturn != null || state.snapshot?.opt("taskId") != "" ||
             state.busy || flow.exportPending || state.pendingDocumentTask != null || state.documentDraft != null ||
@@ -215,14 +234,19 @@ internal class PocketWebAttachments(
                 state.document?.opt("readReceiptId") == seed.receiptId && viewer.displayedPdfPage(state.file) == seed.page
         }
     }
-    private fun currentDraftTextSource(windowId: String, seed: TextSeed): Boolean =
-        window?.id == windowId && importedDraftFile(seed is TextSeed.PdfPage) != null && retainsDraftText(seed)
+    private fun currentDraftTextSource(windowId: String, seed: TextSeed): Boolean {
+        val pdf = seed as? TextSeed.PdfPage
+        val warmOwner = pdf?.warmOwnerCurrent
+        // Losing authority never grants a fresh attempt on an otherwise unchanged visible receipt.
+        return window?.id == windowId && warmOwner?.invoke() != false &&
+            importedDraftFile(pdf != null, warmOwner != null) != null && retainsDraftText(seed)
+    }
     private fun markdownDraftSeed(file: JSONObject): TextSeed.Markdown? {
         val attempted = if (drafts.isInitialized()) drafts.value.textSource() as? TextSeed.Markdown else null
         if (attempted != null && retainsDraftText(attempted)) return attempted
         return viewer.markdownDraftSeed(file, flow.state.originalFile)?.let { TextSeed.Markdown(it) }
     }
-    private fun pdfPageDraftSeed(file: JSONObject): TextSeed.PdfPage? {
+    private fun pdfPageDraftSeed(file: JSONObject, warmOwner: (() -> Boolean)? = null): TextSeed.PdfPage? {
         val attempt = if (drafts.isInitialized()) drafts.value.textSource() as? TextSeed.PdfPage else null
         if (attempt != null && retainsDraftText(attempt)) return attempt
         val state = flow.state
@@ -272,7 +296,7 @@ internal class PocketWebAttachments(
             check(body.isNotBlank())
             val name = source.name.substringBeforeLast('.').trim().take(60).trimEnd { Character.isHighSurrogate(it) }
                 .ifBlank { "PDF" } + " 第 ${page.page} 页"
-            TextSeed.PdfPage(page, source, file, read, receipt, Fields(Format.WORD, name, "", body.toString(), 12))
+            TextSeed.PdfPage(page, source, file, read, receipt, Fields(Format.WORD, name, "", body.toString(), 12), warmOwner)
         }.getOrNull()
     }
     /** Do not derive a linked draft entry from a restored or unscoped file/editor. */
@@ -395,7 +419,9 @@ internal class PocketWebAttachments(
             if (!retainsDraftText(attempted)) drafts.value.retireText()
         }
         val markdown = if (draftPresentation) importedDraftFile()?.let(::markdownDraftSeed) else null
-        val pdfDraft = if (draftPresentation) importedDraftFile(pdfPage = true)?.let(::pdfPageDraftSeed) else null
+        val pdfDraft = if (draftPresentation) importedDraftFile(pdfPage = true, allowWarmPdf = true)?.let {
+            pdfPageDraftSeed(it)
+        } else null
         fun draftTextIndicator(seed: TextSeed?): JSONObject? = seed?.let {
             val retained = if (drafts.isInitialized() && drafts.value.textSource() === seed) drafts.value.textRetention() else null
             JSONObject().put("name", seed.fields.name()).put("state", retained?.state?.name ?: "READY").put("savedAt", retained?.savedAt)
@@ -773,7 +799,7 @@ internal class PocketWebAttachments(
         } catch (failure: Exception) { done(null, failure.message?.take(300) ?: "文件操作未确认，请重新核对原记录") }
     }
     /** These replies must go through the Bridge's transient completion, not the ordinary workspace result. */
-    fun dispatchStandaloneDraft(args: JSONObject, reentry: (() -> Boolean)?, done: (JSONObject?, String?) -> Unit) {
+    fun dispatchStandaloneDraft(args: JSONObject, freshOwner: (() -> Boolean)?, done: (JSONObject?, String?) -> Unit) {
         val unavailable = "原草稿窗口或结果尚未核对；没有自动保存或重试。"
         fun reply(actual: JSONObject?) { if (actual == null) done(null, unavailable) else done(actual, null) }
         fun text(key: String) = args.opt(key) as? String ?: error("原草稿身份无效")
@@ -853,10 +879,13 @@ internal class PocketWebAttachments(
             }
             if (command in setOf("drafts.retainMarkdown", "drafts.checkMarkdown", "drafts.retainPdfPage", "drafts.checkPdfPage")) {
                 val pdfPage = command == "drafts.retainPdfPage" || command == "drafts.checkPdfPage"
-                val file = importedDraftFile(pdfPage) ?: error("请在当前私人文件库查看原件后保留草稿")
+                val warmOwner = if (pdfPage && globalDraftLibrary == null)
+                    warmPdfDraftOwner(freshOwner ?: error("私人文件库窗口尚未就绪")) else null
+                val file = importedDraftFile(pdfPage, allowWarmPdf = warmOwner != null)
+                    ?: error("请在当前私人文件库查看原件后保留草稿")
                 val seed = if (pdfPage) {
                     exact("viewerId", "rasterId", "fileId", "sha256", "readReceiptId")
-                    val shown = pdfPageDraftSeed(file) ?: error("尚未核对这份 PDF 本页的文字层")
+                    val shown = pdfPageDraftSeed(file, warmOwner) ?: error("尚未核对这份 PDF 本页的文字层")
                     check(text("viewerId") == shown.page.viewerId && text("rasterId") == shown.page.rasterId &&
                         text("readReceiptId") == shown.receiptId && text("sha256") == shown.source.sha256)
                     shown
@@ -896,7 +925,7 @@ internal class PocketWebAttachments(
                 exact("reenterVisit")
                 val visit = flow.state.globalStandaloneDraftVisit ?: error("请重新打开私人文件库")
                 val active = window ?: error("原文件库窗口已离开")
-                val current = reentry ?: error("私人文件库窗口尚未就绪")
+                val current = freshOwner ?: error("私人文件库窗口尚未就绪")
                 // The native logical visit survives a warm picker, not a cold/other/document-replaced entry.
                 // Keep its catalog and receipts. Only this explicit action grants a new shelf read on the current frame.
                 check(visit == text("reenterVisit") && globalDraftLibrary == null && ordinaryDraftLibrarySurface() &&

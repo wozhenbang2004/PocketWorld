@@ -28,6 +28,7 @@
  background: var(--pw-canvas); border-block-start: 1px solid var(--pw-divider);
 }
 .pw-file-use-footer > button { min-height: var(--pw-control-target); max-width: 100%; white-space: normal; }
+.pw-file-use-footer > .pw-file-reader-more { min-width: var(--pw-control-target); }
 .pw-file-page .pw-file-draft-action { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .pw-file-page .pw-file-draft-status { order: 1; flex: 1 0 100%; margin: 0; font-size: 13px; overflow-wrap: anywhere; }
 .pw-file-page .pw-file-continuation-target { scroll-margin-block: var(--pw-gap-content); }

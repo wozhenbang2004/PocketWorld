@@ -204,6 +204,9 @@ internal class PocketWebTaskActions(
                 if (!ready) allowed.remove("tasks.resume") else if (allowed.containsKey("tasks.resume")) allowed["tasks.resume"] = "开始这项设备工作"
                 allowed.remove("tasks.plan.enter")
             }
+            if (dev.pocketengine.store.TaskStore.firstMainScreenPending(task.raw)) {
+                allowed.remove("tasks.resume"); allowed.remove("tasks.scope"); allowed.remove("tasks.plan.enter")
+            }
             val positiveApprovalIds = approvalViews.objects().filter { it.optJSONObject("webReview")?.optBoolean("canApprove") == true }
                 .map { it.optString("approvalId", it.optString("id")) }.filter { it.isNotBlank() }.toSet()
             val handle = reviews.create(task, allowed.keys, positiveApprovalIds)

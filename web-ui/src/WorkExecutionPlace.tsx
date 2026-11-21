@@ -23,8 +23,7 @@ function subscribePhoneRead(notify: () => void) {
 
 /** On the original Work overview only, after the live screen fact is absent.
  * An already-committed receipt is not a current frame, an app locator or input authority. */
-function mainPhoneRead(task: WorkCollectionTask): 'retained' | 'unconfirmed' | null {
-  if (!['preparing', 'running'].includes(task.status)) return null;
+function mainPhoneRead(task: WorkCollectionTask): 'retained'|'unconfirmed'|'owner-first-waiting'|'owner-first-checking'|'owner-first-unknown'|'owner-first-observed'|null {
   const { state, view, capabilities } = bridge.getState();
   const activeView = view as { taskId?: string; section?: string | null } | undefined;
   if (document.hidden || activeView?.taskId !== task.id || activeView.section !== null ||
@@ -37,7 +36,19 @@ function mainPhoneRead(task: WorkCollectionTask): 'retained' | 'unconfirmed' | n
       live.updatedAt !== task.updatedAt || raw.runId !== task.raw?.runId || raw.coordinatorEpoch !== task.raw?.coordinatorEpoch ||
       raw.contextAvailable === false || raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true ||
       raw.metadataLimited === true || raw.taskProjection !== 'detail_window' || raw.auditBodyIncluded !== true ||
-      raw.taskCoreReadLimited !== false || privatePhoneSurface(live, state.livePrivatePhones)?.lastObservation) return null;
+      raw.taskCoreReadLimited !== false) return null;
+  const first=raw.ownerFirstCurrentMain;
+  if(first?.format==='pocketworld.owner-first-current-main.v1'&&first.taskId===task.id&&first.runId===raw.runId&&first.epoch===1&&raw.coordinatorEpoch===1){
+    const observed=first.observation;
+    if(first.phase==='observed'&&observed?.structureOnly===true&&observed.runId===raw.runId&&observed.displayId===0&&
+       typeof observed.observationId==='string'&&/^[a-f0-9-]{36}$/.test(observed.observationId))return 'owner-first-observed';
+    if(task.status==='preparing'&&privatePhoneSurface(live,state.livePrivatePhones)?.stopRequested===false){
+      if(first.phase==='waiting')return 'owner-first-waiting';
+      if(first.phase==='checking')return 'owner-first-checking';
+    }
+    if(first.phase==='waiting'||first.phase==='checking')return 'owner-first-unknown';
+  }
+  if (!['preparing', 'running'].includes(task.status)||privatePhoneSurface(live,state.livePrivatePhones)?.lastObservation) return null;
   try {
     const { entries } = taskAuditPage(raw.historyEventPage, task.id, 'events');
     if (entries.some(row => originalMainPhoneObservation(task.id, raw, row))) return 'retained';
@@ -47,9 +58,13 @@ function mainPhoneRead(task: WorkCollectionTask): 'retained' | 'unconfirmed' | n
 
 function MainPhoneRead({ task }: { task: WorkCollectionTask }) {
   const receipt = useSyncExternalStore(subscribePhoneRead, () => mainPhoneRead(task), () => null);
-  return receipt ? <small role="status">{receipt === 'retained'
-    ? '本轮已读到主屏的界面结构。这不是实时画面。'
-    : '本页尚未核对到本轮主屏的读屏回执。'}</small> : null;
+  if (!receipt) return null;
+  const line={retained:'本轮已读到主屏的界面结构。这不是实时画面。',unconfirmed:'本页尚未核对到本轮主屏的读屏回执。',
+    'owner-first-waiting':'等你确认。切到要用的页面，点任务控制条的「从眼前页面开始」。',
+    'owner-first-checking':'正在核对刚确认的页面，尚未开始模型处理。',
+    'owner-first-unknown':'未确认这轮首次主屏读取。不会从这里自动开始。',
+    'owner-first-observed':'已读取你确认的主屏界面结构。不是实时画面，也不代表任务完成。'}[receipt];
+  return <small role="status">{line}</small>;
 }
 
 /** The place comes from the native work binding, not the conversation, the

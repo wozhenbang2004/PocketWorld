@@ -10,7 +10,7 @@ import org.json.JSONObject;
 
 /** Buttons are bound to one native source and one displayed intention, not to a live toggle. */
 final class PhoneOwnerControls {
-    enum Action { NONE, PAUSE, RESUME_LOCAL, RESUME_SOURCE, REVIEW }
+    enum Action { NONE, PAUSE, RESUME_LOCAL, RESUME_SOURCE, REVIEW, FIRST_MAIN_START }
     record ViewState(boolean current,Action action,long pause,long scope,String displayHandle,String message,boolean resultWatch) {
         boolean sameInput(ViewState other){return other!=null&&action==other.action&&pause==other.pause&&scope==other.scope&&Objects.equals(displayHandle,other.displayHandle);}
         ViewState withResultWatch(){return new ViewState(current,action,pause,scope,displayHandle,message,true);}
@@ -76,6 +76,10 @@ final class PhoneOwnerControls {
                 return state(false,Action.NONE,-1,"原任务已结束或执行身份变化，请返回原任务查看记录");
             long revision=original.pauseRevision();
             if(original.isCancelled())return state(true,Action.NONE,revision,"正在停止后续操作，已发生的动作不会撤回");
+            if(row.optBoolean("firstMainHeld")){
+                boolean offer=row.getBoolean("privateLocal")&&!original.isPaused()&&"preparing".equals(row.opt("status"))&&row.optBoolean("firstMainWaiting");
+                return state(true,offer?Action.FIRST_MAIN_START:Action.NONE,revision,"到目标页面后确认读取眼前主屏。尚未启动模型或后续操作。");
+            }
             boolean unresolved=row.optBoolean("unresolved");
             if(!original.isPaused()){
                 ViewState shown=state(true,Action.PAUSE,revision,unresolved?"动作结果待核对，可先暂停并返回原任务":goal);

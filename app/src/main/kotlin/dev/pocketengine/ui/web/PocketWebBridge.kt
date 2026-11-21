@@ -986,9 +986,10 @@ internal class PocketWebBridge(
                 }
                 val draftCommand = args.opt("command") as? String
                 if (action == "attachmentWorkspace.action" && draftCommand != null && draftCommand in PocketWebAttachments.PRIVATE_DRAFT_COMMANDS) {
-                    // Resume needs a fresh owner ticket and native proof of the same warm ordinary Library.
-                    val reentry = if (draftCommand == "drafts.list" && args.has("reenterVisit")) freshLibraryEntry() else null
-                    attachmentPages.dispatchStandaloneDraft(args, reentry) { result, error ->
+                    // Either the same warm shelf or one expressly selected PDF page can need a fresh owner ticket.
+                    val owner = if (draftCommand == "drafts.list" && args.has("reenterVisit") ||
+                        draftCommand == "drafts.retainPdfPage" || draftCommand == "drafts.checkPdfPage") freshLibraryEntry() else null
+                    attachmentPages.dispatchStandaloneDraft(args, owner) { result, error ->
                         complete(id, result, error, retainValue = false,
                             replayHint = "请回本机文档草稿核对同一版本；不会重复保存。")
                         publishState()

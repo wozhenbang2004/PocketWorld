@@ -12,9 +12,9 @@ export type PhoneConditions={notification:Condition&{settingsDetail?:'phone_task
 export type PhoneReviewDisplay={
   goal:string;mode:string;toolLimit:number;modelCallLimit:number;scopeMinutes:number;
   ownerPickedMessage?:boolean;message?:string;conversationId?:string;conversationTitle?:string;modelName?:string;screenDisclosure?:string;
-  conditions?:PhoneConditions;
+  conditions?:PhoneConditions;manualFirstMainAvailable?:true;
 };
-type Live={reviewHandle:string;expiresInMs?:number;documentEpoch?:number;draftRequestId?:string;conversationId?:string;ownerPickedMessage?:boolean};
+type Live={reviewHandle:string;expiresInMs?:number;documentEpoch?:number;draftRequestId?:string;conversationId?:string;ownerPickedMessage?:boolean;manualFirstMainAvailable?:true};
 
 const privatePlace = (mode:string) => mode==='background'?'后台独立屏':mode==='main_screen'?'手机主屏':undefined;
 const readinessLine = (condition:Pick<Condition,'state'|'message'>|undefined, ready:string) => {
@@ -66,7 +66,7 @@ function PrivateReviewDetails({shown,live,past=false}:{shown:PhoneReviewDisplay;
 
 // Exit retains the original description only. Re-checking prepares a review, never a task.
 export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onCheck,onSettings,onPlace,error,terms}:{
-  shown:PhoneReviewDisplay;live:Live|null;pending:boolean;unknown:boolean;onStart?:()=>void;onClose:()=>void;
+  shown:PhoneReviewDisplay;live:Live|null;pending:boolean;unknown:boolean;onStart?:(manualFirstMain?:true)=>void;onClose:()=>void;
   onCheck?:(handle:string)=>void;onSettings?:(handle:string,target:Remedy)=>void;onPlace?:(handle:string,place:ReviewedPlace)=>void;error?:string;terms?:{constraints?:string;deliverable?:string;completionCriteria?:string};
 }){
   const conditions=shown.conditions,handle=live?.reviewHandle,epoch=live?.documentEpoch;
@@ -130,6 +130,11 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
       </div>}
       {taskChannel&&onSettings&&<p className="pw-field-hint">若只打开应用通知设置，请在其中选择「手机任务」。返回后重新核对原目标。</p>}
       {place&&onPlace&&<p className="pw-field-hint">{place==='background_setup'?'在准备页选「后台独立屏 → 连接与检查」。回来后再核对原目标，不会自动连接或提交。':'主屏会占用手中的屏幕。只有你在原草稿选择后才会更换位置；仍需重新核对。'}</p>}
+      {shown.mode==='main_screen'&&live?.manualFirstMainAvailable===true&&canSubmit&&screen?.state==='ready'&&!expired&&onStart&&
+        <div className="pw-phone-review-remedies">
+          <Button variant="secondary" disabled={pending} onClick={()=>{if(current())onStart(true)}}>到目标页面后手动开始</Button>
+          <p className="pw-field-hint">切到你要用的页面，再从任务控制条确认。首次只读取当前窗口的界面结构，不截图，也不锁定某个 App。可读文字仍按本次模型范围处理。</p>
+        </div>}
     </div>
     <PrivateReviewDetails shown={shown} live={live}/>
     {terms&&<dl className="pw-phone-review-limits">

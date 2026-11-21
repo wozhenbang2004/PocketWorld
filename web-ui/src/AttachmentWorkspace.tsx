@@ -2,7 +2,7 @@ import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'rea
 import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconClose, IconExternalLink, IconFileAdd, IconFolder, IconInfo, IconMore, IconRefresh, IconSearch, IconShare, IconUpload } from './icons';
 import {bridge} from './bridge';
 import {Accordion,AccordionItem,Button,IconButton,SelectField,TextField} from './forms-library';
-import {Drawer,ContextMenuTrigger,ContextMenu,ContextMenuItem} from './shell-library';
+import {Drawer,ContextMenuTrigger,ContextMenu,ContextMenuItem,Popover,PopoverTrigger} from './shell-library';
 import {AttachmentOriginalReader,DocumentProjection,FileDetails,type DisplayedOriginalText} from './AttachmentOriginalReader';
 import {AttachmentDocumentEditor,AttachmentProcessingEditor,AttachmentVersionContinuation,type SavedFileNote} from './AttachmentDocumentEditor';
 import {AttachmentStandaloneDrafts} from './AttachmentStandaloneDrafts';
@@ -282,6 +282,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const attachmentFlight=useRef(false);
  const documentParentFlight=useRef(false),generatedDraftFlight=useRef(false);
  const [previewContinuation,setPreviewContinuation]=useState('');
+ const [readerActionMenu,setReaderActionMenu]=useState('');
  useEffect(()=>{if(!view.open){setPreviewContinuation('');setCatalogFilter(null)}},[view.open]);
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
  const continuationHeading=useRef<HTMLDivElement>(null);
@@ -314,6 +315,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   view.resultFilesOnly===true,reportOnly,view.historyResultOnly===true]):'';
  const location=JSON.stringify([mode==='list'&&listScope?listScope:view.windowId,view.taskId,file.id,file.sha256,mode,
   ...(view.wordExcerptSourceOpen===true?['word-excerpt-origin']:[])]);
+ const readerActionScope=JSON.stringify([location,obj(view.originalFile).id,snapshot.taskRunId,snapshot.coordinatorEpoch]);
  const listOrigin=useRef<{scope:string;collection?:string;inset:number}|null>(null);
  const displayedFile=useRef<{scope:string;target:ExactFile}|null>(null);
  const workOutput=file.role==='result'&&!!view.taskId&&(view.resultFilesOnly===true||view.fromWorkResult===true||view.taskId===openTaskId);
@@ -529,6 +531,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const goBack=useCallback(()=>{
   const current=latest.current,transfer=draftFlight.current;
   if(!current.open)return false;
+  if(current.ready&&readerActionMenu===readerActionScope){setReaderActionMenu('');return true}
   if(draftDesk){draftDeskExit.current?.(false);return true}
   if(backFlight.current||current.busy||!current.ready||transfer&&(transfer.phase==='opening'||!current.originalFile))return true;
   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),range=displayedText.current,body=scroller.current;
@@ -557,7 +560,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    }else if(result.accepted!==true||returned.open!==false)retirePin();
   }).catch(retirePin).finally(()=>{backFlight.current=false});
   return true;
- },[act,location,mayRestoreText,draftDesk]);
+ },[act,location,mayRestoreText,draftDesk,readerActionMenu,readerActionScope]);
  const registerBeforeBack=useCallback((handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>{beforeBack.current=handler},[]);
  useEffect(()=>{alive.current=true;registerBack(goBack);return()=>{alive.current=false;registerBack(null)}},[registerBack,goBack]);
  useEffect(()=>{setError('');setPage('1')},[view.windowId,file.id,file.sha256]);
@@ -737,11 +740,11 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   finally{reportFlight.current=false;if(alive.current)setPending(count=>Math.max(0,count-1));}
  };
  const topicHasFile=topic?.conversationId===draftTarget?.conversationId&&draftHasFile;
- const useInTopic=!pythonOutputFile&&privateFiles&&topic&&onUseResult&&<>
-  {onChooseResultAttachment&&<Button variant={preferSave?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined}
-   onClick={()=>void handOffFile(true,topic,false,true)}>选作原话题附件…</Button>}
-  <Button variant={onChooseResultAttachment?'ghost':preferSave?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined}
-   onClick={()=>void handOffFile(!keepResultReadingDraft||topicHasFile,topic,topicHasFile,false,keepResultReadingDraft)}>{draftBusy&&!onChooseResultAttachment?'正在核对原话题草稿…':topicHasFile?'查看草稿中的文件位置':'只关联文件位置'}</Button>
+ const useInTopic=!pythonOutputFile&&privateFiles&&!!topic&&!!onUseResult;
+ const attachInTopic=useInTopic&&!!onChooseResultAttachment;
+ const topicPositionLabel=draftBusy&&!onChooseResultAttachment?'正在核对原话题草稿…':topicHasFile?'查看草稿中的文件位置':'只关联文件位置';
+ const referenceInTopic=()=>void handOffFile(!keepResultReadingDraft||topicHasFile,topic,topicHasFile,false,keepResultReadingDraft);
+ const topicFeedback=useInTopic&&<>
   {handoff?.error?<p className="pw-file-draft-status pw-error" role="alert">{handoff.error}</p>:
    keepResultReadingDraft&&topicHasFile&&!draftBusy&&<p className="pw-file-draft-status" role="status">原话题草稿里已保留这份文件位置。这里没有添加附件或发送。</p>}
  </>;
@@ -764,18 +767,51 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const savedCopy=verifiedCopy?`${verifiedCopy.historical===true?'上次另存时已核对':'已保存并核对'}${destination(verifiedCopy)}：回读 ${verifiedCopy.verifiedBytes.toLocaleString()} 字节，SHA-256 与原件一致。${copyName(verifiedCopy)?'':'目标文件名未核对。'}`:'';
  // This is the evidence stored with the exact save, not a new verification of the destination.
  const copyVersion=verifiedCopy?`原件：${file.name||'原文件'} · ${attachmentFileFormat(file.mimeType,file.name).label} · ${objectVersion}\n回读匹配的 SHA-256：${verifiedCopy.sha256}`:null;
- const copyFeedback=(attemptStatus||verifiedCopy)&&<div className="pw-file-draft-status">
+ const copyLocation=`请在系统文件或所选存储服务的保存位置查看${copyName(verifiedCopy)?'，按上述文件名查找':''}。未记录完整路径。`;
+ const copyFeedback=(compact=false)=>(attemptStatus||verifiedCopy)&&<div className="pw-file-draft-status">
   {attemptStatus&&<div role="status">{attemptStatus}</div>}
   {verifiedCopy&&<div>
-   <span role={verifiedCopy.historical===true?undefined:'status'} className={verifiedCopy.historical===true?'pw-muted':undefined}>{savedCopy}</span><br/>
-   <span className="pw-muted">请在系统文件或所选存储服务的保存位置查看{copyName(verifiedCopy)?'，按上述文件名查找':''}。未记录完整路径。</span>
-   <FileDetails key={verifiedCopy.requestId} title="核对另存的版本" value={copyVersion}/>
+   <span role={verifiedCopy.historical===true?undefined:'status'} className={verifiedCopy.historical===true?'pw-muted':undefined}>{savedCopy}</span>
+   {!compact&&<><br/><span className="pw-muted">{copyLocation}</span></>}
+   <FileDetails key={verifiedCopy.requestId} title="核对另存的版本" value={compact?`${copyLocation}\n\n${copyVersion}`:copyVersion}/>
   </div>}
  </div>;
  const exportLabel=copyStage==='writing'?'正在另存…':copyStage==='picker_unconfirmed'?'保存位置尚未确认…':
   view.exportPending?'等待选择保存位置…':confirmed?'另存另一份…':'另存原件…';
  const saveFirst=!reviewManagedWorkApk&&preferSave&&!confirmed;
  const exportAction=!pythonOutputFile&&<Button variant={confirmed?'ghost':saveFirst?'primary':'secondary'} disabled={busy||draftBusy||view.exportPending} onClick={()=>run('export')}>{exportLabel}</Button>;
+ // Use the real current attach offer, not an inferred draft or an alternate result path.
+ // Moving the other actions into a popover does not change their own owner/file admission.
+ const compactReaderActions=mode==='original'&&view.ready===true&&attachInTopic&&canSaveOriginal&&!preferSave&&
+  !offerDocumentEdit&&!reviewManagedWorkApk&&!localOnlyFile&&!receivedOriginal&&!onReturnToSearch&&view.originalReturn==='entry'&&
+  view.fromWorkResult===true&&view.restoredWorkReturn===false&&view.resultFilesOnly===false&&view.choosingSource===false&&
+  view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.historyResultOnly===false&&view.reportResultOnly===false&&
+  !!view.taskId&&view.taskId===openTaskId&&snapshot.taskId===view.taskId&&!!selection&&
+  (original.kind==='pdf'||original.kind==='text')&&original.sourceUnavailable===false&&original.sha256===selection.sha256;
+ const readerActionsOpen=compactReaderActions&&readerActionMenu===readerActionScope;
+ useLayoutEffect(()=>{
+  if(readerActionMenu&&!readerActionsOpen)setReaderActionMenu('');
+ },[readerActionMenu,readerActionsOpen]);
+ const selectReaderAction=(action:()=>void)=>{
+  setReaderActionMenu('');action();
+ };
+ const supplementLabel=view.continuationDraft?.text?.trim()?'查看补充草稿':'留一条补充';
+ const readerActions=compactReaderActions&&<PopoverTrigger isOpen={readerActionsOpen}
+  onOpenChange={open=>setReaderActionMenu(value=>open?readerActionScope:value===readerActionScope?'':value)}>
+  <IconButton icon={IconMore} className="pw-file-reader-more" aria-label="更多文件操作" disabled={busy||draftBusy}/>
+  {/* The file drawer owns Escape and Android Back; it dismisses this same menu first. */}
+  <Popover aria-label="当前固定文件的更多操作" placement="top end" className="pw-attachment-menu pw-work-object-menu"
+   dialogClassName="pw-work-object-menu-dialog" isKeyboardDismissDisabled>
+   <div className="pw-work-object-menu-actions">
+    <Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
+      onClick={()=>selectReaderAction(referenceInTopic)}>{topicPositionLabel}</Button>
+    {canKeepSupplement&&<Button variant="ghost" disabled={busy||draftBusy}
+      onClick={()=>selectReaderAction(revealContinuation)}>{supplementLabel}</Button>}
+    <Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
+      onClick={()=>selectReaderAction(()=>run('export'))}>{exportLabel}</Button>
+   </div>
+  </Popover>
+ </PopoverTrigger>;
  const fileMenu=<ContextMenuTrigger key={`${file.id}:${file.sha256}`}>{({open})=><>
   <IconButton icon={IconMore} aria-label="更多文件操作" disabled={busy} onClick={event=>open(event.currentTarget)}/>
   <ContextMenu className="pw-attachment-menu" aria-label="当前固定文件的操作" onAction={key=>{if(key==='external'||key==='share'&&privateFiles)run(String(key))}}>
@@ -1128,7 +1164,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
     onClick={()=>run('openDocumentAction',{taskId:view.libraryDocumentActionId})}>查看原生成记录</Button>}
   {!localOnlyFile&&!scopedResultOnly&&fileMenu}
  </div>
- {copyFeedback}
+ {copyFeedback()}
  {!localOnlyFile&&!scopedResultOnly&&<Accordion className="pw-attachment-tools"><AccordionItem id="read-source" title="读取文字与表格" description="保留页码、位置与识别说明"><section>{file.mimeType==='application/pdf'&&<TextField label="从第几页开始" value={page} onChange={setPage}/>}<div className="pw-action-row"><Button variant="secondary" disabled={busy||!/^\d+$/.test(page)||Number(page)<1} onClick={()=>run('read',{unit:Number(page),chunk:0})}>读取文字与表格</Button>{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>本机识别图片文字</Button>}</div></section></AccordionItem></Accordion>}
  {!scopedResultOnly&&privateFiles&&(String(file.mimeType).startsWith('image/')||['video/mp4','audio/mp4'].includes(file.mimeType))&&<Accordion className="pw-attachment-tools"><AccordionItem id="continue-source" title="图像与媒体处理" description="裁剪、转换或对照原版本"><section><div className="pw-action-row">{(String(file.mimeType).startsWith('image/')||['video/mp4','audio/mp4'].includes(file.mimeType))&&<Button variant="secondary" disabled={busy||!!view.pendingProcessingTask} onClick={()=>run('openProcessing')}>{String(file.mimeType).startsWith('image/')?'裁剪、缩放或转换原图':'剪辑原媒体片段'}</Button>}{String(file.mimeType).startsWith('image/')&&(file.parentArtifact||file.source?.parentArtifact)&&<Button variant="ghost" disabled={busy} onClick={()=>run('compareParent')}>对照父原图</Button>}</div></section></AccordionItem></Accordion>}<FileDetails value={file} title="来源与文件版本"/></section>:<>
  <section className="pw-file-library" aria-label={view.choosingSource?'选择来源文件':'文件集合'}>
@@ -1183,11 +1219,16 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    <Button variant="primary" disabled={busy||draftBusy||view.exportPending} aria-busy={reportFlight.current||undefined} onClick={()=>void openReportOriginalWork()}>到原工作另存这份</Button>
    <p className={'pw-file-draft-status'+(reportError?' pw-error':'')} role={reportError?'alert':undefined}>{reportError||'汇报中只读。进入原工作后，再选择保存位置。'}</p>
   </>}
-  {confirmed&&copyFeedback}
+  {confirmed&&copyFeedback(compactReaderActions)}
   {reviewManagedWorkApk&&<Button variant="primary" disabled={busy||draftBusy||view.exportPending}
    onClick={()=>run('external',{reviewProjectApk:true})}>核对这份 APK</Button>}
   {saveFirst&&exportAction}
-  {useInTopic}
+  {attachInTopic&&<Button variant={preferSave?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined}
+   onClick={()=>void handOffFile(true,topic,false,true)}>选作原话题附件…</Button>}
+  {useInTopic&&!compactReaderActions&&<Button variant={onChooseResultAttachment?'ghost':preferSave?'secondary':'primary'} className="pw-file-draft-action"
+   disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined} onClick={referenceInTopic}>{topicPositionLabel}</Button>}
+  {readerActions}
+  {topicFeedback}
   {canReturnGeneratedDraft&&generatedDraftAction(preferSave||useInTopic?'secondary':'primary')}
   {offerDocumentEdit&&editDocument(canReturnGeneratedDraft?'ghost':preferSave||useInTopic?'secondary':'primary')}
   {wordOriginAction}
@@ -1202,10 +1243,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {canChooseAttachment&&<Button variant={preferSave||offerDocumentEdit||canReturnGeneratedDraft?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending}
    aria-busy={attachmentFlight.current||undefined} onClick={()=>void chooseAttachment()}>{attachmentFlight.current?'正在核对原文件…':`选作「${draftTarget?.label}」的附件…`}</Button>}
   {attachmentChoiceError&&<p className="pw-file-draft-status pw-error" role="alert">{attachmentChoiceError}</p>}
-  {canKeepSupplement&&<Button variant={preferSave||useInTopic||offerDocumentEdit?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>{view.continuationDraft?.text?.trim()?'查看补充草稿':'留一条补充'}</Button>}
+  {canKeepSupplement&&!compactReaderActions&&<Button variant={preferSave||useInTopic||offerDocumentEdit?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>{supplementLabel}</Button>}
   {!canChooseAttachment&&reuseAction}
-  {canSaveOriginal&&!saveFirst&&exportAction}
-  {!confirmed&&copyFeedback}
+  {canSaveOriginal&&!saveFirst&&!compactReaderActions&&exportAction}
+  {!confirmed&&copyFeedback(compactReaderActions)}
  </div>}
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }

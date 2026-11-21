@@ -118,10 +118,16 @@ public final class AgentRunner {
     }
 
     private dev.pocketengine.phone.MainPhoneOwnerReturnPage firstOwnerReturnPage;
+    private String ownerFirstMainStructure;
     private boolean ownerReturnPageRead;
     public boolean ownerReturnPageRead(){return ownerReturnPageRead;}
     /** Native main service only; model/tool/input JSON cannot select this route. */
     public AgentRunner forMainOwnerReturn(dev.pocketengine.phone.MainPhoneOwnerReturnPage expected){firstOwnerReturnPage=expected;return this;}
+    /** Already verified and durably acknowledged by the same native main Service. No old reference or image. */
+    public void forOwnerFirstMainStructure(JSONObject structure){
+        if(ownerFirstMainStructure!=null||firstOwnerReturnPage!=null||structure==null)throw new IllegalStateException("first_main_structure_already_bound");
+        ownerFirstMainStructure=structure.toString();
+    }
     public AgentRunner(PhonePort phone) {
         this(phone,null);
     }
@@ -529,7 +535,18 @@ public final class AgentRunner {
             requireIntentImageInput(intent,initialConfig);
             emit(taskId, "run", "running", DeferredPhoneSession.initialized(phone)&&intent.deviceReadAllowed()?(storedMessages == null ? "开始观察手机，准备执行目标。" : "正在恢复任务并重新观察手机。"):"正在处理原目标；实际使用手机时才准备并读取原显示。", null, intent.diagnostics(), initialConfig, sink);
             if(phone!=null)phone.clearReferences();
-            JSONObject latest = !DeferredPhoneSession.initialized(phone)||!control.phoneSurfaceActive()||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId, initialConfig, control, sink,planning);
+            JSONObject latest;
+            if(ownerFirstMainStructure!=null){
+                JSONObject originalFirst=new JSONObject(ownerFirstMainStructure);ownerFirstMainStructure=null;
+                JSONObject binding=originalFirst.getJSONObject("observationBinding");
+                if(openingRestoredTurn||!(phone instanceof DeferredPhoneSession session)||!"main_screen".equals(session.executionMode())||
+                        !control.phoneSurfaceActive()||!intent.deviceReadAllowed()||!taskId.equals(binding.optString("taskId"))||
+                        !control.matchesHostRun(taskId,binding.getString("runId"),binding.getInt("epoch"))||binding.getInt("displayId")!=0||
+                        binding.getLong("pauseRevision")!=control.pauseRevision()||!Boolean.FALSE.equals(originalFirst.getJSONObject("observationSources").opt("imageIncluded"))||
+                        originalFirst.has("imageBase64"))return finish(taskId,"awaiting_user","原主屏观察已保留；本轮未利用不再相符的页面。",evidence,steps,initialConfig,sink);
+                control.checkpoint();latest=originalFirst.put("referenceActionsAllowed",false)
+                        .put("message","机主确认的首次主屏结构，只作页面证据。它不授权点击；操作前仍需原执行的新观察。" );
+            }else latest=!DeferredPhoneSession.initialized(phone)||!control.phoneSurfaceActive()||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId,initialConfig,control,sink,planning);
             evidence = latest;
             if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", latest.optString("message", "无法观察当前手机，请检查页面和操作权限后继续。"), evidence, steps, initialConfig, sink);
             appendCapturedObservation(history, latest, initialConfig, contextBudget,screens,control);

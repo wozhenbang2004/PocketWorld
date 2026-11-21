@@ -26,7 +26,8 @@ internal class PocketWebPhoneComposer(
         val viewEpoch: Int, val expires: Long, val window: PocketWebWindowTicket, val composerKey: String,
         val conversation: String, val draftEpoch: Int, val draftRevision: Long, val reviewGeneration: Long, val originRevision: Long,
         val modelRevision: Long, val privateOwner: Boolean, val linked: EngineApplication.ConversationPhoneStartReview? = null,
-        val draft: EngineApplication.DraftPhoneStartReview? = null, val conditions: JSONObject? = null)
+        val draft: EngineApplication.DraftPhoneStartReview? = null, val conditions: JSONObject? = null,
+        val firstMainPolicyRevision: Long = -1)
     private val main = Handler(Looper.getMainLooper())
     private val phoneReviews = mutableMapOf<String, PhoneReview>()
     // Main-thread invalidation also revokes a review already captured by a queued worker.
@@ -184,7 +185,13 @@ internal class PocketWebPhoneComposer(
                     conversation.isNotBlank() -> original.copy(linked = controller.prepareConversationPhoneStart(conversation, goal, mode, pin?.locator()))
                     else -> original.copy(draft = controller.prepareDraftPhoneStart(modelScope!!, goal, mode))
                 }.let { review ->
-                    if (channel) review else review.copy(conditions = readConditions(mode))
+                    if (channel) review else {
+                        val conditions = readConditions(mode)
+                        val firstMainPolicy = if (review.linked != null && mode == "main_screen" &&
+                            conditions.optJSONObject("screen")?.optString("state") == "ready" &&
+                            dev.pocketengine.runtime.policy.OwnerIntent(goal).deviceReadAllowed()) controller.firstMainScreenPolicyRevision() else -1L
+                        review.copy(conditions = conditions, firstMainPolicyRevision = firstMainPolicy)
+                    }
                 }.also { review ->
                     val native = review.linked?.view() ?: review.draft?.view()
                     check(native == null || native.getInt("toolLimit") == original.tools &&
@@ -221,6 +228,7 @@ internal class PocketWebPhoneComposer(
     private fun reviewView(handle: String, review: PhoneReview): JSONObject {
         val shown = review.linked?.view() ?: review.draft?.view()
         return (shown ?: JSONObject()).put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
+            .putOpt("manualFirstMainAvailable", true.takeIf { review.firstMainPolicyRevision >= 0 })
             .put("toolLimit", review.tools).put("modelCallLimit", review.models).put("scopeMinutes", review.minutes)
             .put("originalDraft", review.conditions?.let { JSONObject().put("composer", review.composerKey).put("conversation", review.conversation)
                 .put("ownerEpoch", review.viewEpoch).put("revision", review.draftRevision).put("origin", review.originRevision) })
@@ -461,10 +469,17 @@ internal class PocketWebPhoneComposer(
         (next==null || !knownBlankSystemResult(next) || listOf("draftRequestId","taskId","runId","admissionState").any { saved.optString(it)!=next.optString(it) })
 
     fun start(id: String, args: JSONObject) {
-        checkedPayload(args, setOf("reviewHandle"))
+        checkedPayload(args, setOf("reviewHandle", "manualFirstMain"))
         val handle = requiredString(args, "reviewHandle")
         val review = phoneReviews[handle] ?: error("原手机目标审阅已关闭或已使用")
         require(phoneReviewCurrent(review)) { "原对话、目标窗口或执行范围已变化，请重新核对" }
+        val firstMainPolicy = if (args.has("manualFirstMain")) {
+            require(requiredBoolean(args,"manualFirstMain") && review.linked != null && review.privateOwner && review.mode == "main_screen" &&
+                review.firstMainPolicyRevision >= 0 && controller.firstMainScreenPolicyRevision() == review.firstMainPolicyRevision) {
+                "这次没有取得眼前主屏手动开始条件，原目标仍保留，没有改用普通开始"
+            }
+            review.firstMainPolicyRevision
+        } else -1L
         val privateRequest = review.privateOwner && (review.linked != null || review.draft != null)
         require(!controller.state.phoneSubmitting && (privateRequest || controller.state.activeTaskId == null)) { "原输入仍在提交或渠道工作正占用，未重复开始" }
         val original = phoneReceiptIdentity(handle, review)
@@ -491,7 +506,7 @@ internal class PocketWebPhoneComposer(
                 publishState()
             } else complete(id,null,"原启动窗口已变化，未覆盖已核对的回执")
         }
-        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, completed) }
+        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, firstMainPolicy, completed) }
             ?: review.draft?.let { controller.startDraftPhone(it, { phoneReviewCurrent(review) }, capacity, completed) }
             ?: controller.startReviewedPhone(review.goal, review.mode, { phoneReviewCurrent(review) }, completed)
         if (admitted) {

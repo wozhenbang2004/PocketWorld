@@ -46,28 +46,41 @@ function StepFields({ draft, index, earlier, projects, snapshot, busy, change }:
     </Accordion></div>;
 }
 
-type PlanWorkTarget = { stepId: string; taskId: string; runId: string; epoch: number; occurrenceId: string };
+type PlanWorkTarget = { stepId: string; taskId: string; runId: string; epoch: number; occurrenceId: string; active?: true };
 type PlanReturnWindow = { document: number; resume: number; request: number; taskId: string };
 type PlanWorkVisit = { plan: Data; work: PlanWorkTarget; window: PlanReturnWindow; acknowledged: boolean; shown: boolean };
 const planWorkId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
-function actionablePlanWork(plan: Data): PlanWorkTarget | undefined {
+function currentPlanWork(plan: Data): PlanWorkTarget | undefined {
   const progress = planProgressView(plan), current = progress?.currentStep, index = current?.index;
-  if (progress?.readState !== 'current' || progress.executionAuthorized !== false || progress.notificationKind !== 'attention' ||
-      current?.readState !== 'current' || current.stepId !== progress.anchorStepId || current.status !== progress.stopReason ||
-      !['awaiting_user', 'waiting_user', 'needs_confirmation', 'waiting_approval', 'awaiting_approval'].includes(current.status) ||
+  if (progress?.readState !== 'current' || progress.executionAuthorized !== false || current?.readState !== 'current' ||
       current.terminalVerified !== false || current.resultVerified !== false ||
       !planWorkId(current.taskId) || !planWorkId(current.runId) || !planWorkId(current.occurrenceId) ||
       !Number.isSafeInteger(current.epoch) || current.epoch <= 0 || !Number.isSafeInteger(index) || index < 0 ||
       !Array.isArray(plan.steps) || plan.steps.length > 50) return;
   if (!planWorkId(current.stepId) || plan.steps[index]?.id !== current.stepId) return;
   const work = { stepId: current.stepId, taskId: current.taskId, runId: current.runId, epoch: current.epoch, occurrenceId: current.occurrenceId };
-  return ownsPlanWork(plan, work) ? work : undefined;
+  const step = boundPlanWorkStep(plan, work);
+  if (!step) return;
+  if (progress.notificationKind === 'attention' && current.stepId === progress.anchorStepId && current.status === progress.stopReason &&
+      ['awaiting_user', 'waiting_user', 'needs_confirmation', 'waiting_approval', 'awaiting_approval'].includes(current.status)) return work;
+  // Only move the active step's existing entry if the native progress and
+  // projected step still agree on this original bound run, not just the Plan's status.
+  if (plan.ownerId === 'owner' && plan.spaceId === 'private' && plan.approvalValid === true &&
+      plan.execution?.started === true && plan.execution.state === 'active' && progress.state === 'waiting_for_original_task' &&
+      progress.notificationKind === '' && progress.stopReason === '' &&
+      ['preparing', 'running', 'observing', 'planning', 'acting'].includes(current.status) &&
+      step.taskState === 'running' && step.taskNeedsApproval === false && step.taskStatus === current.status &&
+      samePlanWorkRound(step, work)) return { ...work, active: true };
 }
-function ownsPlanWork(plan: Data, work: PlanWorkTarget) {
-  if (!Array.isArray(plan.steps) || plan.steps.length > 50) return false;
+function boundPlanWorkStep(plan: Data, work: PlanWorkTarget): Data | undefined {
+  if (!Array.isArray(plan.steps) || plan.steps.length > 50) return;
   const matches = plan.steps.filter((row: Data) => row?.id === work.stepId || row?.taskId === work.taskId), step = matches[0];
   return matches.length === 1 && step.id === work.stepId && step.planId === plan.id && step.taskId === work.taskId &&
-    step.taskAdmission?.state === 'bound' && step.taskAdmission.occurrenceId === work.occurrenceId;
+    step.taskAdmission?.state === 'bound' && step.taskAdmission.occurrenceId === work.occurrenceId ? step : undefined;
+}
+function samePlanWorkRound(step: Data, work: PlanWorkTarget) {
+  return step.taskStateAuthority === 'TaskStore' && step.executionAuthorized === false &&
+    step.taskRunId === work.runId && step.taskEpoch === work.epoch;
 }
 function planReturnCurrent(pin: PlanReturnWindow) {
   const { state, view: nativeView } = bridge.getState(), view = nativeView as Data | undefined;
@@ -193,8 +206,9 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     setSnapshot(value); if (uncertain) setReadAfterUnknown(true);
     if (!returned || !planReturnCurrent(returned.window) || value.taskAuthority !== 'TaskStore') return;
     const matches = rows(value.plans).filter(row => row.id === returned.plan.id), fresh = matches[0], progress = fresh && planProgressView(fresh);
-    const previous = planProgressView(returned.plan);
-    if (matches.length !== 1 || fresh.ownerId !== 'owner' || fresh.spaceId !== 'private' || !ownsPlanWork(fresh, returned.work) ||
+    const previous = planProgressView(returned.plan), step = fresh && boundPlanWorkStep(fresh, returned.work);
+    if (matches.length !== 1 || fresh.ownerId !== 'owner' || fresh.spaceId !== 'private' || !step ||
+        returned.work.active && !samePlanWorkRound(step, returned.work) ||
         !Number.isSafeInteger(fresh.revision) || fresh.revision < returned.plan.revision || !progress || !previous ||
         progress.executionAuthorized !== false || progress.observedAt < previous.observedAt) return;
     // Use the same Back snapshot, never mint or restore a plan review handle.
@@ -265,7 +279,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     }, true);
   };
   const plan = reading?.plan, validRead = !!reading?.viewHandle, terminal = ['completed', 'cancelled', 'finished_with_failures'].includes(plan?.state), paused = plan?.execution?.state === 'paused';
-  const promotedWork = plan && supported('tasks.open') ? actionablePlanWork(plan) : undefined;
+  const promotedWork = plan && supported('tasks.open') ? currentPlanWork(plan) : undefined;
   const planDocument = bridge.getDocumentEpoch();
   const readOnlyProgress = !!reading?.returnWindow && planReturnCurrent(reading.returnWindow);
   const openPromotedWork = async () => {
@@ -333,7 +347,8 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
       {plan.originalTasksUnsettled && <p className="pw-followup-context">仍有工作正在结束或等待核对；暂停结果尚未确认。</p>}
       {(Array.isArray(plan.requirements?.blockers) ? plan.requirements.blockers : []).map((reason: any, index: number) => <p className="pw-followup-context" key={index}>{String(reason)}</p>)}
       {planProgressView(plan) ? <PlanProgress plan={plan} run={run} supported={supported} currentAction={promotedWork &&
-        <Button disabled={busy || (!validRead && !readOnlyProgress) || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen} onClick={() => void openPromotedWork()}>打开原工作</Button>} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
+        <Button variant={promotedWork.active ? 'secondary' : undefined} disabled={busy || (!validRead && !readOnlyProgress) || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen}
+          onClick={() => void openPromotedWork()}>{promotedWork.active ? '查看这一步的工作' : '打开原工作'}</Button>} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
       {!validRead && <div className="pw-followup-attention"><p>{readOnlyProgress ? '已核对这个目标当前的进展。调整目标前需重新核对原版本。' : '详情已保留，操作前需要重新读取原版本。'}</p><Button variant="secondary" disabled={busy} onClick={() => read(plan.id)}>重新核对这个目标</Button></div>}
       <div className="pw-followup-primary-actions">
         {(!plan.execution || !plan.approvalValid) && !terminal && <Button disabled={busy || uncertain || !validRead} onClick={openSettings}>审阅目标与执行范围</Button>}

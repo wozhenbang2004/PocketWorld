@@ -2872,12 +2872,13 @@ export default function App(){
   }
   phoneExit.onCloseAutoFocus(event);
  };
- const startReviewedPhone=()=>{
+ const startReviewedPhone=(manualFirstMain=false)=>{
   const reviewed=phoneReviewLive.current;
   if(document.hidden||phoneAction.current||!reviewed||phoneReviewPending||phoneStart?.status==='unknown')return;
+  if(manualFirstMain&&reviewed.manualFirstMainAvailable!==true)return;
   const startWindow=phoneWindow.current,startDoc=bridge.getDocumentEpoch();const here=()=>!document.hidden&&phoneWindow.current===startWindow&&bridge.getDocumentEpoch()===startDoc;
   phoneAction.current=true;phoneText.markSent();setPhoneReviewPending(true);
-  void act('phone.start',{reviewHandle:reviewed.reviewHandle}).then(value=>{
+  void act('phone.start',{reviewHandle:reviewed.reviewHandle,...(manualFirstMain?{manualFirstMain:true}:{})}).then(value=>{
     if(!here())return;const receipt=phoneStartReceipt(value,reviewed);setPhoneStart(receipt);
     if(reviewed.conditions&&receipt.status==='rejected'&&value?.recheckReview===reviewed.reviewHandle){
       setPhoneReview(current=>current?.reviewHandle===reviewed.reviewHandle?{...current,documentEpoch:undefined}:current);

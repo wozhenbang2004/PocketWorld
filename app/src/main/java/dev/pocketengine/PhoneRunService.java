@@ -24,8 +24,10 @@ import dev.pocketengine.phone.display.DisplayModule;
 import dev.pocketengine.phone.PhoneAccessibilityService;
 import dev.pocketengine.phone.PhoneNotificationControls;
 import dev.pocketengine.phone.OriginalPhoneNotice;
+import dev.pocketengine.phone.FirstMainScreenWindow;
 import dev.pocketengine.phone.observation.AdaptivePhonePort;
 import dev.pocketengine.runtime.AgentRunner;
+import dev.pocketengine.store.TaskStore;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -76,6 +78,58 @@ public final class PhoneRunService extends Service {
     private volatile PhonePort heldPort;
     private volatile DeferredPhoneSession phoneSession;
     private volatile long ownerWaitGeneration;
+    private record FirstMainWait(String task,String run,int epoch,RunControl owner,ModelConfig config,
+                                 String goal,int start,long policy,AtomicBoolean checking){}
+    private volatile FirstMainWait firstMainWait;
+    private boolean ownsFirstMain(FirstMainWait wait){
+        return wait!=null&&firstMainWait==wait&&!destroyed&&waitingForUser&&ownerControl==wait.owner()&&
+                runningConfig==wait.config()&&wait.task().equals(runningId)&&wait.run().equals(runningRunId)&&wait.epoch()==runningEpoch&&
+                wait.owner().matchesHostRun(wait.task(),wait.run(),wait.epoch())&&!wait.owner().isCancelled()&&!wait.owner().isPaused()&&
+                app.retainsShownPhoneControl(wait.task(),wait.owner());
+    }
+    private boolean confirmFirstMain(FirstMainWait wait,FirstMainScreenWindow page){
+        if(!ownsFirstMain(wait)||!page.stillCurrent(wait.owner())||!wait.checking().compareAndSet(false,true))return false;
+        try{worker.execute(()->readFirstMain(wait,page));return true;}
+        catch(java.util.concurrent.RejectedExecutionException closed){wait.checking().set(false);return false;}
+    }
+    private void readFirstMain(FirstMainWait wait,FirstMainScreenWindow page){
+        TaskStore.FirstMainClaim claim=null;boolean recorded=false;
+        RunControl original=wait.owner();
+        java.util.function.BooleanSupplier current=()->ownsFirstMain(wait)&&page.stillCurrent(original);
+        try{
+            if(!current.getAsBoolean()||app.firstMainScreenPolicyRevision()!=wait.policy()||
+                    !new dev.pocketengine.runtime.policy.OwnerIntent(wait.goal()).deviceReadAllowed()||
+                    !AndroidPhoneReadiness.snapshot(this,null).getJSONObject("taskNotifications").getBoolean("ready"))
+                throw new SecurityException("原主屏准备已变化");
+            page.checkWindow(original);
+            claim=app.tasks.claimFirstMainScreen(original,current);
+            JSONObject structure;
+            AndroidPhonePort reader=new AndroidPhonePort(this);
+            try{structure=reader.readFirstMainWindow(page,wait.policy(),original);}
+            finally{reader.closeExtensions();}
+            page.checkWindow(original);
+            app.tasks.finishFirstMainScreen(claim,structure,current);recorded=true;
+            page.checkWindow(original);
+            if(app.firstMainScreenPolicyRevision()!=wait.policy())throw new SecurityException("原主屏规则已变化");
+            var appRules=new dev.pocketengine.phone.access.AndroidPhoneAccessStore(this);
+            original.retainAuthorityCheck(()->{var rules=appRules.current();if(!rules.available()||rules.revision()!=wait.policy()||!rules.rules().isEmpty())
+                throw new SecurityException("原主屏应用规则已变化，不能继续使用已读页面");});
+            synchronized(this){
+                if(!current.getAsBoolean())throw new SecurityException("原主屏确认已离开");
+                if(!app.releaseVerifiedFirstMainHold(wait.task(),original))throw new SecurityException("原主屏任务的本机控制已变化");
+                waitingForUser=false;firstMainWait=null;++ownerWaitGeneration;
+            }
+            PhoneAccessibilityService service=PhoneAccessibilityService.get();
+            if(service!=null)try{service.showControls(wait.task(),wait.goal(),original);}catch(RuntimeException ignored){/* Existing exact notification remains the stop surface. */}
+            run(wait.task(),wait.run(),wait.epoch(),wait.goal(),wait.config(),original,wait.start(),false,null,null,structure);
+        }catch(Exception unavailable){
+            if(recorded&&ownsFirstMain(wait)){
+                waitingForUser=false;firstMainWait=null;++ownerWaitGeneration;
+                finishAttempt(wait.task(),wait.run(),original,new RunOutcome("interrupted","已保存原主屏观察；之后页面或控制变化，未开始模型处理。",new JSONObject()),wait.start());
+            }else if(claim!=null&&ownsFirstMain(wait))try{app.tasks.finishFirstMainScreen(claim,null,()->ownsFirstMain(wait));}
+                catch(Exception unknown){/* An uncertain journal remains held. Never use the normal start branch. */}
+        }finally{wait.checking().set(false);if(ownsFirstMain(wait))app.pushTask(wait.task());}
+    }
     private record OwnerStep(String id,String run,int epoch,RunControl control,AndroidPhonePort port,
                              DeferredPhoneSession session,ModelConfig config,String goal,String operation,long pause,long scope,long generation,dev.pocketengine.phone.MainPhoneOwnerReturnPage page){}
     private volatile OwnerStep ownerStep;
@@ -203,7 +257,7 @@ public final class PhoneRunService extends Service {
         RunControl control=app.control(id);ModelConfig config=app.config(id);
         if(CONTINUE.equals(intent.getAction())){
             String expectedRun=intent.getStringExtra("phoneRunId");int expectedEpoch=intent.getIntExtra("phoneEpoch",-1);
-            if(id!=null&&id.equals(runningId)&&expectedRun!=null&&expectedRun.equals(runningRunId)&&expectedEpoch==runningEpoch&&waitingForUser&&control!=null&&control==ownerControl&&control.matchesHostRun(id,expectedRun,expectedEpoch)&&!control.isCancelled()&&!control.isPaused()){
+            if(firstMainWait==null&&id!=null&&id.equals(runningId)&&expectedRun!=null&&expectedRun.equals(runningRunId)&&expectedEpoch==runningEpoch&&waitingForUser&&control!=null&&control==ownerControl&&control.matchesHostRun(id,expectedRun,expectedEpoch)&&!control.isCancelled()&&!control.isPaused()){
                 DeferredPhoneSession retained=retainedSession(id,expectedRun,expectedEpoch,control);
                 if(heldPort==null&&retained!=null&&retained.initialized())heldPort=retained.physicalPort();
                 if(heldPort==null&&(retained==null||!retained.pending())){control.pause();app.setStatus(id,"awaiting_user","原手机物理会话已不可核对，请停止并检查原任务；未创建替代执行",control);return START_NOT_STICKY;}
@@ -222,7 +276,20 @@ public final class PhoneRunService extends Service {
         String admittedRun=admitted.runId();
         runningId=id;phoneSession=null;
         try{
-            JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);String runId=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");runningRunId=runId;runningEpoch=epoch;runningGoal=task.optString("goal");runningConfig=config;ownerControl=control;lastStartId=startId;startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
+            JSONObject task=app.tasks.foregroundNotificationContextSnapshot(id);String runId=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");runningRunId=runId;runningEpoch=epoch;runningGoal=task.optString("goal");runningConfig=config;ownerControl=control;lastStartId=startId;
+            boolean first=TaskStore.firstMainScreenPending(task)||intent.getBooleanExtra(TaskStore.FIRST_MAIN_SCREEN,false);
+            if(first){
+                long policy=-1;
+                if(START.equals(intent.getAction())&&epoch==1&&runId.equals(intent.getStringExtra("phoneRunId"))&&epoch==intent.getIntExtra("phoneEpoch",-1))
+                    try{policy=app.tasks.firstMainPolicy(control);}catch(Exception unavailable){/* A durable first start never falls through on unknown. */}
+                waitingForUser=true;
+                FirstMainWait hold=new FirstMainWait(id,runId,epoch,control,config,runningGoal,startId,policy,new AtomicBoolean());firstMainWait=hold;
+                startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
+                var overlay=PhoneAccessibilityService.get();
+                if(overlay!=null&&policy>=0)overlay.showFirstMainControls(id,runningGoal,control,()->ownsFirstMain(hold),page->confirmFirstMain(hold,page));
+                return START_NOT_STICKY;
+            }
+            startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
             // A task can use chat, web or local tools before its first phone call.
             main.postDelayed(()->{
                 if(destroyed)return;
@@ -535,6 +602,10 @@ public final class PhoneRunService extends Service {
     }
     private void run(String id,String runId,int epoch,String goal,ModelConfig config,RunControl control,int startId,boolean manualOnly,
                      dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held requiredHold,OwnerStep returned){
+        run(id,runId,epoch,goal,config,control,startId,manualOnly,requiredHold,returned,null);
+    }
+    private void run(String id,String runId,int epoch,String goal,ModelConfig config,RunControl control,int startId,boolean manualOnly,
+                     dev.pocketengine.features.assistant.OwnerPhoneQuestions.Held requiredHold,OwnerStep returned,JSONObject firstMainStructure){
         final PhonePort[] continuationPort=new PhonePort[1];
         if(returned!=null)try{
             control.dispatchAtPauseRevision(returned.pause(),()->{
@@ -580,6 +651,7 @@ public final class PhoneRunService extends Service {
             app.setStatus(id,"running","正在处理原任务；需要手机时才准备原显示",control);
             AgentRunner runner=new AgentRunner(agentPort,capabilities,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),
                     app.phoneOwnerProjection(id,control),app.phoneOwnerInputs(id,runId,epoch,control)).forMainOwnerReturn(returned==null?null:returned.page());
+            if(firstMainStructure!=null)runner.forOwnerFirstMainStructure(firstMainStructure);
             RunOutcome result=runner.run(id,goal,config,control,event->app.record(id,event,control),app.journalForTask(id,runId,epoch,control,config));
             if(returned!=null&&!runner.ownerReturnPageRead()&&!control.isCancelled()&&!result.evidence.has("mainOwnerPageCheck")){
                 // If configuration or the existing read fails earlier, do not lose the original refusal or fall back to generic resume.
@@ -713,7 +785,7 @@ public final class PhoneRunService extends Service {
         if(destroyed||original==null||original!=ownerControl||!original.isCancelled()||!waitingForUser
                 ||id==null||!id.equals(runningId)||run==null||!run.equals(runningRunId)||epoch!=runningEpoch
                 ||!original.matchesHostRun(id,run,epoch)||deviceGoal!=null&&deviceGoal.ownerResultClosed())return;
-        waitingForUser=false;++ownerWaitGeneration;ownerStep=null;int start=lastStartId;
+        waitingForUser=false;++ownerWaitGeneration;ownerStep=null;firstMainWait=null;int start=lastStartId;
         try{worker.execute(()->{
             JSONObject cleanup=closeHeld(id,run,epoch),release=cleanup.optJSONObject("displayRelease");
             String summary=release==null?"已停止后续操作，原任务记录与已有结果保留":Boolean.TRUE.equals(release.opt("releaseConfirmed"))?"已停止后续操作；原独立屏已确认释放，声音复原以原回执为准":"已停止后续操作；原独立屏释放尚未确认，请核对原连接";
@@ -848,7 +920,9 @@ public final class PhoneRunService extends Service {
         if(identified)try{
             PendingIntent stop=PendingIntent.getService(this,0,PhoneNotificationControls.command(this,STOP,t),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
             builder.addAction(new Notification.Action.Builder(null,"停止",stop).build());
-            if(originalWaitUnconfirmed)return builder.build();
+            FirstMainWait first=firstMainWait;
+            if(originalWaitUnconfirmed||TaskStore.firstMainScreenPending(t)||first!=null&&first.task().equals(id)&&
+                    first.run().equals(t.optString("runId"))&&first.epoch()==t.optInt("coordinatorEpoch",-1))return builder.build();
             RunControl owner=ownerControl;
             if(owner!=null&&owner==app.control(id)&&!owner.isCancelled()&&owner.matchesHostRun(id,t.getString("runId"),t.getInt("coordinatorEpoch"))
                     &&t.optString("status").matches("preparing|running|pausing|paused|awaiting_user|reconciling")){

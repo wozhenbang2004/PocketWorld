@@ -91,6 +91,9 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private volatile RenderedOwnerAction renderedOwnerAction;
     private RenderedOwnerAction submittingOwnerAction;
     private volatile long ownerVisibilityVersion;
+    private record FirstMainControl(RunControl control,java.util.function.BooleanSupplier current,
+                                    java.util.function.Predicate<FirstMainScreenWindow> confirm){}
+    private volatile FirstMainControl firstMainControl;
     // Separate from Pause/Stop/Resume: this worker only registers the same local readback reminder.
     private static final java.util.concurrent.ThreadPoolExecutor OWNER_RESULT_WATCH=new java.util.concurrent.ThreadPoolExecutor(0,1,20,java.util.concurrent.TimeUnit.SECONDS,
             new java.util.concurrent.SynchronousQueue<>(),r->{Thread t=new Thread(r,"pocket-owner-result-watch");t.setDaemon(true);return t;});
@@ -383,8 +386,17 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
 
     public void showControls(String taskId, String goal, RunControl runControl) {
+        showControls(taskId,goal,runControl,null);
+    }
+    /** Only the exact waiting native Service holds this one start action. It is not a notification/Web command. */
+    public void showFirstMainControls(String taskId,String goal,RunControl runControl,java.util.function.BooleanSupplier current,
+                                      java.util.function.Predicate<FirstMainScreenWindow> confirm){
+        showControls(taskId,goal,runControl,new FirstMainControl(runControl,current,confirm));
+    }
+    private void showControls(String taskId, String goal, RunControl runControl,FirstMainControl firstMain) {
         runOnMain(() -> {
             if (instance != this || runControl == null || runControl.isCancelled()) return;
+            if(firstMain!=null&&!firstMain.current().getAsBoolean())return;
             if (!(getApplication() instanceof EngineApplication)) return;
             EngineApplication app=(EngineApplication)getApplication();
             PhoneOwnerControls bound=new PhoneOwnerControls(app,taskId,runControl);
@@ -395,15 +407,17 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                 if(openingControls!=bound||openingRun!=runControl)return;
                 var heldReturn=openingReturn;clearOpeningControls();
                 if(instance!=this||first==null||!first.current()||!bound.retained())return;
-                installOwnerControls(taskId,goal,runControl,app,bound,first,heldReturn);
+                if(firstMain!=null&&!firstMain.current().getAsBoolean())return;
+                installOwnerControls(taskId,goal,runControl,app,bound,first,heldReturn,firstMain);
             });
         });
     }
     private void installOwnerControls(String taskId,String goal,RunControl runControl,EngineApplication app,PhoneOwnerControls bound,
-                                     PhoneOwnerControls.ViewState first,OwnerReturnButton heldReturn){
+                                     PhoneOwnerControls.ViewState first,OwnerReturnButton heldReturn,FirstMainControl firstMain){
             removeInstalledControls();
             control = runControl;
             ownerControls=bound;
+            firstMainControl=firstMain;
             LinearLayout panel = new LinearLayout(this);
             panel.setOrientation(LinearLayout.VERTICAL);
             panel.setPadding(dp(4), dp(4), dp(4), dp(4));
@@ -451,8 +465,9 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                     stop.setContentDescription("本次未提交，重新请求停止这一原执行");
                 }
             });
-            Button back = button("暂停并返回原任务");
-            back.setOnClickListener(v -> {if(ownerControls==bound&&visible&&bound.holdForReturn()){
+            Button back = button(firstMain==null?"暂停并返回原任务":"查看原任务");
+            back.setOnClickListener(v -> {if(ownerControls==bound&&visible&&
+                    (firstMain!=null&&firstMain.current().getAsBoolean()||bound.holdForReturn())){
                 refreshOwnerControls(bound,goal);openOriginalOwnerReview(bound,app);
             }});
             actions.bind(grip,ownerActionSlot,stop);
@@ -471,7 +486,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                     }
                 } catch (Exception unavailable) { app.error(unavailable.getMessage() == null ? "请回原任务重新打开快捷补充" : unavailable.getMessage()); }
             });
-            more.addView(supplement); details.addView(more);
+            if(firstMain==null)more.addView(supplement); details.addView(more);
             Button watch = button("这轮有结果时提醒我");
             watch.setVisibility(View.GONE);
             watch.setOnClickListener(v -> watchOriginalResult(watch));
@@ -542,12 +557,15 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             if(pause!=null){pause.setEnabled(false);pause.setOnClickListener(null);}
             var binding=new RenderedOwnerAction(expected,state,hand);renderedOwnerAction=binding;
             String label=hand!=null?"本人已处理，交还":switch(state.action()){
-                case PAUSE->"暂停";case RESUME_LOCAL,RESUME_SOURCE->"继续这次暂停";case REVIEW->"核对原暂停";case NONE->"暂不可控制";};
+                case PAUSE->"暂停";case RESUME_LOCAL,RESUME_SOURCE->"继续这次暂停";case REVIEW->"核对原暂停";
+                case FIRST_MAIN_START->"从眼前页面开始";case NONE->"暂不可控制";};
             Button next=button(label);pause=next;ownerActionSlot.removeAllViews();ownerActionSlot.addView(next);
             next.setOnClickListener(v->performShownOwnerAction(binding,goal,next));
         }
         boolean waiting=hand==null&&submittingOwnerAction!=null&&(state.action()==PhoneOwnerControls.Action.RESUME_LOCAL||state.action()==PhoneOwnerControls.Action.RESUME_SOURCE);
-        pause.setEnabled(!waiting&&(hand!=null||state.action()!=PhoneOwnerControls.Action.NONE));
+        var first=firstMainControl;
+        pause.setEnabled(!waiting&&(hand!=null||state.action()!=PhoneOwnerControls.Action.NONE&&
+                (state.action()!=PhoneOwnerControls.Action.FIRST_MAIN_START||first!=null&&first.current().getAsBoolean())));
         status.setText(shortText(state.message(),140));
         allowedResultWatch=state.current()&&state.resultWatch()?expected:null;
         renderResultWatch();
@@ -603,6 +621,17 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         }else switch(shown.state().action()){
             case PAUSE->{if(control!=null&&control.pauseRevision()==shown.state().pause())bound.pause();}
             case REVIEW->openOriginalOwnerReview(bound,app);
+            case FIRST_MAIN_START->{
+                var offer=firstMainControl;
+                if(offer==null||offer.control()!=control||!source.isShown()||!source.isEnabled()||!offer.current().getAsBoolean())return;
+                long visibleAt=ownerVisibilityVersion;
+                java.util.function.BooleanSupplier current=()->instance==this&&visible&&ownerVisibilityVersion==visibleAt&&firstMainControl==offer&&offer.current().getAsBoolean();
+                try{
+                    var page=FirstMainScreenWindow.fromOverlay(this,offer.control(),controls,current);
+                    if(offer.confirm().test(page))source.setEnabled(false);
+                }catch(Exception unavailable){android.widget.Toast.makeText(this,"还没核对到眼前应用页面。关闭弹窗后可再确认，原任务没有开始。",android.widget.Toast.LENGTH_SHORT).show();}
+                return;
+            }
             case RESUME_LOCAL,RESUME_SOURCE->{
                 if(submittingOwnerAction!=null)return;
                 long version=ownerVisibilityVersion;submittingOwnerAction=shown;source.setEnabled(false);
@@ -712,7 +741,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private void removeControls(){clearOpeningControls();removeInstalledControls();}
     private void removeInstalledControls() {
         shownControlRead.clear();
-        ownerReturnButton=null;renderedOwnerAction=null;submittingOwnerAction=null;ownerVisibilityVersion++;
+        ownerReturnButton=null;renderedOwnerAction=null;submittingOwnerAction=null;firstMainControl=null;ownerVisibilityVersion++;
         resultWatchOffer=null;submittingResultWatch=null;allowedResultWatch=null;resultWatchButton=null;
         ownerActionSlot=null;
         clearInAppStopSurface();

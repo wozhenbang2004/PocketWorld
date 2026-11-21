@@ -51,7 +51,8 @@ internal class PocketWebStandaloneDocumentDrafts(
     sealed class TextSeed(val fields: Fields, val origin: TextOrigin) {
         class Markdown(val original: PocketWebOriginalFiles.MarkdownDraftSeed) : TextSeed(original.fields, TextOrigin.MARKDOWN)
         class PdfPage(val page: AttachmentPdfPageText, val source: OwnerFilePreviewSource, val file: JSONObject,
-            val read: JSONObject, val receiptId: String, fields: Fields) : TextSeed(fields, TextOrigin.PDF_PAGE)
+            val read: JSONObject, val receiptId: String, fields: Fields,
+            val warmOwnerCurrent: (() -> Boolean)? = null) : TextSeed(fields, TextOrigin.PDF_PAGE)
     }
     data class Catalog(val rows: List<Row>, val metadataComplete: Boolean)
     data class Edit(val editorHandle: String, val versionHandle: String)

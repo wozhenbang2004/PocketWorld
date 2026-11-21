@@ -4400,7 +4400,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             true
         } catch (error: Exception) { state = state.copy(phoneSubmitting = false, error = message(error)); false }
     }
-    internal fun startConversationPhone(review: EngineApplication.ConversationPhoneStartReview, ownerCurrent: () -> Boolean, capacity: JSONObject? = null, completed: (JSONObject?, String?) -> Unit): Boolean {
+    internal fun firstMainScreenPolicyRevision(): Long = app.firstMainScreenPolicyRevision()
+
+    internal fun startConversationPhone(review: EngineApplication.ConversationPhoneStartReview, ownerCurrent: () -> Boolean, capacity: JSONObject? = null,
+                                        firstMainPolicyRevision: Long = -1, completed: (JSONObject?, String?) -> Unit): Boolean {
         val shown = review.view()
         if (!webPrivateOwnerVisible() || !ownerCurrent() || hasChannelPhoneOrigin) { state = state.copy(error = "原私人手机任务审阅已变化，请重新核对"); return false }
         if (!preparePhoneSubmission(shown.getString("goal"), shown.getString("mode"))) return false
@@ -4408,7 +4411,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return try {
             io.execute {
                 var allocated: String? = null
-                val result = runCatching { withReviewedPhoneCapacity(shown.getString("mode"), capacity, ownerCurrent) { app.startConversationPhone(review, true,
+                val result = runCatching { withReviewedPhoneCapacity(shown.getString("mode"), capacity, ownerCurrent) { app.startConversationPhone(review, true, firstMainPolicyRevision,
                     java.util.function.BooleanSupplier { webPrivateOwnerVisible() && ownerCurrent() },
                     java.util.function.Consumer { allocated = it }) } }
                 main.post {
