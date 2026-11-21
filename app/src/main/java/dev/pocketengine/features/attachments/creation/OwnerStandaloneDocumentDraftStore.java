@@ -41,6 +41,10 @@ public final class OwnerStandaloneDocumentDraftStore {
     private static final long MAX_REVISION = 9_007_199_254_740_991L;
     private static final String DIRECTORY = "owner-standalone-document-drafts-v1";
     private static final String SCHEMA = "pocketworld.owner-standalone-document-draft.v1";
+    private static final String LINKED_SCHEMA = "pocketworld.owner-standalone-document-draft.v2";
+    private static final Set<String> HEADER = Set.of("schema", "owner", "space", "id", "revision", "sha256", "format", "name", "savedAt", "bytes");
+    private static final Set<String> LINKED_HEADER = Set.of("schema", "owner", "space", "id", "revision", "sha256", "format", "name", "savedAt", "bytes", "revisionOf");
+    private static final Set<String> REVISION_SOURCE = Set.of("parentArtifactId", "parentSha256", "editableSourceId", "editableSourceSha256");
     private static final String ENTRY = ".draft", STAGED = ".pending";
     private static final Object LOCK = new Object(); // Only the private owner UI process may mount this store.
     private final Context app;
@@ -76,8 +80,20 @@ public final class OwnerStandaloneDocumentDraftStore {
                 throw new IllegalArgumentException("原草稿版本无效");
         }
     }
-    /** Header only, not body readback or permission to edit. */
-    public record Metadata(Pin pin, Format format, String name, long savedAt, int bytes) {}
+    /** Exact native lineage locator only. This store cannot authorize or read either Book object. */
+    public record RevisionSource(UUID parentArtifactId, String parentSha256, UUID editableSourceId, String editableSourceSha256) {
+        public RevisionSource {
+            if (parentArtifactId == null || editableSourceId == null || parentArtifactId.equals(editableSourceId)
+                    || !digest(parentSha256) || !digest(editableSourceSha256))
+                throw new IllegalArgumentException("原文件与可编辑源的版本关联无效");
+        }
+    }
+    /** Header only, not body readback or permission to edit. A link must be verified against the selected complete draft before use. */
+    public record Metadata(Pin pin, Format format, String name, long savedAt, int bytes, RevisionSource revisionSource) {
+        public Metadata(Pin pin, Format format, String name, long savedAt, int bytes) {
+            this(pin, format, name, savedAt, bytes, null);
+        }
+    }
     public record Draft(Metadata metadata, Fields fields) {}
     public record Catalog(List<Metadata> entries, boolean metadataComplete) {
         public Catalog { entries = List.copyOf(entries); }
@@ -93,11 +109,13 @@ public final class OwnerStandaloneDocumentDraftStore {
     public static final class Initial {
         private final OwnerStandaloneDocumentDraftStore issuer;
         private final OwnerWindow window;
+        private final RevisionSource revisionSource;
         private final UUID id = UUID.randomUUID();
         private boolean entered;
-        private Initial(OwnerStandaloneDocumentDraftStore issuer, OwnerWindow window) {
+        private Initial(OwnerStandaloneDocumentDraftStore issuer, OwnerWindow window, RevisionSource revisionSource) {
             this.issuer = issuer;
             this.window = window;
+            this.revisionSource = revisionSource;
         }
     }
     private static final Fields EMPTY = new Fields(Format.WORD, "文档", "", "", 12);
@@ -116,7 +134,13 @@ public final class OwnerStandaloneDocumentDraftStore {
     /** Explicit new editor generation; neither creates a directory nor writes a blank draft. */
     public Initial initialize(OwnerWindow window) {
         requireOwner(window);
-        return new Initial(this, window);
+        return new Initial(this, window, null);
+    }
+
+    /** Native-only seed. Its owner is still responsible for proving the exact Book pair before invoking this. No IO. */
+    public Initial initializeRevision(OwnerWindow window, RevisionSource source) {
+        requireOwner(window);
+        return new Initial(this, window, Objects.requireNonNull(source));
     }
 
     /** Native locator for these exact proposed first bytes, not evidence of a write.
@@ -126,7 +150,7 @@ public final class OwnerStandaloneDocumentDraftStore {
         OwnerWindow window = initialWindow(original);
         requireOwner(window);
         Objects.requireNonNull(fields);
-        if (fields.equals(EMPTY)) throw new IllegalArgumentException("原新建页还没有修改");
+        if (original.revisionSource == null && fields.equals(EMPTY)) throw new IllegalArgumentException("原新建页还没有修改");
         byte[] content = encode(fields);
         try {
             Pin pin = firstPin(original, content);
@@ -182,10 +206,11 @@ public final class OwnerStandaloneDocumentDraftStore {
                 Pin pin = firstPin(original, content);
                 Stored existing = load(root, original.id, original.entered ? pin : null, window);
                 if (existing != null) return original.entered && fields.equals(existing.fields)
+                        && Objects.equals(original.revisionSource, existing.metadata.revisionSource)
                     ? new Outcome(State.VERIFIED, existing.draft()) : Outcome.only(State.CONFLICT);
                 if (original.entered || present(root, original.id, STAGED)) return UNKNOWN;
-                if (fields.equals(EMPTY)) return Outcome.only(State.NO_EDIT);
-                return save(ensureRoot(root, window), pin, fields, content, null, original, window);
+                if (original.revisionSource == null && fields.equals(EMPTY)) return Outcome.only(State.NO_EDIT);
+                return save(ensureRoot(root, window), pin, fields, original.revisionSource, content, null, original, window);
             } finally { Arrays.fill(content, (byte) 0); }
         });
     }
@@ -196,7 +221,7 @@ public final class OwnerStandaloneDocumentDraftStore {
     }
 
     private static Pin firstPin(Initial original, byte[] content) {
-        return new Pin(original.id, 1, sha256(content));
+        return new Pin(original.id, 1, contentDigest(original.revisionSource, content));
     }
 
     public Outcome write(Pin expected, Fields fields, OwnerWindow window) {
@@ -212,8 +237,10 @@ public final class OwnerStandaloneDocumentDraftStore {
             if (expected.revision == MAX_REVISION) return Outcome.only(State.QUOTA);
             byte[] content = encode(fields);
             try {
-                Pin next = new Pin(expected.draftId, expected.revision + 1, sha256(content));
-                return save(root, next, fields, content, row.identity, null, window);
+                // The current verified row fixes lineage; writing fields never accepts a replacement pair.
+                RevisionSource source = row.metadata.revisionSource;
+                Pin next = new Pin(expected.draftId, expected.revision + 1, contentDigest(source, content));
+                return save(root, next, fields, source, content, row.identity, null, window);
             } finally { Arrays.fill(content, (byte) 0); }
         });
     }
@@ -238,13 +265,15 @@ public final class OwnerStandaloneDocumentDraftStore {
         });
     }
 
-    private Outcome save(Root root, Pin pin, Fields fields, byte[] content, BasicFileAttributes previous,
-                         Initial initial, OwnerWindow window) throws IOException, JSONException {
+    private Outcome save(Root root, Pin pin, Fields fields, RevisionSource source, byte[] content,
+                         BasicFileAttributes previous, Initial initial, OwnerWindow window) throws IOException, JSONException {
         long now = System.currentTimeMillis();
         if (now <= 0 || now > MAX_REVISION) return UNKNOWN;
-        byte[] header = utf8(new JSONObject().put("schema", SCHEMA).put("owner", "owner").put("space", "private")
+        JSONObject info = new JSONObject().put("schema", source == null ? SCHEMA : LINKED_SCHEMA).put("owner", "owner").put("space", "private")
             .put("id", pin.draftId.toString()).put("revision", pin.revision).put("sha256", pin.sha256)
-            .put("format", fields.format.value).put("name", fields.name).put("savedAt", now).put("bytes", content.length).toString());
+            .put("format", fields.format.value).put("name", fields.name).put("savedAt", now).put("bytes", content.length);
+        if (source != null) info.put("revisionOf", encodeRevisionSource(source));
+        byte[] header = utf8(info.toString());
         int size = header.length + 1 + content.length;
         if (header.length > MAX_HEADER_BYTES || size > MAX_RECORD_BYTES) return Outcome.only(State.QUOTA);
         Scan scan = scan(root);
@@ -297,7 +326,7 @@ public final class OwnerStandaloneDocumentDraftStore {
         }
         syncNamespace(root);
         Stored actual = load(root, pin.draftId, pin, window);
-        if (actual == null || !fields.equals(actual.fields)) return UNKNOWN;
+        if (actual == null || !fields.equals(actual.fields) || !Objects.equals(source, actual.metadata.revisionSource)) return UNKNOWN;
         requireSame(ready, actual.identity);
         return new Outcome(State.SAVED, actual.draft());
     }
@@ -385,17 +414,19 @@ public final class OwnerStandaloneDocumentDraftStore {
                 prefix.write(next);
             }
             JSONObject info = new JSONObject(decode(prefix.toByteArray()));
-            if (next != '\n' || !exactFields(info, Set.of("schema","owner","space","id","revision","sha256","format","name","savedAt","bytes"))
-                    || !SCHEMA.equals(info.opt("schema")) || !"owner".equals(info.opt("owner"))
-                    || !"private".equals(info.opt("space")) || !id.toString().equals(info.opt("id")))
+            Object schema = info.opt("schema");
+            boolean linked = LINKED_SCHEMA.equals(schema);
+            if (next != '\n' || (!linked && !SCHEMA.equals(schema)) || !exactFields(info, linked ? LINKED_HEADER : HEADER)
+                    || !"owner".equals(info.opt("owner")) || !"private".equals(info.opt("space")) || !id.toString().equals(info.opt("id")))
                 throw new IOException("草稿归属或记录版本不可核对");
+            RevisionSource source = linked ? decodeRevisionSource(info.getJSONObject("revisionOf")) : null;
             int bytes = (int) number(info, "bytes", 1, MAX_RECORD_BYTES);
             if (before.size() != prefix.size() + 1L + bytes) throw new IOException("原草稿字节不完整");
             Pin pin = new Pin(id, number(info, "revision", 1, MAX_REVISION), text(info, "sha256"));
             Format format = format(info);
             String name = text(info, "name");
             validateText(name, 80);
-            Metadata metadata = new Metadata(pin, format, name, number(info, "savedAt", 1, MAX_REVISION), bytes);
+            Metadata metadata = new Metadata(pin, format, name, number(info, "savedAt", 1, MAX_REVISION), bytes, source);
             Fields body = null;
             // Catalog and a stale expected revision read headers only.
             if (pin.equals(expected)) {
@@ -403,7 +434,7 @@ public final class OwnerStandaloneDocumentDraftStore {
                 byte[] data = new byte[bytes];
                 try {
                     new DataInputStream(in).readFully(data);
-                    if (in.read() != -1 || !pin.sha256.equals(sha256(data))) throw new IOException("原草稿字节未通过核对");
+                    if (in.read() != -1 || !pin.sha256.equals(contentDigest(source, data))) throw new IOException("原草稿字节未通过核对");
                     body = decodeFields(data);
                     if (body.format != format || !body.name.equals(name)) throw new IOException("原草稿内容与目录不符");
                 } finally { Arrays.fill(data, (byte) 0); }
@@ -502,6 +533,15 @@ public final class OwnerStandaloneDocumentDraftStore {
     private static void atCommit(OwnerWindow window, Commit mutation) throws IOException {
         window.atCommit(() -> { requireOwner(window); mutation.enter(); });
     }
+    private static JSONObject encodeRevisionSource(RevisionSource source) throws JSONException {
+        return new JSONObject().put("parentArtifactId", source.parentArtifactId.toString()).put("parentSha256", source.parentSha256)
+            .put("editableSourceId", source.editableSourceId.toString()).put("editableSourceSha256", source.editableSourceSha256);
+    }
+    private static RevisionSource decodeRevisionSource(JSONObject source) throws IOException {
+        if (!exactFields(source, REVISION_SOURCE)) throw new IOException("原版本关联字段不可核对");
+        return new RevisionSource(uuid(text(source, "parentArtifactId")), text(source, "parentSha256"),
+            uuid(text(source, "editableSourceId")), text(source, "editableSourceSha256"));
+    }
     private static byte[] encode(Fields fields) throws IOException, JSONException {
         return utf8(new JSONObject().put("format", fields.format.value).put("name", fields.name)
             .put("title", fields.title).put("body", fields.body).put("fontPoints", fields.fontPoints).toString());
@@ -553,10 +593,15 @@ public final class OwnerStandaloneDocumentDraftStore {
         return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
     }
-    private static String sha256(byte[] bytes) {
+    private static boolean digest(String value) { return value != null && value.matches("[a-f0-9]{64}"); }
+    private static String contentDigest(RevisionSource source, byte[] bytes) {
         try {
+            MessageDigest hash = MessageDigest.getInstance("SHA-256");
+            // V1 is exactly SHA-256(payload). V2 seals the typed tuple without duplicating it in the body.
+            if (source != null) hash.update((LINKED_SCHEMA + "\0" + source.parentArtifactId + "\0" + source.parentSha256 + "\0"
+                + source.editableSourceId + "\0" + source.editableSourceSha256 + "\0").getBytes(StandardCharsets.US_ASCII));
             StringBuilder value = new StringBuilder(64);
-            for (byte b : MessageDigest.getInstance("SHA-256").digest(bytes))
+            for (byte b : hash.digest(bytes))
                 value.append(Character.forDigit((b >> 4) & 15, 16)).append(Character.forDigit(b & 15, 16));
             return value.toString();
         } catch (NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }

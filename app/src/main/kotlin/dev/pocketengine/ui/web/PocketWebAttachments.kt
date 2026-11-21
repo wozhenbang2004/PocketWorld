@@ -6,6 +6,8 @@ import android.webkit.WebResourceResponse
 import dev.pocketengine.features.attachments.creation.DocumentDraft
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Fields
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Format
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.RevisionSource
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.State
 import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.processing.NativeFileProcess
 import dev.pocketengine.features.attachments.processing.NativeMediaTrim
@@ -30,7 +32,8 @@ internal class PocketWebAttachments(
     companion object {
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
         val PRIVATE_DRAFT_COMMANDS = setOf("drafts.list", "drafts.new", "drafts.open", "drafts.saveFirst",
-            "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.remove", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument")
+            "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.remove", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument",
+            "drafts.retainRevision", "drafts.checkRevision")
         private val SCOPED_RESULT_READS = setOf("back", "close", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")
         private const val REPORT_WORK_NAVIGATION = "openReportOriginalWork"
         private const val DOCUMENT_REVIEW_TTL = 120_000L
@@ -52,7 +55,7 @@ internal class PocketWebAttachments(
     private var globalDraftLibrary: DraftLibraryVisit? = null
     private var draftDocumentReview: DraftDocumentReview? = null
     private val drafts = lazy(LazyThreadSafetyMode.NONE) {
-        PocketWebStandaloneDocumentDrafts(controller, captureWindow, acceptsWindow, ::currentDraftFrame)
+        PocketWebStandaloneDocumentDrafts(controller, captureWindow, acceptsWindow, ::currentDraftFrame, ::currentRevisionFrame)
     }
 
     private fun activeWindow(): Window {
@@ -92,10 +95,43 @@ internal class PocketWebAttachments(
         val visit = globalDraftLibrary ?: return false
         return flow.state.globalStandaloneDraftVisit == visit.id && visit.current() && ordinaryDraftLibrarySurface()
     }
+    private fun keepsDraftLibraryVisit(id: String): Boolean {
+        val visit = globalDraftLibrary ?: return false
+        val active = window ?: return false
+        return visit.id == id && flow.state.globalStandaloneDraftVisit == id && acceptsWindow(active.ticket) &&
+            visit.current() && ordinaryLibrary()
+    }
     private fun currentDraftFrame(selected: PocketWebStandaloneDocumentDrafts.Frame): Boolean {
         val active = window ?: return false
         return active.id == selected.windowId && acceptsWindow(active.ticket) && mayUseDraftLibrary() &&
             frames[selected.frameId]?.location == location(flow.state)
+    }
+    /** Do not derive a linked draft entry from a restored or unscoped file/editor. */
+    private fun linkedEditorSource(): RevisionSource? {
+        val visit = globalDraftLibrary ?: return null
+        val state = flow.state
+        val file = state.file ?: return null
+        val draft = state.documentDraft ?: return null
+        val editable = file.optJSONObject("editableSource") ?: return null
+        if (state.globalStandaloneDraftVisit != visit.id || !visit.current() || !ordinaryLibrary() ||
+            controller.conversationReader != null || controller.state.filePath != null ||
+            state.snapshot?.opt("taskId") != "" || state.fromWorkResult || state.restoredWorkReturn || state.libraryDocumentReturn != null ||
+            state.busy || flow.exportPending || state.pendingDocumentTask != null || !state.documentDraftEdited || state.documentOpen ||
+            state.processingSource != null || state.comparison != null || file.opt("role") != "result" || file.opt("availability") != "available" ||
+            file.opt("sourceKind") != "created_document" || file.optString("sourceOperationId").isBlank() ||
+            file.opt("mimeType") !in setOf("application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+            draft.opt("format") !in setOf("docx", "pdf") || draft.opt("parentArtifactId") != file.opt("id") ||
+            draft.opt("parentSha256") != file.opt("sha256") || draft.opt("editableSourceId") != editable.opt("id") ||
+            draft.opt("editableSourceSha256") != editable.opt("sha256")) return null
+        return runCatching {
+            fun id(key: String): UUID = draft.getString(key).let { value -> UUID.fromString(value).also { check(it.toString() == value) } }
+            RevisionSource(id("parentArtifactId"), draft.getString("parentSha256"), id("editableSourceId"), draft.getString("editableSourceSha256"))
+        }.getOrNull()
+    }
+    private fun currentRevisionFrame(selected: PocketWebStandaloneDocumentDrafts.Frame): Boolean {
+        val active = window ?: return false
+        return active.id == selected.windowId && acceptsWindow(active.ticket) &&
+            frames[selected.frameId]?.location == location(flow.state) && linkedEditorSource() != null
     }
     private fun retireDraftLibrary(keepPresentation: Boolean = false) {
         globalDraftLibrary = null
@@ -123,6 +159,7 @@ internal class PocketWebAttachments(
             if (state.globalStandaloneDraftVisit != visit.id || !visit.current()) retireDraftLibrary()
         }
         if (drafts.isInitialized() && drafts.value.showing() && !mayUseDraftLibrary()) retireDraftLibrary()
+        if (drafts.isInitialized() && drafts.value.retainingLinked() && linkedEditorSource() == null) drafts.value.retireLinked()
         if (!state.open) { if (window != null || scopedResultCurrent != null) clear(); return JSONObject().put("open", false) }
         if (!controller.webUiCanInteract()) return JSONObject().put("open", true).put("ready", false)
         val current = activeWindow()
@@ -164,6 +201,7 @@ internal class PocketWebAttachments(
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report).put("reportResultOnly", report)
             .put("standaloneDraftLibrary", mayUseDraftLibrary())
+            .put("canRetainLinkedDocumentDraft", linkedEditorSource() != null)
             // This ordinary state projection may match a retained Web pane, never a draft command or handle.
             .put("standaloneDraftLibraryVisit", flow.state.globalStandaloneDraftVisit?.takeIf {
                 draftPresentation && ordinaryDraftLibrarySurface()
@@ -264,6 +302,10 @@ internal class PocketWebAttachments(
                 draftDocumentReview = null
                 drafts.value.retire()
             }
+            if (drafts.isInitialized() && drafts.value.retainingLinked()) {
+                check(command == "back" || command == "close") { "请先核对这次保留，或明确离开原编辑页" }
+                drafts.value.retireLinked()
+            }
             if (flow.state.busy && command !in setOf("cancel", "close", "stopObservation")) error("请等待当前读取完成，或明确停止它")
             fun selected(): JSONObject {
                 val file = frame.files.firstOrNull { it.optString("id") == args.optString("fileId") && it.optString("sha256") == args.optString("sha256") }
@@ -323,10 +365,10 @@ internal class PocketWebAttachments(
                 "createDocument" -> {
                     val pin = review ?: error("请先核对要生成的文档")
                     check(args.optBoolean("acknowledge") && args.optString("reviewId") == pin.id && pin.location == location(flow.state) && SystemClock.elapsedRealtime() < pin.expires) { "原文档审阅已变化或过期" }
-                    review = null; flow.createDocument(pin.draft)
+                    review = null; flow.createDocument(pin.draft, ::keepsDraftLibraryVisit)
                 }
                 "discardReview" -> { review = null; processingReview = null; flow.forgetProcessingReview() }
-                "queryDocument" -> flow.queryDocument()
+                "queryDocument" -> flow.queryDocument(::keepsDraftLibraryVisit)
                 "openDocumentAction" -> {
                     val id=args.getString("taskId")
                     if(flow.state.file==null)flow.openDocumentAction(id)
@@ -443,13 +485,36 @@ internal class PocketWebAttachments(
             .put("title", value.title()).put("body", value.body()).put("fontPoints", value.fontPoints())
         fun JSONObject.edit(value: PocketWebStandaloneDocumentDrafts.Edit?) =
             put("editorHandle", value?.editorHandle).put("versionHandle", value?.versionHandle)
+        fun JSONObject.sourceUnavailable(unavailable: Boolean) = apply { if (unavailable) put("sourceAvailable", false) }
         fun saved(value: PocketWebStandaloneDocumentDrafts.Saved?) =
-            reply(value?.let { JSONObject().put("status", it.state.name).edit(it.edit) })
+            reply(value?.let { JSONObject().put("status", it.state.name).edit(it.edit).sourceUnavailable(it.sourceUnavailable) })
+        fun documentInput(input: PocketWebStandaloneDocumentDrafts.GenerationInput): JSONObject = content(input.fields).apply {
+            input.source?.let { source ->
+                put("parentArtifactId", source.parentArtifactId().toString()).put("parentSha256", source.parentSha256())
+                put("editableSourceId", source.editableSourceId().toString()).put("editableSourceSha256", source.editableSourceSha256())
+            }
+        }
         try {
             val frame = PocketWebStandaloneDocumentDrafts.Frame(text("windowId"), text("frameId"))
+            val command = text("command")
+            if (command == "drafts.retainRevision" || command == "drafts.checkRevision") {
+                val source = linkedEditorSource() ?: error("请回到这个原文件的编辑页")
+                exact(); check(currentRevisionFrame(frame))
+                val draft = flow.state.documentDraft ?: error("原编辑页已关闭")
+                val format = Format.values().singleOrNull { it.value == draft.opt("format") } ?: error("草稿格式无效")
+                val content = Fields(format, draft.getString("name"), draft.getString("title"), draft.getString("body"), draft.getInt("fontPoints"))
+                val checking = command == "drafts.checkRevision"
+                drafts.value.retainRevision(frame, source, content, checking) { retained ->
+                    val result = retained?.takeIf { currentRevisionFrame(frame) }?.let { actual ->
+                        if (actual.state == State.SAVED || checking && actual.state == State.VERIFIED) flow.finishLinkedDraftRetention()
+                        JSONObject().put("status", actual.state.name).sourceUnavailable(actual.sourceUnavailable)
+                    }
+                    reply(result)
+                }
+                return
+            }
             check(currentDraftFrame(frame))
             val adapter = drafts.value
-            val command = text("command")
             fun editor() = PocketWebStandaloneDocumentDrafts.Edit(text("editorHandle"), text("versionHandle"))
             fun noGeneration(reason: String) = JSONObject().put("started", false).put("reason", reason)
             if (command != "drafts.createDocument" && command != "drafts.dismissDocument") draftDocumentReview = null
@@ -457,14 +522,15 @@ internal class PocketWebAttachments(
                 "drafts.list" -> { exact(); adapter.list(frame) { catalog ->
                     reply(catalog?.let { JSONObject().put("metadataComplete", it.metadataComplete)
                         .put("rows", JSONArray(it.rows.map { row -> JSONObject().put("rowHandle", row.rowHandle)
-                            .put("name", row.name).put("format", row.format).put("savedAt", row.savedAt) })) })
+                            .put("name", row.name).put("format", row.format).put("savedAt", row.savedAt)
+                            .also { if (row.linkedRevision) it.put("linkedRevision", true) } })) })
                 } }
                 "drafts.new" -> { exact(); val new = adapter.newDraft(frame)
                     reply(JSONObject().put("editorHandle", new.editorHandle).put("fields", content(new.fields)))
                 }
                 "drafts.open" -> { exact("rowHandle"); adapter.open(frame, text("rowHandle")) { opened ->
                     reply(opened?.let { JSONObject().put("status", it.state.name).edit(it.edit)
-                        .put("fields", it.fields?.let(::content)) })
+                        .put("fields", it.fields?.let(::content)).put("sourceName", it.sourceName).sourceUnavailable(it.sourceUnavailable) })
                 } }
                 "drafts.saveFirst" -> { exact("editorHandle", "fields"); adapter.firstSave(frame, text("editorHandle"), fields(), ::saved) }
                 "drafts.checkFirst" -> { exact("editorHandle"); adapter.checkFirst(frame, text("editorHandle"), ::saved) }
@@ -483,10 +549,12 @@ internal class PocketWebAttachments(
                 "drafts.reviewDocument" -> {
                     exact("editorHandle", "versionHandle")
                     val selected = editor()
-                    adapter.readGenerationDraft(frame, selected) { fields ->
-                        val result = fields?.takeIf { currentDraftFrame(frame) }?.let {
+                    adapter.readGenerationDraft(frame, selected) { read ->
+                        val result = if (read?.sourceUnavailable == true && currentDraftFrame(frame))
+                            JSONObject().edit(selected).sourceUnavailable(true)
+                        else read?.input?.takeIf { currentDraftFrame(frame) }?.let {
                             try {
-                                val draft = DocumentDraft(content(it))
+                                val draft = DocumentDraft(documentInput(it))
                                 val prepared = DraftDocumentReview(UUID.randomUUID().toString(), frame.windowId, selected,
                                     draft.identity, SystemClock.elapsedRealtime() + DOCUMENT_REVIEW_TTL)
                                 draftDocumentReview = prepared
@@ -517,17 +585,20 @@ internal class PocketWebAttachments(
                     if (SystemClock.elapsedRealtime() >= prepared.expires) {
                         reply(noGeneration("本次核对已过期，请重新核对草稿。")); return
                     }
-                    adapter.readGenerationDraft(frame, selected) { fields ->
-                        val result = if (!currentDraftFrame(frame)) null else if (fields == null) {
+                    adapter.readGenerationDraft(frame, selected) { read ->
+                        val input = read?.input
+                        val result = if (!currentDraftFrame(frame)) null else if (read?.sourceUnavailable == true) {
+                            noGeneration("暂不能核对原文件或可编辑源；没有开始生成。").edit(selected).sourceUnavailable(true)
+                        } else if (input == null) {
                             noGeneration("没有重新核对到这份已保留的版本，请退出并打开原草稿。")
                         } else {
-                            val draft = runCatching { DocumentDraft(content(fields)) }.getOrNull()
+                            val draft = runCatching { DocumentDraft(documentInput(input)) }.getOrNull()
                             if (draft == null || draft.identity != prepared.planDigest || SystemClock.elapsedRealtime() >= prepared.expires) {
                                 noGeneration("已保留的草稿或本次核对已变化，请重新打开原稿。")
                             } else {
                                 // This is the only entry to the existing creation operation; no draft body enters a reply.
-                                runCatching { flow.createDocumentFromSavedDraft(draft) }.getOrNull()?.let {
-                                    retireDraftLibrary()
+                                runCatching { flow.createDocumentFromSavedDraft(draft, input.source, ::keepsDraftLibraryVisit) }.getOrNull()?.let {
+                                    adapter.retire() // No saved-draft handles survive the move to the result inside this Library.
                                     JSONObject().put("started", true)
                                 }
                             }

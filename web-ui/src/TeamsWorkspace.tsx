@@ -34,7 +34,7 @@ import { ReadingContext } from './reading-context';
 import { teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
 import {sameTeamPackage} from './team-delivered-package';
-import {matchesWorkTeamResult,sameTeamFiles,sameTeamProposal,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
+import {matchesWorkTeamResult,sameTeamFiles,sameTeamProposal,type AcceptedWorkTeamReport,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
@@ -118,6 +118,19 @@ const originalWorkTeamResult = (reading:Data|null, source:WorkTeamResultSource) 
   if(newerTeamReading(reading.run,live))return;
   const result=teamResultReading(reading.run,reading.messages);return result.original?result.messageId:undefined;
 };
+const acceptedSummaryUnavailable='未能核对验收时保存的这份原汇总。没有打开其他版本。';
+async function verifiedAcceptedSummary(reading:Data|undefined,source:WorkTeamResultSource,report:AcceptedWorkTeamReport):Promise<boolean>{
+  if(!reading?.ownerWorkLink||!globalThis.crypto?.subtle||!matchesWorkTeamResult(source,reading.ownerWorkLink)||
+     reading.kind!=='run'||!reading.viewHandle||reading.taskId!==source.taskId||reading.run?.id!==source.teamRunId||
+     reading.run.status!=='completed'||reading.run.phase!=='completed'||reading.run.summaryStale!==false||
+     reading.run.generation!==report.generation||reading.run.revision!==report.revision)return false;
+  const original=teamResultReading(reading.run,reading.messages);
+  if(!original.original||original.messageId!==report.messageId||original.body.length>report.bytes)return false;
+  const body=new TextEncoder().encode(original.body);
+  if(body.byteLength!==report.bytes)return false;
+  const digest=await crypto.subtle.digest('SHA-256',body);
+  return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('')===report.sha256;
+}
 const blankMember = (id: string, index: number) => teamProductionEditorMember({ id, name: `成员 ${index + 1}`, role: '', model: '', runner: 'model' });
 const starterMembers = (template: string): Data[] => [
   { ...blankMember('member-0', 0), name: template === 'options' ? '方案设计' : '资料研究', role: template === 'options' ? '围绕共同目标提出不同方案，说明依据与限制。' : '围绕共同目标搜集和整理信息，标明来源与不确定性。' },
@@ -191,6 +204,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const next = { ...old }; if (value) next[id] = value; else delete next[id]; return next;
   });
   const alive = useRef(true), requestGeneration = useRef(0), entered = useRef(false), currentReading = useRef<Data | null>(null);
+  const acceptedSummary = useRef<{handle:string;current:()=>boolean}|null>(null);
   const backgrounded = useRef(document.visibilityState !== 'visible'), currentReview = useRef<Data | null>(null);
   const currentPhoneSelection = useRef<Data | null>(null);
   const frozenFilesBack = useRef<(() => boolean) | null>(null);
@@ -287,9 +301,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     });
     return ()=>cancelAnimationFrame(frame);
   },[reading?.viewHandle,workspaceActive]);
-  const invoke = async (action: string, args: Data = {}, accept?: (result: Data) => void, rejected?: (failure: unknown) => void) => {
+  const invoke = async (action: string, args: Data = {}, accept?: (result: Data) => void, rejected?: (failure: unknown) => void, beforeAccept?: (result:Data)=>Promise<boolean>) => {
     if (entered.current || backgrounded.current || !ownsNativeWindow()) return; entered.current = true; const generation = ++requestGeneration.current; setBusy(true); setError(''); setNotice('');
-    try { const result = object(await run(action, args)); if (alive.current && generation === requestGeneration.current) accept?.(result); return result; }
+    try {
+      const result = object(await run(action, args));
+      const current=()=>alive.current&&generation===requestGeneration.current;
+      if((beforeAccept?await beforeAccept(result):current())&&current())accept?.(result);
+      return result;
+    }
     catch (failure) { if (alive.current && generation === requestGeneration.current) { setError(failure instanceof Error ? failure.message : String(failure)); rejected?.(failure); } }
     finally { if (generation === requestGeneration.current) { entered.current = false; if (alive.current) setBusy(false); } }
   };
@@ -299,6 +318,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (value?.[kind] && ownsNativeWindow()) void bridge.command('teams.closeReading', { [kind]: value[kind] }).catch(() => {});
   };
   const acceptReading = (next: Data) => {
+    if(acceptedSummary.current?.handle!==next.viewHandle)acceptedSummary.current=null;
     rememberView();
     if (next.kind !== 'run' || next.run?.id !== currentReading.current?.run?.id) { setMemberDraft(null); setResultSource(null); }
     release(currentReading.current); setReading(next);
@@ -346,13 +366,19 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledRunFocus.current = requestId;
     const project=runFocus?.fromProject,from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined,pack=from&&'deliveredPackage' in from?from:undefined;
-    const originalResult=runFocus?.fromWorkResult;
+    const originalResult=runFocus?.fromWorkResult,accepted=originalResult?.accepted;
     retireWorkResult();
     const originalAnchor=originalResult&&onOpenWork&&originalResult.source.teamRunId===runId&&originalHotCompletedTeam(catalog,runId)?originalResult:null;
     const documentEpoch=bridge.getDocumentEpoch(),resume=object(bridge.getState().view).resumeRevision;
     const inSameVisit=()=>alive.current&&!document.hidden&&!backgrounded.current&&ownsNativeWindow()&&Number.isSafeInteger(resume)&&
       bridge.getDocumentEpoch()===documentEpoch&&object(bridge.getState().view).resumeRevision===resume;
-    void invoke('teams.readRun', { runId,...(proposal?{proposalOrigin:proposal}:{}) }, result => {
+    if(accepted){
+      // The normal foreground restore may re-locate a pending run focus.
+      // An acceptance source is read only for this explicit click.
+      onRunFocusConsumed?.(requestId);
+      if(!inSameVisit()||!accepted.current()){setError(acceptedSummaryUnavailable);return;}
+    }
+    const showRun=(result:Data)=>{
       const next=result.reading;
       if (next?.kind!=='run'||next.run?.id !== runId||!next.viewHandle||project&&(from||project.teamRunId!==runId||!next.run.productionScope||!next.run.workPlan)) {release(next);throw new Error('原协作记录身份不匹配，请从原工作重新打开。');}
       if(from){
@@ -365,6 +391,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         }
       }
       setEditor(null); setMemberDraft(null); setResultSource(null); closeReview(); closePhoneSelection();
+      if(accepted)acceptedSummary.current={handle:next.viewHandle,current:accepted.current};
       acceptReading(next);setProposalEntry(proposal?{source:proposal,returnToWork:runFocus?.returnToWork}:null);
       setWorkPackage(pack&&runFocus?.returnToWork?{view:next.viewHandle,returnToWork:runFocus.returnToWork}:null);
       const returned=project||files;
@@ -383,11 +410,25 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           return inSameVisit()&&shown?.run?.generation===generation&&originalWorkTeamResult(shown,originalAnchor.source)===originalMessage;
         });
       }
-      const entry = from || project || workResultReturn.current ? 'result' : settled ? teamRunEntrySection(next) : 'progress';
+      const entry = from || project || workResultReturn.current || accepted ? 'result' : settled ? teamRunEntrySection(next) : 'progress';
       setRunSections(old => ({ ...old, [runId]: entry }));
       setComposeOpen(false);
       onRunFocusConsumed?.(requestId);
-    }, failure => {onRunFocusConsumed?.(requestId);if(runFocus?.fromWork||runFocus?.fromProject)runFocus.returnToWork?.(failure instanceof Error?failure.message:'原文件或提案目录已变化。');});
+    };
+    const selection=requestGeneration.current+1;
+    void invoke('teams.readRun', { runId,...(proposal?{proposalOrigin:proposal}:{}) }, showRun, failure => {
+      onRunFocusConsumed?.(requestId);
+      if(accepted&&inSameVisit())setError(acceptedSummaryUnavailable);
+      else if(runFocus?.fromWork||runFocus?.fromProject)runFocus.returnToWork?.(failure instanceof Error?failure.message:'原文件或提案目录已变化。');
+    }, accepted&&originalResult?async result=>{
+      const next=result.reading, current=()=>inSameVisit()&&requestGeneration.current===selection;
+      const matched=current()&&await verifiedAcceptedSummary(next,originalResult.source,accepted.report).catch(()=>false);
+      if(!current()){release(next);onRunFocusConsumed?.(requestId);return false;}
+      if(!matched||!accepted.current()||newerTeamReading(next.run,object(object(bridge.getState().state.teamRuns)[runId]))){
+        release(next);throw Error(acceptedSummaryUnavailable);
+      }
+      return true;
+    }:undefined);
   }, [runFocus?.requestId, workspaceActive, catalogReady, busy]);
   useEffect(() => {
     const requestId = label(attentionFocus?.requestId);
@@ -411,7 +452,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       onAttentionConsumed?.(requestId);
     }, () => onAttentionConsumed?.(requestId));
   }, [attentionFocus?.requestId, workspaceActive, catalogReady, busy]);
-  const back = () => { const leave = () => { rememberView(); release(reading); setTab(reading?.kind === 'run' ? 'runs' : 'teams'); setReading(null); setComposeOpen(false); setReplyId(''); setEditor(null); setMemberDraft(null); setError(''); setNotice(''); }; formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); })))); };
+  const back = () => { const leave = () => { rememberView(); release(reading); acceptedSummary.current=null; setTab(reading?.kind === 'run' ? 'runs' : 'teams'); setReading(null); setComposeOpen(false); setReplyId(''); setEditor(null); setMemberDraft(null); setError(''); setNotice(''); }; formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); })))); };
   const openRelatedTask = (id: string) => {
     const open = () => { void run('tasks.open', { id }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); };
     if (materialBeforeLeave.current) materialBeforeLeave.current(open); else open();
@@ -452,9 +493,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     // A retired read did not consume its notification; a fresh owner window may locate it again.
     handledAttention.current = '';
     handledRunFocus.current = '';
-    const original = currentReading.current, generation = ++requestGeneration.current;
+    // Resume the directory, not a previously selected acceptance source.
+    const expiredAccepted = acceptedSummary.current;
+    if(expiredAccepted){acceptedSummary.current=null;release(currentReading.current);}
+    const original = expiredAccepted ? null : currentReading.current, generation = ++requestGeneration.current;
     closeReview(); closePhoneSelection();
-    entered.current = true; setBusy(true); setReview(null); setAcknowledged(false); setError('');
+    entered.current = true; setBusy(true); setReview(null); setAcknowledged(false); setError(expiredAccepted?acceptedSummaryUnavailable:'');
     setReading(original ? { ...original, viewHandle: '' } : null);
     void (async () => {
       if (original?.kind === 'definition') {
@@ -513,7 +557,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       if (previous.active) {
         requestGeneration.current++; entered.current = false; setBusy(false);
         closeReview(); closePhoneSelection(); setMemberProbes({}); setExternalReady({});
-        setReading(value => value ? { ...value, viewHandle: '' } : null);
+        const retain = !acceptedSummary.current;
+        setReading(value => retain && value ? { ...value, viewHandle: '' } : null);
       }
       return;
     }
@@ -536,7 +581,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       if(deliveryReturn.current)deliveryReturn.current.work=undefined;
       backgrounded.current = true; requestGeneration.current++; entered.current = false;
       setBusy(false); closeReview(); closePhoneSelection(); setMemberProbes({}); setExternalReady({});
-      setReading(value => value ? { ...value, viewHandle: '' } : null);
+      const retain = !acceptedSummary.current;
+      setReading(value => retain && value ? { ...value, viewHandle: '' } : null);
     };
     const visibility = () => {
       if (document.visibilityState !== 'visible') hide();
@@ -613,11 +659,18 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const latest = current ? object(object(state.teamRuns)[current.id]) : {};
   const changed = !!current && newerTeamReading(current, latest);
+  const pinnedSummary=acceptedSummary.current;
+  const acceptedSummaryRetired=!!reading&&!!pinnedSummary&&
+    (pinnedSummary.handle!==reading.viewHandle||changed||!pinnedSummary.current());
+  useLayoutEffect(()=>{
+    if(!acceptedSummaryRetired||acceptedSummary.current!==pinnedSummary)return;
+    acceptedSummary.current=null;release(currentReading.current);setReading(null);setError(acceptedSummaryUnavailable);
+  });
   useEffect(() => {
-    if (!changed || !workspaceActive || busy || materialBusy || openingMemberResult || readingFiles || editor || memberDraft || review || phoneSelection || backgrounded.current) return;
+    if (pinnedSummary || !changed || !workspaceActive || busy || materialBusy || openingMemberResult || readingFiles || editor || memberDraft || review || phoneSelection || backgrounded.current) return;
     const runId = current!.id, originalHandle = reading?.viewHandle, generation = requestGeneration.current;
     let retired = false;
-    const stillCurrent = () => !retired && alive.current && !backgrounded.current && ownsNativeWindow()
+    const stillCurrent = () => !retired && !acceptedSummary.current && alive.current && !backgrounded.current && ownsNativeWindow()
       && generation === requestGeneration.current && currentReading.current?.run?.id === runId
       && currentReading.current?.viewHandle === originalHandle;
     // Coalesce progress events into one read without locking the user's draft.
@@ -1405,8 +1458,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       <div className="pw-team-definition-settings"><Accordion variant="divided"><AccordionItem id="definition-management" title="管理编组"><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.reviewRemove', { viewHandle: reading!.viewHandle }, reviewResult)}>移除编组</Button></AccordionItem></Accordion></div>
 
     </article>}
-    {current && <article className="pw-team-reading pw-team-run">
-      <header className="pw-object-toolbar pw-team-run-heading"><div><p className="pw-team-run-origin">{ownerWorkLink ? '管家工作中的协作' : '历史协作'}{current.teamName ? ` · ${current.teamName}` : ''}</p><h2 tabIndex={-1}>{teamGoalTitle(current.goal, current.teamName)}</h2><div className="pw-team-run-meta"><span className="pw-team-state" data-state={current.status}>{current.status==='cancelled'?(pendingFinal?'已停派，原执行待核对':'已停止后续派发'):current.status==='completed'&&(pendingFinal||deliveryWorkers?.stage==='stopped_or_waiting')?'协调已结束，交付待核对':current.status==='awaiting_review'&&deliveryWorkers?.stage==='in_progress'?'文件交付处理中':status(current.status)}</span>{teamPhaseLabel(current.phase) && <span>{teamPhaseLabel(current.phase)}</span>}{teamProgressLabel(current) && <span>{teamProgressLabel(current)}</span>}</div></div>{refreshReading}</header>
+    {current && !acceptedSummaryRetired && <article className="pw-team-reading pw-team-run">
+      <header className="pw-object-toolbar pw-team-run-heading"><div><p className="pw-team-run-origin">{pinnedSummary ? '验收时选用的原汇总' : ownerWorkLink ? '管家工作中的协作' : '历史协作'}{current.teamName ? ` · ${current.teamName}` : ''}</p><h2 tabIndex={-1}>{teamGoalTitle(current.goal, current.teamName)}</h2><div className="pw-team-run-meta"><span className="pw-team-state" data-state={current.status}>{current.status==='cancelled'?(pendingFinal?'已停派，原执行待核对':'已停止后续派发'):current.status==='completed'&&(pendingFinal||deliveryWorkers?.stage==='stopped_or_waiting')?'协调已结束，交付待核对':current.status==='awaiting_review'&&deliveryWorkers?.stage==='in_progress'?'文件交付处理中':status(current.status)}</span>{teamPhaseLabel(current.phase) && <span>{teamPhaseLabel(current.phase)}</span>}{teamProgressLabel(current) && <span>{teamProgressLabel(current)}</span>}</div></div>{!pinnedSummary&&refreshReading}</header>
       {members.find(member => member.id === current.leaderId) && <div className="pw-team-owner"><span>{teamRoleLabel(current)}</span><TeamMemberIdentity member={members.find(member => member.id === current.leaderId)!} name={name(current.leaderId)} size={28} /></div>}
       {changed && <p className="pw-team-reading-notice" role="status">正在更新进展，阅读位置与未发送内容保留。</p>}
       {workspaceActive && !busy && !reading?.viewHandle && <p className="pw-team-reading-notice" role="status">请刷新记录后继续操作，未发送内容保留。</p>}
@@ -1546,7 +1599,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       </section>
         </TabPanel>
         <TabPanel id="result">
-          <TeamResultHandoff result={teamResult} partial={partialResult} memberName={name} showSourcesFirst={ordinaryAnswers}
+          <TeamResultHandoff result={teamResult} partial={partialResult} memberName={name}
+            showSourcesFirst={ordinaryAnswers&&!pinnedSummary}
             prioritizePublishedReport={publishedOrdinaryResult} revisionOffers={revisionRows.length||focusedProposal ? <TeamParentRevisions rows={revisionRows} returnToWork={focusedProposal?.returnToWork?()=>leaveWithDrafts(focusedProposal.returnToWork!):undefined} disabled={!canMutate||materialBusy||!bridge.getState().capabilities.commands.includes('teams.reviewParentRevision')} inspect={row=>{
             const original=reading?.viewHandle;if(!original||!canMutate||materialBusy)return;
             void invoke('teams.reviewParentRevision',{viewHandle:original,operationId:row.operationId},value=>{

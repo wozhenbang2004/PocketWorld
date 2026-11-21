@@ -9,11 +9,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.attachments.AttachmentBook
 import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.TeamWorkspaceOutcomeHost
 import dev.pocketengine.features.attachments.AttachmentRepository
 import dev.pocketengine.features.attachments.OwnerAttachmentImport
 import dev.pocketengine.features.attachments.creation.DocumentDraft
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.RevisionSource
 import dev.pocketengine.features.attachments.creation.StructuredOfficeDraft
 import dev.pocketengine.media.jobs.results.GroupResultAccess
 import dev.pocketengine.ui.groups.GroupArtifactSelection
@@ -375,6 +377,13 @@ internal class AttachmentOutcomeCoordinator(
         }
     }
     fun closeDocumentDraft(){if(!state.busy){restoredDocumentDraft=null;state=state.copy(documentDraft=null,documentDraftEdited=false)}}
+    /** A positive saved revision exits only this live editor, preserving the originally selected file. */
+    fun finishLinkedDraftRetention(){
+        if(state.busy||!privateLibrary()||state.file==null||state.documentDraft==null)return
+        restoredDocumentDraft=null
+        state=state.copy(documentDraft=null,documentDraftEdited=false,error=null,
+            notice="本机修改草稿已保留，原文件不变。可在「成果 → 本机文档草稿」继续。")
+    }
     private fun requireSameDocumentSelection(current:JSONObject,draft:JSONObject){
         for(key in listOf("parentArtifactId","parentSha256","editableSourceId","editableSourceSha256"))check(current.has(key)==draft.has(key)&&current.optString(key)==draft.optString(key)){"草稿的原成果或可编辑源已变化，请从原版本重新打开"}
         val format=current.optString("format");check(if(format in setOf("docx","pdf"))draft.optString("format") in setOf("docx","pdf")else draft.optString("format")==format){"原文档格式不可在此编辑中替换"}
@@ -387,7 +396,26 @@ internal class AttachmentOutcomeCoordinator(
         if(state.busy||state.team!=null||state.group!=null||state.documentDraft==null||pendingDocumentAction!=null)return
         try{val pin=checkedDocumentDraft(draft);state=state.copy(documentDraft=pin,documentDraftEdited=state.documentDraftEdited||pin.toString()!=state.documentDraft.toString(),error=null)}catch(failure:Exception){state=state.copy(error=safe(failure))}
     }
-    private fun showPublishedDocument(action:String,file:JSONObject,notice:String){
+    /** Project only the standalone writer's actual Book publication, not a guessed available result row. */
+    private fun publishedLibraryDocumentSource(action:String,file:JSONObject):JSONObject?=runCatching{
+        val format=libraryDocumentFormat(file.getString("mimeType"))?:return@runCatching null
+        check(file.opt("found")==true&&file.opt("originalPublication")==true&&file.opt("principalId")=="owner"&&
+            file.opt("spaceId")=="private"&&!file.optBoolean("outputSourceRetired")&&
+            file.getString("sha256").matches(Regex("[0-9a-f]{64}"))&&file.optLong("size",-1L) in 1L..AttachmentBook.MAX_FILE_BYTES)
+        val source=file.getJSONObject("source");val publication=source.getJSONObject("nativePublication")
+        val plan=source.getString("planDigest")
+        check(!source.has("groupSpaceId")&&source.opt("kind")=="created_document"&&source.opt("documentFormat")==format&&
+            publication.opt("role")=="document_output"&&publication.opt("planDigest")==plan&&
+            listOf("taskId","runId","operationId").all{source.opt(it)==action&&publication.opt(it)==action}&&
+            AttachmentBook.isOriginalPublicationId(file.getString("id"),action,"document_output",action,action,plan))
+        val editable=source.getJSONObject("editableSource")
+        check(editable.opt("mimeType")=="application/json"&&editable.optLong("size",-1L) in 1L..(256L*1024)&&
+            editable.getString("sha256").matches(Regex("[0-9a-f]{64}"))&&
+            AttachmentBook.isOriginalPublicationId(editable.getString("id"),action,"document_source",action,action,plan))
+        JSONObject(editable.toString())
+    }.getOrNull()
+
+    private fun showPublishedDocument(action:String,file:JSONObject,notice:String,libraryVisit:String?){
         val inLibrary=privateLibrary()
         val catalog=state.snapshot?.takeIf{
             if(inLibrary)it.opt("taskId")==""
@@ -404,15 +432,20 @@ internal class AttachmentOutcomeCoordinator(
             }
         }
         val retainedImport=state.libraryImport.takeIf{inLibrary}
+        val retainedVisit=libraryVisit?.takeIf{inLibrary&&catalog!=null&&state.globalStandaloneDraftVisit==it}
+        val editable=retainedVisit?.let{publishedLibraryDocumentSource(action,file)}
         val published=if(inLibrary)JSONObject(file.toString()).put("role","result")
-            .put("sourceKind","created_document").put("sourceTaskId",action) else file
+            .put("sourceKind","created_document").put("sourceTaskId",action).apply{
+                if(editable!=null)put("availability","available").put("sourceOperationId",file.getJSONObject("source").getString("operationId"))
+                    .put("editableSource",editable)
+            } else file
         if(pendingDocumentAction==action)pendingDocumentAction=null
         restoredDocumentDraft=null;restoreFile=null
         // Show only this operation's Book file; a separate pending save still needs its own receipt.
         // The creation task is the file's provenance, not the library's navigation scope.
         state=AttachmentOutcomeState(open=true,taskId=action.takeUnless{inLibrary},snapshot=catalog,file=published,
             pendingDocumentTask=pendingDocumentAction,pendingProcessingTask=pendingProcessingAction,notice=notice,
-            libraryImport=retainedImport,libraryDocumentReturn=retainedReturn)
+            libraryImport=retainedImport,libraryDocumentReturn=retainedReturn,globalStandaloneDraftVisit=retainedVisit?.takeIf{editable!=null})
     }
     private fun isPublishedDocument(action:String,file:JSONObject):Boolean{
         val source=file.optJSONObject("source")?:return false
@@ -420,25 +453,31 @@ internal class AttachmentOutcomeCoordinator(
             file.opt("taskId")==action&&source.opt("kind")=="created_document"&&source.opt("taskId")==action&&
             source.opt("operationId")==action&&file.optString("id").isNotBlank()&&file.optString("sha256").matches(Regex("[a-f0-9]{64}"))
     }
-    fun createDocument(draft:JSONObject){
+    @JvmOverloads
+    fun createDocument(draft:JSONObject,keepLibraryVisit:(String)->Boolean={false}){
         if(state.busy||state.team!=null||state.group!=null||state.documentDraft==null||pendingDocumentAction!=null)return
         val pin=try{checkedDocumentDraft(draft)}catch(failure:Exception){state=state.copy(error=safe(failure));return}
         state=state.copy(documentDraft=pin)
-        startDocumentCreation(pin)
+        startDocumentCreation(pin,keepLibraryVisit)
     }
     /** The current private Library bridge has just revalidated the exact saved revision and consumed its review. */
-    fun createDocumentFromSavedDraft(draft:DocumentDraft){
+    fun createDocumentFromSavedDraft(draft:DocumentDraft, source:RevisionSource?, keepLibraryVisit:(String)->Boolean){
         check(privateLibrary() && state.globalStandaloneDraftVisit!=null && !state.busy && !exportPending &&
             state.file==null && state.originalFile==null && state.documentDraft==null && !state.documentOpen &&
             state.processingSource==null && state.comparison==null && state.pendingDocumentTask==null && pendingDocumentAction==null){
             "请在当前私人文件库核对这份草稿，没有开始生成"
         }
         val input=DocumentDraft.sourceInput(draft.source())
-        require(input.keys().asSequence().toSet()==setOf("format","name","title","body","fontPoints"))
+        val fields=setOf("format","name","title","body","fontPoints")
+        val linked=if(source==null) emptyMap() else mapOf("parentArtifactId" to source.parentArtifactId().toString(),
+            "parentSha256" to source.parentSha256(),"editableSourceId" to source.editableSourceId().toString(),
+            "editableSourceSha256" to source.editableSourceSha256())
+        require(input.keys().asSequence().toSet()==fields+linked.keys && linked.all { (key, value) -> input.opt(key)==value })
         // The already saved draft stays solely in its own store, not in the legacy editor or Activity Bundle.
-        startDocumentCreation(input)
+        startDocumentCreation(input,keepLibraryVisit)
     }
-    private fun startDocumentCreation(pin:JSONObject){
+    private fun startDocumentCreation(pin:JSONObject,keepLibraryVisit:(String)->Boolean){
+        val libraryVisit=state.globalStandaloneDraftVisit?.takeIf(keepLibraryVisit)
         val action=java.util.UUID.randomUUID().toString();pendingDocumentAction=action
         state=state.copy(pendingDocumentTask=action)
         work(onSuccess={actual->when{
@@ -448,7 +487,7 @@ internal class AttachmentOutcomeCoordinator(
                     else "原可编辑源已保存，可修正当前稿后明确生成新版本。"
                 state=state.copy(pendingDocumentTask=pendingDocumentAction,error=actual.optString("message"),notice=notice)
             }
-            isPublishedDocument(action,actual)->showPublishedDocument(action,actual,"新文档已保存到私人文件库，可以打开核对。没有改动原件，也没有导出。")
+            isPublishedDocument(action,actual)->showPublishedDocument(action,actual,"新文档已保存到私人文件库，可以打开核对。没有改动原件，也没有导出。",libraryVisit?.takeIf(keepLibraryVisit))
             else->state=state.copy(notice="尚未核对到这次生成的文件。请核对原文档结果，不会自动重新生成。")
         }}){c,_->app.features.createDocumentForOwner(pin,c,action) to null}
     }
@@ -457,16 +496,18 @@ internal class AttachmentOutcomeCoordinator(
         return task?.takeIf{it.isNotBlank()&&actual.opt("taskId")==it&&actual.opt("taskRunId")==it&&
             actual.opt("coordinatorEpoch")==1&&actual.opt("originalDocumentActionId")==it}
     }
-    fun queryDocument(){
+    @JvmOverloads
+    fun queryDocument(keepLibraryVisit:(String)->Boolean={false}){
         if(state.busy||state.group!=null||state.team!=null||state.deviceOriginalOnly)return
         // In a document record, check its own freshly read action, never an unrelated pending
         // save. A live editor still checks its pending save, even when editing from another file.
         val action=(if(state.documentDraft!=null||privateLibrary())pendingDocumentAction?.takeIf{it==state.pendingDocumentTask}
             else if(state.resultRun==null&&!state.choosingSource)originalDocumentAction(state.taskId,state.snapshot)
             else null)?:return
+        val libraryVisit=state.globalStandaloneDraftVisit?.takeIf(keepLibraryVisit)
         work(onSuccess={actual->
             if(actual.opt("found")==true&&isPublishedDocument(action,actual)&&actual.optJSONObject("source")?.opt("runId")==action)
-                showPublishedDocument(action,actual,"已找到原操作的实际固定文档，没有重新生成")
+                showPublishedDocument(action,actual,"已找到原操作的实际固定文档，没有重新生成",libraryVisit?.takeIf(keepLibraryVisit))
             else state=state.copy(notice="原文档尚无完整发布回执。可查看原任务和已保留源，不自动重复生成。")
         }){c,_->app.features.documentResultForOwner(action,c) to null}
     }

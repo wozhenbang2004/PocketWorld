@@ -74,7 +74,7 @@ import {retainedLocalScriptOutputs,TaskCapabilityWorkspace} from './TaskCapabili
 import {DeviceTaskScopeWorkspace} from './DeviceTaskScopeWorkspace';
 import type {SentPhoneGoalFocus} from './devices-workspace';
 import {PhoneControlWorkspace} from './PhoneControlWorkspace';
-import {OriginalWindowsTextOverview} from './OriginalWindowsTextRead';
+import {OriginalWindowsWorkspaceOverview} from './OriginalWindowsTextRead';
 import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
 import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
@@ -124,7 +124,7 @@ import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
 import {sameTeamPackage} from './team-delivered-package';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
-import {matchesWorkTeamResult,teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,workTeamResultEntryKey,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
+import {acceptedWorkTeamReport,matchesWorkTeamResult,sameAcceptedWorkTeamReport,teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,workTeamResultEntryKey,type AcceptedWorkTeamReport,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
 import {DeclinedTeamStart,originalDeclinedTeamStart,originalPendingNodeCommand,TaskApproval} from './TaskApproval';
 import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,matchesFixedProjectDraft,observedFixedProjectDraft,privateProjectTask,projectContinuation,sameFixedProjectDraftIdentity,savedUnsentProfileProjectApproval,type ContinuationSubmission,type FixedProjectDraft} from './task-continuation';
 import {TaskInference} from './TaskInference';
@@ -3676,7 +3676,7 @@ export default function App(){
    const back=(reason?:string)=>{if(document.hidden||relatedOrigin.current!==origin)return;void restoreWorkspace(origin).then(()=>{if(reason&&!document.hidden)setLocalError(reason)});};
    void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:source.teamRunId,fromProject:source,returnToWork:back})});
  };
- const openWorkTeam=(team:OwnerWorkTeam,openPackage=false)=>{
+ const openWorkTeam=(team:OwnerWorkTeam,openPackage=false,acceptedReport?:AcceptedWorkTeamReport)=>{
    if(!can('teams.readRun'))return;
    if(openPackage){
      const live=bridge.getState(),mark=team.deliveredPackage;
@@ -3693,16 +3693,35 @@ export default function App(){
        void restoreWorkspace(origin).then(()=>{if(reason&&!document.hidden)setLocalError(reason)});};
      void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:team.teamRunId,fromWork:source,returnToWork});});return;
    }
-   const live=bridge.getState(),view=obj(live.view),origin=captureWorkspaceOrigin();
+   const live=bridge.getState(),view=obj(live.view),captured=captureWorkspaceOrigin();
    const {parentTaskId,parentRunId,parentEpoch,conversationId,teamRunId}=team;
    const source:WorkTeamResultSource={parentTaskId,parentRunId,parentEpoch,conversationId,teamRunId,taskId:team.taskId};
+   const origin:WorkspaceOrigin=acceptedReport&&captured.task?.id===parentTaskId?
+     {...captured,task:{...captured.task,expected:{runId:parentRunId,epoch:parentEpoch}}}:captured;
    const original=origin.task?.layer==='overview'&&origin.task.id===parentTaskId&&openedTaskId.current===parentTaskId&&
      !taskOpening&&!document.hidden&&view.section===null&&view.taskId===parentTaskId&&!live.state.conversationReader&&
      ['butler','chat','tasks','projects'].includes(origin.route)&&live.capabilities.commands.includes('tasks.open')&&completedWorkTeam(source,live.state.tasks);
+   const parentIn=(state:typeof live.state)=>{
+     const rows=asArray<Task>(state.tasks).filter(row=>row.id===parentTaskId);
+     return rows.length===1?rows[0]:undefined;
+   };
+   const resume=view.resumeRevision;
+   if(acceptedReport&&(!original||!Number.isSafeInteger(resume)||
+     !sameAcceptedWorkTeamReport(acceptedReport,acceptedWorkTeamReport(parentIn(live.state),source)))){
+     setLocalError('原工作验收记录已变化，没有打开其他汇总。');return;
+   }
    const documentEpoch=bridge.getDocumentEpoch(),arrival=navigationWindow.current+1;
-   const inTeam=()=>{const native=bridge.getState(),now=obj(native.view);
+   const inTeam=(native=bridge.getState())=>{const now=obj(native.view);
     return !document.hidden&&navigationWindow.current===arrival&&bridge.getDocumentEpoch()===documentEpoch&&
      now.section==='teams'&&now.taskId===null&&originalTeamWorkCurrent(origin,source,native);};
+   const accepted=acceptedReport?{report:acceptedReport,current:()=>{
+     const native=bridge.getState(),row=parentIn(native.state),raw=obj(row?.raw);
+     if(!inTeam(native)||obj(native.view).resumeRevision!==resume)return false;
+     if(raw.taskProjection!=null)return sameAcceptedWorkTeamReport(acceptedReport,acceptedWorkTeamReport(row,source));
+     // Entering Teams refreshes the owner Work metadata without its decision body.
+     // Only its unchanged native result version may keep the original click alive.
+     return row?.status==='completed'&&raw.status==='completed'&&raw.resultRevision===acceptedReport.resultRevision;
+   }}:undefined;
    const arm=(verifiedResult:()=>boolean):WorkTeamResultReturn|null=>{
     if(relatedOrigin.current!==origin||!inTeam())return null;
     const pin:WorkTeamResultReturn={source,rearm:arm,current:()=>relatedOrigin.current===exact&&inTeam()&&verifiedResult(),
@@ -3713,7 +3732,7 @@ export default function App(){
    };
    void openRelatedWorkspace('teams',original?origin:undefined,()=>{
     setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:teamRunId,
-      ...(original?{fromWorkResult:{source,arm}}:{})});
+      ...(original?{fromWorkResult:{source,arm,accepted}}:{})});
    });
  };
  const openTeamOwnerWork=(link:TeamOwnerWorkLink,intent:TeamOwnerWorkIntent)=>{
@@ -4555,7 +4574,7 @@ export default function App(){
    <TabPanel id="overview" shouldForceMount hidden={taskLayer!=='overview'}>
     <section className="pw-task-overview pw-task-review" aria-label="这件工作的进展、决定与成果">
      {overviewActive&&<WorkExecutionPlace task={task} projects={projects} remoteProfiles={state.features?.remote?.profiles} canReadPhoneResources={!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')}/>}
-     {overviewActive&&task.raw?.ownerDeviceWork?.directWorkspace&&!phoneViewerObscured&&!phoneViewerExpanded&&<OriginalWindowsTextOverview taskId={task.id}/>}
+     {overviewActive&&task.raw?.ownerDeviceWork?.directWorkspace&&!phoneViewerObscured&&!phoneViewerExpanded&&<OriginalWindowsWorkspaceOverview taskId={task.id}/>}
      {originalPhoneTool&&<div className="pw-action-row"><Button variant="secondary" leadingIcon={IconTool} onClick={event=>openOriginalPhoneTool(task,originalPhoneTool,event.currentTarget)}>查看本轮手机操作</Button></div>}
      {overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')&&<PhoneServiceRecovery key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} readiness={state.phoneReadiness} openSettings={can('settings.openSystem')?()=>act('settings.openSystem',{section:'accessibility'},task.id):undefined} review={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {taskOpen&&!taskOpening&&openedTaskId.current===task.id&&<PhoneMainOwnerStep key={'main-owner-step:'+task.id} task={task} visible={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&obj(snapshot?.view).taskId===task.id} run={act} can={can} onProcess={()=>showTaskLayer('process')}/>}
@@ -4686,8 +4705,15 @@ export default function App(){
    void openRelatedWorkspace('model-settings',origin);
   };
   if(!setDefault&&!supplement&&!continuing&&!note&&controls.resultCapacityState!=='full')return null;
-  const foldNewRound=continuing&&(currentResultDecision||currentPlanDecision);
-  const foldSupplement=currentPlanDecision&&supplement&&controls.canInput===false;
+  // The original unanswered wait already has an actual reply action. Neither
+  // starting another round nor opening an unsent supplement answers it.
+  const currentQuestionDecision=ownerQuestionInWindow&&originalTaskOverview(task)&&review?.task?.id===task.id&&
+   task.status==='awaiting_user'&&task.raw?.status===task.status&&!!conversation&&!!ordinaryChatWorkRow(task,conversation,true)&&
+   ownerQuestion?.kind==='capabilities'&&ownerQuestion.answered===false&&ownerQuestion.replyAvailability==='current_wait'&&
+   can('tasks.answerQuestion')&&review?.actions?.some(row=>row.action==='tasks.answerQuestion')===true;
+  const originalDecision=currentPlanDecision||currentQuestionDecision;
+  const foldNewRound=continuing&&(currentResultDecision||originalDecision);
+  const foldSupplement=originalDecision&&supplement&&controls.canInput===false;
   const more=foldNewRound||foldSupplement;
   const explanation=!control?.pending&&!control?.unknown&&!control?.usedForContinuation?note:null;
   const newRound=continuing&&<Button variant="secondary" disabled={taskOpening||control?.pending||control?.unknown||control?.usedForContinuation} onClick={()=>controlWork(task,'continue')}>在原任务开新一轮</Button>;

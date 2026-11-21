@@ -2,11 +2,16 @@ package dev.pocketengine.ui.web
 
 import android.os.Handler
 import android.os.Looper
+import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.attachments.AttachmentBook
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Fields
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Outcome
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Pin
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.RevisionSource
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.State
 import dev.pocketengine.ui.PocketWorldController
+import org.json.JSONObject
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ExecutionException
@@ -32,19 +37,27 @@ internal class PocketWebStandaloneDocumentDrafts(
     private val controller: PocketWorldController,
     private val captureWindow: () -> PocketWebWindowTicket,
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
-    private val displayedLibraryFrame: (Frame) -> Boolean
+    private val displayedLibraryFrame: (Frame) -> Boolean,
+    private val displayedRevisionFrame: (Frame) -> Boolean
 ) {
     data class Frame(val windowId: String, val frameId: String)
-    data class Row(val rowHandle: String, val name: String, val format: String, val savedAt: Long)
+    data class Row(val rowHandle: String, val name: String, val format: String, val savedAt: Long, val linkedRevision: Boolean)
     data class Catalog(val rows: List<Row>, val metadataComplete: Boolean)
     data class Edit(val editorHandle: String, val versionHandle: String)
     data class NewDraft(val editorHandle: String, val fields: Fields)
-    data class Opened(val state: State, val edit: Edit? = null, val fields: Fields? = null)
-    data class Saved(val state: State, val edit: Edit? = null)
+    data class Opened(val state: State, val edit: Edit? = null, val fields: Fields? = null,
+                      val sourceName: String? = null, val sourceUnavailable: Boolean = false)
+    data class Saved(val state: State, val edit: Edit? = null, val sourceUnavailable: Boolean = false)
+    data class GenerationInput(val fields: Fields, val source: RevisionSource?)
+    data class GenerationRead(val input: GenerationInput? = null, val sourceUnavailable: Boolean = false)
+    data class Retention(val state: State, val sourceUnavailable: Boolean = false)
 
-    private data class Scope(val windowId: String, val ticket: PocketWebWindowTicket)
-    private data class Editor(val edit: Edit, val pin: Pin)
+    private data class Scope(val windowId: String, val ticket: PocketWebWindowTicket, val linkedEditor: Boolean)
+    private data class Editor(val edit: Edit, val pin: Pin, val source: RevisionSource? = null, val removalOnly: Boolean = false)
     private class FirstAttempt(val handle: String, var pin: Pin? = null)
+    private class LinkedAttempt(val source: RevisionSource, var pin: Pin? = null)
+    private data class Read(val outcome: Outcome, val sourceName: String? = null)
+    private data class Write(val outcome: Outcome, val sourceUnavailable: Boolean = false)
     private data class Request(val scope: Scope, val frame: Frame)
     private val main = Handler(Looper.getMainLooper())
     private var store: OwnerStandaloneDocumentDraftStore? = null
@@ -53,9 +66,12 @@ internal class PocketWebStandaloneDocumentDrafts(
     private var editor: Editor? = null
     private var blank: String? = null
     private var first: FirstAttempt? = null
+    private var linkedFirst: LinkedAttempt? = null
     private var pending: Request? = null
     private val defaults = Fields(OwnerStandaloneDocumentDraftStore.Format.WORD, "文档", "", "", 12)
-    fun showing() = scope != null
+    fun showing() = scope?.linkedEditor == false
+    fun retainingLinked() = scope?.linkedEditor == true
+    fun retireLinked() { if (retainingLinked()) retire() }
 
     /** Explicit shelf action only. It does not open a body. Null means this presentation retired. */
     fun list(frame: Frame, done: (Catalog?) -> Unit) {
@@ -71,7 +87,7 @@ internal class PocketWebStandaloneDocumentDrafts(
                 val metadata = catalog.entries().map { row ->
                     val handle = token()
                     pins[handle] = row.pin()
-                    Row(handle, row.name(), row.format().value, row.savedAt())
+                    Row(handle, row.name(), row.format().value, row.savedAt(), row.revisionSource() != null)
                 }
                 rows = pins
                 Catalog(metadata, catalog.metadataComplete())
@@ -149,14 +165,17 @@ internal class PocketWebStandaloneDocumentDrafts(
         check(scope == current && editor == null && blank == null) { "请从当前本机草稿列表打开原版本" }
         require(canonicalId(rowHandle)) { "原草稿列表位置无效" }
         val pin = rows[rowHandle] ?: error("该版本不在当前已核对的本机草稿中")
-        enqueue(current, frame, fallback = ::unknown,
-            call = { storage, window -> storage.read(pin, window) }) { actual ->
+        enqueue(current, frame, fallback = { Read(unknown()) },
+            call = { storage, window -> readExact(storage, window, pin) }) { actual ->
             done(actual?.let { result ->
-                val draft = result.draft()?.takeIf { result.state() == State.VERIFIED && it.metadata().pin() == pin }
-                if (draft == null) return@let Opened(readStatus(result.state()))
+                val outcome = result.outcome
+                val draft = outcome.draft()?.takeIf { outcome.state() == State.VERIFIED && it.metadata().pin() == pin }
+                if (draft == null) return@let Opened(readStatus(outcome.state()))
                 val edit = Edit(token(), token())
-                editor = Editor(edit, pin)
-                Opened(State.VERIFIED, edit, draft.fields())
+                val source = draft.metadata().revisionSource()
+                val unavailable = source != null && result.sourceName == null
+                editor = Editor(edit, pin, source, removalOnly = unavailable)
+                Opened(State.VERIFIED, edit, draft.fields().takeUnless { unavailable }, result.sourceName, unavailable)
             })
         }
     }
@@ -165,23 +184,32 @@ internal class PocketWebStandaloneDocumentDrafts(
     fun save(frame: Frame, shown: Edit, fields: Fields, done: (Saved?) -> Unit) {
         val current = admission(frame)
         require(canonicalId(shown.editorHandle) && canonicalId(shown.versionHandle)) { "原草稿编辑版本无效" }
-        val original = editor?.takeIf { scope == current && it.edit == shown }
+        val original = editor?.takeIf { scope == current && it.edit == shown && !it.removalOnly }
             ?: error("这份本机草稿的编辑版本已变化")
         check(pending == null)
         first = null
         blank = null
         val pin = original.pin
-        enqueue(current, frame, fallback = ::unknown,
-            call = { storage, window -> storage.write(pin, fields, window) }) { actual ->
-            done(actual?.let { result ->
+        enqueue(current, frame, fallback = { Write(unknown()) }, call = { storage, window ->
+            if (original.source != null && verifyRevisionSource(original.source, window) == null)
+                Write(unknown(), sourceUnavailable = true)
+            else Write(storage.write(pin, fields, window))
+        }) { actual ->
+            done(actual?.let { write ->
+                if (write.sourceUnavailable) {
+                    editor = original.copy(removalOnly = true)
+                    return@let Saved(State.UNKNOWN, original.edit, sourceUnavailable = true)
+                }
+                val result = write.outcome
                 val draft = result.draft()
                 val next = draft?.metadata()?.pin()
                 val state = result.state()
                 if (draft?.fields() == fields && next != null && next.draftId() == pin.draftId() &&
+                    draft?.metadata()?.revisionSource() == original.source &&
                     (state == State.VERIFIED && next == pin ||
                      state == State.SAVED && next.revision() == pin.revision() + 1 && next.sha256() != pin.sha256())) {
                     val edit = if (state == State.VERIFIED) original.edit else Edit(original.edit.editorHandle, token())
-                    editor = Editor(edit, next)
+                    editor = original.copy(edit = edit, pin = next)
                     rows = emptyMap() // Retire the previous catalogue; do not re-read it automatically.
                     return@let Saved(state, edit)
                 }
@@ -193,19 +221,111 @@ internal class PocketWebStandaloneDocumentDrafts(
         }
     }
 
+    /** First retained revision of a real Library original. Unknown can only read its already allocated pin. */
+    fun retainRevision(frame: Frame, source: RevisionSource, fields: Fields, checking: Boolean, done: (Retention?) -> Unit) {
+        val current = admission(frame, linkedEditor = true)
+        if (scope != current) {
+            check(!checking && scope == null) { "原文档修改草稿尚待核对" }
+            scope = current
+        }
+        if (pending != null) { done(Retention(State.UNKNOWN)); return }
+        val attempt = if (checking) linkedFirst?.takeIf { it.source == source }
+            ?: run { done(Retention(State.UNKNOWN)); return }
+        else {
+            check(linkedFirst == null) { "请先核对上一次保留，不会重复保存" }
+            LinkedAttempt(source).also { linkedFirst = it }
+        }
+        val expected = attempt.pin
+        if (checking && expected == null) { done(Retention(State.UNKNOWN)); return }
+        enqueue(current, frame, fallback = { Write(unknown()) }, call = { storage, window ->
+            if (verifyRevisionSource(source, window) == null) Write(unknown(), sourceUnavailable = true)
+            else if (checking) Write(storage.read(checkNotNull(expected), window))
+            else {
+                val seed = storage.initializeRevision(window, source)
+                val pin = storage.expectedFirstPin(seed, fields)
+                onMain { check(window.current() && linkedFirst === attempt); attempt.pin = pin }
+                Write(storage.firstWrite(seed, fields))
+            }
+        }) { actual ->
+            done(actual?.let { write ->
+                val outcome = write.outcome
+                val state = outcome.state()
+                val saved = outcome.draft()
+                if ((state == State.SAVED || checking && state == State.VERIFIED) && saved?.fields() == fields &&
+                    saved?.metadata()?.pin() == attempt.pin && saved?.metadata()?.revisionSource() == source) {
+                    retireLinked()
+                    return@let Retention(state)
+                }
+                // A first attempt without any storage call or a positive quota refusal is known not to have written.
+                if (!checking && (write.sourceUnavailable || state == State.QUOTA)) {
+                    retireLinked()
+                    return@let Retention(if (write.sourceUnavailable) State.UNKNOWN else state, write.sourceUnavailable)
+                }
+                Retention(State.UNKNOWN, write.sourceUnavailable)
+            })
+        }
+    }
+
     /** Read only the exact acknowledged revision, for the current native generation review/confirmation. */
-    fun readGenerationDraft(frame: Frame, shown: Edit, done: (Fields?) -> Unit) {
+    fun readGenerationDraft(frame: Frame, shown: Edit, done: (GenerationRead?) -> Unit) {
         val current = admission(frame)
-        val original = editor?.takeIf { scope == current && it.edit == shown }
+        val original = editor?.takeIf { scope == current && it.edit == shown && !it.removalOnly }
             ?: error("这份本机草稿的编辑版本已变化")
         val pin = original.pin
-        enqueue(current, frame, fallback = ::unknown,
-            call = { storage, window -> storage.read(pin, window) }) { actual ->
-            val saved = actual?.takeIf { it.state() == State.VERIFIED }?.draft()?.takeIf {
-                editor === original && it.metadata().pin() == pin
+        enqueue(current, frame, fallback = { Read(unknown()) },
+            call = { storage, window -> readExact(storage, window, pin) }) { actual ->
+            val saved = actual?.outcome?.takeIf { it.state() == State.VERIFIED }?.draft()?.takeIf {
+                editor === original && it.metadata().pin() == pin && it.metadata().revisionSource() == original.source
             }
-            done(saved?.fields())
+            if (saved == null) done(null)
+            else if (original.source != null && actual?.sourceName == null) {
+                editor = original.copy(removalOnly = true)
+                done(GenerationRead(sourceUnavailable = true))
+            } else done(GenerationRead(GenerationInput(saved.fields(), original.source)))
         }
+    }
+
+    private fun readExact(storage: OwnerStandaloneDocumentDraftStore, window: OwnerStandaloneDocumentDraftStore.OwnerWindow, pin: Pin): Read {
+        val actual = storage.read(pin, window) // The DraftStore lock is released before any Book verification.
+        return Read(actual, actual.draft()?.metadata()?.revisionSource()?.let { verifyRevisionSource(it, window) })
+    }
+
+    private fun verifyRevisionSource(source: RevisionSource, window: OwnerStandaloneDocumentDraftStore.OwnerWindow): String? {
+        val control = RunControl()
+        try {
+            // Main-window checks bracket bounded Book reads; do not await main while holding Book's monitor.
+            if (!window.current()) return null
+            val host = controller.nativeButlerHost().attachmentOutcomes ?: return null
+            val parent = host.originalFile(null, source.parentArtifactId().toString(), source.parentSha256(), control).metadata()
+            val origin = parent.getJSONObject("source")
+            val rootMime = parent.opt("mimeType")
+            val format = if (rootMime == "application/pdf") "pdf"
+                else if (rootMime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document") "docx"
+                else return null
+            check(origin.opt("kind") == "created_document" && origin.opt("documentFormat") == format)
+            val selected = origin.getJSONObject("editableSource")
+            check(selected.opt("id") == source.editableSourceId().toString() && selected.opt("sha256") == source.editableSourceSha256())
+            if (!window.current()) return null
+            val editable = host.originalFile(null, source.editableSourceId().toString(), source.editableSourceSha256(), control).metadata()
+            val provenance = editable.getJSONObject("source")
+            check(provenance.opt("kind") == "document_source" && provenance.opt("documentFormat") == format &&
+                editable.opt("mimeType") == "application/json" && selected.opt("mimeType") == editable.opt("mimeType") &&
+                selected.optLong("size", -1L) == editable.optLong("size", -2L))
+            val task = origin.getString("taskId"); val run = origin.getString("runId")
+            val operation = origin.getString("operationId"); val plan = origin.getString("planDigest")
+            val binding = mapOf("taskId" to task, "runId" to run, "operationId" to operation, "planDigest" to plan)
+            fun publication(record: JSONObject, role: String): Boolean {
+                val meta = record.getJSONObject("source")
+                val exact = meta.getJSONObject("nativePublication")
+                return exact.opt("role") == role && binding.all { (key, value) -> meta.opt(key) == value && exact.opt(key) == value } &&
+                    AttachmentBook.isOriginalPublicationId(record.getString("id"), operation, role, task, run, plan)
+            }
+            check(publication(parent, "document_output") && publication(editable, "document_source"))
+            control.check()
+            if (!window.current()) return null
+            return parent.getString("name").takeIf { it.isNotBlank() && it.length <= 160 }
+        } catch (_: Exception) { return null }
+        finally { control.cancel() }
     }
 
     /** Delete only the displayed saved pin; retire its editor even when the receipt is uncertain. */
@@ -236,19 +356,21 @@ internal class PocketWebStandaloneDocumentDrafts(
         editor = null
         blank = null
         first = null
+        linkedFirst = null
         pending = null
     }
 
-    private fun admission(frame: Frame): Scope {
+    private fun admission(frame: Frame, linkedEditor: Boolean = false): Scope {
         checkMain()
         check(canonicalId(frame.windowId) && canonicalId(frame.frameId)) { "原文件窗口身份无效" }
-        val next = Scope(frame.windowId, captureWindow())
+        val next = Scope(frame.windowId, captureWindow(), linkedEditor)
         check(current(next, frame)) { "请在当前私人文件库核对原文档草稿" }
         return next
     }
 
     private fun current(expected: Scope, frame: Frame): Boolean {
         checkMain()
+        if (expected.linkedEditor) return expected.windowId == frame.windowId && acceptsWindow(expected.ticket) && displayedRevisionFrame(frame)
         val flow = controller.attachmentOutcomes
         val state = flow.state
         val visible = state.snapshot

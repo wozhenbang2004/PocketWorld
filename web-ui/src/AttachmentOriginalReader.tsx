@@ -52,9 +52,14 @@ export type DisplayedOriginalText={windowId:string;viewerId:string;identity:stri
 type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;findBeforeLongText?:boolean;onTextDisplayed?:(range:DisplayedOriginalText)=>void;
  recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
 type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:boolean};
-type PdfFindReceipt={value:Json;epoch:number};
+type PdfFindPin={windowId:string;viewerId:string;identity:string;sha256:string;url:string};
+type PdfFindReceipt={value:Json;epoch:number;pin?:PdfFindPin};
 type PdfFindInput={text:string;receipt?:PdfFindReceipt};
 type PdfMatchTarget={page:number;input:PdfFindInput;receipt:PdfFindReceipt;interaction:number;focus:Element|null};
+type PdfPageStart={kind:'pageStart';page:number;pin:PdfFindPin;epoch:number;interaction:number;focus:Element|null;body:HTMLDivElement;top:number;left:number};
+type PdfReveal=PdfPageStart|PdfMatchTarget;
+type PdfHitBox=readonly [number,number,number,number];
+type PdfMark={raster:PdfRaster;receipt:PdfFindReceipt;boxes:PdfHitBox[]};
 type TextAdvance={range:DisplayedOriginalText;epoch:number;interaction:number;focus:Element|null;pane:HTMLElement};
 function textRangeMatches(value:Json,range:DisplayedOriginalText){
  return value.sourceIdentity===range.identity&&value.sha256===range.sha256&&value.encoding===range.encoding&&
@@ -76,6 +81,39 @@ function verifiedPdfFind(value:Json,sha:string,query:string,first:number,pages:n
   Number.isSafeInteger(through)&&through>=first-1&&through<=Math.min(pages,first+19)&&
   value.nextPage===(through===pages?null:through+1)&&Array.isArray(value.matches)&&value.matches.length<=100&&
   value.matches.every(hit=>Number.isSafeInteger(hit?.page)&&hit.page>=first&&hit.page<=through);
+}
+function matchesPdfFindPin(pin:PdfFindPin,windowId:string,source:Json){
+ return windowId===pin.windowId&&source.kind==='pdf'&&source.sourceUnavailable===false&&source.id===pin.viewerId&&
+  source.identity===pin.identity&&source.sha256===pin.sha256&&source.url===pin.url;
+}
+function capturePdfFindPin(windowId:string,source:Json):PdfFindPin|undefined{
+ const {id,identity,sha256,url}=source,view=obj(bridge.getState().state.attachmentWorkspace);
+ if(typeof id!=='string'||!/^[a-f0-9-]{36}$/.test(id)||typeof identity!=='string'||!/^[a-f0-9]{64}$/.test(identity)||
+    typeof sha256!=='string'||!/^[a-f0-9]{64}$/.test(sha256)||url!==`https://pocketengine.local/pocket-files/${id}/content`||
+    view.open!==true||view.ready!==true)return;
+ const pin={windowId,viewerId:id,identity,sha256,url};
+ if(matchesPdfFindPin(pin,windowId,source)&&matchesPdfFindPin(pin,view.windowId,obj(view.originalFile)))return pin;
+}
+function isPdfHitBox(box:unknown):box is PdfHitBox {
+ return Array.isArray(box)&&box.length===4&&box.every(value=>Number.isFinite(value)&&value>=0&&value<=1)&&
+  box[0]<box[2]&&box[1]<box[3];
+}
+function firstPdfHit(value:Json,page:number):PdfHitBox[]|undefined{
+ for(const hit of rows(value.matches))if(hit.page===page&&Number.isSafeInteger(hit.textStart)&&hit.textStart>=0&&
+    Array.isArray(hit.boxes)&&hit.boxes.length>0&&hit.boxes.length<=16&&hit.boxes.every(isPdfHitBox))return hit.boxes;
+}
+function displayedPdfImage(body:HTMLElement,raster:PdfRaster,pin:PdfFindPin){
+ const layer=body.querySelector<HTMLElement>(`[data-pdf-raster="${raster.pdfRasterId}"]`),image=layer?.firstElementChild;
+ if(!layer||!(image instanceof HTMLImageElement)||!image.complete||!image.naturalWidth||!image.naturalHeight||
+    image.currentSrc!==`${pin.url}?page=${raster.page}&raster=${raster.pdfRasterId}`)return;
+ const imageStyle=getComputedStyle(image),layerStyle=getComputedStyle(layer);
+ const unturned=(style:CSSStyleDeclaration)=>style.transform==='none'&&(!style.rotate||style.rotate==='none');
+ if(!unturned(imageStyle)||!unturned(layerStyle)||imageStyle.objectFit!=='fill')return;
+ const rect=image.getBoundingClientRect(),plane=layer.getBoundingClientRect();
+ // The full native page and its search boxes have the same axes. Never map onto a cropped,
+ // stretched or transformed image, or the padded region that contains it.
+ if(rect.width>0&&rect.height>0&&rect.left===plane.left&&rect.top===plane.top&&rect.width===plane.width&&rect.height===plane.height&&
+    Math.abs(rect.height-rect.width*image.naturalHeight/image.naturalWidth)<=1&&body.clientWidth>0&&body.clientHeight>0)return rect;
 }
 function pdfRaster(value:Json):PdfRaster|null {
  const {pdfRasterId,page,pages,searchAvailable}=value;
@@ -109,13 +147,19 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const [failedRead,setFailedRead]=useState<{command:string;args:Json;pdfFind?:PdfFindInput}|null>(null);
  const pdfInput=useRef<PdfFindInput>({text:''});
  const [pdfShown,setPdfShown]=useState<PdfRaster|null>(null),[pdfAttempt,setPdfAttempt]=useState<PdfRaster|null>(null);
- const pdfPending=useRef<{raster:PdfRaster;acknowledging:boolean;match?:PdfMatchTarget}|null>(null);
- const pdfMatchReveal=useRef<{raster:PdfRaster;match:PdfMatchTarget}|null>(null),readerInteraction=useRef(0);
+ const [pdfMark,setPdfMark]=useState<PdfMark|null>(null);
+ const pdfPending=useRef<{raster:PdfRaster;acknowledging:boolean;target?:PdfReveal}|null>(null);
+ const pdfReveal=useRef<{raster:PdfRaster;target:PdfReveal}|null>(null),readerInteraction=useRef(0);
  const retired=source.sourceUnavailable===true;
  const live=useRef({id:source.id,windowId,retired}),sequence=useRef(0),pending=useRef(false);live.current={id:source.id,windowId,retired};
  const type=String(source.kind),details=obj(source.information);
  const trackTextAdvance=type==='text'&&!!onTextDisplayed;
+ const retirePdfMatch=()=>{
+  if(pdfPending.current)pdfPending.current.target=undefined;
+  pdfReveal.current=null;setPdfMark(null);
+ };
  const retirePdfInput=(text:string)=>{
+  retirePdfMatch();
   pdfInput.current.receipt=undefined;
   pdfInput.current={text}; // Editing away and back is still a new, unsubmitted search.
  };
@@ -126,6 +170,12 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  };
  const clearPdfAttempt=()=>{pdfPending.current=null;setPdfAttempt(null)};
  const currentRaster=(raster:PdfRaster)=>!live.current.retired&&document.visibilityState!=='hidden'&&pdfPending.current?.raster===raster;
+ const ownsPdfPageStart=(target:PdfPageStart)=>{
+  const pin=capturePdfFindPin(windowId,source),active=document.activeElement;
+  return !live.current.retired&&!document.hidden&&bridge.getDocumentEpoch()===target.epoch&&readerInteraction.current===target.interaction&&
+   (active===target.focus||active===document.body)&&target.body===pdfBody.current&&target.body.isConnected&&!target.body.hidden&&
+   pin&&matchesPdfFindPin(target.pin,pin.windowId,source);
+ };
  const failRaster=(raster:PdfRaster)=>{
   if(!currentRaster(raster))return;
   clearPdfAttempt();setFailedRead({command:'read',args:{page:raster.page}});
@@ -138,17 +188,22 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    const shown=pdfRaster(obj(await bridge.command<Json>('attachmentWorkspace.viewer',{windowId,viewerId:source.id,command:'check',displayedPdfRaster:raster.pdfRasterId})));
    if(!currentRaster(raster))return;
    if(shown?.pdfRasterId!==raster.pdfRasterId||shown.page!==raster.page){failRaster(raster);return}
-   pdfMatchReveal.current=attempt.match?{raster,match:attempt.match}:null;
+   const target=attempt.target;
+   // Check the old viewport before replacing the raster; the new image's height can clamp its offset.
+   pdfReveal.current=target&&(!('kind' in target)||ownsPdfPageStart(target)&&
+    target.body.scrollTop===target.top&&target.body.scrollLeft===target.left)?{raster,target}:null;
    setPdfShown(raster);clearPdfAttempt();
   } catch {failRaster(raster)}
  };
- const invoke=async(command:string,args:Json={},match?:PdfMatchTarget,advance?:TextAdvance)=>{
+ const invoke=async(command:string,args:Json={},target?:PdfReveal,advance?:TextAdvance)=>{
   if(pending.current||pdfPending.current||live.current.retired)return null;
   const pdfFind=command==='find'&&type==='pdf'?pdfInput.current:undefined;
   const start=args.cursor,pdfPages=pdfShown?.pages??0,sha=source.sha256,epoch=bridge.getDocumentEpoch();
   if(pdfFind&&(!pdfShown?.searchAvailable||!pdfFind.text||args.query!==pdfFind.text||
       !Number.isSafeInteger(start)||start<1||start>pdfPages||typeof sha!=='string'||!/^[a-f0-9]{64}$/.test(sha)||
       (start!==1&&(pdfFind.receipt?.epoch!==epoch||pdfFind.receipt.value.nextPage!==start))))return null;
+  const pdfFindPin=pdfFind?capturePdfFindPin(windowId,source):undefined;
+  if(type==='pdf')retirePdfMatch();
   const owner={...live.current},request=++sequence.current;pending.current=true;textAdvance.current=null;setBusy(true);setFailedRead(null);setError('');
   try{
    const result=await bridge.command<Json>('attachmentWorkspace.viewer',{windowId:owner.windowId,viewerId:owner.id,command,...args});
@@ -160,14 +215,14 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
      if(!verifiedPdfFind(obj(result),sha,pdfFind.text,start,pdfPages)){
       pdfFind.receipt=undefined;setFound(null);return null;
      }
-     pdfFind.receipt={value:result,epoch};
+     pdfFind.receipt={value:result,epoch,pin:pdfFindPin};
     }
     setFound(result);
    }
    else if(type==='pdf'){
     const raster=pdfRaster(obj(result));
-    if(!raster||match&&raster.page!==match.page)throw new Error('这次 PDF 页面显示未确认');
-    pdfPending.current={raster,acknowledging:false,match};setPdfAttempt(raster);
+    if(!raster||target&&raster.page!==target.page)throw new Error('这次 PDF 页面显示未确认');
+    pdfPending.current={raster,acknowledging:false,target};setPdfAttempt(raster);
    }else{
     if(advance&&advance.epoch===bridge.getDocumentEpoch()&&advance.interaction===readerInteraction.current&&
        textRangeMatches(obj(result),advance.range))textAdvance.current=advance;
@@ -182,6 +237,11 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  };
  useEffect(()=>{setValue(obj(source.information));setError('');setFound(null);setZoom(1);setTurn(0);pending.current=false;void invoke('load');return()=>{sequence.current++;pending.current=false;pdfPending.current=null}},[source.id,windowId]);
  useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;textAdvance.current=null;clearPdfAttempt();setBusy(false);if(type==='pdf')retirePdfInput(pdfInput.current.text);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
+ useEffect(()=>{
+  if(type!=='pdf')return;
+  let epoch=bridge.getDocumentEpoch();
+  return bridge.subscribeDocumentEpoch(()=>{const next=bridge.getDocumentEpoch();if(next!==epoch){epoch=next;retirePdfMatch()}});
+ },[type]);
  useLayoutEffect(()=>{
   const pane=trackTextAdvance?readerSurface.current?.closest<HTMLElement>('.pw-file-page-scroll'):null;
   if(!pane)return;
@@ -230,6 +290,12 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const imageTools=(type==='pdf'||type==='image')&&ready;
  const isMarkdown=String(source.name||'').toLowerCase().endsWith('.md');
  const read=(args:Json)=>void invoke('read',args);
+ const readPdfPage=(page:number)=>{
+  const body=pdfBody.current,pin=body&&pdfShown&&page!==pdfShown.page?capturePdfFindPin(windowId,source):undefined;
+  const target:PdfPageStart|undefined=pin&&body?{kind:'pageStart',page,pin,epoch:bridge.getDocumentEpoch(),
+   interaction:readerInteraction.current,focus:document.activeElement,body,top:body.scrollTop,left:body.scrollLeft}:undefined;
+  void invoke('read',{page},target);
+ };
  const readNextText=()=>{
   const args={encoding:actual.encoding,offset:actual.nextOffset};
   const pane=textBody.current?.closest<HTMLElement>('.pw-file-page-scroll');
@@ -256,9 +322,11 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const foundInReader=type==='pdf'&&(paintedPdfReceipt?.value!==found||paintedPdfReceipt?.epoch!==bridge.getDocumentEpoch())?null:found;
  const ownsPaintedFind=()=>type!=='pdf'||pdfInput.current===paintedPdfInput&&paintedPdfInput.receipt===paintedPdfReceipt&&
   !!paintedPdfReceipt&&paintedPdfReceipt.epoch===bridge.getDocumentEpoch()&&!document.hidden;
- const revealPdfMatch=(target:PdfMatchTarget,reset:boolean)=>{
+ const currentPdfMark=pdfMark&&ready&&!readerBusy&&pdfMark.raster===pdfShown&&ownsPaintedFind()&&
+  pdfMark.receipt===paintedPdfReceipt&&pdfMark.receipt.pin&&matchesPdfFindPin(pdfMark.receipt.pin,windowId,source)?pdfMark:null;
+ const revealPdfMatch=(target:PdfMatchTarget,raster:PdfRaster,reset:boolean)=>{
   const body=pdfBody.current,active=document.activeElement;
-  if(!body?.isConnected||body.hidden||live.current.retired||document.hidden||readerInteraction.current!==target.interaction||
+  if(raster.page!==target.page||!body?.isConnected||body.hidden||live.current.retired||document.hidden||readerInteraction.current!==target.interaction||
      (active!==target.focus&&active!==document.body)||bridge.getDocumentEpoch()!==target.receipt.epoch||
      pdfInput.current!==target.input||target.input.receipt!==target.receipt)return;
   const fileView=obj(bridge.getState().state.attachmentWorkspace),reader=obj(fileView.originalFile);
@@ -266,25 +334,41 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
      reader.identity!==source.identity||reader.sha256!==source.sha256||reader.sourceUnavailable!==false)return;
   const pane=body.closest<HTMLElement>('.pw-file-page-scroll');
   if(!pane)return;
-  if(reset)body.scrollTop=0;
+  const pin=target.receipt.pin;
+  const boxes=pin&&raster.searchAvailable&&matchesPdfFindPin(pin,windowId,source)&&matchesPdfFindPin(pin,fileView.windowId,reader)?
+   firstPdfHit(target.receipt.value,raster.page):undefined;
+  const image=pin&&boxes?displayedPdfImage(body,raster,pin):undefined;
+  if(image&&pin&&boxes){
+   setPdfMark({raster,receipt:target.receipt,boxes});
+   const [left,top,right,bottom]=boxes[0],viewport=body.getBoundingClientRect();
+   body.scrollLeft+=image.left-viewport.left-body.clientLeft+(left+right)/2*image.width-body.clientWidth/2;
+   body.scrollTop+=image.top-viewport.top-body.clientTop+(top+bottom)/2*image.height-body.clientHeight/2;
+  }else{
+   setPdfMark(null);
+   if(reset)body.scrollTop=0;
+  }
   // Move only this reader's scroll surface, not its Work, Library or page underneath.
   pane.scrollTop+=body.getBoundingClientRect().top-pane.getBoundingClientRect().top;
   body.focus({preventScroll:true});
  };
  useLayoutEffect(()=>{
-  const reveal=pdfMatchReveal.current;
+  const reveal=pdfReveal.current;
   if(!reveal||reveal.raster!==pdfShown)return;
-  pdfMatchReveal.current=null;
-  if(ready)revealPdfMatch(reveal.match,true);
+  pdfReveal.current=null;
+  if(!ready)return;
+  const {target,raster}=reveal;
+  if(!('kind' in target)){revealPdfMatch(target,raster,true);return}
+  if(ownsPdfPageStart(target)&&target.body.querySelector(`[data-pdf-raster="${raster.pdfRasterId}"]`))target.body.scrollTop=0;
  },[pdfShown,ready]);
  const pickPdfMatch=(page:number)=>{
   if(!paintedPdfReceipt||!ownsPaintedFind()||readerBusy)return;
   const target={page,input:paintedPdfInput,receipt:paintedPdfReceipt,interaction:readerInteraction.current,focus:document.activeElement};
-  if(ready&&page===pdfShown?.page)revealPdfMatch(target,false);
+  if(ready&&page===pdfShown?.page)revealPdfMatch(target,pdfShown,false);
   else void invoke('read',{page},target);
  };
  // A second interaction supersedes the reveal, not the already requested native read.
  const noteReaderInteraction=()=>{if(type==='pdf')readerInteraction.current++};
+ const zoomOriginal=(next:number|((value:number)=>number))=>{if(type==='pdf')retirePdfMatch();setZoom(next)};
  const pdfMatchPages=type==='pdf'&&foundInReader?[...new Set(rows(foundInReader.matches).map(hit=>hit.page as number))]:null;
  // If the earlier search error hid the page, keep the same explicit search box usable for a different phrase.
  const canFindPdf=type==='pdf'&&toolsVisible&&(ready||previousPdfFindFailed&&source.sourceUnavailable===false&&pdfShown?.searchAvailable===true);
@@ -292,7 +376,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  {type==='pdf'&&ready&&!actual.searchAvailable&&<p className="pw-muted">此设备不支持 PDF 原文搜索；可返回文件来源，选择本机文字识别。</p>}
  {foundInReader&&<div className="pw-action-row">
   {pdfMatchPages?pdfMatchPages.map(page=><Button key={page} variant="ghost" disabled={readerBusy}
-   aria-label={`查看原 PDF 第 ${page} 页`} onClick={()=>pickPdfMatch(page)}>第 {page} 页</Button>):
+   aria-label={`查看原 PDF 第 ${page} 页的匹配`} onClick={()=>pickPdfMatch(page)}>第 {page} 页</Button>):
    rows(foundInReader.matches).map((hit,i)=><Button key={i} variant="ghost" disabled={readerBusy}
     onClick={()=>read({offset:hit.offset,encoding:actual.encoding})}>位置 {Number(hit.offset)+1}</Button>)}
   {foundInReader[type==='pdf'?'nextPage':'nextOffset']!=null&&<Button variant="secondary" disabled={readerBusy}
@@ -303,6 +387,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   {foundInReader.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}
  </div>}</AccordionItem></Accordion>;
  return <section ref={readerSurface} className="pw-original-file" aria-label={`原件：${source.name}`} onPointerDownCapture={noteReaderInteraction}
+  onClickCapture={noteReaderInteraction} onInputCapture={noteReaderInteraction}
   onWheelCapture={noteReaderInteraction} onTouchMoveCapture={noteReaderInteraction} onKeyDownCapture={noteReaderInteraction}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
  {!retired&&readerBusy&&<p role="status">正在读取原件…</p>}
@@ -321,10 +406,10 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  {(unavailable||failed&&!ready&&failedRead?.command!=='find')&&!retired&&recovery?.onOpenInReader&&
   <div className="pw-action-row">{systemReaderAction('用其他应用打开原件','secondary')}</div>}
  {imageTools&&<div className="pw-action-row">
-  {type==='pdf'&&<><Button variant="ghost" disabled={readerBusy||page<=1} onClick={()=>read({page:page-1})}>上一页</Button><span>{page} / {pages} 页</span><Button variant="ghost" disabled={readerBusy||page>=pages} onClick={()=>read({page:page+1})}>下一页</Button></>}
+  {type==='pdf'&&<><Button variant="ghost" disabled={readerBusy||page<=1} onClick={()=>readPdfPage(page-1)}>上一页</Button><span>{page} / {pages} 页</span><Button variant="ghost" disabled={readerBusy||page>=pages} onClick={()=>readPdfPage(page+1)}>下一页</Button></>}
   <Button variant="ghost" aria-expanded={toolsVisible} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'阅读工具'}</Button>
  </div>}
- {type==='pdf'&&ready&&<div hidden={!toolsVisible} className="pw-action-row pw-original-pagination pw-material-navigation"><TextField label="页码" value={position} onChange={setPosition}/><Button variant="secondary" disabled={readerBusy||!/^\d+$/.test(position)||Number(position)<1||Number(position)>pages} onClick={()=>read({page:Number(position)})}>跳转</Button></div>}
+ {type==='pdf'&&ready&&<div hidden={!toolsVisible} className="pw-action-row pw-original-pagination pw-material-navigation"><TextField label="页码" value={position} onChange={setPosition}/><Button variant="secondary" disabled={readerBusy||!/^\d+$/.test(position)||Number(position)<1||Number(position)>pages} onClick={()=>readPdfPage(Number(position))}>跳转</Button></div>}
  {findBeforeBody&&findOriginal}
  {ready&&type==='text'&&<div ref={textBody} className="pw-original-text" data-find-before={findBeforeBody?true:undefined}>{markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text" tabIndex={trackTextAdvance?-1:undefined}>{actual.content}</pre>}
   <div className="pw-action-row">{!!actual.offset&&<Button variant="ghost" disabled={busy} onClick={()=>read({encoding:actual.encoding,offset:0})}>从开头</Button>}
@@ -332,15 +417,19 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    {(!!actual.offset||actual.nextOffset!=null)&&<small>字符位置 {Number(actual.offset||0)+1}</small>}</div>
  </div>}
  {!findBeforeBody&&findOriginal}
- {imageTools&&<div hidden={!toolsVisible} className="pw-action-row pw-original-zoom pw-material-navigation" role="group" aria-label="原件显示比例"><Button variant="ghost" disabled={zoom<=1} onClick={()=>setZoom(x=>Math.max(1,x/1.5))}>缩小</Button><Button variant="ghost" onClick={()=>{setZoom(1);setTurn(0)}}>适合页面 · {Math.round(zoom*100)}%</Button><Button variant="ghost" disabled={zoom>=8} onClick={()=>setZoom(x=>Math.min(8,x*1.5))}>放大</Button>{type==='image'&&<Button variant="ghost" onClick={()=>setTurn(x=>(x+90)%360)}>旋转查看</Button>}</div>}
+ {imageTools&&<div hidden={!toolsVisible} className="pw-action-row pw-original-zoom pw-material-navigation" role="group" aria-label="原件显示比例"><Button variant="ghost" disabled={zoom<=1} onClick={()=>zoomOriginal(x=>Math.max(1,x/1.5))}>缩小</Button><Button variant="ghost" onClick={()=>{zoomOriginal(1);setTurn(0)}}>适合页面 · {Math.round(zoom*100)}%</Button><Button variant="ghost" disabled={zoom>=8} onClick={()=>zoomOriginal(x=>Math.min(8,x*1.5))}>放大</Button>{type==='image'&&<Button variant="ghost" onClick={()=>setTurn(x=>(x+90)%360)}>旋转查看</Button>}</div>}
  {ready&&type==='image'&&<><p className="pw-muted">原尺寸 {actual.width} × {actual.height}{actual.sampled?' · 显示时已采样，导出保留完整原图':''}</p><div className="pw-original-raster"><img src={source.url} style={{width:`${zoom*100}%`,transform:`rotate(${turn}deg)`}} alt="选定的固定原图" onError={()=>setError('原件显示已关闭或未完成，请返回后重新打开')}/></div></>}
  {/* Keep the previous decoded image mounted until the next exact raster is acknowledged; never fetch it again as a fallback. */}
  {type==='pdf'&&!retired&&(pdfShown||pdfAttempt)&&<div ref={pdfBody} tabIndex={-1} role="region"
   aria-label={pdfShown?`原 PDF 第 ${pdfShown.page} 页`:'原 PDF'} className="pw-original-raster" hidden={!ready}>
-  {[pdfShown,pdfAttempt].map(raster=>raster&&<img key={raster.pdfRasterId}
-   src={`${source.url}?page=${raster.page}&raster=${raster.pdfRasterId}`} loading="eager"
-   style={{display:pdfShown===raster?'block':'none',width:`${zoom*100}%`}}
-   alt={`原 PDF 第 ${raster.page} 页`} onLoad={()=>void confirmRaster(raster)} onError={()=>failRaster(raster)}/>)}
+  {[pdfShown,pdfAttempt].map(raster=>raster&&<div key={raster.pdfRasterId} data-pdf-raster={raster.pdfRasterId} className="pw-original-pdf-page"
+   style={{display:pdfShown===raster?'block':'none',width:`${zoom*100}%`}}>
+   <img src={`${source.url}?page=${raster.page}&raster=${raster.pdfRasterId}`} loading="eager" style={{width:'100%'}}
+    alt={`原 PDF 第 ${raster.page} 页`} onLoad={()=>void confirmRaster(raster)} onError={()=>failRaster(raster)}/>
+   {currentPdfMark?.raster===raster&&currentPdfMark.boxes.map(([left,top,right,bottom],index)=><span key={index}
+    aria-hidden="true" className="pw-original-pdf-match"
+    style={{left:`${left*100}%`,top:`${top*100}%`,width:`${(right-left)*100}%`,height:`${(bottom-top)*100}%`}}/>)}
+  </div>)}
  </div>}
  {ready&&(type==='video'||type==='audio')&&<OriginalMediaPlayer key={`${windowId}:${source.id}`} url={source.url} kind={type} name={String(source.name||'媒体原件')} onError={()=>setError('此设备未能播放这份原媒体。')} />}
  {ready&&type==='office'&&<>

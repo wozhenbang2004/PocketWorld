@@ -117,12 +117,14 @@ export function AttachmentDocumentGenerationReview({open,format,name,ack,busy,re
  </SettingsDialog>;
 }
 
-export function AttachmentDocumentEditor({original,baseVersion,unpublished,windowId,foregroundReady,pendingTask,busy,act,beforeBack}:{original:Json;baseVersion?:string;unpublished:boolean;windowId:string;foregroundReady:boolean;pendingTask?:string;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void}) {
+export function AttachmentDocumentEditor({original,baseVersion,unpublished,windowId,foregroundReady,pendingTask,busy,act,beforeBack,retainLinkedDraft=false}:{original:Json;baseVersion?:string;unpublished:boolean;windowId:string;foregroundReady:boolean;pendingTask?:string;busy:boolean;act:AttachmentAction;beforeBack:(handler:(()=>Promise<AttachmentFrame|undefined>)|null)=>void;retainLinkedDraft?:boolean}) {
  const [draft,setDraft]=useState<Json>(()=>structuredClone(original)),[slide,setSlide]=useState('0'),[error,setError]=useState(''),[saving,setSaving]=useState(false),[saved,setSaved]=useState(false),[review,setReview]=useState<Json|null>(null),[ack,setAck]=useState(false),[discardOpen,setDiscardOpen]=useState(false);
  const current=useRef(draft),committed=useRef(JSON.stringify(original)),savingPromise=useRef<Promise<AttachmentFrame|undefined>|null>(null),alive=useRef(true),revision=useRef(0),action=useRef(act);current.current=draft;action.current=act;
  const context=useRef({windowId,foregroundReady,generation:0});
  if(context.current.windowId!==windowId||context.current.foregroundReady!==foregroundReady)context.current={windowId,foregroundReady,generation:context.current.generation+1};
  const [leaveOpen,setLeaveOpen]=useState(false);
+ const [retention,setRetention]=useState<'checking'|'unknown'|'verified'>();
+ const retentionFlight=useRef(false);
  const leaving=useRef<{finish:(frame:AttachmentFrame)=>void;stay:()=>void;generation:number;text:string}|null>(null);
  const retainedReceipt=useRef<Json|null>(null);
  const presentation=draft.format==='pptx',supported=['docx','pdf'].includes(draft.format)||presentation&&!!draft.parentArtifactId,slides=rows(draft.presentation?.slides),selected=slides[Number(slide)];
@@ -151,6 +153,7 @@ export function AttachmentDocumentEditor({original,baseVersion,unpublished,windo
   savingPromise.current=operation;return operation;
  }
  const leaveEditor=async():Promise<AttachmentFrame|undefined>=>{
+  if(retentionFlight.current)throw new Error('请等待这次草稿核对。');
   if(leaving.current)throw new Error('请先选择是否离开编辑');
   const generation=context.current.generation,after=await flush();
   const receipt=retainedReceipt.current,view=after&&receipt?.frameId===after.frameId?receipt:bridge.getState().state.attachmentWorkspace;
@@ -177,26 +180,59 @@ export function AttachmentDocumentEditor({original,baseVersion,unpublished,windo
  useEffect(()=>{alive.current=true;beforeBack(leaveEditor);return()=>{alive.current=false;revision.current++;leaving.current?.stay();leaving.current=null;beforeBack(null)}},[]);
  useEffect(()=>{leaving.current?.stay();leaving.current=null;setLeaveOpen(false);setReview(null);setAck(false);setSaved(false);revision.current++},[windowId,foregroundReady]);
  useEffect(()=>{const actual=JSON.stringify(original);if(actual===JSON.stringify(current.current)){committed.current=actual;setSaved(validDraft(current.current))}},[original]);
- const editable=foregroundReady&&!pendingTask&&!review&&!leaveOpen;
+ const editable=foregroundReady&&!pendingTask&&!review&&!leaveOpen&&!retention;
  const edit=(next:Json)=>{if(!editable)return;setSaved(false);setError('');revision.current++;current.current=next;setDraft(next);if(validDraft(next))void flush().catch(()=>{})};
  const text=(field:string,value:string,limit:number)=>{if(value.length<=limit)edit({...draft,[field]:value});else setError(`此项最多 ${limit} 字，超出部分未写入`)};
  const slideText=(field:'title'|'notes'|'paragraph'|'shape',value:string,item?:number)=>{const limit=field==='title'?200:field==='notes'?8000:field==='shape'?4000:2000;if(value.length>limit){setError(`此项最多 ${limit} 字`);return}try{edit(editSlideText(draft,Number(slide),field,value,item))}catch(cause){setError(String(cause))}};
- const prepare=async()=>{const request=revision.current,generation=context.current.generation;try{const after=await flush();if(!alive.current||request!==revision.current||context.current.generation!==generation)return;const result=await act('reviewDocument',{},after);if(alive.current&&request===revision.current&&context.current.generation===generation){setReview(result);setAck(false)}}catch(cause){setError(cause instanceof Error?cause.message:'文档审阅未完成')}};
+ const retain=async(checking=false)=>{
+  if(!retainLinkedDraft||!foregroundReady||pendingTask||review||retentionFlight.current||
+     (checking?retention!=='unknown':!!retention||!validDraft(current.current)))return;
+  const generation=context.current.generation,version=revision.current;
+  const currentWindow=()=>alive.current&&context.current.foregroundReady&&context.current.generation===generation&&revision.current===version;
+  retentionFlight.current=true;setRetention('checking');setError('');
+  let dispatched=false;
+  try{
+   const frame=await flush();
+   if(!currentWindow()){if(alive.current)setRetention(checking?'unknown':undefined);return;}
+   dispatched=true;
+   const result=await action.current(checking?'drafts.checkRevision':'drafts.retainRevision',{},frame);
+   if(!currentWindow()){if(alive.current)setRetention('unknown');return;}
+   if((checking?result.status==='VERIFIED':result.status==='SAVED')){setRetention('verified');return;}
+   if(!checking&&(result.status==='QUOTA'||result.sourceAvailable===false)){
+    setRetention(undefined);setError(result.status==='QUOTA'?'本机草稿容量不足。本页修改没有丢弃。':'暂不能核对原文件与可编辑源。这次没有保留草稿，本页修改仍在。');return;
+   }
+   setRetention('unknown');setError('尚未核对这次保留，可核对原草稿，不会重复创建。');
+  }catch(error){
+   if(alive.current){
+    const unknown=checking||dispatched;
+    setRetention(unknown?'unknown':undefined);
+    if(currentWindow())setError(unknown?'尚未核对这次保留，可核对原草稿，不会重复创建。':
+      error instanceof Error?error.message:'没有提交修改草稿。');
+   }
+  }finally{retentionFlight.current=false}
+ };
+ const prepare=async()=>{if(retention)return;const request=revision.current,generation=context.current.generation;try{const after=await flush();if(!alive.current||request!==revision.current||context.current.generation!==generation)return;const result=await act('reviewDocument',{},after);if(alive.current&&request===revision.current&&context.current.generation===generation){setReview(result);setAck(false)}}catch(cause){setError(cause instanceof Error?cause.message:'文档审阅未完成')}};
  const closeReview=()=>{setReview(null);setAck(false);void action.current('discardReview').catch(()=>{})};
  useEffect(()=>{
   if(leaveOpen)return registerOverlayBack(()=>answerLeave(false));
   if(discardOpen)return registerOverlayBack(()=>setDiscardOpen(false));
   if(review)return registerOverlayBack(closeReview);
  },[leaveOpen,discardOpen,review]);
- const draftStatus=pendingTask?'生成结果待核对':saving?'正在保留本页修改':!saved?'本页修改待确认':unpublished?'更改在本页，尚未生成':'未生成新文件';
+ const draftStatus=retention==='checking'?'正在核对本机修改草稿':retention==='verified'?'修改草稿已保留':retention==='unknown'?'修改草稿待核对':
+  pendingTask?'生成结果待核对':saving?'正在保留本页修改':!saved?'本页修改待确认':unpublished?'更改在本页，尚未生成':'未生成新文件';
  return <section className="pw-document-editor"><header className="pw-document-heading"><h3>{presentation?'演示文稿内容':'文档内容'}</h3><p className="pw-muted">{baseVersion?<>从版本 <code>{baseVersion}</code> 继续。生成新文件时保留原版。</>:draft.parentArtifactId?'以选定原版本为起点，保存为新的独立文件。':'生成 Word 或 PDF，并保留可以继续修改的内容。'}</p></header>
  {error&&<p className="pw-error" role="alert">{error}</p>}{!validDraft(draft)&&supported&&<div className="pw-document-incomplete"><p className="pw-muted">补全文件名和正文后，编辑页才能保留本次输入。要在文件库里找到这份稿子，请生成新文件。</p>{JSON.stringify(draft)!==committed.current&&<Button variant="ghost" disabled={busy||saving} onClick={()=>setDiscardOpen(true)}>放弃未保存修改</Button>}</div>}
  {pendingTask&&<div className="pw-banner"><p>原保存动作待核，编辑与再次生成已暂停。</p><Button variant="secondary" disabled={busy} onClick={()=>void act('queryDocument').catch(()=>{})}>核对原文档结果</Button></div>}
  {supported?<><TextField label="文件名" value={draft.name||''} onChange={value=>text('name',value,80)} isDisabled={!editable}/>
  {presentation?<><SelectField label="幻灯片" value={slide} options={slides.map((item,i)=>({id:String(i),label:`第 ${i+1} 页 · ${item.title||'未命名'}`}))} onChange={setSlide} isDisabled={!editable}/>{selected&&<><TextField label="当前页标题" value={selected.title||''} onChange={value=>slideText('title',value)} isDisabled={!editable}/>{Array.isArray(selected.paragraphs)&&selected.paragraphs.map((value:string,i:number)=><TextAreaField key={i} label={`第 ${i+1} 段正文`} value={value} onChange={text=>slideText('paragraph',text,i)} isDisabled={!editable}/>)}<Accordion className="pw-document-secondary"><AccordionItem id="slide-notes" title="讲稿与文本对象" description={`${rows(selected.shapes).length} 个已有文本对象` }><TextAreaField label="讲稿备注" value={selected.notes||''} onChange={text=>slideText('notes',text)} isDisabled={!editable}/>{rows(selected.shapes).map((shape,i)=><TextAreaField key={shape.id||i} label={`文本对象 ${shape.id||i+1}`} value={shape.text||''} onChange={text=>slideText('shape',text,i)} isDisabled={!editable}/>)}</AccordionItem></Accordion></>}<p className="pw-muted">保留页面顺序、对象位置和大小。修改已有文字与备注后，请打开新原件核对完整排版。</p></>:<AttachmentWordPdfFields draft={draft} editable={editable} edit={edit} text={text}/>}
- <footer className="pw-document-footer"><span className="pw-document-save-state" role="status" data-saved={saved&&!saving}>{draftStatus}</span>{!saving&&!saved&&validDraft(draft)&&<Button variant="secondary" disabled={busy||!editable} onClick={()=>void flush().catch(()=>{})}>保留本页修改</Button>}<Button variant="primary" disabled={busy||saving||!!pendingTask||!validDraft(draft)} onClick={()=>void prepare()}>核对并生成新文件</Button></footer></>:<p>此文件没有可在这里编辑的固定结构源，可以返回后打开或导出原件。</p>}
+ <footer className="pw-document-footer"><span className="pw-document-save-state" role="status" data-saved={saved&&!saving}>{draftStatus}</span>
+  {!retainLinkedDraft&&!retention&&!saving&&!saved&&validDraft(draft)&&<Button variant="secondary" disabled={busy||!editable} onClick={()=>void flush().catch(()=>{})}>保留本页修改</Button>}
+  {retainLinkedDraft&&retention==='unknown'&&<Button variant="secondary" disabled={busy||saving} onClick={()=>void retain(true)}>核对本次保留</Button>}
+  {retainLinkedDraft&&!retention&&<Button variant="secondary" disabled={busy||saving||!editable||!validDraft(draft)} onClick={()=>void retain()}>保留修改草稿</Button>}
+  {!retention&&<Button variant="primary" disabled={busy||saving||!!pendingTask||!validDraft(draft)} onClick={()=>void prepare()}>核对并生成新文件</Button>}
+ </footer></>:<p>此文件没有可在这里编辑的固定结构源，可以返回后打开或导出原件。</p>}
  <SettingsDialog isOpen={leaveOpen} title="不生成新版本就离开？" closeLabel="继续编辑" onClose={()=>answerLeave(false)}>
-  <p>这些更改尚未生成新文档。离开会丢弃本页修改，文件库中的原件不变。</p>
+  <p>{retention==='unknown'?'这次保留结果尚待核对。离开不会重新保存，也不会改动原件。如需核对，请在本机文档草稿查看。':'这些更改尚未生成新文档。离开会丢弃本页修改，文件库中的原件不变。'}</p>
   <div className="pw-action-row"><Button variant="primary" onClick={()=>answerLeave(false)}>继续编辑</Button><Button variant="danger" onClick={()=>answerLeave(true)}>放弃修改并离开</Button></div>
  </SettingsDialog>
  <AttachmentDocumentGenerationReview open={!!review} format={String(draft.format||'')} name={review?.draft?.name} ack={ack} busy={busy}

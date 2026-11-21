@@ -3,12 +3,12 @@ import { IconChevronRight, IconInfo, IconTeam } from './icons';
 import { ProgressCircle } from './library';
 import { teamPhaseLabel, teamStatusLabel } from './team-presentation';
 import { settledTeamResultEntry } from './team-result-reading';
-import { workTeamResultEntryKey } from './team-navigation';
+import { acceptedWorkTeamReport, workTeamResultEntryKey, type AcceptedWorkTeamReport } from './team-navigation';
 import type { OwnerWorkTeam } from './owner-work-presentation';
 
 /** The retained AgentRun progress-row composition, driven only by the
  * original work's native related-team projection. */
-export function OwnerWorkTeams({ teams, onOpen }: { teams: OwnerWorkTeam[]; onOpen?: (team: OwnerWorkTeam, openPackage?:boolean) => void }) {
+export function OwnerWorkTeams({ task, teams, onOpen }: { task:unknown; teams: OwnerWorkTeam[]; onOpen?: (team: OwnerWorkTeam, openPackage?:boolean, accepted?:AcceptedWorkTeamReport) => void }) {
   if (!teams.length) return null;
   return <section className="pw-owner-work-teams" aria-label="协作进展">
     <h3>协作进展</h3>
@@ -18,8 +18,10 @@ export function OwnerWorkTeams({ teams, onOpen }: { teams: OwnerWorkTeam[]; onOp
       const stopping = team.active && (team.cancelRequested || ['cancelled', 'cancel', 'stopping', 'taken_over', 'takeover'].includes(team.status));
       const primaryPackage=!!team.deliveredPackage&&!team.needsAttention&&!stopping;
       const lookForResults = settledTeamResultEntry(team);
+      const accepted = teams.length===1&&lookForResults&&team.status==='completed'&&!team.deliveredPackage?acceptedWorkTeamReport(task,team):undefined;
+      const resultsAction = accepted ? '查看验收时选用的原汇总' : '查看分工与成果';
       const status = primaryPackage ? '完整项目包已保存' : stopping ? '停止状态待核对' : team.needsAttention ? '有问题需要处理' : teamStatusLabel(team.status);
-      const detail = primaryPackage ? `查看固定版本 · ${team.deliveredPackage!.fileCount} 个文件` : lookForResults ? '查看分工与成果' : [phase,
+      const detail = primaryPackage ? `查看固定版本 · ${team.deliveredPackage!.fileCount} 个文件` : lookForResults ? resultsAction : [phase,
         typeof team.memberCount === 'number' && team.memberCount > 0
           ? typeof team.completedMemberCount === 'number' && team.completedMemberCount <= team.memberCount
             ? `在队成员：${team.completedMemberCount}/${team.memberCount} 已记为完成` : `${team.memberCount} 名在队成员`
@@ -27,8 +29,8 @@ export function OwnerWorkTeams({ teams, onOpen }: { teams: OwnerWorkTeam[]; onOp
       ].filter(Boolean).join(' · ');
       return <li key={team.teamRunId}>
         <Button variant="ghost" className="pw-owner-work-team-row" disabled={!onOpen} data-workspace-entry={primaryPackage?`team-package:${team.teamRunId}:${team.deliveredPackage!.operationId}`:lookForResults&&team.status==='completed'?workTeamResultEntryKey(team):undefined}
-          onClick={() => onOpen?.(team,primaryPackage)}
-          aria-label={`${primaryPackage ? '打开原团队的完整项目包' : team.needsAttention ? '处理团队问题' : lookForResults ? '查看分工与成果' : '查看协作进展'}：${team.goal || '这件工作'}`}>
+          onClick={() => onOpen?.(team,primaryPackage,accepted)}
+          aria-label={`${primaryPackage ? '打开原团队的完整项目包' : team.needsAttention ? '处理团队问题' : lookForResults ? resultsAction : '查看协作进展'}：${team.goal || '这件工作'}`}>
           <span className="pw-owner-work-team-mark" data-attention={team.needsAttention || undefined} aria-hidden="true">
             {busy ? <ProgressCircle isIndeterminate size="sm" aria-label={status} /> : team.needsAttention ? <IconInfo size={19} /> : <IconTeam size={19} />}
           </span>

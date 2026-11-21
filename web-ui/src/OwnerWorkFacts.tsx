@@ -4,11 +4,12 @@ import { ProgressCircle } from './library';
 import { ownerWorkPresentation, type OwnerWorkTeam, type ReportReconciliationTarget } from './owner-work-presentation';
 import { OwnerWorkTeams } from './OwnerWorkTeams';
 import { ApprovedSavedTeamRoster, originalTeamStartDecisionReadback } from './TaskApproval';
+import type { AcceptedWorkTeamReport } from './team-navigation';
 import './owner-work.css';
 
 /** The Brief/Assets relationship from Affect AgentChat, rendered with the
  * retained BoardUI controls and host-owned facts instead of demo data. */
-export function OwnerWorkFacts({ task, onReport, reportLabel, onReconcile, onTeam }: { task: unknown; onReport?: () => void; reportLabel?: string; onReconcile?: (target: ReportReconciliationTarget) => void; onTeam?: (team: OwnerWorkTeam, openPackage?:boolean) => void }) {
+export function OwnerWorkFacts({ task, onReport, reportLabel, onReconcile, onTeam }: { task: unknown; onReport?: () => void; reportLabel?: string; onReconcile?: (target: ReportReconciliationTarget) => void; onTeam?: (team: OwnerWorkTeam, openPackage?:boolean, accepted?:AcceptedWorkTeamReport) => void }) {
   const work = ownerWorkPresentation(task);
   if (!work) return null;
   const showHandling = work.waitingForButler || work.waitingForChildren || work.delivered ||
@@ -31,7 +32,7 @@ export function OwnerWorkFacts({ task, onReport, reportLabel, onReconcile, onTea
       {teamDecision.anotherPending && <p>另一笔待审分工是不同申请，不代表这次批准没保存。</p>}
     </div></div>}
     {teamDecision?.savedPlan && <ApprovedSavedTeamRoster plan={teamDecision.savedPlan} />}
-    <OwnerWorkTeams teams={work.teams} onOpen={onTeam} />
+    <OwnerWorkTeams task={task} teams={work.teams} onOpen={onTeam} />
     {work.teamsUnavailable && <p className="pw-owner-work-result-state" role="status">协作进展待读取，请稍后重新打开这件工作。</p>}
   </section>;
 }
