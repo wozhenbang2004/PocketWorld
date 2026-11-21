@@ -5,6 +5,7 @@ import android.net.Uri;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
 import dev.pocketengine.media.MediaModule;
+import dev.pocketengine.store.SshWorkHistory;
 import dev.pocketengine.store.TaskStore;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -46,7 +47,7 @@ public final class AttachmentOutcomeHost {
         for(int i=0;i<selected.length();i++){
             JSONObject pinned=selected.getJSONObject(i),meta=find(files,pinned.getString("id"));
             if(meta==null||!sameReference(pinned,meta))sources.put(new JSONObject(pinned.toString()).put("availability","input_changed").put("name","原来源文件不可读"));
-            else {sources.put(row(meta,"source"));included.add(meta.getString("id"));rememberPdfInput(pdfInputs,meta);}
+            else {sources.put(sourceRow(meta,workFileList?task:null));included.add(meta.getString("id"));rememberPdfInput(pdfInputs,meta);}
         }
         for(int i=0;i<files.length();i++) {
             control.check();JSONObject meta=files.getJSONObject(i);if(!privateFile(meta))continue;
@@ -87,7 +88,7 @@ public final class AttachmentOutcomeHost {
                         origin.isNull("runId")&&origin.isNull("operationId"))excerpts.add(new PdfExcerpt(result,origin));
                 results.put(result);
             }
-            else if(included.add(meta.getString("id"))){sources.put(row(meta,"source"));rememberPdfInput(pdfInputs,meta);}
+            else if(included.add(meta.getString("id"))){sources.put(sourceRow(meta,workFileList?task:null));rememberPdfInput(pdfInputs,meta);}
         }
         if(task!=null){
             JSONArray operations=task.getJSONArray("operations");
@@ -115,7 +116,13 @@ public final class AttachmentOutcomeHost {
                 .put("media",jobs).put("documentCapabilities",documents.documentCapabilities()).put("indexDiagnostics",inventory.getJSONObject("indexDiagnostics")).put("verifiedBusinessSuccess",false);
         if(task!=null){result.put("taskRunId",task.optString("runId")).put("coordinatorEpoch",task.optInt("coordinatorEpoch")).put("taskStatus",task.optString("status"));if("attachments".equals(task.optString("feature"))&&"createDocument".equals(task.optString("command")))result.put("originalDocumentActionId",task.getString("operationId"));}
         else result.put("documentActions",documentActions("",control));
+        if(workFileList&&task!=null&&"ssh".equals(task.opt("feature")))result.put("taskResultRevision",task.optLong("resultRevision"));
         return result;
+    }
+    private static JSONObject sourceRow(JSONObject meta,JSONObject work)throws Exception{
+        JSONObject source=row(meta,"source");
+        if(work!=null&&SshWorkHistory.matchesSavedOwnerDownload(work,meta))source.put("sourceRunEvidence","original_ssh_file_download");
+        return source;
     }
     private static boolean ordinaryCompletedWork(JSONObject task){
         return task!=null&&"assistant".equals(task.opt("kind"))&&"completed".equals(task.opt("status"))&&

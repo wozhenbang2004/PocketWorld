@@ -1,6 +1,7 @@
 package dev.pocketengine.store;
 
 import android.os.SystemClock;
+import dev.pocketengine.features.ssh.DirectSshClient;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -64,17 +65,51 @@ public final class SshWorkHistory {
         if(e==null || !run.equals(t.opt("externalOperationId")) || !run.equals(e.opt("operationId")) || !profile.equals(e.opt("profileId"))) return row;
         row.put("operationId",run);
         if("exec".equals(action) && e.opt("exitCode") instanceof Number) row.put("exitCode",e.getInt("exitCode"));
-        if(!"downloadFile".equals(action) || !Boolean.TRUE.equals(e.opt("artifactSaved")) || !Boolean.TRUE.equals(e.opt("verifiedBytes"))) return row;
+        JSONObject a=savedDownloadAttachment(t,profile,binding,e);
+        if(a!=null)row.put("savedFile",new JSONObject().put("name",a.optString("name")).put("bytes",e.getLong("bytes")));
+        return row;
+    }
+    private static JSONObject savedDownloadAttachment(JSONObject t,String profile,String binding,JSONObject e)throws Exception {
+        if(!"downloadFile".equals(t.opt("command")) || !Boolean.TRUE.equals(e.opt("artifactSaved")) || !Boolean.TRUE.equals(e.opt("verifiedBytes"))) return null;
         JSONObject a=e.optJSONObject("attachment"),src=a==null?null:a.optJSONObject("source");
         JSONObject scope=t.getJSONObject("externalRefs").getJSONObject("sshNativeRequest");
         String v=scope.optString("expectedVersion"),path=scope.optString("path");long bytes=e.optLong("bytes",-1);
-        if(a!=null && src!=null && !a.optString("id").isEmpty() && "owner".equals(a.opt("principalId")) && "private".equals(a.opt("spaceId"))
+        return a!=null && src!=null && !a.optString("id").isEmpty() && "owner".equals(a.opt("principalId")) && "private".equals(a.opt("spaceId"))
                 && v.matches("sha256:[a-f0-9]{64}") && v.equals(e.opt("version")) && v.substring(7).equals(a.opt("sha256"))
                 && bytes>=0 && bytes==a.optLong("size",-1) && "ssh_download".equals(src.opt("kind"))
-                && id.equals(src.opt("taskId")) && run.equals(src.opt("operationId")) && profile.equals(src.opt("profileId"))
-                && binding.equals(src.opt("profileBinding")) && !path.isEmpty() && path.equals(src.opt("path")) && path.equals(e.opt("path")) && v.equals(src.opt("expectedVersion"))) {
-            row.put("savedFile",new JSONObject().put("name",a.optString("name")).put("bytes",bytes));
+                && t.optString("id").equals(src.opt("taskId")) && t.optString("runId").equals(src.opt("operationId")) && profile.equals(src.opt("profileId"))
+                && binding.equals(src.opt("profileBinding")) && !path.isEmpty() && path.equals(src.opt("path")) && path.equals(e.opt("path")) && v.equals(src.opt("expectedVersion")) ? a : null;
+    }
+    /** Historical saved-transfer proof for the selected Work. Neither metadata nor this match authorizes opening bytes. */
+    public static boolean matchesSavedOwnerDownload(JSONObject task,JSONObject book)throws Exception {
+        JSONObject source=book.optJSONObject("source");
+        if(task==null||source==null||!"ssh_download".equals(source.opt("kind"))||!"ssh".equals(task.opt("kind"))
+                ||!"downloadFile".equals(task.opt("command"))||!task.isNull("conversationId")||!task.isNull("parentTaskId")
+                ||!task.isNull("parentOperationId")||!task.isNull("memberId")||!task.isNull("teamRunId")||!task.isNull("developmentContext")
+                ||task.optBoolean("cancelRequested")||task.optInt("coordinatorEpoch",-1)!=0
+                ||!"completed".equals(task.opt("executionStatus"))||!task.optString("status").matches("needs_confirmation|completed")
+                ||!"owner".equals(book.opt("principalId"))||!"private".equals(book.opt("spaceId"))
+                ||book.optBoolean("outputSourceRetired")||source.has("groupSpaceId"))return false;
+        String id=task.optString("id"),profile=source.optString("profileId"),binding=source.optString("profileBinding");
+        JSONObject e=task.optJSONObject("evidence");
+        if(!id.matches("[a-f0-9-]{36}")||!matches(task,profile,binding)||e==null||e.has("ownerReconciliation")
+                ||!"completed".equals(e.opt("executorStatus"))||!Boolean.TRUE.equals(e.opt("readOnly"))||!Boolean.FALSE.equals(e.opt("verifiedBusinessSuccess"))
+                ||!id.equals(task.opt("externalId"))||!id.equals(task.opt("externalOperationId"))
+                ||!id.equals(e.opt("id"))||!id.equals(e.opt("operationId"))||!profile.equals(e.opt("profileId")))return false;
+        JSONObject saved=savedDownloadAttachment(task,profile,binding,e);
+        String file=book.optString("id");long bytes=e.optLong("bytes",-1);
+        if(saved==null||!file.matches("[a-f0-9-]{36}")||!file.equals(saved.opt("id"))||saved.optBoolean("outputSourceRetired")
+                ||!saved.getString("sha256").equals(book.opt("sha256"))||!"application/octet-stream".equals(book.opt("mimeType"))
+                ||!book.opt("mimeType").equals(saved.opt("mimeType"))||bytes<0||bytes>DirectSshClient.MAX_TRANSFER
+                ||!exactCount(e.opt("bytes"),bytes)||!exactCount(saved.opt("size"),bytes)||!exactCount(book.opt("size"),bytes))return false;
+        JSONObject recorded=saved.getJSONObject("source");
+        if(recorded.has("groupSpaceId"))return false;
+        for(String k:new String[]{"taskId","operationId","profileId","profileBinding","path","expectedVersion"}){
+            if(!recorded.getString(k).equals(source.opt(k)))return false;
         }
-        return row;
+        return true;
+    }
+    private static boolean exactCount(Object n,long bytes){
+        return (n instanceof Integer||n instanceof Long)&&((Number)n).longValue()==bytes;
     }
 }

@@ -268,6 +268,17 @@ function keepRemoteDraft(key: string, draft: RemoteDraft) {
   while (remoteDrafts.size > 8) remoteDrafts.delete(remoteDrafts.keys().next().value!);
 }
 const geminiId = 'gemini_cli_acp_v1';
+const codexWorker = 'codex_app_server';
+/** Exact host catalog evidence, not a promise of worker authentication or an execution grant. */
+function linuxCodexWorkspace(catalog: Data[] | null, id: string) {
+  const matches = catalog?.filter(item => item.id === id);
+  const environment = matches?.length === 1 ? matches[0] : undefined;
+  const anchor = hostWorkspaceAnchor(environment);
+  if (!environment || !anchor || typeof environment.bindingHash !== 'string' || !/^[a-f0-9]{64}$/.test(environment.bindingHash)) return;
+  const workers = list(environment.workers).filter(item => item.id === codexWorker);
+  if (workers.length !== 1 || workers[0].adapter !== 'native' || workers[0].available !== true || workers[0].capabilities?.readOnlySandbox !== true) return;
+  return { id, anchor, writeAllowed: typeof environment.writeAllowed === 'boolean' ? environment.writeAllowed : undefined };
+}
 function currentGeminiProbe(probe: Data | null, environment: Data | undefined, model: string): boolean {
   const value = object(probe?.backendObservation);
   return probe?.available === true && /^[a-f0-9]{64}$/.test(text(probe.capabilityRevision))
@@ -301,6 +312,8 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
   const [environmentId, setEnvironment] = useState(initial.current?.environmentId || ''), [worker, setWorker] = useState(initial.current?.worker || 'codex_app_server'), [probe, setProbe] = useState<Data | null>(null);
   const [modeId, setModeId] = useState(initial.current?.modeId || ''), [optionCatalog, setOptionCatalog] = useState<Data | null>(null);
   const [goal, setGoal] = useState(initial.current?.goal || ''), [argv, setArgv] = useState(initial.current?.argv || '["git","status","--short"]'), [model, setModel] = useState(initial.current?.model || ''), [effort, setEffort] = useState(initial.current?.effort || ''), [readOnly, setReadOnly] = useState(initial.current?.readOnly ?? true), [timeout, setTimeoutValue] = useState(initial.current?.timeout || '300');
+  // Preserve intent, not permission, when an explicit reread shows that the same directory lost write access.
+  const [heldCodexWrite, setHeldCodexWrite] = useState<{id: string; anchor: string}>();
   const [savedReply, setSavedReply] = useState<Data | undefined>();
   const recorded = cloudChoice(data.cloudWorkspace), confirmed = cloudChoice(savedReply);
   const saved = confirmed && (!recorded || confirmed.revision > recorded.revision) ? confirmed : recorded;
@@ -353,10 +366,16 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
   const durationReady = /^\d+$/.test(timeout) && Number(timeout) >= 10 && Number(timeout) <= 3600;
   const goalReady = goal.trim().length > 0 && goal.length <= 8000;
   const commandReady = (() => { try { const value: unknown = JSON.parse(argv); return Array.isArray(value) && value.length > 0 && value.every(item => typeof item === 'string'); } catch { return false; } })();
+  const linuxCodex = environmentFresh && worker === codexWorker ? linuxCodexWorkspace(environments, environmentId) : undefined;
+  const onlyRead = linuxCodex?.writeAllowed === false;
+  const writeUnknown = !!linuxCodex && linuxCodex.writeAllowed === undefined;
+  const sameHeldCodex = !!linuxCodex && heldCodexWrite?.id === linuxCodex.id && heldCodexWrite?.anchor === linuxCodex.anchor;
+  const heldWriteIntent = sameHeldCodex || onlyRead && !readOnly;
+  const mayKeepCodexWrite = sameHeldCodex && linuxCodex?.writeAllowed === true;
   const workerReady = !!selectedWorker && selectedWorker.available !== false;
   const capabilityReady = worker === 'command' || probe?.available === true && (!gemini || geminiReady) && (!configuredHarness || harnessReady);
   const permissionReady = !(gemini || configuredHarness) || writeIntent && environment?.writeAllowed === true;
-  const readyForReview = !!profile.hasToken && !locked && environmentFresh && supported('remote.reviewTask') && !unresolved.length && workerReady && capabilityReady && permissionReady && durationReady && (worker === 'command' ? commandReady : goalReady);
+  const readyForReview = !!profile.hasToken && !locked && environmentFresh && supported('remote.reviewTask') && !unresolved.length && workerReady && capabilityReady && permissionReady && !heldWriteIntent && durationReady && (worker === 'command' ? commandReady : goalReady);
   // This is guidance, never permission. The original native review/admission remains authoritative.
   const nextStep = !profile.hasToken ? { title: '先接通这台电脑', detail: '返回连接概览，在连接设置中补充原 Companion 令牌。不会安装、登录或更换电脑上的代理。', action: '' }
     : unresolved.length ? { title: '先核对原提交', detail: '此连接有结果未明的原操作。使用上方只读查询或打开原任务，不再创建同一工作。', action: '' }
@@ -364,6 +383,8 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
     : !environments?.length ? { title: '电脑尚未提供工作环境', detail: '在电脑 Companion 配置允许的目录与执行器后，重新读取。不自动创建目录或安装软件。', action: 'environments' }
     : !environment ? { title: '选择这次使用的工作目录', detail: '从下方实际环境中选择；不会自动采用上次浏览的其他目录。', action: 'environment' }
     : !workerReady ? { title: selectedWorker ? '这个代理当前不可用' : '选择电脑上的执行器', detail: text(object(selectedWorker?.reason).message || selectedWorker?.reason) || '从此环境实际返回的选项中选择。电脑有 Codex 或 Claude 命令，不等于该环境已配置并能启动它。', action: 'worker' }
+    : heldWriteIntent ? { title: onlyRead ? '这个目录的 Codex 只能只读分析' : mayKeepCodexWrite ? '主机本次核对允许写入这个目录' : '尚未核对这个目录能否写入',
+      detail: mayKeepCodexWrite ? '已保留原先的写入意图。请明确选择这次的范围，再核对执行器并审阅。' : '已保留目标和原先的写入意图。明确改为只读后才能审阅；不会更改主机权限。', action: 'codexScope' }
     : !capabilityReady ? { title: probe ? '处理本次能力核对结果' : '核对代理与请求模型', detail: '核对的是这台电脑、此目录、此代理配置和当前模型选择；不会使用手机聊天模型替代。更改选项后重新核对。', action: 'probe' }
     : !(worker === 'command' ? commandReady : goalReady) ? { title: worker === 'command' ? '填写明确命令参数' : '说明这次要完成什么', detail: worker === 'command' ? '填写非空字符串数组；执行端仍按自身 allowlist 审阅，不作为 Shell 拼接。' : '填写 1–8000 字目标。现有原任务的继续工作请回原任务，不复制成一次新任务。', action: 'goal' }
     : !permissionReady ? { title: environment?.writeAllowed !== true ? '这个环境没有允许可写工作' : '核对这次工具权限', detail: environment?.writeAllowed !== true ? '选择支持只读分析的执行器，或在电脑端明确准备可写环境后重新读取。' : '在下方明确确认使用电脑端已配置的工具权限。目录不是系统沙箱。', action: 'worker' }
@@ -373,6 +394,18 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
   const focusStep = (name: string) => { const element = composer.current?.querySelector<HTMLElement>(`[data-remote-step="${name}"]`); element?.scrollIntoView({ block: 'start', behavior: 'auto' }); element?.querySelector<HTMLElement>('input, textarea, button, [role="combobox"]')?.focus({ preventScroll: true }); };
   const changed = (change: () => void) => { if (locked || waiting.current) return; formVersion.current++; setProbe(null); setReview(null); setWriteIntent(false); setDraftError(''); change(); };
   const edited = (change: () => void) => { if (locked || waiting.current) return; formVersion.current++; setReview(null); change(); };
+  const chooseCodexScope = (read: boolean) => {
+    if (!heldWriteIntent || !formCurrent() || !read && !mayKeepCodexWrite) return;
+    edited(() => { setReadOnly(read); setHeldCodexWrite(undefined); });
+  };
+  const chooseEnvironment = (value: string) => changed(() => {
+    if (heldCodexWrite && (value !== heldCodexWrite.id || linuxCodexWorkspace(environments, value)?.anchor !== heldCodexWrite.anchor)) setHeldCodexWrite(undefined);
+    setEnvironment(value); setWorker(''); setModel(''); setModeId(''); setOptionCatalog(null);
+  });
+  const chooseWorker = (value: string) => changed(() => {
+    if (value !== codexWorker) setHeldCodexWrite(undefined);
+    setWorker(value); setModel(''); setModeId(''); setEffort(''); setReadOnly(true); setOptionCatalog(null);
+  });
   const prepare = async (mode: 'ordinary' | 'baseline' | 'inputs' = 'ordinary') => {
     if (!formCurrent() || waiting.current) return;
     if (locked || !nativeActive() || !environmentFresh || !readyForReview) return;
@@ -403,6 +436,7 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
   const guidedAttempt = useRef('');
   const readEnvironments = (useSaved = false, carried?: CloudGoal) => {
     if (locked || !formCurrent() || waiting.current || useSaved && !sameHost) return;
+    const previousWrite = worker === codexWorker && !readOnly ? linuxCodexWorkspace(environments, environmentId) : undefined;
     const selected = ++formVersion.current;
     setReview(null); setProbe(null); setOptionCatalog(null); setWriteIntent(false); setEnvironmentFresh(false); setDraftError('');
     void request('remote.environments', binding(profile)).then(value => {
@@ -411,8 +445,16 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
         setDraftError('环境回执不属于原连接，未选择工作目录。'); return;
       }
       const catalog = list(value.environments); setEnvironments(catalog); setEnvironmentFresh(true);
+      const original = useSaved && sameHost ? originalCloudEnvironment(catalog, sameHost) : undefined;
+      setHeldCodexWrite(held => {
+        const prior = held ?? (previousWrite?.writeAllowed === true ? previousWrite : undefined);
+        if (!prior || (useSaved && (original?.id !== prior.id || sameHost?.worker !== codexWorker))) return undefined;
+        const current = linuxCodexWorkspace(catalog, prior.id);
+        if (!current || current.anchor !== prior.anchor) return undefined;
+        // A new catalog can change what is possible, but does not resolve the owner's previous choice.
+        return held ?? (current.writeAllowed === false ? { id: current.id, anchor: current.anchor } : undefined);
+      });
       if (useSaved && sameHost) {
-        const original = originalCloudEnvironment(catalog, sameHost);
         setEnvironment(original?.id || ''); setWorker(original ? sameHost.worker : '');
         // Never restore old write consent, model selection, or CLI options as part of a remembered location.
         setReadOnly(true); setModel(''); setModeId(''); setEffort('');
@@ -495,7 +537,10 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
       }}>填入目标，继续核对</Button>
     </section>}
     <section className="pw-connection-attention" aria-label="这次电脑工作的下一步"><h3>{nextStep.title}</h3><p>{nextStep.detail}</p>
-      {nextStep.action && <Button variant={nextStep.action === 'review' ? 'primary' : 'secondary'} disabled={locked || nextStep.action === 'probe' && !supported('remote.probeWorker') || nextStep.action === 'review' && !readyForReview} onClick={() => { if (nextStep.action === 'environments') readEnvironments(!!sameHost); else if (nextStep.action === 'probe') probeWorker(); else if (nextStep.action === 'review') void prepare(); else focusStep(nextStep.action); }}>{({ environments: '读取当前环境', environment: '选择工作环境', worker: '核对执行器与权限', probe: '核对当前能力', goal: '填写本次目标与选项', review: '审阅这次新工作' } as Record<string,string>)[nextStep.action]}</Button>}
+      {nextStep.action === 'codexScope' ? <div className="pw-form-actions">
+        {mayKeepCodexWrite && <Button variant="secondary" disabled={locked} onClick={() => chooseCodexScope(false)}>继续准备可写工作</Button>}
+        <Button variant="secondary" disabled={locked} onClick={() => chooseCodexScope(true)}>改为只读分析</Button>
+      </div> : nextStep.action && <Button variant={nextStep.action === 'review' ? 'primary' : 'secondary'} disabled={locked || nextStep.action === 'probe' && !supported('remote.probeWorker') || nextStep.action === 'review' && !readyForReview} onClick={() => { if (nextStep.action === 'environments') readEnvironments(!!sameHost); else if (nextStep.action === 'probe') probeWorker(); else if (nextStep.action === 'review') void prepare(); else focusStep(nextStep.action); }}>{({ environments: '读取当前环境', environment: '选择工作环境', worker: '核对执行器与权限', probe: '核对当前能力', goal: '填写本次目标与选项', review: '审阅这次新工作' } as Record<string,string>)[nextStep.action]}</Button>}
     </section>
     {originalCloudReady&&!showCloudLocation?<section className="pw-connection-environment" aria-label="已核对的云工作位置"><div className="pw-connection-section-toolbar">
       <div><h3>{profile.name || '云主机'}</h3><p className="pw-field-hint">已核对原工作区 · {environment?.label || environment?.id}</p></div>
@@ -509,16 +554,20 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
     {!environments && <p className="pw-field-hint">{profile.hasToken ? '读取这台电脑已提供的目录与执行器，不会自动创建或安装。' : '请返回连接概览，在连接设置中补充令牌。'}</p>}
     {!environmentFresh && (environmentId || operation) && <p className="pw-field-hint">草稿与原操作保留；开始另一项工作前，需要重新读取环境与核对执行器。</p>}
     {environments?.length === 0 && <p>未取得可用工作环境；不会自动创建电脑目录或安装执行器。</p>}
-    {!!environments?.length && <SelectField label="工作环境" value={environmentId} isDisabled={locked} options={environments.map(item => ({ id: item.id, label: String(item.label || item.id) + ' · ' + String(item.kind || '') }))} onChange={value => changed(() => { setEnvironment(value); setWorker(''); setModel(''); setModeId(''); setOptionCatalog(null); })} />}
-    {environment && <Facts values={[[ '实际工作区', environment.workspace ], ['允许写入', environment.writeAllowed === true ? '是' : '未启用' ]]} />}
+    {!!environments?.length && <SelectField label="工作环境" value={environmentId} isDisabled={locked} options={environments.map(item => ({ id: item.id, label: String(item.label || item.id) + ' · ' + String(item.kind || '') }))} onChange={chooseEnvironment} />}
+    {environment && <Facts values={[[ '实际工作区', environment.workspace ], ['允许写入', writeUnknown ? '尚未核对' : environment.writeAllowed === true ? '是' : '未启用' ]]} />}
     </section>}
-    {environment && <section className="pw-connection-task-composer" data-remote-step="worker"><SelectField label="执行器" value={worker} isDisabled={locked} options={[{ id: '', label: '选择这台电脑已配置的执行器' }, ...workers.map(item => ({ id: item.id, label: harnessWorkerLabel(item) + (item.available === false ? ' · 当前不可用' : '') }))]} onChange={value => changed(() => { setWorker(value); setModel(''); setModeId(''); setEffort(''); setReadOnly(true); setOptionCatalog(null); })} />
+    {environment && <section className="pw-connection-task-composer" data-remote-step="worker"><SelectField label="执行器" value={worker} isDisabled={locked} options={[{ id: '', label: '选择这台电脑已配置的执行器' }, ...workers.map(item => ({ id: item.id, label: harnessWorkerLabel(item) + (item.available === false ? ' · 当前不可用' : '') }))]} onChange={chooseWorker} />
       {!workers.length && <p role="status">此环境没有返回执行器，请在电脑端核对配置后刷新。</p>}
       {worker && !selectedWorker && <p role="status">原执行器不在本次环境目录中；请选择当前配置的执行器。</p>}
       {selectedWorker && <p className="pw-field-hint">执行位置：{profile.name}。{harnessWorkerLabel(selectedWorker)}调用自己的模型与工具，模型选项在下方核对。</p>}
       <div data-remote-step="goal">{worker === 'command' ? <TextAreaField label="明确参数 JSON 数组" value={argv} isDisabled={locked} onChange={value => edited(() => setArgv(value))} hint="只执行电脑 allowlist 中的参数数组，不将拼接文本当 Shell。" /> : <>
         <TextAreaField label="这次要完成什么" value={goal} isDisabled={locked} onChange={value => edited(() => setGoal(value))} hint="1–8000 字。本次是新工作，继续已有会话请打开原任务。" />
-        {worker === 'codex_app_server' && <CheckboxField isSelected={readOnly} isDisabled={locked} onChange={value => edited(() => setReadOnly(value))}>只读分析，不授权修改文件</CheckboxField>}
+        {worker === codexWorker && (heldWriteIntent
+          ? <p className="pw-field-hint">请在上方明确选择这次的读写范围。</p>
+          : onlyRead ? <p className="pw-field-hint">主机未在这个目录开放 Codex 写入。本次限于只读分析。</p>
+          : <><CheckboxField isSelected={readOnly} isDisabled={locked} onChange={value => edited(() => setReadOnly(value))}>只读分析，不授权修改文件</CheckboxField>
+            {writeUnknown && <p className="pw-field-hint">主机未返回这个目录的写入设置，不能据此确认可写入。</p>}</>)}
         {worker === 'pi' && <p className="pw-field-hint">仅无工具对话，不提供项目读写、命令、扩展或 MCP；执行器配置可能重试或压缩，费用与内部调用次数尚未核实。</p>}
         {worker === 'claude' && <p className="pw-field-hint">使用执行端的受限工具配置；此处不声明操作系统只读沙箱。原任务仍需实际验证账号和推理。</p>}
         {gemini && <><p className="pw-field-hint">Gemini ACP 仅支持私人可写工作，不支持只读分析。使用固定版本与默认审批模式，实际工具权限仍在原任务逐次审阅；不会自动安装或登录。</p>
@@ -556,14 +605,14 @@ function RemoteWork({ profile, state, data, run, supported, back, visible, cloud
       <Button variant="secondary" onClick={() => { void run('tasks.open', { id: operation.operationId }).catch(() => {}); }}>打开原任务 · 审批、成果与继续</Button>
       {(originalAdmission && !unresolved.length || nativeTask && ['completed', 'failed', 'cancelled'].includes(nativeTask.status) &&
         ownOperations.some(item => item.operationId === operation.operationId && ['settled', 'rejected'].includes(item.status))) &&
-        <Button variant="secondary" disabled={busy || !active} onClick={() => { setOperation(null); setUncertain(false); setReceipt(null); setGoal(''); setReturnOrigin(null); setFromComposer(false); setCarriedTextOnly(false); setProbe(null); setWriteIntent(false); setEnvironmentFresh(false); }}>新建另一项工作</Button>}</div>}
+        <Button variant="secondary" disabled={busy || !active} onClick={() => { setOperation(null); setUncertain(false); setReceipt(null); setGoal(''); setReturnOrigin(null); setFromComposer(false); setCarriedTextOnly(false); setProbe(null); setWriteIntent(false); setHeldCodexWrite(undefined); setEnvironmentFresh(false); }}>新建另一项工作</Button>}</div>}
     <Receipt value={receipt} run={run} />
     {baseline && <RemoteProjectBaseline prepared={baseline} visible={visible && active} onClose={() => setBaseline(null)} onRegistered={captured => { draft.current = { ...draft.current, operation: captured, uncertain: true }; setOperation(captured); setUncertain(true); setReceipt(null); }} />}
     {inputRequest && <RemoteInputFlow prepared={inputRequest} visible={visible && active} close={() => setInputRequest(null)} onRegistered={captured => { draft.current = { ...draft.current, operation: captured, uncertain: true }; setOperation(captured); setUncertain(true); setReceipt(null); }} />}
     <SettingsDialog isOpen={visible && !!review} title="确认在所选电脑创建工作" onClose={() => { if (!waiting.current) dismissReview(); }}>
       <Facts values={[[ '电脑', profile.name ], ['地址', profile.baseUrl ], ['工作区', environment?.workspace ], ['执行器', review?.worker === 'gemini_acp' ? 'Gemini CLI 0.66.0 · ACP 1' : harnessWorkerLabel(selectedWorker, review?.worker) ], ['请求模型', review?.model || '执行端默认' ], ['推理强度', review?.effort || null ], ['执行模式', review?.worker === 'gemini_acp' ? '默认审批 · 仅本次私人可写工作' : review?.modeId || null ], ['时限', review?.timeoutSeconds ]]} />
       {review?.linksOriginalPrivateConversation===true&&<p className="pw-field-hint">确认后，原私人对话将链接手机登记的这项工作；主机是否接单以原任务回执为准。聊天记录与附件不会随目标发送。</p>}
-    <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review?.prompt || JSON.stringify(review?.argv)}</pre><p>{review?.worker === 'pi' ? '仅进行无工具对话。' : review?.readOnly ? '本次为 Codex 只读分析。' : '本次可能修改所选工作区；工具审批在原任务逐次核对。'}</p>
+    <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review?.prompt || JSON.stringify(review?.argv)}</pre><p>{review?.worker === 'pi' ? '仅进行无工具对话。' : review?.readOnly ? '本次为 Codex 只读分析。' : review?.worker === codexWorker && writeUnknown ? '尚未核对主机是否允许写入。选择非只读不代表已经取得写入权限。' : '本次可能修改所选工作区；工具审批在原任务逐次核对。'}</p>
       {review?.worker === 'gemini_acp' && <p>已明确选择可写工作；登录、实际模型与会话模式仍须在原任务核对。不支持只读隔离，不自动登录或更换后端。</p>}
       {configuredHarness && <p>沿本次核对的执行器配置与能力启动。使用电脑端已有权限，工作目录不是操作系统沙箱；实际模型、会话和工具结果保留在原任务。</p>}
       <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismissReview}>返回修改</Button><Button disabled={locked || !environmentFresh || gemini && (!writeIntent || !geminiReady) || configuredHarness && (!writeIntent || !harnessReady)} onClick={confirm}>确认创建一次</Button></div>

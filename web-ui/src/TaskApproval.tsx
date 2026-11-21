@@ -178,6 +178,12 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
  const rosterStart=view.kind==='operation'?teamStartKind(approval.tool,capability,args):null;
  const oneTimeStart=rosterStart==='one_time';
  const plannedTeam=rosterStart?originalModelTeamStart(capability,args,oneTimeStart):null;
+ const frozenTeam=object(capability.teamDefinition),frozenMembers=list(frozenTeam.members).map(object);
+ const affectedPhoneIds=Array.isArray(view.savedTeamPhoneScopeMemberIds)?view.savedTeamPhoneScopeMemberIds:[];
+ const affectedPhoneNames=rosterStart==='saved'&&view.canApprove===false?frozenMembers.flatMap((member,index)=>
+  member.runner==='phone_agent'&&affectedPhoneIds.includes(member.id)&&nonEmptyText(member.name)?
+   [frozenMembers.some((other,i)=>i!==index&&other.name===member.name)?member.name+'（编组第 '+(index+1)+' 位）':member.name]:[]):[];
+ const missingPhoneScope=affectedPhoneNames.length>0&&affectedPhoneNames.length===affectedPhoneIds.length;
  const executionOriginal=object(view.executionPlan),executionPlan=object(executionOriginal.plan);
  const original=object(view.teamPlan),plan=object(original.plan),source=object(plan.sourceParent),previous=object(source.parentBudget),budget=object(plan.budgetPlan);
  const items=list(plan.items),members=list(object(plan.definition).members);
@@ -204,8 +210,8 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
  const argumentFacts=Object.entries(args).filter(([key,value])=>key in labels&&(!originalFile||key!=='path')&&['string','number','boolean'].includes(typeof value));
  return <section className="pw-approval-item pw-task-decision" aria-label="本次操作授权">
   <header className="pw-decision-heading">
-   <span className="pw-decision-eyebrow">{execution?'审阅原任务计划':team?'确认工作计划':live?'确认服务范围':plannedTeam||oneTimeStart?'确认团队分工':'需要你的确认'}</span>
-   <h4>{nodeCommand?(dependencies?'核对本机依赖准备':'核对这次本机构建'):oneTimeStart?'管家为这件事安排的分工':plannedTeam?<>{'使用编组：'}<bdi>{plannedTeam.name}</bdi></>:String(approval.message||approval.title||(execution?'计划审阅':approval.toolName||approval.tool||'这次操作授权'))}</h4>
+   <span className="pw-decision-eyebrow">{missingPhoneScope?'本次团队分工':execution?'审阅原任务计划':team?'确认工作计划':live?'确认服务范围':plannedTeam||oneTimeStart?'确认团队分工':'需要你的确认'}</span>
+   <h4>{missingPhoneScope?'缺少手机操作范围，不能批准':nodeCommand?(dependencies?'核对本机依赖准备':'核对这次本机构建'):oneTimeStart?'管家为这件事安排的分工':plannedTeam?<>{'使用编组：'}<bdi>{plannedTeam.name}</bdi></>:String(approval.message||approval.title||(execution?'计划审阅':approval.toolName||approval.tool||'这次操作授权'))}</h4>
    {approval.reason&&<p className="pw-decision-context">{String(approval.reason)}</p>}
    {approval.description&&<p className="pw-decision-context">{String(approval.description)}</p>}
   </header>
@@ -224,6 +230,9 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
   {argumentFacts.length>0&&<dl className="pw-decision-facts" aria-label="本次操作内容">
    {argumentFacts.map(([key,value])=><div key={key}><dt>{labels[key]}</dt><dd className="pw-approval-copy">{String(value)}</dd></div>)}
   </dl>}
+  {missingPhoneScope&&<div className="pw-decision-notice" role="status">
+   <p><bdi>{affectedPhoneNames.join('、')}</bdi> 需要逐位核对手机操作范围。这次申请没有包含这些范围。</p>
+  </div>}
   {oneTimeStart&&!plannedTeam&&<div className="pw-decision-notice" role="alert"><h5>原分工暂不可审阅</h5>
    <p>{missingOneTimeTeamReview(object(capability.teamDefinition),args)}请重新打开原待审事项，或拒绝这次申请。这里不会另起分工。</p></div>}
   {plannedTeam&&<section className="pw-decision-section" aria-label="这次申请的成员与分工">
@@ -309,7 +318,7 @@ export function TaskApproval({approval,executionScope={},disabled,onDecision}:{a
    {(team||live||execution)&&view.canApprove===true&&(!execution||executionMatches)&&<CheckboxField className="pw-decision-reviewed" isSelected={scopeReviewed} onChange={setScopeReviewed} isDisabled={disabled}>
     {execution?`我已核对计划版本 ${String(executionOriginal.planRevision)} 的完整步骤和原任务范围`:team?'我已核对原成员、依赖、文件基线、范围与累计预算':'我已核对原文件范围，并允许这些源码后续修改在本轮服务中执行'}
    </CheckboxField>}
-   <div className="pw-decision-actions"><PressButton label={execution?'确认这版计划，在原范围内继续':team?'批准此计划与可见预算':live?'允许启动与限定热改':nodeCommand?(dependencies?'批准此锁的依赖下载':'批准运行本机构建'):view.programRisk?'允许运行本机程序':dependencies?'批准此锁的依赖下载':plannedTeam||oneTimeStart?'批准这次分工':'允许这次操作'} disabled={disabled||!id||!canApprove} onClick={()=>decide(true)}/><Button variant="secondary" disabled={disabled||!id} onClick={()=>decide(false)}>拒绝</Button></div>
+   <div className="pw-decision-actions">{!missingPhoneScope&&<PressButton label={execution?'确认这版计划，在原范围内继续':team?'批准此计划与可见预算':live?'允许启动与限定热改':nodeCommand?(dependencies?'批准此锁的依赖下载':'批准运行本机构建'):view.programRisk?'允许运行本机程序':dependencies?'批准此锁的依赖下载':plannedTeam||oneTimeStart?'批准这次分工':'允许这次操作'} disabled={disabled||!id||!canApprove} onClick={()=>decide(true)}/>}<Button variant="secondary" disabled={disabled||!id} onClick={()=>decide(false)}>拒绝</Button></div>
   </footer>
  </section>;
 }

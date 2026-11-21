@@ -5,7 +5,7 @@ import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 
 type PdfExcerptStart = { page: number; chunk: number; method: 'text_layer' | 'ocr' };
-export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive'; hasSavedSupplement?: boolean; pdfExcerptStart?: PdfExcerptStart };
+export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive' | 'original_ssh_file_download'; hasSavedSupplement?: boolean; pdfExcerptStart?: PdfExcerptStart };
 
 type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string };
 
@@ -91,7 +91,9 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error) return null;
   const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
       const format = attachmentFileFormat(file.mimeType,file.name).label;
-      const metadata = [format, input ? '' : pdfExcerptLabel(file) || fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录', fileBytes(file.size)].filter(Boolean).join(' · ');
+      const savedTransfer = file.sourceRunEvidence === 'original_ssh_file_download' && file.runProvenance === 'current' && file.mimeType === 'application/octet-stream';
+      const provenance = savedTransfer ? '本次传输已保存到手机' : pdfExcerptLabel(file) || fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录';
+      const metadata = [format, input ? '' : provenance, fileBytes(file.size)].filter(Boolean).join(' · ');
       return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
       aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}${!input && file.hasSavedSupplement === true ? '，有补充草稿' : ''}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
         <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}{!input && file.hasSavedSupplement === true && ' · 有补充草稿'}</small></span>

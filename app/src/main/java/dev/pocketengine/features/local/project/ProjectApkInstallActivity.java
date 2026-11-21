@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
 import dev.pocketengine.ui.web.PocketWebHost;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.attachments.AttachmentBook;
 import dev.pocketengine.features.attachments.AttachmentOutcomeHost;
 import dev.pocketengine.features.attachments.AttachmentViewSnapshots;
 import dev.pocketengine.features.attachments.OwnerFilePreviewSource;
@@ -40,6 +41,21 @@ public final class ProjectApkInstallActivity extends ComponentActivity {
     private AutoCloseable ownerWindow,systemWindow;
     private PocketWebHost webHost;
     private Runnable surfaceRefresh;
+
+    /** Presentation fact for the already admitted Work original. No APK read or installer handoff. */
+    public static boolean canReviewManagedWorkFile(OwnerFilePreviewSource source,String task,JSONObject file) {
+        if(source==null||task==null||task.isBlank()||file==null||!"result".equals(file.opt("role"))||
+                !"available".equals(file.opt("availability"))||!ProjectManagedOutput.ROLE.equals(file.opt("sourceKind"))||
+                !task.equals(file.opt("sourceTaskId"))||!source.name.equals(file.opt("name"))||!source.sha256.equals(file.opt("sha256")))return false;
+        try {
+            OwnerProjectApk.requireSource(source);
+            JSONObject meta=source.metadata(),origin=meta.getJSONObject("source");
+            String id=meta.getString("id"),run=origin.getString("runId"),operation=origin.getString("operationId");
+            return !meta.optBoolean("outputSourceRetired")&&id.equals(file.opt("id"))&&task.equals(origin.opt("taskId"))&&
+                    run.equals(file.opt("sourceTaskRunId"))&&operation.equals(file.opt("sourceOperationId"))&&
+                    AttachmentBook.isOriginalPublicationId(id,operation,ProjectManagedOutput.ROLE,task,run,origin.getString("artifactPlanDigest"));
+        } catch(Exception unavailable){return false;}
+    }
 
     public static void open(Activity owner,OwnerFilePreviewSource source) throws Exception {
         OwnerProjectApk.requireSource(source);

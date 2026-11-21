@@ -419,6 +419,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   finally{attachmentFlight.current=false;if(alive.current)setPending(count=>Math.max(0,count-1));}
  };
  const offerReader=canSaveOriginal&&view.canOpenInReader===true&&!view.externalViewerResult;
+ const reviewManagedWorkApk=mode==='original'&&privateFiles&&!scopedResultOnly&&view.canReviewManagedWorkApk===true;
  const resultFilesOnly=view.resultFilesOnly===true;
  const reportInWork=!scopedResultOnly&&resultFilesOnly&&view.fromWorkResult===true;
  const preferSave=canSaveOriginal&&(reportInWork||original.kind==='unsupported'||original.information?.previewAvailable===false||original.error||view.externalViewerResult);
@@ -483,7 +484,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  </div>;
  const exportLabel=copyStage==='writing'?'正在另存…':copyStage==='picker_unconfirmed'?'保存位置尚未确认…':
   view.exportPending?'等待选择保存位置…':confirmed?'另存另一份…':'另存原件…';
- const saveFirst=preferSave&&!confirmed;
+ const saveFirst=!reviewManagedWorkApk&&preferSave&&!confirmed;
  const exportAction=<Button variant={confirmed?'ghost':saveFirst?'primary':'secondary'} disabled={busy||draftBusy||view.exportPending} onClick={()=>run('export')}>{exportLabel}</Button>;
  const fileMenu=<ContextMenuTrigger key={`${file.id}:${file.sha256}`}>{({open})=><>
   <IconButton icon={IconMore} aria-label="更多文件操作" disabled={busy} onClick={event=>open(event.currentTarget)}/>
@@ -692,6 +693,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    <p className={'pw-file-draft-status'+(reportError?' pw-error':'')} role={reportError?'alert':undefined}>{reportError||'汇报中只读。进入原工作后，再选择保存位置。'}</p>
   </>}
   {confirmed&&copyFeedback}
+  {reviewManagedWorkApk&&<Button variant="primary" disabled={busy||draftBusy||view.exportPending}
+   onClick={()=>run('external',{reviewProjectApk:true})}>核对这份 APK</Button>}
   {saveFirst&&exportAction}
   {useInTopic}
   {offerDocumentEdit&&editDocument(preferSave||useInTopic?'secondary':'primary')}

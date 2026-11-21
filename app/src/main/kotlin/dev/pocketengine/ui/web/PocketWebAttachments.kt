@@ -7,6 +7,7 @@ import dev.pocketengine.features.attachments.creation.DocumentDraft
 import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.processing.NativeFileProcess
 import dev.pocketengine.features.attachments.processing.NativeMediaTrim
+import dev.pocketengine.features.local.project.ProjectApkInstallActivity
 import dev.pocketengine.ui.AttachmentOutcomeState
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.AttachmentWorkReturn
@@ -60,6 +61,10 @@ internal class PocketWebAttachments(
         state.resultRun?.report != null && scopedResultCurrent?.invoke() == true && controller.webPrivateOwnerVisible() &&
             !state.deviceOriginalOnly && state.group == null && state.team == null && state.file?.optString("role") == "result" &&
             viewer.matchesOriginal(state.file)
+    private fun canReviewManagedWorkApk(state: AttachmentOutcomeState): Boolean =
+        scopedResultCurrent == null && controller.webPrivateOwnerVisible() && state.fromWorkResult && !state.restoredWorkReturn &&
+            state.resultRun == null && !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file) &&
+            ProjectApkInstallActivity.canReviewManagedWorkFile(state.originalFile, state.taskId, state.file)
     fun openOriginalFromDevice(file:dev.pocketengine.ui.ReceivedFileSelection,current:()->Boolean){
         check(controller.webUiCanInteract() && controller.webPrivateOwnerVisible() && current())
         clear();deviceTaskCurrent=current
@@ -106,6 +111,7 @@ internal class PocketWebAttachments(
             .put("returnToLibraryDocument", ownedCopy && flow.canReturnToLibraryDocument())
             .put("canReferenceHistoryOriginal", scoped != null && !report && privateOriginal)
             .put("canSaveOriginal", scoped == null && privateOriginal).put("canOpenInReader", scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
+            .put("canReviewManagedWorkApk", canReviewManagedWorkApk(state))
             .put("externalViewerResult", state.externalViewerResult)
             .put("taskId", state.taskId).put("group", state.group != null).put("team", state.team != null)
             .put("deviceOriginalOnly",state.deviceOriginalOnly).put("fromWorkResult", state.fromWorkResult).put("resultFilesOnly", state.resultRun?.taskId?.let { it == state.taskId } == true)
@@ -287,7 +293,12 @@ internal class PocketWebAttachments(
                     }
                     flow.openExternal()
                 }
-                "external" -> flow.openExternal()
+                "external" -> if (args.has("reviewProjectApk")) {
+                    check(args.length() == 4 && args.opt("reviewProjectApk") == true && !flow.exportPending && canReviewManagedWorkApk(flow.state)) {
+                        "请回原工作重新打开这份固定 APK，未交给其他应用"
+                    }
+                    flow.openExternal(requireNotNull(flow.state.originalFile))
+                } else flow.openExternal()
                 "share" -> flow.shareOriginalFile()
                 "readContinuationDraft", "editContinuationDraft" -> {
                     val original=flow.state;val task=original.taskId?:error("请回到原工作的固定成果")

@@ -755,15 +755,20 @@ internal class AttachmentOutcomeCoordinator(
             JSONObject().put("shareSheetRequested",false) to null
         }
     }
-    fun openExternal(){val file=state.file?:return;val group=state.group;val task=state.taskId
+    fun openExternal(reviewedWorkApk:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null){val file=state.file?:return;val group=state.group;val task=state.taskId
         if(group==null&&state.team==null&&file.optString("name").endsWith(".apk",ignoreCase=true)&&(file.optString("sourceKind")=="managed_build_output"||file.optJSONObject("source")?.optString("kind")=="managed_build_output")){
             var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
             work(onSuccess={
                 if(resumed)try{original?.let{dev.pocketengine.features.local.project.ProjectApkInstallActivity.open(activity,it)}}
                 catch(error:Exception){state=state.copy(error=safe(error))}
-            }){c,_->original=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),c);JSONObject() to null}
+            }){c,_->
+                val actual=app.attachmentOutcomes.originalFile(task,file.getString("id"),file.getString("sha256"),c)
+                check(reviewedWorkApk==null||reviewedWorkApk.identity==actual.identity){"原构建成果来源已变化，未打开 APK 核对"}
+                original=actual;JSONObject() to null
+            }
             return
         }
+        check(reviewedWorkApk==null){"未核对到原固定 APK，没有交给其他应用"}
         work{c,w->
             // Only this preparation may release its copy. Entry into Android launch wins over later cancellation.
             val disposition=java.util.concurrent.atomic.AtomicInteger(0) // prepared / launch entered / discarded

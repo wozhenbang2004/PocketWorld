@@ -175,7 +175,8 @@ internal class PocketWebWorkSearch(
         }
         val selectedTask = requireVisibleTask()
         val readExcerptStarts = conversationResult == null && selectedTask.opt("status") == "completed"
-        val snapshot = if (readExcerptStarts) (host.attachmentOutcomes ?: error("附件成果宿主尚未就绪")).workResultFilesSnapshot(taskId, control)
+        val readSshTransfer = conversationResult == null && selectedTask.opt("feature") == "ssh" && selectedTask.opt("command") == "downloadFile"
+        val snapshot = if (readExcerptStarts || readSshTransfer) (host.attachmentOutcomes ?: error("附件成果宿主尚未就绪")).workResultFilesSnapshot(taskId, control)
             else host.ownerOutcomeSnapshot(taskId, control)
         check(snapshot.getString("taskId") == taskId) { "原工作成果身份不符" }
         val runFiles = if (conversationResult != null)
@@ -219,11 +220,29 @@ internal class PocketWebWorkSearch(
             // Only the original private work can offer inputs. A chat completion receipt
             // remains scoped to that run's outputs, even for a work with input but no output.
             val sources = snapshot.getJSONArray("sources").objects()
+            val revision = snapshot.optLong("taskResultRevision")
+            val received = if (readSshTransfer && revision > 0 && selectedTask.optLong("resultRevision") == revision &&
+                current.optLong("resultRevision") == revision && current.opt("taskCoreReadLimited") == false &&
+                current.opt("hasUnresolvedOperations") == false && !current.optBoolean("contextWithdrawn") &&
+                !current.optBoolean("sourceCurrentReadRequired") && current.opt("runId") == taskId &&
+                snapshot.opt("taskRunId") == taskId && current.optInt("coordinatorEpoch", -1) == 0 &&
+                snapshot.optInt("coordinatorEpoch", -1) == 0) {
+                sources.singleOrNull { it.opt("availability") == "available" && it.opt("sourceRunEvidence") == "original_ssh_file_download" }
+            } else null
+            if (received != null) {
+                // Presentation only. The normal task file list and exact local reader are unchanged.
+                val withReceived = JSONArray().put(fileHeader(received).put("runProvenance", "current")
+                    .put("sourceRunEvidence", "original_ssh_file_download"))
+                for (index in 0 until minOf(files.length(), limit - 1)) withReceived.put(files.getJSONObject(index))
+                page.put("files", withReceived)
+                if (files.length() == limit) page.put("readLimited", true)
+            }
             val readable = sources.filter { it.optString("availability") == "available" }
+            val inputsAvailable = readable.filter { it !== received }
             val sourceLimit = 4
             val inputs = JSONArray()
-            readable.take(sourceLimit).forEach { inputs.put(fileHeader(it)) }
-            page.put("sourceFiles", inputs).put("moreSourceFiles", readable.size > sourceLimit)
+            inputsAvailable.take(sourceLimit).forEach { inputs.put(fileHeader(it)) }
+            page.put("sourceFiles", inputs).put("moreSourceFiles", inputsAvailable.size > sourceLimit)
                 .put("sourceUnavailable", readable.size < sources.size)
                 .put("hasRequestAttachments", current.optJSONObject("ownerWork")?.optBoolean("hasInitialAttachments") == true)
         }
