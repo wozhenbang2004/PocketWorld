@@ -25,7 +25,7 @@ const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
 const sameDraft = (draft: DevelopmentDraft, original: Data) => draft.goal === original.goal && draft.checkoutId === original.checkoutId &&
   deliveryFields.every(key => draft[key] === (original[key] || ''));
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string };
-type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package';
+type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https';
 export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string};
 export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
@@ -156,14 +156,22 @@ export function originalImportedEditor(projectId:string):ProjectImportedEditor|n
   if(matches.length!==1)return null;
   const copy=matches[0], source=copy.sourceImport;
   const sourceKind:unknown=source.sourceKind;
-  // A collected Termux checkout can inherit sourceImport but is not the published fork.
-  const collectedTaskCopy=sourceKind==='task_source_package'&&('collectedFromCheckoutId' in copy||'collectionOperationId' in copy);
+  // A collected Termux checkout can inherit sourceImport, including native Git provenance.
+  const collectedCopy=(sourceKind==='task_source_package'||sourceKind==='git_https')&&('collectedFromCheckoutId' in copy||'collectionOperationId' in copy);
   if(!copyIdentity(copy.id)||source.mode!=='new_project'||source.executionAuthorityRestored!==false||
-    (sourceKind!=='external_zip'&&sourceKind!=='saf_tree'&&sourceKind!=='task_source_package')||
+    (sourceKind!=='external_zip'&&sourceKind!=='saf_tree'&&sourceKind!=='task_source_package'&&sourceKind!=='git_https')||
     !sourceHash(source.manifestIdentity)||!sourceHash(source.sourceEvidenceSha256)||
-    collectedTaskCopy||['teamProjectCopy','skillExecutionCopy','isolatedGit','nativeGitImportPending'].some(key=>key in copy))return null;
-  return {projectId,checkoutId:copy.id,importIdentity:JSON.stringify([origin.clientId,origin.packageSha256,source.manifestIdentity,source.sourceEvidenceSha256]),
-    sourceKind,window:ownerWindow()};
+    collectedCopy||['teamProjectCopy','skillExecutionCopy','isolatedGit','nativeGitImportPending'].some(key=>key in copy))return null;
+  const identity=[origin.clientId,origin.packageSha256,source.manifestIdentity,source.sourceEvidenceSha256];
+  if(sourceKind==='git_https'){
+    const git=source.gitOriginal;
+    if(state.projectGitImport?.open||source.gitHistoryCopied!==true||source.credentialsRestored!==false||
+      !copyIdentity(git?.actionId)||typeof git.commitId!=='string'||!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(git.commitId)||
+      git.sourceManifestIdentity!==source.manifestIdentity||git.executionAuthorityRestored!==false||
+      !sourceHash(git.manifestSha256)||!sourceHash(git.gitMetadataDigest))return null;
+    identity.push(git.actionId,git.commitId,git.manifestSha256,git.gitMetadataDigest);
+  }
+  return {projectId,checkoutId:copy.id,importIdentity:JSON.stringify(identity),sourceKind,window:ownerWindow()};
 }
 export const sameImportedEditor = (target:ProjectImportedEditor, observed:ProjectImportedEditor|null) =>
   !!observed&&target.projectId===observed.projectId&&target.checkoutId===observed.checkoutId&&
@@ -242,7 +250,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [retainedRead,setRetainedRead]=useState<RetainedOriginalRead|null>(null), retainedOriginalOpen=useRef(false);
   const activeRetainedVisit=useRef<RetainedOriginalVisit|null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
-  const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;unselectedImport?:ProjectImportedEditor}|null>(null);
+  const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;
+    originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   const [importEditChoice,setImportEditChoice]=useState<{original:ProjectImportedEditor;viewHandle:string}|null>(null);
   const [importEditorNotice,setImportEditorNotice]=useState('');
@@ -604,9 +613,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const sequence=generation.current;
     const originalIsCurrent=()=>alive.current&&latest.current.active&&generation.current===sequence&&handle.current===view.viewHandle&&
       sameImportedEditor(importedEditor,originalImportedEditor(projectId))&&canEditImportedCheckout(latest.current.can);
-    if(!originalIsCurrent()||view.projectId!==projectId||view.executionAuthorized!==false||
-       !rows(view.checkouts).some(copy=>copy.projectId===projectId&&copy.checkoutId===checkoutId&&
-         (importedEditor.sourceKind!=='task_source_package'||copy.taskPackageSource===true))){
+    const nativeCopies=rows(view.checkouts).filter(copy=>copy?.projectId===projectId&&copy.checkoutId===checkoutId);
+    const gitImport=importedEditor.sourceKind==='git_https';
+    const admitted=gitImport?nativeCopies.length===1&&nativeCopies[0].draftWorkingCopy===false&&view.commandsAuthorized===false:
+      nativeCopies.some(copy=>importedEditor.sourceKind!=='task_source_package'||copy.taskPackageSource===true);
+    if(!originalIsCurrent()||view.projectId!==projectId||view.executionAuthorized!==false||!admitted){
       setImportEditorNotice('原导入副本已不能核对，没有打开其他文件。');return;
     }
     const hasDifferentCopy=()=>[draft.current.checkoutId,view.draft?.checkoutId].some(id=>id&&id!==checkoutId);
@@ -619,12 +630,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       const firstEntry=checkoutWebEntry(inspection??null,projectId,checkoutId);
       if(inspection?.projectId===projectId&&inspection.checkoutId===draft.current.checkoutId&&inspection.checkoutId===checkoutId&&sourceHash(inspection.sourceDigest))
         setSource(inspection); // Existing observation can name a destination, not authorize a build after an edit.
-      setFileWindow({checkoutId,firstEntry:firstEntry??undefined,
+      setFileWindow({checkoutId,firstEntry:firstEntry??undefined,originalImport:importedEditor,
         unselectedImport:!draft.current.checkoutId&&!view.draft?.checkoutId?importedEditor:undefined});
     };
-    // Only the existing read's exact entry can skip the same copy's file
-    // list. Neither opening path changes the selected work or grants a build.
-    if(latest.current.can('projects.development.inspect'))
+    // Git has no pinned web starter: open only its ordinary file list. Other
+    // imports still use their existing exact entry observation when available.
+    if(!gitImport&&latest.current.can('projects.development.inspect'))
       void invoke('projects.development.inspect',{viewHandle:view.viewHandle,checkoutId}).then(openCopy);
     else openCopy();
   },[importedEditor,onImportedEditorHandled,active,view,busy,review,fileCheckout,buildReturn,projectId,submission,sourceConflict]);
@@ -809,7 +820,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const firstBuildAction = !firstBuildVisible || missingRequiredLock ? '' : showToolSetupByBuild ? 'tools' : buildToolsBlocked ? 'refresh' : modelStillNeeded ? canPreviewBuild?'preview':'model' : 'review';
   // The pre-editor missing-lock observation may be repaired by saving that exact root path.
   // Recheck the saved source before deciding what comes next; saving a lock is not dependency readiness.
-  const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
+  const originalImportForSave=fileWindow?.originalImport;
+  const directImportedSave=!source&&!!originalImportForSave&&originalImportForSave.sourceKind!=='task_source_package'&&
+    originalImportForSave.checkoutId===checkout&&selectedCopy?.draftWorkingCopy===false&&view?.executionAuthorized===false&&view.commandsAuthorized===false&&
+    sameImportedEditor(originalImportForSave,originalImportedEditor(projectId));
+  const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock||directImportedSave)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
     !view?.draftRecoveryRequired&&can('projects.development.inspect')&&can('projects.development.reviewDraftBuild'));
   const savedSource = source?.savedEditInSource;
   const checkedSave = savedFileHere && savedSource?.path===savedFileHere.path && savedSource.savedHash===savedFileHere.savedHash &&
@@ -853,6 +868,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   };
   const prepareSavedBuild = async ({position:saved,filesHandle,id}:CheckoutSaveForBuild) => {
     const viewHandle=handle.current, window=ownerWindow();
+    const original=directImportedSave?originalImportForSave:undefined;
     if(!active||!canPrepareSavedBuild||!viewHandle||view?.viewHandle!==viewHandle||saved.projectId!==projectId||
       saved.checkoutId!==fileCheckout||draft.current.checkoutId!==saved.checkoutId||
       (missingRequiredLock&&saved.path!==missingRequiredLock)||document.hidden)
@@ -863,6 +879,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         value.checkoutId!==saved.checkoutId||!sourceHash(value.sourceDigest)||observation?.sourceDigest!==value.sourceDigest||
         observation.path!==saved.path||observation.savedHash!==saved.savedHash||typeof observation.matches!=='boolean')
         throw Error('没有核对到这次原文件保存与当前源码，文件仍留在原编辑器。');
+      if(original&&(!sameImportedEditor(original,originalImportedEditor(projectId))||observation.matches!==true))
+        throw Error('原导入副本或刚保存的字节已变化，没有进入其他版本的构建核对。');
       buildAfterSave.current={saved,viewHandle,window};
       setLastSavedFile(saved); setImportEditChoice(null); setFileWindow(null); setHostEditor(null); setHostFiles(null);
       // The normal inspection already ran with exactly this page and save.
@@ -1156,7 +1174,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     } : undefined}/>}
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} onClose={closeFiles}
-      onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined} registerBack={registerFilesBack} />}
+      onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined}
+      prepareBuildLabel={directImportedSave?'核对已保存源码':undefined} registerBack={registerFilesBack} />}
     {originalDifference&&<SettingsDialog isOpen title="本轮原改稿" closeLabel="返回当前工作副本" onClose={closeRetainedOriginal}>
       <div className="pw-project-draft">
         <strong className="pw-project-draft-path">{originalDifference.path}</strong>

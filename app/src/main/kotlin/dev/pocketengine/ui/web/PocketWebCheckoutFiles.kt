@@ -21,6 +21,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     private class Page(val handle: String, val project: String, val checkout: String, val parentCurrent: () -> Boolean, val sourcePath: String? = null, @Volatile var initialPhoneSha: String? = null) {
         @Volatile var matches: CheckoutPathMatches? = null
         @Volatile var matchesUntil: Long = 0
+        @Volatile var directory: CheckoutPathMatches.DirectoryPage? = null
         @Volatile var textPage: CheckoutTextMatches? = null
         @Volatile var textUntil: Long = 0
         @Volatile var savedEdit: SavedEdit? = null
@@ -52,7 +53,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             "projects.development.files.cache", "projects.development.files.close", "projects.development.files.reviewImport",
             "projects.development.files.import", "projects.development.files.dismissImport", "projects.development.files.openFormal")
     }
-    fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.textPage=null; old?.priorSavedFile=null; old?.opened?.let { store.release(it.draft) } }
+    fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.directory=null; old?.textPage=null; old?.priorSavedFile=null; old?.opened?.let { store.release(it.draft) } }
     fun closedForOriginalDraftRead() = page == null
     private fun current(original: Page) = page === original && original.parentCurrent() && controller.webPrivateOwnerVisible() && controller.state.projectId == original.project
     private fun fields(args: JSONObject, vararg allowed: String) = require(args.keys().asSequence().all { it in allowed }) { "副本文件操作包含未声明字段" }
@@ -119,22 +120,36 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             }
         }) } catch (failure: Exception) { busy = false; throw failure }
     }
-    private fun listing(original: Page, after: String, expected: String): JSONObject {
+    private fun listing(original: Page, after: String, expected: String, refreshDirectory: String? = null): JSONObject {
         check(original.sourcePath == null) { "原单文件入口不能读取副本文件列表" }
         val source = controller.projectDevelopmentForWeb().ordinaryEditorFilesForOwner(original.project, original.checkout)
         val digest = source.getString("sourceDigest")
         check(after.isBlank() || expected == digest) { "副本文件在翻页期间变化，请重新读取列表，不拼接不同版本" }
         val all = sortedMapOf<String, JSONObject>(); val files = source.getJSONArray("files")
-        for (i in 0 until files.length()) { val row = files.getJSONObject(i); all[row.getString("path")] = JSONObject(row.toString()) }
+        var nested=false
+        for (i in 0 until files.length()) {
+            val row=files.getJSONObject(i);val path=row.getString("path");all[path]=JSONObject(row.toString())
+            if(!nested&&row.opt("change")!="deleted"&&path.contains('/'))nested=true
+        }
         var cacheError = ""
         try { for (path in store.dirtyPaths(original.project, original.checkout)) all.getOrPut(path) { JSONObject().put("path", path).put("change", "draft_only") }.put("hasDraft", true) }
         catch (failure: Exception) { cacheError = failure.message ?: "部分保留草稿暂无法读取，未删除" }
         val selected = all.entries.filter { it.key > after }.take(41)
-        return JSONObject().put("filesHandle", original.handle).put("projectId", original.project).put("checkoutId", original.checkout)
+        val result = JSONObject().put("filesHandle", original.handle).put("projectId", original.project).put("checkoutId", original.checkout)
             .put("sourceDigest", digest).put("files", JSONArray(selected.take(40).map { it.value })).put("fileCount", source.getInt("fileCount"))
             .put("nextPath", if (selected.size > 40) selected[39].key else "").put("draftError", cacheError).put("readOnly", true)
             .putOpt("priorSavedFile", source.optJSONObject("priorSavedFile"))
             .put("gitAvailable", runCatching { PocketWebCheckoutGit.available(controller, original.checkout) }.getOrDefault(false))
+        if(after.isBlank()) {
+            // Same complete metadata already read for the ordinary Files page, not another disk scan.
+            val directory=if(nested||refreshDirectory!=null)runCatching {
+                val inventory=CheckoutPathMatches.directoryInventory(original.project,original.checkout,source)
+                inventory.directoryPage(refreshDirectory.orEmpty(),0)
+            }.getOrNull() else null
+            original.directory=directory
+            result.putOpt("directoryPage",directory?.view(original.handle))
+        }
+        return result
     }
     private fun presentListing(original: Page, value: JSONObject): JSONObject {
         original.priorSavedFile = null
@@ -275,12 +290,27 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         original.git.read(controller,request){ current(original) }.put("filesHandle",original.handle)
                             .put("projectId",original.project).put("checkoutId",original.checkout)
                     }
+                }else if(args.has("browseDirectory")){
+                    fields(args,"viewHandle","filesHandle","browseDirectory")
+                    val request=args.getJSONObject("browseDirectory");fields(request,"directoryHandle","directory","start")
+                    val old=original.directory
+                    check(old!=null&&old.handle==text(request,"directoryHandle")){"原目录清单已变化，请刷新这个目录"}
+                    val directory=text(request,"directory",240,true);val start=number(request,"start");require(start in 0L..2000L)
+                    work(original,done){
+                        val next=old.move(directory,start.toInt())
+                        check(current(original)&&original.directory===old){"原目录页面已变化，请刷新这个目录"}
+                        val result=next.view(original.handle);original.directory=next;result
+                    }
                 }else{
-                    fields(args, "viewHandle", "filesHandle", "afterPath", "sourceDigest")
+                    fields(args, "viewHandle", "filesHandle", "afterPath", "sourceDigest", "refreshDirectory")
                     val after = text(args, "afterPath", 240, true); val expected = text(args, "sourceDigest", 64, true)
+                    val directory = if(args.has("refreshDirectory")) {
+                        require(after.isEmpty()&&expected.isEmpty()){"刷新目录不能拼接旧清单"}
+                        text(args,"refreshDirectory",240,true).also { if(it.isNotEmpty())dev.pocketengine.features.workspace.VersionedWorkspace.path(it) }
+                    } else null
                     check(!busy) { "请等待原文件操作回执" }
                     original.priorSavedFile = null
-                    observe(original, done, { value: JSONObject -> presentListing(original, value) }) { listing(original, after, expected) }
+                    observe(original, done, { value: JSONObject -> presentListing(original, value) }) { listing(original, after, expected,directory) }
                 }
             }
             "projects.development.files.find", "projects.development.files.findNext" -> {
@@ -327,10 +357,15 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     val index=number(args,"hit");require(index in 0L until CheckoutTextMatches.PAGE.toLong())
                     val source=textPage(original,args);source to source.selected(index.toInt())
                 }else null
+                var browsed: CheckoutPathMatches.DirectoryPage? = null
                 val hit=if(action.endsWith(".readFound")){
                     check(original.sourcePath==null){"原任务只读所选文件"};fields(args,"viewHandle","filesHandle","searchHandle","hit")
-                    val index=number(args,"hit");require(index in 0L..1999L);check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已过期，请重新查找"}
-                    (original.matches?:error("原查询已结束，请重新查找")).selected(text(args,"searchHandle"),index.toInt())
+                    val index=number(args,"hit");require(index in 0L..1999L);val id=text(args,"searchHandle")
+                    val folder=original.directory?.takeIf{it.handle==id};browsed=folder
+                    if(folder!=null)folder.selected(index.toInt()) else{
+                        check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已过期，请重新查找"}
+                        (original.matches?:error("原查询已结束，请重新查找")).selected(id,index.toInt())
+                    }
                 }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path", "gitStatusOperation", "savedEditId", "priorSavedFileId");null}
                 val gitStatus=if(args.has("gitStatusOperation")){
                     check(action.endsWith(".read")&&original.sourcePath==null){"只能在原副本目录选择 Git 文件"}
@@ -370,7 +405,11 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         check(textPage(original,args)===source){"原查询已经改变"};source.anchor(selected,actual)
                     }
                     if(hit!=null){
-                        check(SystemClock.elapsedRealtime()<original.matchesUntil&&actual.opt("projectId")==original.project&&actual.opt("checkoutId")==original.checkout){"原查询或副本已变化，请重新查找"}
+                        val sameCopy=actual.opt("projectId")==original.project&&actual.opt("checkoutId")==original.checkout
+                        if(browsed!=null)check(current(original)&&original.directory===browsed&&sameCopy&&
+                            actual.opt("deleted")==false&&hit.path()==actual.opt("path")&&hit.sha()==actual.opt("expectedHash")){
+                            "目录中的原文件已变化或移除，请刷新目录；没有打开其他版本。"
+                        }else check(SystemClock.elapsedRealtime()<original.matchesUntil&&sameCopy){"原查询或副本已变化，请重新查找"}
                         CheckoutPathMatches.requireStillExact(hit,actual)
                     }
                     check(original.sourcePath == null || !actual.getBoolean("deleted")) { "原副本已没有这个文件。固定包保留原文，不会重建或替换文件" }
@@ -380,6 +419,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         }
                     }
                     val value = synchronized(store) {
+                        if(browsed!=null)check(current(original)&&original.directory===browsed){"原目录页面已关闭，未打开其他文件"}
                         // Do not touch even the existing draft/cache for a deleted or replacement version.
                         if(listed!=null)check(current(original) && original.opened==null &&
                             actual.opt("deleted")==false && actual.opt("expectedHash")==listed.sha &&
@@ -480,6 +520,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     } catch (failure: Exception) {
                         file.saveUnknown = true
                         info(original, file, true).put("saveStatus", "unknown").put("message", "原保存未取得完整回执，草稿仍保留。请读取同一文件核对，不自动再次保存。").put("saveError", failure.message)
+                    } finally {
+                        // A one-file readback says nothing about the new whole source digest.
+                        original.directory=null
                     }
                 }
             }
