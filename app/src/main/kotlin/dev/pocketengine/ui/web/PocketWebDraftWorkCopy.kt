@@ -12,7 +12,7 @@ import org.json.JSONObject
 
 /** Only a currently shown, already persisted version. A repeat query cannot publish, open or run a project. */
 internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private val local:()->LocalModule,
-    private val work:(Runnable)->Unit,private val open:(JSONObject)->Unit) {
+    private val work:(Runnable)->Unit,private val open:(JSONObject,Boolean)->Unit) {
     companion object {
         const val FIND="projectDraft.findWorkCopy";const val REVIEW="projectDraft.reviewWorkCopy"
         const val CREATE="projectDraft.createWorkCopy";const val OPEN="projectDraft.openWorkCopy";const val OPEN_RETAINED="projectDraft.openRetainedWorkCopy"
@@ -84,7 +84,7 @@ internal class PocketWebDraftWorkCopy(private val tasks:()->TaskStore,private va
                 else result.fold({r->
                     offer=next;move=nextMove
                     next?.id?.let{token->main.postDelayed({if(offer?.id==token)offer=null},120_000L)}
-                    if(action==OPEN||action==OPEN_RETAINED)runCatching{open(r)}.fold({done(r,null)},{done(null,it.message?:"没有打开原副本")})
+                    if(action==OPEN||action==OPEN_RETAINED)runCatching{open(r,action==OPEN_RETAINED)}.fold({done(r,null)},{done(null,it.message?:"没有打开原副本")})
                     else done(r,null)
                 },{done(null,it.message?:"暂不能核对这份副本；原工程和改稿均保留。")})
             }

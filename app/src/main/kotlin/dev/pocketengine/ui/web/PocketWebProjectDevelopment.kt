@@ -11,18 +11,23 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
+/** Created only from a successful explicit native open of this retained copy. */
+internal class RetainedDraftOriginalRead(val current: () -> Boolean, val read: (() -> Boolean) -> JSONObject)
+
 /** Presentation around the original project checkout and Assistant admission.
  * No execution grant, alternate runner, task ledger or restored review lives here. */
 internal class PocketWebProjectDevelopment(
     private val controller: PocketWorldController,
     private val ownerCurrent: () -> Boolean,
     private val captureWindow: () -> PocketWebWindowTicket,
-    private val acceptsWindow: (PocketWebWindowTicket) -> Boolean
+    private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
+    private val captureOriginalDraft: (String, String) -> RetainedDraftOriginalRead?
 ) {
     private data class ReturnToDraft(val handle:String,val project:String,val checkout:String,val draftDigest:String,val until:Long)
     private class Page(val handle: String, val project: String, val window: PocketWebWindowTicket, val generation: Long, val requested:ReturnToDraft?=null) {
         // Set only when this specific page actually reads the native draft. Guarded by the shared draft monitor.
         var shownSeal:String?=null
+        @Volatile var shownSoleCheckout:String?=null
     }
     private data class Review(val handle: String, val page: Page, val input: String, val picked:ProjectConventionDraft.Bound, val modelRevision: Long, val expires: Long, val heldBuildDraftDigest:String?=null)
     private val main = Handler(Looper.getMainLooper())
@@ -157,17 +162,18 @@ internal class PocketWebProjectDevelopment(
     }
     private fun pending(project: String): Boolean = draft(project).optJSONObject("submission")?.optString("status") in setOf("pending", "unknown", "unconfirmed")
     private fun copy(value: JSONObject) = JSONObject(value.toString())
-    private fun working(original: Page, done: (JSONObject?, String?) -> Unit, effect: Boolean = false, block: () -> JSONObject) {
+    private fun working(original: Page, done: (JSONObject?, String?) -> Unit, effect: Boolean = false,
+        extraCurrent: () -> Boolean = { true }, block: () -> JSONObject) {
         check(!busy) { "请等待当前项目操作回执" }; busy = true
         try {
             controller.runPluginCatalogWork(Runnable {
                 val result = runCatching {
-                    check(current(original)) { "原项目页面已关闭，没有开始排队操作" }
+                    check(current(original) && extraCurrent()) { "原项目页面已关闭，没有开始排队操作" }
                     block()
                 }
                 main.post {
                     if (page === original) busy = false
-                    if (current(original)) result.fold({ done(public(it), null) }, { done(null, it.message ?: "项目操作未完成，请核对原记录") })
+                    if (current(original) && extraCurrent()) result.fold({ done(public(it), null) }, { done(null, it.message ?: "项目操作未完成，请核对原记录") })
                     else done(null, if (effect) "原页面已变化，请回到这个项目查询原记录；不要重复提交" else "原页面已变化，请重新读取")
                 }
             })
@@ -177,7 +183,9 @@ internal class PocketWebProjectDevelopment(
     private fun model() = controller.nativeModelSelection().readStable { controller.projectDevelopmentModelForWeb() }
     private fun metadata(original: Page): JSONObject {
         val actual = controller.projectDevelopmentForWeb().inspectForOwner(original.project)
-        if (actual.getJSONArray("checkouts").length() == 0) {
+        val checkouts = actual.getJSONArray("checkouts")
+        original.shownSoleCheckout = if (checkouts.length() == 1) checkouts.getJSONObject(0).optString("checkoutId").ifEmpty { null } else null
+        if (checkouts.length() == 0) {
             // No guessed absence from the catalog snapshot; only the phone import's original durable locator can prove this.
             val recovery = runCatching { controller.projectPackages.pendingWebSourceForProject(original.project) }.getOrNull()
             actual.putOpt("phoneSourceRecovery", recovery)
@@ -320,6 +328,22 @@ internal class PocketWebProjectDevelopment(
                 working(original, done) { controller.projectDevelopmentForWeb().hostSourceOriginForOwner(original.project, checkout, expected) }
             }
             "projects.development.inspect" -> {
+                if (args.has("readOriginalDraft")) {
+                    fields(args, "viewHandle", "checkoutId", "readOriginalDraft")
+                    require(args.opt("readOriginalDraft") == true)
+                    val checkout = text(args, "checkoutId")
+                    val visit = captureOriginalDraft(original.project, checkout) ?: error("请从原改稿打开这份已保留的工作副本")
+                    fun sameVisit(): Boolean = visit.current() && review == null && files.closedForOriginalDraftRead() && synchronized(drafts) {
+                        val saved = drafts[original.project]
+                        val selectedCheckout = saved?.optString("checkoutId").orEmpty()
+                        original.shownSeal != null &&
+                            (selectedCheckout == checkout || selectedCheckout.isEmpty() && original.shownSoleCheckout == checkout) &&
+                            saved?.optJSONObject("submission")?.optString("status") !in setOf("pending", "unknown", "unconfirmed")
+                    }
+                    check(sameVisit()) { "请先退出文件编辑、核对待定交办，并选择刚打开的原工作副本" }
+                    working(original, done, extraCurrent = ::sameVisit) { visit.read { current(original) && sameVisit() } }
+                    return
+                }
                 fields(args, "viewHandle", "checkoutId", "savedEdit"); val checkout = text(args, "checkoutId")
                 val receipt = if (args.has("savedEdit")) {
                     val saved = args.getJSONObject("savedEdit"); fields(saved, "filesHandle", "id")

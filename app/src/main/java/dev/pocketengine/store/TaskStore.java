@@ -13662,13 +13662,45 @@ public final class TaskStore {
         JSONObject t=required(id),ctx=requirePrivateDraftTask(t);if(ctx.has(OWNER_REVISION))requireStoredOwnerRevisionLineage(t);Object pin=t.opt("projectEditDraftId");
         if(pin==null)return new JSONObject().put("taskId",id).put("available",false);
         if(!(pin instanceof String token)||!token.matches("[a-f0-9]{64}"))throw new SecurityException("原草稿回执损坏");
+        JSONObject record=privateProjectEditDraftRecord(id,token,ctx);
+        requireDraftRun(id,record.getString("runId"),record.getInt("epoch"));
+        return privateProjectEditDraftView(record);
+    }
+    private JSONObject privateProjectEditDraftRecord(String id,String token,JSONObject ctx)throws Exception{
         JSONObject record=PrivateProjectDraftRecords.read(db,id,token);
         if(!dev.pocketengine.features.local.project.ProjectSources.canonical(ctx.opt(OWNER_REVISION)).equals(dev.pocketengine.features.local.project.ProjectSources.canonical(record.opt(OWNER_REVISION)))||!ctx.getString("projectId").equals(record.opt("projectId"))||!ctx.getString("checkoutId").equals(record.opt("checkoutId"))||
             !ctx.getString("initialSourceDigest").equals(record.opt("sourceDigest")))throw new SecurityException("草稿不属于原项目版本");
-        try(Cursor row=db.rawQuery("SELECT epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{id,record.getString("runId")})){
-            if(!row.moveToFirst()||row.getInt(0)!=record.getInt("epoch"))throw new SecurityException("原轮次不可核对");
+        return record;
+    }
+    private void requireDraftRun(String id,String run,int epoch)throws Exception{
+        try(Cursor row=db.rawQuery("SELECT epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{id,run})){
+            if(!row.moveToFirst()||row.getInt(0)!=epoch)throw new SecurityException("原轮次不可核对");
         }
+    }
+    private static JSONObject privateProjectEditDraftView(JSONObject record)throws Exception{
         return dev.pocketengine.features.local.project.ProjectEditDraft.receipt(record).put("available",true).put("before",record.getString("before")).put("after",record.getString("after"));
+    }
+    /** Only from the seal of a just-opened retained project copy; there is no other version fallback. */
+    public synchronized JSONObject readRetainedCopyOriginalForOwner(JSONObject origin,java.util.function.BooleanSupplier current)throws Exception{
+        db.beginTransactionNonExclusive();try{
+            if(!current.getAsBoolean())throw new SecurityException("原工作副本页面已离开");
+            String id=origin.getString("taskId"),pin=origin.getString("draftId"),run=origin.getString("runId");
+            int epoch=TaskExecutionScope.exactInt(origin,"epoch",1,Integer.MAX_VALUE);
+            JSONObject task=required(id),ctx=requirePrivateDraftTask(task);
+            if(!pin.matches("[a-f0-9]{64}")||!pin.equals(task.opt("projectEditDraftId"))||
+               !ctx.getString("projectId").equals(origin.opt("sourceProjectId"))||
+               !ctx.getString("checkoutId").equals(origin.opt("sourceCheckoutId")))
+                throw new SecurityException("已保存原改稿已无法核对，没有读取其他稿本");
+            requireDraftRun(id,run,epoch);
+            if(ctx.has(OWNER_REVISION))requireStoredOwnerRevisionLineage(task);
+            if(!current.getAsBoolean())throw new SecurityException("原工作副本页面已离开");
+            JSONObject record=privateProjectEditDraftRecord(id,pin,ctx);
+            if(!run.equals(record.opt("runId"))||epoch!=record.getInt("epoch")||
+               !origin.getString("path").equals(record.opt("path"))||!current.getAsBoolean())
+                throw new SecurityException("原改稿或工作副本已变化，没有返回差异");
+            JSONObject view=privateProjectEditDraftView(record);
+            db.setTransactionSuccessful();return view;
+        }finally{db.endTransaction();}
     }
     /** Only the original owner difference view can attach a retained revision locator to this receipt. */
     public synchronized JSONObject readPrivateProjectEditDraftForOwnerView(String id,String expectedDraft,String expectedRun,int expectedEpoch)throws Exception{

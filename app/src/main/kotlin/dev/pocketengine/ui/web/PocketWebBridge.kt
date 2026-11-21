@@ -186,10 +186,13 @@ internal class PocketWebBridge(
     // A task-list stub or proposed ID is not permission to expose that owner's detailed project requirements.
     private data class GoalWindow(val task:String,val run:String,val epoch:Int,val project:String,val checkout:String,val ticket:PocketWebWindowTicket)
     private var projectGoal:GoalWindow?=null
+    private data class RetainedDraftSource(val draft: String, val run: String, val epoch: Int, val workIdentity: String)
     private data class OpenedRetainedDraftCopy(val project: String, val checkout: String, val sourceTask: String,
-        val request: Int, val selection: Long, val document: String)
-    private var openedRetainedDraftCopy: OpenedRetainedDraftCopy? = null
-    private fun openDraftCopy(copy: JSONObject) {
+        val request: Int, val selection: Long, val document: String, val original: RetainedDraftSource?)
+    @Volatile private var openedRetainedDraftCopy: OpenedRetainedDraftCopy? = null
+    private fun localDraftCopy() = controller.nativeButlerHost().features.module("local") as? dev.pocketengine.features.local.LocalModule
+        ?: error("原本机项目宿主不可用")
+    private fun openDraftCopy(copy: JSONObject, explicitlyRetained: Boolean) {
         val sourceTask = taskViewId
         val document = documentId
         openedRetainedDraftCopy = null
@@ -201,25 +204,63 @@ internal class PocketWebBridge(
         if (sourceTask != null && copy.opt("taskId") == sourceTask && document != null && taskReturnSection == null &&
             copy.opt("status") == "ready" && copy.optInt("ordinal") in 1..8 &&
             state.requestedProjectId == project && controller.originalProjectEditorCurrent(project, checkout)) {
+            val original = if (explicitlyRetained && copy.opt("found") == true && copy.opt("recyclable") == false &&
+                copy.opt("executionAuthorized") == false && copy.optInt("epoch") > 0) {
+                val draft = copy.optString("draftId"); val run = copy.optString("runId"); val work = copy.optString("workIdentity")
+                if (draft.matches(Regex("[a-f0-9]{64}")) && run.isNotBlank() && work.matches(Regex("[a-f0-9]{64}")))
+                    RetainedDraftSource(draft, run, copy.getInt("epoch"), work) else null
+            } else null
             openedRetainedDraftCopy = OpenedRetainedDraftCopy(project, checkout, sourceTask, state.requestedProjectRevision,
-                controller.projectWorkbench.navigationRevision(), document)
+                controller.projectWorkbench.navigationRevision(), document, original)
         }
         publishState()
     }
 
-    private fun retainedDraftCopyOpenForWeb(): JSONObject? {
-        val open = openedRetainedDraftCopy ?: return null
+    private fun currentRetainedDraftCopy(open: OpenedRetainedDraftCopy): Boolean {
         val state = controller.state
         // The Web drawer may close after native selection. Match the actual project request, not its old task window.
-        if (documentId != open.document || section != null || taskViewId != null || !controller.webPrivateOwnerVisible() ||
-            state.filePath != null || state.requestedProjectId != open.project || state.requestedProjectRevision != open.request ||
-            controller.projectWorkbench.navigationRevision() != open.selection ||
-            !controller.originalProjectEditorCurrent(open.project, open.checkout)) {
+        return openedRetainedDraftCopy === open && !closed && documentId == open.document && section == null &&
+            taskViewId == null && controller.webPrivateOwnerVisible() && state.filePath == null &&
+            state.requestedProjectId == open.project && state.requestedProjectRevision == open.request &&
+            controller.projectWorkbench.navigationRevision() == open.selection &&
+            controller.originalProjectEditorCurrent(open.project, open.checkout)
+    }
+    private fun retainedDraftCopyOpenForWeb(): JSONObject? {
+        val open = openedRetainedDraftCopy ?: return null
+        if (!currentRetainedDraftCopy(open)) {
             openedRetainedDraftCopy = null
             return null
         }
         return JSONObject().put("projectId", open.project).put("checkoutId", open.checkout)
             .put("sourceTaskId", open.sourceTask).put("requestRevision", open.request)
+            .also { if (open.original != null) it.put("canReadOriginalDraft", true) }
+    }
+    private fun captureRetainedDraftOriginal(project: String, checkout: String): RetainedDraftOriginalRead? {
+        val open = openedRetainedDraftCopy ?: return null
+        val original = open.original ?: return null
+        fun current() = currentRetainedDraftCopy(open)
+        if (open.project != project || open.checkout != checkout || !current()) return null
+        return RetainedDraftOriginalRead(::current) { live ->
+            val local = localDraftCopy()
+            fun publication(): JSONObject {
+                check(live()) { "原工作副本页面已离开" }
+                return local.retainedDraftOriginForOpenCopy(project, checkout, original.workIdentity).also {
+                    check(it.opt("taskId") == open.sourceTask && it.opt("draftId") == original.draft &&
+                        it.opt("runId") == original.run && it.optInt("epoch") == original.epoch) { "原改稿来源已变化" }
+                }
+            }
+            val origin = publication()
+            val fixed = controller.nativeButlerHost().tasks.readRetainedCopyOriginalForOwner(origin) { live() }
+            check(dev.pocketengine.features.local.project.ProjectSources.canonical(origin) ==
+                dev.pocketengine.features.local.project.ProjectSources.canonical(publication()) && live()) { "原工作副本页面已变化" }
+            JSONObject().put("format", "pocketworld.retained-copy-original-draft.v1").put("projectId", project)
+                .put("checkoutId", checkout).put("requestRevision", open.request).put("sourceTaskId", open.sourceTask)
+                .put("readOnly", true).put("executionAuthorized", false)
+                .put("beforeFromOwnerRevision", fixed.has(dev.pocketengine.features.local.project.OwnerRevisionSource.FIELD)).also { view ->
+                    for (field in listOf("draftId", "runId", "epoch", "path", "before", "after", "beforeSha256", "afterSha256", "beforeBytes", "afterBytes"))
+                        view.put(field, fixed.get(field))
+                }
+        }
     }
 
     private fun canReadProjectGoal(row:UiTask):Boolean {
@@ -285,8 +326,7 @@ internal class PocketWebBridge(
     }
     private val profilePages = PocketWebProfiles(controller, { !closed && documentId != null && section == "workProfiles" && controller.webPrivateOwnerVisible() })
     private val projectDraftDifference=PocketWebProjectDraftDifference(controller.nativeButlerHost(),{controller.nativeButlerHost().tasks},controller::runPluginCatalogWork,::captureWindow,::acceptsWindow,
-        { controller.nativeButlerHost().features.module("local") as? dev.pocketengine.features.local.LocalModule ?: error("原本机项目宿主不可用") },
-        ::openDraftCopy) {
+        ::localDraftCopy, ::openDraftCopy) {
         taskViewId.takeIf{!closed&&documentId!=null&&section==null&&controller.state.filePath==null&&controller.webPrivateOwnerVisible()}
     }
     private val firstNodeWebOutput=PocketWebFirstNodeWebOutput({controller.nativeButlerHost().tasks},
@@ -308,7 +348,8 @@ internal class PocketWebBridge(
     private val taskPackagePreparation=PocketWebTaskPackagePreparation(controller)
     private val removedProjectFiles=PocketWebRemovedProjectFiles(controller,{ project -> !closed && documentId!=null && section==null && taskViewId==null &&
         controller.webPrivateOwnerVisible() && controller.state.projectId==project && controller.state.filePath==null },::captureWindow,::acceptsWindow)
-    private val projectDevelopment = PocketWebProjectDevelopment(controller, { !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
+    private val projectDevelopment = PocketWebProjectDevelopment(controller, { !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() },
+        ::captureWindow, ::acceptsWindow, ::captureRetainedDraftOriginal)
     private val knowledge = PocketWebKnowledge(controller, projectDevelopment::conventionDraft)
     private val butlerPreparations = PocketWebButlerPreparations(controller, { !closed && documentId != null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
     private val localPages = PocketWebLocal(controller) { taskViewId }
@@ -691,7 +732,8 @@ internal class PocketWebBridge(
                 requireFile(args)
                 controller.formalFileExports.dispatch(action,args){result,error->complete(id,result,error,retainValue=false);publishState()};return
             }
-            if(action=="projects.development.taskPackageSource" || action=="projects.development.resolveTaskPackageSource"){
+            if(action=="projects.development.taskPackageSource" || action=="projects.development.resolveTaskPackageSource" ||
+                action=="projects.development.inspect" && args.has("readOriginalDraft")){
                 projectDevelopment.dispatch(action,args){r,e->complete(id,r,e,retainValue=false)};return
             }
             if (action in PocketWebProjectDevelopment.COMMANDS) {

@@ -51,6 +51,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             "projects.development.files.import", "projects.development.files.dismissImport", "projects.development.files.openFormal")
     }
     fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.textPage=null; old?.opened?.let { store.release(it.draft) } }
+    fun closedForOriginalDraftRead() = page == null
     private fun current(original: Page) = page === original && original.parentCurrent() && controller.webPrivateOwnerVisible() && controller.state.projectId == original.project
     private fun fields(args: JSONObject, vararg allowed: String) = require(args.keys().asSequence().all { it in allowed }) { "副本文件操作包含未声明字段" }
     private fun text(args: JSONObject, key: String, max: Int = 80, blank: Boolean = false): String {

@@ -14,7 +14,7 @@ import org.json.JSONObject
 internal class PocketWebProjectDraftDifference(private val context:Context,private val tasks:()->TaskStore,private val work:(Runnable)->Unit,
     private val capture:()->PocketWebWindowTicket,
     private val accepts:(PocketWebWindowTicket)->Boolean,private val local:()->dev.pocketengine.features.local.LocalModule,
-    private val openWork:(JSONObject)->Unit,private val selected:()->String?) {
+    private val openWork:(JSONObject,Boolean)->Unit,private val selected:()->String?) {
     companion object {
         const val READ="projectDraft.readDifference";const val EDIT="projectDraft.editLocal"
         const val KEEP="projectDraft.keepRevision";const val CLOSE="projectDraft.closeEditor"

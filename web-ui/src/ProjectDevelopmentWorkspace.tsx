@@ -8,6 +8,7 @@ import { bridge } from './bridge';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutSavedPosition, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
+import { ProjectDraftChanges } from './ProjectDraftChanges';
 import './local-workspace.css';
 import './project-development.css';
 import './project-workspace-manga.css';
@@ -29,6 +30,7 @@ export type ProjectImportedEditor = {projectId:string; checkoutId:string; import
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
+  retainedOriginalVisit?:Data;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
   onOpenTask: (id: string, checkoutId?: string) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout) => void;
   registerBack: (handler: (() => boolean) | null) => void; onInteractionBusyChange?: (busy: boolean) => void };
@@ -41,6 +43,41 @@ const copyIdentity = (value: unknown): value is string =>
   typeof value==='string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const sourceHash = (value: unknown): value is string => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
 type BuildPreview = {value:Data; viewHandle:string; window:string};
+type RetainedOriginalVisit = {projectId:string; checkoutId:string; sourceTaskId:string; requestRevision:number};
+type RetainedOriginalDifference = RetainedOriginalVisit & {
+  draftId:string; runId:string; epoch:number; path:string; before:string; after:string;
+  beforeSha256:string; afterSha256:string; beforeBytes:number; afterBytes:number; beforeFromOwnerRevision:boolean;
+};
+type RetainedOriginalRead = {value:RetainedOriginalDifference; viewHandle:string; window:string};
+const sourceTaskKey=(value:unknown):value is string=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
+const sameRetainedVisit = (a:RetainedOriginalVisit,b:RetainedOriginalVisit) =>
+  a.projectId===b.projectId&&a.checkoutId===b.checkoutId&&a.sourceTaskId===b.sourceTaskId&&a.requestRevision===b.requestRevision;
+
+function currentRetainedVisit(shown:Data|undefined,projectId:string,checkoutId:string):RetainedOriginalVisit|null {
+  const {state,view}=bridge.getState(),native=state.openedRetainedDraftCopy,window=(view||{}) as Data;
+  if(document.hidden||window.section!==null||window.taskId!==null||state.filePath||state.projectId!==projectId||
+    state.requestedProjectId!==projectId||shown?.canReadOriginalDraft!==true||native?.canReadOriginalDraft!==true||
+    native.projectId!==projectId||native.checkoutId!==checkoutId||!sourceTaskKey(native.sourceTaskId)||
+    !Number.isSafeInteger(native.requestRevision)||native.requestRevision<1||
+    native.requestRevision!==state.requestedProjectRevision||!sameRetainedVisit(native,shown as RetainedOriginalVisit))return null;
+  return {projectId,checkoutId,sourceTaskId:native.sourceTaskId,requestRevision:native.requestRevision};
+}
+
+function checkedRetainedOriginal(value:Data,visit:RetainedOriginalVisit):RetainedOriginalDifference {
+  const fields=['format','readOnly','executionAuthorized','projectId','checkoutId','sourceTaskId','requestRevision','draftId','runId','epoch',
+    'path','before','after','beforeSha256','afterSha256','beforeBytes','afterBytes','beforeFromOwnerRevision'];
+  if(value?.format!=='pocketworld.retained-copy-original-draft.v1'||value.readOnly!==true||value.executionAuthorized!==false||
+    Object.keys(value).some(key=>!fields.includes(key))||!sameRetainedVisit(value as RetainedOriginalVisit,visit)||
+    !sourceHash(value.draftId)||!sourceTaskKey(value.runId)||!Number.isSafeInteger(value.epoch)||value.epoch<1||
+    typeof value.path!=='string'||!value.path.trim()||typeof value.beforeFromOwnerRevision!=='boolean'||
+    !sourceHash(value.beforeSha256)||!sourceHash(value.afterSha256)||value.beforeSha256===value.afterSha256||
+    typeof value.before!=='string'||value.before.length>65536||typeof value.after!=='string'||value.after.length>24576||
+    value.before===value.after||!Number.isSafeInteger(value.beforeBytes)||value.beforeBytes<0||value.beforeBytes>65536||
+    !Number.isSafeInteger(value.afterBytes)||value.afterBytes<0||value.afterBytes>24576||
+    new TextEncoder().encode(value.before).byteLength!==value.beforeBytes||new TextEncoder().encode(value.after).byteLength!==value.afterBytes)
+    throw Error('未能核对这份工作副本的本轮原改稿，没有显示其他文件。');
+  return value as RetainedOriginalDifference;
+}
 const nodeScripts=['prebuild','build','postbuild'] as const;
 
 function checkedBuildPreview(value:Data,projectId:string,checkoutId:string,sourceDigest:string) {
@@ -144,7 +181,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),noticeArea=useRef<HTMLDivElement>(null);
@@ -157,6 +194,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [requirements, setRequirements] = useState<DeliveryRequirements>(() => deliveryRequirements());
   const [source, setSource] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null), [submission, setSubmission] = useState<Data | null>(null);
   const [buildPreview,setBuildPreview]=useState<BuildPreview|null>(null), previewOpen=useRef(false);
+  const [retainedRead,setRetainedRead]=useState<RetainedOriginalRead|null>(null), retainedOriginalOpen=useRef(false);
+  const activeRetainedVisit=useRef<RetainedOriginalVisit|null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
   const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;unselectedImport?:ProjectImportedEditor}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
@@ -181,6 +220,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     bridge.getState().state.projectId===projectId&&!document.hidden?buildPreview.value:null;
   previewOpen.current=!!preview;
   const closeBuildPreview=()=>{previewOpen.current=false;setBuildPreview(null);};
+  const retainedVisit=active&&view?.projectId===projectId&&view.executionAuthorized===false&&view.viewHandle===handle.current&&
+    !view.draftRecoveryRequired&&!filesOpen&&!hostDiff&&!review&&!preview&&!unresolved(submission)&&!sourceConflict&&!buildCopyMissing&&
+    can('projects.development.inspect')?currentRetainedVisit(retainedOriginalVisit,projectId,checkout):null;
+  activeRetainedVisit.current=retainedVisit;
+  const originalDifference=retainedRead&&retainedVisit&&retainedRead.viewHandle===handle.current&&
+    retainedRead.window===ownerWindow()&&sameRetainedVisit(retainedRead.value,retainedVisit)?retainedRead.value:null;
+  retainedOriginalOpen.current=!!originalDifference;
+  const closeRetainedOriginal=()=>{retainedOriginalOpen.current=false;setRetainedRead(null);};
+  useEffect(()=>{if(retainedRead&&!originalDifference)setRetainedRead(null);},[retainedRead,originalDifference]);
   const clearSubmittedDraft = (receipt: Data) => {
     if (receipt.status !== 'accepted' || scopedBuildReceipt(receipt) || receipt.draftSourceNeedsReview===true || !sameDraft(draft.current, receipt)) return;
     keptNativePick.current=false;draft.current = { ...draft.current, goal: '', ...deliveryRequirements() }; setGoal(''); setRequirements(deliveryRequirements());
@@ -204,7 +252,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     entered.current = token; setBusy(true); setError('');
     const current = () => alive.current && latest.current.active && entered.current === token && generation.current === sequence && ownerWindow() === window && ownsProject() && !document.hidden;
     try {
-      const value = await latest.current.run(action, args);
+      // A retired comparison must not report its private read failure on the next page.
+      const runHere=action==='projects.development.inspect'&&args.readOriginalDraft===true?bridge.command:latest.current.run;
+      const value = await runHere(action, args);
       if (current()) { accept?.(value); return value as Data; }
       if (action === 'projects.development.read' && value?.viewHandle) void latest.current.run('projects.development.close', { viewHandle: value.viewHandle }).catch(() => {});
     }
@@ -223,7 +273,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       }
       returned.current=pinned.handle;focusReturned.current=true;setDeliveryOpen(true);
     }
-    handle.current = value.viewHandle; setView(value); sourceAttempt.current = ''; setSource(null); closeBuildPreview();
+    handle.current = value.viewHandle; setView(value); sourceAttempt.current = ''; setSource(null); closeBuildPreview(); closeRetainedOriginal();
     const incoming = value.draft || {}, here = draft.current;
     if(value.draftRecoveryRequired!==true)setCopyResult(previous =>
       incoming.copyRequestId && (previous?.unconfirmed===true || previous?.requestId===incoming.copyRequestId) ? previous : null);
@@ -293,15 +343,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if (original && handle.current) void latest.current.run('projects.development.dismiss', { viewHandle: handle.current, reviewHandle: original.reviewHandle }).catch(() => {});
   };
   useEffect(() => {
-    registerBack(() => { if (!latest.current.active) return false; if (visibleHostDiff.current) { closeHostDiff(); return true; } if (filesBack.current?.()) return true; if (entered.current) return true; if (activeReview.current) { dismiss(); return true; } if(previewOpen.current){closeBuildPreview();return true;} return false; });
+    registerBack(() => { if (!latest.current.active) return false; if (visibleHostDiff.current) { closeHostDiff(); return true; } if (filesBack.current?.()) return true; if (entered.current) return true; if (activeReview.current) { dismiss(); return true; } if(previewOpen.current){closeBuildPreview();return true;} if(retainedOriginalOpen.current){closeRetainedOriginal();return true;} return false; });
     return () => registerBack(null);
   }, [registerBack]);
   useEffect(() => {
     alive.current = true; let owner = ownerWindow();
     const retire = () => {
       generation.current++; entered.current = null; buildAfterSave.current=null; sourceRecoveryReturn.current=null;
-      const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null; previewOpen.current=false;
-      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setBuildPreview(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); }
+      const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null; previewOpen.current=false; retainedOriginalOpen.current=false; activeRetainedVisit.current=null;
+      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setBuildPreview(null); setRetainedRead(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); }
       if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
     };
     // Switching the start method retires its window, never its plain draft or
@@ -431,7 +481,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   };
   const copyUnconfirmed = copyResult?.unconfirmed === true ||
     !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
-  const interactionBusy = active && (busy || pending || !!review || !!preview || filesOpen || copyUnconfirmed && can('projects.development.queryCopy'));
+  const interactionBusy = active && (busy || pending || !!review || !!preview || !!originalDifference || filesOpen || copyUnconfirmed && can('projects.development.queryCopy'));
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
   const closeFiles = (saved?:CheckoutSavedPosition) => {
     const original=fileWindow?.unselectedImport;
@@ -694,6 +744,18 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       setBuildPreview({value:checkedBuildPreview(value,projectId,checkout,expectedSourceDigest),viewHandle,window});
     });
   };
+  const readRetainedOriginal=()=>{
+    const viewHandle=handle.current,window=ownerWindow(),seen=currentRetainedVisit(retainedOriginalVisit,projectId,checkout);
+    if(disabled||retainedOriginalOpen.current||!retainedVisit||!seen||!sameRetainedVisit(retainedVisit,seen)||
+      !viewHandle||view?.viewHandle!==viewHandle||draft.current.checkoutId!==checkout)return;
+    void invoke('projects.development.inspect',{viewHandle,checkoutId:checkout,readOriginalDraft:true},value=>{
+      const current=currentRetainedVisit(retainedOriginalVisit,projectId,checkout);
+      const shown=activeRetainedVisit.current;
+      if(!current||!shown||!sameRetainedVisit(seen,current)||!sameRetainedVisit(seen,shown)||handle.current!==viewHandle||
+        ownerWindow()!==window||draft.current.checkoutId!==checkout)return;
+      setRetainedRead({value:checkedRetainedOriginal(value,seen),viewHandle,window});
+    });
+  };
   const reviewNodeBuild = () => {
     const viewHandle=handle.current;
     void invoke('projects.development.reviewDraftBuild',{
@@ -847,6 +909,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           onClick={openSelectedCopyFiles}>{importedEntry?'编辑其他源文件':'编辑这份副本的文件'}</Button>}
         {savedFileHere && can('projects.development.files.open') && <Button variant="ghost" disabled={busy || !!review || filesOpen}
           onClick={() => { setHostEditor(null); setFileWindow({checkoutId:savedFileHere.checkoutId,resumeSaved:savedFileHere}); }}>回到上次保存的文件</Button>}
+        {retainedVisit&&selectedCopy?.draftWorkingCopy===true&&<Button variant="ghost" disabled={disabled} onClick={readRetainedOriginal}>查看本轮原改稿</Button>}
         {canReviewSelectedBuild &&
           (versionBuild ? !versionWorkAtTop && can('tasks.open') && <Button ref={buildNextAction} variant="secondary" disabled={disabled || !can('projects.development.inspect')}
             onClick={()=>openVersionBuild('work')}>查看原构建任务</Button> :
@@ -926,6 +989,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} onClose={closeFiles}
       onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined} registerBack={registerFilesBack} />}
+    {originalDifference&&<SettingsDialog isOpen title="本轮原改稿" closeLabel="返回当前工作副本" onClose={closeRetainedOriginal}>
+      <div className="pw-project-draft">
+        <strong className="pw-project-draft-path">{originalDifference.path}</strong>
+        <p className="pw-field-hint">固定原改稿 <code>{originalDifference.afterSha256.slice(0,8)}</code>。只读，不包含当前工作副本的后续编辑。关闭仍留在当前副本。</p>
+        <ProjectDraftChanges key={originalDifference.draftId} before={originalDifference.before} after={originalDifference.after}
+          version={originalDifference.afterSha256.slice(0,8)} beforeLabel={originalDifference.beforeFromOwnerRevision?'本轮选中的已存稿':'本轮起点'}/>
+      </div>
+    </SettingsDialog>}
     <SettingsDialog isOpen={!!review||!!preview} title={preview?'本机构建方案':review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={preview?closeBuildPreview:dismiss} closeLabel={preview||review?.draftBuild===true?'返回项目副本':'返回修改目标'}>{preview?<div className="pw-local-review">
       <p className="pw-field-hint">{name} · 副本 <code>{preview.checkoutId.slice(0,8)}</code> · 已保存版本 <code>{preview.sourceDigest.slice(0,10)}</code></p>
       <strong>{preview.manager} run build</strong>

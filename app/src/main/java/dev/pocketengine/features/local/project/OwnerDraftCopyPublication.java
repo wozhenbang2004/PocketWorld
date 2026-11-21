@@ -100,9 +100,24 @@ public final class OwnerDraftCopyPublication {
         if(project==null||!project.matches("[a-f0-9-]{36}")||!present(new File(root,"draft-work-intents")))return;
         JSONObject i=read(file(root,project));if(i!=null)OwnerDraftCopyShelf.requireOpenedForContent(OwnerDraftCopyShelf.location(root,i.getJSONObject("reference").getString("checkoutId"),false));
     }
+    /** Recheck the exact published checkout without opening its files or the source manuscript. */
+    public static JSONObject requireRetainedCopyPresent(File root,String project,String checkout,String work)throws Exception{
+        JSONObject i=read(file(root,project));
+        if(i==null)throw new SecurityException("原工作副本没有可核对的发布记录");
+        JSONObject ref=i.getJSONObject("reference");
+        if(!checkout.equals(ref.opt("checkoutId"))||!work.equals(ref.opt("workIdentity"))||
+            !(ref.opt("ordinal") instanceof Integer ordinal)||ordinal<1||ordinal>8)
+            throw new SecurityException("已离开刚打开的原稿工作副本");
+        requirePresent(root,project,false,i);
+        OwnerDraftCopyShelf.requireOpenedForContent(OwnerDraftCopyShelf.location(root,checkout,false));
+        return ref;
+    }
     private static void requirePresent(File root,String project,boolean catalogOnly)throws Exception{
         if(project==null||!project.matches("[a-f0-9-]{36}")||!present(new File(root,"draft-work-intents")))return;
         JSONObject i=read(file(root,project));if(i==null)return;
+        requirePresent(root,project,catalogOnly,i);
+    }
+    private static void requirePresent(File root,String project,boolean catalogOnly,JSONObject i)throws Exception{
         JSONObject ref=i.getJSONObject("reference");File active=OwnerDraftCopyShelf.location(root,ref.getString("checkoutId"),false);
         File record=new File(active,"checkout.json"),files=new File(active,"files");
         if(!Files.isDirectory(files.toPath(),LinkOption.NOFOLLOW_LINKS)||!Files.isRegularFile(record.toPath(),LinkOption.NOFOLLOW_LINKS))
