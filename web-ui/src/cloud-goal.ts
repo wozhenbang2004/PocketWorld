@@ -10,6 +10,7 @@ export const exactSavedHostMessage=<T extends SavedHostProjection>(rows:readonly
     row.firstHostRequestLocal===true&&(!unsent||localSavedHostMessage(row))?row:undefined;
 };
 
+export type SavedHostConnectionChoice = {profileId:string;profileBinding:string};
 export type CloudGoal = {
   readonly id: string;
   readonly text: string;

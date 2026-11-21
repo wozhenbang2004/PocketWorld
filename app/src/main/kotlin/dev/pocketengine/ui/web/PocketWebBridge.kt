@@ -1467,7 +1467,11 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "models.snapshot") {
-                if (args.has("originalHomeInput")) readOriginalHomeModelInput(id, args) else readModelSnapshot(id)
+                when {
+                    args.has("originalHomeInput") -> readOriginalHomeModelInput(id, args)
+                    args.has("originalConversationInput") -> readOriginalConversationModelInput(id, args)
+                    else -> readModelSnapshot(id)
+                }
                 return
             }
             if (action == "conversation.drafts") { checkedPayload(args, setOf("taskId")); controller.readConversationDrafts(requiredString(args, "taskId")) { result, error -> complete(id, result, error) }; return }
@@ -1716,6 +1720,20 @@ internal class PocketWebBridge(
             }
             if (action == "devices.openTask") {
                 requireSection("devices")
+                if (args.has("savedPeerWorkHandle")) {
+                    val selected=devicePages.savedPeerWorkForNavigation(args)
+                    val sourceCurrent={
+                        section=="devices" && taskViewId==null &&
+                            runCatching { devicePages.savedPeerWorkForNavigation(args,verifyIdentity=false)==selected }.getOrDefault(false)
+                    }
+                    val verifySource:(JSONObject)->Unit={ raw ->
+                        require(sourceCurrent() && devicePages.savedPeerWorkForNavigation(args)==selected &&
+                            dev.pocketengine.store.TaskStoreDeviceTasks.matchesSavedPeerWorkspaceWork(raw,selected.task,selected.run,selected.epoch,selected.peer)) { "原设备或这份原工作已变化，未打开其他记录" }
+                    }
+                    openOriginalTask(id,selected.task,true,"devices",expectedRunId=selected.run,expectedEpoch=selected.epoch,
+                        sourceWindowCurrent=sourceCurrent,verifySourceBeforeMerge=verifySource,checkReaderInput={ verifySource(it.raw) })
+                    return
+                }
                 val taskId = devicePages.taskForNavigation(args)
                 if (args.has("savedDeviceChoice")) {
                     val deviceRevision = controller.deviceWorkspaceRevision
@@ -1750,7 +1768,7 @@ internal class PocketWebBridge(
                     val value=result?.optJSONObject("value")
                     val privateText=when(action){
                         "devices.queryPhoneGoalResult" -> !value?.optJSONObject("result")?.optString("summary").isNullOrEmpty()
-                        "devices.readReviewedPhoneReceipt" -> true // Original closed-window read only; never replay the selection.
+                        "devices.readReviewedPhoneReceipt", "devices.readSavedPeerWork" -> true // Native page selections are never replayed.
                         "devices.readLocalReviewedPhoneGoal" -> value?.has("text")==true
                         "devices.reviewResult" -> value?.optJSONObject("view")?.let { it.has("summary") || it.has("evidence") }==true
                         "devices.readPendingGoalInput" -> value?.optJSONObject("input")!=null
@@ -2853,6 +2871,34 @@ internal class PocketWebBridge(
             .put("epoch", epoch).put("revision", revision), null, retainValue = false)
     }
 
+    /** A new foreground token can re-attest the unchanged active private composer, never an earlier send or model lease. */
+    private fun readOriginalConversationModelInput(id: String, args: JSONObject) {
+        checkedPayload(args, setOf("originalConversationInput"))
+        val expected = checkedPayload(args.getJSONObject("originalConversationInput"),
+            setOf("conversationId", "key", "epoch", "revision", "resumeRevision", "section"))
+        val conversation = requiredString(expected, "conversationId")
+        val key = requiredString(expected, "key")
+        val epoch = requiredInt(expected, "epoch")
+        val revision = requiredLong(expected, "revision")
+        val resume = requiredLong(expected, "resumeRevision")
+        val source = requiredString(expected, "section")
+        require(conversation.length <= 240 && key == "conversation:$conversation" && epoch >= 0 && revision > 0 &&
+            resume >= 0 && (source == "models" || source == "accounts"))
+        val window = captureWindow()
+        val draft = controller.composerDraft
+        val state = controller.state
+        check(documentId != null && acceptsWindow(window) && section == source && workspaceResumeRevision == resume &&
+            taskViewId == null && controller.conversationReader == null && controller.queuedInputsPage == null &&
+            controller.webPrivateOwnerVisible() && !controller.attachmentOutcomes.state.open && !state.chatAttachmentPickerOpen &&
+            !state.attachmentImporting && state.filePath == null && !state.fileLoading && !state.fileSaving &&
+            !state.chatSubmitting && !state.phoneSubmitting && !phoneComposer.intent && !controller.hasChannelPhoneOrigin &&
+            state.conversationId == conversation && draft != null && draft.conversationId == conversation &&
+            draft.key == key && draft.revision == revision && controller.composerViewEpoch == epoch) {
+            "暂未核对到原输入，未打开其他对话。"
+        }
+        complete(id, expected.put("originalConversationInputMatched", true), null, retainValue = false)
+    }
+
     private fun readModelSnapshot(requestId: String? = null) {
         val service = controller.nativeModelConnections()
         if (service == null) {
@@ -3053,7 +3099,7 @@ internal class PocketWebBridge(
     private fun projectReadCurrent(scope: ProjectTaskReadScope) = controller.webPrivateOwnerVisible() && section == null &&
         controller.state.projectId == scope.projectId && controller.state.filePath == null
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, originalFileApproval: String? = null, preparedPhoneReceipt: JSONObject? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, originalFileApproval: String? = null, preparedPhoneReceipt: JSONObject? = null, verifySourceBeforeMerge: ((JSONObject) -> Unit)? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
         if (projectScope != null) require(projectReadCurrent(projectScope)) { "原项目页面已切换，未打开其他工作" }
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         var entered = false
@@ -3070,7 +3116,8 @@ internal class PocketWebBridge(
         val bindImage = controller.bindPhoneImageAfterOpen()
         fun currentSource()= !closed && acceptsWindow(window) && (projectScope == null || projectReadCurrent(projectScope)) && (sourceWindowCurrent?.invoke() != false)
         fun readOriginal(done: (UiTask?,String?) -> Unit) {
-            if(originalFileApproval==null)controller.readTaskForOpen(taskId,::currentSource,done)
+            if(verifySourceBeforeMerge!=null)controller.readTaskForOpen(taskId,::currentSource,verifySourceBeforeMerge,done)
+            else if(originalFileApproval==null)controller.readTaskForOpen(taskId,::currentSource,done)
             else controller.readTaskForActionReview(taskId,originalFileApproval,::currentSource,done)
         }
         readOriginal { task, error ->

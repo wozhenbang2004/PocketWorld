@@ -5,6 +5,7 @@ import android.os.Looper
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost as Host
 import dev.pocketengine.features.devices.DeviceProtocol
 import dev.pocketengine.features.devices.DirectedPhoneTarget
+import dev.pocketengine.features.devices.DirectedWorkspaceTarget
 import dev.pocketengine.store.OwnerPhoneControlScope
 import dev.pocketengine.store.TaskStoreDeviceTasks
 import dev.pocketengine.ui.ReceivedFileSelection
@@ -43,6 +44,11 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val after: Pair<String,String>, val previous: List<Pair<String,String>>, val next: Pair<String,String>?, val digests: Map<Pair<String,String>,String>,
         val received: Boolean, val inbox: Map<Pair<String,String>, Pair<String,String>>, val search: String, val source: String,val partnerEpoch:Long,val needsAcceptanceProof:Boolean)
     @Volatile private var phoneArchive: PhoneArchive? = null
+    private data class SavedPeerPlace(val local:DirectedWorkspaceTarget,val peer:DirectedWorkspaceTarget,val pairing:Long)
+    internal data class SavedPeerWorkOpen(val task:String,val run:String,val epoch:Int,val peer:DirectedWorkspaceTarget)
+    private data class SavedPeerWorkPage(val handle:String,val window:Host.Window,val generation:Long,val place:SavedPeerPlace,
+        val next:String,val rows:Map<String,SavedPeerWorkOpen>)
+    @Volatile private var savedPeerWork:SavedPeerWorkPage?=null
     private data class ReceiptOrigin(val task: String, val operation: String, val source: String, val here: String, val instance: String, val digest: String, val mode: String,
         val reviewRun: String = "", val reviewEpoch: Int = 0, val reviewRecordedAt: Long = 0,val activeRun:String="",val activeEpoch:Int=0,val failed:Boolean=false,val candidateState:String="")
     private data class WaitingPage(val handle: String,val window: Host.Window,val epoch: Long,val here: String,val instance: String,
@@ -68,7 +74,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         val COMMANDS = setOf("devices.discovery.start", "devices.discovery.stop", "devices.discovery.reviewConnection", "devices.snapshot", "devices.createInvitation", "devices.inspectInvitation", "devices.readOwnerModelRules", "devices.disableOwnerModelRule", "devices.readSavedPeerScope", "devices.changeLocalPeerName", "devices.continueFirstPair", "devices.reviewPairing", "devices.advancePairing", "devices.reviewPeerGrant",
             "devices.readPendingGoalInput", "devices.reviewGrant", "devices.reviewConnection", "devices.reviewRelay", "devices.reviewAction", "devices.reviewGoal", "devices.reviewResult", "devices.reviewApproval",
             "devices.confirm", "devices.reject", "devices.discard", "devices.recoveryAddresses", "devices.openRecovery", "devices.recoverPairing", "devices.reviewAbandonment", "devices.openTask", "devices.readTask", "devices.reviewResumeRequest",
-            "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals", "devices.readLocalReviewedPhoneGoal", "devices.readReviewedPhoneInbox", "devices.readReviewedPhoneReceipt", "devices.readWaitingPhoneGoals", "devices.findWaitingPhoneGoals", "devices.returnToReceivedPhoneGoal", "devices.prepareReceivedModelReturn", "devices.openHistory", "devices.checkLocalExportedFile", "devices.openCheckedLocalFile", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
+            "devices.readSavedPeerWork", "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals", "devices.readLocalReviewedPhoneGoal", "devices.readReviewedPhoneInbox", "devices.readReviewedPhoneReceipt", "devices.readWaitingPhoneGoals", "devices.findWaitingPhoneGoals", "devices.returnToReceivedPhoneGoal", "devices.prepareReceivedModelReturn", "devices.openHistory", "devices.checkLocalExportedFile", "devices.openCheckedLocalFile", "devices.queryHistory", "devices.queryPhoneGoalResult", "devices.stopHistory",
             "devices.pairImage.pick", "devices.pairImage.review", "devices.pairImage.close",
             "devices.desktop.open", "devices.desktop.negotiate", "devices.desktop.status",
             "devices.desktop.control", "devices.desktop.input", "devices.desktop.close")
@@ -87,7 +93,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         if (!preserveImageChoice) pairingImage.clear()
         // Keep running-lane gates until their own callbacks settle; an invalidated read cannot
         // race a new review on this same native Window and close its resources.
-        generation.incrementAndGet(); review = null; ownerRules=null; historyPages.clear(); phoneArchive = null; waitingPage = null; closedPage=null; latest = JSONObject()
+        generation.incrementAndGet(); review = null; ownerRules=null; historyPages.clear(); phoneArchive = null; savedPeerWork = null; waitingPage = null; closedPage=null; latest = JSONObject()
         desktopGeneration.incrementAndGet(); desktop?.close(); desktop = null
         desktopInFlight.set(null); runCatching { window()?.closeDesktop() }
         runCatching { window()?.stopLanDiscovery() }
@@ -155,6 +161,62 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         return requireNotNull(native.fileHandoff.get()?.takeIf { held.kind=="history" && held.view.opt("canCheckLocalExportedFile")==true &&
             it.key==oneTime && it.sourceHandle==handle && it.until>android.os.SystemClock.elapsedRealtime() &&
             held.view.opt("taskId")==it.selected.task && held.view.opt("operationId")==it.selected.op }) { "这次原文件打开许可已变化，请重新核对" }
+    }
+    private fun requireSavedPeerPlace(place:SavedPeerPlace, original:Host.Window, epoch:Long, verifyIdentity:Boolean) {
+        current(original,epoch)
+        val selected=peer(latest,place.peer.deviceId());val here=latest.getJSONObject("local")
+        fun matches(value:JSONObject, id:DirectedWorkspaceTarget)=value.opt("deviceId")==id.deviceId() &&
+            value.opt("instanceId")==id.instanceId() && value.opt("certificateFingerprint")==id.certificateFingerprint()
+        require(matches(selected,place.peer) && matches(here,place.local) && selected.opt("revoked")==false &&
+            selected.optJSONObject("connection")?.opt("state")!="REVOKED" &&
+            selected.optLong("authorizationEpoch",-1)==place.pairing) { "本机或原配对设备已变化，未读取其他工作" }
+        if(verifyIdentity)original.requireSavedPeerWorkspaceWork(place.local,place.peer,place.pairing)
+        current(original,epoch)
+    }
+    internal fun savedPeerWorkForNavigation(args:JSONObject,verifyIdentity:Boolean=true):SavedPeerWorkOpen {
+        fields(args,"savedPeerWorkHandle","taskId")
+        val original=requireNotNull(window());val epoch=generation.get()
+        val page=savedPeerWork?.takeIf { it.handle==text(args,"savedPeerWorkHandle") && it.window===original && it.generation==epoch }
+            ?: error("原本机工作目录已关闭，请在同一台设备重读")
+        requireSavedPeerPlace(page.place,original,epoch,verifyIdentity)
+        check(savedPeerWork===page)
+        return requireNotNull(page.rows[text(args,"taskId")]) { "这份工作不在当前原设备目录" }
+    }
+    private fun readSavedPeerWork(args:JSONObject, original:Host.Window, epoch:Long):JSONObject {
+        val previous:SavedPeerWorkPage?
+        val place:SavedPeerPlace
+        val after:String
+        if(args.has("savedPeerWorkHandle")){
+            fields(args,"savedPeerWorkHandle")
+            previous=savedPeerWork?.takeIf { it.handle==text(args,"savedPeerWorkHandle") && it.window===original && it.generation==epoch && it.next.isNotEmpty() }
+                ?: error("原设备目录位置已变化，请从最近的本机工作重新读取")
+            place=previous.place;after=previous.next
+        }else{
+            fields(args,"local","peer","authorizationEpoch","original")
+            place=SavedPeerPlace(DirectedWorkspaceTarget.read(args.getJSONObject("local")),DirectedWorkspaceTarget.read(args.getJSONObject("peer")),
+                integer(args,"authorizationEpoch",1,DeviceProtocol.MAX_SAFE_INTEGER))
+            previous=null;after=""
+        }
+        val exact=args.optJSONObject("original")
+        require(!args.has("original") || exact!=null)
+        exact?.let { fields(it,"taskId","runId","epoch") }
+        requireSavedPeerPlace(place,original,epoch,verifyIdentity=false)
+        val page=original.savedPeerWorkspaceWork(place.local,place.peer,place.pairing,after,
+            exact?.let { text(it,"taskId") } ?: "",exact?.let { text(it,"runId") } ?: "",
+            exact?.let { integer(it,"epoch",1,Int.MAX_VALUE.toLong()).toInt() } ?: 0)
+        requireSavedPeerPlace(place,original,epoch,verifyIdentity=false)
+        check(previous==null || savedPeerWork===previous)
+        val retained=page.getJSONArray("rows")
+        check(page.opt("readOnly")==true && retained.length()<=12)
+        val rows=retained.objects().associate { row ->
+            val task=text(row,"taskId"); task to SavedPeerWorkOpen(task,text(row,"runId"),integer(row,"epoch",1,Int.MAX_VALUE.toLong()).toInt(),place.peer)
+        }
+        require(rows.size==retained.length())
+        val index=SavedPeerWorkPage(UUID.randomUUID().toString(),original,epoch,place,page.getString("next"),rows)
+        savedPeerWork=index
+        return JSONObject().put("kind","savedPeerWorkspaceWork").put("savedPeerWorkHandle",index.handle)
+            .put("local",place.local.view()).put("peer",place.peer.view()).put("authorizationEpoch",place.pairing)
+            .put("readOnly",true).put("rows",retained).put("hasMore",index.next.isNotEmpty())
     }
     fun taskForNavigation(args: JSONObject): String {
         check(visible() && controller.webPrivateOwnerVisible())
@@ -815,6 +877,11 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             done(JSONObject().put("value", JSONObject().put("candidatesDisabled", true).put("stopRequested", true)).put("snapshot", captureSnapshot(original, taskIds())), null); return
         }
         if (action == "devices.discard") {
+            if(args.has("savedPeerWorkHandle")){
+                fields(args,"savedPeerWorkHandle");val expected=text(args,"savedPeerWorkHandle")
+                val closed=synchronized(this){if(savedPeerWork?.handle==expected){savedPeerWork=null;true}else false}
+                done(JSONObject().put("closed",closed),null);return
+            }
             if(args.has("rulesHandle")){
                 fields(args,"rulesHandle");val handle=text(args,"rulesHandle")
                 val closed=synchronized(this){if(ownerRules?.handle!=handle)false else{ownerRules=null;true}}
@@ -837,7 +904,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             }
             fields(args, "viewHandle")
             val handle = if (args.has("viewHandle")) text(args, "viewHandle") else ""
-            if (handle.isBlank()) { synchronized(this) { phoneArchive = null; waitingPage = null; closedPage=null; ownerRules=null }; original.stopLanDiscovery() }
+            if (handle.isBlank()) { synchronized(this) { savedPeerWork = null; phoneArchive = null; waitingPage = null; closedPage=null; ownerRules=null }; original.stopLanDiscovery() }
             val closed = discard(original, handle)
             done(JSONObject().put("closed", closed), null); return
         }
@@ -854,11 +921,12 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }catch(failure:Exception){gate.compareAndSet(call,null);throw failure}
         val phoneResultRead=action=="devices.queryPhoneGoalResult"
         val receiptRead=action=="devices.readReviewedPhoneReceipt"
+        val savedPeerWorkRead=action=="devices.readSavedPeerWork"
         val readRevision=if(phoneResultRead||receiptRead) controller.deviceWorkspaceRevision else -1L
         val ownerModelRule=action=="devices.readOwnerModelRules"||action=="devices.disableOwnerModelRule"
         val pendingInput=action=="devices.readPendingGoalInput"
         val previewRevision=if(pendingInput)controller.deviceWorkspaceRevision else -1L
-        val ids = if(receiptRead||action=="devices.findWaitingPhoneGoals"||pendingInput||ownerModelRule||action in setOf("devices.inspectInvitation","devices.pairImage.review","devices.continueFirstPair")||action=="devices.readPhoneGoalArchive"&&args.has("localCopy")||action=="devices.openCheckedLocalFile"||action=="devices.checkLocalExportedFile"||phoneResultRead||action=="devices.readLocalReviewedPhoneGoal"||action=="devices.readReviewedPhoneInbox") emptyArray() else taskIds()
+        val ids = if(savedPeerWorkRead||receiptRead||action=="devices.findWaitingPhoneGoals"||pendingInput||ownerModelRule||action in setOf("devices.inspectInvitation","devices.pairImage.review","devices.continueFirstPair")||action=="devices.readPhoneGoalArchive"&&args.has("localCopy")||action=="devices.openCheckedLocalFile"||action=="devices.checkLocalExportedFile"||phoneResultRead||action=="devices.readLocalReviewedPhoneGoal"||action=="devices.readReviewedPhoneInbox") emptyArray() else taskIds()
         fun taskId(): String = text(args, "taskId").also { require(it in ids) { "请从原设备任务记录选择" } }
         val work = Runnable {
             var snapshot: JSONObject? = null; var value: JSONObject? = null; var error: String? = null
@@ -1063,6 +1131,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                     "devices.readLocalReviewedPhoneGoal" -> localReviewedPhoneGoal(args,original,epoch)
                     "devices.prepareReceivedModelReturn" -> prepareModelPlace(args,original,epoch)
                     "devices.readWaitingPhoneGoals","devices.findWaitingPhoneGoals" -> waitingGoals(args,original,epoch,action=="devices.findWaitingPhoneGoals")
+                    "devices.readSavedPeerWork" -> readSavedPeerWork(args,original,epoch)
                     "devices.readPhoneGoalArchive", "devices.readReceivedPhoneGoals" -> phoneArchivePage(args, original, epoch, action == "devices.readReceivedPhoneGoals")
                     "devices.openHistory" -> {
                         fields(args, "taskId", "operationId", "historyPageHandle", "archiveHandle")
@@ -1246,7 +1315,7 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 }
                 current(original, epoch)
             } catch (failure: Exception) { if (action == "devices.discovery.start" && runCatching { current(original, epoch) }.isFailure) original.stopLanDiscovery(); error = if (failure is org.json.JSONException) "原设备信息不完整，请刷新核对。" else failure.message?.take(400) ?: "设备操作结果待核对" }
-            if (value?.optString("kind")!="firstIdentity" && !receiptRead && !phoneResultRead && !pendingInput && !ownerModelRule && action !in setOf("devices.prepareReceivedModelReturn","devices.openCheckedLocalFile","devices.checkLocalExportedFile","devices.readPhoneGoalArchive","devices.readReceivedPhoneGoals","devices.readWaitingPhoneGoals","devices.findWaitingPhoneGoals","devices.readLocalReviewedPhoneGoal","devices.readReviewedPhoneInbox") && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
+            if (value?.optString("kind")!="firstIdentity" && !savedPeerWorkRead && !receiptRead && !phoneResultRead && !pendingInput && !ownerModelRule && action !in setOf("devices.prepareReceivedModelReturn","devices.openCheckedLocalFile","devices.checkLocalExportedFile","devices.readPhoneGoalArchive","devices.readReceivedPhoneGoals","devices.readWaitingPhoneGoals","devices.findWaitingPhoneGoals","devices.readLocalReviewedPhoneGoal","devices.readReviewedPhoneInbox") && (action != "devices.readTask" || !args.has("historyPageHandle"))) {
                 try { current(original, epoch); snapshot = captureSnapshot(original, ids) } catch (_: Exception) { }
             }
             val result = JSONObject().put("value", value ?: JSONObject.NULL).put("snapshot", snapshot ?: JSONObject.NULL)
@@ -1254,6 +1323,14 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
                 gate.compareAndSet(call, null)
                 if (runCatching { current(original, epoch) }.isFailure) done(null, "原设备窗口已变化，请读取原回执，不要重复提交")
                 else {
+                    if(savedPeerWorkRead && error==null && runCatching {
+                        val index=requireNotNull(savedPeerWork)
+                        check(value?.opt("savedPeerWorkHandle")==index.handle && index.window===original && index.generation==epoch)
+                        requireSavedPeerPlace(index.place,original,epoch,verifyIdentity=true)
+                    }.isFailure){
+                        done(null,"原设备或本机目录已变化，未显示其他工作")
+                        return@post
+                    }
                     if(pendingInput && error==null && runCatching {
                         val (source,raw)=waitingPending(args);val preview=result.getJSONObject("value").getJSONObject("input")
                         require(previewRevision==controller.deviceWorkspaceRevision && preview.opt("taskId")==source.task && raw.getLong("deviceStateRevision")==preview.getLong("revision")

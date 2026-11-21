@@ -218,6 +218,13 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default JSONObject findBeforePickupDecision(String caller,String op,String query,boolean withdrawn)throws Exception{throw new IllegalStateException("本机未提供启动前原决定查找");}
         default JSONObject findWaitingPhoneGoals(String caller,String op,String query)throws Exception{throw new IllegalStateException("本机未提供待接手原目标查找");}
         default JSONObject waitingPhoneGoals(String afterCaller,String afterOp,boolean results)throws Exception {throw new IllegalStateException("本机未提供待接手工作索引");}
+        default JSONObject savedPeerWorkspaceWork(DirectedWorkspaceTarget here,DirectedWorkspaceTarget peer,long pairEpoch,
+                                                 String after,String task,String run,int epoch)throws Exception{
+            throw new SecurityException("本机未提供原电脑工作目录");
+        }
+        default void requireSavedPeerWorkspaceWork(DirectedWorkspaceTarget here,DirectedWorkspaceTarget peer,long pairEpoch)throws Exception{
+            throw new SecurityException("本机未提供原电脑工作目录");
+        }
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received) throws Exception { throw new IllegalStateException("本机未提供手机目标记录"); }
         default JSONObject phoneGoalIndex(String target,String parentAfter,String operationAfter,boolean received,String searchText)throws Exception {
             if(!searchText.isEmpty())throw new IllegalStateException("本机未提供原目标查找");return phoneGoalIndex(target,parentAfter,operationAfter,received);
@@ -601,6 +608,13 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         }
         public JSONObject directedPhoneDispatches(String target,String source,String parentAfter,String after)throws Exception {
             current();JSONObject page=copy(control.directedPhoneDispatches(target,source,parentAfter,after));current();return page;
+        }
+        public JSONObject savedPeerWorkspaceWork(DirectedWorkspaceTarget here,DirectedWorkspaceTarget peer,long pairEpoch,
+                                                String after,String task,String run,int epoch)throws Exception{
+            current(); JSONObject out=copy(control.savedPeerWorkspaceWork(here,peer,pairEpoch,after,task,run,epoch)); current(); return out;
+        }
+        public void requireSavedPeerWorkspaceWork(DirectedWorkspaceTarget here,DirectedWorkspaceTarget peer,long pairEpoch)throws Exception{
+            current(); control.requireSavedPeerWorkspaceWork(here,peer,pairEpoch); current();
         }
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received) throws Exception { current(); return copy(control.phoneGoalIndex(target,parentAfter,after,received)); }
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received,String searchText)throws Exception {

@@ -13,6 +13,7 @@ import { PendingGoalFinder } from './PendingGoalFinder';
 import { PairingInvitationDisplay, shownPairingInvitation, type ShownPairingInvitation } from './PairingInvitationDisplay';
 import { SavedPhoneDispatches } from './SavedPhoneDispatches';
 import { SavedPeerScopeReceipt } from './SavedPeerScopeReceipt';
+import { SavedPeerWorkspaceWork } from './SavedPeerWorkspaceWork';
 import { PeerModelAutoRules } from './PeerModelAutoRules';
 import { LocalPeerNameEditor } from './LocalPeerNameEditor';
 import { WindowsCommandReceipt } from './WindowsCommandReceipt';
@@ -233,6 +234,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const readingRoot = useRef<HTMLElement>(null), readingPositions = useRef({ list: 0, detail: 0 }), previousReadingView = useRef('list');
   const rememberReadingPosition = (view: 'list' | 'detail') => { readingPositions.current[view] = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll')?.scrollTop || 0; };
   const busy = workBusy || controlBusy;
+  const savedPeerWorkOpening = useRef(false);
   const alive = useRef(true), scope = useRef(new DeviceRequestScope()), handle = useRef(''), selectedPeer = useRef(peerId), resumed = useRef(state.webWorkspaceResumeRevision), nativeRevision = useRef(state.deviceWorkspaceRevision);
   const acceptSnapshot = (value: any) => { const actual = deviceSnapshot(value); setSnapshot(old => !old || actual.capturedAt >= old.capturedAt ? actual : old); };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data, snapshot: Data | null, current: () => boolean) => void | Promise<void>, lane = 'work', onFailure?: (message: string) => void) => {
@@ -1054,6 +1056,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (form) { clearSensitive(true); refresh(); return true; }
     if (desktopOpen) { setDesktopOpen(false); return true; }
     if (sourceFocus) return false; // Return to the same owner task instead of stepping to another peer.
+    // Do not step to a different selected peer while this local original Work is being admitted.
+    if (savedPeerWorkOpening.current) return true;
     if (peerId) { selectPeer(''); return true; }
     // The original receipt only jumped within this page; Back only restores its already-rendered source.
     const focus = modelReturnFocus, back = focus?.waitingBack;
@@ -1513,6 +1517,17 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {!sourceFocus && peerId && !peer && snapshot && placeRead.current && <p className="pw-device-feedback" role="alert">{candidatePeer && peerPlace.current
           ? '本机或原配对身份已变化，没有打开其他设备。可返回所有设备重新选择。'
           : '这台原设备不在本次本机读取范围。没有改选其他伙伴。'}</p>}
+        {!sourceFocus && peerId && supported('devices.readSavedPeerWork') && supported('devices.openTask') && <SavedPeerWorkspaceWork
+          key={peerId} place={localReadCurrent && peer?.revoked === false && Number.isSafeInteger(peer.authorizationEpoch) &&
+            peer.authorizationEpoch > 0 && peer.connection?.state !== 'REVOKED' && peerPlace.current && sameDeviceReadingPlace(peerPlace.current, local, peer)
+            ? { identity: peerPlace.current, authorizationEpoch: peer.authorizationEpoch } : undefined}
+          busy={busy} release={savedPeerWorkHandle=>{void bridge.command('devices.discard',{savedPeerWorkHandle}).catch(()=>{});}}
+          request={(action,args,accept)=>{
+            if(action!=='devices.openTask')return invoke(action,args,accept);
+            if(savedPeerWorkOpening.current)return Promise.resolve();
+            savedPeerWorkOpening.current=true;
+            return invoke(action,args,accept).finally(()=>{savedPeerWorkOpening.current=false;});
+          }}/>}
         {!sourceFocus && peer && <>
           {manualFocus && localReadCurrent && !focusedManualTask && <p className="pw-device-feedback" role="status">原手控准备已不在这次本机记录中，未打开其他工作。</p>}
           {preparedHere.length > 0 && originalWork}

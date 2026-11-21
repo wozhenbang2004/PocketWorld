@@ -453,6 +453,23 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             }
             return page;
         }
+        private void requireLocalSavedWorkspaceIdentity(DirectedWorkspaceTarget here,DirectedWorkspaceTarget peer)throws Exception{
+            DeviceIdentity.LocalIdentity actual=existingIdentity();
+            if(actual==null||!here.deviceId().equals(actual.deviceId())||!here.instanceId().equals(actual.instanceId())
+                    ||!here.certificateFingerprint().equals(actual.certificateFingerprint())||here.deviceId().equals(peer.deviceId()))
+                throw new SecurityException("本机原配对身份已变化，未读取其他设备");
+        }
+        public JSONObject savedPeerWorkspaceWork(DirectedWorkspaceTarget here,DirectedWorkspaceTarget peer,long pairEpoch,
+                                               String after,String task,String run,int epoch)throws Exception{
+            requireLocalSavedWorkspaceIdentity(here,peer);
+            JSONObject out=tasks.deviceTasks().savedPeerWorkspaceWork(here.deviceId(),peer,pairEpoch,after,task,run,epoch);
+            requireLocalSavedWorkspaceIdentity(here,peer);
+            return out;
+        }
+        public void requireSavedPeerWorkspaceWork(DirectedWorkspaceTarget here,DirectedWorkspaceTarget peer,long pairEpoch)throws Exception{
+            requireLocalSavedWorkspaceIdentity(here,peer);
+            tasks.deviceTasks().requireSavedPeerWorkspaceWork(peer,pairEpoch);
+        }
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received) throws Exception {return phoneGoalIndex(target,parentAfter,after,received,"");}
         public JSONObject phoneGoalIndex(String target,String parentAfter,String after,boolean received,String searchText) throws Exception {
             DeviceIdentity.LocalIdentity local=existingIdentity();JSONObject peer=trust.peer(target);

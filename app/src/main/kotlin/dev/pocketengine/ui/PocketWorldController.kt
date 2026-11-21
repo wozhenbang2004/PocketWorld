@@ -5583,6 +5583,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     /** Opening a bounded owner view is distinct from accepting a complete result review. */
     internal fun readTaskForOpen(id: String, current: () -> Boolean, complete: (UiTask?, String?) -> Unit) =
         readTaskForWeb(id, false, current, complete)
+    /** A scoped navigation must reject another run before its task body is merged. */
+    internal fun readTaskForOpen(id: String, current: () -> Boolean, verifySource: (JSONObject) -> Unit, complete: (UiTask?, String?) -> Unit) =
+        readTaskForWeb(id, false, current, complete, verifySource = verifySource)
     /** Reopen one privately accepted device goal without entering a new task, dispatching, or importing an unverified row. */
     private var heldReceivedGoal: Pair<String, () -> Boolean>? = null
     private fun heldReceivedGoalId(): String? {

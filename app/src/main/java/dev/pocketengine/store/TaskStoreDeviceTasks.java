@@ -1109,6 +1109,16 @@ public final class TaskStoreDeviceTasks {
      * This is not a peer endpoint; it never returns wire_json, contexts, paths or credentials. */
     public JSONObject workspaceTaskLinks(int offset,int limit)throws Exception{return workspaceTaskLinks(null,offset,limit,"","");}
     public JSONObject childOverview(String parentTaskId,int limit)throws Exception{return childHistoryPage(parentTaskId,"","",limit);}
+    public JSONObject savedPeerWorkspaceWork(String here,DirectedWorkspaceTarget selected,long pairEpoch,String after,
+                                             String task,String run,int epoch)throws Exception{
+        synchronized(owner){return OwnerSavedPeerWorkspaceWork.page(db,here,selected,pairEpoch,after,task,run,epoch);}
+    }
+    public void requireSavedPeerWorkspaceWork(DirectedWorkspaceTarget selected,long pairEpoch){
+        OwnerSavedPeerWorkspaceWork.requirePeer(db,selected,pairEpoch);
+    }
+    public static boolean matchesSavedPeerWorkspaceWork(JSONObject task,String id,String run,int epoch,DirectedWorkspaceTarget selected){
+        return OwnerSavedPeerWorkspaceWork.ownerWork(task,id,run,epoch,selected);
+    }
     public JSONObject declinedReceivedPhoneGoals(String here,String instance,String afterCaller,String afterOp)throws Exception{
         synchronized(owner){return ReceivedPhoneGoalIndex.declined(db,here,instance,afterCaller,afterOp);}
     }
