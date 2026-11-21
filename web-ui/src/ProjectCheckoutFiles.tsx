@@ -23,17 +23,18 @@ type FileFind = { fileHandle: string; query: string; result?: { text: string; at
 // A UI bookmark, not a reusable native save handle or a copy of the file.
 export type CheckoutSavedPosition = { projectId: string; checkoutId: string; path: string; savedHash: string; caret?: EditorPosition };
 export type CheckoutBuildEditorResume = Omit<CheckoutSavedPosition,'caret'> & { sourceDigest: string };
+export type CheckoutPythonToolsDeparture = {position:CheckoutSavedPosition;savedHere:boolean;closeEditor:()=>Promise<boolean>};
 export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandle: string; id: string; closeEditor:()=>Promise<boolean> };
 export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
 type PythonEditorSource = {path:string;sha256:string;content:string;clickKey:string;selection:{saveId:string}|{readRevision:number}};
-type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry };
+type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry; buildResume?: CheckoutBuildEditorResume; pythonResume?: OriginalPythonRun;
   pythonSetupResume?: CheckoutSavedPosition;
   onClose: (saved?: CheckoutSavedPosition) => void;
   onOpenPythonWork?: (work: OriginalPythonRun) => void;
-  onPreparePythonTools?: (saved: CheckoutSaveForBuild) => Promise<void>;
+  onPreparePythonTools?: (source: CheckoutPythonToolsDeparture) => Promise<void>;
   onPrepareBuild?: (saved: CheckoutSaveForBuild) => Promise<void>; prepareBuildAfterPath?: string; prepareBuildLabel?: string;
   registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
@@ -252,13 +253,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const opened=await openMatchedFile(page.directoryHandle,hit);
     if(!opened&&live(sequence))setDirectory(previous=>previous?.page===page?{path:previous.path,page:null}:previous);
   };
-  const readFile = (path: string, { gitStatusOperation, saved, position, pythonTaskId, priorSavedFileId, currentOnly, entry:sourceEntry }: FileRead = {}) => {
+  const readFile = (path: string, { gitStatusOperation, saved, position, pythonTaskId, expectedPythonSha256, priorSavedFileId, currentOnly, entry:sourceEntry }: FileRead = {}) => {
     if (sourceMember || hostFile) {
       if (path !== (sourceMember || hostFile)!.path || entered.current || edits.current) return;
       setReviewed(false); currentFile.current = null; setFile(null);
     }
     return invoke('read', { path, ...(gitStatusOperation?{gitStatusOperation}:{}), ...(saved?{savedEditId:saved.id}:{}),
-      ...(priorSavedFileId?{priorSavedFileId}:{}), ...(pythonTaskId?{pythonTaskId}:{}) }, value => {
+      ...(priorSavedFileId?{priorSavedFileId}:{}), ...(pythonTaskId?{pythonTaskId}:{}),
+      ...(expectedPythonSha256?{expectedPythonSha256}:{}) }, value => {
       if ((sourceMember || hostFile || gitStatusOperation || saved || position || currentOnly || sourceEntry) && (value.path !== path || value.latest?.deleted !== false ||
           !fileHash(value.latest?.expectedHash) || typeof value.latest.content !== 'string'))
         throw new Error('没有取得原副本这个文件的当前内容，未打开替代文件。');
@@ -270,6 +272,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         throw new Error('未核对到先前确认保存的版本，没有打开其他版本。');
       if (pythonTaskId && value.pythonTaskId!==pythonTaskId)
         throw Error('未核对到本次运行保存的原脚本，没有打开其他文件。');
+      if (expectedPythonSha256 && value.matchedPythonSetupSha256!==expectedPythonSha256)
+        throw Error('未核对到原脚本的同一已保存版本。只显示同一副本的文件清单。');
       if (position && value.latest.expectedHash !== position.savedHash)
         throw new Error(priorSavedFileId?'此路径已不是先前确认保存的版本，没有切换到其他版本。':'此路径当前字节不再是上次保存的版本，没有切换到其他版本。');
       if(sourceEntry && value.latest.expectedHash!==sourceEntry.sha256)
@@ -335,8 +339,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           typeof saved.readId==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(saved.readId)){
           resumeReadId=saved.readId;
           delete list.priorSavedFile; // The exact list token is consumed by the native read, never reused by a fallback.
-        }else setError(resumeSetup?'未核对到刚才保存的脚本。这里只显示同一副本的文件清单，未打开其他文件。':
-          '未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
+        }else if(!resumeSetup)setError('未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
       }
       handle.current = value.filesHandle; setListing(list);
     });
@@ -345,7 +348,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       if(resumeBuild&&opened&&live(generation.current)&&currentFile.current?.fileHandle===opened.fileHandle)openedBuildResume.current=resumeBuild;
       return;
     }
-    if(resumeSetup)return; // No path-only fallback after the explicit tools return.
+    if(resumeSetup){
+      // Opening an existing unchanged script may never have produced a recent Save token.
+      // The native selector checks the known original SHA before attaching an editor.
+      if(result?.readOnly===true && result.projectId===projectId && result.checkoutId===checkoutId &&
+        handle.current===result.filesHandle && live(generation.current))
+        await readFile(resumeSetup.path,{position:resumeSetup,expectedPythonSha256:resumeSetup.savedHash});
+      return;
+    }
     if (pythonResume && result && !pin && !hostFile && !resume && !checkedEntry &&
         pythonResume.projectId===projectId && pythonResume.checkoutId===checkoutId &&
         handle.current===result.filesHandle && live(generation.current)) {
@@ -389,8 +399,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const canReviewPython = !hostFile && !sourceMember && !!onOpenPythonWork && !!file && !!pythonSource &&
     uncertainPythonSource!==pythonSource.clickKey &&
     ['reviewPython','confirmPython','dismissPython'].every(action=>bridge.getState().capabilities.commands.includes(ownerPythonFiles+action));
-  const canPreparePythonTools = !!onPreparePythonTools && !!recentSave && showingSavedFile && canReviewPython &&
-    pythonSource?.clickKey===recentSave.id && bridge.getState().capabilities.commands.includes(command+'close');
+  const canPreparePythonTools = !!onPreparePythonTools && !!pythonSource && canReviewPython &&
+    bridge.getState().capabilities.commands.includes(command+'close');
   const exactPythonEditor = () => canReviewPython && !!file && !!pythonSource && live(generation.current) &&
     currentFile.current===file && file.filesHandle===handle.current && currentText.current===pythonSource.content &&
     editorInput.current?.value===textareaText(pythonSource.content) && !entered.current && !edits.current &&
@@ -423,13 +433,27 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       latest.current.onOpenPythonWork?.(work);
     });
   };
-  const close = (next?: 'prepare-build' | 'prepare-python-tools') => {
+  const preparePythonTools = () => {
+    const prepare=latest.current.onPreparePythonTools, source=pythonSource;
+    if(!prepare||!source||!file||!canPreparePythonTools||!exactPythonEditor()||pythonReviewNow.current)return;
+    const sequence=generation.current, filesHandle=handle.current, token={};
+    entered.current=token;setBusy(true);setError('');
+    const closeEditor=async()=>{
+      if(!live(sequence)||entered.current!==token||handle.current!==filesHandle||currentFile.current!==file||currentText.current!==source.content)
+        throw Error('原脚本编辑器已变化，没有打开工具准备。');
+      handle.current='';
+      const receipt=await bridge.command(command+'close',{viewHandle,filesHandle}).catch(()=>null);
+      return live(sequence)&&entered.current===token&&receipt?.closed===true&&receipt.taskStopped===false;
+    };
+    void prepare({position:{projectId,checkoutId,path:source.path,savedHash:source.sha256},savedHere:'saveId' in source.selection,closeEditor})
+      .catch(failure=>{if(live(sequence))setError(failureText(failure))})
+      .finally(()=>{if(entered.current===token){entered.current=null;if(alive.current)setBusy(false)}});
+  };
+  const close = (next?: 'prepare-build') => {
     if (entered.current || edits.current) return;
     if (pythonReviewNow.current) { dismissPythonReview(); return; }
     if (activeAdoption.current) { dismissAdoption(); return; }
     if (choice) { setChoice(null); return; }
-    const forPythonTools=next==='prepare-python-tools';
-    if(forPythonTools&&(!canPreparePythonTools||!exactPythonEditor()))return;
     const sameOpenFile = currentFile.current === file;
     const fromSavedFile = sameOpenFile && showingSavedFile;
     // Reading a different file does not replace the last verified save. It
@@ -447,8 +471,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     } : undefined;
     const position = { projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret };
     if (!next) { latest.current.onClose(position); return; }
-    const prepare = forPythonTools ? latest.current.onPreparePythonTools : latest.current.onPrepareBuild;
-    if (!prepare || !forPythonTools && !canCheckSavedBuild) return;
+    const prepare = latest.current.onPrepareBuild;
+    if (!prepare || !canCheckSavedBuild) return;
     // Keep the ordinary editor and its exact receipt alive until the read-only
     // source comparison is back. Failure stays here instead of hiding the edit.
     const sequence = generation.current, token = {};
@@ -456,7 +480,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const closeEditor=async()=>{
       if(!live(sequence)||entered.current!==token||handle.current!==recentSave.filesHandle||
         currentFile.current!==file||currentText.current!==recentSave.after)
-        throw Error(forPythonTools?'原编辑器或本次保存已变化，没有打开工具准备。':'原编辑器或本次保存已变化，没有打开构建审阅。');
+        throw Error('原编辑器或本次保存已变化，没有打开构建审阅。');
       // Relinquish only this visit's handle before sending; cleanup must not
       // repeat a close whose acknowledgement was lost.
       handle.current='';
@@ -680,7 +704,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
           {canReviewPython && !pythonRunReview && (canPreparePythonTools
-            ? <Button disabled={locked} onClick={()=>close('prepare-python-tools')}>查看手机工具准备</Button>
+            ? <Button disabled={locked} onClick={preparePythonTools}>查看手机工具准备</Button>
             : <Button disabled={locked} onClick={readPythonReview}>运行已保存的脚本…</Button>)}
           {showingSavedFile ? <>
             <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>

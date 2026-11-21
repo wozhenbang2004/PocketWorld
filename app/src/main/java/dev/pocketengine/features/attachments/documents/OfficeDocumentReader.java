@@ -199,21 +199,40 @@ final class OfficeDocumentReader {
     }
     private void word(String part)throws Exception {
         out.warning("DOCX body text only; pagination, headers, footnotes, drawings, comments and deleted revisions are not extracted");
+        final boolean headingNavigation=out.tracksWordHeadings();
         parse(part,new Handler(){
             int paragraph,table,deleted,capture,body,drawing;StringBuilder text;Map<String,String> locator;
+            int bodyDepth,headingParagraph,headingProperties,headingLevel;
+            boolean headingUnsafe,headingPropertiesSeen;
             final Deque<int[]> tables=new ArrayDeque<>();
             @Override void start(String uri,String n,Attributes a)throws Exception {
                 if(depth==1&&(!ns(uri,"wordprocessingml")||!n.equals("document")))throw new Invalid("Invalid DOCX document root");
-                if(!ns(uri,"wordprocessingml"))return;
-                if(n.equals("body"))body++;
-                if(n.equals("drawing")||n.equals("pict")||n.equals("object"))drawing++;
+                if(!ns(uri,"wordprocessingml")){if(headingParagraph>0)headingUnsafe=true;return;}
+                if(n.equals("body")){body++;if(body==1&&depth==2)bodyDepth=depth;}
+                if(n.equals("drawing")||n.equals("pict")||n.equals("object")){if(headingParagraph>0)headingUnsafe=true;drawing++;}
                 if(body==0||drawing>0)return;
                 if(n.equals("del"))deleted++;
                 if(n.equals("tbl"))tables.push(new int[]{++table,0,0});
                 if(n.equals("tr")&&!tables.isEmpty()){tables.peek()[1]++;tables.peek()[2]=0;}
                 if(n.equals("tc")&&!tables.isEmpty())tables.peek()[2]++;
                 if(n.equals("p")){paragraph++;text=new StringBuilder();locator=DocumentContent.location("part",part,"paragraph",Integer.toString(paragraph));
+                    headingParagraph=headingNavigation&&bodyDepth>0&&depth==bodyDepth+1&&deleted==0&&tables.isEmpty()?depth:0;
+                    headingProperties=0;headingLevel=0;headingUnsafe=false;headingPropertiesSeen=false;
                     if(!tables.isEmpty()){int[] t=tables.peek();locator.put("table",Integer.toString(t[0]));locator.put("row",Integer.toString(t[1]));locator.put("column",Integer.toString(t[2]));}}
+                if(headingParagraph>0){
+                    if(n.equals("pPr")&&depth==headingParagraph+1){
+                        if(headingPropertiesSeen)headingUnsafe=true;
+                        headingPropertiesSeen=true;headingProperties=depth;
+                    }
+                    // Only the current w:p/w:pPr/w:outlineLvl, never a style name or a tracked old pPr.
+                    if(n.equals("outlineLvl")&&headingProperties>0&&depth==headingProperties+1){
+                        if(headingLevel!=0)headingUnsafe=true;
+                        String level=a.getValue(uri,"val");
+                        headingLevel=level!=null&&level.matches("[0-8]")?level.charAt(0)-'0'+1:-1;
+                    }
+                    if(n.equals("del")||n.equals("moveFrom")||n.equals("tbl")||n.equals("fldSimple")||n.equals("fldChar")||n.equals("instrText")||
+                            n.equals("vanish")||n.equals("webHidden"))headingUnsafe=true;
+                }
                 if(n.equals("t")&&deleted==0)capture++;
                 if(text!=null&&deleted==0&&(n.equals("tab")||n.equals("br")))text.append(n.equals("tab")?'\t':'\n');
             }
@@ -221,10 +240,16 @@ final class OfficeDocumentReader {
             @Override void end(String uri,String n) {
                 if(!ns(uri,"wordprocessingml"))return;
                 if(n.equals("drawing")||n.equals("pict")||n.equals("object")){drawing--;return;}
-                if(n.equals("body")){body--;return;}
+                if(n.equals("body")){if(depth==bodyDepth)bodyDepth=0;body--;return;}
                 if(body==0||drawing>0)return;
                 if(n.equals("t")&&deleted==0)capture--;
-                if(n.equals("p")&&text!=null){out.add(paragraph,tables.isEmpty()?"text":"table_cell",locator,text.toString());out.unit(paragraph);text=null;}
+                if(n.equals("pPr")&&depth==headingProperties)headingProperties=0;
+                if(n.equals("p")&&text!=null){
+                    String visible=text.toString();
+                    out.add(paragraph,tables.isEmpty()?"text":"table_cell",locator,visible);out.unit(paragraph);
+                    if(depth==headingParagraph&&!headingUnsafe&&headingLevel>0)out.wordHeading(paragraph,headingLevel,visible);
+                    headingParagraph=0;text=null;
+                }
                 if(n.equals("tbl")&&!tables.isEmpty())tables.pop();
                 if(n.equals("del"))deleted--;
             }

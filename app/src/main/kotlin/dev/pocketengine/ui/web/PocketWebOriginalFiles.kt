@@ -266,6 +266,10 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                                     put("worksheets", JSONArray(page.worksheets.map {
                                         JSONObject().put("unit", it.unit).put("name", it.name)
                                     }))
+                                if (officePosition != null && page.format == "docx" && page.wordHeadings.isNotEmpty())
+                                    put("wordHeadings", JSONArray(page.wordHeadings.map {
+                                        JSONObject().put("unit", it.unit).put("level", it.level).put("text", it.text)
+                                    }))
                             }
                         }
                         "text" -> {

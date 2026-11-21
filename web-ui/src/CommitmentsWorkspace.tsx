@@ -8,6 +8,7 @@ import { commitmentDraft, commitmentMutationReceipt, commitmentPolicyReview, com
 import './followup-reading.css';
 import { CalendarDateTimeFields } from './CalendarDateTimeFields';
 import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form-drafts';
+import { bridge } from './bridge';
 import './knowledge-depth.css';
 
 type Data = Record<string, any>;
@@ -52,9 +53,12 @@ function CommitmentList({ state, supported, run, registerTransientBack, register
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void | Promise<void>, mutation = false) => {
     if (!alive.current || document.visibilityState !== 'visible' || state.webWorkspaceTaskOpen) return;
     const ticket = scope.current.begin(); if (ticket === null) return;
+    const linkedRead = action === 'tasks.open' && typeof args.commitmentViewHandle === 'string' ? args.commitmentViewHandle : undefined;
     setBusy(true); setError(''); mutationPending.current = mutation;
-    try { if (!supported(action)) throw new Error('当前宿主尚未接通这项委托操作。'); const value = await run(action, args); if (alive.current && scope.current.owns(ticket)) await accept?.(value); }
-    catch (failure) { if (alive.current && scope.current.owns(ticket)) { setError(failure instanceof Error ? failure.message : String(failure)); if (mutation) { setUncertain(true); setReadAfterUnknown(false); } } }
+    try { if (!supported(action)) throw new Error('当前宿主尚未接通这项委托操作。'); const value = await (linkedRead ? bridge.command(action, args) : run(action, args)); if (alive.current && scope.current.owns(ticket)) await accept?.(value); }
+    catch (failure) { if (alive.current && scope.current.owns(ticket)) { setError(failure instanceof Error ? failure.message : String(failure)); if (mutation) { setUncertain(true); setReadAfterUnknown(false); }
+      if (linkedRead) setReading((old: Data | null) => old?.viewHandle === linkedRead ? { ...old, viewHandle: '' } : old);
+    } }
     finally { if (scope.current.finish(ticket) && alive.current) { mutationPending.current = false; setBusy(false); } }
   };
   const acceptReading = (value: Data) => { if (!value?.viewHandle || !value.commitment?.id) throw new Error('未取得原承诺读取。'); release(selected.current, 'viewHandle'); setReading(value); setReceiptRows([]); setReceiptsLoaded(false); };
@@ -105,6 +109,21 @@ function CommitmentList({ state, supported, run, registerTransientBack, register
     }, true);
   };
   const current = reading?.commitment, terminal = ['completed', 'cancelled'].includes(current?.status);
+  const canRecoverLinkedWork = current?.ownerId === 'owner' && current.spaceId === 'private' &&
+    current.kind === 'explicit_user' && current.planId == null && current.taskStateAuthority === 'TaskStore' &&
+    typeof current.taskRunId === 'string' && current.taskRunId.length === 36 && Number.isSafeInteger(current.taskEpoch) && current.taskEpoch > 0;
+  const linkedTaskShown = rows(state.tasks).some(row => row.id === current?.taskId);
+  const openLinkedWork = () => {
+    if (!current?.taskId || busy || selected.current !== reading || !supported('tasks.open')) return;
+    const live = bridge.getState(), view = live.view as Data | undefined;
+    if (!canRecoverLinkedWork || rows(live.state.tasks).some(row => row.id === current.taskId)) {
+      void run('tasks.open', { id: current.taskId }).catch(() => {});
+    } else if (reading?.viewHandle && !document.hidden && view?.section === 'commitments' && view.taskId === null &&
+        view.resumeRevision === state.webWorkspaceResumeRevision) {
+      // Native derives the one saved task from the held private reading; the renderer cannot select its run or topic.
+      void invoke('tasks.open', { commitmentViewHandle: reading.viewHandle });
+    }
+  };
   const records = rows(snapshot.commitments).filter(row => !dueOnly || row.followUpDue === true)
     .filter(row => [row.title, row.details].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .filter(row => filter === 'all' || (filter === 'open' ? !['completed', 'cancelled'].includes(row.status) : ['completed', 'cancelled'].includes(row.status)));
@@ -145,7 +164,8 @@ function CommitmentList({ state, supported, run, registerTransientBack, register
       <header className="pw-followup-heading"><div><p className="pw-followup-eyebrow">{status(current.status)}</p><h2 ref={detailHeading} tabIndex={-1}>{current.title}</h2></div></header>
       <dl className="pw-followup-facts"><div><dt>期限</dt><dd>{time(current.dueAt)}</dd></div><div><dt>跟进时间</dt><dd>{time(current.followUpAt || current.dueAt)}</dd></div>{current.taskState && <div><dt>原任务状态</dt><dd>{current.taskState}</dd></div>}</dl>
       <div className="pw-followup-primary-actions">
-        {current.taskId && <Button variant="secondary" disabled={busy || !supported('tasks.open')} onClick={() => { void run('tasks.open', { id: current.taskId }); }}>查看原任务</Button>}
+        {current.taskId && <Button variant="secondary" disabled={busy || !supported('tasks.open') ||
+          canRecoverLinkedWork && !linkedTaskShown && !reading?.viewHandle} onClick={openLinkedWork}>查看原任务</Button>}
         {!terminal && <><Button disabled={busy || uncertain || !reading?.viewHandle || !snapshot.completionEvidenceAvailable} onClick={() => prepare('commitments.review', { operation: 'complete', viewHandle: reading?.viewHandle })}>确认已完成</Button><Button variant="secondary" disabled={busy || uncertain || !reading?.viewHandle} onClick={() => prepare('commitments.review', { operation: 'snooze', viewHandle: reading?.viewHandle, hours: 1 })}>暂缓一小时</Button></>}
       </div>
       {current.details && <p className="pw-user-text pw-followup-goal">{current.details}</p>}

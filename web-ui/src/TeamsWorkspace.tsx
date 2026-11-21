@@ -68,6 +68,54 @@ function memberAuditWindow(original:MemberDeliveryReturn,live:ReturnType<typeof 
   if(view.section===null&&view.taskId===original.taskId&&view.resumeRevision===audit.resume)return 'child';
   return audit.seen&&view.section==='teams'&&view.taskId===null&&view.resumeRevision===audit.resume+1?'returned':null;
 }
+type PlanWorkLocator = {teamRunId:string;generation:number;planId:string;workItemId:string;assignmentId:string;runId:string;epoch:number;
+  memberId:string;itemRevision:number;ownerGeneration:number;targetProjectId:string;parentTaskId:string;parentRunId:string;parentEpoch:number};
+type PlanWorkReturn = {source:PlanWorkLocator;sourceHandle:string;document:number;resume:number;request:number;seen?:true;receipt?:true};
+function planWorkTask(live:ReturnType<typeof bridge.getState>, id:string) {
+  const matches=rows(live.state.tasks).filter(row=>row.id===id);
+  return matches.length===1?object(matches[0].raw):{};
+}
+function planWorkSource(run:Data,item:Data):Omit<PlanWorkLocator,'epoch'>|null {
+  const plan=object(run.workPlan),scope=object(run.productionScope),shown=object(item.assignmentTask);
+  const source={teamRunId:label(run.id),generation:run.generation,planId:label(plan.planId),workItemId:label(item.workItemId),
+    assignmentId:label(item.assignmentId),runId:label(shown.runId),memberId:label(item.memberId),itemRevision:item.itemRevision,
+    ownerGeneration:item.ownerGeneration,targetProjectId:label(plan.targetProjectId),parentTaskId:label(plan.parentTaskId),
+    parentRunId:label(plan.parentRunId),parentEpoch:plan.parentEpoch};
+  const members=rows(run.members).filter(row=>row.id===source.memberId),member=members[0];
+  if(run.mode!=='produce'||run.archived===true||plan.format!=='pocketworld.team.work-items.v1'||plan.state!=='active'||plan.teamRunId!==source.teamRunId||
+     plan.parentPlanRef!==source.planId||scope.parentPlanRef!==source.planId||scope.projectSelection!=null||
+     scope.targetProjectId!==source.targetProjectId||scope.parentTaskId!==source.parentTaskId||scope.parentRunId!==source.parentRunId||
+     members.length!==1||(member.runner??'model')!=='model'||member.device!=='phone'||member.exited===true||
+     shown.taskId!==source.assignmentId||shown.assignmentId!==source.assignmentId||shown.memberId!==source.memberId||
+     [source.teamRunId,source.planId,source.workItemId,source.assignmentId,source.runId,source.memberId,source.targetProjectId,
+       source.parentTaskId,source.parentRunId].some(id=>!id)||
+     !Number.isSafeInteger(source.generation)||source.generation<0||
+     !Number.isSafeInteger(source.itemRevision)||source.itemRevision<1||!Number.isSafeInteger(source.ownerGeneration)||source.ownerGeneration<0||
+     !Number.isSafeInteger(source.parentEpoch)||source.parentEpoch<1)return null;
+  return source;
+}
+function planWorkLocator(shown:ReturnType<typeof planWorkSource>,live:ReturnType<typeof bridge.getState>):PlanWorkLocator|null {
+  if(!shown)return null;
+  const raw=planWorkTask(live,shown.assignmentId),origin=object(raw.origin),assignment=object(raw.teamAssignment);
+  const source={...shown,epoch:raw.coordinatorEpoch};
+  if(!Number.isSafeInteger(source.epoch)||source.epoch<1||
+     origin.kind!=='team_assignment'||origin.teamRunId!==source.teamRunId||origin.assignmentId!==source.assignmentId||origin.memberId!==source.memberId||
+     assignment.teamRunId!==source.teamRunId||assignment.assignmentId!==source.assignmentId||assignment.memberId!==source.memberId||
+     assignment.targetProjectId!==source.targetProjectId||assignment.workItemId!==source.workItemId||assignment.itemRevision!==source.itemRevision||
+     assignment.ownerGeneration!==source.ownerGeneration||assignment.remoteSelection!=null||assignment.projectSelection!=null||
+     raw.id!==source.assignmentId||raw.runId!==source.runId||raw.parentTaskId!==source.teamRunId||raw.actorId!=='owner'||
+     raw.spaceId!=='private'||raw.kind!=='assistant'||raw.executionMode!=='capabilities'||raw.teamProject!=null)return null;
+  return source;
+}
+function planWorkWindow(place:PlanWorkReturn,live:ReturnType<typeof bridge.getState>) {
+  const view=object(live.view), owner=live.state,source=place.source,task=planWorkTask(live,source.assignmentId);
+  if(document.hidden||bridge.getDocumentEpoch()!==place.document||owner.conversationReader||
+     task.runId!==source.runId||task.coordinatorEpoch!==source.epoch)return null;
+  if(!place.seen&&view.section==='teams'&&view.taskId===null&&view.resumeRevision===place.resume&&owner.requestedTaskRevision===place.request)return 'team';
+  if(owner.requestedTaskRevision!==place.request+1||owner.requestedTaskId!==source.assignmentId)return null;
+  if(view.section===null&&view.taskId===source.assignmentId&&view.resumeRevision===place.resume)return 'child';
+  return place.seen&&view.section==='teams'&&view.taskId===null&&view.resumeRevision===place.resume+1?'returned':null;
+}
 const questionKey = (value: Data): string => ['memberId', 'workItemId', 'assignmentId', 'questionId'].map(key => label(value[key])).join(':');
 
 function originalResearchQuestion(run: Data, item: TeamFollowUp): string {
@@ -219,6 +267,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const [openingMemberResult, setOpeningMemberResult] = useState(false);
   const classicAnswerFlight=useRef(false);
   const deliveryReturn=useRef<MemberDeliveryReturn|null>(null);
+  const planWorkReturn=useRef<PlanWorkReturn|null>(null);
   const [allResultActions, setAllResultActions] = useState<Record<string, boolean>>({});
   const resultBack = useRef<() => boolean>(() => false);
   const handledAttention = useRef('');
@@ -453,8 +502,36 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     }, () => onAttentionConsumed?.(requestId));
   }, [attentionFocus?.requestId, workspaceActive, catalogReady, busy]);
   const back = () => { const leave = () => { rememberView(); release(reading); acceptedSummary.current=null; setTab(reading?.kind === 'run' ? 'runs' : 'teams'); setReading(null); setComposeOpen(false); setReplyId(''); setEditor(null); setMemberDraft(null); setError(''); setNotice(''); }; formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); })))); };
-  const openRelatedTask = (id: string) => {
-    const open = () => { void run('tasks.open', { id }).catch(failure => setError(failure instanceof Error ? failure.message : String(failure))); };
+  const openRelatedTask = (id: string,item?:Data) => {
+    const origin=currentReading.current,live=bridge.getState(),view=object(live.view);
+    const board=item&&origin?.kind==='run'&&['awaiting_input','awaiting_user','needs_confirmation','blocked_unknown','paused','failed','interrupted'].includes(item.status)
+      ?planWorkSource(origin.run,item):null;
+    if(board&&(!ownsNativeWindow()||document.hidden||backgrounded.current||busy||entered.current))return;
+    const source=planWorkLocator(board,live);
+    const place:PlanWorkReturn|null=source&&origin&&label(origin.viewHandle)&&source.assignmentId===id&&Number.isSafeInteger(view.resumeRevision)&&
+      Number.isSafeInteger(live.state.requestedTaskRevision)?{source,sourceHandle:origin.viewHandle,document:bridge.getDocumentEpoch(),
+        resume:view.resumeRevision,request:live.state.requestedTaskRevision}:null;
+    if(board&&!place){setError('未核对到此分工的原工作回合。请重读本轮团队记录，没有打开其他工作。');return;}
+    const open = () => {
+      if(place) {
+        if(planWorkReturn.current)return;
+        if(currentReading.current?.viewHandle!==place.sourceHandle||planWorkWindow(place,bridge.getState())!=='team'){
+          setError('原分工已变化，未打开其他工作。');return;
+        }
+        planWorkReturn.current=place;
+      }
+      void run('tasks.open',place?{id,teamPlanView:place.sourceHandle,expectedRunId:place.source.runId,expectedEpoch:place.source.epoch}:{id})
+        .then(value=>{
+          if(place&&planWorkReturn.current===place&&value?.taskId===id&&value.readOnly===true&&value.executionAuthorized===false)
+            place.receipt=true;
+        }).catch(failure=>{
+          if(place) {
+            if(planWorkReturn.current!==place||planWorkWindow(place,bridge.getState())!=='team')return;
+            planWorkReturn.current=null;
+          }
+          setError(failure instanceof Error?failure.message:String(failure));
+        });
+    };
     if (materialBeforeLeave.current) materialBeforeLeave.current(open); else open();
   };
   const leaveWithDrafts = (leave: () => void) => formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => {
@@ -523,12 +600,32 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       const memberReturnCurrent = () => !backgrounded.current && !document.hidden && ownsNativeWindow() &&
         deliveryReturn.current === returning && returning?.documentEpoch === bridge.getDocumentEpoch() &&
         currentReading.current?.kind === 'run' && currentReading.current.run?.id === restoreRun;
-      const value = object(await (restoreRun ? run('teams.snapshot', { restoreMemberResultRunId: restoreRun }) : run('teams.snapshot')));
-      const next = restoreRun ? value.reading : null;
-      if (!alive.current || generation !== requestGeneration.current || restoreRun && !memberReturnCurrent()) { release(next); return; }
-      const fresh = restoreRun ? object(value.catalog) : value;
-      if (restoreRun && (!Array.isArray(fresh.teams) || !Array.isArray(fresh.runs))) { release(next); throw new Error('原团队目录尚未读取'); }
+      const planReturn=planWorkReturn.current;
+      const restorePlan=!restoreRun&&original?.kind==='run'&&planReturn?.receipt&&planReturn.source.teamRunId===original.run.id&&
+        planWorkWindow(planReturn,bridge.getState())==='returned'?planReturn:null;
+      const samePlanVisit=()=>!restorePlan||(!backgrounded.current&&!document.hidden&&ownsNativeWindow()&&
+        bridge.getDocumentEpoch()===restorePlan.document&&object(bridge.getState().view).resumeRevision===restorePlan.resume+1&&
+        currentReading.current?.kind==='run'&&currentReading.current.run?.id===restorePlan.source.teamRunId);
+      const wrapped=!!restoreRun||!!restorePlan;
+      const value=object(await run('teams.snapshot',restorePlan?{restorePlanWork:restorePlan.source}:restoreRun?{restoreMemberResultRunId:restoreRun}:undefined));
+      const next=wrapped?value.reading:null;
+      if (!alive.current || generation !== requestGeneration.current || restoreRun && !memberReturnCurrent() || !samePlanVisit()) { release(next); return; }
+      const fresh=wrapped?object(value.catalog):value;
+      if (wrapped && (!Array.isArray(fresh.teams) || !Array.isArray(fresh.runs))) { release(next); throw new Error('原团队目录尚未读取'); }
       acceptCatalog(fresh);
+      if(restorePlan) {
+        const live=bridge.getState(),source=restorePlan.source;
+        const returned=planWorkReturn.current===restorePlan&&planWorkWindow(restorePlan,live)==='returned';
+        if(planWorkReturn.current===restorePlan)planWorkReturn.current=null;
+        const selected=rows(next?.run?.workPlan?.items).filter(item=>item.workItemId===source.workItemId);
+        if(returned&&next?.kind==='run'&&label(next.viewHandle)&&next.viewHandle!==restorePlan.sourceHandle&&
+           selected.length===1&&dequal(planWorkLocator(planWorkSource(next.run,selected[0]),live),source)&&
+           !newerTeamReading(next.run,object(object(live.state.teamRuns)[source.teamRunId]))) {
+          acceptReading(next);
+          showDecisionTarget(source.teamRunId,next.viewHandle,{kind:'workItem',workItemId:source.workItemId,taskId:source.assignmentId});
+          return;
+        }
+      }
       if (restoreRun && next?.kind === 'run' && label(next.viewHandle) && next.viewHandle !== returning?.sourceHandle &&
           next.run?.id === restoreRun) {
         const audit=returning?.work;
@@ -543,8 +640,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       if (original?.kind === 'run') {
         const value = object(await run('teams.readRun', proposalRead(original.run.id)));
         if (alive.current && generation === requestGeneration.current && value.reading?.run?.id === original.run.id &&
-            (!restoreRun || memberReturnCurrent())) acceptReading(value.reading);
-        else if (restoreRun) release(value.reading);
+            (!restoreRun || memberReturnCurrent()) && samePlanVisit()) acceptReading(value.reading);
+        else if (wrapped) release(value.reading);
       }
     })().catch(failure => { if (alive.current && generation === requestGeneration.current) setError(failure instanceof Error ? failure.message : String(failure)); })
       .finally(() => { if (generation === requestGeneration.current) { entered.current = false; if (alive.current) setBusy(false); } });
@@ -564,14 +661,20 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     }
     if (!previous.active || revision !== previous.revision) restoreWorkspace();
   }, [workspaceActive, state.webWorkspaceResumeRevision]);
-  // Retire only the optional original Work return, not the member's existing read or focus.
+  // Retire only the optional original return, not the existing member reading.
   useEffect(()=>{
     const check=()=>{
-      const opened=deliveryReturn.current;
-      if(!opened?.work)return;
-      const phase=memberAuditWindow(opened,bridge.getState());
-      if(phase==='child')opened.work.seen=true;
-      else if(!phase)opened.work=undefined;
+      const live=bridge.getState(),opened=deliveryReturn.current,place=planWorkReturn.current;
+      if(place) {
+        const phase=planWorkWindow(place,live);
+        if(phase==='child')place.seen=true;
+        else if(!phase)planWorkReturn.current=null;
+      }
+      if(opened?.work) {
+        const phase=memberAuditWindow(opened,live);
+        if(phase==='child')opened.work.seen=true;
+        else if(!phase)opened.work=undefined;
+      }
     };
     const stopState=bridge.subscribe(check),stopDocument=bridge.subscribeDocumentEpoch(check);
     return ()=>{stopState();stopDocument();};
@@ -579,6 +682,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   useEffect(() => {
     const hide = () => {
       if(deliveryReturn.current)deliveryReturn.current.work=undefined;
+      planWorkReturn.current=null;
       backgrounded.current = true; requestGeneration.current++; entered.current = false;
       setBusy(false); closeReview(); closePhoneSelection(); setMemberProbes({}); setExternalReady({});
       const retain = !acceptedSummary.current;
@@ -1637,7 +1741,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           {workItems.map(item => <AccordionItem key={item.workItemId} id={item.workItemId} className="pw-team-work-item" data-work-item-id={item.workItemId} data-motion-key={`work-item:${item.workItemId}`}
             title={<span className="pw-team-item-heading"><span>{item.title}</span><small className="pw-team-state" data-state={item.status}>{status(item.status)}</small></span>}
             description={<TeamMemberIdentity member={members.find(member => member.id === item.memberId) || { id: item.memberId }} name={name(item.memberId)} size={24} />}>
-            <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.message && <p>{item.message}</p>}{item.nativeErrorMessage && <p className="pw-field-hint">{item.nativeErrorMessage}</p>}{item.assignmentTask?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} data-team-source-task={item.assignmentTask.taskId} onClick={() => openRelatedTask(item.assignmentTask.taskId)}>查看此分工与审批</Button>}
+            <div className="pw-team-expanded-copy"><p>{item.instruction}</p>{item.message && <p>{item.message}</p>}{item.nativeErrorMessage && <p className="pw-field-hint">{item.nativeErrorMessage}</p>}{item.assignmentTask?.taskId && <Button variant="secondary" trailingIcon={IconExternalLink} data-team-source-task={item.assignmentTask.taskId} onClick={() => openRelatedTask(item.assignmentTask.taskId,item)}>查看此分工与审批</Button>}
               {canInspectFileContinuation(current, item, members.find(member => member.id === item.memberId)) && <Button variant="ghost" disabled={!canMutate} onClick={() => {
                 const original = reading?.viewHandle;
                 if (!original) return;

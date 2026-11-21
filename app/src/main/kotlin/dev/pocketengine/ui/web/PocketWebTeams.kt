@@ -83,6 +83,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
 
     companion object {
         const val RESTORE_MEMBER_RESULT_RUN = "restoreMemberResultRunId"
+        const val RESTORE_PLAN_WORK = "restorePlanWork"
         const val CURRENT_FAILED_AGGREGATE_SOURCE = "currentFailedAggregateSource"
         const val CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE = "currentCompletedTemporaryAnswersSource"
         val COMMANDS = setOf("teams.openWorkFileDecision", "teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
@@ -131,6 +132,78 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
         }
     }
+    private data class PlanWork(val team: String, val generation: Int, val plan: String, val itemIdentity: JSONObject,
+                                val task: String, val run: String, val epoch: Int, val project: String,
+                                val parent: String, val parentRun: String, val parentEpoch: Int) {
+        fun matchesTask(raw: JSONObject): Boolean {
+            val origin = raw.optJSONObject("origin") ?: return false
+            val assignment = raw.optJSONObject("teamAssignment") ?: return false
+            return raw.opt("id") == task && raw.opt("runId") == run && raw.opt("coordinatorEpoch") == epoch &&
+                raw.opt("actorId") == "owner" && raw.opt("spaceId") == "private" && raw.opt("kind") == "assistant" &&
+                raw.opt("executionMode") == "capabilities" && raw.opt("parentTaskId") == team && raw.isNull("teamProject") &&
+                origin.opt("kind") == "team_assignment" && origin.opt("teamRunId") == team &&
+                origin.opt("assignmentId") == task && origin.opt("memberId") == itemIdentity.opt("memberId") &&
+                assignment.opt("teamRunId") == team && assignment.opt("targetProjectId") == project &&
+                !assignment.has("projectSelection") && !assignment.has("remoteSelection") &&
+                runCatching { TeamWorkItems.sameIdentity(itemIdentity, assignment) }.getOrDefault(false)
+        }
+
+        fun matchesLocator(locator: JSONObject): Boolean {
+            val exact = mapOf("teamRunId" to team, "generation" to generation, "planId" to plan,
+                "workItemId" to itemIdentity.opt("workItemId"), "assignmentId" to task, "runId" to run, "epoch" to epoch,
+                "memberId" to itemIdentity.opt("memberId"), "itemRevision" to itemIdentity.opt("itemRevision"),
+                "ownerGeneration" to itemIdentity.opt("ownerGeneration"), "targetProjectId" to project,
+                "parentTaskId" to parent, "parentRunId" to parentRun, "parentEpoch" to parentEpoch)
+            return locator.length() == exact.size && exact.all { (key, value) -> locator.opt(key) == value }
+        }
+    }
+
+    private fun selectedPlanWork(run: JSONObject, task: JSONObject): PlanWork? {
+        val plan = run.optJSONObject("workPlan") ?: return null
+        val scope = run.optJSONObject("productionScope") ?: return null
+        val team = run.optString("id")
+        val planId = plan.optString("planId")
+        val generation = run.optInt("generation", -1)
+        val project = plan.optString("targetProjectId")
+        val parent = plan.optString("parentTaskId")
+        val parentRun = plan.optString("parentRunId")
+        val parentEpoch = plan.optInt("parentEpoch", -1)
+        if (run.opt("mode") != "produce" || run.opt("archived") == true || generation < 0 || team.isBlank() ||
+            plan.opt("format") != TeamWorkItems.FORMAT || plan.opt("state") != "active" ||
+            plan.opt("teamRunId") != team || planId.isBlank() || plan.opt("parentPlanRef") != planId ||
+            scope.opt("parentPlanRef") != planId || scope.has("projectSelection") ||
+            project.isBlank() || project != scope.opt("targetProjectId") || parent.isBlank() || parentRun.isBlank() ||
+            parent != scope.opt("parentTaskId") || parentRun != scope.opt("parentRunId") || parentEpoch < 1) return null
+
+        val taskId = task.optString("id")
+        val child = task.optString("runId")
+        val epoch = task.optInt("coordinatorEpoch", -1)
+        val items = plan.optJSONArray("items").objects()
+        if (taskId.isBlank() || child.isBlank() || epoch < 1 || items.size !in 1..TeamWorkItems.MAX_ITEMS) return null
+        val item = items.singleOrNull { it.opt("assignmentId") == taskId } ?: return null
+        val shown = item.optJSONObject("assignmentTask") ?: return null
+        val member = run.optJSONArray("members").objects().singleOrNull { it.opt("id") == item.opt("memberId") } ?: return null
+        if (member.optString("runner", "model") != "model" || member.opt("device") != "phone" || member.opt("exited") == true ||
+            shown.opt("taskId") != taskId || shown.opt("assignmentId") != taskId ||
+            shown.opt("memberId") != item.opt("memberId") || shown.opt("runId") != child) return null
+        val itemIdentity = runCatching { TeamWorkItems.exactIdentity(item) }.getOrNull() ?: return null
+        return PlanWork(team, generation, planId, itemIdentity, taskId, child, epoch, project, parent, parentRun, parentEpoch)
+            .takeIf { it.matchesTask(task) }
+    }
+
+    /** Reuse the one original task read. A held Team page and its exact native task are both required. */
+    fun planWorkOpenVerifier(handle: String, taskId: String, run: String, epoch: Int): (JSONObject) -> Unit {
+        val page = readings[handle]?.takeIf { it.live && it.kind == "run" }
+            ?: error("原团队读取已关闭，请重新读取")
+        val task = controller.state.tasks.singleOrNull { it.id == taskId }?.raw
+            ?: error("原分工不在当前工作窗口，请重新读取")
+        val expected = selectedPlanWork(JSONObject(page.original), task)
+        check(expected != null && expected.run == run && expected.epoch == epoch) { "原分工已变化，未打开其他工作" }
+        return { actual ->
+            check(page.live && readings[handle] === page && expected.matchesTask(actual)) { "原分工已变化，未打开其他工作" }
+        }
+    }
+
     private fun reading(handle: String, kind: String, consume: Boolean = false): JSONObject {
         val original = if (consume) readings.remove(handle)?.also { it.retire() } else readings[handle]
         check(original != null && original.kind == kind) { "原团队读取已关闭，请重新读取" }
@@ -366,22 +439,22 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             } catch (failure: Exception) { phoneInFlight.set(false); workingTeamPage = null; runCatching { page?.close() }; throw failure }
         }
-        fun finishReceipt(receipt: JSONObject) {
+        fun finishReceipt(receipt: JSONObject, received: (JSONObject?, String?) -> Unit = deliver) {
             val reading = receipt.optJSONObject("reading")
-            if (reading == null || reading.optString("kind") != "run" || reading.has("taskId")) { deliver(receipt, null); return }
+            if (reading == null || reading.optString("kind") != "run" || reading.has("taskId")) { received(receipt, null); return }
             controller.readWebTeamTaskId(reading.getJSONObject("run").getString("id")) { taskId, error ->
                 if (currentWindow()) {
                     if (taskId != null) reading.put("taskId", taskId)
                     else reading.put("taskLookupNotice", error ?: "未找到这次协作的原任务绑定；记录仍可查看，没有猜测另一个任务。")
-                    deliver(receipt, null)
+                    received(receipt, null)
                 } else done(null, "原团队窗口已关闭；操作结果保留，请回原记录核对，没有自动重发")
             }
         }
         // Capture downstream SQL and live-control evidence on the worker thread. Do not
         // inject display-only fields into the coordinator record used by mutation reviews.
-        fun deliverReceipt(receipt: JSONObject) {
+        fun deliverReceipt(receipt: JSONObject, received: (JSONObject?, String?) -> Unit = deliver) {
             val packet=receipt.optJSONObject("reading"); val source=packet?.optJSONObject("run")
-            if(packet==null || source==null || source.optJSONObject("productionScope")==null){ finishReceipt(receipt); return }
+            if(packet==null || source==null || source.optJSONObject("productionScope")==null){ finishReceipt(receipt, received); return }
             val handle=packet.getString("viewHandle"); val owner=readings[handle] ?: return done(null,"原团队窗口已关闭")
             val team=source.getString("id")
             controller.runTeamPhoneWork {
@@ -401,7 +474,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                             owner.finalPackage=pack.first; owner.finalPackageKey=pack.second; packet.put("finalProjectPackage",pack.second)
                             controller.projectPackages.teamExportSnapshot(pack.second)?.let { packet.put("finalPackageExport",it) }
                         }
-                        owner.deliveryWorkers=observed.toString(); packet.put("deliveryWorkers",observed); finishReceipt(receipt)
+                        owner.deliveryWorkers=observed.toString(); packet.put("deliveryWorkers",observed); finishReceipt(receipt, received)
                     } else done(null,"原团队窗口已关闭；没有打开其他执行或重发控制")
                 }
             }
@@ -564,7 +637,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
             "teams.snapshot" -> {
-                fields(args, "restoreDefinitionId", RESTORE_MEMBER_RESULT_RUN)
+                fields(args, "restoreDefinitionId", RESTORE_MEMBER_RESULT_RUN, RESTORE_PLAN_WORK)
+                val restorePlan = if (args.has(RESTORE_PLAN_WORK)) args.getJSONObject(RESTORE_PLAN_WORK).also {
+                    require(args.length() == 1) { "原分工返回定位不能与其他定位混用" }
+                    text(it, "teamRunId", 36); text(it, "assignmentId", 36)
+                } else null
                 val restoreId = if (args.has("restoreDefinitionId")) text(args, "restoreDefinitionId") else null
                 val restoreRun = if (args.has(RESTORE_MEMBER_RESULT_RUN)) text(args, RESTORE_MEMBER_RESULT_RUN, 36).also {
                     require(restoreId == null && runCatching { UUID.fromString(it).toString() == it }.getOrDefault(false)) { "原团队返回定位无效" }
@@ -574,7 +651,37 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         if (value != null && error == null) {
                             snapshot = captureSnapshot(value)
                             val catalog = PocketWebState.publicValue(snapshot) as JSONObject
-                            if (restoreRun != null) {
+                            if (restorePlan != null) {
+                                val reply = JSONObject().put("catalog", catalog)
+                                val id = restorePlan.getString("teamRunId")
+                                val taskId = restorePlan.getString("assignmentId")
+                                val hot = value.optJSONArray("runs").objects().singleOrNull { it.opt("id") == id }
+                                    ?.takeUnless { value.optJSONArray("history").objects().any { it.opt("id") == id } }
+                                val task = controller.state.tasks.singleOrNull { it.id == taskId }?.raw
+                                val visible = catalog.getJSONArray("runs")
+                                val at = (0 until visible.length()).singleOrNull { visible.optJSONObject(it)?.opt("id") == id }
+                                val selected = if (hot != null && task != null) selectedPlanWork(hot, task) else null
+                                if (controller.state.requestedTaskId == taskId && hot != null && at != null &&
+                                    selected != null && selected.matchesLocator(restorePlan)) {
+                                    try {
+                                        val reading = view("run", hot)
+                                        // Same downstream receipt evidence as readRun, without a second run lookup.
+                                        deliverReceipt(reply.put("reading", reading)) { result, failure ->
+                                            val latest = controller.state.tasks.singleOrNull { it.id == taskId }?.raw
+                                            if (failure == null && result != null && controller.state.requestedTaskId == taskId &&
+                                                latest != null && selected.matchesTask(latest)) {
+                                                visible.remove(at)
+                                                deliver(result, null)
+                                            } else {
+                                                readings.remove(reading.getString("viewHandle"))?.retire()
+                                                reply.remove("reading")
+                                                deliver(reply, null)
+                                            }
+                                        }
+                                    } catch (invalid: Exception) { deliver(null, invalid.message ?: "原分工暂不可读") }
+                                } else deliver(reply, null)
+                            }
+                            else if (restoreRun != null) {
                                 val reply = JSONObject().put("catalog", catalog)
                                 val hot = hotMemberResultRun(value, restoreRun)
                                 val visible = catalog.getJSONArray("runs")

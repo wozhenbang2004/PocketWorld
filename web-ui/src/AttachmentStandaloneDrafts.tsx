@@ -1,12 +1,13 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {AttachmentDocumentGenerationReview,AttachmentWordPdfFields} from './AttachmentDocumentEditor';
-import {Button,SettingsDialog,TextAreaField,TextField} from './forms-library';
+import {Button,SelectField,SettingsDialog,TextAreaField,TextField} from './forms-library';
 import {fileObject as obj,type FileJson as Json} from './attachment-workspace';
 import {registerOverlayBack} from './overlay-back';
 
 type Fields={format:'docx'|'pdf';name:string;title:string;body:string;fontPoints:number};
 type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update';sourceName?:string};
 type Row={rowHandle:string;name:string;format:Fields['format'];savedAt:number;linkedRevision?:true;justCopiedMarkdown?:true};
+type OutputChoice={editorHandle:string;versionHandle:string;format:Fields['format']};
 type GenerationReview={id:string;editorHandle:string;versionHandle:string;fileName:string;format:Fields['format']};
 type RemovalReview={editorHandle:string;versionHandle:string;name:string;format:Fields['format']};
 type Invoke=(command:string,args?:Json)=>Promise<Json>;
@@ -33,6 +34,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
 }){
  const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor>(),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [exit,setExit]=useState<{close:boolean}>();
+ const [outputChoice,setOutputChoice]=useState<OutputChoice>();
  const [review,setReview]=useState<GenerationReview>(),[ack,setAck]=useState(false),[generation,setGeneration]=useState<'submitting'|'accepted'|'unknown'>();
  const [removalReview,setRemovalReview]=useState<RemovalReview>(),[removal,setRemoval]=useState<'removing'|'changed'|'unknown'>();
  const [unavailable,setUnavailable]=useState<RemovalReview>();
@@ -138,16 +140,22 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
  const retry=()=>perform(async()=>{if(active){const value=await invoke('drafts.list');if(mounted.current&&current.current)setCatalog(value)}});
  const editable=active&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation&&!removalReview&&!removal;
  const canReviewGeneration=!!editor?.version&&!dirty&&!!editor.original.name.trim()&&!!editor.original.body.trim();
+ const outputFormat=editor&&outputChoice?.editorHandle===editor.handle&&outputChoice.versionHandle===editor.version?
+  outputChoice.format:editor?.original.format;
+ const chooseOutputFormat=(format:string)=>{
+  if(!editable||flight.current||!canReviewGeneration||!editor?.version||(format!=='docx'&&format!=='pdf'))return;
+  setOutputChoice({editorHandle:editor.handle,versionHandle:editor.version,format});setError('');
+ };
  const prepareGeneration=()=>perform(async()=>{
-  if(!active||review||generation||removalReview||removal||!canReviewGeneration||!editor?.version||editor.uncertain)return;
-  const result=await invoke('drafts.reviewDocument',{editorHandle:editor.handle,versionHandle:editor.version});
+  if(!active||review||generation||removalReview||removal||!canReviewGeneration||!outputFormat||!editor?.version||editor.uncertain)return;
+  const result=await invoke('drafts.reviewDocument',{editorHandle:editor.handle,versionHandle:editor.version,outputFormat});
   if(!mounted.current||!current.current)return;
   if(exactSourceLost(result,editor))return;
   if(result.status==='invalid'){
    setError(typeof result.reason==='string'?result.reason:'请补全本机草稿后再核对生成。');return;
   }
   if(result.status!=='ready'||!isHandle(result.reviewId)||result.editorHandle!==editor.handle||result.versionHandle!==editor.version||
-    result.format!==editor.original.format||typeof result.fileName!=='string'||!result.fileName.endsWith(`.${result.format}`)||result.fileName.length>85){
+    result.format!==outputFormat||typeof result.fileName!=='string'||!result.fileName.endsWith(`.${result.format}`)||result.fileName.length>85){
    setError('没有核对到这份已保留的草稿。原稿没有改动。');return;
   }
   setReview({id:result.reviewId,editorHandle:editor.handle,versionHandle:editor.version,fileName:result.fileName,format:result.format});setAck(false);
@@ -228,10 +236,13 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
    editor?<><TextField label="文件名" value={editor.input.name} isDisabled={!editable} onChange={name=>edit({...editor.input,name})}/>
     <AttachmentWordPdfFields draft={editor.input} editable={editable} edit={edit}
      text={(field,value,limit)=>{if(value.length<=limit)edit({...editor.input,[field]:value});else setError(`此项最多 ${limit} 字，未改变输入。`)}} draftOnly/>
+    {canReviewGeneration&&!editor.uncertain&&!generation&&outputFormat&&
+     <SelectField label="本次生成格式" value={outputFormat} options={[{id:'docx',label:'Word'},{id:'pdf',label:'PDF'}]}
+      onChange={chooseOutputFormat} isDisabled={!editable} compactValue/>}
     <footer className="pw-document-footer"><span role="status">{generation==='unknown'?'生成是否受理尚未核对':generation==='accepted'?'已受理生成，等待新文件回执':generation?'正在核对已保留版本':busy?'正在核对本机草稿':notice||
      (editor.uncertain==='update'?'请重新打开这份原稿核对本机版本。':dirty?'本页修改尚未保留':editor.version?'已打开本机保留版':'还没有保留本页')}</span>
      {!generation&&(editor.uncertain==='first'?<Button variant="secondary" disabled={busy} onClick={()=>save(true)}>核对本次草稿</Button>:
-      !editor.uncertain&&(canReviewGeneration?<Button variant="primary" disabled={!editable} onClick={prepareGeneration}>核对并生成{editor.input.format==='pdf'?' PDF':' Word'}</Button>:
+      !editor.uncertain&&(canReviewGeneration?<Button variant="primary" disabled={!editable} onClick={prepareGeneration}>核对并生成{outputFormat==='pdf'?' PDF':' Word'}</Button>:
       <Button variant="primary" disabled={!editable||!dirty} onClick={()=>save()}>保留草稿</Button>))}
      {removalTarget&&!generation&&!removal&&<Button variant="ghost" disabled={!editable} onClick={reviewRemoval}>删除草稿</Button>}
     </footer></>:

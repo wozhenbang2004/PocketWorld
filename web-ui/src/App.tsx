@@ -121,6 +121,7 @@ import {OwnerWorkFacts,WorkGoal} from './OwnerWorkFacts';
 import {OwnerWorkTeamReportReview,linkedTeamReportChoice,sameTeamReportChoice,teamReportDecisionSaved,teamReportParent,teamReportRead,
  type TeamReportChoice,type TeamReportParent,type TeamReportRead} from './OwnerWorkTeamReportReview';
 import {WorkExecutionPlace} from './WorkExecutionPlace';
+import {pausedMainPhoneRead,type MainPhoneReadVisit,type PausedMainPhoneRead} from './original-main-phone-observation';
 import {OwnerWorkSupplement,type WorkSupplementTarget,type WorkSupplementLeave} from './OwnerWorkSupplement';
 import {ProjectTeamFirstReviews} from './ProjectTeamFirstReviews';
 import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
@@ -742,6 +743,7 @@ export default function App(){
  const phoneWorkReportExit=useRef<{exited:()=>boolean;retire:()=>void}|null>(null);
  useEffect(()=>()=>phoneWorkReportExit.current?.retire(),[]);
  const originalPhoneToolOpen=useRef<((pin:OriginalPhoneToolRecord)=>boolean)|null>(null);
+ const mainPhoneReadOpen=useRef<((visit:MainPhoneReadVisit)=>boolean)|null>(null);
  const capabilityBack=useRef<(()=>boolean)|null>(null);
  const taskPolicyBeforeLeave=useRef<PermissionLeaveGuard|null>(null);
  const projectDraftBeforeLeave=useRef<(()=>boolean)|null>(null);
@@ -759,6 +761,7 @@ export default function App(){
  const registerCapabilityBack=useCallback((handler:(()=>boolean)|null)=>{capabilityBack.current=handler},[]);
  const registerTaskBack=useCallback((handler:(()=>boolean)|null)=>{taskTransientBack.current=handler},[]);
  const registerOriginalPhoneTool=useCallback((handler:((pin:OriginalPhoneToolRecord)=>boolean)|null)=>{originalPhoneToolOpen.current=handler},[]);
+ const registerMainPhoneRead=useCallback((handler:((visit:MainPhoneReadVisit)=>boolean)|null)=>{mainPhoneReadOpen.current=handler},[]);
  const attachmentBack=useRef<(()=>boolean)|null>(null);
  const resultFileReturnFocus=useRef<({taskId:string;report?:VerifiedHomeReport}|{conversationId:string;resultMessageId:string;result:TaskResult;revision:number;document:number;navigation:number;resume:number;taskRequest:number;reader?:HistoryResultOrigin;historySourceGeneration?:number;chatReading?:ChatWorkReturn})&{target:HTMLButtonElement}|null>(null);
  const [fileAttachmentPicker,setFileAttachmentPicker]=useState<FileAttachmentPickerOrigin|null>(null);
@@ -4338,6 +4341,34 @@ export default function App(){
   const show=()=>{if(current()&&originalPhoneToolOpen.current?.(pin)){rememberTaskPosition();setTaskLayer('process')}};
   if(!guardTaskLeave(show))show();
  };
+ const openMainPhoneRead=(task:Task,pin:PausedMainPhoneRead,trigger:HTMLButtonElement)=>{
+  const initial=bridge.getState(),documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current,request=reviewRequest.current;
+  const resume=openedTaskResumeRevision.current,source=initial.state.traceSourceRevision;
+  const current=()=>{
+   const live=bridge.getState(),view=obj(live.view);
+   if(document.hidden||bridge.getDocumentEpoch()!==documentEpoch||navigation!==navigationWindow.current||request!==reviewRequest.current||
+      openedTaskId.current!==pin.taskId||view.taskId!==pin.taskId||view.section!==null||view.resumeRevision!==resume||
+      live.state.traceSourceRevision!==source||live.state.conversationReader||!live.capabilities.commands.includes('history.read'))return false;
+   const rows=asArray<Task>(live.state.tasks).filter(row=>row.id===pin.taskId);
+   return rows.length===1&&JSON.stringify(pausedMainPhoneRead(rows[0],live.state.livePrivatePhones,pin.eventKey))===JSON.stringify(pin);
+  };
+  const triggerVisible=()=>trigger.isConnected&&!trigger.disabled&&trigger.getClientRects().length>0&&
+    !trigger.closest('[hidden],[inert],[aria-hidden="true"]');
+  const returnToOverview=()=>{
+   const scroller=taskScroll.current;
+   if(!current()||!scroller||scroller.closest<HTMLElement>('.pw-task-drawer')?.dataset.taskLayer!=='process')return false;
+   taskReading.current.set(`${pin.taskId}:process`,scroller.scrollTop);setTaskLayer('overview');
+   requestAnimationFrame(()=>{if(current()&&triggerVisible())trigger.focus({preventScroll:true})});
+   return true;
+  };
+  const canOpen=()=>originalTaskOverview(task)&&current()&&triggerVisible();
+  if(!canOpen())return;
+  const show=()=>{
+   // Set the existing Events tab before switching layers; Trace does not activate.
+   if(canOpen()&&mainPhoneReadOpen.current?.({pin,current,returnToOverview})){rememberTaskPosition();setTaskLayer('process')}
+  };
+  if(!guardTaskLeave(show))show();
+ };
  const lateDependencyForOverview=(task:Task)=>{
   if(!originalTaskOverview(task))return false;
   const current=observedLateProjectDependency(task);
@@ -4505,6 +4536,7 @@ export default function App(){
   const resumeFeedback=<Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={reviewFeedbackOpen?['resume-feedback']:[]} onExpandedChange={keys=>setReviewFeedbackOpen(keys.has('resume-feedback'))}><AccordionItem id="resume-feedback" title={phoneInterrupted?'给新一轮的补充（可选）':'补充说明（可选）'} description={reviewNote?'已填写':undefined}><TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="需要调整的内容" isDisabled={protectedDisabled}/></AccordionItem></Accordion>;
   const overviewActive=taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview';
   const originalPhoneTool=!phoneViewerObscured&&!phoneViewerExpanded&&originalTaskOverview(task)&&can('history.read')?originalPhoneToolRecord(task):undefined;
+  const mainPhoneRead=!phoneViewerObscured&&!phoneViewerExpanded&&originalTaskOverview(task)&&can('history.read')?pausedMainPhoneRead(task,state.livePrivatePhones):undefined;
   const draftView=obj(snapshot?.view);
   const currentDraft=overviewActive&&!document.hidden&&draftView.taskId===task.id&&draftView.section==null?fixedDraftReviewTarget(task):null;
   const reviewedDraft=currentDraft&&fixedDraftReviewTarget(review?.task);
@@ -4667,6 +4699,7 @@ export default function App(){
    <TabPanel id="overview" shouldForceMount hidden={taskLayer!=='overview'}>
     <section className="pw-task-overview pw-task-review" aria-label="这件工作的进展、决定与成果">
      {overviewActive&&<WorkExecutionPlace task={task} projects={projects} remoteProfiles={state.features?.remote?.profiles} canReadPhoneResources={!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')}/>}
+     {mainPhoneRead&&<div className="pw-action-row"><Button variant="secondary" onClick={event=>openMainPhoneRead(task,mainPhoneRead,event.currentTarget)}>查看本轮已读到的主屏记录</Button></div>}
      {overviewActive&&task.raw?.ownerDeviceWork?.directWorkspace&&!phoneViewerObscured&&!phoneViewerExpanded&&<OriginalWindowsWorkspaceOverview taskId={task.id}/>}
      {originalPhoneTool&&<div className="pw-action-row"><Button variant="secondary" leadingIcon={IconTool} onClick={event=>openOriginalPhoneTool(task,originalPhoneTool,event.currentTarget)}>查看本轮手机操作</Button></div>}
      {overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')&&<PhoneServiceRecovery key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} readiness={state.phoneReadiness} openSettings={can('settings.openSystem')?()=>act('settings.openSystem',{section:'accessibility'},task.id):undefined} review={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
@@ -4753,7 +4786,7 @@ export default function App(){
        The original task/run/epoch key still retires a different history window. */}
    <TabPanel id="process" shouldForceMount className="pw-task-process-layer" hidden={taskLayer!=='process'}>{chatWorkReturn.current?.replyRun?.taskId===task.id&&
     (task.raw?.runId!==chatWorkReturn.current.replyRun.runId||task.raw?.coordinatorEpoch!==chatWorkReturn.current.replyRun.epoch)?
-    <p className="pw-reading-note" role="status">这项工作已换轮或原执行暂不可核对。没有用另一轮的记录代替这条回复。</p>:<TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} canReadTrace={can('trace.read')} active={taskLayer==='process' && taskOpen && !taskOpening && openedTaskId.current===task.id} registerTransientBack={registerTaskBack} registerOriginalPhoneTool={registerOriginalPhoneTool} renderOperation={renderOperation}/>}</TabPanel>
+    <p className="pw-reading-note" role="status">这项工作已换轮或原执行暂不可核对。没有用另一轮的记录代替这条回复。</p>:<TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} canReadTrace={can('trace.read')} active={taskLayer==='process' && taskOpen && !taskOpening && openedTaskId.current===task.id} registerTransientBack={registerTaskBack} registerOriginalPhoneTool={registerOriginalPhoneTool} registerMainPhoneRead={registerMainPhoneRead} renderOperation={renderOperation}/>}</TabPanel>
    <TabPanel id="goal" shouldForceMount hidden={taskLayer!=='goal'&&taskLayer!=='scope'}>
     <div hidden={taskLayer==='scope'} className="pw-work-goal-panel"><WorkGoal task={task}/>
      {phoneConversationId(task)&&can('phone.request.original')?<PhoneTaskOriginalRequest key={taskHistoryIdentity(task)} task={task} active={taskOpen&&!taskOpening&&taskLayer==='goal'&&openedTaskId.current===task.id&&obj(snapshot?.view).taskId===task.id}/>

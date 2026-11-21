@@ -48,7 +48,7 @@ internal class PocketWebAttachments(
     private data class ProcessingReview(val id: String, val value: NativeFileProcess.Review)
     private data class DraftLibraryVisit(val id: String, val current: () -> Boolean)
     private data class DraftDocumentReview(val id: String, val windowId: String,
-        val edit: PocketWebStandaloneDocumentDrafts.Edit, val planDigest: String, val expires: Long)
+        val edit: PocketWebStandaloneDocumentDrafts.Edit, val outputFormat: Format, val planDigest: String, val expires: Long)
     private var window: Window? = null
     private val frames = linkedMapOf<String, Frame>()
     private var review: Review? = null
@@ -611,7 +611,9 @@ internal class PocketWebAttachments(
         fun JSONObject.sourceUnavailable(unavailable: Boolean) = apply { if (unavailable) put("sourceAvailable", false) }
         fun saved(value: PocketWebStandaloneDocumentDrafts.Saved?) =
             reply(value?.let { JSONObject().put("status", it.state.name).edit(it.edit).sourceUnavailable(it.sourceUnavailable) })
-        fun documentInput(input: PocketWebStandaloneDocumentDrafts.GenerationInput): JSONObject = content(input.fields).apply {
+        fun documentInput(input: PocketWebStandaloneDocumentDrafts.GenerationInput, outputFormat: Format): JSONObject = content(input.fields).apply {
+            // Select only this output; the saved editor's format and revision are never updated here.
+            put("format", outputFormat.value)
             input.source?.let { source ->
                 put("parentArtifactId", source.parentArtifactId().toString()).put("parentSha256", source.parentSha256())
                 put("editableSourceId", source.editableSourceId().toString()).put("editableSourceSha256", source.editableSourceSha256())
@@ -687,16 +689,18 @@ internal class PocketWebAttachments(
                     }
                 }
                 "drafts.reviewDocument" -> {
-                    exact("editorHandle", "versionHandle")
+                    exact("editorHandle", "versionHandle", "outputFormat")
                     val selected = editor()
+                    val outputFormat = Format.values().singleOrNull { it.value == args.opt("outputFormat") }
+                        ?: error("请选择本次生成 Word 或 PDF")
                     adapter.readGenerationDraft(frame, selected) { read ->
                         val result = if (read?.sourceUnavailable == true && currentDraftFrame(frame))
                             JSONObject().edit(selected).sourceUnavailable(true)
                         else read?.input?.takeIf { currentDraftFrame(frame) }?.let {
                             try {
-                                val draft = DocumentDraft(documentInput(it))
+                                val draft = DocumentDraft(documentInput(it, outputFormat))
                                 val prepared = DraftDocumentReview(UUID.randomUUID().toString(), frame.windowId, selected,
-                                    draft.identity, SystemClock.elapsedRealtime() + DOCUMENT_REVIEW_TTL)
+                                    outputFormat, draft.identity, SystemClock.elapsedRealtime() + DOCUMENT_REVIEW_TTL)
                                 draftDocumentReview = prepared
                                 JSONObject().put("status", "ready").put("reviewId", prepared.id).edit(selected)
                                     .put("format", draft.format).put("fileName", draft.fileName())
@@ -732,7 +736,7 @@ internal class PocketWebAttachments(
                         } else if (input == null) {
                             noGeneration("没有重新核对到这份已保留的版本，请退出并打开原草稿。")
                         } else {
-                            val draft = runCatching { DocumentDraft(documentInput(input)) }.getOrNull()
+                            val draft = runCatching { DocumentDraft(documentInput(input, prepared.outputFormat)) }.getOrNull()
                             if (draft == null || draft.identity != prepared.planDigest || SystemClock.elapsedRealtime() >= prepared.expires) {
                                 noGeneration("已保留的草稿或本次核对已变化，请重新打开原稿。")
                             } else {

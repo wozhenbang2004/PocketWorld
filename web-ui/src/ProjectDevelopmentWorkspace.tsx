@@ -6,7 +6,7 @@ import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextArea
 import {ProjectTaskPackageOrigin,type TaskPackageOriginalWork} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
 import { savedPythonPath, type OriginalPythonRun } from './owner-python-run';
-import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
+import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutPythonToolsDeparture, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
 import { ProjectDraftChanges } from './ProjectDraftChanges';
@@ -712,7 +712,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       draft.current.checkoutId!==position.checkoutId||copies.length!==1||copies[0].draftWorkingCopy!==false||
       !savedPythonPath(position.path)||!sourceHash(position.savedHash)||!original.take())return;
     // Wait for the existing Work inspection to release the page before taking the one-use return.
-    // This just opens the ordinary list. It cannot reopen a file without new native readId + SHA proof.
+    // The ordinary list opens first. Returning to the file still requires a fresh native byte match.
     setFileWindow({checkoutId:position.checkoutId,pythonSetupResume:position});
   },[active,pythonSetupReturn,view,projectId,busy,fileCheckout,returnTarget,buildReturn,importedEditor,localFilesIntent,sourceConflict]);
 
@@ -994,7 +994,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&!view?.draftRecoveryRequired&&
     selectedCopy?.draftWorkingCopy===false&&view?.runtime?.runtimeId==='managed_process_v1'&&
     view.runtime.status==='preparation_required'&&view.runtime.canExecute===false&&view.runtime.preparationAvailable===true&&canViewToolSetup;
-  const prepareSavedPythonTools = async ({position,closeEditor}:CheckoutSaveForBuild) => {
+  const prepareSavedPythonTools = async ({position,savedHere,closeEditor}:CheckoutPythonToolsDeparture) => {
     const documentWindow=ownerWindow(),viewHandle=handle.current,sequence=generation.current,displayed={...draft.current};
     const stillHere=()=>alive.current&&latest.current.active&&!document.hidden&&generation.current===sequence&&
       handle.current===viewHandle&&ownerWindow()===documentWindow&&!activeReview.current&&!previewOpen.current&&
@@ -1004,10 +1004,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     let verified=false;
     await preserveSelectionBeforeDeparture(displayed,()=>{verified=true});
     if(!verified||!stillHere())throw Error('原副本的选择尚未确认，没有打开工具准备。');
-    if(!await closeEditor())throw Error('保存已完成，但未确认原编辑器已关闭，没有打开工具准备。');
+    if(!await closeEditor())throw Error('未确认原编辑器已关闭，没有打开工具准备。');
     if(!stillHere())return;
     const exactPosition = {projectId,checkoutId:position.checkoutId,path:position.path,savedHash:position.savedHash};
-    closeFiles(exactPosition);
+    closeFiles(savedHere?exactPosition:undefined);
     latest.current.onPreparePythonTools?.(exactPosition);
   };
   const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock||directImportedSave||viteForSave)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&

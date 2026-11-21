@@ -11,6 +11,7 @@ import { phoneStopReceipt } from './phone-stop-receipt';
 import { phoneResourceHistory } from './phone-resource-history';
 import { getTaskEventHistory, getTaskOperations } from './task-presentation';
 import { taskAuditPage, taskHistoryIdentity, type AuditPage, type AuditSection, type TaskHeader } from './task-history';
+import { containsMainPhoneRead, type MainPhoneReadVisit } from './original-main-phone-observation';
 import { OriginalWindowsTextRead, ReceivedOriginalWindowsText, originalWindowsTextAt, receivedOriginalWindowsTextAt } from './OriginalWindowsTextRead';
 
 type Window = { identity: string; cursor: string; prior: string[]; page: AuditPage };
@@ -114,10 +115,11 @@ function useAuditWindow(task: TaskHeader, identity: string, section: AuditSectio
 }
 
 /** The adopted task disclosures now navigate their original bounded audit windows. */
-export function TaskHistory({ task, canRead, canReadTrace = false, active = true, registerTransientBack, registerOriginalPhoneTool, renderOperation }: {
+export function TaskHistory({ task, canRead, canReadTrace = false, active = true, registerTransientBack, registerOriginalPhoneTool, registerMainPhoneRead, renderOperation }: {
   task: TaskHeader; canRead: boolean; canReadTrace?: boolean; active?: boolean;
   registerTransientBack?: (handler: (() => boolean) | null) => void;
   registerOriginalPhoneTool?: (handler: ((pin: OriginalPhoneToolRecord) => boolean) | null) => void;
+  registerMainPhoneRead?: (handler: ((visit: MainPhoneReadVisit) => boolean) | null) => void;
   renderOperation: (operation: unknown, index: number, scope: string) => ReactNode;
 }) {
   const [selectedTab, setSelectedTab] = useState('trace');
@@ -133,18 +135,26 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
   const events = useAuditWindow(task, identity, 'events', canRead && !unavailable, active, documentEpoch, revision);
   const operations = useAuditWindow(task, identity, 'operations', canRead && !unavailable, active, documentEpoch, revision);
   const [expanded, setExpanded] = useState<{scope: string; keys: Set<string | number>}>({scope: '', keys: new Set()});
-  const [target, setTarget] = useState<{scope: string; record: ProcessRecord; originalPhone?: true} | null>(null);
+  const [target, setTarget] = useState<{scope: string; record: ProcessRecord; originalPhone?: true; mainRead?: MainPhoneReadVisit} | null>(null);
+  const [mainRead, setMainRead] = useState<{scope: string; visit: MainPhoneReadVisit} | null>(null);
   const [drill, setDrill] = useState<{scope: string; section: AuditSection} | null>(null);
   const [locateMiss, setLocateMiss] = useState(''), surface = useRef<HTMLElement>(null), focusReturn = useRef(''), releaseReturn = useRef('');
   const backToCheckpoint = useCallback(() => {
     focusReturn.current = identity; setDrill(null); setLocateMiss(''); setSelectedTab('trace');
   }, [identity]);
   const fromCheckpoint = active && drill?.scope === identity && selectedTab === drill.section;
+  const fromMainRead = active && selectedTab === 'events' && !!mainRead && mainRead.scope === identity && inOriginalTask && canRead &&
+    !events.earlier && containsMainPhoneRead(task, events.page, mainRead.visit.pin) && mainRead.visit.current();
+  const backFromMainRead = useCallback(() => {
+    if (!fromMainRead || !mainRead?.visit.returnToOverview()) return false;
+    setMainRead(null); return true;
+  }, [fromMainRead, mainRead]);
+  useLayoutEffect(() => { if (mainRead && !fromMainRead) setMainRead(null); }, [mainRead, fromMainRead]);
   useEffect(() => {
-    if (!fromCheckpoint || !registerTransientBack) return;
-    registerTransientBack(() => { backToCheckpoint(); return true; });
+    if ((!fromCheckpoint && !fromMainRead) || !registerTransientBack) return;
+    registerTransientBack(fromMainRead ? backFromMainRead : () => { backToCheckpoint(); return true; });
     return () => registerTransientBack(null);
-  }, [fromCheckpoint, registerTransientBack, backToCheckpoint]);
+  }, [fromCheckpoint, fromMainRead, backFromMainRead, registerTransientBack, backToCheckpoint]);
   useLayoutEffect(() => {
     if (!focusReturn.current) return;
     const restore = focusReturn.current === identity && active && selectedTab === 'trace';
@@ -160,14 +170,17 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
   useLayoutEffect(() => {
     if (!target) return;
     const current = () => active && target.scope === identity && selectedTab === target.record.section &&
-      bridge.getDocumentEpoch() === documentEpoch && sourceRevision() === revision;
+      bridge.getDocumentEpoch() === documentEpoch && sourceRevision() === revision &&
+      (!target.mainRead || fromMainRead && target.mainRead.current());
     const reveal = () => {
       const live = target.originalPhone ? bridge.getState() : undefined;
       const view = live?.view as {section?: unknown; taskId?: unknown} | undefined;
       if (current() && (!live || !document.hidden && view?.section == null && view?.taskId === task.id && live.capabilities.commands.includes('history.read'))) {
         const key = recordKey(target.record.runId, target.record.id);
         const row = [...(surface.current?.querySelectorAll<HTMLElement>('[data-audit-key]') ?? [])].find(el =>
-          el.dataset.auditKey === key && el.dataset.auditSection === target.record.section);
+          el.dataset.auditKey === key && el.dataset.auditSection === target.record.section &&
+          (!target.mainRead || el.dataset.eventPosition === String(target.mainRead.pin.position) &&
+            el.getClientRects().length > 0 && !el.closest('[hidden],[inert],[aria-hidden="true"]')));
         if (row) {
           const control = row.querySelector<HTMLElement>('[slot="trigger"], .ui-tcc__head') ?? row;
           control.focus({ preventScroll: true }); row.scrollIntoView({ block: 'nearest' });
@@ -175,13 +188,13 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
       }
       setTarget(previous => previous === target ? null : previous);
     };
-    if (target.originalPhone && current()) {
-      // Let the drawer restore its Process scroll before locating the existing tool row.
+    if ((target.originalPhone || target.mainRead) && current()) {
+      // Let the drawer restore its Process scroll before locating the existing row.
       const frame = requestAnimationFrame(reveal);
       return () => cancelAnimationFrame(frame);
     }
     reveal();
-  }, [target, active, identity, selectedTab, documentEpoch, revision, task.id]);
+  }, [target, active, identity, selectedTab, documentEpoch, revision, task.id, fromMainRead]);
   useLayoutEffect(() => {
     if (!registerOriginalPhoneTool) return;
     registerOriginalPhoneTool(pin => {
@@ -197,6 +210,19 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
       return true;
     });
     return () => registerOriginalPhoneTool(null);
+  });
+  useLayoutEffect(() => {
+    if (!registerMainPhoneRead) return;
+    registerMainPhoneRead(visit => {
+      if (active || unavailable || !canRead || !inOriginalTask || !visit.current() ||
+        !containsMainPhoneRead(task, events.latest, visit.pin)) return false;
+      const {eventKey,renderRun}=visit.pin;
+      events.showLatest(); setDrill(null); setLocateMiss(''); setSelectedTab('events');
+      setMainRead({scope:identity,visit});
+      setTarget({scope:identity,mainRead:visit,record:{section:'events',id:eventKey,runId:renderRun,locatable:true,label:'',body:''}});
+      return true;
+    });
+    return () => registerMainPhoneRead(null);
   });
   if (unavailable) return <section className="pw-task-process" aria-label="执行过程"><p className="pw-muted">原任务来源已变化或暂不可核对，请回任务概览核对来源。</p></section>;
 
@@ -253,8 +279,12 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
     {window.page?.readLimited === true && <p className="pw-muted">部分正文超出当前读取范围。</p>}
   </>;
   return <section ref={surface} className="pw-task-process" aria-label="执行过程">
-    <Tabs className="pw-task-history-tabs" selectedKey={selectedTab} onSelectionChange={key => { if (key !== selectedTab) { setDrill(null); setLocateMiss(''); setSelectedTab(String(key)); } }}>
+    <Tabs className="pw-task-history-tabs" selectedKey={selectedTab} onSelectionChange={key => { if (key !== selectedTab) { setMainRead(null); setDrill(null); setLocateMiss(''); setSelectedTab(String(key)); } }}>
       <TabList aria-label="执行记录类型"><Tab id="trace">轨迹</Tab><Tab id="events" count={history.entries.length}>进展记录</Tab><Tab id="operations" count={tools.length}>工具调用</Tab></TabList>
+      {fromMainRead && <div className="pw-action-row">
+        <Button variant="ghost" className="pw-audit-return" leadingIcon={IconArrowLeft} onClick={backFromMainRead}>返回原工作概览</Button>
+        <small>暂停前已保留的记录，不是实时画面。</small>
+      </div>}
       {fromCheckpoint && <Button variant="ghost" className="pw-audit-return" leadingIcon={IconArrowLeft} onClick={backToCheckpoint}>返回当前进展</Button>}
       {selectedTab !== 'trace' && <p className="pw-audit-caption">数量仅对应当前已读取的记录。{locateMiss === identity && <span role="status">原记录已变化，请在当前窗口重新核对。</span>}</p>}
       <TabPanel id="trace" shouldForceMount><TaskTrajectory task={task} currentCheckpoint={brief} active={active && selectedTab === 'trace'} canRead={canReadTrace} registerTransientBack={registerTransientBack}/></TabPanel>
@@ -262,9 +292,10 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
       {history.partial && <p className="pw-muted pw-task-history-limit">当前为部分记录，完整过程尚未载入。</p>}
       {history.entries.length ? <Accordion variant="divided" className="pw-task-event-list" aria-label="已读取任务记录" expandedKeys={expanded.scope === identity ? expanded.keys : []} onExpandedChange={keys => setExpanded({scope: identity, keys})}>{history.entries.map((event, index) => {
         const verdict = event.ownerGoalVerdict !== undefined;
+        const originalMain = fromMainRead && mainRead?.visit.pin.eventKey === event.id && mainRead.visit.pin.position === event.position;
         return <AccordionItem key={event.id + ':' + index} id={recordKey(event.runId, event.id)} data-audit-key={recordKey(event.runId, event.id)} data-audit-section="events" className="pw-task-event" data-event-position={event.position} data-read-limited={event.readLimited || undefined} headingLevel={4}
           title={verdict ? event.stateLabel : event.bodyAvailable && event.detail !== event.stateLabel ? event.detail : event.title}
-          description={[event.title, verdict ? '' : event.stateLabel, time(event.at), event.runId && task.raw?.runId && !event.isCurrentRun ? '早先执行记录' : ''].filter(Boolean).join(' · ')}>
+          description={[originalMain ? '本轮主屏读屏记录' : event.title, verdict ? '' : event.stateLabel, time(event.at), event.runId && task.raw?.runId && !event.isCurrentRun ? '早先执行记录' : ''].filter(Boolean).join(' · ')}>
           <p className="pw-task-event-copy" dir="auto">{expanded.scope === identity && expanded.keys.has(recordKey(event.runId, event.id)) ? event.fullDetail ?? event.detail : event.detail}</p>
         </AccordionItem>;
       })}</Accordion> : <p className="pw-muted">当前窗口没有可读取的任务记录。</p>}

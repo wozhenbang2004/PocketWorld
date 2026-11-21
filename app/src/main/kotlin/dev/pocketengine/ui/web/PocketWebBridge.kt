@@ -1116,6 +1116,28 @@ internal class PocketWebBridge(
                 }
                 return
             }
+            if (action == "tasks.open" && args.has("commitmentViewHandle")) {
+                checkedPayload(args, setOf("commitmentViewHandle"))
+                val handle = requiredString(args, "commitmentViewHandle")
+                val window = captureWindow()
+                fun current() = !closed && acceptsWindow(window) && section == "commitments" &&
+                    taskViewId == null && taskReturnSection == null && controller.webPrivateOwnerVisible()
+                check(current()) { "请在原私人单项委托中打开关联工作" }
+                commitmentPages.resolveLinkedWork(handle, ::current) { original, error ->
+                    if (closed) return@resolveLinkedWork
+                    if (original == null || error != null || !current()) {
+                        complete(id, null, error ?: "原委托已离开，未打开其他工作"); return@resolveLinkedWork
+                    }
+                    val verify: (JSONObject) -> Unit = { raw ->
+                        check(current() && commitmentPages.holdsLinkedWork(handle, original)) { "原委托阅读已变化，未打开其他工作" }
+                        commitmentPages.requireLinkedWork(original, raw)
+                    }
+                    openOriginalTask(id, original.link.taskId, true, "commitments",
+                        expectedRunId = original.runId, expectedEpoch = original.epoch, sourceWindowCurrent = ::current,
+                        verifySourceBeforeMerge = verify, checkReaderInput = { verify(it.raw) })
+                }
+                return
+            }
             if (action in PocketWebTokenBudgets.COMMANDS) {
                 require(section == "models" || taskViewId != null) { "请从模型连接或原任务详情读取预算" }
                 if (action == "tokenBudgets.open") {
@@ -1128,7 +1150,7 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.open") {
-                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId", "expectedExternalKind"))
+                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId", "expectedExternalKind", "teamPlanView"))
                 val taskId = requiredString(args, "id")
                 val fromReader = args.has("readerWindow") || args.has("readerConversationId") || args.has("readerMessageId")
                 require(args.has("expectedRunId") == args.has("expectedEpoch")) { "原整理记录身份不完整" }
@@ -1137,7 +1159,7 @@ internal class PocketWebBridge(
                     val kind = requiredString(args, "expectedExternalKind")
                     require(kind in setOf("remote", "teams", "ssh") && expectedRunId == taskId && requiredInt(args, "expectedEpoch") == 0 &&
                         !fromReader && !args.has("searchQuery") && !args.has("expectedProjectId") && !args.has("expectedCheckoutId") &&
-                        args.has("requestNavigation") && !requiredBoolean(args, "requestNavigation") && controller.webPrivateOwnerVisible()) { "原本机工作身份无效" }
+                        !args.has("teamPlanView") && args.has("requestNavigation") && !requiredBoolean(args, "requestNavigation") && controller.webPrivateOwnerVisible()) { "原本机工作身份无效" }
                     openOriginalTask(id, taskId, false, expectedRunId = expectedRunId, expectedEpoch = 0,
                         sourceWindowCurrent = { controller.webPrivateOwnerVisible() },
                         checkReaderInput = { task ->
@@ -1157,6 +1179,17 @@ internal class PocketWebBridge(
                     return
                 }
                 val expectedEpoch = if (expectedRunId != null) requiredInt(args, "expectedEpoch").also { require(it > 0) { "原整理回合无效" } } else null
+                if (args.has("teamPlanView")) {
+                    fun sameTeamWindow() = section == "teams" && taskViewId == null && controller.conversationReader == null &&
+                        controller.webPrivateOwnerVisible()
+                    require(args.length() == 4 && expectedRunId != null && expectedEpoch != null && sameTeamWindow()) {
+                        "请从本次原团队的同一分工打开"
+                    }
+                    val verify = teamPages.planWorkOpenVerifier(requiredString(args, "teamPlanView"), taskId, expectedRunId, expectedEpoch)
+                    openOriginalTask(id, taskId, true, returnSection = "teams", expectedRunId = expectedRunId, expectedEpoch = expectedEpoch,
+                        sourceWindowCurrent = ::sameTeamWindow, verifySourceBeforeMerge = verify, checkReaderInput = { verify(it.raw) })
+                    return
+                }
                 val projectScope = ProjectTaskReadScope.read(args)
                 if (args.has("searchQuery") || expectedRunId != null || projectScope != null) {
                     if (projectScope != null) require(projectReadCurrent(projectScope)) { "请返回原项目工作页后再打开" }
@@ -1974,13 +2007,13 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebTeams.COMMANDS) {
                 requireSection("teams")
-                val restoringMemberResult = action == "teams.snapshot" && args.has(PocketWebTeams.RESTORE_MEMBER_RESULT_RUN)
+                val restoringTeamReading = action == "teams.snapshot" && (args.has(PocketWebTeams.RESTORE_MEMBER_RESULT_RUN) || args.has(PocketWebTeams.RESTORE_PLAN_WORK))
                 teamPages.dispatch(action, args) { result, error ->
                     val currentMemberAnswerRead = action == "teams.readRun" && error == null && result?.optJSONObject("reading")?.let {
                         it.opt(PocketWebTeams.CURRENT_FAILED_AGGREGATE_SOURCE) == true ||
                             it.opt(PocketWebTeams.CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE) == true
                     } == true
-                    complete(id, result, error, "outcome_unknown", retainValue = !restoringMemberResult && !currentMemberAnswerRead &&
+                    complete(id, result, error, "outcome_unknown", retainValue = !restoringTeamReading && !currentMemberAnswerRead &&
                         action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget"))
                     if (action != "teams.readFinalPackageFiles") publishState()
                 }

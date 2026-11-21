@@ -1,6 +1,10 @@
 package dev.pocketengine.ui.web
 
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import dev.pocketengine.features.automation.AutomationModule
+import dev.pocketengine.store.OwnerWorkTask
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.objects
 import org.json.JSONObject
@@ -11,6 +15,9 @@ import java.util.UUID
 /** Owner presentation only. The original CommitmentBook supplies revisions, evidence and receipts. */
 internal class PocketWebCommitments(private val controller: PocketWorldController) {
     private data class Review(val owner: Boolean, val command: String, val input: String, val expires: Long)
+    data class WorkLink(val commitmentId: String, val revision: Long, val taskId: String)
+    data class LinkedWork(val link: WorkLink, val runId: String, val epoch: Int)
+    private val main = Handler(Looper.getMainLooper())
     @Volatile private var generation = 0L
     private var snapshot = JSONObject()
     private val readings = linkedMapOf<String, Pair<String, Long>>()
@@ -18,6 +25,7 @@ internal class PocketWebCommitments(private val controller: PocketWorldControlle
     private val receipts = linkedMapOf<String, JSONObject>()
 
     companion object {
+        private val UUID_TEXT = Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
         val COMMANDS = setOf("commitments.snapshot", "commitments.read", "commitments.review", "commitments.reviewPolicy",
             "commitments.receipts", "commitments.reviewReceipt", "commitments.reconcileReceipt", "commitments.confirm", "commitments.discard")
     }
@@ -49,6 +57,62 @@ internal class PocketWebCommitments(private val controller: PocketWorldControlle
         val handle = UUID.randomUUID().toString()
         readings[handle] = record.toString() to SystemClock.elapsedRealtime() + 120_000
         return JSONObject().put("viewHandle", handle).put("commitment", public(record))
+    }
+    private fun workLink(record: JSONObject): WorkLink {
+        val id = text(record, "id", 36); val task = text(record, "taskId", 36)
+        require(UUID_TEXT.matches(id) && UUID_TEXT.matches(task) && record.opt("ownerId") == "owner" &&
+            record.opt("spaceId") == "private" && record.opt("kind") == "explicit_user" && record.isNull("planId") &&
+            record.opt("referenceOnly") == true && record.opt("executionAuthorized") == false) { "原私人单项委托没有可核对的工作关联" }
+        return WorkLink(id, integer(record, "revision", 1, Long.MAX_VALUE), task)
+    }
+    private fun linkedWork(record: JSONObject): LinkedWork {
+        val run = text(record, "taskRunId", 36)
+        check(record.opt("taskStateAuthority") == "TaskStore" && UUID_TEXT.matches(run)) { "原关联工作未取得确定的执行轮次" }
+        return LinkedWork(workLink(record), run, integer(record, "taskEpoch", 1, Int.MAX_VALUE.toLong()).toInt())
+    }
+    fun holdsLinkedWork(handle: String, original: LinkedWork): Boolean =
+        runCatching { linkedWork(read(handle)) == original }.getOrDefault(false)
+
+    /** Only the held owner reading chooses this link. Check the current Book row before a TaskStore read. */
+    fun resolveLinkedWork(handle: String, current: () -> Boolean, done: (LinkedWork?, String?) -> Unit) {
+        val original = linkedWork(read(handle)); val page = generation
+        fun active() = generation == page && current() && controller.webPrivateOwnerVisible()
+        controller.runPluginCatalogWork(Runnable {
+            val checked = runCatching {
+                check(active()) { "原委托阅读已关闭，请重新打开" }
+                val automation = controller.nativeButlerHost().features.module("automation") as? AutomationModule
+                    ?: error("本机原委托宿主暂不可用")
+                // Use the Book-only read; the standard UI projection repeats the full task audit.
+                val scope = JSONObject().put("ownerId", "owner").put("spaceId", "private")
+                val actual = automation.handle("getCommitment", JSONObject().put("scope", scope).put("id", original.link.commitmentId))
+                    .getJSONObject("commitment")
+                check(workLink(actual) == original.link) { "原委托或工作关联已变化，请重新读取" }
+            }
+            main.post {
+                if (!active() || !holdsLinkedWork(handle, original)) done(null, "原委托阅读已关闭，请重新打开")
+                else checked.fold({ done(original, null) }, { done(null, it.message ?: "未能核对原委托的关联工作") })
+            }
+        })
+    }
+
+    fun requireLinkedWork(original: LinkedWork, raw: JSONObject) {
+        val link = original.link
+        check(raw.opt("id") == link.taskId && raw.opt("actorId") == "owner" && raw.opt("spaceId") == "private" &&
+            raw.opt("kind") == "assistant" && raw.opt("executionMode") == "capabilities" && OwnerWorkTask.isOwnerWork(raw) &&
+            raw.isNull("origin") && raw.isNull("parentTaskId") && raw.opt("taskProjection") == "detail_window" &&
+            raw.opt("taskCoreReadLimited") == false && raw.opt("contextAvailable") == true &&
+            raw.opt("contextWithdrawn") != true && raw.opt("sourceCurrentReadRequired") != true) { "原私人关联工作暂无法核对，未打开其他工作" }
+        val work = raw.getJSONObject("ownerWork")
+        val conversation = text(raw, "conversationId", 160)
+        check(raw.opt("runId") == original.runId && integer(raw, "coordinatorEpoch", 1, Int.MAX_VALUE.toLong()).toInt() == original.epoch) {
+            "原工作已进入另一轮，未打开替代记录"
+        }
+        val bindings = raw.optJSONArray("commitmentBindings")
+        val reverse = bindings?.takeIf { it.length() <= 1000 }.objects().singleOrNull { it.opt("commitmentId") == link.commitmentId }
+        check(work.opt("workTaskId") == link.taskId && work.opt("conversationId") == conversation &&
+            reverse != null) { "这份工作没有原委托的完整关联，未打开其他工作" }
+        // Edits or snoozes can advance the Book revision without changing the selected task.
+        integer(reverse, "commitmentRevision", 1, link.revision)
     }
     private fun review(owner: Boolean, command: String, input: JSONObject, details: JSONObject = JSONObject()): JSONObject {
         reviews.entries.removeAll { it.value.expires <= SystemClock.elapsedRealtime() }

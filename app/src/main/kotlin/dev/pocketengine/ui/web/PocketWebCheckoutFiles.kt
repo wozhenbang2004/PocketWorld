@@ -303,6 +303,10 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             args.keys().asSequence().toSet() == setOf("viewHandle", "filesHandle", "path", "pythonTaskId")) {
             "只从这次原脚本工作核对同一文件"
         }
+        if (args.has("expectedPythonSha256")) require(action == "projects.development.files.read" &&
+            args.keys().asSequence().toSet() == setOf("viewHandle", "filesHandle", "path", "expectedPythonSha256")) {
+            "只能核对原工具准备返回的同一份脚本"
+        }
         val readPriorSave = action == "projects.development.files.read" && args.has("priorSavedFileId")
         if (!readPriorSave && action in setOf("projects.development.files.list", "projects.development.files.find", "projects.development.files.findNext", "projects.development.files.readFound", "projects.development.files.read", "projects.development.files.edit",
                 "projects.development.files.resolve", "projects.development.files.save")) original.adoption = null
@@ -455,7 +459,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已过期，请重新查找"}
                         (original.matches?:error("原查询已结束，请重新查找")).selected(id,index.toInt())
                     }
-                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path", "gitStatusOperation", "savedEditId", "priorSavedFileId", "pythonTaskId");null}
+                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path", "gitStatusOperation", "savedEditId", "priorSavedFileId", "pythonTaskId", "expectedPythonSha256");null}
                 val gitStatus=if(args.has("gitStatusOperation")){
                     check(action.endsWith(".read")&&original.sourcePath==null){"只能在原副本目录选择 Git 文件"}
                     text(args,"gitStatusOperation")
@@ -481,6 +485,12 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         gitStatus == null && saved == null && listed == null && !busy) { "请回同一脚本工作的原私人副本" }
                     text(args, "pythonTaskId").also { require(it.matches(Regex("[a-f0-9-]{36}"))) }
                 } else null
+                val setupSha = if(args.has("expectedPythonSha256")){
+                    check(original.sourcePath==null && original.opened==null && !busy && OwnerPythonRun.supportsPath(path)) {
+                        "请返回原普通副本的原脚本"
+                    }
+                    text(args,"expectedPythonSha256").also { require(it.matches(Regex("[a-f0-9]{64}"))) }
+                }else null
                 if (original.sourcePath != null) {
                     check(path == original.sourcePath && !busy) { "只能重新核对已选择的原文件" }
                     original.opened?.let { store.release(it.draft) }; original.opened = null
@@ -533,6 +543,11 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                             actual.opt("checkoutId")==script.checkoutId() && actual.opt("path")==script.path()) {
                             "原脚本的已保存字节已变化。没有打开其他版本，可从同一副本清单核对当前文件。"
                         }
+                        if(setupSha!=null)check(current(original) && original.opened==null && pythonReadCandidate &&
+                            actual.opt("deleted")==false && actual.opt("sha256")==setupSha && actual.opt("expectedHash")==setupSha &&
+                            actual.opt("projectId")==original.project && actual.opt("checkoutId")==original.checkout && actual.opt("path")==path) {
+                            "原脚本版本已变化。只显示同一副本的文件清单，未打开其他文件。"
+                        }
                         val prior = store.open(original.project, original.checkout, path, actual.optBoolean("deleted"))
                         val observed = if (original.sourcePath == null && current(original))
                             prior.observeRecoveredOrdinaryFile(actual) else prior.observe(actual)
@@ -554,6 +569,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     if(saved!=null)shown.put("savedEditId",saved.id)
                     if(listed!=null)shown.put("priorSavedFileId",listed.id)
                     if(script!=null)shown.put("pythonTaskId",pythonTask)
+                    if(setupSha!=null)shown.put("matchedPythonSetupSha256",setupSha)
                     original.initialPhoneSha = null // First real read succeeded. From here existing save CAS and adoption review govern this same path.
                     shown
                 }

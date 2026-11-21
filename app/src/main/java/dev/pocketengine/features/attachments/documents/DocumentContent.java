@@ -13,24 +13,24 @@ public final class DocumentContent {
     public static final class Request {
         public final int startUnit, startChunk, maxUnits, maxChars, maxChunks;
         public final String extraction;
-        private final boolean worksheetNavigation;
+        private final boolean originalOfficeNavigation;
         public Request(int startUnit, int startChunk, int maxUnits, int maxChars, int maxChunks) {
             this(startUnit,startChunk,maxUnits,maxChars,maxChunks,"auto");
         }
         public Request(int startUnit, int startChunk, int maxUnits, int maxChars, int maxChunks,String extraction) {
             this(startUnit,startChunk,maxUnits,maxChars,maxChunks,extraction,false);
         }
-        private Request(int startUnit, int startChunk, int maxUnits, int maxChars, int maxChunks,String extraction,boolean worksheetNavigation) {
+        private Request(int startUnit, int startChunk, int maxUnits, int maxChars, int maxChunks,String extraction,boolean originalOfficeNavigation) {
             if (startUnit < 1 || startUnit > 1000000 || startChunk < 0 || startChunk > 1000000
                     || maxUnits < 1 || maxUnits > 32 || maxChars < 2048 || maxChars > 65536
                     || maxChunks < 1 || maxChunks > 256) throw new IllegalArgumentException("Invalid document range or limits");
             if(!"auto".equals(extraction)&&!"text".equals(extraction)&&!"ocr".equals(extraction))throw new IllegalArgumentException("Unsupported extraction mode");
             this.startUnit=startUnit; this.startChunk=startChunk; this.maxUnits=maxUnits;
             this.maxChars=maxChars; this.maxChunks=maxChunks;
-            this.extraction=extraction; this.worksheetNavigation=worksheetNavigation;
+            this.extraction=extraction; this.originalOfficeNavigation=originalOfficeNavigation;
         }
         public static Request defaults() { return new Request(1,0,8,12000,48); }
-        /** Opt in only for the original owner reader; the actual workbook parser must still confirm XLSX. */
+        /** Opt in only for the original owner reader; the actual Office parser must still confirm its format. */
         public static Request originalOfficeView(int unit,int chunk,boolean word) {
             return new Request(unit,chunk,word?16:1,16000,128,"text",true);
         }
@@ -49,6 +49,11 @@ public final class DocumentContent {
         public final String name;
         private Worksheet(int unit,String name) { this.unit=unit; this.name=name; }
     }
+    public static final class WordHeading {
+        public final int unit,level;
+        public final String text;
+        private WordHeading(int unit,int level,String text) { this.unit=unit;this.level=level;this.text=text; }
+    }
     public static final class Result {
         public final String format, status, coverage;
         public final List<Chunk> chunks;
@@ -58,33 +63,39 @@ public final class DocumentContent {
         public final int previousWorksheetChunk;
         /** Bounded visible worksheet names in original order, only for the original reader. */
         public final List<Worksheet> worksheets;
+        /** Complete short labels with direct paragraph outline levels, not a style-derived outline. */
+        public final List<WordHeading> wordHeadings;
         public final boolean truncated;
         Result(String format,String status,String coverage,List<Chunk> chunks,List<String> warnings,
                 int totalUnits,int nextUnit,int nextChunk) {
-            this(format,status,coverage,chunks,warnings,totalUnits,nextUnit,nextChunk,-1,Collections.emptyList());
+            this(format,status,coverage,chunks,warnings,totalUnits,nextUnit,nextChunk,-1,Collections.emptyList(),Collections.emptyList());
         }
         private Result(String format,String status,String coverage,List<Chunk> chunks,List<String> warnings,
-                int totalUnits,int nextUnit,int nextChunk,int previousWorksheetChunk,List<Worksheet> worksheets) {
+                int totalUnits,int nextUnit,int nextChunk,int previousWorksheetChunk,List<Worksheet> worksheets,List<WordHeading> wordHeadings) {
             this.format=format; this.status=status; this.coverage=coverage;
             this.chunks=Collections.unmodifiableList(new ArrayList<>(chunks));
             this.warnings=Collections.unmodifiableList(new ArrayList<>(warnings));
             this.totalUnits=totalUnits; this.nextUnit=nextUnit; this.nextChunk=nextChunk;
             this.previousWorksheetChunk=previousWorksheetChunk;
             this.worksheets=worksheets.isEmpty()?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(worksheets));
+            this.wordHeadings=wordHeadings.isEmpty()?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(wordHeadings));
             this.truncated=nextUnit>0;
         }
     }
     static final class Collector {
         private static final int MAX_WORKSHEET_CHOICES=64;
+        private static final int MAX_WORD_HEADING_CHOICES=64;
         final Request request;
         final List<Chunk> chunks=new ArrayList<>();
         final List<String> warnings=new ArrayList<>();
         int chars,totalUnits,nextUnit,nextChunk,lastUnit,unitChunk;
         private WorksheetRange precedingWorksheetRange;
         private final List<Worksheet> worksheets=new ArrayList<>();
+        private final List<WordHeading> wordHeadings=new ArrayList<>();
+        private boolean wordHeadingChoicesExceeded;
         Collector(Request request) { this.request=request; }
         void trackPreviousWorksheetRange() {
-            if(request.worksheetNavigation&&request.maxUnits==1&&request.startChunk>0)precedingWorksheetRange=new WorksheetRange();
+            if(request.originalOfficeNavigation&&request.maxUnits==1&&request.startChunk>0)precedingWorksheetRange=new WorksheetRange();
         }
         private boolean rangeFull(int count,int characters,int incoming) {
             return count>=request.maxChunks||characters+incoming>request.maxChars;
@@ -100,15 +111,25 @@ public final class DocumentContent {
         }
         void unit(int unit) { totalUnits=Math.max(totalUnits,unit); }
         void worksheet(int unit,String name,String state) {
-            if(!request.worksheetNavigation||request.maxUnits!=1||unit>MAX_WORKSHEET_CHOICES||
-                    (state!=null&&!"visible".equals(state))||name==null||name.length()>128)return;
+            if(request.originalOfficeNavigation&&request.maxUnits==1&&unit<=MAX_WORKSHEET_CHOICES&&
+                    (state==null||"visible".equals(state))&&safeNavigationLabel(name))worksheets.add(new Worksheet(unit,name));
+        }
+        boolean tracksWordHeadings() { return request.originalOfficeNavigation; }
+        void wordHeading(int unit,int level,String text) {
+            if(!tracksWordHeadings()||wordHeadingChoicesExceeded||unit<1||unit>1000000||
+                    level<1||level>9||!safeNavigationLabel(text))return;
+            if(wordHeadings.size()==MAX_WORD_HEADING_CHOICES){wordHeadingChoicesExceeded=true;wordHeadings.clear();return;}
+            wordHeadings.add(new WordHeading(unit,level,text));
+        }
+        private static boolean safeNavigationLabel(String name) {
+            if(name==null||name.length()>128)return false;
             boolean visible=false;
             for(int i=0;i<name.length();i++){
                 char ch=name.charAt(i);
-                if(Character.isISOControl(ch)||(ch>=0x2028&&ch<=0x202e)||(ch>=0x2066&&ch<=0x2069))return;
+                if(Character.isISOControl(ch)||(ch>=0x2028&&ch<=0x202e)||(ch>=0x2066&&ch<=0x2069))return false;
                 if(!Character.isWhitespace(ch)&&!Character.isSpaceChar(ch)&&Character.getType(ch)!=Character.FORMAT)visible=true;
             }
-            if(visible)worksheets.add(new Worksheet(unit,name));
+            return visible;
         }
         void warning(String warning) {
             if(warning==null)return;
@@ -142,7 +163,8 @@ public final class DocumentContent {
             int previous="xlsx".equals(format)&&precedingWorksheetRange!=null&&!chunks.isEmpty()&&
                     chunks.get(0).unit==request.startUnit&&chunks.get(0).chunk==request.startChunk?precedingWorksheetRange.previous:-1;
             return new Result(format,status,coverage,chunks,warnings,totalUnits,nextUnit,nextChunk,previous,
-                    "xlsx".equals(format)&&totalUnits<=MAX_WORKSHEET_CHOICES?worksheets:Collections.emptyList());
+                    "xlsx".equals(format)&&totalUnits<=MAX_WORKSHEET_CHOICES?worksheets:Collections.emptyList(),
+                    "docx".equals(format)?wordHeadings:Collections.emptyList());
         }
     }
     public static Map<String,String> location(String... fields) {

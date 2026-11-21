@@ -10,6 +10,17 @@ export function FileDetails({value,title='来源详情'}:{value:unknown;title?:s
  return value == null ? null : <details className="pw-file-details"><summary>{title}</summary><pre>{typeof value==='string'?value:JSON.stringify(value,null,2)}</pre></details>;
 }
 type WordFragment={kind:'paragraph';block:Json}|{kind:'table';tableId:string;blocks:Json[]};
+type OriginalWordHeading={unit:number;level:number;text:string};
+function confirmedWordHeadings(value:Json):OriginalWordHeading[]{
+ const headings=rows(value.wordHeadings),total=value.totalUnits;
+ if(value.format!=='docx'||!['ok','partial'].includes(value.status)||!Number.isSafeInteger(total)||total<1||
+    !Number.isSafeInteger(value.unit)||value.unit<1||value.unit>total||!Number.isSafeInteger(value.chunk)||value.chunk<0||
+    !headings.length||headings.length>64||headings.length>total||
+    headings.some(({unit,level,text},index)=>!Number.isSafeInteger(unit)||unit<1||unit>Math.min(total,1000000)||
+     index>0&&unit<=headings[index-1].unit||!Number.isSafeInteger(level)||level<1||level>9||
+     typeof text!=='string'||!text.trim()||text.length>128||/[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/u.test(text)))return [];
+ return headings.map(({unit,level,text})=>({unit,level,text}));
+}
 function wordFragments(chunks:Json[]):WordFragment[]{
  const fragments:WordFragment[]=[];
  const coordinate=(value:unknown)=>typeof value==='string'&&/^[1-9]\d{0,6}$/.test(value);
@@ -28,8 +39,13 @@ function wordFragments(chunks:Json[]):WordFragment[]{
 export function DocumentProjection({value,orderedOriginalWord=false,pdfPage}:{value:Json;orderedOriginalWord?:boolean;pdfPage?:number}) {
  const chunks=rows(value.chunks),tables=new Map<string,Json[]>(),paragraphs:Json[]=[];
  const orderedWord=orderedOriginalWord&&value.format==='docx'&&['ok','partial'].includes(value.status);
+ const wordHeadings=new Map((orderedWord?confirmedWordHeadings(value):[]).map(heading=>[heading.unit,heading] as const));
  if(!orderedWord)for(const block of chunks){const at=obj(block.locator);if(at.cell||at.table){const key=`${at.sheet||''}:${at.table||''}:${block.unit}`;tables.set(key,[...(tables.get(key)||[]),block])}else paragraphs.push(block)}
- const paragraph=(block:Json,key:string)=><div key={key}>{!pdfPage&&<small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small>}<p className="pw-file-text">{block.text}</p></div>;
+ const paragraph=(block:Json,key:string)=>{
+  const heading=wordHeadings.get(block.unit);
+  if(heading&&block.kind==='text'&&block.chunk===0&&block.text===heading.text)return <h4 key={key} className="pw-file-text"><bdi>{block.text}</bdi></h4>;
+  return <div key={key}>{!pdfPage&&<small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small>}<p className="pw-file-text">{block.text}</p></div>;
+ };
  const tableFragment=(blocks:Json[],key:string)=>{
   const table=documentTable(blocks),caption=orderedWord?'原表格片段 · 当前读取范围':obj(blocks[0]?.locator).sheet||'原文档表格 · 当前范围';
   return <div className="pw-file-table" key={key}><table><caption>{caption}</caption><thead><tr><th>行</th>{table.columns.map(col=><th key={col}>{col}</th>)}</tr></thead><tbody>{table.rows.map(row=><tr key={row}><th>{row}</th>{table.columns.map(col=><td key={col}>{table.text(row,col)}</td>)}</tr>)}</tbody></table></div>;
@@ -316,7 +332,9 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const previousWorksheet=ready&&type==='office'&&source.sourceUnavailable===false?previousWorksheetRange(actual):undefined;
  const worksheets=ready&&type==='office'&&source.sourceUnavailable===false&&actual.format==='xlsx'&&actual.totalUnits===details.totalUnits
   ?worksheetChoices(details):[];
- const canChooseWorksheet=!readerBusy&&actual.unit===details.unit&&actual.chunk===details.chunk;
+ const wordHeadings=ready&&type==='office'&&source.sourceUnavailable===false&&actual.format==='docx'&&actual.totalUnits===details.totalUnits
+  ?confirmedWordHeadings(details):[];
+ const canChooseOfficeUnit=!readerBusy&&actual.unit===details.unit&&actual.chunk===details.chunk;
  const shownText=ready&&!readerBusy&&!failed&&type==='text'&&source.sourceUnavailable===false&&typeof actual.content==='string'&&!!actual.content&&
   textEncodings.some(row=>row.id===actual.encoding)&&Number.isSafeInteger(actual.offset)&&actual.offset>=0;
  const textRange={windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,encoding:actual.encoding,offset:actual.offset};
@@ -521,9 +539,18 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   </div>
   {!!worksheets.length&&<SelectField label="工作表" placeholder="选择可见工作表"
    value={worksheets.some(sheet=>sheet.unit===actual.unit)?String(actual.unit):''} options={worksheets}
-   isDisabled={!canChooseWorksheet} onChange={id=>{
+   isDisabled={!canChooseOfficeUnit} onChange={id=>{
     const sheet=worksheets.find(choice=>choice.id===id);
-    if(sheet&&sheet.unit!==actual.unit&&canChooseWorksheet&&!document.hidden)read({unit:sheet.unit,chunk:0});
+    if(sheet&&sheet.unit!==actual.unit&&canChooseOfficeUnit&&!document.hidden)read({unit:sheet.unit,chunk:0});
+   }}/>}
+  {!!wordHeadings.length&&<SelectField label="按标题定位" placeholder="选择已识别的标题"
+   value={wordHeadings.some(heading=>heading.unit===actual.unit)?String(actual.unit):''}
+   options={wordHeadings.map(heading=>({id:String(heading.unit),
+    label:wordHeadings.some(other=>other.unit!==heading.unit&&other.text.trim()===heading.text.trim())?
+     `${heading.text} · 段落 ${heading.unit}`:heading.text,description:`${heading.level} 级标题`}))}
+   isDisabled={!canChooseOfficeUnit} onChange={id=>{
+    const heading=wordHeadings.find(choice=>String(choice.unit)===id);
+    if(heading&&heading.unit!==actual.unit&&canChooseOfficeUnit&&!document.hidden)read({unit:heading.unit,chunk:0});
    }}/>}
   {(!worksheets.length||worksheets.length<actual.totalUnits)&&
    <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>}
