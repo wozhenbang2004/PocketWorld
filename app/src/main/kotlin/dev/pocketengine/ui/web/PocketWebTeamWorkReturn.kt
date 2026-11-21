@@ -54,6 +54,10 @@ internal class PocketWebTeamWorkReturn private constructor(
                 .put("title",facts.getString("title")).put("memberName",source.memberName).put("files", JSONArray(files))
                 .put("remainingModelRequests",budget.getInt("remainingModelRequests")).put("remainingToolOperations",budget.getInt("remainingToolOperations"))
                 .put("draftOperationsRemaining",facts.getInt("draftOperationsRemaining"))
+            facts.optJSONObject("originalInputFile")?.let { original ->
+                shown.put("originalInputFile", JSONObject().put("path",original.getString("path")).put("version",original.getInt("version"))
+                    .put("title",original.getString("title")).put("readOnly",true))
+            }
             return PocketWebTeamWorkReturn(page,exact,source,shown)
         }
     }

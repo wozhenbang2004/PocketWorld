@@ -11,8 +11,9 @@ import org.json.JSONObject;
 /** Buttons are bound to one native source and one displayed intention, not to a live toggle. */
 final class PhoneOwnerControls {
     enum Action { NONE, PAUSE, RESUME_LOCAL, RESUME_SOURCE, REVIEW }
-    record ViewState(boolean current,Action action,long pause,long scope,String displayHandle,String message) {
+    record ViewState(boolean current,Action action,long pause,long scope,String displayHandle,String message,boolean resultWatch) {
         boolean sameInput(ViewState other){return other!=null&&action==other.action&&pause==other.pause&&scope==other.scope&&Objects.equals(displayHandle,other.displayHandle);}
+        ViewState withResultWatch(){return new ViewState(current,action,pause,scope,displayHandle,message,true);}
     }
     private final EngineApplication app;
     private final String taskId;
@@ -57,6 +58,16 @@ final class PhoneOwnerControls {
         try{JSONObject r=new JSONObject(value);return born!=null&&taskId.equals(r.opt("taskId"))&&born.runId().equals(r.opt("runId"))&&
                 born.epoch()==r.optInt("epoch",-1)&&Boolean.TRUE.equals(r.opt("controlRequested"));}catch(Exception unknown){return false;}
     }
+    /** Only the owner's explicit overlay gesture. The SQL transaction calls the
+     * lock-free original overlay fence, not the Engine/overlay presentation reads. */
+    boolean watchResult(BooleanSupplier visible)throws Exception {
+        if(!visible.getAsBoolean()||!ownsControl()||original.isCancelled())throw new SecurityException("原手机任务窗口已变化");
+        JSONObject receipt=app.privatePhoneResultWatch(taskId,born.runId(),born.epoch(),true,visible);
+        return visible.getAsBoolean()&&ownsControl()&&taskId.equals(receipt.opt("taskId"))&&born.runId().equals(receipt.opt("runId"))&&
+                born.epoch()==receipt.optInt("epoch",-1)&&"this_run_this_phone".equals(receipt.opt("scope"))&&
+                Boolean.TRUE.equals(receipt.opt("watching"))&&Boolean.TRUE.equals(receipt.opt("systemAvailable"))&&
+                Boolean.FALSE.equals(receipt.opt("externalDelivery"));
+    }
     ViewState view(String goal) {
         try {
             JSONObject row=ownsControl()?app.tasks.originalPhoneOverlayContext(taskId):null;
@@ -66,15 +77,18 @@ final class PhoneOwnerControls {
             long revision=original.pauseRevision();
             if(original.isCancelled())return state(true,Action.NONE,revision,"正在停止后续操作，已发生的动作不会撤回");
             boolean unresolved=row.optBoolean("unresolved");
-            if(!original.isPaused())return state(true,Action.PAUSE,revision,unresolved?"动作结果待核对，可先暂停并返回原任务":goal);
+            if(!original.isPaused()){
+                ViewState shown=state(true,Action.PAUSE,revision,unresolved?"动作结果待核对，可先暂停并返回原任务":goal);
+                return row.getBoolean("privateLocal")&&"running".equals(row.opt("status"))&&!unresolved?shown.withResultWatch():shown;
+            }
             if(!"paused".equals(row.optString("status"))||unresolved||!original.ownerPausedAt(revision))
                 return state(true,Action.REVIEW,revision,unresolved?"有未核对的动作，请查看原任务；不会自动继续":"已停在原任务，请核对暂停或本人步骤");
             if(!row.getBoolean("privateLocal"))return row.optBoolean("identifiedSource")?state(true,Action.RESUME_SOURCE,revision,"原来源任务已暂停；普通继续不处理本人步骤"):
                     state(true,Action.REVIEW,revision,"这次暂停的来源尚未核实，请查看原任务");
             long scope=row.optLong("scopeRevision",-1);String handle=scope<1?null:original.displayedPauseHandle(revision);
             if(handle==null)return state(true,Action.REVIEW,revision,"这次暂停仍需核对，请查看原任务");
-            return new ViewState(true,Action.RESUME_LOCAL,revision,scope,handle,"已暂停。继续只恢复面前的原执行，不代表已取得新屏幕");
+            return new ViewState(true,Action.RESUME_LOCAL,revision,scope,handle,"已暂停。继续只恢复面前的原执行，不代表已取得新屏幕",true);
         } catch(Exception unavailable){return state(ownsControl(),Action.NONE,-1,"原任务状态暂不可核对，请返回应用");}
     }
-    private static ViewState state(boolean current,Action action,long pause,String message){return new ViewState(current,action,pause,-1,null,message);}
+    private static ViewState state(boolean current,Action action,long pause,String message){return new ViewState(current,action,pause,-1,null,message,false);}
 }

@@ -14,6 +14,10 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
     private final PhoneAccessibilityService service;
     private final OwnerScreenContextHost host;
     private final JSONObject expected;
+    private final boolean originalPrivateMain;
+    /** A navigation hint from this panel's actual completed local registration, never a new input or run. */
+    private record SavedPhoneReview(String task,String run,int epoch){}
+    private SavedPhoneReview savedPhoneReview;
     private final Handler main;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final QuickPanelSurface surface;
@@ -43,6 +47,8 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
         this.service = service; this.host = host; this.main = service.mainHandler();
         expected = new JSONObject().put("taskId", task.getString("id")).put("runId", task.getString("runId"))
                 .put("epoch", task.getInt("coordinatorEpoch")).put("executionMode", task.getString("executionMode"));
+        originalPrivateMain = "main_screen".equals(task.opt("executionMode")) &&
+                dev.pocketengine.store.PhoneActionRecovery.local(task);
         drafts = new QuickPanelDraftStore(service.getFilesDir(), expected.getString("taskId"), expected.getString("runId"), expected.getInt("epoch"));
         surface = new QuickPanelSurface(service, task.getString("goal"), location, this);
         surface.audioScope("background".equals(task.getString("executionMode")));
@@ -243,6 +249,8 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
                 && expected.optInt("epoch") == receipt.optInt("epoch")
                 && receipt.optString("status").matches("accepted|queued|consumed")) {
             final String client = clientMessageId; sending = true;
+            SavedPhoneReview accepted=originalPrivateMain?new SavedPhoneReview(receipt.optString("taskId"),
+                    receipt.optString("runId"),receipt.optInt("epoch")):null;
             worker.execute(() -> {
                 try {
                     drafts.accepted(client);
@@ -252,6 +260,7 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
                         synchronized (captureState) { previous = capture; capture = null; preview = null; }
                         if (previous != null) previous.close(); clientMessageId = null; sending = false;
                         synchronized (draftState) { latestNote = ""; }
+                        savedPhoneReview=accepted;
                         surface.saved(receipt.optString("status").equals("consumed") ? "原任务已采用这份补充。" : "补充已登记到原任务；暂停中的任务由你明确继续。");
                     });
                 } catch (Exception failed) {
@@ -266,6 +275,27 @@ final class QuickPanelCoordinator implements AutoCloseable, QuickPanelSurface.Ac
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                 .putExtra("quickPanelTaskId", expected.optString("taskId"));
         service.startActivity(launch);
+    }
+
+    @Override public void openSavedOriginalTask() {
+        if (!originalPrivateMain) { openOriginalTask(); return; }
+        SavedPhoneReview original=savedPhoneReview;
+        if (closed || !surface.showingSavedReceipt() || PhoneAccessibilityService.get()!=service ||
+                sending || clientMessageId!=null) return;
+        if (original==null || !original.task().equals(expected.opt("taskId")) ||
+                !original.run().equals(expected.opt("runId")) || original.epoch()!=expected.optInt("epoch",-1)) {
+            surface.savedReviewUnavailable(); return; // A bare task id cannot substitute the accepted round.
+        }
+        try {
+            Intent review=PhoneNotificationControls.open(service,new JSONObject().put("id",original.task())
+                    .put("runId",original.run()).put("coordinatorEpoch",original.epoch()))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            service.startActivity(review);
+            // Issuing the existing Android request is not an ACK that Work is now visible.
+            // Fold only this saved panel; its receipt can still be reopened if Android blocked the transition.
+            if (!closed && savedPhoneReview==original && PhoneAccessibilityService.get()==service)
+                surface.foldSavedReceipt();
+        } catch (Exception unavailable) { surface.savedReviewUnavailable(); }
     }
 
     @Override public void reviewAudio() { audio(null,false); }

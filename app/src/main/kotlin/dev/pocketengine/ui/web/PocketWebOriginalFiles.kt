@@ -9,7 +9,10 @@ import android.webkit.WebResourceResponse
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.attachments.NativeOriginalFileSession
 import dev.pocketengine.features.attachments.OwnerFilePreviewSource
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Fields
+import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Format
 import dev.pocketengine.features.attachments.documents.DocumentContent
+import dev.pocketengine.ui.AttachmentPdfPageText
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -60,6 +63,9 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     data class LibraryPdfResume(val fileId: String, val sha256: String, val identity: String, val page: Int) {
         fun view() = JSONObject().put("fileId", fileId).put("sha256", sha256)
     }
+    /** This is an input from the native reader, not a Web-supplied body or an output lineage. */
+    class MarkdownDraftSeed(val viewerId: String, val source: OwnerFilePreviewSource, val fields: Fields,
+        internal val decoded: JSONObject)
     private class Pin(val source: OwnerFilePreviewSource, val ticket: PocketWebWindowTicket,
         val rememberLibraryPdf: (() -> Boolean)?, val accepts: (PocketWebWindowTicket) -> Boolean) {
         val id = UUID.randomUUID().toString()
@@ -71,6 +77,7 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         @Volatile var error: String? = null
         @Volatile var pdfRaster: PdfRaster? = null
         var information: JSONObject? = null
+        var markdownDraft: MarkdownDraftSeed? = null
         var busy = false
     }
     private class PdfRaster(val page: Int, val pages: Int, val searchAvailable: Boolean) {
@@ -126,11 +133,52 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         .put("url", if (pin.sourceUnavailable) "" else "https://pocketengine.local/pocket-files/${pin.id}/content")
         .put("information", pin.information)
     fun snapshot(): JSONObject? = primary?.let(::view)
+    /** This information is assigned only after the exact rendered native raster is acknowledged. */
+    fun displayedPdfPage(file:JSONObject?): AttachmentPdfPageText? {
+        val pin=primary?:return null
+        if(pin.kind!="pdf" || pin.busy || pin.error!=null || pin.pdfRaster!=null || !matchesOriginal(file) ||
+            runCatching { requireCurrent(pin) }.isFailure)return null
+        val info=pin.information?:return null
+        val raster=info.opt("pdfRasterId") as? String?:return null
+        val page=info.opt("page") as? Int?:return null
+        return AttachmentPdfPageText(pin.id,raster,page).takeIf {
+            bookmarkFileId.matches(raster) && page in 1..info.optInt("pages",0)
+        }
+    }
     /** Preview recovery is narrower than the file-detail external action, which also handles managed APKs. */
     fun matchesOriginal(file: JSONObject?): Boolean {
         val pin = primary ?: return false
         return file != null && !pin.sourceUnavailable && !pin.lifetime.isCancelled && !pin.source.tombstone &&
             pin.fileId.isNotBlank() && pin.fileId == file.optString("id") && pin.source.sha256 == file.optString("sha256")
+    }
+    fun retainsMarkdownSource(seed: MarkdownDraftSeed): Boolean = primary?.let { pin ->
+        pin.id == seed.viewerId && pin.source === seed.source && !pin.sourceUnavailable &&
+            runCatching { requireCurrent(pin) }.isSuccess
+    } == true
+    fun markdownDraftSeed(file: JSONObject?, source: OwnerFilePreviewSource?): MarkdownDraftSeed? {
+        val pin = primary ?: return null
+        if (pin.kind != "text" || pin.source !== source || !matchesOriginal(file) || pin.busy || pin.error != null ||
+            pin.source.name.substringAfterLast('.', "").lowercase() !in setOf("md", "markdown") ||
+            pin.source.mimeType !in setOf("text/markdown", "text/x-markdown", "text/plain", "application/octet-stream"))
+            return null
+        val decoded = pin.information ?: return null
+        pin.markdownDraft?.takeIf { it.decoded === decoded && retainsMarkdownSource(it) }?.let { return it }
+        val body = decoded.opt("content") as? String ?: return null
+        if (decoded.opt("encoding") != "UTF-8" || decoded.opt("offset") != 0 || decoded.opt("atEnd") != true ||
+            decoded.opt("nextOffset") !== JSONObject.NULL || decoded.opt("decodedCharacters") != body.length ||
+            decoded.opt("originalBytesChanged") != false || decoded.opt("sourceIdentity") != pin.source.identity ||
+            decoded.opt("sha256") != pin.source.sha256 || body.isBlank() || body.length > 12_000) return null
+        return runCatching {
+            requireCurrent(pin)
+            val meta = pin.source.metadata()
+            val origin = meta.getJSONObject("source")
+            check(meta.opt("principalId") == "owner" && meta.opt("spaceId") == "private" && !meta.optBoolean("outputSourceRetired") &&
+                !meta.has("groupSource") && origin.opt("kind") == "content_uri" && !origin.has("archiveEvidence") &&
+                !origin.has("groupSpaceId") && origin.optString("taskId").isEmpty() && origin.optString("projectId").isEmpty())
+            val base = pin.source.name.substringBeforeLast('.').trim().take(72).trimEnd { Character.isHighSurrogate(it) }
+            MarkdownDraftSeed(pin.id, pin.source, Fields(Format.WORD, base.ifBlank { "Markdown 草稿" }, "", body, 12), decoded)
+                .also { pin.markdownDraft = it }
+        }.getOrNull()
     }
     fun canOpenInReader(file: JSONObject?) = matchesOriginal(file) && primary?.source?.let { !packageFile(it) } == true
     fun comparisonSnapshot(): JSONArray? = comparison?.let { JSONArray().put(view(it.first)).put(view(it.second)) }

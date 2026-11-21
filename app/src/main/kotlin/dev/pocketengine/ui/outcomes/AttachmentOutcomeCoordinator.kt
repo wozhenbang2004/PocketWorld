@@ -85,6 +85,7 @@ internal data class OwnerAttachmentCopyReceipt(val requestId:String,val taskId:S
 }
 
 internal enum class AttachmentOriginalReturn(val value:String) { DETAILS("details"), LIST("list"), ENTRY("entry") }
+internal data class AttachmentPdfPageText(val viewerId: String, val rasterId: String, val page: Int)
 /** A saveable navigation hint for the work behind an already-opened original, never a read grant. */
 internal data class AttachmentWorkReturn(val run:AttachmentResultRun,val fileId:String,val sha256:String,
                                          private val recordedDocument:Boolean=false) {
@@ -181,7 +182,8 @@ internal data class AttachmentOutcomeState(
     val libraryImport:AttachmentLibraryImport?=null,
     val workReturn:AttachmentWorkReturn?=null,val restoredWorkReturn:Boolean=false,
     val libraryDocumentReturn:AttachmentLibraryDocumentReturn?=null,
-    val globalStandaloneDraftVisit:String?=null // Native in-session provenance, never restored from Bundle.
+    val globalStandaloneDraftVisit:String?=null, // Native in-session provenance, never restored from Bundle.
+    val pdfPageText:AttachmentPdfPageText?=null // The still-open original display, never restored.
 )
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -714,6 +716,19 @@ internal class AttachmentOutcomeCoordinator(
     fun read(range:DocumentContent.Request){val file=state.file?:return;val group=state.group;val task=state.taskId
         work(document=true){c,w->val result=if(group==null)app.ownerOutcomeDocument(task,file.getString("id"),file.getString("sha256"),range,c) else groupCall(w){app.groupOutcomeDocument(group,range,c)};result to null}
     }
+    /** Uses only the already displayed native raster. No neighboring page or OCR fallback. */
+    fun readDisplayedPdfPage(page:AttachmentPdfPageText,current:()->Boolean){
+        val file=checkNotNull(state.file)
+        check(privateLibrary() && !state.busy && !exportPending && !state.documentOpen && state.originalFile!=null &&
+            file.opt("role")=="source" && file.opt("mimeType")=="application/pdf" && current()){"请先显示这份 PDF 的原页"}
+        state=state.copy(pdfPageText=page,document=null)
+        val range=DocumentContent.Request(page.page,0,1,12000,48,"text")
+        work(document=true){control,_->
+            control.setAuthorityCheck { check(current()) { "原 PDF 阅读位置已变化，未显示其他页面的文字" } }
+            control.check()
+            app.ownerOutcomeDocument(null,file.getString("id"),file.getString("sha256"),range,control) to null
+        }
+    }
     fun canRequestOcr():Boolean {
         val file=state.file?:return false;val caps=state.snapshot?.optJSONObject("documentCapabilities")?:return false
         val actual=state.document?.takeIf{it.optString("attachmentId")==file.optString("id")&&it.optString("sha256")==file.optString("sha256")}
@@ -730,7 +745,15 @@ internal class AttachmentOutcomeCoordinator(
     }
     fun canSaveRead():Boolean {
         val file=state.file?:return false;val read=state.document?:return false
-        return state.group==null&&read.optString("attachmentId")==file.optString("id")&&read.optString("sha256")==file.optString("sha256")&&read.optString("readReceiptId").isNotBlank()&&read.optJSONArray("chunks")?.length()?.let{it>0}==true
+        val chunks=read.optJSONArray("chunks")?:return false
+        state.pdfPageText?.let{page->
+            val shown=chunks.objects()
+            if(!state.documentOpen||!privateLibrary()||state.originalFile==null||
+                read.opt("taskId")!=""||read.opt("readContext")!="native_owner_preview"||read.opt("format")!="pdf"||
+                read.opt("extraction")!="text"||read.opt("coverage")!="pdf_text_layer"||
+                shown.size!=chunks.length()||shown.any{it.opt("unit")!=page.page})return false
+        }
+        return state.group==null&&read.optString("attachmentId")==file.optString("id")&&read.optString("sha256")==file.optString("sha256")&&read.optString("readReceiptId").isNotBlank()&&chunks.length()>0
     }
     private fun listedWorkPdf(snapshot:JSONObject,file:JSONObject):Boolean =
         snapshot.optJSONArray("sources").objects().singleOrNull{it.opt("id")==file.opt("id")}?.let{
@@ -738,8 +761,10 @@ internal class AttachmentOutcomeCoordinator(
                 it.opt("mimeType")=="application/pdf"&&it.opt("sourceKind")=="content_uri"&&it.isNull("sourceTaskId")&&
                 it.optLong("size",-1)>0&&it.optLong("size",-1)==file.optLong("size",-2)
         }==true
-    fun saveReadAsFile(){
+    fun saveReadAsFile(currentPdfPage:(()->Boolean)?=null){
         if(state.busy||!canSaveRead())return;val task=state.taskId;val file=state.file?:return;val read=state.document?:return
+        val page=state.pdfPageText
+        check(page==null||currentPdfPage?.invoke()==true) { "原 PDF 阅读位置已变化，未保存摘录" }
         val receipt=read.getString("readReceiptId")
         val pdfWork=state.snapshot?.takeIf{task!=null&&it.opt("taskId")==task&&it.opt("taskStatus")=="completed"&&
             it.optString("taskRunId").isNotBlank()&&it.optInt("coordinatorEpoch")>0&&
@@ -747,7 +772,12 @@ internal class AttachmentOutcomeCoordinator(
             state.originalFile==null&&state.documentOpen&&file.opt("role")=="source"&&file.opt("mimeType")=="application/pdf"&&
             read.opt("readContext")=="native_owner_preview"&&read.opt("taskId")==task&&read.opt("format")=="pdf"&&
             read.opt("coverage")=="pdf_text_layer"&&listedWorkPdf(it,file)}
-        work(replaceDocumentWithFile=true){c,_->
+        work(replaceDocumentWithFile=true,onSuccess={if(page!=null && state.pdfPageText==page)
+            state=state.copy(originalFile=null,pdfPageText=null)}){c,_->
+            if(page!=null){
+                c.setAuthorityCheck { check(currentPdfPage?.invoke()==true) { "原 PDF 阅读位置已变化，未确认保存" } }
+                c.check()
+            }
             val saved=app.attachmentOutcomes.saveOwnerDocumentExtract(task,file.getString("id"),file.getString("sha256"),receipt,c)
             val snapshot=app.ownerOutcomeSnapshot(task,c);val artifacts=snapshot.optJSONArray("artifacts").objects()
             val selected=artifacts.firstOrNull{it.optString("id")==saved.getString("id")&&it.optString("sha256")==saved.getString("sha256")}?:throw IllegalStateException("摘录文件已保存，请刷新原任务成果核对；没有再次生成")
@@ -771,7 +801,8 @@ internal class AttachmentOutcomeCoordinator(
         work{c,w->val image=if(group==null)app.attachmentOutcomes.thumbnail(task,file.getString("id"),file.getString("sha256"),c)else{var image:android.graphics.Bitmap?=null;groupCall(w){image=app.groupOutcomeThumbnail(group,c);JSONObject()};image?:throw IllegalStateException("图片预览未取得");}
             main.post{if(!closed&&state.open&&wait===c&&!c.isCancelled)state=state.copy(thumbnail=image)else image.recycle()};JSONObject() to null}
     }
-    fun backFromDocument(){cancel();state=state.copy(documentOpen=false)}
+    fun backFromDocument(){cancel();state=if(state.pdfPageText==null)state.copy(documentOpen=false)
+        else state.copy(documentOpen=false,pdfPageText=null,document=null)}
     fun openOriginalFile(){
         if(state.busy)return;val selectedTeam=state.team;val selectedGroup=state.group;val selectedFile=state.file;val task=state.taskId
         if(selectedTeam==null&&selectedFile==null)return

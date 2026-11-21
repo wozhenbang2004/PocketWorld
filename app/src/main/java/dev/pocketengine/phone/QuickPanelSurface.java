@@ -36,6 +36,7 @@ final class QuickPanelSurface implements AutoCloseable {
         void noteChanged(String note);
         void clearDraft();
         void openOriginalTask();
+        default void openSavedOriginalTask() { openOriginalTask(); }
         default void voice() { }
         default void reviewAudio() { }
         default void setAudio(String reviewId,boolean muted) { }
@@ -128,6 +129,14 @@ final class QuickPanelSurface implements AutoCloseable {
     void unknown(String detail) { mainOnly(); querying = false; phase = Phase.UNKNOWN; message = detail; render(); }
     void querying() { mainOnly(); querying = true; render(); }
     void saved(String detail) { mainOnly(); querying = false; clearPreview(); note = ""; phase = Phase.SAVED; message = detail; render(); }
+    boolean showingSavedReceipt() { mainOnly(); return attached && expanded && !hidden && phase == Phase.SAVED; }
+    void foldSavedReceipt() { if(showingSavedReceipt()){expanded=false;render();} }
+    void savedReviewUnavailable() {
+        if(showingSavedReceipt()){
+            message="这份补充已登记，但暂不能打开原执行。没有打开其他轮次，也未重新发送。";
+            render();
+        }
+    }
     void error(String detail) { mainOnly(); phase = Phase.ERROR; message = detail; expanded = true; render(); }
     void ready() { mainOnly(); clearPreview(); phase = Phase.READY; message = null; render(); }
     void audioScope(boolean supported) { audioSupported=supported; }
@@ -199,7 +208,7 @@ final class QuickPanelSurface implements AutoCloseable {
                 footer.addView(button("查看原任务", actions::openOriginalTask, false));
             } else if (phase == Phase.SAVED) {
                 body.addView(text(message, 14, UiAppearance.foreground(context)));
-                footer.addView(button("查看原任务", actions::openOriginalTask, true));
+                footer.addView(button("查看原任务", () -> { if(showingSavedReceipt())actions.openSavedOriginalTask(); }, true));
                 footer.addView(button("继续补充", () -> { phase = Phase.READY; message = null; render(); }, false));
             } else if (preview != null) {
                 renderPreview();

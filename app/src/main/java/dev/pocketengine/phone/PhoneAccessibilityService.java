@@ -91,6 +91,14 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private volatile RenderedOwnerAction renderedOwnerAction;
     private RenderedOwnerAction submittingOwnerAction;
     private volatile long ownerVisibilityVersion;
+    // Separate from Pause/Stop/Resume: this worker only registers the same local readback reminder.
+    private static final java.util.concurrent.ThreadPoolExecutor OWNER_RESULT_WATCH=new java.util.concurrent.ThreadPoolExecutor(0,1,20,java.util.concurrent.TimeUnit.SECONDS,
+            new java.util.concurrent.SynchronousQueue<>(),r->{Thread t=new Thread(r,"pocket-owner-result-watch");t.setDaemon(true);return t;});
+    private record ResultWatchOffer(PhoneOwnerControls owner){}
+    private volatile ResultWatchOffer resultWatchOffer;
+    private ResultWatchOffer submittingResultWatch;
+    private PhoneOwnerControls allowedResultWatch;
+    private Button resultWatchButton;
     // At most one explicit visible-owner resume in flight. Never queue a tap for a future screen.
     private static final java.util.concurrent.ThreadPoolExecutor OWNER_RESUME=new java.util.concurrent.ThreadPoolExecutor(0,1,20,java.util.concurrent.TimeUnit.SECONDS,
             new java.util.concurrent.SynchronousQueue<>(),r->{Thread t=new Thread(r,"pocket-visible-owner-resume");t.setDaemon(true);return t;});
@@ -425,6 +433,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                 boolean expand = details.getVisibility() != View.VISIBLE;
                 details.setVisibility(expand ? View.VISIBLE : View.GONE);
                 grip.setText(expand ? "任务 ▴" : "任务 ▾");updateOwnerGripLabel();
+                renderResultWatch();
             });
             // refreshOwnerControls installs a distinct Android View for each displayed intention.
             ownerActionSlot=new android.widget.FrameLayout(this);
@@ -458,11 +467,17 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                     var original = runControl.hostRunIdentity();
                     if (original == null) throw new IllegalStateException("原任务暂不可核对");
                     if (showQuickPanel(new org.json.JSONObject().put("taskId", taskId).put("runId", original.runId()).put("epoch", original.epoch()))) {
-                        details.setVisibility(View.GONE); grip.setText("任务 ▾");updateOwnerGripLabel();
+                        details.setVisibility(View.GONE); grip.setText("任务 ▾");updateOwnerGripLabel();renderResultWatch();
                     }
                 } catch (Exception unavailable) { app.error(unavailable.getMessage() == null ? "请回原任务重新打开快捷补充" : unavailable.getMessage()); }
             });
-            more.addView(supplement); details.addView(more); panel.addView(details);
+            more.addView(supplement); details.addView(more);
+            Button watch = button("这轮有结果时提醒我");
+            watch.setVisibility(View.GONE);
+            watch.setOnClickListener(v -> watchOriginalResult(watch));
+            resultWatchButton=watch;
+            details.addView(watch);
+            panel.addView(details);
             controls = panel;
             WindowManager.LayoutParams layout = new WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
@@ -534,7 +549,44 @@ public final class PhoneAccessibilityService extends AccessibilityService {
         boolean waiting=hand==null&&submittingOwnerAction!=null&&(state.action()==PhoneOwnerControls.Action.RESUME_LOCAL||state.action()==PhoneOwnerControls.Action.RESUME_SOURCE);
         pause.setEnabled(!waiting&&(hand!=null||state.action()!=PhoneOwnerControls.Action.NONE));
         status.setText(shortText(state.message(),140));
+        allowedResultWatch=state.current()&&state.resultWatch()?expected:null;
+        renderResultWatch();
         updateOwnerGripLabel();
+    }
+    /** No local read on expand: this is the exact owner fact from the existing status read,
+     * not a claim that the watch is currently saved or that the phone has produced a result. */
+    private void renderResultWatch(){
+        var button=resultWatchButton;
+        if(button==null)return;
+        var owner=allowedResultWatch;
+        if(owner==null||controlDetails==null||controlDetails.getVisibility()!=View.VISIBLE)resultWatchOffer=null;
+        else if(resultWatchOffer==null||resultWatchOffer.owner()!=owner)resultWatchOffer=new ResultWatchOffer(owner);
+        button.setVisibility(owner==null?View.GONE:View.VISIBLE);
+        button.setEnabled(resultWatchOffer!=null&&submittingResultWatch==null);
+    }
+    private void watchOriginalResult(Button source){
+        var offer=resultWatchOffer;
+        if(offer==null||source!=resultWatchButton||!source.isShown()||!source.isEnabled()||!visible||instance!=this||
+                ownerControls!=offer.owner()||submittingResultWatch!=null)return;
+        long stamp=ownerVisibilityVersion;
+        java.util.function.BooleanSupplier current=()->instance==this&&visible&&ownerVisibilityVersion==stamp&&resultWatchOffer==offer;
+        submittingResultWatch=offer;
+        source.setEnabled(false);
+        try{OWNER_RESULT_WATCH.execute(()->{
+            boolean accepted;
+            try{accepted=offer.owner().watchResult(current);}catch(Exception unavailable){accepted=false;}
+            boolean saved=accepted;
+            main.post(()->{
+                if(submittingResultWatch==offer)submittingResultWatch=null;
+                renderResultWatch();
+                if(current.getAsBoolean())android.widget.Toast.makeText(this,saved?"已登记这轮手机工作的本机提醒。":
+                        "本次提醒未确认，没有自动重试。",android.widget.Toast.LENGTH_SHORT).show();
+            });
+        });}catch(java.util.concurrent.RejectedExecutionException busy){
+            if(submittingResultWatch==offer)submittingResultWatch=null;
+            renderResultWatch();
+            if(current.getAsBoolean())android.widget.Toast.makeText(this,"上一请求仍在核对，未重复登记。",android.widget.Toast.LENGTH_SHORT).show();
+        }
     }
     private void updateOwnerGripLabel(){
         // The private goal is a separately expanded detail, never the collapsed grip’s spoken name.
@@ -661,6 +713,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private void removeInstalledControls() {
         shownControlRead.clear();
         ownerReturnButton=null;renderedOwnerAction=null;submittingOwnerAction=null;ownerVisibilityVersion++;
+        resultWatchOffer=null;submittingResultWatch=null;allowedResultWatch=null;resultWatchButton=null;
         ownerActionSlot=null;
         clearInAppStopSurface();
         if (control != null && cancellation != null) control.removeCancelAction(cancellation);

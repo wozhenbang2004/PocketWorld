@@ -30,8 +30,10 @@ type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: Che
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry; buildResume?: CheckoutBuildEditorResume; pythonResume?: OriginalPythonRun;
+  pythonSetupResume?: CheckoutSavedPosition;
   onClose: (saved?: CheckoutSavedPosition) => void;
   onOpenPythonWork?: (work: OriginalPythonRun) => void;
+  onPreparePythonTools?: (saved: CheckoutSaveForBuild) => Promise<void>;
   onPrepareBuild?: (saved: CheckoutSaveForBuild) => Promise<void>; prepareBuildAfterPath?: string; prepareBuildLabel?: string;
   registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
@@ -77,7 +79,7 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume }: Props) {
   const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
@@ -104,9 +106,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const activeAdoption = useRef<Data | null>(null), adoptionHeading = useRef<HTMLHeadingElement>(null); activeAdoption.current = adoption;
   const alive = useRef(false), generation = useRef(0), handle = useRef(''), currentFile = useRef<Data | null>(null), currentText = useRef('');
   const entered = useRef<object | null>(null), edits = useRef(0), editSequence = useRef(0), blockedEdit = useRef(false);
-  const latest = useRef({ run, onClose, onOpenPythonWork, onPrepareBuild }); latest.current = { run, onClose, onOpenPythonWork, onPrepareBuild };
+  const latest = useRef({ run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools });
+  latest.current = { run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools };
   const originalWindow = useRef(windowKey());
-  const attemptedBuildResume=useRef(false);
+  const attemptedBuildResume=useRef(false), attemptedPythonSetupResume=useRef(false);
   const openedBuildResume=useRef<CheckoutBuildEditorResume|null>(null);
   const recentSave = savedEdit?.filesHandle===handle.current ? savedEdit : null;
   const savedLocation=listing?.priorSavedFile;
@@ -291,8 +294,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const resumeBuild=!attemptedBuildResume.current&&!entered.current&&!edits.current&&live(generation.current)&&
       !sourceMember&&!hostFile&&!resume&&!entry&&
       buildResume?.projectId===projectId&&buildResume.checkoutId===checkoutId?buildResume:undefined;
+    const resumeSetup=!attemptedPythonSetupResume.current&&!entered.current&&!edits.current&&live(generation.current)&&
+      !sourceMember&&!hostFile&&!resume&&!entry&&!buildResume&&!pythonResume&&
+      pythonSetupResume?.projectId===projectId&&pythonSetupResume.checkoutId===checkoutId&&
+      savedPythonPath(pythonSetupResume.path)&&fileHash(pythonSetupResume.savedHash)?pythonSetupResume:undefined;
+    const priorTarget=resumeBuild||resumeSetup;
     let resumeReadId:string|undefined;
     if(resumeBuild)attemptedBuildResume.current=true;
+    if(resumeSetup)attemptedPythonSetupResume.current=true;
     const pin = sourceMember && { taskId: sourceMember.taskId, operationId: sourceMember.operationId, artifactId: sourceMember.artifactId,
       artifactSha256: sourceMember.artifactSha256, path: sourceMember.path, fileSha256: sourceMember.fileSha256 };
     const result = await invoke(hostFile ? 'openHostChange' : pin ? 'openSource' : 'open', hostFile ? { hostFile } : pin ? { sourceMember: pin } : {}, value => {
@@ -318,23 +327,25 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         else {setDirectory(null);setFinder('path');}
       }
       const {directoryPage:_,...list}=value;
-      if(resumeBuild){
+      if(priorTarget){
         const saved=list.priorSavedFile;
-        if(list.readOnly===true&&list.sourceDigest===resumeBuild.sourceDigest&&
+        if(list.readOnly===true&&(!resumeBuild||list.sourceDigest===resumeBuild.sourceDigest)&&
           saved?.format==='pocketworld.owner-checkout-file-save-position.v1'&&saved.projectId===projectId&&saved.checkoutId===checkoutId&&
-          saved.path===resumeBuild.path&&saved.sha256===resumeBuild.savedHash&&
+          saved.path===priorTarget.path&&saved.sha256===priorTarget.savedHash&&
           typeof saved.readId==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(saved.readId)){
           resumeReadId=saved.readId;
           delete list.priorSavedFile; // The exact list token is consumed by the native read, never reused by a fallback.
-        }else setError('未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
+        }else setError(resumeSetup?'未核对到刚才保存的脚本。这里只显示同一副本的文件清单，未打开其他文件。':
+          '未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
       }
       handle.current = value.filesHandle; setListing(list);
     });
-    if(resumeBuild&&resumeReadId&&result&&handle.current===result.filesHandle&&live(generation.current)){
-      const opened=await readFile(resumeBuild.path,{position:resumeBuild,priorSavedFileId:resumeReadId});
-      if(opened&&live(generation.current)&&currentFile.current?.fileHandle===opened.fileHandle)openedBuildResume.current=resumeBuild;
+    if(priorTarget&&resumeReadId&&result&&handle.current===result.filesHandle&&live(generation.current)){
+      const opened=await readFile(priorTarget.path,{position:priorTarget,priorSavedFileId:resumeReadId});
+      if(resumeBuild&&opened&&live(generation.current)&&currentFile.current?.fileHandle===opened.fileHandle)openedBuildResume.current=resumeBuild;
       return;
     }
+    if(resumeSetup)return; // No path-only fallback after the explicit tools return.
     if (pythonResume && result && !pin && !hostFile && !resume && !checkedEntry &&
         pythonResume.projectId===projectId && pythonResume.checkoutId===checkoutId &&
         handle.current===result.filesHandle && live(generation.current)) {
@@ -378,6 +389,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const canReviewPython = !hostFile && !sourceMember && !!onOpenPythonWork && !!file && !!pythonSource &&
     uncertainPythonSource!==pythonSource.clickKey &&
     ['reviewPython','confirmPython','dismissPython'].every(action=>bridge.getState().capabilities.commands.includes(ownerPythonFiles+action));
+  const canPreparePythonTools = !!onPreparePythonTools && !!recentSave && showingSavedFile && canReviewPython &&
+    pythonSource?.clickKey===recentSave.id && bridge.getState().capabilities.commands.includes(command+'close');
   const exactPythonEditor = () => canReviewPython && !!file && !!pythonSource && live(generation.current) &&
     currentFile.current===file && file.filesHandle===handle.current && currentText.current===pythonSource.content &&
     editorInput.current?.value===textareaText(pythonSource.content) && !entered.current && !edits.current &&
@@ -410,11 +423,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       latest.current.onOpenPythonWork?.(work);
     });
   };
-  const close = (next?: 'prepare-build') => {
+  const close = (next?: 'prepare-build' | 'prepare-python-tools') => {
     if (entered.current || edits.current) return;
     if (pythonReviewNow.current) { dismissPythonReview(); return; }
     if (activeAdoption.current) { dismissAdoption(); return; }
     if (choice) { setChoice(null); return; }
+    const forPythonTools=next==='prepare-python-tools';
+    if(forPythonTools&&(!canPreparePythonTools||!exactPythonEditor()))return;
     const sameOpenFile = currentFile.current === file;
     const fromSavedFile = sameOpenFile && showingSavedFile;
     // Reading a different file does not replace the last verified save. It
@@ -432,8 +447,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     } : undefined;
     const position = { projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret };
     if (!next) { latest.current.onClose(position); return; }
-    const prepare = latest.current.onPrepareBuild;
-    if (!prepare || !canCheckSavedBuild) return;
+    const prepare = forPythonTools ? latest.current.onPreparePythonTools : latest.current.onPrepareBuild;
+    if (!prepare || !forPythonTools && !canCheckSavedBuild) return;
     // Keep the ordinary editor and its exact receipt alive until the read-only
     // source comparison is back. Failure stays here instead of hiding the edit.
     const sequence = generation.current, token = {};
@@ -441,7 +456,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const closeEditor=async()=>{
       if(!live(sequence)||entered.current!==token||handle.current!==recentSave.filesHandle||
         currentFile.current!==file||currentText.current!==recentSave.after)
-        throw Error('原编辑器或本次保存已变化，没有打开构建审阅。');
+        throw Error(forPythonTools?'原编辑器或本次保存已变化，没有打开工具准备。':'原编辑器或本次保存已变化，没有打开构建审阅。');
       // Relinquish only this visit's handle before sending; cleanup must not
       // repeat a close whose acknowledgement was lost.
       handle.current='';
@@ -664,7 +679,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {choice ? <div role="region" aria-label="处理文件冲突"><p>{choice === 'keep_mine' ? '把当前副本作为新基线，保留我的草稿文字？下一次保存才会改写文件。' : '放弃这份草稿，采用刚读取的副本内容？不会写入文件。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => setChoice(null)}>返回</Button><Button disabled={locked} onClick={() => void invoke('resolve', { fileHandle: file.fileHandle, revision: file.revision, choice }, value => { interfaceDrafts.delete(keyFor(file.path)); setChoice(null); apply(value); })}>确认这个选择</Button></div></div> : <div className="pw-form-actions">
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
-          {canReviewPython && !pythonRunReview && <Button disabled={locked} onClick={readPythonReview}>运行已保存的脚本…</Button>}
+          {canReviewPython && !pythonRunReview && (canPreparePythonTools
+            ? <Button disabled={locked} onClick={()=>close('prepare-python-tools')}>查看手机工具准备</Button>
+            : <Button disabled={locked} onClick={readPythonReview}>运行已保存的脚本…</Button>)}
           {showingSavedFile ? <>
             <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
             {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' : '已保存，回到项目工作区'}

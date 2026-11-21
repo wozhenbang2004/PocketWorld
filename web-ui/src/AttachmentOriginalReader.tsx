@@ -25,17 +25,19 @@ function wordFragments(chunks:Json[]):WordFragment[]{
  }
  return fragments;
 }
-export function DocumentProjection({value,orderedOriginalWord=false}:{value:Json;orderedOriginalWord?:boolean}) {
+export function DocumentProjection({value,orderedOriginalWord=false,pdfPage}:{value:Json;orderedOriginalWord?:boolean;pdfPage?:number}) {
  const chunks=rows(value.chunks),tables=new Map<string,Json[]>(),paragraphs:Json[]=[];
  const orderedWord=orderedOriginalWord&&value.format==='docx'&&['ok','partial'].includes(value.status);
  if(!orderedWord)for(const block of chunks){const at=obj(block.locator);if(at.cell||at.table){const key=`${at.sheet||''}:${at.table||''}:${block.unit}`;tables.set(key,[...(tables.get(key)||[]),block])}else paragraphs.push(block)}
- const paragraph=(block:Json,key:string)=><div key={key}><small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small><p className="pw-file-text">{block.text}</p></div>;
+ const paragraph=(block:Json,key:string)=><div key={key}>{!pdfPage&&<small className="pw-muted">{orderedWord?'段落':value.format==='pptx'?'幻灯片':'单元'} {block.unit}</small>}<p className="pw-file-text">{block.text}</p></div>;
  const tableFragment=(blocks:Json[],key:string)=>{
   const table=documentTable(blocks),caption=orderedWord?'原表格片段 · 当前读取范围':obj(blocks[0]?.locator).sheet||'原文档表格 · 当前范围';
   return <div className="pw-file-table" key={key}><table><caption>{caption}</caption><thead><tr><th>行</th>{table.columns.map(col=><th key={col}>{col}</th>)}</tr></thead><tbody>{table.rows.map(row=><tr key={row}><th>{row}</th>{table.columns.map(col=><td key={col}>{table.text(row,col)}</td>)}</tr>)}</tbody></table></div>;
  };
- return <section className="pw-file-projection" aria-label="当前读取范围"><p className="pw-muted">{value.coverage||'这里只显示当前已读取的范围。'} {value.status&&`读取状态：${value.status}`}</p>
- {!chunks.length&&<p>当前范围没有可显示的文字，不代表原文件为空。</p>}
+ return <section className="pw-file-projection" aria-label="当前读取范围"><p className="pw-muted">{pdfPage?
+  value.truncated===true?'只显示本页已读到的文字。':'仅显示该页的本机文本层，未做图片识别。':
+  <>{value.coverage||'这里只显示当前已读取的范围。'} {value.status&&`读取状态：${value.status}`}</>}</p>
+ {!chunks.length&&<p>{pdfPage?'未读到本页文字；页面仍可在原 PDF 中查看。':'当前范围没有可显示的文字，不代表原文件为空。'}</p>}
  {orderedWord?wordFragments(chunks).map((fragment,i)=>fragment.kind==='table'?
   tableFragment(fragment.blocks,`word:table:${fragment.tableId}:${i}`):
   paragraph(fragment.block,`word:paragraph:${fragment.block.unit}:${fragment.block.chunk}:${i}`)):<>
@@ -50,6 +52,7 @@ export function DocumentProjection({value,orderedOriginalWord=false}:{value:Json
 const textEncodings=['UTF-8','UTF-16LE','UTF-16BE','GB18030','ISO-8859-1'].map(id=>({id,label:id}));
 export type DisplayedOriginalText={windowId:string;viewerId:string;identity:string;sha256:string;encoding:string;offset:number};
 type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;findBeforeLongText?:boolean;onTextDisplayed?:(range:DisplayedOriginalText)=>void;
+ onReadPdfPageText?:(viewerId:string,rasterId:string)=>void;showingPdfPageText?:boolean;
  recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
 type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:boolean};
 type PdfFindPin={windowId:string;viewerId:string;identity:string;sha256:string;url:string};
@@ -149,7 +152,7 @@ export function AttachmentOriginalReader(props:OriginalReaderProps) {
  return <OriginalReader key={JSON.stringify([props.windowId,props.source.id])} {...props}/>;
 }
 
-function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed}:OriginalReaderProps) {
+function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed,onReadPdfPageText,showingPdfPageText}:OriginalReaderProps) {
  const readerSurface=useRef<HTMLElement>(null),textAdvance=useRef<TextAdvance|null>(null);
  const textBody=useRef<HTMLDivElement>(null),pdfBody=useRef<HTMLDivElement>(null),pdfView=useRef<HTMLDivElement>(null);
  const [toolsVisible,setToolsVisible]=useState(false);
@@ -161,6 +164,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const [pdfMark,setPdfMark]=useState<PdfMark|null>(null);
  const pdfPending=useRef<{raster:PdfRaster;acknowledging:boolean;target?:PdfReveal}|null>(null);
  const pdfReveal=useRef<{raster:PdfRaster;target:PdfReveal}|null>(null),readerInteraction=useRef(0);
+ const pdfTextReturn=useRef<{pin:PdfFindPin;raster:PdfRaster;epoch:number;pane:HTMLDivElement;top:number;left:number;opened:boolean}|null>(null);
  const retired=source.sourceUnavailable===true;
  const live=useRef({id:source.id,windowId,retired}),sequence=useRef(0),pending=useRef(false);live.current={id:source.id,windowId,retired};
  const type=String(source.kind),details=obj(source.information);
@@ -276,6 +280,26 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const unavailable=actual.previewAvailable===false?'这个格式没有内置预览。':officeIssue;
  const ready=(!failed||retaining)&&!unavailable&&type!=='unsupported'&&Object.keys(actual).length>0,page=Number(actual.page||1),pages=Number(actual.pages||0);
  const readerBusy=busy||source.busy||pdfAttempt!==null;
+ const mayReadPdfText=!!onReadPdfPageText&&type==='pdf'&&ready&&!failed&&!readerBusy&&!showingPdfPageText&&
+  !!pdfShown&&details.pdfRasterId===pdfShown.pdfRasterId&&details.page===pdfShown.page;
+ const readPdfPageText=()=>{
+  const raster=pdfShown,pane=pdfBody.current,pin=capturePdfFindPin(windowId,source);
+  const img=raster&&pane?.querySelector<HTMLImageElement>(`[data-pdf-raster="${raster.pdfRasterId}"] img`);
+  if(!mayReadPdfText||!pane?.isConnected||!raster||!pin||!img?.complete||img.naturalWidth<=0||document.hidden)return;
+  pdfTextReturn.current={pin,raster,epoch:bridge.getDocumentEpoch(),pane,top:pane.scrollTop,left:pane.scrollLeft,opened:false};
+  onReadPdfPageText?.(pin.viewerId,raster.pdfRasterId);
+ };
+ useLayoutEffect(()=>{
+  const from=pdfTextReturn.current;
+  if(!from)return;
+  if(showingPdfPageText){from.opened=true;return}
+  if(!from.opened)return;
+  pdfTextReturn.current=null;
+  if(!document.hidden&&bridge.getDocumentEpoch()===from.epoch&&pdfShown===from.raster&&pdfBody.current===from.pane&&
+    from.pane.isConnected&&matchesPdfFindPin(from.pin,windowId,source)){
+   from.pane.scrollTop=from.top;from.pane.scrollLeft=from.left;
+  }
+ },[showingPdfPageText,pdfShown,windowId,source.id,source.identity,source.sha256]);
  const previousWorksheet=ready&&type==='office'&&source.sourceUnavailable===false?previousWorksheetRange(actual):undefined;
  const shownText=ready&&!readerBusy&&!failed&&type==='text'&&source.sourceUnavailable===false&&typeof actual.content==='string'&&!!actual.content&&
   textEncodings.some(row=>row.id===actual.encoding)&&Number.isSafeInteger(actual.offset)&&actual.offset>=0;
@@ -417,7 +441,8 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    '本次还没有查到页面。':'当前查找范围内没有匹配文字。'}</p>}
   {foundInReader.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}
  </div>}</AccordionItem></Accordion>;
- return <section ref={readerSurface} className="pw-original-file" aria-label={`原件：${source.name}`} onPointerDownCapture={noteReaderInteraction}
+ return <section ref={readerSurface} className="pw-original-file" aria-label={`原件：${source.name}`}
+  style={showingPdfPageText?{display:'none'}:undefined} onPointerDownCapture={noteReaderInteraction}
   onClickCapture={noteReaderInteraction} onInputCapture={noteReaderInteraction}
   onWheelCapture={noteReaderInteraction} onTouchMoveCapture={noteReaderInteraction} onKeyDownCapture={noteReaderInteraction}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
@@ -439,6 +464,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  {imageTools&&<div className="pw-action-row">
   {type==='pdf'&&<><Button variant="ghost" disabled={readerBusy||page<=1} onClick={()=>readPdfPage(page-1)}>上一页</Button><span>{page} / {pages} 页</span><Button variant="ghost" disabled={readerBusy||page>=pages} onClick={()=>readPdfPage(page+1)}>下一页</Button></>}
   <Button variant="ghost" aria-expanded={toolsVisible} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'阅读工具'}</Button>
+  {mayReadPdfText&&<Button variant="ghost" size="small" aria-label={`读取原 PDF 第 ${page} 页的文字`} onClick={readPdfPageText}>本页文字</Button>}
  </div>}
  {type==='pdf'&&ready&&<div hidden={!toolsVisible} className="pw-action-row pw-original-pagination pw-material-navigation"><TextField label="页码" value={position} onChange={setPosition}/><Button variant="secondary" disabled={readerBusy||!/^\d+$/.test(position)||Number(position)<1||Number(position)>pages} onClick={()=>readPdfPage(Number(position))}>跳转</Button></div>}
  {findBeforeBody&&findOriginal}

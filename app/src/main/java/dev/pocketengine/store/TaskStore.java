@@ -10644,6 +10644,36 @@ public final class TaskStore {
                 ||item.has("projectSelection")||identity.has("remoteSelection")||identity.has("projectSelection")||child.has("teamProject"))
             throw new SecurityException("仅可从这里继续已明确停下的本机选定文件分工；请回原任务核对实际范围");
     }
+    /** A settled predecessor already bound by registerTeamAssignment. No author task, journal or file read. */
+    private static JSONObject localContinuationOriginalText(JSONObject plan,JSONObject item,JSONObject child)throws Exception {
+        JSONObject binding=child.getJSONObject("teamAssignment");
+        JSONArray edges=item.optJSONArray("dependsOn"),bound=binding.optJSONArray("dependencyArtifacts"),items=plan.optJSONArray("items");
+        if(edges==null||edges.length()!=1||bound==null||bound.length()!=1||items==null||
+                items.length()>dev.pocketengine.features.teams.TeamWorkItems.MAX_ITEMS)return null;
+        String from=edges.optString(0);
+        if(from.isEmpty()||from.equals(item.optString("workItemId")))return null;
+        JSONObject author=null;
+        for(int i=0;i<items.length();i++){
+            JSONObject candidate=items.optJSONObject(i);
+            if(candidate==null||!from.equals(candidate.opt("workItemId")))continue;
+            if(author!=null)return null;
+            author=candidate;
+        }
+        if(author==null||!"completed".equals(author.opt("status"))||author.has("remoteSelection")||author.has("projectSelection"))return null;
+        JSONArray outputs=author.optJSONArray("artifacts");
+        JSONObject ref=bound.optJSONObject(0),original=outputs!=null&&outputs.length()==1?outputs.optJSONObject(0):null;
+        if(ref==null||original==null||!canonical(ref).equals(canonical(original)))return null;
+        String path=ref.optString("path"),title=author.optString("title"),assignment=author.optString("assignmentId");
+        if(!"text_file".equals(ref.opt("artifactKind"))||!"text/plain".equals(ref.opt("mimeType"))||
+                path.length()>240||!path.toLowerCase(java.util.Locale.ROOT).endsWith(".txt")||title.isBlank()||title.length()>120||
+                !(ref.opt("draftVersion") instanceof Integer version)||version<1||!ref.optString("sha256").matches("[a-f0-9]{64}")||
+                !ref.optString("artifactId").matches("[a-f0-9-]{36}")||!ref.optString("draftRevisionId").matches("[a-f0-9-]{36}")||
+                !ref.optString("runId").matches("[a-f0-9-]{36}")||!plan.getString("teamRunId").equals(ref.opt("teamRunId"))||
+                !binding.getString("targetProjectId").equals(ref.opt("targetProjectId"))||!assignment.equals(ref.opt("assignmentId"))||
+                !assignment.equals(ref.opt("taskId"))||!author.getString("memberId").equals(ref.opt("memberId")))return null;
+        return new JSONObject().put("author",dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(author))
+                .put("receiptDigest",capabilityFingerprint(ref)).put("path",path).put("version",version).put("title",title);
+    }
     public synchronized TeamWorkReview prepareTeamWorkContinuation(TeamWorkWindow window,String itemId,int itemRevision,int ownerGeneration)throws Exception {
         return prepareTeamWorkContinuation(window,itemId,itemRevision,ownerGeneration,false);
     }
@@ -10654,7 +10684,13 @@ public final class TaskStore {
         if(window==null||window.issuer!=this)throw new SecurityException("不是原主人工作项窗口");window.require();JSONObject team=teamWriteTask(window.teamRun),plan=team.getJSONObject("teamWorkPlan"),item=dev.pocketengine.features.teams.TeamWorkItems.find(plan.getJSONArray("items"),itemId),child=required(item.getString("assignmentId"));currentTeamWorkItem(team,new JSONObject(item.toString()).put("assignmentId",child.getString("id")));teamWorkPlanParent(window.teamRun);
         if(item.getInt("itemRevision")!=itemRevision||item.getInt("ownerGeneration")!=ownerGeneration||hasUnresolved(child.getString("id"))||teamHasPendingQuestion(child)||!child.optString("status").matches("paused|awaiting_user|needs_confirmation|interrupted|failed|cancelled"))throw new SecurityException("原工作项未处于确定安全等待点；未知操作或未回答问题不能重放");
         requireOwnerWorkContinuationSafe(window.teamRun,child,item);if(localOnly)requireLocalStoppedTeamDraft(team,item,child);
-        JSONObject queued=child.optJSONObject("teamDraftContinuation");if(queued!=null&&!queued.has("runId"))throw new SecurityException("原继续已登记但尚未实际启动；请刷新核对原队列，不重复预留或替换继续身份");JSONObject budget=teamBudgetSnapshot(window.teamRun);if(budget.getInt("remainingModelRequests")<1||budget.getInt("remainingToolOperations")<1)throw new SecurityException("原父预算已用尽，此继续不追加额度");return new TeamWorkReview(this,window,null,new JSONObject().put("kind","continue").put("planId",plan.getString("planId")).put("workItem",dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(item)).put("runId",child.getString("runId")).put("epoch",child.getInt("coordinatorEpoch")).put("parentBudget",budget).put("budgetChanged",false).put("localDraftOnly",localOnly).put("stoppedStatus",child.getString("status")).put("title",item.getString("title")).put("files",new JSONArray(item.getJSONArray("files").toString())).put("draftOperationsRemaining",item.getJSONObject("draftScope").getInt("remainingOperations")).put("expiresAt",Math.min(Math.min(plan.getLong("expiresAt"),item.getJSONObject("draftScope").getLong("expiresAt")),System.currentTimeMillis()+120_000)));
+        JSONObject queued=child.optJSONObject("teamDraftContinuation");if(queued!=null&&!queued.has("runId"))throw new SecurityException("原继续已登记但尚未实际启动；请刷新核对原队列，不重复预留或替换继续身份");JSONObject budget=teamBudgetSnapshot(window.teamRun);if(budget.getInt("remainingModelRequests")<1||budget.getInt("remainingToolOperations")<1)throw new SecurityException("原父预算已用尽，此继续不追加额度");
+        JSONObject facts=new JSONObject().put("kind","continue").put("planId",plan.getString("planId")).put("workItem",dev.pocketengine.features.teams.TeamWorkItems.exactIdentity(item)).put("runId",child.getString("runId")).put("epoch",child.getInt("coordinatorEpoch")).put("parentBudget",budget).put("budgetChanged",false).put("localDraftOnly",localOnly).put("stoppedStatus",child.getString("status")).put("title",item.getString("title")).put("files",new JSONArray(item.getJSONArray("files").toString())).put("draftOperationsRemaining",item.getJSONObject("draftScope").getInt("remainingOperations")).put("expiresAt",Math.min(Math.min(plan.getLong("expiresAt"),item.getJSONObject("draftScope").getLong("expiresAt")),System.currentTimeMillis()+120_000));
+        if(localOnly){
+            JSONObject originalText=localContinuationOriginalText(plan,item,child);
+            if(originalText!=null)facts.put("originalInputFile",originalText);
+        }
+        return new TeamWorkReview(this,window,null,facts);
     }
     public synchronized JSONObject approveTeamWorkContinuation(TeamWorkReview review,String digest,int runGeneration,int memberGeneration)throws Exception {
         if(review==null||review.issuer!=this||review.consumed||review.plan!=null||!review.digest.equals(digest))throw new SecurityException("不是本次精确原工作项继续审阅");review.window.require();if(review.pageGeneration!=review.window.pageGeneration)throw new SecurityException("原前台审阅已离开，请重新核对");JSONObject shown=new JSONObject(review.data);if(!shown.optString("kind").equals("continue"))throw new SecurityException("不是原工作项继续");db.beginTransaction();try{JSONObject team=teamWriteTask(review.window.teamRun),item=currentTeamWorkItem(team,shown.getJSONObject("workItem")),child=required(item.getString("assignmentId")),owner=teamBudgetOwner(team),pool=teamBudget(owner);teamWorkPlanParent(review.window.teamRun);
@@ -10663,6 +10699,9 @@ public final class TaskStore {
             if(shown.optBoolean("localDraftOnly")){
                 requireLocalStoppedTeamDraft(team,item,child);
                 if(!shown.getString("stoppedStatus").equals(child.optString("status")))throw new SecurityException("原停点已变化，请重新审阅");
+                JSONObject originalText=shown.optJSONObject("originalInputFile");
+                if(originalText!=null&&!canonical(originalText).equals(canonical(localContinuationOriginalText(team.getJSONObject("teamWorkPlan"),item,child))))
+                    throw new SecurityException("原分工的前置文件已变化，请重新审阅，没有继续");
             }
             JSONObject currentBudget=teamBudgetSnapshot(review.window.teamRun);if(currentBudget.getInt("remainingModelRequests")<1||currentBudget.getInt("remainingToolOperations")<1)throw new SecurityException("原父预算已用尽，本次不补额度");
             if(!canonical(shown.getJSONArray("files")).equals(canonical(item.getJSONArray("files"))))throw new SecurityException("原分工文件范围已改变，请重新核对");

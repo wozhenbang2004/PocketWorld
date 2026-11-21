@@ -255,7 +255,18 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
  const continuationHeading=useRef<HTMLDivElement>(null);
  const hasOriginal=Object.keys(obj(view.originalFile)).length>0;
- const mode=draftDesk?'drafts':view.documentDraft?'edit':view.comparison?'compare':view.processingOpen?'process':hasOriginal?'original':view.documentOpen?'read':file.id?'detail':'list';
+ const nativePdfPage=obj(view.pdfPageText),pairedOriginal=obj(view.originalFile),acknowledgedPdf=obj(pairedOriginal.information);
+ const pdfPageText=privateLibraryWindow(view)&&view.documentOpen===true&&pairedOriginal.kind==='pdf'&&
+  pairedOriginal.sourceUnavailable===false&&pairedOriginal.id===nativePdfPage.viewerId&&pairedOriginal.sha256===file.sha256&&
+  typeof nativePdfPage.rasterId==='string'&&acknowledgedPdf.pdfRasterId===nativePdfPage.rasterId&&
+  Number.isSafeInteger(nativePdfPage.page)&&nativePdfPage.page>0&&acknowledgedPdf.page===nativePdfPage.page?nativePdfPage.page as number:undefined;
+ const pdfTextRead=obj(view.document);
+ const pdfTextCurrent=!!pdfPageText&&pdfTextRead.attachmentId===file.id&&pdfTextRead.sha256===file.sha256&&
+  pdfTextRead.taskId===''&&pdfTextRead.readContext==='native_owner_preview'&&pdfTextRead.format==='pdf'&&
+  pdfTextRead.extraction==='text'&&pdfTextRead.coverage==='pdf_text_layer'&&Array.isArray(pdfTextRead.chunks)&&
+  pdfTextRead.chunks.every((chunk:Json)=>obj(chunk).unit===pdfPageText);
+ const mode=draftDesk?'drafts':view.documentDraft?'edit':view.comparison?'compare':view.processingOpen?'process':
+  pdfPageText?'read':hasOriginal?'original':view.documentOpen?'read':file.id?'detail':'list';
  const reportOnly=view.reportResultOnly===true,scopedResultOnly=reportOnly||view.historyResultOnly===true;
  const privateFiles=!view.group&&!view.team&&!view.deviceOriginalOnly;
  const listScope=privateFiles&&!view.choosingSource?JSON.stringify([view.taskId||'',snapshot.taskRunId||'',snapshot.coordinatorEpoch||0,
@@ -466,7 +477,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const busy=pending>0||!!view.busy||!view.ready,hasFile=typeof file.id==='string';
  const compilerFile=compilerOutputRow(file);
  const canStage=!compilerFile&&!scopedResultOnly&&!workOutput&&privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
- const title=draftDesk?'私人文件库 · 本机草稿':view.documentDraft?'编辑文档':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
+ const title=draftDesk?'私人文件库 · 本机草稿':view.documentDraft?'编辑文档':pdfPageText?`第 ${pdfPageText} 页的文字`:hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
   if(draftDesk){draftDeskExit.current?.(true);return}
   if(!view.ready||draftFlight.current)return;
@@ -687,7 +698,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const mayDismissRestored=view.restoredWorkReturn===true&&!!(error||view.error);
  const originalHasDirectBack=mode==='original'&&(view.originalReturn==='entry'||view.originalReturn==='list');
  const detailsLabel=scopedResultOnly?'文件来源':'来源与操作';
- const backLabel=draftDesk?'返回成果':mode==='list'&&returnToLibraryDocument?'返回文件来源':view.deviceOriginalOnly?'返回原工作':entryBack||mode==='list'?sourceReturnLabel:
+ const backLabel=draftDesk?'返回成果':pdfPageText?'返回原 PDF':mode==='list'&&returnToLibraryDocument?'返回文件来源':view.deviceOriginalOnly?'返回原工作':entryBack||mode==='list'?sourceReturnLabel:
   mode==='detail'||originalHasDirectBack?'返回文件列表':mode==='edit'&&hasOriginal?'返回这份原件':'返回文件详情';
  const fileList=(label:string,files:Json[],opensOriginal:boolean|((file:Json)=>boolean)=false,resumePdf=false)=><AttachmentFileCollection label={label} files={files} busy={busy||selectionPending} choosing={!!view.choosingSource} opensOriginal={opensOriginal} versions={documentVersions} origins={catalogOrigins}
   onSelect={(target,row,direct)=>{
@@ -856,6 +867,43 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {fileList('已关联成品的编辑源',listedEditable)}
  </AccordionItem></Accordion>;
  const libraryActions=privateFiles&&!resultFilesOnly&&<div className="pw-action-row pw-file-library-actions"><Button variant={hasLibraryFiles?'secondary':'primary'} leadingIcon={IconUpload} disabled={busy||selectionPending||state.attachmentImporting===true} onClick={()=>run('import')}>导入文件</Button><Button variant="ghost" leadingIcon={IconFileAdd} disabled={busy||selectionPending||!!view.pendingDocumentTask} onClick={()=>run('newDocument')}>{privateLibrary?'直接生成 Word / PDF':'创建文档'}</Button>{view.taskId&&!view.choosingSource&&<Button variant="ghost" disabled={busy} onClick={()=>run('chooseSource')}>从附件库关联</Button>}</div>;
+ const offerPdfPageText=privateLibrary&&mode==='original'&&view.canReadPdfPageText===true&&!busy&&!draftBusy&&!view.exportPending;
+ const requestPdfPageText=(viewerId:string,rasterId:string)=>{
+  const live=bridge.getState(),current=obj(live.state.attachmentWorkspace),reader=obj(current.originalFile);
+  if(!offerPdfPageText||document.hidden||!ordinaryLibraryOwner(live)||current.windowId!==view.windowId||
+     current.canReadPdfPageText!==true||reader.id!==viewerId||obj(reader.information).pdfRasterId!==rasterId)return;
+  run('read',{pdfViewerId:viewerId,displayedPdfRaster:rasterId});
+ };
+ const savePdfPagePending=!!pdfPageText&&pdfTextCurrent&&typeof pdfTextRead.readReceiptId==='string';
+ const pdfPageTextView=pdfPageText&&<section aria-label={`原 PDF 第 ${pdfPageText} 页的文字`}>
+  {pdfTextCurrent?<DocumentProjection value={pdfTextRead} pdfPage={pdfPageText}/>:
+   !view.busy&&!error&&!view.error&&<p role="status">本页文字尚未读到。可返回原 PDF。</p>}
+  {pdfTextCurrent&&view.canSaveRead===true&&<div className="pw-action-row">
+   <Button variant="primary" disabled={busy} onClick={()=>run('saveRead')}>保存本页文字为 TXT</Button>
+   <p className="pw-muted">保存到私人文件库，原 PDF 保留。</p>
+  </div>}
+ </section>;
+ const markdown=obj(view.markdownDraft),markdownTarget=mode==='original'&&privateLibrary&&view.ready===true&&
+  file.role==='source'&&file.sourceKind==='content_uri'&&typeof markdown.name==='string'&&markdown.name.length>0&&markdown.name.length<=80?
+  exactFileTarget(file):undefined;
+ const retainMarkdown=()=>{
+  if(!markdownTarget||busy||draftBusy||view.exportPending||!['READY','UNKNOWN'].includes(markdown.state))return;
+  const epoch=bridge.getDocumentEpoch(),viewerId=original.id;
+  const current=()=>{
+   const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),target=exactFileTarget(obj(live.file));
+   return alive.current&&!document.hidden&&bridge.getDocumentEpoch()===epoch&&ordinaryLibraryOwner(native)&&
+    live.windowId===view.windowId&&obj(live.originalFile).id===viewerId&&target?.fileId===markdownTarget.fileId&&
+    target?.sha256===markdownTarget.sha256?live:undefined;
+  };
+  const live=current(),frame=attachmentFrame(live);
+  if(!frame||obj(live?.markdownDraft).state!==markdown.state||typeof viewerId!=='string'||!viewerId)return;
+  void act(markdown.state==='READY'?'drafts.retainMarkdown':'drafts.checkMarkdown',{viewerId,...markdownTarget},frame)
+   .then(result=>{
+    if(!current())return;
+    if(result.sourceAvailable===false)setError('暂不能核对该原件。请回到本机文档草稿核对，不会自动重复保留。');
+    else if(result.status==='QUOTA')setError('本机草稿已达到容量上限，没有保留这份草稿。');
+   }).catch(()=>{});
+ };
  return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{if(returningToSearch.current)event.preventDefault();onReturnFocus?.(event)}} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description">
  <header className="pw-drawer-header pw-file-page-header">
   {mode==='original'&&!originalHasDirectBack?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>{detailsLabel}</Button>:
@@ -871,15 +919,16 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  <div className="pw-drawer-body pw-file-page-scroll" ref={scroller} onScroll={rememberPosition}>
  {receivedOriginal&&<p className="pw-field-hint">这是原设备交给本机的固定文件，不是对端已经完成目标的证明。{topic&&'带回原话题只添加文件引用，不会发送。'}</p>}
  {file.sourceRunEvidence==='original_snapshot_capture'&&file.sourceKind==='remote_result_snapshot'&&<p className="pw-field-hint">这份文件在原主机作业结束后被选中并固定。采集轮次已核对，不代表文件一定由该作业生成。</p>}
- {view.busy&&<div className="pw-action-row"><p role="status">{copyStage==='writing'?'正在写入并核对这次另存…':'正在核对原记录…'}</p><Button variant="ghost" onClick={()=>run('cancel')}>{copyStage==='writing'?'停止本次另存':'停止本次读取'}</Button></div>}
+ {view.busy&&<div className="pw-action-row"><p role="status">{pdfPageText?(savePdfPagePending?'正在保存本页文字…':'正在读取本页文字…'):copyStage==='writing'?'正在写入并核对这次另存…':'正在核对原记录…'}</p><Button variant="ghost" onClick={()=>run('cancel')}>{pdfPageText?(savePdfPagePending?'停止等待':'取消本页读取'):copyStage==='writing'?'停止本次另存':'停止本次读取'}</Button></div>}
  {!reportError&&!attachmentChoiceError&&(error||view.error)&&<p className="pw-error" role="alert">{error||view.error}</p>}{view.notice&&<p role="status">{view.notice}</p>}
  {!view.ready&&!draftDesk&&<p>回到当前工作区后继续查看，原文件、记录和当前输入保留。</p>}
  {draftDesk?<AttachmentStandaloneDrafts active={draftDeskActive} recoverable={draftDeskReadOnly} loading={draftDesk.loading} initial={draftDesk.initial}
   invoke={(command,args)=>draftAct(draftDesk.visit,command,args)} registerExit={handler=>{draftDeskExit.current=handler}}
   onExit={close=>leaveDraftDesk(draftDesk.visit,close)}/>:view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}
-  retainLinkedDraft={view.canRetainLinkedDocumentDraft===true&&!onReturnToSearch}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
+  retainLinkedDraft={view.canRetainLinkedDocumentDraft===true&&!onReturnToSearch}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<><AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
   findBeforeLongText={!!textScope&&canSaveOriginal} onTextDisplayed={textScope?textDisplayed:undefined}
-  recovery={{canSave:canSaveOriginal,busy:busy||draftBusy,onOpenInReader:offerReader?()=>run('openInReader'):undefined}}/>:view.documentOpen?<section><h3>{file.name||'原文件'}</h3><div className="pw-action-row">{Number(view.document?.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>run('read',{unit:view.document.nextUnit,chunk:view.document.nextChunk||0})}>读取后续范围</Button>}{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>识别原图或 PDF 文字</Button>}{view.canSaveRead&&<Button variant="primary" disabled={busy} onClick={()=>run('saveRead')}>保存当前已读范围为文件</Button>}</div><DocumentProjection value={obj(view.document)}/><p className="pw-muted">文字摘录只包含当前已查看的部分，并保留来源位置。</p></section>:view.team?<section><h3>{snapshot.artifact?.path||'成员的固定文件成果'}</h3><div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>查看原件</Button><Button variant="secondary" disabled={busy||view.exportPending} onClick={()=>run('export')}>导出到手机</Button><Button variant="ghost" disabled={busy} onClick={()=>run('newerTeam')}>核对较新成果</Button>{view.hasPreviousTeamArtifact&&<Button variant="ghost" disabled={busy} onClick={()=>run('previousTeam')}>返回上一份成果</Button>}{view.canReadTeamDifference&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference')}>比较原项目当前文件</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>回原分工</Button></div>{typeof snapshot.content==='string'&&<pre className="pw-file-text">{snapshot.content}</pre>}{typeof snapshot.preview?.content==='string'&&<pre className="pw-file-text">{snapshot.preview.content}</pre>}<FileDetails value={snapshot} title="原成果与读取范围"/>{snapshot.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('readTeam',{offset:snapshot.nextOffset})}>读取后续内容</Button>}{view.teamDifference&&<><FileDetails value={view.teamDifference} title="原文件差异"/>{view.teamDifference.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference',{offset:view.teamDifference.nextOffset})}>读取后续差异</Button>}</>}</section>:<>
+  showingPdfPageText={!!pdfPageText} onReadPdfPageText={offerPdfPageText?requestPdfPageText:undefined}
+  recovery={{canSave:canSaveOriginal,busy:busy||draftBusy,onOpenInReader:offerReader?()=>run('openInReader'):undefined}}/>{pdfPageTextView}</>:view.documentOpen?<section><h3>{file.name||'原文件'}</h3><div className="pw-action-row">{Number(view.document?.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>run('read',{unit:view.document.nextUnit,chunk:view.document.nextChunk||0})}>读取后续范围</Button>}{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>识别原图或 PDF 文字</Button>}{view.canSaveRead&&<Button variant="primary" disabled={busy} onClick={()=>run('saveRead')}>保存当前已读范围为文件</Button>}</div><DocumentProjection value={obj(view.document)}/><p className="pw-muted">文字摘录只包含当前已查看的部分，并保留来源位置。</p></section>:view.team?<section><h3>{snapshot.artifact?.path||'成员的固定文件成果'}</h3><div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>查看原件</Button><Button variant="secondary" disabled={busy||view.exportPending} onClick={()=>run('export')}>导出到手机</Button><Button variant="ghost" disabled={busy} onClick={()=>run('newerTeam')}>核对较新成果</Button>{view.hasPreviousTeamArtifact&&<Button variant="ghost" disabled={busy} onClick={()=>run('previousTeam')}>返回上一份成果</Button>}{view.canReadTeamDifference&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference')}>比较原项目当前文件</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>回原分工</Button></div>{typeof snapshot.content==='string'&&<pre className="pw-file-text">{snapshot.content}</pre>}{typeof snapshot.preview?.content==='string'&&<pre className="pw-file-text">{snapshot.preview.content}</pre>}<FileDetails value={snapshot} title="原成果与读取范围"/>{snapshot.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('readTeam',{offset:snapshot.nextOffset})}>读取后续内容</Button>}{view.teamDifference&&<><FileDetails value={view.teamDifference} title="原文件差异"/>{view.teamDifference.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference',{offset:view.teamDifference.nextOffset})}>读取后续差异</Button>}</>}</section>:<>
  {otherPendingDocument&&<p className="pw-muted">另有文档待核对，可回「成果」核对。</p>}
  {!scopedResultOnly&&(documentRecord||pendingDocumentHere)&&<div className="pw-action-row">{pendingDocumentHere&&<p>有原文档动作待核对。</p>}<Button variant="secondary" disabled={busy} onClick={()=>run('queryDocument')}>{pendingDocumentHere?'核对原文档结果':'核对这条文档记录'}</Button></div>}{!scopedResultOnly&&view.pendingProcessingTask&&<div className="pw-action-row"><p>有原加工动作待核对。</p><Button variant="secondary" disabled={busy} onClick={()=>run('queryProcessing')}>核对原加工结果</Button></div>}
  {hasFile?<section className="pw-outcome-file-detail">
@@ -960,6 +1009,14 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {saveFirst&&exportAction}
   {useInTopic}
   {offerDocumentEdit&&editDocument(preferSave||useInTopic?'secondary':'primary')}
+  {markdownTarget&&(markdown.state==='READY'||markdown.state==='UNKNOWN')&&
+   <Button variant="secondary" disabled={busy||draftBusy||view.exportPending} onClick={retainMarkdown}>
+    {markdown.state==='UNKNOWN'?'核对这次草稿':'保留原文为本机文档草稿'}</Button>}
+  {markdownTarget&&markdown.state==='UNKNOWN'&&<p className="pw-file-draft-status" role="status">
+   保留结果尚待核对。离开后可先到「成果 → 本机文档草稿」查找；不会自动重试。</p>}
+  {markdownTarget&&['SAVED','VERIFIED'].includes(markdown.state)&&Number.isSafeInteger(markdown.savedAt)&&markdown.savedAt>0&&
+   <p className="pw-file-draft-status" role="status">已保留 Word 草稿「{markdown.name}」（{new Date(markdown.savedAt).toLocaleString()}）。
+    可在「成果 → 本机文档草稿」继续编辑或核对生成，不会改动原件。</p>}
   {canChooseAttachment&&<Button variant={preferSave||offerDocumentEdit?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending}
    aria-busy={attachmentFlight.current||undefined} onClick={()=>void chooseAttachment()}>{attachmentFlight.current?'正在核对原文件…':`选作「${draftTarget?.label}」的附件…`}</Button>}
   {attachmentChoiceError&&<p className="pw-file-draft-status pw-error" role="alert">{attachmentChoiceError}</p>}

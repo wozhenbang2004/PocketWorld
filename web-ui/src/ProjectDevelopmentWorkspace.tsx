@@ -5,7 +5,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import {ProjectTaskPackageOrigin,type TaskPackageOriginalWork} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
-import type { OriginalPythonRun } from './owner-python-run';
+import { savedPythonPath, type OriginalPythonRun } from './owner-python-run';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
@@ -34,11 +34,14 @@ export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;reque
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
 type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:string};
 export type ProjectTerminalSavedFileReturn = {position:CheckoutSavedPosition; take:()=>boolean};
+export type CheckoutPythonSetupReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
   localFilesIntent?:ProjectLocalFilesIntent; onLocalFilesIntentHandled?:(target:ProjectLocalFilesIntent)=>void;
   terminalSavedFile?:ProjectTerminalSavedFileReturn;
+  pythonSetupReturn?:CheckoutPythonSetupReturn;
+  onPreparePythonTools?: (position: CheckoutSavedPosition) => void;
   retainedOriginalVisit?:Data;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
   onOpenTask: (id: string, checkoutId?: string, expected?: {runId:string;epoch:number}) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: () => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout, position?:CheckoutSavedPosition) => void;
@@ -328,7 +331,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),deliverySummary=useRef<HTMLSpanElement>(null);
@@ -345,7 +348,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const activeRetainedVisit=useRef<RetainedOriginalVisit|null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
   const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;buildResume?:CheckoutBuildEditorResume;pythonResume?:OriginalPythonRun;
-    originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor}|null>(null);
+    pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   const [importEditChoice,setImportEditChoice]=useState<{original:ProjectImportedEditor;viewHandle:string}|null>(null);
   const [importEditorNotice,setImportEditorNotice]=useState('');
@@ -361,8 +364,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
   const keptNativePick=useRef(false);const [sourceConflict,setSourceConflict]=useState(false);
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
-  const latest = useRef({ run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile });
-  latest.current = { run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile }; activeReview.current = review;
+  const latest = useRef({ run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools });
+  latest.current = { run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools }; activeReview.current = review;
   const attemptedLocalFiles = useRef<ProjectLocalFilesIntent|null>(null);
   const firstFilesPreparation = useRef<FirstLocalFilesPreparation|null>(null);
   const preview=active&&buildPreview&&view?.viewHandle===buildPreview.viewHandle&&handle.current===buildPreview.viewHandle&&
@@ -696,6 +699,23 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     !copyResult && !!view?.draft?.copyRequestId && view?.draft?.copyStatus !== 'ready';
   const interactionBusy = active && (busy || pending || !!review || !!preview || !!originalDifference || filesOpen || copyUnconfirmed && can('projects.development.queryCopy'));
   useEffect(() => { onInteractionBusyChange?.(interactionBusy); return () => onInteractionBusyChange?.(false); }, [interactionBusy, onInteractionBusyChange]);
+  useEffect(()=>{
+    const original=pythonSetupReturn;
+    if(!original||!active||document.hidden||!view||view.viewHandle!==handle.current||view.projectId!==projectId||
+      original.position.projectId!==projectId||busy||entered.current)return;
+    const {position}=original,incoming=view.draft||{};
+    const copies=rows(view.checkouts).filter(copy=>copy?.projectId===projectId&&copy.checkoutId===position.checkoutId);
+    if(fileCheckout||returnTarget||buildReturn||importedEditor||localFilesIntent||activeReview.current||previewOpen.current||
+      sourceConflict||!canEditImportedCheckout(latest.current.can)||view.executionAuthorized!==false||view.commandsAuthorized!==false||
+      view.draftRecoveryRequired!==false||incoming.projectId!==projectId||unresolved(incoming.submission)||
+      incoming.copyRequestId&&incoming.copyStatus!=='ready'||incoming.checkoutId!==position.checkoutId||
+      draft.current.checkoutId!==position.checkoutId||copies.length!==1||copies[0].draftWorkingCopy!==false||
+      !savedPythonPath(position.path)||!sourceHash(position.savedHash)||!original.take())return;
+    // Wait for the existing Work inspection to release the page before taking the one-use return.
+    // This just opens the ordinary list. It cannot reopen a file without new native readId + SHA proof.
+    setFileWindow({checkoutId:position.checkoutId,pythonSetupResume:position});
+  },[active,pythonSetupReturn,view,projectId,busy,fileCheckout,returnTarget,buildReturn,importedEditor,localFilesIntent,sourceConflict]);
+
   const closeFiles = (saved?:CheckoutSavedPosition) => {
     const original=fileWindow?.unselectedImport;
     const sameSave=saved?.projectId===projectId&&saved.checkoutId===fileCheckout&&active&&!document.hidden&&bridge.getState().state.projectId===projectId;
@@ -970,6 +990,26 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     sameImportedEditor(candidateGit,originalImportedEditor(projectId))?candidateGit:null;
   const viteForSave=starterForSave||gitForSave;
   const showViteSaveLabel=!!starterForSave||!!gitForSave&&gitViteEntry;
+  const pythonToolSetup = !!onPreparePythonTools && !!fileWindow && !fileWindow.originalImport && !fileWindow.unselectedImport &&
+    checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&!view?.draftRecoveryRequired&&
+    selectedCopy?.draftWorkingCopy===false&&view?.runtime?.runtimeId==='managed_process_v1'&&
+    view.runtime.status==='preparation_required'&&view.runtime.canExecute===false&&view.runtime.preparationAvailable===true&&canViewToolSetup;
+  const prepareSavedPythonTools = async ({position,closeEditor}:CheckoutSaveForBuild) => {
+    const documentWindow=ownerWindow(),viewHandle=handle.current,sequence=generation.current,displayed={...draft.current};
+    const stillHere=()=>alive.current&&latest.current.active&&!document.hidden&&generation.current===sequence&&
+      handle.current===viewHandle&&ownerWindow()===documentWindow&&!activeReview.current&&!previewOpen.current&&
+      bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath&&sameDraft(draft.current,displayed);
+    if(!pythonToolSetup||!stillHere()||position.projectId!==projectId||position.checkoutId!==fileCheckout||
+      displayed.checkoutId!==position.checkoutId||!savedPythonPath(position.path)||!sourceHash(position.savedHash))return;
+    let verified=false;
+    await preserveSelectionBeforeDeparture(displayed,()=>{verified=true});
+    if(!verified||!stillHere())throw Error('原副本的选择尚未确认，没有打开工具准备。');
+    if(!await closeEditor())throw Error('保存已完成，但未确认原编辑器已关闭，没有打开工具准备。');
+    if(!stillHere())return;
+    const exactPosition = {projectId,checkoutId:position.checkoutId,path:position.path,savedHash:position.savedHash};
+    closeFiles(exactPosition);
+    latest.current.onPreparePythonTools?.(exactPosition);
+  };
   const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock||directImportedSave||viteForSave)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
     !view?.draftRecoveryRequired&&can('projects.development.inspect')&&(!!viteForSave||can('projects.development.reviewDraftBuild')));
   const savedSource = source?.savedEditInSource;
@@ -1418,7 +1458,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       closeHostDiff(); setFileWindow({checkoutId:checkout});
     } : undefined}/>}
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={run} hostFile={hostEditor || undefined}
-      resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume} onClose={closeFiles}
+      resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume}
+      pythonSetupResume={fileWindow.pythonSetupResume} onClose={closeFiles}
+      onPreparePythonTools={pythonToolSetup?prepareSavedPythonTools:undefined}
       onOpenPythonWork={!hostEditor&&can('tasks.open')?work=>{
         if (work.projectId!==projectId || work.checkoutId!==fileCheckout || !active) return;
         onTaskRegistered();onOpenTask(work.taskId,work.checkoutId,{runId:work.runId,epoch:work.epoch});

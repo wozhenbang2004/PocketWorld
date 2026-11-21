@@ -46,7 +46,9 @@ function StepFields({ draft, index, earlier, projects, snapshot, busy, change }:
     </Accordion></div>;
 }
 
-type PlanWorkTarget = { stepId: string; taskId: string; runId: string; epoch: number };
+type PlanWorkTarget = { stepId: string; taskId: string; runId: string; epoch: number; occurrenceId: string };
+type PlanReturnWindow = { document: number; resume: number; request: number; taskId: string };
+type PlanWorkVisit = { plan: Data; work: PlanWorkTarget; window: PlanReturnWindow; acknowledged: boolean; shown: boolean };
 const planWorkId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 function actionablePlanWork(plan: Data): PlanWorkTarget | undefined {
   const progress = planProgressView(plan), current = progress?.currentStep, index = current?.index;
@@ -57,11 +59,31 @@ function actionablePlanWork(plan: Data): PlanWorkTarget | undefined {
       !planWorkId(current.taskId) || !planWorkId(current.runId) || !planWorkId(current.occurrenceId) ||
       !Number.isSafeInteger(current.epoch) || current.epoch <= 0 || !Number.isSafeInteger(index) || index < 0 ||
       !Array.isArray(plan.steps) || plan.steps.length > 50) return;
-  const step = plan.steps[index], admission = step?.taskAdmission;
-  if (!planWorkId(step?.id) || step.id !== current.stepId || step.taskId !== current.taskId ||
-      admission?.state !== 'bound' || admission.occurrenceId !== current.occurrenceId ||
-      plan.steps.filter((row: Data) => row?.id === step.id || row?.taskId === current.taskId).length !== 1) return;
-  return { stepId: step.id, taskId: current.taskId, runId: current.runId, epoch: current.epoch };
+  if (!planWorkId(current.stepId) || plan.steps[index]?.id !== current.stepId) return;
+  const work = { stepId: current.stepId, taskId: current.taskId, runId: current.runId, epoch: current.epoch, occurrenceId: current.occurrenceId };
+  return ownsPlanWork(plan, work) ? work : undefined;
+}
+function ownsPlanWork(plan: Data, work: PlanWorkTarget) {
+  if (!Array.isArray(plan.steps) || plan.steps.length > 50) return false;
+  const matches = plan.steps.filter((row: Data) => row?.id === work.stepId || row?.taskId === work.taskId), step = matches[0];
+  return matches.length === 1 && step.id === work.stepId && step.planId === plan.id && step.taskId === work.taskId &&
+    step.taskAdmission?.state === 'bound' && step.taskAdmission.occurrenceId === work.occurrenceId;
+}
+function planReturnCurrent(pin: PlanReturnWindow) {
+  const { state, view: nativeView } = bridge.getState(), view = nativeView as Data | undefined;
+  return !document.hidden && bridge.getDocumentEpoch() === pin.document && view?.section === 'commitments' &&
+    view.taskId === null && view.resumeRevision === pin.resume && state.requestedTaskRevision === pin.request && state.requestedTaskId === pin.taskId;
+}
+function originalPlanWorkShown(visit: PlanWorkVisit, live: ReturnType<typeof bridge.getState>) {
+  const { work, plan, window: pin } = visit, view = live.view as Data | undefined;
+  if (view?.section !== null || view.taskId !== work.taskId || view.resumeRevision + 1 !== pin.resume ||
+      live.state.requestedTaskRevision !== pin.request || live.state.requestedTaskId !== work.taskId) return false;
+  const matches = rows(live.state.tasks).filter(row => row.id === work.taskId), raw = matches[0]?.raw, origin = raw?.origin;
+  return matches.length === 1 && raw?.id === work.taskId && raw.actorId === 'owner' && raw.spaceId === 'private' &&
+    raw.runId === work.runId && raw.coordinatorEpoch === work.epoch && raw.contextAvailable !== false &&
+    raw.contextWithdrawn !== true && raw.sourceCurrentReadRequired !== true && raw.taskProjection !== 'source_unavailable' &&
+    origin?.kind === 'automation' && origin.planId === plan.id &&
+    origin.commitmentId === work.stepId && origin.occurrenceId === work.occurrenceId;
 }
 
 function PlanProgress({ plan, run, supported, currentAction }: { plan: Data; run: Props['run']; supported: Props['supported']; currentAction?: ReactNode }) {
@@ -141,10 +163,13 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   const [busy, setBusy] = useState(false), [ack, setAck] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uncertain, setUncertain] = useState(false), [readAfterUnknown, setReadAfterUnknown] = useState(false);
   const [reminderSubmission, setReminderSubmission] = useState(false);
   const openedNotification = useRef('');
-  const mutationPending = useRef(false), taskOpen = useRef(state.webWorkspaceTaskOpen);
+  const mutationPending = useRef(false);
+  const taskWindow = useRef({ open: state.webWorkspaceTaskOpen, resume: state.webWorkspaceResumeRevision });
+  const planWorkVisit = useRef<PlanWorkVisit | null>(null);
+  const nativeTaskId = (bridge.getState().view as Data | undefined)?.taskId;
   const collectionPanel = useRef<HTMLDivElement>(null), detailHeading = useRef<HTMLHeadingElement>(null);
   const listPosition = useRef(0), openedId = useRef(''), presentedId = useRef('');
-  const alive = useRef(true), scope = useRef(new OwnerWorkspaceRequest()), selected = useRef<Data | null>(null), reviewed = useRef<Data | null>(null), resumed = useRef(state.webWorkspaceResumeRevision);
+  const alive = useRef(true), scope = useRef(new OwnerWorkspaceRequest()), selected = useRef<Data | null>(null), reviewed = useRef<Data | null>(null);
   selected.current = reading; reviewed.current = review;
   const release = (value: Data | null, key: string) => { if (value?.[key]) void run('plans.discard', { [key]: value[key] }).catch(() => {}); };
   const closeReview = () => { release(reviewed.current, 'reviewHandle'); setReview(null); setAck(false); };
@@ -152,12 +177,31 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     if (!alive.current || document.visibilityState !== 'visible' || state.webWorkspaceTaskOpen) return;
     const ticket = scope.current.begin(); if (ticket === null) return;
     setBusy(true); setError(''); mutationPending.current = mutation;
-    try { if (!supported(action)) throw new Error('当前宿主尚未接通这项计划操作。'); const value = await run(action, input); if (alive.current && scope.current.owns(ticket)) accept?.(value); }
+    try {
+      if (!supported(action)) throw new Error('当前宿主尚未接通这项计划操作。');
+      const value = await run(action, input);
+      if (alive.current && scope.current.owns(ticket)) accept?.(value);
+      // Opening a Work retires this plan's request scope before the read-only ACK can arrive.
+      return action === 'tasks.open' ? value : undefined;
+    }
     catch (failure) { if (alive.current && scope.current.owns(ticket)) { setError(failure instanceof Error ? failure.message : String(failure)); if (mutation) { setUncertain(true); setReadAfterUnknown(false); } } }
     finally { if (scope.current.finish(ticket) && alive.current) { mutationPending.current = false; setBusy(false); } }
   };
   const acceptReading = (value: Data) => { if (!value?.viewHandle || !value.plan?.id) throw new Error('未取得原目标读取。'); release(selected.current, 'viewHandle'); setReading(value); };
-  const refresh = () => { void invoke('plans.snapshot', {}, value => { if (!Array.isArray(value?.plans)) throw new Error('原计划清单尚未完整返回。'); setSnapshot(value); if (uncertain) setReadAfterUnknown(true); }); };
+  const readSnapshot = (returned?: PlanWorkVisit) => { void invoke('plans.snapshot', {}, value => {
+    if (!Array.isArray(value?.plans)) throw new Error('原计划清单尚未完整返回。');
+    setSnapshot(value); if (uncertain) setReadAfterUnknown(true);
+    if (!returned || !planReturnCurrent(returned.window) || value.taskAuthority !== 'TaskStore') return;
+    const matches = rows(value.plans).filter(row => row.id === returned.plan.id), fresh = matches[0], progress = fresh && planProgressView(fresh);
+    const previous = planProgressView(returned.plan);
+    if (matches.length !== 1 || fresh.ownerId !== 'owner' || fresh.spaceId !== 'private' || !ownsPlanWork(fresh, returned.work) ||
+        !Number.isSafeInteger(fresh.revision) || fresh.revision < returned.plan.revision || !progress || !previous ||
+        progress.executionAuthorized !== false || progress.observedAt < previous.observedAt) return;
+    // Use the same Back snapshot, never mint or restore a plan review handle.
+    setReading((old: Data | null) => old?.plan === returned.plan && !old.viewHandle && planReturnCurrent(returned.window)
+      ? { plan: fresh, viewHandle: '', returnWindow: returned.window } : old);
+  }); };
+  const refresh = () => readSnapshot();
   const read = (id: string) => { if (!selected.current) { listPosition.current = collectionPanel.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; openedId.current = id; } closeReview(); void invoke('plans.read', { id }, acceptReading); };
   const returnToList = () => { if (busy) return; openedId.current = selected.current?.plan?.id || openedId.current; release(selected.current, 'viewHandle'); setReading(null); };
   useEffect(() => {
@@ -167,12 +211,27 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     else setNotice('通知对应的原目标暂不在当前清单，请刷新后核对；未打开其它目标。');
   }, [state.requestedExecutionPlanId, state.requestedExecutionPlanRevision, snapshot.plans, busy, editor, settings, review, state.webWorkspaceTaskOpen]);
   const prepare = (action: string, input: Data) => { if (uncertain) return; void invoke(action, input, value => { if (!value?.reviewHandle || !value.command) throw new Error('未取得原目标审阅。'); closeReview(); setReview(value); setAck(false); }); };
-  const hide = (active: boolean) => { if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old ? { ...old, viewHandle: '' } : null); setEditor(old => old ? { ...old, viewHandle: '' } : null); setSettings(old => old ? { ...old, viewHandle: '' } : null); void run('plans.discard').catch(() => {}); };
-  useEffect(() => { alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh(); return () => { alive.current = false; scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false); }; }, []);
+  const hide = (active: boolean) => { if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old ? { ...old, viewHandle: '', returnWindow: undefined } : null); setEditor(old => old ? { ...old, viewHandle: '' } : null); setSettings(old => old ? { ...old, viewHandle: '' } : null); void run('plans.discard').catch(() => {}); };
+  useEffect(() => { alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh(); return () => { alive.current = false; planWorkVisit.current = null; scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false); }; }, []);
   useEffect(() => { onEditingChange(busy || !!editor || !!settings || !!review); }, [busy, editor, settings, review]);
-  useEffect(() => { const changed = () => { const active = document.visibilityState === 'visible'; hide(active); if (active) refresh(); }; const hidden = () => hide(false); document.addEventListener('visibilitychange', changed); window.addEventListener('pagehide', hidden); return () => { document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); }; });
-  useEffect(() => { if (resumed.current !== state.webWorkspaceResumeRevision) { resumed.current = state.webWorkspaceResumeRevision; hide(document.visibilityState === 'visible'); refresh(); } }, [state.webWorkspaceResumeRevision]);
-  useEffect(() => { if (taskOpen.current === state.webWorkspaceTaskOpen) return; taskOpen.current = state.webWorkspaceTaskOpen; hide(!state.webWorkspaceTaskOpen && document.visibilityState === 'visible'); if (!state.webWorkspaceTaskOpen) refresh(); }, [state.webWorkspaceTaskOpen]);
+  useEffect(() => { const changed = () => { planWorkVisit.current = null; const active = document.visibilityState === 'visible'; hide(active); if (active) refresh(); }; const hidden = () => { planWorkVisit.current = null; hide(false); }; document.addEventListener('visibilitychange', changed); window.addEventListener('pagehide', hidden); return () => { document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); }; });
+  useEffect(() => {
+    const before = taskWindow.current, next = { open: state.webWorkspaceTaskOpen, resume: state.webWorkspaceResumeRevision };
+    taskWindow.current = next;
+    const live = bridge.getState(), visit = planWorkVisit.current;
+    if (visit && (document.hidden || bridge.getDocumentEpoch() !== visit.window.document || selected.current?.plan !== visit.plan ||
+        next.open && (nativeTaskId !== visit.work.taskId || state.requestedTaskRevision > visit.window.request))) planWorkVisit.current = null;
+    else if (visit && next.open) {
+      if (originalPlanWorkShown(visit, live)) visit.shown = true;
+      else if (visit.shown) planWorkVisit.current = null;
+    }
+    if (before.open === next.open && before.resume === next.resume) return;
+    const active = !next.open && document.visibilityState === 'visible';
+    const returned = active && before.open && visit?.acknowledged && visit.shown && planWorkVisit.current === visit && planReturnCurrent(visit.window) ? visit : undefined;
+    if (active) planWorkVisit.current = null;
+    hide(active);
+    if (active) readSnapshot(returned);
+  }, [nativeTaskId, state.webWorkspaceTaskOpen, state.webWorkspaceResumeRevision, state.requestedTaskRevision, state.tasks]);
   useEffect(() => { registerTransientBack(() => { if (busy) return true; if (review) { closeReview(); return true; } if (settings) { setSettings(null); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (reading) { returnToList(); return true; } return false; }); return () => registerTransientBack(null); }, [busy, review, settings, editor, reading, registerTransientBack]);
   useLayoutEffect(() => {
     const id = reading?.plan?.id || '', scroller = collectionPanel.current?.closest('.pw-secondary-scroll');
@@ -208,14 +267,24 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   const plan = reading?.plan, validRead = !!reading?.viewHandle, terminal = ['completed', 'cancelled', 'finished_with_failures'].includes(plan?.state), paused = plan?.execution?.state === 'paused';
   const promotedWork = plan && supported('tasks.open') ? actionablePlanWork(plan) : undefined;
   const planDocument = bridge.getDocumentEpoch();
-  const openPromotedWork = () => {
-    const live = bridge.getState(), view = live.view as Data | undefined;
-    if (!promotedWork || !validRead || busy || editor || settings || review || selected.current !== reading ||
+  const readOnlyProgress = !!reading?.returnWindow && planReturnCurrent(reading.returnWindow);
+  const openPromotedWork = async () => {
+    const live = bridge.getState(), view = live.view as Data | undefined, request = live.state.requestedTaskRevision;
+    if (!promotedWork || !plan || !Number.isSafeInteger(plan.revision) ||
+        (!validRead && !(reading?.returnWindow && planReturnCurrent(reading.returnWindow))) ||
+        document.hidden || planWorkVisit.current || busy || editor || settings || review || selected.current !== reading ||
         bridge.getDocumentEpoch() !== planDocument || view?.section !== 'commitments' || view.taskId !== null ||
-        view.resumeRevision !== state.webWorkspaceResumeRevision || !live.capabilities.commands.includes('tasks.open')) return;
+        view.resumeRevision !== state.webWorkspaceResumeRevision || !Number.isSafeInteger(view.resumeRevision) ||
+        !Number.isSafeInteger(request) || request < 0 || !live.capabilities.commands.includes('tasks.open')) return;
     // Navigation to the original Work, not plan "continue", which can start another step.
     const { taskId, runId, epoch } = promotedWork;
-    void invoke('tasks.open', { id: taskId, expectedRunId: runId, expectedEpoch: epoch });
+    const visit: PlanWorkVisit = { plan, work: promotedWork,
+      window: { document: planDocument, resume: view.resumeRevision + 1, request: request + 1, taskId }, acknowledged: false, shown: false };
+    planWorkVisit.current = visit;
+    const opened = await invoke('tasks.open', { id: taskId, expectedRunId: runId, expectedEpoch: epoch });
+    if (planWorkVisit.current !== visit) return;
+    if (opened?.taskId === taskId && opened.readOnly === true && opened.executionAuthorized === false) visit.acknowledged = true;
+    else planWorkVisit.current = null;
   };
   const projects = rows(state.features?.workspace?.projects);
   const openSettings = () => { if (!plan || !validRead) return; const p = plan.execution?.policy || {}; setSettings({ viewHandle: reading?.viewHandle, planId: plan.id, revision: plan.revision, mode: plan.execution?.mode || 'manual', maxTaskAdmissions: String(plan.execution?.maxTaskAdmissions || Math.max(1, rows(plan.steps).length)), phoneMode: plan.execution?.phoneMode || 'background', modelObservationConsent: false, allowPrivateArtifactFreeze: false, businessEventConsent: false, notifyChanges: plan.execution?.notifyChanges === true, hours: '168', zoneId: p.zoneId || Intl.DateTimeFormat().resolvedOptions().timeZone, requiresNetwork: p.requiresNetwork !== false, requiresCharging: p.requiresCharging === true, minBatteryPercent: String(p.minBatteryPercent || 0), quiet: !!p.quietHours, start: p.quietHours?.start || '22:00', end: p.quietHours?.end || '08:00' }); };
@@ -264,8 +333,8 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
       {plan.originalTasksUnsettled && <p className="pw-followup-context">仍有工作正在结束或等待核对；暂停结果尚未确认。</p>}
       {(Array.isArray(plan.requirements?.blockers) ? plan.requirements.blockers : []).map((reason: any, index: number) => <p className="pw-followup-context" key={index}>{String(reason)}</p>)}
       {planProgressView(plan) ? <PlanProgress plan={plan} run={run} supported={supported} currentAction={promotedWork &&
-        <Button disabled={busy || !validRead || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen} onClick={openPromotedWork}>打开原工作</Button>} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
-      {!validRead && <div className="pw-followup-attention"><p>详情已保留，操作前需要重新读取原版本。</p><Button variant="secondary" disabled={busy} onClick={() => read(plan.id)}>重新核对这个目标</Button></div>}
+        <Button disabled={busy || (!validRead && !readOnlyProgress) || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen} onClick={() => void openPromotedWork()}>打开原工作</Button>} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
+      {!validRead && <div className="pw-followup-attention"><p>{readOnlyProgress ? '已核对这个目标当前的进展。调整目标前需重新核对原版本。' : '详情已保留，操作前需要重新读取原版本。'}</p><Button variant="secondary" disabled={busy} onClick={() => read(plan.id)}>重新核对这个目标</Button></div>}
       <div className="pw-followup-primary-actions">
         {(!plan.execution || !plan.approvalValid) && !terminal && <Button disabled={busy || uncertain || !validRead} onClick={openSettings}>审阅目标与执行范围</Button>}
         {plan.execution && !terminal && <>{plan.approvalValid && (!plan.execution.started || paused) && <Button disabled={busy || uncertain || !validRead || !paused && plan.execution.started} onClick={() => prepare('plans.reviewAction', { viewHandle: reading?.viewHandle, operation: paused ? 'resume' : 'start' })}>{paused ? '继续同一目标' : '开始目标'}</Button>}{!paused && <Button variant="secondary" disabled={busy || uncertain || !validRead} onClick={() => prepare('plans.reviewAction', { viewHandle: reading?.viewHandle, operation: 'pause' })}>暂停</Button>}</>}

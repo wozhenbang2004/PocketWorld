@@ -81,7 +81,7 @@ import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
 import {bareManagedNodeCheck,currentManagedNodeOperation,originalDirectViteEditorReturn,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
 import { OwnerPythonRun } from './OwnerPythonRun';
-import { originalPythonExit, originalPythonRun, ownerPythonRead, samePythonRun, type OriginalPythonRun } from './owner-python-run';
+import { originalPythonExit, originalPythonRun, ownerPythonRead, samePythonRun, savedPythonPath, type OriginalPythonRun } from './owner-python-run';
 import {failedBuildFeedback,nodeBuildContinuationText,originalNodeBuildAfterDependencies,projectFeedbackKey,type ExecutionExit} from './project-execution-exit';
 import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWorkspace';
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
@@ -103,7 +103,7 @@ import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
@@ -207,7 +207,8 @@ type PreferredChatFile={file:Pick<TaskResultFile,'id'|'sha256'>;returnFocus:HTML
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
 type TerminalSavedFileOrigin={position:CheckoutSavedPosition;navigation:number;current:(section:'local'|null)=>boolean};
-type WorkspaceOrigin={route:string;label:string;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type PythonSetupSource={position:CheckoutSavedPosition;navigation:number;ownerCurrent:(section:'setup'|null)=>boolean};
+type WorkspaceOrigin={route:string;label:string;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type BackgroundPhoneDraftVisit={origin:WorkspaceOrigin;pin:PhonePlaceReturn;navigation:number;document:number;afterRevision:number;
  first:{generation:number;setupRevision:number}|null;seenAuthentication:boolean;retired:boolean};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
@@ -509,6 +510,7 @@ export default function App(){
  const [modelSetupFeedback,setModelSetupFeedback]=useState<{input:ModelSetupInput;choice:AIChoice;matchesDefault?:boolean;modelRevision:number;draftRevision:number;preferenceRevision:unknown}|null>(null);
  const relatedOrigin=useRef<WorkspaceOrigin|null>(null);
  const terminalSavedFileArrival=useRef<ProjectTerminalSavedFileReturn|null>(null);
+ const [pythonSetupReturn,setPythonSetupReturn]=useState<CheckoutPythonSetupReturn>();
  const [localWorkspaceDraft,setLocalWorkspaceDraft]=useState<LocalWorkspaceDraft|undefined>();
  const [projectSections,setProjectSections]=useState<Record<string,'work'|'files'>>({});
  const [projectWorkDrafts,setProjectWorkDrafts]=useState<Record<string,ProjectWorkDraft>>({});
@@ -1101,7 +1103,7 @@ export default function App(){
    setupReturnPending.current=false;rememberChatPosition();setWorkOpen(false);setCommandOpen(false);
    if(taskOpen&&!taskClosed&&!await closeTask())return false;
    if(options?.stillCurrent&&!options.stillCurrent())return false;
-   terminalSavedFileArrival.current=null;
+   terminalSavedFileArrival.current=null;setPythonSetupReturn(undefined);
    navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);afterNavigate?.();return true;
   };
   if(guardTaskLeave(()=>{void navigate(requested,afterNavigate,options)}))return Promise.resolve(false);
@@ -1389,16 +1391,56 @@ export default function App(){
   const origin=capturedOrigin||captureWorkspaceOrigin(),navigation=navigationWindow.current,closingTask=taskOpen;
   if(closingTask&&!await closeTask())return;
   if(navigationWindow.current!==navigation)return;
+  const python=origin.pythonSetupSource;
+  if(python&&(python.navigation!==navigation+1||!python.ownerCurrent(null)))return;
   if(phonePlace&&!samePhonePlaceDraft(phonePlace))return;
   setupOrigin.current=phonePlace?{...origin,label:'返回原手机目标',focus:null,focusKey:'phone-place',phonePlace,
    drawerChat:{id:phonePlace.conversation,draftKey:phonePlace.composer,documentEpoch:phonePlace.documentEpoch}}:
    settingsDirectory?{...origin,route:settingsDirectory.page,settingsDirectory}:origin;
   setSetupMode(modelMode||'center');setSetupCapability(capability);setSetupView(modelMode?'model':capability||'overview');setSetupRuntimeTask(runtimeTaskId);
   const modelInput=origin.modelInput,proposal=origin.phonePreparation;
-  await navigate('setup',undefined,{keepOrigin:true,taskClosed:closingTask,...(proposal?{stillCurrent:()=>!document.hidden&&phonePreparationOwner()===proposal.owner}:modelInput?{stillCurrent:()=>sameModelSetupInput(modelInput,bridge.getState(),bridge.getDocumentEpoch())}:{})});
+  await navigate('setup',undefined,{keepOrigin:true,taskClosed:closingTask,...(proposal?{stillCurrent:()=>!document.hidden&&phonePreparationOwner()===proposal.owner}:modelInput?{stillCurrent:()=>sameModelSetupInput(modelInput,bridge.getState(),bridge.getDocumentEpoch())}:
+    python?{stillCurrent:()=>navigationWindow.current===navigation&&python.ownerCurrent(null)}:{})});
  };
  const navigateFromSetup=(destination:SetupDestination)=>{const target={connections:'model-settings',background:'background',appearance:'phone:appearance',local:'local'}[destination];void navigate(target,undefined,{keepOrigin:true});setupReturnPending.current=true;};
- const closeSetup=()=>{setupReturnPending.current=false;void restoreWorkspace(setupOrigin.current,true);};
+ const openPythonTools=(position:CheckoutSavedPosition)=>{
+  const start=bridge.getState(),view=obj(start.view),doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const {projectId,checkoutId,path,savedHash}=position, revision=start.state.requestedProjectRevision,resume=view.resumeRevision;
+  if(route!=='projects'||projectSection!=='work'||taskOpen||taskOpening||projectPreview.expanded||
+    !savedPythonPath(path)||!checkoutId||!projectId||!/^[a-f0-9]{64}$/.test(savedHash)||
+    !Number.isSafeInteger(revision)||!Number.isSafeInteger(resume)||
+    !['connections.enter','connections.leave','setup.read','setup.runtime.read','projects.development.files.read'].every(can))return;
+  const ownerCurrent=(section:'setup'|null)=>{
+   const native=bridge.getState(), location=obj(native.view), owner=native.state;
+   return !document.hidden&&bridge.getDocumentEpoch()===doc&&location.section===section&&
+    location.taskId===null&&location.resumeRevision===resume&&owner.projectId===projectId&&
+    owner.requestedProjectRevision===revision&&!owner.filePath&&!owner.fileSaving&&!owner.fileLoading&&!owner.conversationReader;
+  };
+  if(!ownerCurrent(null))return;
+  const source:PythonSetupSource={position:{projectId,checkoutId,path,savedHash},navigation:navigation+1,ownerCurrent};
+  const origin:WorkspaceOrigin={...captureWorkspaceOrigin(),label:'返回原副本',focus:null,focusKey:undefined,pythonSetupSource:source};
+  void openSetup('tools',undefined,undefined,undefined,undefined,origin);
+ };
+ const closeSetup=()=>{
+  setupReturnPending.current=false;
+  const origin=setupOrigin.current, source=origin.pythonSetupSource;
+  if(!source){void restoreWorkspace(origin,true);return;}
+  if(route!=='setup'||origin.route!=='projects'||source.navigation!==navigationWindow.current||!source.ownerCurrent('setup')){
+   void restoreWorkspace({...origin,projectId:undefined,pythonSetupSource:undefined},true);return;
+  }
+  const after=source.navigation+1, atReturn=()=>navigationWindow.current===after&&setupOrigin.current===origin&&
+   (source.ownerCurrent('setup')||source.ownerCurrent(null));
+  void restoreWorkspace({...origin,projectId:undefined},true,false,()=>{
+   void awaitPickerProjection(atReturn,()=>source.ownerCurrent(null)?true:undefined).then(ready=>{
+    if(!ready||!atReturn()||!source.ownerCurrent(null))return;
+    let used=false;
+    setPythonSetupReturn({position:source.position,take:()=>{
+     if(used||!atReturn()||!source.ownerCurrent(null))return false;
+     used=true;setPythonSetupReturn(undefined);return true;
+    }});
+   });
+  });
+ };
  const returnFirstHomeModelInput=async(origin:WorkspaceOrigin,choice?:AIChoice)=>{
   const input=origin.modelInput,visit=origin.firstHomeModel,documentEpoch=bridge.getDocumentEpoch();
   if(route!=='model-settings'||origin.route!=='butler'||!input||!visit||input.conversation!==''||
@@ -6104,6 +6146,8 @@ export default function App(){
             importedEditor={projectImportedEditor?.projectId===currentProject.id?projectImportedEditor:undefined} onImportedEditorHandled={handledImportedEditor}
             localFilesIntent={projectLocalFilesIntent?.projectId===currentProject.id?projectLocalFilesIntent:undefined} onLocalFilesIntentHandled={handledLocalFilesIntent}
             terminalSavedFile={terminalSavedFileArrival.current?.position.projectId===currentProject.id?terminalSavedFileArrival.current:undefined}
+            pythonSetupReturn={pythonSetupReturn?.position.projectId===currentProject.id?pythonSetupReturn:undefined}
+            onPreparePythonTools={openPythonTools}
             buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)}
             onOpenPackageOriginal={({taskId,runId,epoch})=>{
              const projectId=currentProject.id,navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
