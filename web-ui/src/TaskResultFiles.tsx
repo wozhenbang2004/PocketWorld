@@ -1,13 +1,67 @@
-import { useEffect, useId, useState, useSyncExternalStore, type MouseEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent } from 'react';
 import { attachmentFileFormat, fileBytes, fileRunProvenance } from './attachment-workspace';
 import { bridge } from './bridge';
+import { ownerWorkIdentity, workIdentityKey } from './conversation-work';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
+import { taskAuditPage, type TaskHeader } from './task-history';
 
 type PdfExcerptStart = { page: number; chunk: number; method: 'text_layer' | 'ocr' };
 export type TaskResultFile = { id: string; sha256: string; name: string; mimeType: string; size: number; runProvenance?: 'current' | 'earlier' | 'unrecorded'; sourceRunEvidence?: 'original_device_file_receive' | 'original_ssh_file_download' | 'original_node_compiler_output'; hasSavedSupplement?: boolean; pdfExcerptStart?: PdfExcerptStart };
 
-type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string };
+type SavedFileFact = { position: number; id: string; sha256: string };
+type FileNotice = SavedFileFact & { scope: string };
+type FileNotices = { scope: string; through: number; pending?: FileNotice };
+type FileCheck = { window: string; notice: FileNotice };
+type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string; checkedFile?: FileNotice };
+
+function runningFileWork(taskId: string): TaskHeader | undefined {
+  const native = bridge.getState(), view = native.view as { taskId?: string; section?: string | null } | undefined;
+  if (view?.taskId !== taskId || view.section !== null || !native.capabilities.commands.includes('tasks.resultFiles')) return;
+  const tasks = native.state.tasks as TaskHeader[] | undefined;
+  const task = Array.isArray(tasks) ? tasks.find(row => row?.id === taskId) : undefined;
+  const work = ownerWorkIdentity(task), raw = task?.raw, source = raw?.ownerWork;
+  if (!work?.runId || work.epoch < 1 || task?.status !== 'running' || raw?.status !== 'running' ||
+      raw.kind !== 'assistant' || raw.executionMode !== 'capabilities' || raw.contextAvailable !== true ||
+      raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true || raw.taskProjection === 'source_unavailable' ||
+      raw.origin != null || raw.parentTaskId != null || raw.teamRunId != null || raw.memberId != null || raw.teamAssignment != null ||
+      raw.developmentContext != null || raw.ownerPhoneControl != null || raw.ownerDeviceWork != null ||
+      typeof raw.conversationId !== 'string' || !raw.conversationId || source?.format !== 'pocketworld.owner-work.v1' ||
+      source.workTaskId !== taskId || source.conversationId !== raw.conversationId) return;
+  return task;
+}
+
+function fileNoticeScope(task: TaskHeader | undefined, windowKey: string) {
+  const work = ownerWorkIdentity(task);
+  return work ? JSON.stringify([windowKey, workIdentityKey(work)]) : '';
+}
+
+const nativeUuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+
+/** The original operation reports a committed Book entry, not a fresh file read or a completed Work. */
+function localTextSaveWindow(task: TaskHeader | undefined): { settledHead: number; latest?: SavedFileFact } | undefined {
+  const raw = task?.raw;
+  if (!task || raw?.taskProjection !== 'detail_window' || raw.auditBodyIncluded !== true || raw.taskCoreReadLimited !== false) return;
+  try {
+    const page = taskAuditPage(raw.historyOperationPage, task.id, 'operations');
+    let settledHead = 0;
+    for (const op of page.entries) {
+      if (op.runId !== raw.runId || op.tool !== 'attachments_create_text' || op.state !== 'receipt' || !nativeUuid(op.operationId)) continue;
+      if (!settledHead) settledHead = op.position;
+      const receipt = op.receipt, data = receipt?.data, outcome = op.toolOutcome;
+      if (op.status !== 'available' || op.readLimited === true || op.bodyAvailable === false ||
+          outcome?.format !== 'pocketworld.tool-outcome.v1' || outcome.kind !== 'success' || outcome.completion !== 'terminal' ||
+          receipt?.tool !== op.tool || receipt.hostOperationId !== op.operationId || receipt.status !== 'created' ||
+          receipt.ok !== true || receipt.accepted !== true || receipt.automaticReplayAllowed !== false ||
+          !nativeUuid(data?.id) || typeof data.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(data.sha256)) continue;
+      return { settledHead, latest: { position: op.position, id: data.id, sha256: data.sha256 } };
+    }
+    return { settledHead };
+  } catch { /* No new file cue from an unreadable audit window. */ }
+}
+
+const hasExactCurrentFile = (files: readonly TaskResultFile[] | undefined, notice: SavedFileFact) =>
+  files?.some(file => file.runProvenance === 'current' && file.id === notice.id && file.sha256 === notice.sha256) === true;
 
 export function usableResultFile(value: unknown): value is TaskResultFile {
   if (!value || typeof value !== 'object') return false;
@@ -36,7 +90,9 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
 }) {
   const heading = useId();
   const [page, setPage] = useState<FilePage | null>(null);
-  const [retry, setRetry] = useState(0);
+  const [request, setRequest] = useState<{ retry: number; file?: FileCheck }>({ retry: 0 });
+  const [notices, setNotices] = useState<FileNotices | undefined>(undefined);
+  const attemptedFileCheck = useRef(0);
   const [expandedSources, setExpandedSources] = useState('');
   const windowEpoch = useSyncExternalStore(bridge.subscribe, () => {
     const view = bridge.getState().view as { taskId?: string; section?: string };
@@ -46,18 +102,38 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
     const view = bridge.getState().state.attachmentWorkspace;
     return view?.open === true && view.taskId === taskId;
   });
-  const key = JSON.stringify([taskId, windowEpoch, readIdentity, retry]);
+  const liveWork = useSyncExternalStore(bridge.subscribe, () => runningFileWork(taskId));
+  const fileWindow = JSON.stringify([taskId, windowEpoch, readIdentity]);
+  const noticeScope = active && supported && windowEpoch >= 0 ? fileNoticeScope(liveWork, fileWindow) : '';
+  const saves = useMemo(() => localTextSaveWindow(liveWork), [liveWork]);
+  const key = JSON.stringify([fileWindow, request.retry]);
   const current = page?.key === key ? page : null;
   const busy = active && supported && !current;
+  const checkingFile = request.file?.window === fileWindow ? request.file.notice : undefined;
+  useEffect(() => {
+    setNotices(previous => {
+      if (!noticeScope) return undefined;
+      const inScope = previous?.scope === noticeScope ? previous : undefined;
+      // The first actual audit window is a baseline; do not call pre-existing receipts new.
+      if (!inScope) return saves ? { scope: noticeScope, through: saves.settledHead } : undefined;
+      const latest = saves?.latest;
+      if (latest && latest.position > inScope.through) return {
+        scope: noticeScope, through: latest.position,
+        pending: hasExactCurrentFile(current?.files, latest) ? undefined : { ...latest, scope: noticeScope },
+      };
+      return inScope.pending && hasExactCurrentFile(current?.files, inScope.pending) ? { ...inScope, pending: undefined } : inScope;
+    });
+  }, [noticeScope, saves, current]);
   useEffect(() => {
     if (!active || !supported || windowEpoch < 0 || readingFile) return;
     let alive = true;
     let sequence = 0;
-    const read = () => {
+    const read = (wanted?: FileNotice) => {
       const request = ++sequence;
       const stillOpen = () => {
-        const view = bridge.getState().view as { taskId?: string; section?: string } | undefined;
-        return alive && sequence === request && !document.hidden && bridge.getDocumentEpoch() === windowEpoch && !view?.section && view?.taskId === taskId;
+        const native = bridge.getState(), view = native.view as { taskId?: string; section?: string } | undefined;
+        return alive && sequence === request && !document.hidden && bridge.getDocumentEpoch() === windowEpoch && !view?.section && view?.taskId === taskId &&
+          (!wanted || !native.state.attachmentWorkspace?.open && fileNoticeScope(runningFileWork(taskId), fileWindow) === wanted.scope);
       };
       if (!stillOpen()) return;
       void bridge.command('tasks.resultFiles', { taskId }).then(value => {
@@ -70,25 +146,39 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
         if (!Array.isArray(sources) || sources.length > 4) throw new Error('来源文件尚未核对，请到原工作文件查看。');
         const files: TaskResultFile[] = value.files.filter(usableResultFile);
         const inputs = sources.filter(usableResultFile);
-        setPage({ key, files, sources: inputs, sourceUnavailable: value.sourceUnavailable === true || inputs.length !== sources.length,
+        setPage({ key, files, sources: inputs, checkedFile: wanted, sourceUnavailable: value.sourceUnavailable === true || inputs.length !== sources.length,
           hasRequestAttachments: value.hasRequestAttachments === true,
           limited: value.readLimited || files.length !== value.files.length || value.moreSourceFiles === true });
       }).catch(error => {
         if (stillOpen()) setPage({ key, files: [], sources: [], limited: false, error: error instanceof Error ? error.message : '无法读取这件工作的文件。' });
       });
     };
-    read();
-    document.addEventListener('visibilitychange', read);
+    // A refresh for this notice belongs to its click, not ordinary reader/foreground refreshes.
+    const wanted = attemptedFileCheck.current !== request.retry ? checkingFile : undefined;
+    if (wanted) attemptedFileCheck.current = request.retry;
+    read(wanted);
+    const visible = () => read();
+    document.addEventListener('visibilitychange', visible);
     return () => {
       alive = false;
-      document.removeEventListener('visibilitychange', read);
+      document.removeEventListener('visibilitychange', visible);
     };
-  }, [active, supported, key, taskId, windowEpoch, readingFile]);
+  }, [active, supported, key, taskId, windowEpoch, readingFile, checkingFile, fileWindow, request.retry]);
 
   if (windowEpoch < 0) return null;
   const outputs = current?.files ?? [], sources = current?.sources ?? [];
   const hasSources = !!(sources.length || current?.sourceUnavailable || current?.hasRequestAttachments);
-  if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error) return null;
+  const notice = notices?.scope === noticeScope ? notices.pending : undefined;
+  const pendingFile = notice && !hasExactCurrentFile(current?.files, notice) ? notice : undefined;
+  const fileCue = !readingFile && pendingFile && (current || checkingFile === pendingFile) ? <div className="pw-action-row">
+    <Button variant="ghost" disabled={busy} onClick={() => {
+      if (document.hidden || bridge.getDocumentEpoch() !== windowEpoch || bridge.getState().state.attachmentWorkspace?.open ||
+          fileNoticeScope(runningFileWork(taskId), fileWindow) !== pendingFile.scope) return;
+      setRequest(value => ({ retry: value.retry + 1, file: { window: fileWindow, notice: pendingFile } }));
+    }}>{busy ? '正在核对新文件…' : '有新文件，查看'}</Button>
+    {current?.checkedFile === pendingFile && <p className="pw-reading-note" role="status">这份原文件暂未在当前清单里核对到。</p>}
+  </div> : null;
+  if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error) return fileCue;
   const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
       const format = attachmentFileFormat(file.mimeType,file.name).label;
       const savedTransfer = file.sourceRunEvidence === 'original_ssh_file_download' && file.runProvenance === 'current' && file.mimeType === 'application/octet-stream';
@@ -108,16 +198,17 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   </>;
   return <section className="pw-outcome-deliverables" aria-labelledby={heading} aria-busy={busy || undefined}>
     <div className="pw-reading-section-heading"><h4 id={heading}>{outputs.length ? '已保存的文件成果' : hasSources ? '来源文件' : '工作文件'}</h4></div>
-    {busy && <p className="pw-reading-note" role="status">正在读取工作文件…</p>}
+    {busy && !fileCue && <p className="pw-reading-note" role="status">正在读取工作文件…</p>}
     {current?.error && <p className="pw-reading-note pw-error" role="alert">{current.error}</p>}
     {outputs.length > 0 && fileList(outputs, false)}
+    {fileCue}
     {hasSources && (outputs.length ? <Accordion variant="divided" className="pw-reading-disclosures"
       expandedKeys={expandedSources === taskId ? ['source-files'] : []} onExpandedChange={keys => setExpandedSources(keys.has('source-files') ? taskId : '')}>
       <AccordionItem id="source-files" title="来源文件">{sourceContent}</AccordionItem></Accordion> : sourceContent)}
     {current?.limited && <p className="pw-reading-note" role="status">文件清单未列全。</p>}
     {(!supported || current?.limited || current?.error || current?.sourceUnavailable) && <div className="pw-action-row">
       <Button variant="ghost" disabled={!active} onClick={onBrowse}>查看原工作文件</Button>
-      {current?.error && <Button variant="ghost" disabled={!active} onClick={() => setRetry(value => value + 1)}>重新读取</Button>}
+      {current?.error && !fileCue && <Button variant="ghost" disabled={!active} onClick={() => setRequest(value => ({ retry: value.retry + 1 }))}>重新读取</Button>}
     </div>}
   </section>;
 }

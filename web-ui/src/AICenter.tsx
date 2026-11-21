@@ -22,6 +22,7 @@ type Props = {
   state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: Back;
   returnToOrigin?: { label: string; go: () => void };
   onReturnOriginalInput?: (choice: AIChoice) => Promise<boolean>;
+  onReturnOriginalPhoneInput?: (choice: AIChoice) => Promise<boolean>;
   initialView?: 'main' | 'proxy'; onHostSectionChange: (section: 'models' | 'accounts' | 'proxy') => void;
   renderEditor: (connection: Data | undefined, preset: AIServicePreset | undefined, onClose: () => void, onSaved: (value: Data) => void, registerBack: Back, field?: AIEditorField) => ReactNode;
   renderAccounts: (accountId: string | undefined, adding: boolean, registerBack: Back, onModelChoice: (choice: AIChoice) => void) => ReactNode;
@@ -38,13 +39,14 @@ const presets: AIServicePreset[] = [
 
 const factLabels: Record<string, string> = { CONTEXT_WINDOW: '上下文容量', OUTPUT_TOKENS: '目录输出上限', IMAGE_INPUT: '图片输入', TOOL_CALLS: '工具调用' };
 /** Product composition of the native connection, account and catalog owners. */
-export function AICenter({ state, data, supported, run, registerTransientBack, initialView = 'main', returnToOrigin, onReturnOriginalInput, onHostSectionChange, renderEditor, renderAccounts, renderTools, renderProxy }: Props) {
+export function AICenter({ state, data, supported, run, registerTransientBack, initialView = 'main', returnToOrigin, onReturnOriginalInput, onReturnOriginalPhoneInput, onHostSectionChange, renderEditor, renderAccounts, renderTools, renderProxy }: Props) {
   const [tab, setTab] = useState('services'), [view, setView] = useState<View>({ kind: initialView });
   const [modelPresentation, setModelPresentation] = useState<AIModelPickerPresentation>({ query: '', filter: 'all' });
   const [accountSnapshot, setAccountSnapshot] = useState<Data>({}), [localSnapshot, setLocalSnapshot] = useState<Data | null>(null);
   const [accountsLoading, setAccountsLoading] = useState(false), [accountReadRevision, setAccountReadRevision] = useState<number | null>(null), [accountsError, setAccountsError] = useState('');
   const [showManagement, setShowManagement] = useState(false);
   const [completion, setCompletion] = useState<AIChoice | null>(null), pickerChoice = useRef<AIChoice | null>(null);
+  const [unmatchedPhoneChoice, setUnmatchedPhoneChoice] = useState<AIChoice | null>(null);
   const [catalog, setCatalog] = useState<Data | null>(null), [query, setQuery] = useState('');
   const [modelReview, setModelReview] = useState<Data | null>(null), [selectionUnknown, setSelectionUnknown] = useState(false);
   const [reviewOutput, setReviewOutput] = useState(''), [reviewImageReserve, setReviewImageReserve] = useState('0');
@@ -134,14 +136,20 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
     if (returnToOrigin || choice.accountOnly) setCompletion(choice);
     else setNotice(`已选择 ${choice.source} 的 ${choice.model} 作为默认模型。`);
   };
+  const phoneReturn = !onReturnOriginalInput && completion?.target?.kind === 'api' && !completion.accountOnly &&
+    unmatchedPhoneChoice !== completion ? onReturnOriginalPhoneInput : undefined;
+  const returnInput = onReturnOriginalInput || phoneReturn;
   const returnOriginalInput = async () => {
-    if (!completion || !onReturnOriginalInput || pending.current || pickerPending.current) return;
+    if (!completion || !returnInput || pending.current || pickerPending.current) return;
     const ticket = generation.current;
     pending.current = true; setBusy(true); setError('');
     try {
-      if (!await onReturnOriginalInput(completion)) throw new Error('原输入窗口已变化，未打开另一份草稿。');
+      if (!await returnInput(completion)) throw new Error(phoneReturn ? '还没核对到同一原目标与模型。可以按原路径返回，没有提交任务。' : '原输入窗口已变化，未打开另一份草稿。');
     } catch (failure) {
-      if (alive.current && ticket === generation.current) setError(failure instanceof Error ? failure.message : '原输入尚未核对，草稿仍保留。');
+      if (alive.current && ticket === generation.current) {
+        if (phoneReturn) setUnmatchedPhoneChoice(completion);
+        setError(failure instanceof Error ? failure.message : '原输入尚未核对，草稿仍保留。');
+      }
     } finally {
       if (ticket === generation.current) { pending.current = false; if (alive.current) setBusy(false); }
     }
@@ -316,17 +324,20 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   }, [completion]);
   if (completion) return <section className="pw-ai-center" data-ai-view="selected" ref={root}>
     <div className="pw-ai-finish" aria-labelledby="pw-ai-finish-title" aria-busy={busy}><IconModel aria-hidden size={26}/>
-      <h2 id="pw-ai-finish-title" data-ai-outcome tabIndex={-1}>{completion.accountOnly ? '账号模型已记录，还不能用于管家' : onReturnOriginalInput ? '模型选择已保存' : '默认模型已选好'}</h2>
+      <h2 id="pw-ai-finish-title" data-ai-outcome tabIndex={-1}>{completion.accountOnly ? '账号模型已记录，还不能用于管家' : returnInput ? '模型选择已保存' : '默认模型已选好'}</h2>
       <p className="pw-ai-finish-choice"><strong>{completion.model}</strong><span>{completion.source}</span></p>
       <p>{completion.accountOnly ? '当前版本没有接通账号推理。原默认模型没有被替换，可以改用已接入的 API 服务。'
+        : phoneReturn ? '返回时只核对本机保存的模型。不测试连接，也不会启动手机任务。'
         : onReturnOriginalInput ? '返回前核对这份输入是否跟随所选模型。有单独选择的对话不会被改动。'
         : '新工作会沿用这项默认选择；有单独模型设置的对话不变。这里没有发送测试消息。'}</p>
       {error && <p className="pw-field-error" role="alert">{error}</p>}
       <div className="pw-ai-detail-actions">
         {completion.accountOnly && <Button disabled={busy} onClick={chooseOtherSource}>选择其他服务</Button>}
-        {onReturnOriginalInput ? <Button variant={completion.accountOnly ? 'secondary' : 'primary'} disabled={busy} onClick={() => void returnOriginalInput()}>
-          {busy ? '正在核对原输入…' : completion.accountOnly ? '返回原输入' : '核对并返回原输入'}
-        </Button> : returnToOrigin && <Button variant={completion.accountOnly ? 'secondary' : 'primary'} onClick={returnToOrigin.go}>{returnToOrigin.label}</Button>}
+        {returnInput && <Button variant={completion.accountOnly ? 'secondary' : 'primary'} disabled={busy} onClick={() => void returnOriginalInput()}>
+          {phoneReturn ? (busy ? '正在核对原目标…' : '核对模型并返回原手机目标') : busy ? '正在核对原输入…' : completion.accountOnly ? '返回原输入' : '核对并返回原输入'}
+        </Button>}
+        {(!returnInput || phoneReturn) && returnToOrigin && <Button variant={phoneReturn || completion.accountOnly ? 'secondary' : 'primary'}
+          disabled={!!phoneReturn && busy} onClick={returnToOrigin.go}>{returnToOrigin.label}</Button>}
         {!completion.accountOnly && <Button variant="ghost" disabled={busy} onClick={() => setCompletion(null)}>继续管理模型</Button>}
       </div>
     </div>

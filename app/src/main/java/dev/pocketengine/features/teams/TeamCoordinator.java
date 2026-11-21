@@ -1363,8 +1363,21 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
                 summaryRevision=run.scheduleRevision;capturedSummary=summaryRevision;
                 results=JsonFiles.copy(run.json).getJSONArray("members");
             }
-            boolean any=false;for(int i=0;i<results.length();i++)if(results.getJSONObject(i).optString("status").equals("completed"))any=true;
-            if(!any){synchronized(this){passSummary(run,generation,owner,summaryRevision);run.json.put("status","failed").put("phase","failed").put("summary","成员未取得可汇总的真实结果，请检查各成员错误与执行端状态");save(run);}return;}
+            boolean any=false,phoneOutputNotReturned=false;
+            for(int i=0;i<results.length();i++){
+                String status=results.getJSONObject(i).optString("status");
+                any|="completed".equals(status);
+                phoneOutputNotReturned|=TeamWorkPlan.PHONE_OUTPUT_NOT_RETURNED.equals(status);
+            }
+            if(!any){synchronized(this){
+                passSummary(run,generation,owner,summaryRevision);
+                String status=phoneOutputNotReturned?"partial":"failed";
+                run.json.put("status",status).put("phase",status).put("summary",phoneOutputNotReturned
+                        ?"原配对手机的执行已结束；当前没有取得可供汇总的成员成果。"
+                        :"成员未取得可汇总的真实结果，请检查各成员错误与执行端状态");
+                if(phoneOutputNotReturned)run.json.remove("summaryProducer");
+                save(run);
+            }return;}
             if(run.json.optString("mode").equals("produce")){synchronized(this){passSummary(run,generation,owner,summaryRevision);String observed=TeamIntegrationDeliveryNote.savedForCurrentPlan(run.json);run.json.put("status","awaiting_review").put("phase","review").put("summary",observed.isEmpty()?TeamIntegrationDeliveryNote.AWAITING:observed).put("summaryStale",false);activity(run,"awaiting_review","实际文件成果等待主人审查",null);save(run);}return;}
             synchronized(this){passSummary(run,generation,owner,summaryRevision);if(TeamEvidenceDiscussion.enabled(run.json)&&!TeamEvidenceDiscussion.ready(run.json,4)){incompleteDiscussion(run,"原作者回应尚未完整或已变版，不能把读完文件/消息当作讨论完成");return;}}
             ModelConfig config=run.config;JSONObject leader=member(run,run.json.getString("leaderId"));boolean modelLeader=leader.optString("runner","model").equals("model")&&leader.optString("status").equals("completed");if(modelLeader&&run.json.optBoolean("leaderUsesMemberModel"))config=selected(run,leader);
@@ -1645,7 +1658,15 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
                 message(turn.run,call.memberId,turn.round,"system","phone_receipt","原手机任务与结果已保留；本次补充或依赖尚未提交，也未消费。请打开原手机任务核对后重新确认后续工作，不会重放旧手机操作。",null);
                 consumeFeedback(turn,false);save(turn.run);return null;
             }
-            String status=result.optString("status");if(!status.equals("completed")){state.put("status",status);member.put("status",status);message(turn.run,call.memberId,turn.round,"system","phone_receipt",result.optString("summary","原手机任务尚未完成，请核对原记录"),null);consumeFeedback(turn,false);save(turn.run);return null;}}
+            String status=result.optString("status");if(!status.equals("completed")){
+                state.put("status",status);member.put("status",status);
+                if(TeamWorkPlan.PHONE_OUTPUT_NOT_RETURNED.equals(status)){
+                    // A settled execution without a delivered answer is not its assistant turn.
+                    state.put("text","").put("finishedAt",System.currentTimeMillis());
+                    member.put("text","");
+                }
+                message(turn.run,call.memberId,turn.round,"system","phone_receipt",result.optString("summary","原手机任务尚未完成，请核对原记录"),null);consumeFeedback(turn,false);save(turn.run);return null;
+            }}
         return result.optString("summary","原手机任务已结束；请核对原动作与结果回执");
     }
     private String researchChild(Turn turn,JSONObject slot,JSONArray messages,ModelConfig captured,ResearchSources sources)throws Exception {
@@ -2009,7 +2030,14 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         return out;
     }
     private static JSONArray dependencyOutputs(Run run,JSONObject member,int round)throws Exception {JSONArray out=new JSONArray(),dependencies=member.getJSONArray("dependsOn");for(int i=0;i<dependencies.length();i++){JSONObject source=TeamWorkPlan.find(roster(run),dependencies.getString(i)),state=TeamWorkPlan.state(source,round);if(!state.optString("status").equals("completed"))throw new IllegalStateException("前置分工尚未真正完成");out.put(output(source,state));}return out;}
-    private static JSONObject output(JSONObject member,JSONObject state)throws Exception {String text=state.optString("text");JSONObject result=TeamOutputText.preview(text,state.optString("turnId"),8000).put("memberId",member.getString("id")).put("round",state.getInt("round")).put("generation",state.optInt("generation")).put("turnId",state.optString("turnId")).put("status",state.optString("status"));JSONArray refs=state.optJSONArray("artifacts"),artifacts=new JSONArray();for(int i=0;refs!=null&&i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);artifacts.put(new JSONObject().put("artifactId",ref.getString("artifactId")).put("path",ref.getString("path")).put("sha256",ref.getString("sha256")));}if(refs!=null)result.put("artifacts",artifacts);return result;}
+    private static JSONObject output(JSONObject member,JSONObject state)throws Exception {
+        String status=state.optString("status"),turn=state.optString("turnId");
+        boolean noDelivery=TeamWorkPlan.PHONE_OUTPUT_NOT_RETURNED.equals(status);
+        JSONObject result=(noDelivery?new JSONObject():TeamOutputText.preview(state.optString("text"),turn,8000))
+                .put("memberId",member.getString("id")).put("round",state.getInt("round")).put("generation",state.optInt("generation")).put("turnId",turn).put("status",status);
+        if(noDelivery)return result; // The report sees the delivery state, not receipt text, a pseudo-answer or an artifact.
+        JSONArray refs=state.optJSONArray("artifacts"),artifacts=new JSONArray();for(int i=0;refs!=null&&i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);artifacts.put(new JSONObject().put("artifactId",ref.getString("artifactId")).put("path",ref.getString("path")).put("sha256",ref.getString("sha256")));}if(refs!=null)result.put("artifacts",artifacts);return result;
+    }
     private static JSONObject safeEvidence(JSONObject source,ModelConfig config,int depth)throws Exception{
         if(depth>6)throw new IllegalArgumentException("证据结构过深");JSONObject safe=new JSONObject();java.util.Iterator<String> keys=source.keys();int count=0;
         while(keys.hasNext()&&count++<40){String key=keys.next();if(key.matches("(?i)apiKey|authorization|token|secret|imageBase64|imageDataUrl"))continue;safe.put(key,safeEvidenceValue(source.get(key),config,depth+1));}if(keys.hasNext())safe.put("_truncated",true);return safe;
@@ -2112,7 +2140,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     }
     private void resetFrom(Run run,JSONObject member,int from)throws Exception{if(TeamEvidenceDiscussion.enabled(run.json))TeamEvidenceDiscussion.markIncomplete(run.json,"主人改变原讨论输入；旧结论仅留历史，等待当前阶段完成");for(int r=from;r<=plannedRounds(run);r++){JSONObject state=progress(member,r);if(researchEnabled(run)&&state.has("researchTaskId")){JSONArray retired=state.optJSONArray("researchHistory");if(retired==null)retired=new JSONArray();if(retired.length()>=32)throw new IllegalStateException("此阶段已保留32个研究版本，不删除旧来源或复用旧检查点");JSONObject old=new JSONObject().put("taskId",state.getString("researchTaskId")).put("retiredAt",System.currentTimeMillis()).put("reason","native_input_revision");if(state.has("researchTask"))old.put("result",state.get("researchTask"));retired.put(old);state.put("researchHistory",retired).remove("researchTaskId");state.remove("researchTask");}if(state.optBoolean("externalSettled")&&state.has("externalOperationId")){state.put("previousExternalOperationId",state.getString("externalOperationId")).remove("externalOperationId");}state.put("status","queued");}}
     private static int unfinishedRound(Run run,JSONObject member)throws Exception{for(int r=1;r<=plannedRounds(run);r++)if(!done(progress(member,r).optString("status")))return r;return -1;}
-    private static boolean done(String status){return status.matches("completed|failed|unsupported|blocked_dependency|exited");}
+    private static boolean done(String status){return "completed".equals(status)||TeamWorkPlan.failed(status);}
     private static int plannedRounds(Run run){return TeamEvidenceDiscussion.stages(run.json);}
     private static int activeMemberCount(Run run)throws Exception{int count=0;for(int i=0;i<roster(run).length();i++)if(!roster(run).getJSONObject(i).optBoolean("exited"))count++;return count;}
     private static JSONArray roster(Run run){JSONArray value=run.json.optJSONArray("members");return value==null?new JSONArray():value;}

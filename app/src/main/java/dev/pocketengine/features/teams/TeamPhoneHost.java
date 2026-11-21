@@ -23,6 +23,7 @@ import org.json.JSONObject;
 /** Native owner review and adapter for explicit phone work. The existing Coordinator, TaskStore,
  * PhoneRunService and paired-device route remain the only scheduler, ledger and executors. */
 public final class TeamPhoneHost implements TeamCoordinator.PhoneFactory {
+    private static final String PAIRED_COMPLETION_NOTE="原配对手机的执行已结束，本设备未取得结果正文。";
     @FunctionalInterface public interface Definition { JSONObject read(String id)throws Exception; }
     private final EngineApplication app;
     private final TaskStore tasks;
@@ -147,7 +148,10 @@ public final class TeamPhoneHost implements TeamCoordinator.PhoneFactory {
     @Override public JSONObject execute(TeamCoordinator.PhoneCall call,RunControl original,Consumer<JSONObject> progress)throws Exception {
         call.checkCurrent();Binding binding=call.approval().requireMember(call.memberId);call.approval().requireRun(call.teamRunId);
         JSONObject task=tasks.deviceTasks().prepareTeamPhone(call,binding,original);String id=task.getString("id");
-        if(!task.optString("runId").isEmpty())return receipt(task).put("queryOnly",true).put("goalMatches",call.goal().equals(task.optString("goal"))).put("summary",task.optString("summary","此原手机分工已有执行，只核对原任务，不创建第二次运行"));
+        if(!task.optString("runId").isEmpty()){
+            JSONObject retained=receipt(task).put("queryOnly",true).put("goalMatches",call.goal().equals(task.optString("goal")));
+            return binding.remote()?retained:retained.put("summary",task.optString("summary","此原手机分工已有执行，只核对原任务，不创建第二次运行"));
+        }
         if(binding.remote())try(var window=devices.taskScopeHost().open(id)){
             var choice=new NativeDeviceTaskScopeHost.RouteChoice(binding.option.id,binding.tools,binding.models,binding.expires,binding.tools,binding.models,List.of(),NativeDeviceTaskScopeHost.ContextChoice.GOAL_ONLY);
             window.confirm(window.review(new NativeDeviceTaskScopeHost.Selection(List.of(choice))));
@@ -179,10 +183,35 @@ public final class TeamPhoneHost implements TeamCoordinator.PhoneFactory {
             for(int i=0;i<30;i++){
                 original.sleep(10000);String queryOperation=journal.beginOperation("device_operation_get",query);result=port.execute("device_operation_get",new JSONObject(query.toString()).put("_hostOperationId",queryOperation),original);journal.finishOperation(queryOperation,result);
                 JSONObject typed=result.optJSONObject("deviceReceipt"),payload=typed==null?null:typed.optJSONObject("payload");progress.accept(receipt(tasks.get(admission.task,false)).put("deviceReceipt",result));
-                if(payload!=null&&payload.optBoolean("terminal")&&payload.optBoolean("stopped")){String status="succeeded".equals(typed.optString("status"))?"completed":typed.optString("status").equals("cancelled")?"cancelled":"failed";tasks.endAttempt(admission.task,run.runId(),status,payload.optString("summary",payload.optString("message","已核对目标手机原任务终态")),result);return receipt(tasks.get(admission.task,false)).put("deviceReceipt",result);}
+                if(payload!=null&&payload.optBoolean("terminal")&&payload.optBoolean("stopped")){
+                    String status="succeeded".equals(typed.optString("status"))?"completed":typed.optString("status").equals("cancelled")?"cancelled":"failed";
+                    // operation.get proves execution settlement, not a reviewed member answer.
+                    String note="completed".equals(status)?PAIRED_COMPLETION_NOTE:payload.optString("summary",payload.optString("message","已核对目标手机原任务终态"));
+                    tasks.endAttempt(admission.task,run.runId(),status,note,result);
+                    return receipt(tasks.get(admission.task,false)).put("deviceReceipt",result);
+                }
             }
             original.cancel();tasks.status(admission.task,"reconciling","本次原设备查询额度已用尽，已请求停止原子任务；回执未确认时只查原任务，不换 ID 重发");return receipt(tasks.get(admission.task,false)).put("queryOnly",true).put("deviceReceipt",result);
         }
     }
-    private static JSONObject receipt(JSONObject task)throws Exception{return new JSONObject().put("taskId",task.getString("id")).put("runId",task.optString("runId")).put("executorEpoch",task.optInt("coordinatorEpoch")).put("status",task.optString("status")).put("summary",task.optString("summary")).put("supportedControls",new JSONObject().put("pause",!"paired_android".equals(task.optJSONObject("teamPhoneScope")==null?"":task.getJSONObject("teamPhoneScope").getJSONObject("device").optString("kind"))).put("cancel",true).put("queryOriginal",true)).put("businessVerified",false);}
+    private static JSONObject receipt(JSONObject task)throws Exception{
+        JSONObject scope=task.optJSONObject("teamPhoneScope"),device=scope==null?null:scope.optJSONObject("device");
+        boolean paired=device!=null&&"paired_android".equals(device.opt("kind"));
+        JSONObject result=new JSONObject().put("taskId",task.getString("id")).put("runId",task.optString("runId")).put("executorEpoch",task.optInt("coordinatorEpoch")).put("status",task.optString("status")).put("summary",task.optString("summary")).put("supportedControls",new JSONObject().put("pause",!paired).put("cancel",true).put("queryOriginal",true)).put("businessVerified",false);
+        if(paired&&"completed".equals(task.opt("status"))){
+            JSONObject evidence=task.optJSONObject("evidence"),typed=evidence==null?null:evidence.optJSONObject("deviceReceipt");
+            JSONObject payload=typed==null?null:typed.optJSONObject("payload"),audience=typed==null?null:typed.optJSONObject("audience");
+            String operation=task.optString("teamPhoneDeviceOperation"),run=task.optString("runId");
+            // Only the retained same-operation receipt from the existing authenticated query can prove closure.
+            boolean closed=payload!=null&&audience!=null&&!operation.isEmpty()&&!run.isEmpty()&&
+                    "OperationReceipt".equals(typed.opt("messageType"))&&operation.equals(typed.opt("operationId"))&&
+                    "succeeded".equals(typed.opt("status"))&&Boolean.TRUE.equals(typed.opt("accepted"))&&
+                    device.optString("targetDeviceId").equals(typed.opt("executorDeviceId"))&&
+                    run.equals(audience.opt("requestRunId"))&&task.optInt("coordinatorEpoch")==audience.optInt("requestExecutorEpoch",-1)&&
+                    Boolean.TRUE.equals(payload.opt("terminal"))&&Boolean.TRUE.equals(payload.opt("stopped"));
+            result.put("status",closed?TeamWorkPlan.PHONE_OUTPUT_NOT_RETURNED:"reconciling")
+                    .put("summary",closed?PAIRED_COMPLETION_NOTE:"原配对手机的执行终态还不能核对，本设备未取得结果正文。");
+        }
+        return result;
+    }
 }

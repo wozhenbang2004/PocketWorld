@@ -1,6 +1,6 @@
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
 import type { OwnerWorkTeam } from './owner-work-presentation';
-import { teamGoalTitle, teamStatusLabel } from './team-presentation';
+import { PHONE_OUTPUT_NOT_RETURNED, teamGoalTitle, teamStatusLabel } from './team-presentation';
 
 type Data = Record<string, any>;
 const rows = (value: unknown): Data[] => Array.isArray(value) ? value : [];
@@ -184,7 +184,7 @@ export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollo
     locator.memberId === member.id && locator.memberGeneration === member.generation);
   const state = (row: Data, matches: (locator: TeamAttentionLocator) => boolean) => {
     const saved = text(row.status) || 'unknown';
-    if (['completed','cancelled','paused','interrupted','failed','exited'].includes(saved)) return saved;
+    if (['completed','cancelled','paused','interrupted','failed','exited',PHONE_OUTPUT_NOT_RETURNED].includes(saved)) return saved;
     if (member.exited || run.status === 'cancelled') return ['unsupported','blocked_dependency'].includes(saved) ? saved : 'unknown'; // Never present a stale live state as still executing.
     // A native question or approval can arrive while the coordinator still says "running".
     const same = pending.filter(item => matches(item.locator));

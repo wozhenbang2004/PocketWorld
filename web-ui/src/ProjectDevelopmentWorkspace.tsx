@@ -1041,7 +1041,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const versionWorkAtTop = buildStepVisible && !directWorkAtTop && !!versionBuild && source?.existingNodeBuild===true && can('tasks.open');
   const acceptedWorkAtTop = buildStepVisible && !directWorkAtTop && !versionBuild && !!acceptedBuild && can('tasks.open');
   const showMissingLock = buildStepVisible && !directWorkAtTop && !!missingRequiredLock && !versionWorkAtTop && !acceptedWorkAtTop;
-  const exactBuildNext = !!(firstBuildAction || directWorkAtTop || versionWorkAtTop || acceptedWorkAtTop || showMissingLock);
+  const reactLock=ordinaryBuildSource&&source?.existingNodeBuild===true&&!source.directBuildKind?
+    source.directReactTypeScriptLockNotice:null;
+  const showReactLock=buildStepVisible&&nativeDirectBuild&&!directWorkAtTop&&!versionWorkAtTop&&!acceptedWorkAtTop&&!showMissingLock&&
+    reactLock?.verifiedVersion==='6.0.3'&&typeof reactLock.lockedVersion==='string'&&/^7[.](?:0|[1-9][0-9]{0,3})[.](?:0|[1-9][0-9]{0,3})$/.test(reactLock.lockedVersion);
+  const exactBuildNext = !!(firstBuildAction || directWorkAtTop || versionWorkAtTop || acceptedWorkAtTop || showMissingLock || showReactLock);
   // Recognizing Python and its tools only brings the existing scope review closer.
   // The terminal's native review still reads the current copy and execution conditions.
   const savedScriptTooling=source?.checkoutTooling, terminalRuntime=view?.runtime;
@@ -1352,7 +1356,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         <p className="pw-field-hint" role="status">这份源码声明了要用的依赖，但副本根目录没有 <bdi>{missingRequiredLock}</bdi>。先补齐同版本的锁文件，再核对构建；不会自动生成锁或安装依赖。</p>
         {can('projects.development.files.open')&&<div className="pw-form-actions"><Button ref={buildNextAction} disabled={disabled}
           onClick={openSelectedCopyFiles}>打开这份副本的文件</Button></div>}
-      </>:nodeTools&&firstBuildAction&&<>
+      </>:showReactLock?<p className="pw-field-hint" role="status">
+        这份锁使用 TypeScript <bdi>{reactLock.lockedVersion}</bdi>。此处的本机网页构建目前只支持锁定到 TypeScript <bdi>{reactLock.verifiedVersion}</bdi> 的标准 React TypeScript 项目。
+        你仍可编辑这份副本。没有改锁、准备依赖或构建。
+      </p>:nodeTools&&firstBuildAction&&<>
         <p className="pw-field-hint" role="status">{buildToolsBlocked?
           <>{nodeTools.missing.length?`尚未核对到 ${nodeTools.missing.map(tool=>tool==='node'?'Node.js':tool).join('、')}。`:'开发环境尚未核对为可运行。'}
             {missingPnpm?' 内置准备提供 Node.js 和 npm，不会用 npm 替代 pnpm。':

@@ -98,6 +98,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         const val RESTORE_PLAN_WORK = "restorePlanWork"
         const val CURRENT_FAILED_AGGREGATE_SOURCE = "currentFailedAggregateSource"
         const val CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE = "currentCompletedTemporaryAnswersSource"
+        const val CURRENT_FIRST_LOCAL_FROZEN_REVIEW_SOURCE = "currentFirstLocalFrozenReviewSource"
         const val REVIEW_INDEPENDENT_FILES = "teams.reviewIndependentFiles"
         const val START_INDEPENDENT_FILES = "teams.startIndependentFiles"
         val COMMANDS = setOf("teams.openWorkFileDecision", "teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
@@ -341,6 +342,29 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             value.opt("researchExecutionFormat") == TeamCoordinator.RESEARCH_FORMAT &&
             TeamCoordinator.ordinaryLocalReportRoster(value.optJSONArray("members"))
 
+    // The current native read owns the record. This is only a pointer to the existing Results tab.
+    private fun firstLocalFrozenReview(source: JSONObject): Boolean {
+        if (source.opt("mode") != "produce" || source.opt("status") != "awaiting_review" || source.opt("phase") != "review") return false
+        val plan = source.optJSONObject("workPlan") ?: return false
+        val scope = source.optJSONObject("productionScope") ?: return false
+        val planId = plan.optString("planId")
+        if (plan.opt("format") != TeamWorkItems.FORMAT || plan.opt("state") != "active" ||
+            plan.opt("teamRunId") != source.opt("id") || plan.optInt("revision", -1) != 1 || plan.has("lastRevisionRequestId") ||
+            plan.optJSONObject("decision")?.opt("origin") != "native_owner_approved_parent_proposal" ||
+            planId.isBlank() || scope.opt("parentPlanRef") != planId || plan.opt("parentPlanRef") != planId ||
+            plan.optString("targetProjectId").isBlank() || scope.opt("targetProjectId") != plan.opt("targetProjectId") ||
+            scope.has("projectSelection")) return false
+        val slots = scope.optJSONArray("assignments") ?: return false
+        val items = plan.optJSONArray("items") ?: return false
+        return items.length() in 1..8 && slots.length() == items.length() && (0 until items.length()).all { index ->
+            val item = items.optJSONObject(index) ?: return@all false
+            val slot = slots.optJSONObject(index) ?: return@all false
+            !slot.has("remoteSelection") && !slot.has("projectSelection") &&
+                slot.opt("workItemId") == item.opt("workItemId") && slot.opt("memberId") == item.opt("memberId") &&
+                item.opt("status") == "completed" && (item.optJSONArray("artifacts")?.length() ?: 0) > 0
+        }
+    }
+
     private fun view(kind: String, value: JSONObject, answerRoutes: JSONArray? = null, currentSource: Boolean = false): JSONObject {
         while (readings.size >= 24) readings.remove(readings.keys.first())?.retire()
         val handle = UUID.randomUUID().toString()
@@ -537,7 +561,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     if (command == "answerAssignment") receipt.put("runId", input.getString("runId")).put("memberId", input.getString("memberId"))
                     if (command in setOf("get", "pause", "resume", "feedback", "continueMessages", "cancel", "sendMessage", "configureMember")) {
                         check(result.optString("id") == input.getString("runId")) { "原团队运行身份不匹配" }
-                        receipt.put("reading", view("run", result, observations, currentSource))
+                        val reading = view("run", result, observations, currentSource)
+                        if (action == "teams.readRun" && currentSource && firstLocalFrozenReview(result) &&
+                            reading.optJSONArray("attention")?.length() == 0 && reading.optJSONArray("revisionOffers")?.length() == 0)
+                            reading.put(CURRENT_FIRST_LOCAL_FROZEN_REVIEW_SOURCE, true)
+                        receipt.put("reading", reading)
                         if (attention != null) receipt.put("focus", attentionFocus(result, attention))
                     }
                     if (command == "start") {

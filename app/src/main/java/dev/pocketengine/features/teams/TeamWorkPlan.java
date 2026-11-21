@@ -9,6 +9,7 @@ import org.json.JSONObject;
 
 /** Owner-authored ordering within the existing bounded team run, never a product task queue. */
 public final class TeamWorkPlan {
+    static final String PHONE_OUTPUT_NOT_RETURNED="phone_output_not_returned";
     private TeamWorkPlan(){}
     static void validate(JSONArray members)throws Exception {
         Map<String,JSONObject> slots=new HashMap<>();for(int i=0;i<members.length();i++){JSONObject slot=members.getJSONObject(i);if(slots.put(slot.getString("id"),slot)!=null)throw new IllegalArgumentException("成员ID重复");}
@@ -39,6 +40,7 @@ public final class TeamWorkPlan {
         if(round>1&&failed(state(member,round-1).optString("status")))return true;
         JSONArray dependencies=member.getJSONArray("dependsOn");for(int i=0;i<dependencies.length();i++)if(failed(state(find(members,dependencies.getString(i)),round).optString("status")))return true;return false;
     }
-    static boolean failed(String status){return status.matches("failed|unsupported|blocked_dependency|exited");}
+    // A closed phone execution without a returned answer cannot satisfy an output dependency.
+    static boolean failed(String status){return status.matches("failed|unsupported|blocked_dependency|exited")||PHONE_OUTPUT_NOT_RETURNED.equals(status);}
     public static JSONObject find(JSONArray members,String id)throws Exception {for(int i=0;i<members.length();i++)if(id.equals(members.getJSONObject(i).getString("id")))return members.getJSONObject(i);throw new IllegalArgumentException("团队成员不存在");}
 }

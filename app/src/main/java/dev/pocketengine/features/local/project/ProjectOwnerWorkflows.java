@@ -87,8 +87,13 @@ public final class ProjectOwnerWorkflows {
                     catch(Exception unavailable){source.put("existingNodeBuildUnavailable",true);}
                     try{source.putOpt("directNodeBuildWork",tasks.directNodeWorkForSource(project,checkout,source.getString("sourceDigest")));}
                     catch(Exception unavailable){source.put("directNodeBuildWorkUnavailable",true);}
-                    try{if(OriginalNodeWebOutput.directViteSource(snapshot)!=null)source.put("directBuildKind","vite");}
-                    catch(Exception unavailable){/* Source shape is optional, not build authority. */}
+                    try{
+                        var inspected=OriginalNodeWebOutput.inspectDirectViteSource(snapshot);
+                        if(inspected!=null){
+                            if(inspected.supported()!=null)source.put("directBuildKind","vite");
+                            else source.putOpt("directReactTypeScriptLockNotice",inspected.lockNotice());
+                        }
+                    }catch(Exception unavailable){/* Source shape is optional, not build authority. */}
                     try{source.putOpt("directViteBuildWork",tasks.directViteWorkForSource(project,checkout,source.getString("sourceDigest")));}
                     catch(Exception unavailable){source.put("directViteBuildWorkUnavailable",true);}
                 }else if(!state.state().isEmpty())source.put("existingNodeBuildBlocked",state.state());

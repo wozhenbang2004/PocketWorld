@@ -1576,6 +1576,7 @@ internal class PocketWebBridge(
                 when {
                     args.has("originalHomeInput") -> readOriginalHomeModelInput(id, args)
                     args.has("originalConversationInput") -> readOriginalConversationModelInput(id, args)
+                    args.has("originalPhoneInput") -> readOriginalPhoneModelInput(id, args)
                     else -> readModelSnapshot(id)
                 }
                 return
@@ -2051,13 +2052,14 @@ internal class PocketWebBridge(
                 requireSection("teams")
                 val restoringTeamReading = action == "teams.snapshot" && (args.has(PocketWebTeams.RESTORE_MEMBER_RESULT_RUN) || args.has(PocketWebTeams.RESTORE_PLAN_WORK))
                 teamPages.dispatch(action, args) { result, error ->
-                    val currentMemberAnswerRead = action == "teams.readRun" && error == null && result?.optJSONObject("reading")?.let {
+                    val currentTeamSourceRead = action == "teams.readRun" && error == null && result?.optJSONObject("reading")?.let {
                         it.opt(PocketWebTeams.CURRENT_FAILED_AGGREGATE_SOURCE) == true ||
-                            it.opt(PocketWebTeams.CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE) == true
+                            it.opt(PocketWebTeams.CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE) == true ||
+                            it.opt(PocketWebTeams.CURRENT_FIRST_LOCAL_FROZEN_REVIEW_SOURCE) == true
                     } == true
                     val originalReviewerFindingsRead = action == "teams.reviewFrozenTextApproval" && error == null &&
                         result?.optJSONObject("originalReviewerFindings") != null
-                    complete(id, result, error, "outcome_unknown", retainValue = !restoringTeamReading && !currentMemberAnswerRead && !originalReviewerFindingsRead &&
+                    complete(id, result, error, "outcome_unknown", retainValue = !restoringTeamReading && !currentTeamSourceRead && !originalReviewerFindingsRead &&
                         action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget",
                             PocketWebTeams.REVIEW_INDEPENDENT_FILES, PocketWebTeams.START_INDEPENDENT_FILES))
                     if (action != "teams.readFinalPackageFiles") publishState()
@@ -3088,6 +3090,74 @@ internal class PocketWebBridge(
             "暂未核对到原输入，未打开其他对话。"
         }
         complete(id, expected.put("originalConversationInputMatched", true), null, retainValue = false)
+    }
+
+    /** Explicit return from the existing API model choice: identity and local configuration only. */
+    private fun readOriginalPhoneModelInput(id: String, args: JSONObject) {
+        checkedPayload(args, setOf("originalPhoneInput"))
+        val expected = checkedPayload(args.getJSONObject("originalPhoneInput"), setOf("conversationId", "key", "epoch", "revision",
+            "phoneEpoch", "phoneRevision", "sourceEditTicket", "resumeRevision", "preferenceRevision", "selectionRevision"))
+        val conversation = requiredString(expected, "conversationId")
+        val key = requiredString(expected, "key")
+        val epoch = requiredInt(expected, "epoch")
+        val revision = requiredLong(expected, "revision")
+        val phoneEpoch = requiredInt(expected, "phoneEpoch")
+        val phoneRevision = requiredLong(expected, "phoneRevision")
+        val sourceEditTicket = requiredLong(expected, "sourceEditTicket")
+        val resume = requiredLong(expected, "resumeRevision")
+        val preference = requiredLong(expected, "preferenceRevision")
+        val selection = requiredLong(expected, "selectionRevision")
+        require(conversation.length <= 240 && key == "conversation:$conversation" && epoch >= 0 && revision > 0 &&
+            phoneEpoch >= 0 && phoneRevision > 0 && sourceEditTicket > 0 && resume >= 0 && preference >= 0 && selection > 0)
+        val unavailable = "还没核对到同一原手机目标与保存的模型。没有提交任务。"
+        val window = captureWindow()
+        val document = documentId
+        val generation = domainGeneration
+        fun current(): Boolean {
+            val state = controller.state
+            val draft = controller.composerDraft
+            if (closed || document == null || documentId != document || generation != domainGeneration || !acceptsWindow(window) ||
+                section != "models" || workspaceResumeRevision != resume || taskViewId != null ||
+                !controller.webPrivateOwnerVisible() || controller.hasChannelPhoneOrigin || controller.conversationReader != null ||
+                controller.queuedInputsPage != null || controller.attachmentOutcomes.state.open || state.chatAttachmentPickerOpen ||
+                state.attachmentImporting || state.filePath != null || state.fileLoading || state.fileSaving ||
+                state.chatSubmitting || state.phoneSubmitting || state.conversationId != conversation || draft == null ||
+                draft.key != key || draft.conversationId != conversation || draft.revision != revision ||
+                controller.composerViewEpoch != epoch || !phoneComposer.originalMainModelInputCurrent(phoneEpoch, phoneRevision, sourceEditTicket)) return false
+            val own = controller.conversationModelPreference()
+            val model = controller.nativeModelSelection().status()
+            return !model.pending() && model.revision() == selection && own.opt("scopeKey") == "conversation:$conversation" &&
+                own.opt("inherited") == true && own.isNull("target") && own.optLong("revision", -1) == preference
+        }
+        check(current()) { unavailable }
+        val service = controller.nativeModelConnections() ?: error(unavailable)
+        controller.runModelConnectionWork(Runnable {
+            // Same local reader as the ordinary settings snapshot, no model/catalog/account request.
+            val result = runCatching {
+                check(!closed && acceptsWindow(window))
+                val (snapshot, observed) = currentModelSnapshot(service)
+                check(observed.revision() == selection && snapshot.opt("activeRoute") == "api_key" &&
+                    snapshot.opt("selectionUnavailable") != true)
+                val active = snapshot.getJSONObject("nativeSelection")
+                val binding = active.getJSONObject("capabilityBinding")
+                val model = active.getString("model")
+                val sourceId = binding.getString("connectionId")
+                val rows = snapshot.getJSONObject("connections").getJSONArray("connections")
+                val source = (0 until rows.length()).map { rows.getJSONObject(it) }.singleOrNull { it.opt("id") == sourceId }
+                check(model.isNotBlank() && active.opt("modelRoute") == "api_key" &&
+                    (active.optJSONObject("modelRoutePlan")?.optLong("groupRevision") ?: 0L) == 0L &&
+                    source != null && source.opt("enabled") == true && source.opt("credentialStatus") != "expired" &&
+                    ModelBinding.fromJson(source.getJSONObject("binding")) == ModelBinding.fromJson(binding))
+                JSONObject().put("model", model).put("modelRoute", "api_key").put("capabilityBinding", binding)
+            }
+            main.post {
+                val proof = result.getOrNull()
+                if (proof == null || !runCatching { current() }.getOrDefault(false)) {
+                    complete(id, null, unavailable)
+                } else complete(id, expected.put("originalPhoneInputMatched", true).put("activeRoute", "api_key")
+                    .put("nativeSelection", PocketWebState.publicValue(proof)), null, retainValue = false)
+            }
+        })
     }
 
     private fun readModelSnapshot(requestId: String? = null) {

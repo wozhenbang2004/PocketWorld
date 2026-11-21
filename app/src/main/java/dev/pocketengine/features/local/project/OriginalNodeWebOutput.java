@@ -207,8 +207,18 @@ public final class OriginalNodeWebOutput {
             !isNodeBuild(exact)||!"npm".equals(exact.getJSONObject("payload").opt("executable")))return null;
         return directViteSource(snapshot);
     }
-    /** Same source-shape inspection for the project entry, without suggesting that lock/tools are ready. */
     static OutputSource directViteSource(JSONObject snapshot)throws Exception{
+        var inspected=inspectDirectViteSource(snapshot);
+        return inspected==null?null:inspected.supported();
+    }
+    record DirectViteInspection(OutputSource supported,String newerReactTypeScriptLock) {
+        JSONObject lockNotice()throws Exception{
+            return newerReactTypeScriptLock==null?null:new JSONObject().put("lockedVersion",newerReactTypeScriptLock)
+                .put("verifiedVersion",REACT_TS_VERSION);
+        }
+    }
+    /** Source shape only. A newer reviewed lock is not a usable build, plan or tool proof. */
+    static DirectViteInspection inspectDirectViteSource(JSONObject snapshot)throws Exception{
         JSONObject checkout=snapshot.getJSONObject("checkout");
         if(!OwnerDraftFirstBuild.ordinaryCheckout(checkout)||checkout.has(OwnerDraftWorkCopy.FIELD)||
             checkout.has("collectedFromCheckoutId")||checkout.has("collectionOperationId"))return null;
@@ -245,8 +255,15 @@ public final class OriginalNodeWebOutput {
                 !"npm".equals(ProjectCheckoutTooling.manager(paths,pkg.optString("packageManager"))))return null;
         OwnerDraftNodeDependencies.requirePlainProject(pkg,paths);
         if((typescript&&!react)||(react&&(customReactTransform||!defaultReactVite(pkg,files,typescript))))return null;
-        if(typescript)return new OutputSource(null,true,true);
-        return requireViteSource(files,true);
+        if(typescript){
+            Object lockedVersion=dev.pocketengine.features.plugins.mcp.McpJson.parse(files.get("package-lock.json"))
+                .getJSONObject("packages").getJSONObject("node_modules/typescript").opt("version");
+            if(REACT_TS_VERSION.equals(lockedVersion))return new DirectViteInspection(new OutputSource(null,true,true),null);
+            if(lockedVersion instanceof String version&&version.matches("7[.](?:0|[1-9][0-9]{0,3})[.](?:0|[1-9][0-9]{0,3})"))
+                return new DirectViteInspection(null,version);
+            return null;
+        }
+        return new DirectViteInspection(requireViteSource(files,true),null);
     }
     private static boolean defaultReactVite(JSONObject pkg,Map<String,String> files,boolean typescript)throws Exception{
         String target=typescript?REACT_TS_ENTRY:REACT_ENTRY;
@@ -265,8 +282,7 @@ public final class OriginalNodeWebOutput {
         if(entry.parent()!=document.body()||entry.attributes().size()!=2||!"module".equals(entry.attr("type"))||
             !(target.equals(src)||("/"+target).equals(src)||("./"+target).equals(src))||!entry.data().isBlank()||
             !OwnerDraftNodeDependencies.matchesOriginalNpmProfile(pkg,lock,typescript?REACT_TS_PACKAGES:REACT_PACKAGES))return false;
-        return !typescript||REACT_TS_VERSION.equals(dev.pocketengine.features.plugins.mcp.McpJson.parse(lock)
-            .getJSONObject("packages").getJSONObject("node_modules/typescript").opt("version"));
+        return true;
     }
     private static void requirePreparedReactTypeScript(RuntimeWorkspace root)throws Exception{
         var noFollow=LinkOption.NOFOLLOW_LINKS;

@@ -3,10 +3,13 @@ type TeamRecord = Record<string, any>;
 const records = (value: unknown): TeamRecord[] => Array.isArray(value) ? value : [];
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
 
+export const PHONE_OUTPUT_NOT_RETURNED = 'phone_output_not_returned';
+
 /** Labels describe stored coordinator facts; these helpers never authorize work. */
 export function teamStatusLabel(value: unknown): string {
   return ({
     queued: '等待开始', running: '进行中', completed: '本轮已完成', partial: '部分分工未完成', paused: '已暂停',
+    [PHONE_OUTPUT_NOT_RETURNED]: '原手机执行已结束 · 本设备未取得正文',
     awaiting_review: '等待审阅', awaiting_input: '等待回答', awaiting_user: '需要处理', awaiting_approval: '等待授权',
     waiting_dependency: '等待前置分工', blocked_dependency: '前置分工未完成', blocked_unknown: '操作结果待核对',
     needs_confirmation: '结果待确认', reconciling: '正在核对结果', failed: '未完成', exited: '已退出',
