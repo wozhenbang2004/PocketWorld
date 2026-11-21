@@ -36,8 +36,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -1374,7 +1376,7 @@ public final class LocalModule implements EngineModule {
         var runtime=ownerPythonRuntime();
         window.check();
         if(file==null||!dev.pocketengine.features.local.runtime.OwnerPythonRun.supportsPath(file.path))
-            throw new SecurityException("请选择原副本根目录中已保存的 Python 文件");
+            throw new SecurityException("请选择原副本中一个受支持路径的已保存 Python 文件");
         File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),file.checkoutId,false),files=new File(home,"files"),
                 record=new File(home,"checkout.json");
         if(!root.getAbsoluteFile().equals(root.getCanonicalFile())||!record.equals(record.getCanonicalFile())||
@@ -1386,6 +1388,7 @@ public final class LocalModule implements EngineModule {
             throw new SecurityException("这不是所选的普通私人开发副本");
         Object checkoutKey=pythonDirectoryKey(home.getParentFile()),homeKey=pythonDirectoryKey(home),filesKey=pythonDirectoryKey(files);
         var target=NativeCommandExecutor.within(files,file.path).toPath();
+        List<Object> parentKeys=pythonParentKeys(files,file.path);
         var basic=java.nio.file.attribute.BasicFileAttributes.class;
         var noFollow=java.nio.file.LinkOption.NOFOLLOW_LINKS;
         var before=Files.readAttributes(target,basic,noFollow);
@@ -1396,6 +1399,7 @@ public final class LocalModule implements EngineModule {
             window.check();
             var after=Files.readAttributes(target,basic,noFollow);
             if(!target.equals(NativeCommandExecutor.within(files,file.path).toPath())||
+                    !parentKeys.equals(pythonParentKeys(files,file.path))||
                     !checkoutKey.equals(pythonDirectoryKey(home.getParentFile()))||!homeKey.equals(pythonDirectoryKey(home))||
                     !filesKey.equals(pythonDirectoryKey(files))||!before.fileKey().equals(after.fileKey())||!pythonSingleLink(target)||
                     !before.lastModifiedTime().equals(after.lastModifiedTime())||before.size()!=after.size()||
@@ -1404,6 +1408,11 @@ public final class LocalModule implements EngineModule {
                 throw new SecurityException("原文件读取期间身份变化，未采用替代脚本");
             return runtime.reviewOwnerPython(file,observed,()->{window.check();if(closed)throw new SecurityException("原本机项目已关闭");});
         }finally{Arrays.fill(observed,(byte)0);}
+    }
+    private static List<Object> pythonParentKeys(File root,String relative)throws Exception{
+        List<Object> keys=new ArrayList<>();File directory=root;String[] parts=relative.split("/",-1);
+        for(int i=0;i<parts.length-1;i++){directory=new File(directory,parts[i]);keys.add(pythonDirectoryKey(directory));}
+        return keys;
     }
     private static Object pythonDirectoryKey(File directory)throws Exception{
         var attrs=Files.readAttributes(directory.toPath(),java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);

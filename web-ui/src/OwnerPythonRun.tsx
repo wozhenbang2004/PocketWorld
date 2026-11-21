@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Button } from './forms-library';
-import { ownerPythonRead, pythonReadResult, type OriginalPythonRun, type PythonExit, type PythonRead } from './owner-python-run';
+import { ownerPythonRead, ownerPythonSaveText, pythonOutputSaveResult, pythonReadResult,
+  type OriginalPythonRun, type PythonExit, type PythonOutputFile, type PythonOutputSave, type PythonRead } from './owner-python-run';
 
 const endText = (exit: PythonExit) => {
   if (exit.timedOut) return '超过 60 秒，运行已结束';
@@ -11,12 +12,14 @@ const endText = (exit: PythonExit) => {
   return exit.value === 0 ? '脚本运行完成' : `脚本退出（退出码 ${exit.value}）`;
 };
 
-export function OwnerPythonRun({work, released, notStarted, canRead, live, reopen}: {
+export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText, live, reopen, openOutput}: {
   work: OriginalPythonRun; released?: PythonExit; notStarted: boolean; canRead: boolean;
-  live: () => boolean; reopen?: () => void;
+  canSaveText:boolean; live: () => boolean; reopen?: () => void;
+  openOutput?:(file:PythonOutputFile,trigger:HTMLButtonElement)=>void;
 }) {
   const [read, setRead] = useState<PythonRead>(), [pending, setPending] = useState(false), [error, setError] = useState('');
-  const alive = useRef(false), entered = useRef(false), current = useRef(live);
+  const [textSave,setTextSave]=useState<PythonOutputSave>();
+  const alive = useRef(false), entered = useRef(false), submitted = useRef(false), current = useRef(live);
   current.current = live;
   useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
   const readOutput = async () => {
@@ -29,8 +32,28 @@ export function OwnerPythonRun({work, released, notStarted, canRead, live, reope
       const reply = pythonReadResult(value,work);
       if (!reply) throw Error('没有核对到本次运行的原输出，未打开其他结果。');
       setRead(reply);
+      const fresh=reply.state==='settled'?reply.textOutputSave:undefined;
+      setTextSave(previous=>submitted.current&&(!fresh||fresh.state==='ready')?previous:fresh);
     } catch (failure) {
       if (alive.current && current.current()) setError(failure instanceof Error?failure.message:'暂时读不到本次输出，可以重新读取。');
+    } finally {
+      entered.current=false;
+      if (alive.current) setPending(false);
+    }
+  };
+  const saveText = async () => {
+    const ready=textSave;
+    if (ready?.state!=='ready' || !canSaveText || submitted.current || entered.current || !current.current()) return;
+    submitted.current=true;entered.current=true;setPending(true);setError('');setTextSave({state:'pending'});
+    const {taskId,runId,operationId,epoch}=work;
+    try {
+      const reply=await bridge.command(ownerPythonSaveText,{taskId,runId,operationId,epoch,outputHandle:ready.handle});
+      if (!alive.current || !current.current()) return;
+      const saved=pythonOutputSaveResult(reply,work,ready);
+      if (!saved) throw Error('保存结果待核对。请核对这次保存，不会重复写入。');
+      setTextSave(saved);
+    } catch (failure) {
+      if (alive.current && current.current()) setError(failure instanceof Error?failure.message:'保存结果待核对。');
     } finally {
       entered.current=false;
       if (alive.current) setPending(false);
@@ -48,18 +71,25 @@ export function OwnerPythonRun({work, released, notStarted, canRead, live, reope
     </div>
     <div className="pw-action-row">
       {canRead && !preparationFailed && <Button variant={output?'secondary':undefined} disabled={pending} onClick={()=>void readOutput()}>
-        {pending?'正在读取…':exit?'读取本次输出':'查看运行进度'}
+        {pending?'正在核对…':textSave?.state==='pending'?'核对这次保存':exit?'读取本次输出':'查看运行进度'}
       </Button>}
+      {!preparationFailed && textSave?.state==='saved' && openOutput && <Button variant="secondary" disabled={pending}
+        onClick={event=>{if(current.current())openOutput(textSave.file,event.currentTarget)}}>打开已保存的 TXT</Button>}
       {reopen && <Button variant="secondary" disabled={pending} onClick={()=>{if(current.current())reopen()}}>返回原脚本</Button>}
     </div>
     {error && <p role="alert">{error}</p>}
-    {!preparationFailed && read?.state==='settled' && !output && <p role="status">已核对结束状态。当前没有可读取的原输出。</p>}
+    {!preparationFailed && textSave?.state==='pending' && <p role="status">这次保存尚待核对，不会再写一份。</p>}
+    {!preparationFailed && textSave?.state==='unavailable' && <p role="status">这次原保存暂不可读取。</p>}
+    {!preparationFailed && textSave?.state==='saved' && <p role="status">输出已保存在私人文件库。</p>}
+    {!preparationFailed && read?.state==='settled' && !output && textSave?.state!=='saved' && <p role="status">已核对结束状态。当前没有可读取的原输出。</p>}
     {output && <div className="pw-work-current-progress">
       <h4>程序输出</h4>
       {output.stdout?<pre className="pw-checkout-review-diff" aria-label="程序输出">{output.stdout}</pre>:<p>没有程序输出。</p>}
       <h4>错误输出</h4>
       {output.stderr?<pre className="pw-checkout-review-diff" aria-label="错误输出">{output.stderr}</pre>:<p>没有错误输出。</p>}
       {output.truncated && <p>只显示已保留的部分输出。</p>}
+      {textSave?.state==='ready' && canSaveText && <Button variant="secondary" disabled={pending}
+        onClick={()=>void saveText()}>保存本次输出为 TXT</Button>}
     </div>}
   </section>;
 }

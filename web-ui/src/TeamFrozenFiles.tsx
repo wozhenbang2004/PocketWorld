@@ -7,6 +7,8 @@ import type {WorkFileSource} from './team-navigation';
 
 type Data = Record<string, any>;
 type FileRow = {artifactId:string;assignmentId:string;memberId:string;path:string;kind:'text'|'deletion'|'binary_or_large';sha256:string;retainedChars?:number;currentVersion:number;currentExists:boolean;matchesOwnerBase:boolean;retainedApplied:boolean;truncated:boolean;beforeBytes?:number;afterBytes?:number};
+export type FrozenMemberFile = Pick<FileRow,'artifactId'|'assignmentId'|'memberId'|'path'|'sha256'> & {projectId:string};
+type MemberEntry = {requestId:string; documentEpoch:number; file:FrozenMemberFile; consume:(requestId:string)=>void};
 type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewRouteCaptured?:boolean;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false};
 type IntegrationCapture={integrationTaskId:string;reviewId:string;planHash:string;matchingFiles:number;total:number;active:boolean;unresolved:boolean;status:string;businessVerified:false};
 type Finding={verdict:'changes_requested'|'inconclusive';findings:string;businessVerified:false;executionAuthorized:false;originalReviewer:{teamRunId:string;taskId:string;runId:string;epoch:number;role:'reviewer';planHash:string;canOpen:true}};
@@ -20,19 +22,19 @@ function blockedFinding(decision:Decision|undefined,team:string,hash:string):Fin
 type Reading = {projectReviewOrigin?:ProjectTeamReviewOrigin;fullProject?:boolean;revisionComparison?:RevisionComparison;revisionWarning?:string;projectId:string;integrationCapture?:IntegrationCapture;ownerDecision?:Decision;fileHandle:string;teamRunId:string;planHash:string;files:FileRow[];incompleteCount:number;capturedAt:number;readOnly:true};
 type Page = {id:string;body:string;end:number;size:number};
 
-export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back, memberName, entry, hasRevision=false}:{
+export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back, memberName, entry, memberEntry, hasRevision=false}:{
   team:string;view:string;hasRevision?:boolean;active:boolean;disabled:boolean;run:(action:string,args:Data)=>Promise<any>;
-  entry?:{requestId:string;source:WorkFileSource|ProjectTeamReviewOrigin;returnToWork?:(reason?:string)=>void};memberName:(id:string)=>string;onOpen:(shown:boolean)=>void;back:MutableRefObject<(()=>boolean)|null>;
+  entry?:{requestId:string;source:WorkFileSource|ProjectTeamReviewOrigin;returnToWork?:(reason?:string)=>void};memberEntry?:MemberEntry;memberName:(id:string)=>string;onOpen:(shown:boolean)=>void;back:MutableRefObject<(()=>boolean)|null>;
 }) {
   const [shown,setShown]=useState(false),[source,setSource]=useState<Reading|null>(null),[selected,setSelected]=useState(''),[page,setPage]=useState<Page|null>(null);
-  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[memberFirst,setMemberFirst]=useState('');
   const [allLoaded,setAllLoaded]=useState(false),[approval,setApproval]=useState<Approval|null>(null),[ack,setAck]=useState(false);
   const [projectView,setProjectView]=useState(false);
   const [registered,setRegistered]=useState(''),[unknown,setUnknown]=useState(false);
   const generation=useRef(0),current=useRef<Reading|null>(null),pending=useRef(false),opened=useRef(false);
   const release=(handle?:string)=>{if(handle)void bridge.command('teams.closeReading',{fileHandle:handle}).catch(()=>{});};
   const close=()=>{generation.current++;pending.current=false;opened.current=false;release(current.current?.fileHandle);current.current=null;
-    setProjectView(false);setAllLoaded(false);setApproval(null);setAck(false);setRegistered('');setUnknown(false);setBusy(false);setShown(false);setSource(null);setSelected('');setPage(null);setError('');onOpen(false);};
+    setProjectView(false);setAllLoaded(false);setApproval(null);setAck(false);setRegistered('');setUnknown(false);setBusy(false);setShown(false);setSource(null);setSelected('');setPage(null);setMemberFirst('');setError('');onOpen(false);};
   const returnToRevision=()=>{generation.current++;pending.current=false;setBusy(false);setError('');setProjectView(false);};
   const dismiss=()=>{close();if(entry&&!document.hidden)entry.returnToWork?.()};
   useEffect(()=>()=>{generation.current++;opened.current=false;pending.current=false;release(current.current?.fileHandle);current.current=null;onOpen(false);},[view,team,onOpen]);
@@ -43,10 +45,11 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
     document.addEventListener('visibilitychange',hide);
     return()=>{if(back.current===handler)back.current=null;document.removeEventListener('visibilitychange',hide);};
   },[shown,back,projectView]);
-  const open=async(origin?:WorkFileSource|ProjectTeamReviewOrigin)=>{
+  const open=async(origin?:WorkFileSource|ProjectTeamReviewOrigin, member?:FrozenMemberFile)=>{
     const fromWork=origin&&'fileReview' in origin?origin:undefined,fromProject=origin&&'selectionHash' in origin?origin:undefined;
     if(disabled||!active||opened.current||!view)return;
     const seq=++generation.current;opened.current=true;pending.current=true;onOpen(true);setShown(true);setBusy(true);setError('');
+    let selectedFile:FileRow|undefined;
     try{
       const result=await run('teams.readFrozenOutputs',{viewHandle:view,...(fromWork?{fromWork}:fromProject?{fromProject}:{})}) as Reading;
       if(seq!==generation.current){release(result?.fileHandle);return;}
@@ -71,15 +74,34 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
           result.planHash!==fromProject.planHash||result.files.length!==fromProject.fileCount||!sameProjectFileDecision(fromProject,result.ownerDecision))){
         release(result.fileHandle);throw new Error('这份原项目首版独审或冻结目录已变，没有改到另一项。');
       }
+      if(member){
+        const matches=result.files.filter(file=>file.artifactId===member.artifactId);
+        const file=matches[0];
+        if(result.fullProject!==false||result.projectId!==member.projectId||result.revisionComparison||
+           matches.length!==1||file.kind!=='text'||file.assignmentId!==member.assignmentId||file.memberId!==member.memberId||
+           file.path!==member.path||file.sha256!==member.sha256){
+          release(result.fileHandle);throw new Error('这份原分工的冻结文本已变化，未打开其他版本。');
+        }
+        selectedFile=file;
+        setMemberFirst(file.artifactId);
+      }
       current.current=result;setSource(result);
     }catch(e){if(seq===generation.current){const reason=e instanceof Error?e.message:String(e);if(origin&&entry?.returnToWork&&!document.hidden){close();entry.returnToWork(reason)}else setError(reason);}}
     finally{if(seq===generation.current){pending.current=false;setBusy(false);}}
+    // This is the exact file selected by the owner's original button, not a prefetch.
+    if(seq===generation.current&&selectedFile)void read(selectedFile,0);
   };
   const usedEntry=useRef('');
   useEffect(()=>{
-    if(!entry||usedEntry.current===entry.requestId||disabled||!active||!view||opened.current)return;
-    usedEntry.current=entry.requestId;void open(entry.source);
-  },[entry?.requestId,disabled,active,view]);
+    const target=entry??memberEntry;
+    if(!target||usedEntry.current===target.requestId||disabled||!active||!view||opened.current)return;
+    usedEntry.current=target.requestId;
+    if(memberEntry)memberEntry.consume(memberEntry.requestId);
+    if(entry)void open(entry.source);
+    else if(memberEntry&&!document.hidden&&bridge.getDocumentEpoch()===memberEntry.documentEpoch){
+      void open(undefined,memberEntry.file);
+    }
+  },[entry?.requestId,memberEntry?.requestId,disabled,active,view]);
   const read=async(row:FileRow,offset:number)=>{
     const original=current.current;if(!original||pending.current||!opened.current)return;
     const seq=++generation.current;pending.current=true;setBusy(true);setError('');setSelected(row.artifactId);if(!offset)setPage(null);
@@ -134,6 +156,8 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
   };
 
   const finding=source?blockedFinding(source.ownerDecision,team,source.planHash):null;
+  const files=source?.files??[];
+  const orderedFiles=memberFirst?[...files.filter(file=>file.artifactId===memberFirst),...files.filter(file=>file.artifactId!==memberFirst)]:files;
   return <><Button variant="secondary" size="small" disabled={disabled||!active||!view} onClick={()=>void open()}>{hasRevision?'核对上版写回与本次冻结':'查看冻结文件与原项目差异'}</Button>
     <SettingsDialog isOpen={shown} title={approval?approval.firstProject?"核对完整项目的首版文件许可":"核对这份写回许可":source?.revisionComparison?"核对原分工修订":"原协作的冻结文件"} onClose={dismiss} className="pw-team-modal">
       <div className="pw-form-stack">{approval?<><p>{approval.firstProject?'你正在给下列原冻结文本登记首版许可。这份登记不可用于发起整合。':'这份许可只适用于下列原冻结文本。批准后，管家可在原授权内请求唯一整合者将它们写回原项目；本次不会启动整合或写入文件。'}</p>
@@ -162,7 +186,7 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
             {bridge.getState().capabilities.commands.includes('teams.openDeliveryWorker')&&<Button variant="secondary" size="small" disabled={busy} onClick={()=>void openOriginalReviewer()}>查看这次原审阅任务</Button>}
           </section>}
           {!source.files.length&&<p>没有读到这次协作的冻结文件。</p>}
-          {source.files.filter(file=>!source.revisionComparison||file.artifactId===selected).map(file=><section className="pw-team-expanded-copy" key={file.artifactId}><h3>{file.path}</h3>
+          {orderedFiles.filter(file=>!source.revisionComparison||file.artifactId===selected).map(file=><section className="pw-team-expanded-copy" key={file.artifactId}><h3>{file.path}</h3>
             <p className="pw-field-hint">贡献成员：{memberName(file.memberId) || file.memberId} · {file.retainedApplied?'与原整合回执及当前项目一致':file.matchesOwnerBase?'项目基线仍与原分工一致':'项目基线已改变'} · {file.currentExists?`项目版本 ${file.currentVersion}`:'打开时项目中无此文件'}</p>
             {file.kind!=='text'?<p>{file.kind==='deletion'?'这是删除记录。':'这是二进制或超出文本比较范围的文件。'}没有文本差异可展示。{typeof file.beforeBytes==='number'&&typeof file.afterBytes==='number'?` 原 ${file.beforeBytes} 字节，成果 ${file.afterBytes} 字节。`:''}</p>:
               <>{selected!==file.artifactId&&<Button variant="ghost" disabled={busy} onClick={()=>void read(file,0)}>查看这份差异</Button>}

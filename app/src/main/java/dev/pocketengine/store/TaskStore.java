@@ -26,6 +26,7 @@ import android.util.AtomicFile;
 import android.util.Base64;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.local.runtime.OwnerPythonRun;
+import dev.pocketengine.features.local.runtime.OwnerPythonOutputText;
 import dev.pocketengine.features.local.runtime.RuntimeSetupHost;
 import dev.pocketengine.features.local.runtime.RuntimeExecutionRef;
 import dev.pocketengine.features.local.runtime.RuntimeReceipt;
@@ -14996,6 +14997,72 @@ public final class TaskStore {
             throw new SecurityException("原脚本终态不一致");
         return reply.put("state","settled").put("exit",exit);
     }
+    private static final String OWNER_PYTHON_TEXT="_ownerPythonOutputTextPublication";
+    public static final class OwnerPythonTextPublication {
+        private final OwnerPythonOutputText.Pin pin;
+        private final JSONObject file;
+        private OwnerPythonTextPublication(OwnerPythonOutputText.Pin pin,JSONObject file){this.pin=pin;this.file=file;}
+        public OwnerPythonOutputText.Pin pin(){return pin;}
+        public boolean saved(){return file!=null;}
+    }
+    private OwnerPythonTextPublication ownerPythonTextPublication(JSONObject task,JSONObject settled)throws Exception{
+        if(!task.has(OWNER_PYTHON_TEXT))return null;
+        if(!"settled".equals(settled.opt("state")))throw new SecurityException("原脚本退出无法核对");
+        JSONObject slot=task.getJSONObject(OWNER_PYTHON_TEXT),file=slot.optJSONObject("file");
+        String state=slot.getString("state");
+        if(!("pending".equals(state)&&slot.length()==2||"saved".equals(state)&&file!=null&&slot.length()==3))
+            throw new SecurityException("原 TXT 保存记录不完整");
+        return new OwnerPythonTextPublication(OwnerPythonOutputText.Pin.verified(slot.getJSONObject("pin"),settled,settled.getJSONObject("exit")),file);
+    }
+    /** Existing Work only, same single execution operation, never a grant or content read. */
+    public synchronized OwnerPythonTextPublication ownerPythonTextPublicationForOwner(OwnerPythonOriginal original)throws Exception{
+        JSONObject settled=ownerPythonStatusForOwner(original);
+        return ownerPythonTextPublication(required(original.id()),settled);
+    }
+    public synchronized OwnerPythonTextPublication claimOwnerPythonTextForOwner(OwnerPythonOriginal original,OwnerPythonOutputText reviewed,
+            java.util.function.BooleanSupplier current)throws Exception{
+        db.beginTransaction();try{
+            if(!current.getAsBoolean())throw new SecurityException("原输出阅读已关闭");
+            JSONObject settled=ownerPythonStatusForOwner(original),task=required(original.id());
+            if(!"settled".equals(settled.opt("state"))||task.has(OWNER_PYTHON_TEXT))
+                throw new SecurityException("原退出或保存已变化，只核对这次原保存");
+            JSONObject proof=reviewed.pin().facts();
+            OwnerPythonOutputText.Pin pin=OwnerPythonOutputText.Pin.verified(proof,settled,settled.getJSONObject("exit"));
+            task.put(OWNER_PYTHON_TEXT,new JSONObject().put("state","pending").put("pin",proof));write(task);
+            if(!current.getAsBoolean())throw new SecurityException("原输出阅读已关闭");
+            db.setTransactionSuccessful();return new OwnerPythonTextPublication(pin,null);
+        }finally{db.endTransaction();}
+    }
+    /** Compare only with a positively re-read Book file. No Book or runtime lock under Tasks. */
+    public synchronized JSONObject finishOwnerPythonTextForOwner(OwnerPythonOriginal original,OwnerPythonTextPublication selected,OwnerPythonOutputText.Published book,
+            java.util.function.BooleanSupplier current)throws Exception{
+        db.beginTransaction();try{
+            if(!current.getAsBoolean())throw new SecurityException("原输出阅读已关闭");
+            JSONObject settled=ownerPythonStatusForOwner(original),task=required(original.id());
+            OwnerPythonTextPublication actual=ownerPythonTextPublication(task,settled);
+            if(actual==null||!selected.pin.same(actual.pin))throw new SecurityException("原 TXT 保存记录已变化");
+            JSONObject observed=book.fileFor(actual.pin);
+            if(!actual.saved()){
+                task.getJSONObject(OWNER_PYTHON_TEXT).put("state","saved").put("file",observed);write(task);
+            }else if(!canonical(actual.file).equals(canonical(observed)))throw new SecurityException("原 TXT 固定文件已变化");
+            if(!current.getAsBoolean())throw new SecurityException("原输出阅读已关闭");
+            db.setTransactionSuccessful();return new JSONObject().put("state","saved").put("coverage","complete").put("file",observed);
+        }finally{db.endTransaction();}
+    }
+    /** Only the local Work/Library viewer may prove the typed row; callers own original byte reads. */
+    public synchronized JSONObject requireSavedOwnerPythonOutputText(JSONObject book){
+        try{
+            JSONObject source=book.getJSONObject("source");String task=source.getString("taskId");
+            OwnerPythonOriginal original=ownerPythonOriginalForOwner(task,source.getString("runId"),1,source.getString("operationId"));
+            OwnerPythonTextPublication actual=ownerPythonTextPublicationForOwner(original);
+            if(actual!=null&&actual.saved()){
+                JSONObject observed=actual.pin.checkedArtifact(book);
+                if(canonical(actual.file).equals(canonical(observed)))return observed;
+            }
+        }catch(Exception unavailable){/* Staged, missing and mismatched writes are not visible files. */}
+        throw new SecurityException("本次 Python 输出的固定 TXT 尚无法核对");
+    }
+
     public synchronized ProjectFileSavePosition ownerPythonEditorPositionForOwner(String id)throws Exception{
         JSONObject settled=ownerPythonStatusForOwner(ownerPythonOriginalForOwner(id,id,1,id));
         if(!"settled".equals(settled.opt("state"))&&!"not_started".equals(settled.opt("state")))

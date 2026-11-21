@@ -225,8 +225,9 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
         return OwnerPythonRun.retainedExit(this,original.plan(),original.route(),reader,window);
     }
     public JSONObject openOwnerPythonOutput(dev.pocketengine.store.TaskStore.OwnerPythonOriginal original,
-            dev.pocketengine.core.RunControl reader,java.util.function.BooleanSupplier window)throws Exception {
-        return OwnerPythonRun.openOutput(this,original.plan(),original.route(),reader,window);
+            dev.pocketengine.core.RunControl reader,java.util.function.BooleanSupplier window,
+            java.util.function.Consumer<OwnerPythonOutputText> completeText)throws Exception {
+        return OwnerPythonRun.openOutput(this,original.plan(),original.route(),reader,window,completeText);
     }
     OwnerPythonRun.Tool ownerPythonTool()throws Exception {
         AndroidRuntimePreparation profile=androidRuntime;

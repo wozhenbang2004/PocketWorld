@@ -20,6 +20,7 @@ import dev.pocketengine.ui.AttachmentWorkReturn
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.objects
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery
+import dev.pocketengine.features.local.runtime.OwnerPythonOutputText
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -81,6 +82,7 @@ internal class PocketWebAttachments(
     private var deviceTaskCurrent:(()->Boolean)?=null
     private var scopedResultCurrent: (() -> Boolean)? = null
     val hasScopedResult: Boolean get() = scopedResultCurrent != null
+    val hasOpenWorkspace: Boolean get() = flow.state.open
     private fun ordinaryLibrary()=flow.privateLibrary()&&scopedResultCurrent==null&&!controller.state.chatAttachmentPickerOpen&&controller.webPrivateOwnerVisible()
     private fun libraryPdfSurface(state: AttachmentOutcomeState, allowPageText: Boolean = false) =
         // The no-locator Library's native presentation survives a normal system picker pause.
@@ -216,10 +218,12 @@ internal class PocketWebAttachments(
         val scoped = scopedResultCurrent
         val report = state.resultRun?.report != null
         val selectedCompiler = OriginalNodeCompilerDelivery.resultRow(state.file)
+        val selectedPythonText = OwnerPythonOutputText.resultRow(state.file)
+        fun fixedLocalResult(file: JSONObject) = OriginalNodeCompilerDelivery.resultRow(file) || OwnerPythonOutputText.resultRow(file)
         val scopedSnapshot = state.snapshot?.let { existing ->
             val artifacts = if (state.choosingSource) existing.optJSONArray("artifacts").objects() else emptyList()
-            if (artifacts.any { OriginalNodeCompilerDelivery.resultRow(it) })
-                JSONObject(existing.toString()).put("artifacts", JSONArray(artifacts.filterNot { OriginalNodeCompilerDelivery.resultRow(it) }))
+            if (artifacts.any(::fixedLocalResult))
+                JSONObject(existing.toString()).put("artifacts", JSONArray(artifacts.filterNot(::fixedLocalResult)))
             else existing
         }
         val files = (scopedSnapshot?.optJSONArray("sources").objects() + scopedSnapshot?.optJSONArray("artifacts").objects())
@@ -261,11 +265,11 @@ internal class PocketWebAttachments(
         val reviewedProcessing = originalReview?.let { original -> original.metadata().also { metadata ->
             if (original.command == "trimMedia") metadata.put("startAlignmentLabel", NativeMediaTrim.startAlignmentLabel(metadata))
         } }
-        val continuationDraft=if(!selectedCompiler&&scoped==null&&!state.deviceOriginalOnly&&state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null&&controller.webPrivateOwnerVisible())runCatching{
+        val continuationDraft=if(!selectedCompiler&&!selectedPythonText&&scoped==null&&!state.deviceOriginalOnly&&state.group==null&&state.team==null&&state.taskId!=null&&state.file!=null&&controller.webPrivateOwnerVisible())runCatching{
             controller.readArtifactContinuationDraft(state.taskId,state.file.getString("id"),state.file.getString("sha256")).put("available",true)
         }.getOrElse{JSONObject().put("available",false).put("error",it.message?:"原成果补充草稿尚未读取")} else null
         val privateOriginal = !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
-        val ownedCopy= scoped == null && !state.deviceOriginalOnly && state.group == null && state.team == null && controller.webPrivateOwnerVisible()
+        val ownedCopy= !selectedPythonText && scoped == null && !state.deviceOriginalOnly && state.group == null && state.team == null && controller.webPrivateOwnerVisible()
         val copyReceipt=if(ownedCopy)flow.privateCopyReceipt(privateOriginal) else null
         val ordinaryLibrary=ordinaryLibrary()
         val readableLibrarySources=if(ordinaryLibrary&&state.file==null)JSONArray(files.filter{PocketWebOriginalFiles.libraryDocument(it)}
@@ -290,8 +294,9 @@ internal class PocketWebAttachments(
             .put("libraryDocumentActionId", if(ordinaryLibrary)flow.libraryDocumentActionId() else null)
             .put("libraryPdfResume", libraryPdfResume?.view())
             .put("returnToLibraryDocument", ownedCopy && flow.canReturnToLibraryDocument())
-            .put("canReferenceHistoryOriginal", !selectedCompiler && scoped != null && !report && privateOriginal)
-            .put("canSaveOriginal", scoped == null && privateOriginal).put("canOpenInReader", !selectedCompiler && scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
+            .put("canReferenceHistoryOriginal", !selectedCompiler && !selectedPythonText && scoped != null && !report && privateOriginal)
+            .put("canSaveOriginal", !selectedPythonText && scoped == null && privateOriginal)
+            .put("canOpenInReader", !selectedCompiler && !selectedPythonText && scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
             .put("canReviewManagedWorkApk", canReviewManagedWorkApk(state))
             .put("externalViewerResult", state.externalViewerResult)
             .put("taskId", state.taskId).put("group", state.group != null).put("team", state.team != null)
@@ -383,6 +388,11 @@ internal class PocketWebAttachments(
             if (OriginalNodeCompilerDelivery.resultRow(flow.state.file)) {
                 check(command in setOf("close", "back", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails", "export", REPORT_WORK_NAVIGATION)) {
                     "此固定编译输出仅在本机查看或另存"
+                }
+            }
+            if (OwnerPythonOutputText.resultRow(flow.state.file)) {
+                check(command in setOf("close", "back", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails")) {
+                    "Python 输出 TXT 仅在原工作或私人文件库内查看"
                 }
             }
             if (drafts.isInitialized() && drafts.value.showing()) {

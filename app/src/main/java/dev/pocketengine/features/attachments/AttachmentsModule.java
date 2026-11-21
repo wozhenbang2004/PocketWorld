@@ -8,6 +8,7 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
 import dev.pocketengine.features.attachments.documents.DocumentReader;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
+import dev.pocketengine.features.local.runtime.OwnerPythonOutputText;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
@@ -26,17 +27,19 @@ public final class AttachmentsModule implements EngineModule {
         if(source!=null&&source.has("groupSpaceId"))throw new SecurityException("群媒体技术副本请通过原群成果读取");
         NativeRecordRead check=nativeRecordRead;
         if(OriginalNodeCompilerDelivery.claims(source))throw new SecurityException("固定编译输出请在工作或私人文件库查看、另存");
+        if(OwnerPythonOutputText.claims(source))throw new SecurityException("Python 输出 TXT 仅在原工作或私人文件库内查看");
         if(check!=null)check.check(record);
     }
     private JSONArray ownerFiles()throws Exception{JSONArray result=new JSONArray(),all=repository.book.list();for(int i=0;i<all.length();i++)try{JSONObject row=all.getJSONObject(i);ownerRecord(row);result.put(row);}catch(SecurityException hidden){}return result;}
     /** Display only. Archive and original-publication consumers keep the complete ownerFiles scan. */
     public JSONObject ownerAttachmentInventoryForHost()throws Exception{return ownerInventory(true);}
-    private JSONObject ownerInventory(boolean localCompilerOutputs)throws Exception{
+    private JSONObject ownerInventory(boolean localFixedOutputs)throws Exception{
         JSONObject inventory=repository.book.inspectIndex();JSONArray result=new JSONArray(),all=inventory.getJSONArray("attachments");
         for(int i=0;i<all.length();i++)try{
             JSONObject row=all.getJSONObject(i);
-            if(localCompilerOutputs&&OriginalNodeCompilerDelivery.claims(row.optJSONObject("source"))){
-                // Only this existing local result catalog admits the new compiler role.
+            if(localFixedOutputs&&(OriginalNodeCompilerDelivery.claims(row.optJSONObject("source"))||
+                    OwnerPythonOutputText.claims(row.optJSONObject("source")))){
+                // Only this existing local result catalog admits the exact original fixed roles.
                 // Do not acquire the TaskStore under the Book monitor.
                 NativeRecordRead check=nativeRecordRead;
                 if(check==null||Thread.holdsLock(repository.book))continue;
@@ -72,6 +75,14 @@ public final class AttachmentsModule implements EngineModule {
     }
     public JSONObject queryOwnerArchiveAttachmentForHost(String nativeOperation,String phaseTask,String sectionDigest,RunControl original)throws Exception{return repository.book.findNativeResult(nativeOperation,"backup_restored_file",phaseTask,phaseTask,sectionDigest,original);}
     public JSONObject documentResultForHost(String operation,String task,String run,String digest,RunControl control)throws Exception{JSONObject found=repository.book.findNativeResult(operation,"document_output",task,run,digest,control);if(found.optBoolean("found"))ownerRecord(found);return found;}
+    /** No generic feature command. Only a held native view can supply the bounded text body. */
+    public OwnerPythonOutputText.Published saveOwnerPythonTextForHost(OwnerPythonOutputText reviewed,RunControl control)throws Exception{
+        return reviewed.publish(repository.book,control);
+    }
+    /** An original Work slot that can compare its own Book publication, never import or choose another. */
+    public OwnerPythonOutputText.Published findOwnerPythonTextForHost(OwnerPythonOutputText.Pin original,RunControl control)throws Exception{
+        return original.find(repository.book,control);
+    }
     public JSONObject inspectProcessingForOwner(OwnerFilePreviewSource source,RunControl control)throws Exception{
         requirePrivateProcessingSource(source,control);return source.mimeType.startsWith("image/")?dev.pocketengine.features.attachments.processing.NativeImageTransform.inspect(source,control):dev.pocketengine.features.attachments.processing.NativeMediaTrim.inspect(source,context.android.getCacheDir(),control);
     }

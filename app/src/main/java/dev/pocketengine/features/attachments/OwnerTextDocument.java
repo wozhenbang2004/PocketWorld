@@ -3,6 +3,7 @@ package dev.pocketengine.features.attachments;
 import dev.pocketengine.core.RunControl;
 import java.io.*;
 import java.nio.charset.*;
+import java.util.ArrayDeque;
 import java.util.Set;
 import org.json.*;
 
@@ -51,21 +52,61 @@ public final class OwnerTextDocument {
             return previous>=0?result.put("previousOffset",previous):result;
         }catch(CharacterCodingException invalid){throw new IllegalArgumentException("当前解码方式不能完整读取此文件；请选择实际编码，未替换非法字符或改写原件",invalid);}
     }
+    /** Context is copied only from units the existing literal search actually scans. */
+    private static final class SearchContext {
+        private static final int SIDE=32;
+        private record Following(JSONObject hit,StringBuilder text){}
+        private final char[] recent;
+        private final ArrayDeque<Following> following=new ArrayDeque<>();
+        private int write;
+        SearchContext(int queryLength){recent=new char[queryLength+SIDE];}
+        void observe(char unit)throws JSONException{
+            recent[write]=unit;
+            if(++write==recent.length)write=0;
+            if(following.isEmpty())return;
+            for(Following pending:following)pending.text.append(unit);
+            if(following.getFirst().text.length()==SIDE)finishFirst();
+        }
+        JSONObject match(int end,int length,int cursor)throws JSONException{
+            int offset=end-length,count=Math.min(SIDE,offset-cursor);
+            JSONObject hit=new JSONObject().put("offset",offset).put("length",length);
+            int start=write-length-count;
+            if(start<0)start+=recent.length;
+            if(count>0&&Character.isLowSurrogate(recent[start])){if(++start==recent.length)start=0;count--;}
+            if(count>0){
+                StringBuilder before=new StringBuilder(count);
+                for(int i=0;i<count;i++){before.append(recent[start]);if(++start==recent.length)start=0;}
+                hit.put("before",before.toString());
+            }
+            following.add(new Following(hit,new StringBuilder(SIDE)));
+            return hit;
+        }
+        private void finishFirst()throws JSONException{
+            Following pending=following.removeFirst();
+            int count=pending.text.length();
+            if(count>0&&Character.isHighSurrogate(pending.text.charAt(count-1)))count--;
+            if(count>0)pending.hit.put("after",pending.text.substring(0,count));
+        }
+        void finish()throws JSONException{while(!following.isEmpty())finishFirst();}
+    }
+
     /** Literal, case-sensitive, non-overlapping matches; cursor refers to this exact decode. */
     public JSONObject search(String encoding,String query,int cursor,RunControl control)throws Exception {
         if(query==null||query.isEmpty()||query.length()>512)throw new IllegalArgumentException("请输入1至512字符的字面查找文字");StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(query));
         int[] prefix=new int[query.length()];for(int i=1,j=0;i<query.length();i++){while(j>0&&query.charAt(i)!=query.charAt(j))j=prefix[j-1];if(query.charAt(i)==query.charAt(j))j++;prefix[i]=j;}
-        JSONArray hits=new JSONArray();int at=cursor,matched=0;boolean end=false;long until=System.nanoTime()+20_000_000_000L;
+        JSONArray hits=new JSONArray();SearchContext context=new SearchContext(query.length());
+        int at=cursor,matched=0;boolean end=false;long until=System.nanoTime()+20_000_000_000L;
         try(Reader in=reader(encoding)){
             char previous=skip(in,cursor,control,null);char[] buffer=new char[4096];boolean first=true;
             outer:for(;;){control.check();if(System.nanoTime()>until)break;int n=in.read(buffer);if(n<0){end=true;break;}
                 for(int i=0;i<n;i++){
                     char next=buffer[i];if(first&&cursor>0&&Character.isHighSurrogate(previous)&&Character.isLowSurrogate(next))throw new IllegalArgumentException("查找起点在同一个字符中间");first=false;
-                    if(++at>MAX_CHARS)throw new IllegalArgumentException("本次文字查找超过20Mi字符边界，原件仍保留");while(matched>0&&next!=query.charAt(matched))matched=prefix[matched-1];if(next==query.charAt(matched))matched++;
-                    if(matched==query.length()){hits.put(new JSONObject().put("offset",at-query.length()).put("length",query.length()));matched=0;if(hits.length()>=40)break outer;}
+                    if(++at>MAX_CHARS)throw new IllegalArgumentException("本次文字查找超过20Mi字符边界，原件仍保留");
+                    context.observe(next);while(matched>0&&next!=query.charAt(matched))matched=prefix[matched-1];if(next==query.charAt(matched))matched++;
+                    if(matched==query.length()){hits.put(context.match(at,query.length(),cursor));matched=0;if(hits.length()>=40)break outer;}
                 }
             }
         }catch(CharacterCodingException invalid){throw new IllegalArgumentException("所选编码不能完整读取查找范围，请核对编码；没有把未知范围视为无匹配",invalid);}
-        control.check();return new JSONObject().put("encoding",encoding).put("query",query).put("matches",hits).put("startOffset",cursor).put("scannedUntil",at).put("nextOffset",end?JSONObject.NULL:at-matched).put("atEnd",end).put("caseSensitive",true).put("overlapping",false);
+        control.check();context.finish();return new JSONObject().put("encoding",encoding).put("query",query).put("matches",hits).put("startOffset",cursor).put("scannedUntil",at).put("nextOffset",end?JSONObject.NULL:at-matched).put("atEnd",end).put("caseSensitive",true).put("overlapping",false);
     }
 }

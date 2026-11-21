@@ -112,7 +112,9 @@ internal class PocketWebStandaloneDocumentDrafts(
     /** A blank editor is only presentation and does not allocate a draft ID. */
     fun newDraft(frame: Frame): NewDraft {
         val current = admission(frame)
-        check(scope == current && pending == null && editor == null && blank == null) { "请从当前本机草稿列表新建" }
+        check((scope == null || scope == current) && pending == null && editor == null && blank == null) { "请先退出或核对当前本机草稿" }
+        // The explicit ordinary Library entry can start with a blank without reading the shelf.
+        scope = current
         return NewDraft(token().also { blank = it }, defaults)
     }
 

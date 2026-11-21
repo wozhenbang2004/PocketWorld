@@ -81,7 +81,7 @@ import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
 import {bareManagedNodeCheck,currentManagedNodeOperation,originalDirectViteEditorReturn,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
 import { OwnerPythonRun } from './OwnerPythonRun';
-import { originalPythonExit, originalPythonNotStarted, originalPythonRun, ownerPythonRead, samePythonRun, savedPythonPath, type OriginalPythonRun } from './owner-python-run';
+import { originalPythonExit, originalPythonNotStarted, originalPythonRun, ownerPythonRead, ownerPythonSaveText, samePythonRun, savedPythonPath, type OriginalPythonRun } from './owner-python-run';
 import {failedBuildFeedback,nodeBuildContinuationText,originalNodeBuildAfterDependencies,projectFeedbackKey,type ExecutionExit} from './project-execution-exit';
 import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWorkspace';
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
@@ -4436,7 +4436,8 @@ export default function App(){
    const notStarted=task.status==='failed' && task.raw.hasUnresolvedOperations===false &&
     originalPythonNotStarted(task.raw.ownerPythonScriptNotStarted,work);
    return <OwnerPythonRun key={JSON.stringify([work.taskId,work.runId,work.operationId,visit,viewRevision])}
-    work={work} released={exit} notStarted={notStarted} canRead={can(ownerPythonRead)} live={live}
+    work={work} released={exit} notStarted={notStarted} canRead={can(ownerPythonRead)} canSaveText={can(ownerPythonSaveText)} live={live}
+    openOutput={can('attachmentWorkspace.open')?(file,target)=>{if(live())openTaskResultFile(work.taskId,file,target)}:undefined}
     reopen={(exit||notStarted)&&currentPythonEditorVisit(work,bridge.getState())?()=>void openOriginalBuildCopy({
       taskId:work.taskId,runId:work.runId,epoch:work.epoch,projectId:work.projectId,checkoutId:work.checkoutId,
       sourceDigest:work.sha256,pythonEditor:work,

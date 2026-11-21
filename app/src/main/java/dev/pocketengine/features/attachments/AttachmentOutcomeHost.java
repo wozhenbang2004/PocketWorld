@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.net.Uri;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
+import dev.pocketengine.features.local.runtime.OwnerPythonOutputText;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
 import dev.pocketengine.media.MediaModule;
 import dev.pocketengine.store.SshWorkHistory;
@@ -82,6 +83,15 @@ public final class AttachmentOutcomeHost {
                     }
                     results.put(result);
                 }catch(org.json.JSONException unverified){ /* An unreadable origin isn't a new Work file. */ }
+                continue;
+            }
+            if(OwnerPythonOutputText.claims(origin)){
+                // The shared local inventory already checked this exact saved Work/Book relation.
+                JSONObject result=row(meta,"result").put("sourceRunEvidence",OwnerPythonOutputText.EVIDENCE)
+                        .put("sourceCoordinatorEpoch",1);
+                if(task==null)results.put(result);
+                else if(task.getInt("coordinatorEpoch")==1&&task.getString("runId").equals(result.opt("sourceTaskRunId")))
+                    results.put(result.put("runProvenance","current"));
                 continue;
             }
             boolean output=kind.equals("generated_media")||kind.equals("created_text")||kind.equals("document_extract")||kind.equals("remote_result_snapshot")||kind.equals("created_document")||kind.equals("derived_media")||kind.equals("managed_build_output");
@@ -199,7 +209,7 @@ public final class AttachmentOutcomeHost {
         JSONArray result=new JSONArray();if(references==null)return result;if(references.length()>4)throw new SecurityException("原消息附件数无效");
         for(int i=0;i<references.length();i++){
             JSONObject pinned=references.getJSONObject(i);
-            try{JSONObject meta=privateMetadata(pinned.getString("id"),pinned.getString("sha256"));if(!sameReference(pinned,meta))throw new SecurityException("原消息附件版本变化");result.put(row(meta,"source").put("contentReadConfirmed",false));}
+            try{JSONObject meta=privateMetadata(pinned.getString("id"),pinned.getString("sha256"));if(OwnerPythonOutputText.claims(meta.optJSONObject("source"))||!sameReference(pinned,meta))throw new SecurityException("原消息附件版本变化");result.put(row(meta,"source").put("contentReadConfirmed",false));}
             catch(Exception unavailable){result.put(new JSONObject().put("id",pinned.optString("id")).put("sha256",pinned.optString("sha256")).put("mimeType",pinned.optString("mimeType")).put("size",pinned.optLong("size")).put("name","原消息附件不可用").put("availability","unavailable").put("contentReadConfirmed",false));}
         }
         return result;
@@ -287,7 +297,13 @@ public final class AttachmentOutcomeHost {
                     ||!recordedDocumentOriginal(ownerTaskRequired(taskId),read))
                 throw new SecurityException("原生成记录已变化，未打开其他文件");
         }else repository.book.requireUnchanged(artifactId,expectedSha256,control);
-        return new OwnerFilePreviewSource("attachments",metadata,c->repository.book.verifiedBytes(artifactId,expectedSha256,c),c->{requireReference(taskId,artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,c);},(destination,c)->repository.book.exportOwnerArchiveBytes(artifactId,expectedSha256,destination,c));
+        boolean localText=OwnerPythonOutputText.claims(metadata.optJSONObject("source"));
+        return new OwnerFilePreviewSource("attachments",metadata,c->repository.book.verifiedBytes(artifactId,expectedSha256,c),
+                c->{requireReference(taskId,artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,c);},
+                (destination,c)->{
+                    if(localText)throw new SecurityException("Python 输出 TXT 仅在原工作或私人文件库内查看");
+                    repository.book.exportOwnerArchiveBytes(artifactId,expectedSha256,destination,c);
+                });
     }
     /** Explicit system chooser with a pinned original copy; a requested share is not delivery. */
     public Intent share(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
@@ -308,12 +324,15 @@ public final class AttachmentOutcomeHost {
         catch(Exception stopped){if(image!=null)image.recycle();throw stopped;}finally{java.util.Arrays.fill(bytes,(byte)0);}
     }
     public JSONObject export(String taskId,String artifactId,String expectedSha256,Uri destination,RunControl control)throws Exception {
-        requireReference(taskId,artifactId,expectedSha256);JSONObject result=repository.exportVerifiedToUri(artifactId,expectedSha256,destination,control);
+        JSONObject meta=reference(taskId,artifactId,expectedSha256);
+        if(OwnerPythonOutputText.claims(meta.optJSONObject("source")))throw new SecurityException("Python 输出 TXT 不使用导出");
+        JSONObject result=repository.exportVerifiedToUri(artifactId,expectedSha256,destination,control);
         requireReference(taskId,artifactId,expectedSha256);return result.put("taskId",taskId==null?"":taskId).put("verifiedBusinessSuccess",false);
     }
     /** A compare-only native receipt. Does not read another file or grant an export. */
     public JSONObject originalTaskOutputForExport(String taskId,JSONObject shown,RunControl control)throws Exception{
-        control.check();String id=shown.getString("id"),sha=shown.getString("sha256");requireReference(taskId,id,sha);
+        control.check();String id=shown.getString("id"),sha=shown.getString("sha256");
+        if(OwnerPythonOutputText.claims(reference(taskId,id,sha).optJSONObject("source")))throw new SecurityException("Python 输出 TXT 不使用导出");
         JSONObject pin=OriginalTaskOutputPin.checked(ownerTaskRequired(taskId),privateMetadata(id,sha),shown);control.check();return pin;
     }
     public JSONObject originalMedia(String taskId,String operationId,String command,RunControl control)throws Exception {
@@ -327,6 +346,10 @@ public final class AttachmentOutcomeHost {
         JSONObject meta=privateMetadata(artifactId,expectedSha256);if(taskId==null||taskId.isEmpty())return meta;
         JSONObject provenance=meta.optJSONObject("source");
         if(OriginalNodeCompilerDelivery.claims(provenance)){
+            if(!taskId.equals(provenance.opt("taskId")))requireReusableInput(meta);
+            return meta;
+        }
+        if(OwnerPythonOutputText.claims(provenance)){
             if(!taskId.equals(provenance.opt("taskId")))requireReusableInput(meta);
             return meta;
         }
@@ -344,6 +367,8 @@ public final class AttachmentOutcomeHost {
     private static void requireReusableInput(JSONObject file){
         if(OriginalNodeCompilerDelivery.claims(file.optJSONObject("source")))
             throw new SecurityException("此固定编译输出仅在本机查看或另存");
+        if(OwnerPythonOutputText.claims(file.optJSONObject("source")))
+            throw new SecurityException("Python 输出 TXT 仅在原工作或私人文件库内查看");
     }
     private JSONObject privateMetadata(String id,String expected)throws Exception {
         JSONObject meta=repository.book.get(id);if(!privateFile(meta)||expected==null||!expected.equals(meta.optString("sha256")))throw new SecurityException("文件空间或不可变版本不匹配");
@@ -351,6 +376,11 @@ public final class AttachmentOutcomeHost {
         if(OriginalNodeCompilerDelivery.claims(source)){
             if(Thread.holdsLock(repository.book))throw new SecurityException("固定编译输出须在原文件锁外核实");
             tasks.requireSettledNodeCompilerAttachment(meta);
+            return meta;
+        }
+        if(OwnerPythonOutputText.claims(source)){
+            if(Thread.holdsLock(repository.book))throw new SecurityException("固定 TXT 须在原文件锁外核实");
+            tasks.requireSavedOwnerPythonOutputText(meta);
             return meta;
         }
         JSONObject task=source==null||source.optString("taskId").isEmpty()?null:tasks.get(source.getString("taskId"),false);

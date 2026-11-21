@@ -27,10 +27,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** One native owner-reviewed root .py file. No command registry, project writeback, or sandbox. */
+/** One native owner-reviewed .py file. No command registry, project writeback, or sandbox. */
 public final class OwnerPythonRun {
     static final String FIELD = "ownerPythonScript";
     public static final String FORMAT = "pocketworld.owner-python-script.v1";
@@ -41,6 +42,9 @@ public final class OwnerPythonRun {
     static final String INTERPRETER = "/usr/bin/python3";
     static final long TIMEOUT_MILLIS = 60_000L;
     private static final int MAX_OUTPUT = 64 * 1024, MAX_STAGED = 16;
+    private static final int MAX_PATH = 240, MAX_PARENT_DEPTH = 4;
+    private static final Pattern SCRIPT_LEAF = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9._-]{0,119}\\.py");
+    private static final Pattern SOURCE_FOLDER = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9._-]{0,63}");
     private static final long REVIEW_NANOS = 120_000_000_000L;
     private static final String INTENT = "owner_python_script";
     private static final String RESULT = "pocketworld.owner-python-script-result.v1";
@@ -59,7 +63,7 @@ public final class OwnerPythonRun {
             requireUuid(project);
             requireUuid(checkout);
             if (!supportsPath(path) || size < 0 || size > MAX_SOURCE)
-                throw new SecurityException("只支持所选副本根目录中的一个已保存 Python 文件");
+                throw new SecurityException("请选择所选副本中一个受支持路径的已保存 Python 文件");
             requireDigest(sha256);
         }
         // Job ordering is private to this runner, not the real checkout's build/output order.
@@ -69,11 +73,15 @@ public final class OwnerPythonRun {
             if (value.equals(checkout)) throw new SecurityException("原副本与脚本执行范围不能相同");
             return value;
         }
+        // Only the original receipt keeps the source path. The execution workspace stays a flat single file.
+        String leaf() {
+            return scriptLeaf(path);
+        }
         JSONArray argv() {
-            return new JSONArray(arguments(path));
+            return new JSONArray(arguments(leaf()));
         }
         JSONArray manifest() throws Exception {
-            return new JSONArray().put(new JSONObject().put("path", path).put("sha256", sha256).put("bytes", size));
+            return new JSONArray().put(new JSONObject().put("path", leaf()).put("sha256", sha256).put("bytes", size));
         }
         JSONObject pin() throws Exception {
             return new JSONObject().put("format", FORMAT).put("requestId", id).put("projectId", project)
@@ -82,13 +90,23 @@ public final class OwnerPythonRun {
         }
         JSONObject snapshot(byte[] bytes) throws Exception {
             return new JSONObject().put("checkout", new JSONObject().put("id", executionCheckout()).put("projectId", project))
-                    .put("files", new JSONArray().put(new JSONObject().put("path", path).put("sha256", sha256)
+                    .put("files", new JSONArray().put(new JSONObject().put("path", leaf()).put("sha256", sha256)
                             .put("binary", true).put("contentBase64", Base64.getEncoder().encodeToString(bytes))));
         }
     }
 
     public static boolean supportsPath(String path) {
-        return path != null && path.matches("[A-Za-z0-9_][A-Za-z0-9._-]{0,119}\\.py");
+        if (path == null || path.length() > MAX_PATH || !ProjectSources.sourcePath(path)) return false;
+        String[] parts = path.split("/", -1);
+        int leaf = parts.length - 1;
+        if (leaf > MAX_PARENT_DEPTH || !SCRIPT_LEAF.matcher(parts[leaf]).matches()) return false;
+        for (int i = 0; i < leaf; i++) if (!SOURCE_FOLDER.matcher(parts[i]).matches()) return false;
+        return true;
+    }
+
+    static String scriptLeaf(String originalPath) {
+        if (!supportsPath(originalPath)) throw new SecurityException("原脚本路径不可核对");
+        return originalPath.substring(originalPath.lastIndexOf('/') + 1);
     }
 
     public static boolean matchesRoute(JSONObject route) {
@@ -193,7 +211,7 @@ public final class OwnerPythonRun {
             boolean passed = false;
             try {
                 try {
-                    stage = runtime.materializeOwnerPython(source.id, source.path, source.sha256, owned);
+                    stage = runtime.materializeOwnerPython(source.id, source.leaf(), source.sha256, owned);
                 } catch (Exception failed) {
                     if (failed instanceof InterruptedException || Thread.currentThread().isInterrupted()) throw failed;
                     // This one-use buffer has already been taken. Materialization cannot call the provider.
@@ -338,7 +356,8 @@ public final class OwnerPythonRun {
 
     /** Explicit second read of the same settled native job; the two actual pipe channels are never merged. */
     static JSONObject openOutput(ManagedProjectRuntime runtime, JSONObject plan, JSONObject route,
-                                 RunControl read, BooleanSupplier sameWindow) throws Exception {
+                                 RunControl read, BooleanSupplier sameWindow,
+                                 java.util.function.Consumer<OwnerPythonOutputText> completeText) throws Exception {
         Original run = original(plan, route);
         RuntimeReceipt receipt = terminal(runtime, run, read, sameWindow);
         JSONObject before = receipt == null ? null : receipt.json();
@@ -372,11 +391,26 @@ public final class OwnerPythonRun {
         RuntimeReceipt after = terminal(runtime, run, read, sameWindow);
         if (after == null || !ProjectSources.canonical(before).equals(ProjectSources.canonical(after.json())))
             throw new SecurityException("原脚本退出回执或日志已变化");
+        boolean truncated=more||incomplete||Boolean.TRUE.equals(page.opt("outputTruncated"))||!Boolean.TRUE.equals(before.opt("outputComplete"));
+        int count=stdout.size()+stderr.size();
+        if(completeText!=null&&!truncated&&count>0&&cursor==originalCursor&&
+                Boolean.FALSE.equals(before.opt("outputTruncated"))&&exactOutputBytes(before,"storedOutputBytes",count)&&
+                exactOutputBytes(before,"outputBytes",count)&&!"no_child".equals(observed.opt("exitKind"))){
+            byte[] out=stdout.toByteArray(),err=stderr.toByteArray();
+            try{
+                OwnerPythonOutputText captured=OwnerPythonOutputText.capture(scopeForPlan(plan),observed,out,err);
+                if(captured!=null)completeText.accept(captured);
+            }finally{Arrays.fill(out,(byte)0);Arrays.fill(err,(byte)0);}
+        }
         return observed.put("stdout", stdout.toString(StandardCharsets.UTF_8.name()))
                 .put("stderr", stderr.toString(StandardCharsets.UTF_8.name())).put("stdoutBytesShown", stdout.size())
-                .put("stderrBytesShown", stderr.size()).put("truncated", more || incomplete
-                        || Boolean.TRUE.equals(page.opt("outputTruncated")) || !Boolean.TRUE.equals(before.opt("outputComplete")))
+                .put("stderrBytesShown", stderr.size()).put("truncated", truncated)
                 .put("encoding", "utf-8-with-replacement");
+    }
+
+    private static boolean exactOutputBytes(JSONObject receipt,String key,int expected){
+        Object count=receipt.opt(key);
+        return (count instanceof Long||count instanceof Integer)&&((Number)count).longValue()==expected;
     }
 
     private static RuntimeReceipt terminal(ManagedProjectRuntime runtime, Original run, RunControl read,
@@ -421,8 +455,8 @@ public final class OwnerPythonRun {
                 .put("outputFilesReturned", false).put("replayAllowed", false);
     }
 
-    private static List<String> arguments(String path) {
-        return List.of("-I", "-S", "-B", "-u", "./" + path);
+    private static List<String> arguments(String leaf) {
+        return List.of("-I", "-S", "-B", "-u", "./" + leaf);
     }
 
     static final class Stage implements AutoCloseable {
@@ -468,9 +502,9 @@ public final class OwnerPythonRun {
         }
     }
 
-    static synchronized Stage materialize(File privateRuntime, String id, String path, String sha, byte[] bytes) throws Exception {
+    static synchronized Stage materialize(File privateRuntime, String id, String leaf, String sha, byte[] bytes) throws Exception {
         requireUuid(id);
-        if (path == null || !path.matches("[A-Za-z0-9_][A-Za-z0-9._-]{0,119}\\.py")
+        if (leaf == null || !SCRIPT_LEAF.matcher(leaf).matches()
                 || bytes.length > MAX_SOURCE || !sha.equals(ProjectSources.sha256(bytes))) throw new SecurityException("脚本暂存输入不匹配");
         Path root = RuntimeFiles.directory(privateRuntime, "owner-python-scripts").toPath();
         Object rootKey = directoryKey(root);
@@ -482,7 +516,7 @@ public final class OwnerPythonRun {
         Path directory = root.resolve(id);
         if (!rootKey.equals(directoryKey(root))) throw new SecurityException("脚本暂存根已变化");
         Files.createDirectory(directory, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
-        Stage stage = new Stage(root, rootKey, directory, directoryKey(directory), path);
+        Stage stage = new Stage(root, rootKey, directory, directoryKey(directory), leaf);
         boolean retained = false;
         try {
             stage.current();

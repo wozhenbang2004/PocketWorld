@@ -57,7 +57,8 @@ public final class AttachmentBook {
     private void publishOutputEligibility(JSONObject meta)throws Exception{
         String id=meta.getString("id");java.util.Map<String,OutputSourceEligibility> next=new java.util.HashMap<>(outputEligibility);next.remove(id);
         // This new fixed result is readable/exportable locally, not a reusable model/device source.
-        if(privateOutputSource(meta)&&!dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery.claims(meta.optJSONObject("source")))
+        if(privateOutputSource(meta)&&!dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery.claims(meta.optJSONObject("source"))&&
+                !dev.pocketengine.features.local.runtime.OwnerPythonOutputText.claims(meta.optJSONObject("source")))
             next.put(id,new OutputSourceEligibility(id,meta.getString("sha256"),outputGeneration(meta)));
         outputEligibility=java.util.Collections.unmodifiableMap(next);
     }

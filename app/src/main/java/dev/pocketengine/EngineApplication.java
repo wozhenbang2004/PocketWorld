@@ -1260,6 +1260,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(attachments instanceof dev.pocketengine.features.attachments.AttachmentsModule ownerAttachments)ownerAttachments.setNativeRecordRead(record->{
             JSONObject source=record.optJSONObject("source");
             if(dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery.claims(source))tasks.requireSettledNodeCompilerAttachment(record);
+            else if(dev.pocketengine.features.local.runtime.OwnerPythonOutputText.claims(source))tasks.requireSavedOwnerPythonOutputText(record);
             else if(source!=null&&!source.optString("taskId").isEmpty()&&groupOrigin(tasks.get(source.getString("taskId"),false)))
                 throw new SecurityException("群媒体技术副本请从原群任务读取");
         });

@@ -4,6 +4,8 @@ import dev.pocketengine.core.EventSink;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.ExecutionResources;
 import dev.pocketengine.features.assistant.AssistantModule;
+import dev.pocketengine.features.attachments.AttachmentsModule;
+import dev.pocketengine.features.local.runtime.OwnerPythonOutputText;
 import dev.pocketengine.features.local.runtime.OwnerPythonRun;
 import dev.pocketengine.features.teams.TeamCoordinator;
 import dev.pocketengine.store.TaskStore;
@@ -378,7 +380,8 @@ public final class FeatureHost implements AutoCloseable {
     }
 
     /** Same original owner Work, separate read-only native pipe channels. No effect/retry on absence. */
-    public JSONObject readOwnerPythonForOwner(String id,String run,int epoch,String operation,BooleanSupplier window)throws Exception{
+    public JSONObject readOwnerPythonForOwner(String id,String run,int epoch,String operation,BooleanSupplier window,
+            java.util.function.Consumer<OwnerPythonOutputText> completeText)throws Exception{
         if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local)||!window.getAsBoolean())
             throw new IllegalStateException("原本机脚本工作未打开");
         var original=tasks.ownerPythonOriginalForOwner(id,run,epoch,operation);
@@ -386,6 +389,16 @@ public final class FeatureHost implements AutoCloseable {
         if("not_started".equals(result.opt("state"))){
             if(!window.getAsBoolean())throw new SecurityException("原脚本工作窗口已关闭");
             return result; // positive pre-provider proof: there is no native job or output to look up
+        }
+        var attachments=module("attachments") instanceof AttachmentsModule originalBook?originalBook:null;
+        TaskStore.OwnerPythonTextPublication savedText=null;
+        if(attachments!=null&&"settled".equals(result.opt("state"))){
+            savedText=tasks.ownerPythonTextPublicationForOwner(original);
+            if(savedText!=null){
+                JSONObject saved=readOriginalPythonText(attachments,original,savedText,window);
+                result.put("textOutputSave",saved);
+                if("saved".equals(saved.opt("state")))return result.put("outputState","unavailable");
+            }
         }
         RunControl read=new RunControl();read.bindHostRun(id,run,epoch);
         read.setAuthorityCheck(()->{
@@ -403,21 +416,62 @@ public final class FeatureHost implements AutoCloseable {
         }
         if("settled".equals(result.opt("state"))){
             result.put("outputState","unavailable");
-            JSONObject output;
-            try{output=local.ownerPythonRuntime().openOwnerPythonOutput(original,read,window);}
-            catch(Exception unavailable){if(Thread.currentThread().isInterrupted()||!window.getAsBoolean())throw unavailable;output=null;}
-            if(output!=null){
-                String[] fields={"stdout","stderr","stdoutBytesShown","stderrBytesShown","truncated","encoding"};
-                JSONObject payload=new JSONObject(),scalar=new JSONObject(output.toString());
-                for(String field:fields)payload.put(field,scalar.remove(field));
-                if(dev.pocketengine.features.local.project.ProjectSources.canonical(result.getJSONObject("exit"))
-                        .equals(dev.pocketengine.features.local.project.ProjectSources.canonical(scalar))){
-                    for(String field:fields)result.put(field,payload.get(field));
-                    result.put("outputState","available");
+            OwnerPythonOutputText[] candidate={null};
+            try{
+                JSONObject output;
+                try{output=local.ownerPythonRuntime().openOwnerPythonOutput(original,read,window,
+                        attachments!=null&&savedText==null&&completeText!=null?value->candidate[0]=value:null);}
+                catch(Exception unavailable){if(Thread.currentThread().isInterrupted()||!window.getAsBoolean())throw unavailable;output=null;}
+                if(output!=null){
+                    String[] fields={"stdout","stderr","stdoutBytesShown","stderrBytesShown","truncated","encoding"};
+                    JSONObject payload=new JSONObject(),scalar=new JSONObject(output.toString());
+                    for(String field:fields)payload.put(field,scalar.remove(field));
+                    if(dev.pocketengine.features.local.project.ProjectSources.canonical(result.getJSONObject("exit"))
+                            .equals(dev.pocketengine.features.local.project.ProjectSources.canonical(scalar))){
+                        for(String field:fields)result.put(field,payload.get(field));
+                        result.put("outputState","available");
+                        if(candidate[0]!=null&&tasks.ownerPythonTextPublicationForOwner(original)==null){
+                            read.check();completeText.accept(candidate[0]);candidate[0]=null;
+                        }
+                    }
                 }
-            }
+            }finally{if(candidate[0]!=null)candidate[0].close();}
         }
         read.check();return result;
+    }
+
+    private static RunControl originalPythonTextWindow(BooleanSupplier current){
+        RunControl control=new RunControl();control.setAuthorityCheck(()->{
+            if(!current.getAsBoolean())throw new SecurityException("原脚本输出阅读已关闭");
+        });return control;
+    }
+    private JSONObject readOriginalPythonText(AttachmentsModule book,TaskStore.OwnerPythonOriginal original,
+            TaskStore.OwnerPythonTextPublication selected,BooleanSupplier current)throws Exception{
+        RunControl window=originalPythonTextWindow(current);
+        try{
+            var observed=book.findOwnerPythonTextForHost(selected.pin(),window);
+            if(observed!=null)return tasks.finishOwnerPythonTextForOwner(original,selected,observed,current);
+        }catch(Exception unavailable){window.check();}
+        window.check();return new JSONObject().put("state",selected.saved()?"unavailable":"pending");
+    }
+
+    /** Save exactly one in-memory snapshot the current owner just read. No original run is re-opened. */
+    public JSONObject saveOwnerPythonTextForOwner(String id,String run,int epoch,String operation,OwnerPythonOutputText reviewed,
+            BooleanSupplier current)throws Exception{
+        if(tasks==null||!(module("attachments") instanceof AttachmentsModule book)||!current.getAsBoolean())
+            throw new SecurityException("本次原脚本输出无法核对，没有选择其他文件");
+        var original=tasks.ownerPythonOriginalForOwner(id,run,epoch,operation);
+        JSONObject result=tasks.ownerPythonStatusForOwner(original);
+        RunControl window=originalPythonTextWindow(current);
+        try(AutoCloseable entry=window.retainDispatchCheck(window::check)){
+            window.check();var claim=tasks.claimOwnerPythonTextForOwner(original,reviewed,current);
+            try{
+                var observed=book.saveOwnerPythonTextForHost(reviewed,window);
+                return result.put("textOutputSave",tasks.finishOwnerPythonTextForOwner(original,claim,observed,current));
+            }catch(Exception uncertain){
+                window.check();return result.put("textOutputSave",new JSONObject().put("state","pending"));
+            }
+        }
     }
 
     /** Explicit same-window native owner build confirmation. No Assistant send, queue or tool grant. */

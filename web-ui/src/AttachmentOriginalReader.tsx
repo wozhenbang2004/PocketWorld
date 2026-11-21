@@ -74,12 +74,16 @@ type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:bool
 type PdfFindPin={windowId:string;viewerId:string;identity:string;sha256:string;url:string};
 type PdfFindReceipt={value:Json;epoch:number;pin?:PdfFindPin};
 type PdfFindInput={text:string;receipt?:PdfFindReceipt};
+type TextFindScope=Omit<DisplayedOriginalText,'offset'>;
+type TextFindHit={offset:number;before:string;after:string};
+type TextFindReceipt={value:Json;epoch:number;scope:TextFindScope;matches:TextFindHit[]};
+type TextFindInput={text:string;receipt?:TextFindReceipt};
 type PdfMatchTarget={page:number;input:PdfFindInput;receipt:PdfFindReceipt;interaction:number;focus:Element|null};
 type PdfPageStart={kind:'pageStart';page:number;pin:PdfFindPin;epoch:number;interaction:number;focus:Element|null;body:HTMLDivElement;top:number;left:number};
 type PdfReveal=PdfPageStart|PdfMatchTarget;
 type PdfHitBox=readonly [number,number,number,number];
 type PdfMark={raster:PdfRaster;receipt:PdfFindReceipt;hits:PdfHitBox[][];index:number};
-type TextAdvance={range:DisplayedOriginalText;epoch:number;interaction:number;focus:Element|null;pane:HTMLElement};
+type TextAdvance={range:DisplayedOriginalText;epoch:number;interaction:number;focus:Element|null;pane:HTMLElement;findCurrent?:()=>boolean};
 function textRangeMatches(value:Json,range:DisplayedOriginalText){
  return value.sourceIdentity===range.identity&&value.sha256===range.sha256&&value.encoding===range.encoding&&
   value.offset===range.offset&&typeof value.content==='string'&&!!value.content;
@@ -93,6 +97,36 @@ function currentTextRange(range:DisplayedOriginalText):Json {
   view.canSaveOriginal===true&&view.file?.sha256===range.sha256&&original.kind==='text'&&original.id===range.viewerId&&
   original.identity===range.identity&&original.sha256===range.sha256&&original.sourceUnavailable===false&&original.busy===false?
   obj(original.information):{};
+}
+function currentTextFindSource(scope:TextFindScope){
+ const view=obj(bridge.getState().state.attachmentWorkspace),file=obj(view.originalFile),info=obj(file.information);
+ return view.open===true&&view.ready===true&&view.windowId===scope.windowId&&file.kind==='text'&&
+  file.id===scope.viewerId&&file.identity===scope.identity&&file.sha256===scope.sha256&&file.sourceUnavailable===false&&
+  info.sourceIdentity===scope.identity&&info.sha256===scope.sha256&&info.encoding===scope.encoding;
+}
+function captureTextFindScope(windowId:string,source:Json,encoding:unknown):TextFindScope|undefined{
+ const {id,identity,sha256}=source;
+ if(typeof id!=='string'||!/^[a-f0-9-]{36}$/.test(id)||typeof identity!=='string'||!/^[a-f0-9]{64}$/.test(identity)||
+    typeof sha256!=='string'||!/^[a-f0-9]{64}$/.test(sha256)||typeof encoding!=='string'||!textEncodings.some(row=>row.id===encoding))return;
+ const scope={windowId,viewerId:id,identity,sha256,encoding};
+ if(currentTextFindSource(scope))return scope;
+}
+function verifiedTextFind(value:Json,scope:TextFindScope,query:string,start:number):TextFindHit[]|undefined{
+ const {scannedUntil:through,nextOffset:next,atEnd}=value;
+ if(value.sourceIdentity!==scope.identity||value.sha256!==scope.sha256||value.encoding!==scope.encoding||
+    value.query!==query||value.startOffset!==start||!Number.isSafeInteger(through)||through<start||through>20*1024*1024||
+    typeof atEnd!=='boolean'||(atEnd?next!==null:!Number.isSafeInteger(next)||next<start||next>through)||
+    value.caseSensitive!==true||value.overlapping!==false||!Array.isArray(value.matches)||value.matches.length>40)return;
+ const matches:TextFindHit[]=[];
+ const context=(text:unknown,available:number)=>typeof text==='string'&&text.length<=32&&text.length<=available?text:'';
+ let first=start;
+ for(const raw of value.matches){
+  const {offset,length,before,after}=obj(raw);
+  if(!Number.isSafeInteger(offset)||offset<first||length!==query.length||offset+length>through)return;
+  first=offset+length;
+  matches.push({offset,before:context(before,offset-start),after:context(after,through-first)});
+ }
+ return matches;
 }
 function verifiedPdfFind(value:Json,sha:string,query:string,first:number,pages:number){
  const through=value.scannedThrough;
@@ -187,8 +221,9 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const [toolsVisible,setToolsVisible]=useState(false);
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
  const [recoveryEncoding,setRecoveryEncoding]=useState('');
- const [failedRead,setFailedRead]=useState<{command:string;args:Json;pdfFind?:PdfFindInput}|null>(null);
+ const [failedRead,setFailedRead]=useState<{command:string;args:Json;pdfFind?:PdfFindInput;textFind?:TextFindInput}|null>(null);
  const pdfInput=useRef<PdfFindInput>({text:''});
+ const textFindInput=useRef<TextFindInput>({text:''});
  const [pdfShown,setPdfShown]=useState<PdfRaster|null>(null),[pdfAttempt,setPdfAttempt]=useState<PdfRaster|null>(null);
  const [pdfMark,setPdfMark]=useState<PdfMark|null>(null);
  const pdfPending=useRef<{raster:PdfRaster;acknowledging:boolean;target?:PdfReveal}|null>(null);
@@ -207,9 +242,14 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   pdfInput.current.receipt=undefined;
   pdfInput.current={text}; // Editing away and back is still a new, unsubmitted search.
  };
+ const retireTextFind=(text:string)=>{
+  textFindInput.current.receipt=undefined;
+  textFindInput.current={text};
+ };
  const changeQuery=(text:string)=>{
   const next=text.slice(0,256);
   if(type==='pdf')retirePdfInput(next);
+  if(type==='text')retireTextFind(next);
   setQuery(next);setFound(null);
  };
  const clearPdfAttempt=()=>{pdfPending.current=null;setPdfAttempt(null)};
@@ -242,17 +282,22 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const invoke=async(command:string,args:Json={},target?:PdfReveal,advance?:TextAdvance)=>{
   if(pending.current||pdfPending.current||live.current.retired)return null;
   const pdfFind=command==='find'&&type==='pdf'?pdfInput.current:undefined;
+  const textFind=command==='find'&&type==='text'?textFindInput.current:undefined;
   const start=args.cursor,pdfPages=pdfShown?.pages??0,sha=source.sha256,epoch=bridge.getDocumentEpoch();
   if(pdfFind&&(!pdfShown?.searchAvailable||!pdfFind.text||args.query!==pdfFind.text||
       !Number.isSafeInteger(start)||start<1||start>pdfPages||typeof sha!=='string'||!/^[a-f0-9]{64}$/.test(sha)||
       (start!==1&&(pdfFind.receipt?.epoch!==epoch||pdfFind.receipt.value.nextPage!==start))))return null;
+  const textScope=textFind?captureTextFindScope(windowId,source,args.encoding):undefined;
+  if(textFind&&(!textScope||!textFind.text||args.query!==textFind.text||!Number.isSafeInteger(start)||start<0||
+     (start!==0&&(textFind.receipt?.epoch!==epoch||textFind.receipt.value.nextOffset!==start||
+      textFind.receipt.scope.encoding!==textScope.encoding))))return null;
   const pdfFindPin=pdfFind?capturePdfFindPin(windowId,source):undefined;
   if(type==='pdf')retirePdfMatch();
   const owner={...live.current},request=++sequence.current;pending.current=true;textAdvance.current=null;setBusy(true);setFailedRead(null);setError('');
   try{
    const result=await bridge.command<Json>('attachmentWorkspace.viewer',{windowId:owner.windowId,viewerId:owner.id,command,...args});
    if(request!==sequence.current||live.current.id!==owner.id||live.current.windowId!==owner.windowId||live.current.retired||document.visibilityState==='hidden')return null;
-   if(pdfFind&&bridge.getDocumentEpoch()!==epoch)return null;
+   if((pdfFind||textFind)&&bridge.getDocumentEpoch()!==epoch)return null;
    if(command==='find'){
     if(pdfFind){
      if(pdfInput.current!==pdfFind)return null;
@@ -260,6 +305,11 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
       pdfFind.receipt=undefined;setFound(null);return null;
      }
      pdfFind.receipt={value:result,epoch,pin:pdfFindPin};
+    }else if(textFind&&textScope){
+     if(textFindInput.current!==textFind||!currentTextFindSource(textScope))return null;
+     const matches=verifiedTextFind(obj(result),textScope,textFind.text,start);
+     if(!matches){textFind.receipt=undefined;setFound(null);return null}
+     textFind.receipt={value:result,epoch,scope:textScope,matches};
     }
     setFound(result);
    }
@@ -268,19 +318,19 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
     if(!raster||target&&raster.page!==target.page)throw new Error('这次 PDF 页面显示未确认');
     pdfPending.current={raster,acknowledging:false,target};setPdfAttempt(raster);
    }else{
-    if(advance&&advance.epoch===bridge.getDocumentEpoch()&&advance.interaction===readerInteraction.current&&
+    if(advance&&(!advance.findCurrent||advance.findCurrent())&&advance.epoch===bridge.getDocumentEpoch()&&advance.interaction===readerInteraction.current&&
        textRangeMatches(obj(result),advance.range))textAdvance.current=advance;
     setValue(result);
    }
    return result;
   }
-  catch(cause){if(request===sequence.current&&!live.current.retired&&(!pdfFind||bridge.getDocumentEpoch()===epoch)){
-   setFailedRead({command,args,pdfFind});setError(cause instanceof Error?cause.message:'原件读取未完成')
+  catch(cause){if(request===sequence.current&&!live.current.retired&&(!pdfFind&&!textFind||bridge.getDocumentEpoch()===epoch)){
+   setFailedRead({command,args,pdfFind,textFind});setError(cause instanceof Error?cause.message:'原件读取未完成')
   }return null}
   finally{if(request===sequence.current){pending.current=false;setBusy(false)}}
  };
  useEffect(()=>{setValue(obj(source.information));setError('');setFound(null);setZoom(1);setTurn(0);pending.current=false;void invoke('load');return()=>{sequence.current++;pending.current=false;pdfPending.current=null}},[source.id,windowId]);
- useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;textAdvance.current=null;clearPdfAttempt();setBusy(false);if(type==='pdf')retirePdfInput(pdfInput.current.text);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
+ useEffect(()=>{const hide=()=>{if(document.visibilityState==='hidden'){sequence.current++;pending.current=false;textAdvance.current=null;clearPdfAttempt();setBusy(false);if(type==='pdf')retirePdfInput(pdfInput.current.text);if(type==='text')retireTextFind(textFindInput.current.text);setFound(null)}};document.addEventListener('visibilitychange',hide);return()=>document.removeEventListener('visibilitychange',hide)},[]);
  useEffect(()=>{
   if(type!=='pdf')return;
   let epoch=bridge.getDocumentEpoch();
@@ -298,7 +348,9 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  useEffect(()=>{if(retired){sequence.current++;pending.current=false;clearPdfAttempt();setPdfShown(null);setBusy(false);setValue({});changeQuery('');setFailedRead(null)}},[retired]);
  const nativeError=typeof source.error==='string'?source.error:'';
  const previousPdfFindFailed=!!failedRead?.pdfFind&&failedRead.pdfFind!==pdfInput.current;
- const failed=retired?'原来源已失效，请返回后重新打开。':previousPdfFindFailed?'上一次 PDF 查找未完成；当前关键词尚未查找。':nativeError||error;
+ const previousTextFindFailed=!!failedRead?.textFind&&failedRead.textFind!==textFindInput.current;
+ const failed=retired?'原来源已失效，请返回后重新打开。':previousPdfFindFailed?'上一次 PDF 查找未完成；当前关键词尚未查找。':
+  previousTextFindFailed?'上一次文字查找未完成；当前关键词尚未查找。':nativeError||error;
  const priorRange=type==='text'&&typeof details.content==='string'||type==='office'&&['ok','partial'].includes(details.status)&&
   Array.isArray(details.chunks)&&Number.isSafeInteger(details.unit)&&details.unit>=1&&details.unit<=details.totalUnits;
  // A client-only error cannot authorize displaying old content. Keep the node mounted while the native verdict settles.
@@ -349,7 +401,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  useLayoutEffect(()=>{
   const advance=textAdvance.current,active=document.activeElement;
   if(!advance)return;
-  if(!trackTextAdvance||retired||document.hidden||bridge.getDocumentEpoch()!==advance.epoch||
+  if(!trackTextAdvance||retired||document.hidden||advance.findCurrent&&!advance.findCurrent()||bridge.getDocumentEpoch()!==advance.epoch||
      advance.interaction!==readerInteraction.current||(active!==advance.focus&&active!==document.body)){
    textAdvance.current=null;return;
   }
@@ -382,7 +434,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   void invoke('read',args,undefined,advance);
  };
  const retry=()=>{
-  if(failedRead?.pdfFind&&failedRead.pdfFind!==pdfInput.current)return;
+  if(failedRead?.pdfFind&&failedRead.pdfFind!==pdfInput.current||failedRead?.textFind&&failedRead.textFind!==textFindInput.current)return;
   void invoke(failedRead?.command||'load',failedRead?.args);
  };
  const encodingChoice=recoveryEncoding||String(actual.encoding||'UTF-8');
@@ -395,7 +447,12 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   (actual.atEnd===false&&Number.isSafeInteger(actual.nextOffset)&&actual.nextOffset>actual.offset||
    actual.atEnd===true&&Number.isSafeInteger(actual.decodedCharacters)&&actual.decodedCharacters>=12_000);
  const paintedPdfInput=pdfInput.current,paintedPdfReceipt=paintedPdfInput.receipt;
- const foundInReader=type==='pdf'&&(paintedPdfReceipt?.value!==found||paintedPdfReceipt?.epoch!==bridge.getDocumentEpoch())?null:found;
+ const paintedTextInput=textFindInput.current,paintedTextReceipt=paintedTextInput.receipt;
+ const ownsPaintedTextFind=()=>!!paintedTextReceipt&&textFindInput.current===paintedTextInput&&
+  paintedTextInput.receipt===paintedTextReceipt&&paintedTextReceipt.epoch===bridge.getDocumentEpoch()&&!document.hidden&&
+  paintedTextReceipt.scope.encoding===actual.encoding&&currentTextFindSource(paintedTextReceipt.scope);
+ const foundInReader=type==='text'?paintedTextReceipt?.value===found&&ownsPaintedTextFind()?found:null:
+  type==='pdf'&&(paintedPdfReceipt?.value!==found||paintedPdfReceipt?.epoch!==bridge.getDocumentEpoch())?null:found;
  const ownsPaintedFind=()=>type!=='pdf'||pdfInput.current===paintedPdfInput&&paintedPdfInput.receipt===paintedPdfReceipt&&
   !!paintedPdfReceipt&&paintedPdfReceipt.epoch===bridge.getDocumentEpoch()&&!document.hidden;
  const currentPdfMark=pdfMark&&ready&&!readerBusy&&pdfMark.raster===pdfShown&&ownsPaintedFind()&&
@@ -455,6 +512,17 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   if(ready&&page===pdfShown?.page)revealPdfMatch(target,pdfShown,false);
   else void invoke('read',{page},target);
  };
+ const pickTextMatch=(hit:TextFindHit)=>{
+  if(!paintedTextReceipt||readerBusy||!ownsPaintedTextFind()||!paintedTextReceipt.matches.includes(hit))return;
+  const {scope}=paintedTextReceipt,pane=textBody.current?.closest<HTMLElement>('.pw-file-page-scroll');
+  const advance=pane&&trackTextAdvance&&!markdown&&shownText&&textRangeMatches(currentTextRange(textRange),textRange)?
+   {range:{...scope,offset:hit.offset},epoch:paintedTextReceipt.epoch,interaction:readerInteraction.current,focus:document.activeElement,
+    pane,findCurrent:ownsPaintedTextFind}:undefined;
+  void invoke('read',{offset:hit.offset,encoding:scope.encoding},undefined,advance);
+ };
+ const selectTextEncoding=(encoding:string)=>{
+  retireTextFind(query);setFound(null);read({encoding,offset:0});
+ };
  // A second interaction supersedes the reveal, not the already requested native read.
  const noteReaderInteraction=()=>{if(type==='pdf')readerInteraction.current++};
  const zoomOriginal=(next:number|((value:number)=>number))=>{if(type==='pdf')retirePdfMatch();setZoom(next)};
@@ -463,18 +531,25 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const canFindPdf=type==='pdf'&&toolsVisible&&(ready||previousPdfFindFailed&&source.sourceUnavailable===false&&pdfShown?.searchAvailable===true);
  const findOriginal=(canFindPdf||type==='text'&&ready)&&<Accordion className="pw-original-find"><AccordionItem id="original-find" title="查找原文" description={query?`当前查找：${query}`:undefined}><div className="pw-file-search"><TextField label={type==='pdf'?'查找 PDF 原文层':'查找文字（区分大小写）'} value={query} onChange={changeQuery}/><Button variant="secondary" disabled={readerBusy||!query||type==='pdf'&&!actual.searchAvailable} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:type==='pdf'?1:0})}>查找</Button></div>
  {type==='pdf'&&ready&&!actual.searchAvailable&&<p className="pw-muted">此设备不支持 PDF 原文搜索；可返回文件来源，选择本机文字识别。</p>}
- {foundInReader&&<div className="pw-action-row">
-  {pdfMatchPages?pdfMatchPages.map(page=><Button key={page} variant="ghost" disabled={readerBusy}
-   aria-label={`查看原 PDF 第 ${page} 页的匹配`} onClick={()=>pickPdfMatch(page)}>第 {page} 页</Button>):
-   rows(foundInReader.matches).map((hit,i)=><Button key={i} variant="ghost" disabled={readerBusy}
-    onClick={()=>read({offset:hit.offset,encoding:actual.encoding})}>位置 {Number(hit.offset)+1}</Button>)}
-  {foundInReader[type==='pdf'?'nextPage':'nextOffset']!=null&&<Button variant="secondary" disabled={readerBusy}
-   onClick={()=>{if(ownsPaintedFind())void invoke('find',{query:type==='pdf'?foundInReader.query:query,encoding:actual.encoding,
-    cursor:foundInReader[type==='pdf'?'nextPage':'nextOffset']})}}>继续后续范围</Button>}
+ {foundInReader&&<>
+  {type==='text'&&!!paintedTextReceipt?.matches.length&&<div className="pw-outcome-files" aria-label="当前文字匹配">
+   {paintedTextReceipt.matches.map(hit=><Button key={hit.offset} variant="ghost" disabled={readerBusy} onClick={()=>pickTextMatch(hit)}>
+    {hit.before.trim()||hit.after.trim()?<span><bdi>{hit.before}<strong>{foundInReader.query}</strong>{hit.after}</bdi>
+     <small>位置 {hit.offset+1}</small></span>:`位置 ${hit.offset+1}`}
+   </Button>)}
+  </div>}
+  <div className="pw-action-row">
+  {pdfMatchPages?.map(page=><Button key={page} variant="ghost" disabled={readerBusy}
+   aria-label={`查看原 PDF 第 ${page} 页的匹配`} onClick={()=>pickPdfMatch(page)}>第 {page} 页</Button>)}
+  {(type==='pdf'?foundInReader.nextPage!=null:Number.isSafeInteger(foundInReader.nextOffset)&&foundInReader.nextOffset>foundInReader.startOffset)&&
+   <Button variant="secondary" disabled={readerBusy}
+   onClick={()=>{if(type==='pdf'?ownsPaintedFind():ownsPaintedTextFind())void invoke('find',
+    {query:foundInReader.query,encoding:actual.encoding,cursor:foundInReader[type==='pdf'?'nextPage':'nextOffset']})}}>继续后续范围</Button>}
   {!rows(foundInReader.matches).length&&<p>{type==='pdf'&&foundInReader.scannedThrough<foundInReader.firstPage?
-   '本次还没有查到页面。':'当前查找范围内没有匹配文字。'}</p>}
+   '本次还没有查到页面。':type==='text'&&foundInReader.atEnd===false&&foundInReader.scannedUntil===foundInReader.startOffset?
+    '本次还未扫描到文字。':'当前查找范围内没有匹配文字。'}</p>}
   {foundInReader.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}
- </div>}</AccordionItem></Accordion>;
+ </div></>}</AccordionItem></Accordion>;
  return <section ref={readerSurface} className="pw-original-file" aria-label={`原件：${source.name}`}
   style={showingPdfPageText?{display:'none'}:undefined} onPointerDownCapture={noteReaderInteraction}
   onClickCapture={noteReaderInteraction} onInputCapture={noteReaderInteraction}
@@ -485,12 +560,12 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  {failed&&<section aria-label="原件读取失败">
   <p className="pw-error" role="alert">{failed}</p>
   {retaining&&ready&&<p className="pw-muted">这次操作没有更新内容，仍显示同一原件上次已读的范围。</p>}
-  {!source.sourceUnavailable&&!previousPdfFindFailed&&<Button variant="secondary" disabled={readerBusy} onClick={retry}>{failedRead?.command==='find'?'重试本次查找':type==='unsupported'?'重新核对文件':'重试本次读取'}</Button>}
+  {!source.sourceUnavailable&&!previousPdfFindFailed&&!previousTextFindFailed&&<Button variant="secondary" disabled={readerBusy} onClick={retry}>{failedRead?.command==='find'?'重试本次查找':type==='unsupported'?'重新核对文件':'重试本次读取'}</Button>}
   {type==='pdf'&&!retired&&!pdfShown&&failedRead?.command==='read'&&Number(failedRead.args.page)>1&&
    <Button variant="ghost" disabled={readerBusy} onClick={()=>read({page:1})}>从第 1 页读取</Button>}
   {type==='text'&&!retired&&failedRead?.command!=='find'&&actual.previewAvailable!==false&&<div className="pw-action-row">
    <RadioOptions label="重新读取时使用的文本编码" value={encodingChoice} options={textEncodings} isDisabled={busy||source.busy} onChange={setRecoveryEncoding}/>
-   <Button variant="secondary" disabled={busy||source.busy} onClick={()=>{setFound(null);read({encoding:encodingChoice,offset:0})}}>用此编码从头读取</Button>
+   <Button variant="secondary" disabled={busy||source.busy} onClick={()=>selectTextEncoding(encodingChoice)}>用此编码从头读取</Button>
   </div>}
  </section>}
  {(unavailable||failed&&!ready&&failedRead?.command!=='find')&&!retired&&recovery?.onOpenInReader&&
@@ -557,7 +632,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   <DocumentProjection value={actual} orderedOriginalWord/>{Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
  </>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">
-  <RadioOptions label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);setFound(null);read({encoding,offset:0})}}/>
+  <RadioOptions label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);selectTextEncoding(encoding)}}/>
   {isMarkdown&&<Button variant="ghost" onClick={()=>setMarkdown(value=>!value)}>{markdown?'显示原文':'显示 Markdown'}</Button>}
  </AccordionItem></Accordion>}
  </section>;

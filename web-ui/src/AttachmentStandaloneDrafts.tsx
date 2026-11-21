@@ -27,12 +27,19 @@ const dateOf=(instant:number)=>{
  return Number.isFinite(time.getTime())?time.toLocaleString():undefined;
 };
 
+function acknowledgedBlank(value:Json|undefined):Editor|undefined{
+ const input=fields(value?.fields),handle=value?.editorHandle;
+ if(!input||!isHandle(handle)||value?.versionHandle!=null||input.title!==''||input.body!=='')return;
+ return {handle,original:input,input};
+}
+
 /** This editor owns only the current Web document's input. Native versions are opaque handles. */
-export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,invoke,registerExit,onExit}:{
- active:boolean;recoverable:boolean;loading:boolean;initial?:Json;invoke:Invoke;
+export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,initialBlank=false,invoke,registerExit,onExit}:{
+ active:boolean;recoverable:boolean;loading:boolean;initial?:Json;initialBlank?:boolean;invoke:Invoke;
  registerExit:(handle:((close:boolean)=>void)|null)=>void;onExit:(close:boolean)=>Promise<void>;
 }){
- const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor>(),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor|undefined>(()=>initialBlank&&active?acknowledgedBlank(initial):undefined);
+ const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [exit,setExit]=useState<{close:boolean}>();
  const [outputChoice,setOutputChoice]=useState<OutputChoice>();
  const [review,setReview]=useState<GenerationReview>(),[ack,setAck]=useState(false),[generation,setGeneration]=useState<'submitting'|'accepted'|'unknown'>();
@@ -136,7 +143,8 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
   if(!input){setError('草稿文字超出可保留范围。');return}
   setEditor(value=>value?{...value,input}:value);setNotice('');setError('');
  };
- const shown=catalog===undefined?initial:catalog??undefined,rows=rowList(shown);
+ const shown=catalog===undefined?(initialBlank?undefined:initial):catalog??undefined,rows=rowList(shown);
+ const blankUnconfirmed=initialBlank&&!editor&&catalog===undefined;
  const retry=()=>perform(async()=>{if(active){const value=await invoke('drafts.list');if(mounted.current&&current.current)setCatalog(value)}});
  const editable=active&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation&&!removalReview&&!removal;
  const canReviewGeneration=!!editor?.version&&!dirty&&!!editor.original.name.trim()&&!!editor.original.body.trim();
@@ -217,7 +225,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
   await readListAfterRemoval(removal==='unknown'?'本次删除没有收到确认；这里只显示当前可核对的草稿。':'请在当前清单核对原草稿。');
  });
  return <section className="pw-document-editor" aria-label="本机文档草稿">
-  <h3 ref={heading} tabIndex={-1}>{typed?'本页还在的输入':active&&removal?'删除本机草稿':active&&unavailable?'原文件暂不能核对':active&&editor?'编辑本机草稿':'已保留的草稿'}</h3>
+  <h3 ref={heading} tabIndex={-1}>{typed?'本页还在的输入':active&&removal?'删除本机草稿':active&&unavailable?'原文件暂不能核对':active&&editor?'编辑本机草稿':blankUnconfirmed?'新建文档':'已保留的草稿'}</h3>
   {active&&<p className="pw-muted">{editor?.sourceName?<>修改草稿源自固定文件「{editor.sourceName}」，原件不变。</>:'只保存在本机。草稿不是已生成的文件。'}</p>}
   {active&&!editor&&!unavailable&&!removal&&notice&&<p role="status">{notice}</p>}
   {error&&<p className="pw-error" role="alert">{error}</p>}
@@ -246,6 +254,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,i
       <Button variant="primary" disabled={!editable||!dirty} onClick={()=>save()}>保留草稿</Button>))}
      {removalTarget&&!generation&&!removal&&<Button variant="ghost" disabled={!editable} onClick={reviewRemoval}>删除草稿</Button>}
     </footer></>:
+   blankUnconfirmed?<p role="status">没有核对到空白草稿，未保存任何内容。请返回文件库后再试。</p>:
    loading||busy&&catalog===null?<p role="status">正在读取本机草稿清单</p>:<>{shown?.metadataComplete===false&&<p role="status">草稿清单尚未核对齐全，可以打开已经列出的原稿。</p>}
     {shown?.metadataComplete===true&&!rows.length&&<p>还没有已保留的草稿。</p>}
     {!shown&&<p role="status">草稿清单尚未核对。</p>}

@@ -3,6 +3,7 @@ package dev.pocketengine.features.devices;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.AttachmentBook;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
+import dev.pocketengine.features.local.runtime.OwnerPythonOutputText;
 import dev.pocketengine.features.devices.transport.DeviceArtifactTransfer;
 import java.util.List;
 import java.util.UUID;
@@ -17,8 +18,8 @@ final class DeviceSelectedFileTransfer {
         JSONArray out=new JSONArray();if(book==null)return out;JSONArray all=book.list();
         for(int i=0;i<all.length();i++){JSONObject item=all.getJSONObject(i);JSONObject source=item.optJSONObject("source");
             if(!"owner".equals(item.optString("principalId"))||!"private".equals(item.optString("spaceId"))||item.optBoolean("outputSourceRetired")||source!=null&&(source.has("groupSpaceId")||source.optString("kind").startsWith("group")))continue;
-            // Fixed compiler files are local results, not selectable paired-device inputs.
-            if(OriginalNodeCompilerDelivery.claims(source))continue;
+            // Fixed local results are not selectable paired-device inputs.
+            if(OriginalNodeCompilerDelivery.claims(source)||OwnerPythonOutputText.claims(source))continue;
             out.put(new JSONObject().put("id",item.getString("id")).put("sha256",item.getString("sha256")).put("name",item.getString("name")).put("mimeType",item.getString("mimeType")).put("size",item.getLong("size")).put("available",item.getLong("size")<=MAX_BYTES).put("maximumBytes",MAX_BYTES));
         }return out;
     }
