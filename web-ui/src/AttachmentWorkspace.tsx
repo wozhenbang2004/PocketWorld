@@ -20,6 +20,7 @@ type Props={
  onStageFile?:(reference:Json,target:FileDraftTarget,stillCurrent:()=>boolean)=>Promise<boolean>;
  onOpenDraft?:(reference:Json,target:FileDraftTarget,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
  onUseResult?:(reference:Json,topic:FileResultTopic,openOnly:boolean,stillCurrent:()=>boolean,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
+ onChooseResultAttachment?:(file:OriginalAttachmentChoice,topic:FileResultTopic,stillCurrent:()=>boolean,closeOriginal:()=>Promise<unknown>)=>Promise<boolean>;
  onVerifyReportFileWork?:(taskId:string,windowId:string)=>Promise<void>;
  onChooseAttachment?:(file:OriginalAttachmentChoice,target:FileDraftTarget,stillCurrent:()=>boolean,closeOriginal:()=>Promise<void>)=>Promise<void>;
 };
@@ -59,7 +60,7 @@ function documentSourceKey(record:Json,source:Json=record){
  return file&&scope.every(key=>typeof key==='string'&&key)?JSON.stringify([...scope,file.fileId,file.sha256]):'';
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onVerifyReportFileWork,onChooseAttachment}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,openTaskId,draftTarget,resultTopic,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onVerifyReportFileWork,onChooseAttachment}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -143,8 +144,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   void Promise.resolve(beforeBack.current?.()).then(frame=>act(returnToWork?'continueTask':'close',{},frame)).catch(()=>{});
  };
  const returnToSearch=()=>{if(busy||draftFlight.current||!onReturnToSearch)return;returningToSearch.current=true;void Promise.resolve(beforeBack.current?.()).then(frame=>act('close',{},frame)).then(()=>onReturnToSearch()).catch(()=>{returningToSearch.current=false})};
- const handOffFile=async(openDraft:boolean,originalTopic?:FileResultTopic,openOnly=false)=>{
-  if(busy||draftFlight.current||!selection||!privateFiles||originalTopic&&!onUseResult||!originalTopic&&!canStage)return;
+ const handOffFile=async(openDraft:boolean,originalTopic?:FileResultTopic,openOnly=false,asAttachment=false)=>{
+  if(busy||draftFlight.current||attachmentFlight.current||!selection||!privateFiles||
+     (asAttachment?!originalTopic||!onChooseResultAttachment:originalTopic?!onUseResult:!canStage))return;
   const target=draftTarget;
   const reference={kind:'artifact',id:selection.fileId,sha256:selection.sha256},epoch=bridge.getDocumentEpoch();
   const readSource=()=>obj(bridge.getState().state.attachmentWorkspace);
@@ -177,8 +179,11 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   setDraftHandoff(request);
   try{
    const label=originalTopic?.label||target?.label;
-   const accepted=await (originalTopic?onUseResult?.(reference,originalTopic,openOnly,stillCurrent,closeOriginal):target&&(openDraft?onOpenDraft?.(reference,target,closeOriginal):onStageFile?.(reference,target,stillCurrent)));
-   if(!accepted)throw new Error(openDraft?`「${label}」草稿暂未打开，请重新核对后再试。`:`文件尚未确认加入「${label}」草稿，请重试。`);
+   const accepted=await (originalTopic?asAttachment
+    ?onChooseResultAttachment?.({...selection,name:String(file.name||'原件')},originalTopic,stillCurrent,closeOriginal)
+    :onUseResult?.(reference,originalTopic,openOnly,stillCurrent,closeOriginal)
+    :target&&(openDraft?onOpenDraft?.(reference,target,closeOriginal):onStageFile?.(reference,target,stillCurrent)));
+   if(!accepted)throw new Error(asAttachment?'尚未打开原话题附件选择，没有加入文件。':openDraft?`「${label}」草稿暂未打开，请重新核对后再试。`:`文件位置尚未确认关联到「${label}」草稿，请重试。`);
    if(stillCurrent())setDraftHandoff({...request,phase:'added'});
   }catch(error){
    if(stillCurrent())setDraftHandoff({...request,phase:openDraft&&!originalTopic?'added':'failed',error:error instanceof Error?error.message:'草稿操作尚未确认，请重试。'});
@@ -292,8 +297,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  };
  const topicHasFile=topic?.conversationId===draftTarget?.conversationId&&draftHasFile;
  const useInTopic=privateFiles&&topic&&onUseResult&&<>
-  <Button variant={preferSave?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined}
-   onClick={()=>void handOffFile(true,topic,topicHasFile)}>{draftBusy?'正在核对原话题草稿…':topicHasFile?'打开原话题草稿':topic.label==='原话题'?'带回原话题草稿':`带回「${topic.label}」草稿`}</Button>
+  {onChooseResultAttachment&&<Button variant={preferSave?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined}
+   onClick={()=>void handOffFile(true,topic,false,true)}>选作原话题附件…</Button>}
+  <Button variant={onChooseResultAttachment?'ghost':preferSave?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined}
+   onClick={()=>void handOffFile(true,topic,topicHasFile)}>{draftBusy&&!onChooseResultAttachment?'正在核对原话题草稿…':topicHasFile?'查看草稿中的文件位置':'只关联文件位置'}</Button>
   {handoff?.error&&<p className="pw-file-draft-status pw-error" role="alert">{handoff.error}</p>}
  </>;
  const copyReceipt=obj(view.privateCopyReceipt),copyStage=view.privateCopyStage;

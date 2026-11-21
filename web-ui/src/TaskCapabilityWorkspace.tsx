@@ -6,6 +6,7 @@ import { TaskToolInventory } from './TaskToolInventory';
 import type { TaskCatalogReading } from './TaskToolComparison';
 import { TaskCapabilityConsent, taskCapabilityArtifactStatus, taskCapabilityDecision, taskSkillPreparation } from './task-capabilities';
 import { profileDependencyLabel } from './profile-contract';
+import { bridge } from './bridge';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -34,6 +35,39 @@ const toolMaintenanceRoute = (need: Data): 'plugins' | 'mcp' | null => {
   if (!missingDefinition && !needsReconnection) return null;
   return installation.manifest?.mcpSource || Array.isArray(definitions) && definitions.some((tool: Data) => tool?.kind === 'mcp') ? 'mcp' : 'plugins';
 };
+
+/** The existing task read already includes the original selected and currently
+ * verifiable Skill versions. Do not infer a selection from related suggestions. */
+function originalLocalProfileSkills(taskId: string, pageHandle: string, view: Data | null) {
+  const prepared = view?.skillPreparation, inventory = view?.toolInventory;
+  if (document.hidden || !pageHandle || view?.pageHandle !== pageHandle || view.taskId !== taskId ||
+      view.executionAuthorized !== false || view.capabilityPreparationMessage ||
+      prepared?.selectionSource !== 'original_work_profile' || prepared.state !== 'ready' ||
+      prepared.configurationOnly !== true || prepared.executionAuthorized !== false ||
+      inventory?.format !== 'pocketworld.owner-tool-inventory.v1' || inventory.source !== 'original_run_record' ||
+      inventory.taskId !== taskId || inventory.executionAuthorized !== false || inventory.selection?.kind !== 'work_profile') return [];
+  const live = bridge.getState(), native = live.view as Data | undefined;
+  if (native?.section !== null || native.taskId !== taskId || live.state.conversationReader) return [];
+  const matches = rows(live.state.tasks).filter(task => task?.id === taskId);
+  const raw = matches.length === 1 ? matches[0].raw : undefined, pin = raw?.workProfileRef;
+  if (raw?.id !== taskId || raw.kind !== 'assistant' || raw.actorId !== 'owner' || raw.spaceId !== 'private' ||
+      raw.contextAvailable === false || raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true ||
+      raw.taskProjection === 'source_unavailable' || typeof pin?.runId !== 'string' || !pin.runId ||
+      !Number.isSafeInteger(pin.epoch) || pin.epoch<1 || pin.runId !== raw.runId || pin.epoch !== raw.coordinatorEpoch ||
+      inventory.runId !== pin.runId || inventory.epoch !== pin.epoch ||
+      typeof pin.profileId !== 'string' || !pin.profileId || !Number.isSafeInteger(pin.revision) || pin.revision<1 ||
+      inventory.selection.profileId !== pin.profileId || inventory.selection.revision !== pin.revision ||
+      prepared.profileId !== pin.profileId || prepared.profileRevision !== pin.revision ||
+      typeof pin.resolutionDigest !== 'string' || !/^[a-f0-9]{64}$/.test(pin.resolutionDigest) ||
+      prepared.resolutionDigest !== pin.resolutionDigest) return [];
+  const skills = rows(view.skills);
+  if (skills.length !== prepared.selectedSkillCount || new Set(skills.map(skill => skill?.id)).size !== skills.length) return [];
+  return skills.filter(skill => skill?.selectionSource === 'original_work_profile' && skill.sourceKind === 'owner_import' &&
+    skill.ownerId === 'owner' && skill.spaceId === 'private' && skill.applicableToScope === true &&
+    skill.contentVerified === true && skill.active === true && skill.shadowed === false &&
+    typeof skill.id === 'string' && !!skill.id && typeof skill.name === 'string' && !!skill.name.trim() &&
+    Number.isSafeInteger(skill.revision) && skill.revision>0);
+}
 
 export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange, onOpenTools, registerBeforeLeave }: { taskId: string; run: Run; exportState?: Data | null; onBackChange?: (handler: (() => boolean) | null) => void; onOpenTools?: (route?: 'skills' | 'plugins' | 'mcp' | 'workProfiles') => void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void }) {
   const [expanded, setExpanded] = useState(false), [view, setView] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
@@ -179,6 +213,7 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
   }, [registerBeforeLeave]);
   useEffect(() => { onBackChange?.(() => { if (reviewId.current) { closeReview(); return true; } if (policyCurrent.current) { leavePolicy(); return true; } if (inventoryBack.current?.()) return true; if (file) { closeArtifact(); return true; } if (expanded) { close(); setExpanded(false); return true; } return false; }); return () => onBackChange?.(null); }, [expanded, file, onBackChange]);
 
+  const selectedLocalSkills = expanded && !policy ? originalLocalProfileSkills(taskId, page.current, view) : [];
   return <section ref={root} aria-busy={busy} className="pw-task-capabilities pw-ecosystem-depth"><div className="pw-section-heading pw-eco-workspace-heading"><div><h3>任务脚本与工具</h3><p>核对这次执行，查看原回执与文件成果。</p></div><Button variant="secondary" disabled={busy} onClick={() => { if (expanded) { const collapse = () => { closePolicy(); close(); setExpanded(false); }; if (policyCurrent.current) leavePolicy(collapse); else collapse(); } else { setExpanded(true); load(); } }}>{expanded ? '收起' : '查看'}</Button></div>
     {expanded && <>
       {policy && <section className="pw-task-policy-editor" aria-label="原任务适用的审批规则">
@@ -227,6 +262,11 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
         </section>;
       })}
       </section><aside className="pw-eco-tool-needs"><div className="pw-eco-section-heading"><h4>{view?.skillPreparation?.selectionSource === 'original_work_profile' ? '所选技能的能力准备' : '相关技能的能力准备'}</h4><p>{view?.skillPreparation?.selectionSource === 'original_work_profile' ? `按原工作配置${view.skillPreparation.profileRevision ? `修订 ${view.skillPreparation.profileRevision}` : ''}固定的技能版本核对。准备后仍需回原任务检查原选择。` : '按任务描述提示相关技能，列出它们需要的连接、工具与宿主能力。是否使用以本次执行为准。'}</p></div>
+      {selectedLocalSkills.length > 0 && <section className="pw-eco-tool" aria-label="原配置已选入的本机技能">
+        <h5>原配置已选入</h5>
+        <ul>{selectedLocalSkills.map(skill => <li key={skill.id}><bdi>{skill.name}</bdi> · 修订 {skill.revision}</li>)}</ul>
+        <p className="pw-field-hint">这是本轮配置的选择，不代表任务已读取或采用。</p>
+      </section>}
       {view?.skillPreparation && view.skillPreparation.state !== 'ready' && <p role="status">{view.skillPreparation.state === 'profile_unavailable' ? '原工作配置暂不可核对，请回原任务重新读取。' : view.skillPreparation.state === 'selection_changed' ? '读取期间原任务选择已变化，请刷新后核对。' : view.skillPreparation.state === 'skills_unavailable' ? '技能来源暂未读到，请刷新后核对；原脚本回执仍可查看。' : '原任务的资料范围暂不可核对，请先检查原项目。'}</p>}
       {rows(view?.skillPreparation?.unresolvedSkills).map(skill => <p className="pw-field-hint" key={skill.id}>原技能 {skill.id} · 修订 {skill.revision}：{capabilityState(skill.status)}</p>)}
       {rows(view?.pluginNeeds).map(need => {
