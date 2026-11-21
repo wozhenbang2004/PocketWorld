@@ -63,7 +63,7 @@ import {ChatNavigationMenu} from './ChatNavigationMenu';
 import {useNavigationGlass} from './useNavigationGlass';
 import {NavigationChrome} from './NavigationChrome';
 import {WorkObjectMenu} from './WorkObjectMenu';
-import {TaskCapabilityWorkspace} from './TaskCapabilityWorkspace';
+import {retainedLocalScriptOutputs,TaskCapabilityWorkspace} from './TaskCapabilityWorkspace';
 import {DeviceTaskScopeWorkspace} from './DeviceTaskScopeWorkspace';
 import type {SentPhoneGoalFocus} from './devices-workspace';
 import {PhoneControlWorkspace} from './PhoneControlWorkspace';
@@ -521,6 +521,7 @@ export default function App(){
  const taskHistoryOrigin=useRef<{taskId:string;origin:ConversationHistoryTaskOrigin}|null>(null);
  const taskReconciliationOrigin=useRef<{taskId:string;layer:TaskLayer;openedId:string;expected:{runId:string;epoch:number};history?:ConversationHistoryTaskOrigin}|null>(null);
  const [taskOpening,setTaskOpening]=useState(false);
+ const [taskToolsPlace,setTaskToolsPlace]=useState<{taskId:string;overview:boolean}|null>(null);
  const [focusedOriginalDraft,setFocusedOriginalDraft]=useState<OriginalProjectDraft|null>(null);
  const [sourceSelection,setSourceSelection]=useState<AnswerSourceTarget|null>(null);
  const [projectConventionMessage,setProjectConventionMessage]=useState<string|null>(null);
@@ -652,6 +653,15 @@ export default function App(){
  const taskCandidate=tasks.find(x=>x.id===taskId),expectedProjectRun=projectReading?.sourcePackageRun??projectReading?.expected;
  const wrongProjectRun=!!expectedProjectRun&&(taskCandidate?.raw?.runId!==expectedProjectRun.runId||taskCandidate?.raw?.coordinatorEpoch!==expectedProjectRun.epoch);
  const selectedTask=noticeNotReady||reportSourceChanged||wrongProjectRun||projectReading&&(openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId||state.projectId!==projectReading.projectId)?undefined:taskCandidate;const currentProject=projects.find(x=>x.id===state.projectId);const currentConversation=conversations.find(x=>x.id===state.conversationId);
+ useLayoutEffect(()=>{
+  // Choose one parent before mounting the tools in this admitted drawer visit. Later receipts must not move a live reader.
+  const task=selectedTask,raw=task?.raw,view=obj(snapshot?.view);
+  if(taskToolsPlace||!taskOpen||taskOpening||!task||openedTaskId.current!==task.id||view.taskId!==task.id||view.section!=null||
+     !['detail_window','source_unavailable'].includes(raw?.taskProjection)||!can('taskCapabilities.open'))return;
+  const ordinary=raw?.executionRole==='owner_work'&&!raw?.developmentContext&&!raw?.ownerPhoneControl&&!raw?.ownerDeviceWork;
+  const overview=ordinary&&can('taskCapabilities.artifact')&&can('taskCapabilities.export')&&!!retainedLocalScriptOutputs(task);
+  setTaskToolsPlace(place=>place??{taskId:task.id,overview});
+ },[taskToolsPlace,taskOpen,taskOpening,selectedTask,snapshot?.view,can]);
  const historyPage=state.conversationReader||null,workRequestPin=obj(historyPage?.workRequest),workRequestOrigin=workRequestVisit.current;
  const workRequestPage=taskOpen&&workRequestOrigin&&taskId===workRequestOrigin.work.taskId&&snapshot?.view?.taskId===taskId&&
   workRequestPin.taskId===taskId&&workRequestPin.runId===workRequestOrigin.work.runId&&workRequestPin.epoch===workRequestOrigin.work.epoch&&
@@ -1143,6 +1153,7 @@ export default function App(){
   taskHistoryOrigin.current=origin?{taskId:id,origin}:null;
   invalidateContinuation();
   setFocusedOriginalDraft(expected?.draftId?{taskId:id,runId:expected.runId,epoch:expected.epoch,draftId:expected.draftId}:null);
+  setTaskToolsPlace(null);
   rememberTaskPosition();const request=++reviewRequest.current;const readReview=entry!=='homeReport'&&(entry==='review'||entry==='scope'||tasks.some(task=>task.id===id&&attention(task)));openedTaskId.current=null;setReviewPending(false);setTaskOpening(true);setWorkOpen(false);setCommandOpen(false);setTaskId(id);setTaskLayer(entry==='review'?'overview':entry);setTaskOpen(true);setReview(null);setReviewNote('');setReviewFeedbackOpen(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
   // Open the original host window before obtaining its single-use review handle.
@@ -2967,6 +2978,14 @@ export default function App(){
   const inlineDraftDecision=!buildNext?inlineDraftDecisionFor(task,actionNames):null;
   const draftOtherOperations=originalDraftReview&&projectControls&&<Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="after-original-draft" title="更多操作">{projectControls}</AccordionItem></Accordion>;
   const ordinaryWork=task.raw?.executionRole==='owner_work'&&!task.raw?.developmentContext&&!task.raw?.ownerPhoneControl&&!task.raw?.ownerDeviceWork;
+  const taskToolsInOverview=taskToolsPlace?.taskId===task.id&&taskToolsPlace.overview;
+  const originalToolsWindow=overviewActive&&obj(snapshot?.view).taskId===task.id&&obj(snapshot?.view).section==null;
+  const retainedScriptOutputs=taskToolsInOverview&&ordinaryWork&&originalToolsWindow&&
+   can('taskCapabilities.artifact')&&can('taskCapabilities.export')?retainedLocalScriptOutputs(task):undefined;
+  const taskTools=taskToolsPlace?.taskId===task.id&&originalToolsWindow&&!task.raw?.ownerPhoneControl&&
+   task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&can('taskCapabilities.open')&&
+   <TaskCapabilityWorkspace key={'capabilities:'+task.id} taskId={task.id} run={act} exportState={state.taskCapabilityExport} retainedOutputs={retainedScriptOutputs}
+    onBackChange={registerCapabilityBack} registerBeforeLeave={registerTaskPolicyBeforeLeave} onOpenTools={next=>void openRelatedWorkspace(next||'capabilities')}/>;
   const currentResultDecision=ordinaryWork&&overviewActive&&task.status==='needs_confirmation'&&!reviewStale&&
    actionNames.includes('tasks.confirm')&&can('tasks.confirm')&&currentReviewWindow(reviewWindow.current);
   const requestWork=ordinaryWork?ownerWorkIdentity(task):null;
@@ -3082,7 +3101,7 @@ export default function App(){
      {phoneInterrupted&&overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&<InterruptedPhoneRecord
        reviewed={!!review&&!reviewStale&&!readingReview} canStart={actionNames.includes('tasks.resume')} onHistory={can('history.read')?()=>showTaskLayer('process'):undefined}
        onReview={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
-     {inspectResult?[evidence,decision,workFacts]:decisionFirst?[mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence]:[latestProgress,workFacts,evidence,decision]}
+     {inspectResult?[evidence,taskToolsInOverview&&taskTools,decision,workFacts]:decisionFirst?[mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence,taskToolsInOverview&&taskTools]:[latestProgress,workFacts,evidence,taskToolsInOverview&&taskTools,decision]}
      {taskLayer==='overview'&&ownerWorkActions(task,currentResultDecision)}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
@@ -3125,7 +3144,11 @@ export default function App(){
 
      {openedTaskId.current===task.id&&!taskOpening&&task.raw?.kind==='assistant'&&can('conversation.drafts')&&<ConversationDrafts key={'drafts:'+task.id} taskId={task.id} reviewingMemory={memoryDraftTarget?.taskId===task.id} refreshRevision={Number(state.memoryRefreshRevision||0)} open={openConversationDraft}/>}
 
-     <Accordion variant="divided" className="pw-task-disclosures" aria-label="更多任务资料">
+     <Accordion variant="divided" className="pw-task-disclosures" aria-label="更多任务资料" onExpandedChange={keys=>{
+      const view=obj(bridge.getState().view);
+      if(keys.has(`${task.id}:details`)&&taskOpen&&!taskOpening&&openedTaskId.current===task.id&&view.taskId===task.id&&view.section==null)
+       setTaskToolsPlace(place=>place??{taskId:task.id,overview:false});
+     }}>
       <AccordionItem id={`${task.id}:details`} title="过程与范围">
      <div className="pw-task-entry-list">
       <Button variant="ghost" leadingIcon={IconTool} onClick={()=>showTaskLayer('process')}>查看执行轨迹<IconChevronRight size={17}/></Button>
@@ -3133,7 +3156,7 @@ export default function App(){
      </div>
      {openedTaskId.current===task.id&&!taskOpening&&<>
       {taskLayer==='overview'&&!task.raw?.ownerDeviceWork&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&['assistant','phone'].includes(String(task.raw?.kind))&&!task.raw?.origin&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'device:'+task.id} taskId={task.id} run={act} onBackChange={registerDeviceScopeBack} onSaved={()=>loadTaskReview(task.id)} onOpenDevices={()=>void openRelatedWorkspace('devices')}/>}
-      {taskLayer==='overview'&&!task.raw?.ownerPhoneControl&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&can('taskCapabilities.open')&&<TaskCapabilityWorkspace key={'capabilities:'+task.id} taskId={task.id} run={act} exportState={state.taskCapabilityExport} onBackChange={registerCapabilityBack} registerBeforeLeave={registerTaskPolicyBeforeLeave} onOpenTools={next=>void openRelatedWorkspace(next||'capabilities')}/>}
+      {!taskToolsInOverview&&taskTools}
       {taskLayer==='overview'&&task.raw?.ownerRuntimeSetup&&can('setup.runtime.read')&&<Button variant="secondary" onClick={()=>openSetup('tools',task.id)}>查看工具准备进度</Button>}
       {taskLayer==='overview'&&task.raw?.developmentContext&&can('projectRuntime.read')&&<ProjectRuntimeHealth key={'runtime:'+task.id} taskId={task.id} run={act} onPrepareTools={can('setup.runtime.read')?()=>openSetup('tools'):undefined}/>}
       {taskLayer==='overview'&&!failureOverview&&task.raw?.developmentContext&&(can('local.execution.observe')||can('local.execution.open'))&&<ConversationModelPickerVisibility key={'execution:'+task.id}>{pickerVisible=><ProjectExecutionWorkspace task={task} reviewedPending={managedPending} skipPending={managedLogs.map(log=>log.pin)} active={taskOpen&&!pickerVisible&&!phoneViewerObscured} run={act} prepareFailure={can('tasks.review')?prepareFailedBuild:undefined}/>}</ConversationModelPickerVisibility>}

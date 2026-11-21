@@ -18,6 +18,37 @@ const names = (value: any) => Array.isArray(value) ? value.join('、') || '无' 
 const pendingArtifactExport = new Set(['waiting', 'selected', 'writing']);
 const artifactDigest = /^[a-f0-9]{64}$/;
 
+type RetainedScriptOutputs = { runId: string; epoch: number; operationIds: string[] };
+
+/** Placement only. A durable retained reference is not a Book attachment or an export handle. */
+export function retainedLocalScriptOutputs(task: { id: string; raw?: Data }): RetainedScriptOutputs | undefined {
+  const { id, raw } = task, history = raw?.historyOperationPage;
+  if (raw?.id !== id || raw.taskProjection !== 'detail_window' || raw.taskCoreReadLimited !== false || raw.auditBodyIncluded !== true ||
+      raw.kind !== 'assistant' || raw.actorId !== 'owner' || raw.spaceId !== 'private' || raw.origin != null ||
+      raw.teamRunId != null || raw.memberId != null || raw.parentTaskId != null || raw.contextAvailable === false ||
+      raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true ||
+      typeof raw.runId !== 'string' || !raw.runId || !Number.isSafeInteger(raw.coordinatorEpoch) || raw.coordinatorEpoch <= 0 ||
+      history?.format !== 'pocketworld.task-audit-page.v1' || history.taskId !== id || history.section !== 'operations' ||
+      history.executionAuthorized !== false || !Array.isArray(history.entries) || history.entries.length > 24) return undefined;
+  const operationIds = history.entries.flatMap((operation: Data) => {
+    if (operation?.status !== 'available' || operation.state !== 'receipt' || operation.runId !== raw.runId ||
+        typeof operation.operationId !== 'string' || !/^[a-f0-9-]{36}$/.test(operation.operationId)) return [];
+    const prepared = taskSkillPreparation(id, operation), native = operation.arguments?.nativeSkill, receipt = operation.receipt;
+    if (!prepared || prepared.epoch !== raw.coordinatorEpoch || native.reference.ownerId !== 'owner' || native.reference.spaceId !== 'private' ||
+        native.approvalState !== 'consumed' ||
+        !Number.isSafeInteger(native.claimedAt) || native.claimedAt <= 0 || native.deployment?.backendId !== 'phone-managed-skill-v1' ||
+        receipt?.taskId !== id || receipt.runId !== raw.runId || receipt.epoch !== raw.coordinatorEpoch ||
+        receipt.operationId !== operation.operationId || receipt.planDigest !== native.reference.planDigest || receipt.executionLocation !== 'this_phone' ||
+        !['completed', 'failed', 'timed_out'].includes(receipt.status) || !Array.isArray(receipt.artifacts) ||
+        !receipt.artifacts.length || receipt.artifacts.length > 8) return [];
+    return receipt.artifacts.some((file: Data) => typeof file?.path === 'string' && prepared.outputPaths.includes(file.path) &&
+      typeof file.artifactId === 'string' && artifactDigest.test(file.artifactId) && typeof file.sha256 === 'string' && artifactDigest.test(file.sha256) &&
+      Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= 65_536) ? [operation.operationId] : [];
+  });
+  // A limited page can prove a positive reference, never absence/completeness.
+  return operationIds.length ? { runId: raw.runId, epoch: raw.coordinatorEpoch, operationIds } : undefined;
+}
+
 /** A successful source write is not a verified destination. Show only the native result of this selection. */
 function artifactExportFeedback(value: Data | null | undefined, taskId: string) {
   if (value?.taskId !== taskId || typeof value.requestId !== 'string' || !value.requestId ||
@@ -100,7 +131,7 @@ function originalLocalProfileSkills(taskId: string, pageHandle: string, view: Da
     Number.isSafeInteger(skill.revision) && skill.revision>0);
 }
 
-export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange, onOpenTools, registerBeforeLeave }: { taskId: string; run: Run; exportState?: Data | null; onBackChange?: (handler: (() => boolean) | null) => void; onOpenTools?: (route?: 'skills' | 'plugins' | 'mcp' | 'workProfiles') => void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void }) {
+export function TaskCapabilityWorkspace({ taskId, run, exportState, retainedOutputs, onBackChange, onOpenTools, registerBeforeLeave }: { taskId: string; run: Run; exportState?: Data | null; retainedOutputs?: RetainedScriptOutputs; onBackChange?: (handler: (() => boolean) | null) => void; onOpenTools?: (route?: 'skills' | 'plugins' | 'mcp' | 'workProfiles') => void; registerBeforeLeave?: (guard: PermissionLeaveGuard | null) => void }) {
   const [expanded, setExpanded] = useState(false), [view, setView] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [script, setScript] = useState<Data | null>(null), [file, setFile] = useState<OriginalFileReading | null>(null), [busy, setBusy] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -246,7 +277,51 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
   useEffect(() => { onBackChange?.(() => { if (reviewId.current) { closeReview(); return true; } if (policyCurrent.current) { leavePolicy(); return true; } if (inventoryBack.current?.()) return true; if (file) { closeArtifact(); return true; } if (expanded) { close(); setExpanded(false); return true; } return false; }); return () => onBackChange?.(null); }, [expanded, file, onBackChange]);
 
   const selectedLocalSkills = expanded && !policy ? originalLocalProfileSkills(taskId, page.current, view) : [];
-  return <section ref={root} aria-busy={busy} className="pw-task-capabilities pw-ecosystem-depth"><div className="pw-section-heading pw-eco-workspace-heading"><div><h3>任务脚本与工具</h3><p>核对这次执行，查看原回执与文件成果。</p></div><Button variant="secondary" disabled={busy} onClick={() => { if (expanded) { const collapse = () => { closePolicy(); close(); setExpanded(false); }; if (policyCurrent.current) leavePolicy(collapse); else collapse(); } else { setExpanded(true); load(); } }}>{expanded ? '收起' : '查看'}</Button></div>
+  const executions = rows(view?.executions);
+  const pinnedOutput = (operation: Data) => !!retainedOutputs && retainedOutputs.operationIds.includes(operation.operationId) &&
+    operation.runId === retainedOutputs.runId && operation.receipt?.runId === retainedOutputs.runId &&
+    operation.receipt?.epoch === retainedOutputs.epoch && operation.receipt?.taskId === taskId && operation.receipt?.operationId === operation.operationId;
+  const mainExecutions = retainedOutputs ? executions.filter(pinnedOutput) : executions;
+  const otherExecutions = retainedOutputs ? executions.filter(operation => !pinnedOutput(operation)) : [];
+  const toolInventory = expanded && <TaskToolInventory key={`${taskId}:${view?.toolInventory?.runId || ''}:${view?.toolInventory?.epoch ?? ''}`} inventory={view?.toolInventory} registerBack={registerInventoryBack} onEditPolicy={openPolicy} readComparison={view?.toolInventory?.taskId === taskId && ['recorded', 'not_recorded'].includes(view.toolInventory.state) ? readComparison : undefined} onOpenProfiles={onOpenTools ? () => onOpenTools('workProfiles') : undefined} />;
+  const renderExecution = (operation: Data) => {
+    const prepared = taskSkillPreparation(taskId, operation), receipt = operation.receipt;
+    const canRetrieve = operation.artifactAvailability?.canRecheck === true;
+    const alreadyRetained = !!prepared && pinnedOutput(operation) && operation.artifactAvailability?.state === 'available';
+    const retrieve = () => original('taskCapabilities.retrieve', operation);
+    return <section className="pw-eco-operation" key={operation.operationId}>
+      <h4 style={{ overflowWrap: 'anywhere' }}>{prepared ? prepared.script : '原任务脚本回执'}</h4>
+      <p>{prepared && `第 ${prepared.epoch} 轮 · 原技能修订 ${prepared.revision} · `}{receiptStatus(receipt?.status || operation.state || '等待原回执')} · {taskCapabilityArtifactStatus(operation)}</p>
+      {prepared && <Accordion variant="divided"><AccordionItem title="原来审阅的成果范围"><p>计划的文件：{names(prepared.outputPaths)}</p>
+        <p className="pw-field-hint">原技能 {prepared.skillId} · 原操作 {operation.operationId}</p>
+        {alreadyRetained && canRetrieve && <Button variant="ghost" disabled={busy} onClick={retrieve}>重新核对并取回原文件</Button>}
+      </AccordionItem></Accordion>}
+      <div className="pw-form-actions">
+        <Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.receipt', operation)}>核对原回执</Button>
+        {canRetrieve && !alreadyRetained && <Button variant="secondary" disabled={busy} onClick={retrieve}>取回原文件成果</Button>}
+      </div>
+      {receipt?.output && <Accordion variant="divided"><AccordionItem title={receipt.outputTruncated === true ? '查看保留的脚本日志片段' : '查看脚本日志'}>
+        <pre className="pw-source-code">{String(receipt.output)}</pre>
+      </AccordionItem></Accordion>}
+      {rows(receipt?.artifacts).map(artifact => {
+        const saved = file && file.operationId === operation.operationId && file.artifactId === artifact.artifactId && file.sha256 === artifact.sha256 ? file.preview : null;
+        return <div className="pw-eco-artifact" key={artifact.artifactId}>
+          <p>{artifact.path} · {artifact.bytes} 字节</p>
+          <Button variant="ghost" disabled={busy} aria-expanded={!!saved} onClick={event => saved ? closeArtifact() : readArtifact(operation, artifact, event.currentTarget)}>
+            {saved ? '收起原件' : '预览原件'}
+          </Button>
+          <Button variant="secondary" disabled={busy || exported?.pending} onClick={() => { setNotice(''); void invoke('taskCapabilities.export', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }); }}>导出原成果</Button>
+          {saved && <section aria-label="原文件预览">
+            {saved.kind === 'plain_text' ? <>
+              {saved.text ? <pre className="pw-source-code">{saved.text}</pre> : <p>这个原文件为空。</p>}
+              {saved.truncated && <p className="pw-muted">这里只显示开头的文字。可导出完整原件。</p>}
+            </> : <p className="pw-muted">无法在这里预览此格式。可导出原件查看。</p>}
+          </section>}
+        </div>;
+      })}
+    </section>;
+  };
+  return <section ref={root} aria-busy={busy} className="pw-task-capabilities pw-ecosystem-depth"><div className="pw-section-heading pw-eco-workspace-heading"><div><h3>{retainedOutputs ? '本轮留存的脚本文件' : '任务脚本与工具'}</h3><p>{retainedOutputs ? '打开时核对原件，可预览或另存。' : '核对这次执行，查看原回执与文件成果。'}</p></div><Button variant="secondary" disabled={busy} onClick={() => { if (expanded) { const collapse = () => { closePolicy(); close(); setExpanded(false); }; if (policyCurrent.current) leavePolicy(collapse); else collapse(); } else { setExpanded(true); load(); } }}>{expanded ? '收起' : retainedOutputs ? '查看原文件' : '查看'}</Button></div>
     {exported && <p role="status"><bdi>{exported.path}</bdi> · {exported.message}</p>}
     {expanded && <>
       {policy && <section className="pw-task-policy-editor" aria-label="原任务适用的审批规则">
@@ -258,42 +333,12 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
       </section>}
       <div hidden={!!policy} style={policy ? { display: 'none' } : undefined}><div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={load}>刷新原任务能力</Button></div>
       {view?.reviewPending && <section className="pw-eco-pending-review"><div><h4>待你核对本次脚本</h4><p>当前任务正在等你审阅脚本。打开此页不会批准执行。</p></div><Button disabled={busy} onClick={() => void invoke('taskCapabilities.review', { pageHandle: page.current }, showReview)}>审阅本次执行</Button></section>}{view?.capabilityPreparationMessage && <p>{view.capabilityPreparationMessage}</p>}
-      <TaskToolInventory key={`${taskId}:${view?.toolInventory?.runId || ''}:${view?.toolInventory?.epoch ?? ''}`} inventory={view?.toolInventory} registerBack={registerInventoryBack} onEditPolicy={openPolicy} readComparison={view?.toolInventory?.taskId === taskId && ['recorded', 'not_recorded'].includes(view.toolInventory.state) ? readComparison : undefined} onOpenProfiles={onOpenTools ? () => onOpenTools('workProfiles') : undefined} />
+      {!retainedOutputs && toolInventory}
       <div className="pw-eco-capability-layout"><section className="pw-eco-executions">
       <div className="pw-eco-section-heading"><h4>执行与成果</h4><p>审阅计划不代表执行成功；文件只来自原操作。</p></div>
-      {rows(view?.executions).map(operation => {
-        const prepared = taskSkillPreparation(taskId, operation), receipt = operation.receipt;
-        return <section className="pw-eco-operation" key={operation.operationId}>
-          <h4 style={{ overflowWrap: 'anywhere' }}>{prepared ? prepared.script : '原任务脚本回执'}</h4>
-          <p>{prepared && `第 ${prepared.epoch} 轮 · 原技能修订 ${prepared.revision} · `}{receiptStatus(receipt?.status || operation.state || '等待原回执')} · {taskCapabilityArtifactStatus(operation)}</p>
-          {prepared && <Accordion variant="divided"><AccordionItem title="原来审阅的成果范围"><p>计划的文件：{names(prepared.outputPaths)}</p>
-            <p className="pw-field-hint">原技能 {prepared.skillId} · 原操作 {operation.operationId}</p>
-          </AccordionItem></Accordion>}
-          <div className="pw-form-actions">
-            <Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.receipt', operation)}>核对原回执</Button>
-            {operation.artifactAvailability?.canRecheck === true && <Button variant="secondary" disabled={busy} onClick={() => original('taskCapabilities.retrieve', operation)}>取回原文件成果</Button>}
-          </div>
-          {receipt?.output && <Accordion variant="divided"><AccordionItem title={receipt.outputTruncated === true ? '查看保留的脚本日志片段' : '查看脚本日志'}>
-            <pre className="pw-source-code">{String(receipt.output)}</pre>
-          </AccordionItem></Accordion>}
-          {rows(receipt?.artifacts).map(artifact => {
-            const saved = file && file.operationId === operation.operationId && file.artifactId === artifact.artifactId && file.sha256 === artifact.sha256 ? file.preview : null;
-            return <div className="pw-eco-artifact" key={artifact.artifactId}>
-              <p>{artifact.path} · {artifact.bytes} 字节</p>
-              <Button variant="ghost" disabled={busy} aria-expanded={!!saved} onClick={event => saved ? closeArtifact() : readArtifact(operation, artifact, event.currentTarget)}>
-                {saved ? '收起原件' : '预览原件'}
-              </Button>
-              <Button variant="secondary" disabled={busy || exported?.pending} onClick={() => { setNotice(''); void invoke('taskCapabilities.export', { pageHandle: page.current, artifactHandle: artifact.artifactHandle }); }}>导出原成果</Button>
-              {saved && <section aria-label="原文件预览">
-                {saved.kind === 'plain_text' ? <>
-                  {saved.text ? <pre className="pw-source-code">{saved.text}</pre> : <p>这个原文件为空。</p>}
-                  {saved.truncated && <p className="pw-muted">这里只显示开头的文字。可导出完整原件。</p>}
-                </> : <p className="pw-muted">无法在这里预览此格式。可导出原件查看。</p>}
-              </section>}
-            </div>;
-          })}
-        </section>;
-      })}
+      {retainedOutputs && view && !mainExecutions.length && <p role="status">本次未核对到这轮原脚本文件，未用其他执行替代。</p>}
+      {mainExecutions.map(renderExecution)}
+      {otherExecutions.length > 0 && <Accordion variant="divided"><AccordionItem id="other-script-executions" title="其他原脚本记录">{otherExecutions.map(renderExecution)}</AccordionItem></Accordion>}
       </section><aside className="pw-eco-tool-needs"><div className="pw-eco-section-heading"><h4>{view?.skillPreparation?.selectionSource === 'original_work_profile' ? '所选技能的能力准备' : '相关技能的能力准备'}</h4><p>{view?.skillPreparation?.selectionSource === 'original_work_profile' ? `按原工作配置${view.skillPreparation.profileRevision ? `修订 ${view.skillPreparation.profileRevision}` : ''}固定的技能版本核对。准备后仍需回原任务检查原选择。` : '按任务描述提示相关技能，列出它们需要的连接、工具与宿主能力。是否使用以本次执行为准。'}</p></div>
       {selectedLocalSkills.length > 0 && <section className="pw-eco-tool" aria-label="原配置已选入的本机技能">
         <h5>原配置已选入</h5>
@@ -316,7 +361,7 @@ export function TaskCapabilityWorkspace({ taskId, run, exportState, onBackChange
         </section>;
       })}
       {rows(view?.capabilityNeeds).map(need => <section className="pw-eco-tool" key={need.capability}><h4>{need.capability}</h4><p>{capabilityState(need.status)}</p><p className="pw-field-hint">所需技能：{requiredBy(need)}</p></section>)}
-      </aside></div>{view && !view.reviewPending && !rows(view.executions).length && !rows(view.pluginNeeds).length && !rows(view.capabilityNeeds).length && !rows(view.skillPreparation?.unresolvedSkills).length && (!view.skillPreparation || view.skillPreparation.state === 'ready') && <p className="pw-muted">当前没有待审阅脚本、原执行记录或需要准备的技能能力。</p>}
+      </aside></div>{retainedOutputs && toolInventory}{!retainedOutputs && view && !view.reviewPending && !executions.length && !rows(view.pluginNeeds).length && !rows(view.capabilityNeeds).length && !rows(view.skillPreparation?.unresolvedSkills).length && (!view.skillPreparation || view.skillPreparation.state === 'ready') && <p className="pw-muted">当前没有待审阅脚本、原执行记录或需要准备的技能能力。</p>}
       </div>
     </>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     <SettingsDialog isOpen={!!review} onClose={closeReview} title={review?.kind === 'script' ? '审阅本次脚本执行' : '审阅工具设置'}>{review && <div className="pw-ecosystem-depth pw-eco-review-body">
