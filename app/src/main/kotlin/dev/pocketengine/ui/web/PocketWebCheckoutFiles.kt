@@ -24,6 +24,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         @Volatile var textPage: CheckoutTextMatches? = null
         @Volatile var textUntil: Long = 0
         @Volatile var savedEdit: SavedEdit? = null
+        var priorSavedFile: ListedSave? = null // Main-thread selection from this exact list response.
         val git = PocketWebCheckoutGit(project, checkout)
         var opened: Opened? = null
         var adoption: Adoption? = null
@@ -33,6 +34,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     data class SavedEdit(val id: String, val path: String, val beforeHash: String, val savedHash: String) {
         fun view() = JSONObject().put("id",id).put("path",path).put("beforeHash",beforeHash).put("savedHash",savedHash)
     }
+    private data class ListedSave(val id: String, val path: String, val sha: String)
     private class Adoption(val handle: String, val file: Opened, val revision: Long, val review: JSONObject, val expires: Long)
     private class Opened(val handle: String, var draft: ProjectFileDraft) {
         var sequence = 0L
@@ -50,7 +52,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             "projects.development.files.cache", "projects.development.files.close", "projects.development.files.reviewImport",
             "projects.development.files.import", "projects.development.files.dismissImport", "projects.development.files.openFormal")
     }
-    fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.textPage=null; old?.opened?.let { store.release(it.draft) } }
+    fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.textPage=null; old?.priorSavedFile=null; old?.opened?.let { store.release(it.draft) } }
     fun closedForOriginalDraftRead() = page == null
     private fun current(original: Page) = page === original && original.parentCurrent() && controller.webPrivateOwnerVisible() && controller.state.projectId == original.project
     private fun fields(args: JSONObject, vararg allowed: String) = require(args.keys().asSequence().all { it in allowed }) { "副本文件操作包含未声明字段" }
@@ -118,7 +120,8 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         }) } catch (failure: Exception) { busy = false; throw failure }
     }
     private fun listing(original: Page, after: String, expected: String): JSONObject {
-        val source = controller.projectDevelopmentForWeb().filesForOwner(original.project, original.checkout)
+        check(original.sourcePath == null) { "原单文件入口不能读取副本文件列表" }
+        val source = controller.projectDevelopmentForWeb().ordinaryEditorFilesForOwner(original.project, original.checkout)
         val digest = source.getString("sourceDigest")
         check(after.isBlank() || expected == digest) { "副本文件在翻页期间变化，请重新读取列表，不拼接不同版本" }
         val all = sortedMapOf<String, JSONObject>(); val files = source.getJSONArray("files")
@@ -130,7 +133,25 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         return JSONObject().put("filesHandle", original.handle).put("projectId", original.project).put("checkoutId", original.checkout)
             .put("sourceDigest", digest).put("files", JSONArray(selected.take(40).map { it.value })).put("fileCount", source.getInt("fileCount"))
             .put("nextPath", if (selected.size > 40) selected[39].key else "").put("draftError", cacheError).put("readOnly", true)
+            .putOpt("priorSavedFile", source.optJSONObject("priorSavedFile"))
             .put("gitAvailable", runCatching { PocketWebCheckoutGit.available(controller, original.checkout) }.getOrDefault(false))
+    }
+    private fun presentListing(original: Page, value: JSONObject): JSONObject {
+        original.priorSavedFile = null
+        val position = value.optJSONObject("priorSavedFile")
+        val path = position?.opt("path") as? String
+        val sha = position?.opt("sha256") as? String
+        if (current(original) && original.sourcePath == null && original.opened == null && position != null &&
+            value.opt("readOnly") == true && value.opt("filesHandle") == original.handle &&
+            value.opt("projectId") == original.project && value.opt("checkoutId") == original.checkout &&
+            position.opt("format") == "pocketworld.owner-checkout-file-save-position.v1" &&
+            position.opt("projectId") == original.project && position.opt("checkoutId") == original.checkout &&
+            path != null && path.isNotBlank() && path.length <= 240 && sha != null && sha.matches(Regex("[a-f0-9]{64}"))) {
+            val listed = ListedSave(UUID.randomUUID().toString(), path, sha)
+            position.put("readId", listed.id)
+            original.priorSavedFile = listed
+        } else value.remove("priorSavedFile")
+        return value
     }
     fun dispatch(action: String, args: JSONObject, project: String, parentCurrent: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         require(action in COMMANDS)
@@ -155,7 +176,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             val checkout = text(args, "checkoutId")
             check(parentCurrent() && controller.webPrivateOwnerVisible()) { "原项目窗口已关闭" }
             clear(); val original = Page(UUID.randomUUID().toString(), project, checkout, parentCurrent, pin?.getString("path") ?: host?.getString("path"), host?.getString("phoneSha256")); page = original
-            work(original, done) {
+            observe(original, done, { value: JSONObject -> if (original.sourcePath == null) presentListing(original, value) else value }) {
                 if (host != null) {
                     // Origin and phone bytes are native evidence, not a path-only editor deep link.
                     val actual = controller.projectDevelopmentForWeb().readChangedHostTextForOwner(project, checkout, host.getString("evidenceDigest"),
@@ -178,7 +199,8 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             }; return
         }
         val original = selected(args)
-        if (action in setOf("projects.development.files.list", "projects.development.files.find", "projects.development.files.findNext", "projects.development.files.readFound", "projects.development.files.read", "projects.development.files.edit",
+        val readPriorSave = action == "projects.development.files.read" && args.has("priorSavedFileId")
+        if (!readPriorSave && action in setOf("projects.development.files.list", "projects.development.files.find", "projects.development.files.findNext", "projects.development.files.readFound", "projects.development.files.read", "projects.development.files.edit",
                 "projects.development.files.resolve", "projects.development.files.save")) original.adoption = null
         if (action in setOf("projects.development.files.reviewImport", "projects.development.files.import",
                 "projects.development.files.edit", "projects.development.files.save", "projects.development.files.resolve")) original.opened?.formal = null
@@ -256,7 +278,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 }else{
                     fields(args, "viewHandle", "filesHandle", "afterPath", "sourceDigest")
                     val after = text(args, "afterPath", 240, true); val expected = text(args, "sourceDigest", 64, true)
-                    work(original, done) { listing(original, after, expected) }
+                    check(!busy) { "请等待原文件操作回执" }
+                    original.priorSavedFile = null
+                    observe(original, done, { value: JSONObject -> presentListing(original, value) }) { listing(original, after, expected) }
                 }
             }
             "projects.development.files.find", "projects.development.files.findNext" -> {
@@ -307,7 +331,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     check(original.sourcePath==null){"原任务只读所选文件"};fields(args,"viewHandle","filesHandle","searchHandle","hit")
                     val index=number(args,"hit");require(index in 0L..1999L);check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已过期，请重新查找"}
                     (original.matches?:error("原查询已结束，请重新查找")).selected(text(args,"searchHandle"),index.toInt())
-                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path", "gitStatusOperation", "savedEditId");null}
+                }else{if(located==null)fields(args, "viewHandle", "filesHandle", "path", "gitStatusOperation", "savedEditId", "priorSavedFileId");null}
                 val gitStatus=if(args.has("gitStatusOperation")){
                     check(action.endsWith(".read")&&original.sourcePath==null){"只能在原副本目录选择 Git 文件"}
                     text(args,"gitStatusOperation")
@@ -318,6 +342,15 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     val receipt=original.savedEdit
                     check(receipt!=null&&receipt.id==text(args,"savedEditId")&&receipt.path==path) { "本次保存回执已变化，请在原列表重新选择" }
                     receipt
+                }else null
+                val listed=if(readPriorSave){
+                    val position=original.priorSavedFile
+                    check(!busy && original.sourcePath==null && original.opened==null && gitStatus==null && saved==null &&
+                        position!=null && position.id==text(args,"priorSavedFileId") && position.path==path) {
+                        "先前确认的保存位置已变化，请在原副本清单重新选择。"
+                    }
+                    original.priorSavedFile=null
+                    position
                 }else null
                 if (original.sourcePath != null) {
                     check(path == original.sourcePath && !busy) { "只能重新核对已选择的原文件" }
@@ -347,9 +380,17 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         }
                     }
                     val value = synchronized(store) {
+                        // Do not touch even the existing draft/cache for a deleted or replacement version.
+                        if(listed!=null)check(current(original) && original.opened==null &&
+                            actual.opt("deleted")==false && actual.opt("expectedHash")==listed.sha &&
+                            actual.opt("projectId")==original.project && actual.opt("checkoutId")==original.checkout &&
+                            actual.opt("path")==listed.path) {
+                            "无法核对先前确认保存的版本。未打开替代文件，可从同一副本清单核对当前文件。"
+                        }
                         val prior = store.open(original.project, original.checkout, path, actual.optBoolean("deleted"))
                         val observed = if (original.sourcePath == null && current(original))
                             prior.observeRecoveredOrdinaryFile(actual) else prior.observe(actual)
+                        if(listed!=null)check(current(original) && original.opened==null) { "原副本清单已关闭，未替换草稿。" }
                         observed.also { store.retain(it) }
                     }
                     if (!current(original)) { store.release(value); error("原文件读取窗口已变化，草稿已保留") }
@@ -359,6 +400,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     if(anchor!=null)shown.put("sourceHit",anchor)
                     if(hit!=null)shown.put("matchedFileSha256",hit.sha())
                     if(saved!=null)shown.put("savedEditId",saved.id)
+                    if(listed!=null)shown.put("priorSavedFileId",listed.id)
                     original.initialPhoneSha = null // First real read succeeded. From here existing save CAS and adoption review govern this same path.
                     shown
                 }
@@ -401,7 +443,10 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 }
                 work(original, done) {
                     try {
-                        val result = controller.projectDevelopmentForWeb().saveFileForOwner(submitted) { current(original) && original.opened === file }
+                        val host = controller.projectDevelopmentForWeb()
+                        fun stillFile() = current(original) && original.opened === file
+                        val result = if (original.sourcePath == null) host.saveOrdinaryEditorFileForOwner(submitted) { stillFile() }
+                            else host.saveFileForOwner(submitted) { stillFile() }
                         synchronized(store) {
                             val latest = store.open(original.project, original.checkout, submitted.path, false)
                             val observed = JSONObject(result.toString()).put("projectId", original.project).put("expectedHash", result.getString("sha256")).put("deleted",false)

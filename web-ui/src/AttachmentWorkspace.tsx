@@ -32,7 +32,15 @@ type Props={
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
 type WorkTextVisit={taskId:string;runId:string;epoch:number;visit:string};
-type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit};
+type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;textStart?:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit};
+function textBounds(body:HTMLDivElement){
+ const text=body.querySelector<HTMLElement>('.pw-original-text[data-find-before] > .pw-file-text')?.getBoundingClientRect();
+ return text&&text.height>0?{top:body.scrollTop+text.top-body.getBoundingClientRect().top,height:text.height}:undefined;
+}
+function readingTextStart(body:HTMLDivElement){
+ const bounds=textBounds(body),top=body.scrollTop;
+ return bounds&&top>=bounds.top&&top<bounds.top+bounds.height?bounds.top:undefined;
+}
 function privateTxtPositionScope(view:Json){
  const file=obj(view.file),version=exactFileTarget(file);
  return view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&
@@ -175,7 +183,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
      scope!==pin.scope||!matchesTextViewer(live,range)||obj(live.originalFile).busy!==false||
      range.encoding!==pin.range.encoding||
      range.offset!==pin.range.offset||range.identity!==pin.range.identity||body.scrollTop!==pin.start.top)return;
-  body.scrollTop=pin.top;
+  // The text stays put even if the previous reader's disclosure above it was expanded.
+  const textStart=pin.textStart!==undefined?textBounds(body)?.top:undefined;
+  body.scrollTop=textStart!==undefined&&pin.textStart!==undefined?pin.top+textStart-pin.textStart:pin.top;
  },[]);
  const rememberPosition=()=>{
   if(!view.ready||!scroller.current)return;
@@ -236,7 +246,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    if(command==='originalDetails'){
     const range=displayedText.current,body=scroller.current;
     textReturn.current=same&&mode==='original'&&range&&body&&body.scrollTop>0&&body.querySelector('.pw-original-text')&&
-     matchesTextViewer(live,range)&&obj(live.originalFile).busy===false?{scope,document:documentEpoch,range,top:body.scrollTop}:null;
+     matchesTextViewer(live,range)&&obj(live.originalFile).busy===false?{scope,document:documentEpoch,range,top:body.scrollTop,textStart:readingTextStart(body)}:null;
    }else if(mode==='detail'&&!Object.keys(args).length&&same&&pin?.scope===scope&&pin.document===documentEpoch)pin.reopening=true;
    else textReturn.current=null;
   }else textReturn.current=null;
@@ -254,7 +264,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   const scope=workTxtPositionScope(live,work);
   const pin:TextReturn|null=work&&scope&&range&&body&&body.scrollTop>0&&body.querySelector('.pw-original-text')&&
    matchesTextViewer(live,range)&&obj(live.originalFile).busy===false?
-   {scope,work,range,document:bridge.getDocumentEpoch(),top:body.scrollTop,reopening:true}:null;
+   {scope,work,range,document:bridge.getDocumentEpoch(),top:body.scrollTop,textStart:readingTextStart(body),reopening:true}:null;
   textReturn.current=pin;
   if(body)positions.current.set(location,body.scrollTop);
   backFlight.current=true;
@@ -595,7 +605,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const refreshList=()=>run(view.choosingSource?'chooseSource':'refresh');
  const sourcesList=fileList(view.choosingSource?'可用文件':'来源文件',listedSources,opensSource);
  const recentSourcesList=fileList('本次已登记的文件',listedRecent,opensSource);
- const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存的文件成果',listedOutputs,privateLibrary||resultFilesOnly);
+ const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存的文件成果',listedOutputs,privateLibrary||resultFilesOnly||
+  (row=>documentRecord&&view.fromWorkResult===false&&row.recordedDocumentOriginal===true));
  const editableSourceList=listedEditable.length>0&&<Accordion className="pw-attachment-tools"><AccordionItem id="library-editable-sources" title={`文档编辑源 · ${listedEditable.length} 项`}>
   {fileList('已关联成品的编辑源',listedEditable)}
  </AccordionItem></Accordion>;
@@ -618,7 +629,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {view.busy&&<div className="pw-action-row"><p role="status">{copyStage==='writing'?'正在写入并核对这次另存…':'正在核对原记录…'}</p><Button variant="ghost" onClick={()=>run('cancel')}>{copyStage==='writing'?'停止本次另存':'停止本次读取'}</Button></div>}
  {!reportError&&!attachmentChoiceError&&(error||view.error)&&<p className="pw-error" role="alert">{error||view.error}</p>}{view.notice&&<p role="status">{view.notice}</p>}
  {!view.ready&&<p>回到当前工作区后继续查看，原文件、记录和当前输入保留。</p>}
- {view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false} onTextDisplayed={textScope?textDisplayed:undefined}
+ {view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:Object.keys(original).length?<AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
+  findBeforeLongText={!!textScope&&canSaveOriginal} onTextDisplayed={textScope?textDisplayed:undefined}
   recovery={{canSave:canSaveOriginal,busy:busy||draftBusy,onOpenInReader:offerReader?()=>run('openInReader'):undefined}}/>:view.documentOpen?<section><h3>{file.name||'原文件'}</h3><div className="pw-action-row">{Number(view.document?.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>run('read',{unit:view.document.nextUnit,chunk:view.document.nextChunk||0})}>读取后续范围</Button>}{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>识别原图或 PDF 文字</Button>}{view.canSaveRead&&<Button variant="primary" disabled={busy} onClick={()=>run('saveRead')}>保存当前已读范围为文件</Button>}</div><DocumentProjection value={obj(view.document)}/><p className="pw-muted">文字摘录只包含当前已查看的部分，并保留来源位置。</p></section>:view.team?<section><h3>{snapshot.artifact?.path||'成员的固定文件成果'}</h3><div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>查看原件</Button><Button variant="secondary" disabled={busy||view.exportPending} onClick={()=>run('export')}>导出到手机</Button><Button variant="ghost" disabled={busy} onClick={()=>run('newerTeam')}>核对较新成果</Button>{view.hasPreviousTeamArtifact&&<Button variant="ghost" disabled={busy} onClick={()=>run('previousTeam')}>返回上一份成果</Button>}{view.canReadTeamDifference&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference')}>比较原项目当前文件</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>回原分工</Button></div>{typeof snapshot.content==='string'&&<pre className="pw-file-text">{snapshot.content}</pre>}{typeof snapshot.preview?.content==='string'&&<pre className="pw-file-text">{snapshot.preview.content}</pre>}<FileDetails value={snapshot} title="原成果与读取范围"/>{snapshot.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('readTeam',{offset:snapshot.nextOffset})}>读取后续内容</Button>}{view.teamDifference&&<><FileDetails value={view.teamDifference} title="原文件差异"/>{view.teamDifference.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference',{offset:view.teamDifference.nextOffset})}>读取后续差异</Button>}</>}</section>:<>
  {otherPendingDocument&&<p className="pw-muted">另有文档待核对，可回「成果」核对。</p>}
  {!scopedResultOnly&&(documentRecord||pendingDocumentHere)&&<div className="pw-action-row">{pendingDocumentHere&&<p>有原文档动作待核对。</p>}<Button variant="secondary" disabled={busy} onClick={()=>run('queryDocument')}>{pendingDocumentHere?'核对原文档结果':'核对这条文档记录'}</Button></div>}{!scopedResultOnly&&view.pendingProcessingTask&&<div className="pw-action-row"><p>有原加工动作待核对。</p><Button variant="secondary" disabled={busy} onClick={()=>run('queryProcessing')}>核对原加工结果</Button></div>}

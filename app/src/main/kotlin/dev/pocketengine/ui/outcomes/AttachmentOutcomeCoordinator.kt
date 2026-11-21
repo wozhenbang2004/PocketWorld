@@ -691,12 +691,14 @@ internal class AttachmentOutcomeCoordinator(
             entered()
         }, current = current)
     }
-    /** Read a saved item from its displayed library list or from the exact run's listed originals. */
+    /** Read a saved item from its displayed library, native generation record or exact result run. */
     fun openListedOriginal(id: String, sha256: String, onOpened: (() -> Unit)? = null, librarySource: Boolean = false, current: () -> Boolean) {
         val run = state.resultRun
         val listed = state.snapshot ?: error("文件清单尚未读取")
         val library = run == null && state.taskId == null && state.file == null && onOpened == null && listed.opt("taskId") == ""
-        check(library || run != null && run.taskId == state.taskId) { "请在原文件清单中打开这份原件" }
+        val recordedDocument = if (run == null && state.file == null && onOpened == null && !state.fromWorkResult && !librarySource)
+            originalDocumentAction(state.taskId, listed) else null
+        check(library || recordedDocument != null || run != null && run.taskId == state.taskId) { "请在原文件清单中打开这份原件" }
         check(current() && state.open && !state.busy && !exportPending &&
             state.group == null && state.team == null && !state.deviceOriginalOnly && !state.choosingSource &&
             state.documentDraft == null && state.processingSource == null && state.comparison == null && !state.documentOpen &&
@@ -704,7 +706,8 @@ internal class AttachmentOutcomeCoordinator(
         val entries = if(library&&librarySource)listed.getJSONArray("sources").objects()
             else run?.files(listed)?.entries ?: listed.getJSONArray("artifacts").objects()
         val selected = entries.singleOrNull { it.optString("id") == id && it.optString("sha256") == sha256 &&
-            it.optString("role") == (if(library&&librarySource)"source" else "result") && it.optString("availability") == "available" }
+            it.optString("role") == (if(library&&librarySource)"source" else "result") && it.optString("availability") == "available" &&
+            (recordedDocument == null || it.opt("recordedDocumentOriginal") == true) }
             ?.let { JSONObject(it.toString()) } ?: error("所选原件不在这次已核对的成果中")
         val originalReturn = when {
             onOpened != null -> AttachmentOriginalReturn.ENTRY // Re-admitted inside the already-open original work.
@@ -712,8 +715,9 @@ internal class AttachmentOutcomeCoordinator(
             else -> state.originalReturn
         }
         var original: dev.pocketengine.features.attachments.OwnerFilePreviewSource? = null
+        fun sameRecord() = recordedDocument == null || state.taskId == recordedDocument && state.snapshot === listed
         work(onSuccess = {
-            if (current() && state.resultRun == run) original?.let { source ->
+            if (current() && state.resultRun == run && sameRecord()) original?.let { source ->
                 restoreFile = null
                 val same = state.file?.let(::copySource) == copySource(selected)
                 state = state.copy(file = selected, originalFile = source, originalReturn = originalReturn, thumbnail = null, document = null,
@@ -722,7 +726,12 @@ internal class AttachmentOutcomeCoordinator(
             }
         }) { control, _ ->
             if (run != null) requireConversationResult(run, control)
-            val source = app.attachmentOutcomes.originalFile(run?.taskId, id, sha256, control)
+            val source = if (recordedDocument == null) app.attachmentOutcomes.originalFile(run?.taskId, id, sha256, control)
+                else {
+                    control.setAuthorityCheck { check(current() && sameRecord()) { "原生成记录窗口已变化" } }
+                    control.check()
+                    app.attachmentOutcomes.originalRecordedDocument(recordedDocument, id, sha256, control)
+                }
             check(source.name == selected.getString("name") && source.mimeType == selected.getString("mimeType") &&
                 source.sizeBytes == selected.getLong("size")) { "原文件信息已变化，请重新读取文件清单" }
             if (run != null) requireConversationResult(run, control)

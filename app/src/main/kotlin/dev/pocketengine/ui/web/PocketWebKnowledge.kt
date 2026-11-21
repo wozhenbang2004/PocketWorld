@@ -1,6 +1,7 @@
 package dev.pocketengine.ui.web
 
 import dev.pocketengine.features.memory.MemoryAssertionReview
+import dev.pocketengine.features.memory.MemoryBook
 import dev.pocketengine.ui.MemoryLearningReviewGuard
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.MAX_ASSERTION_DISPLAY_MILLIS
@@ -45,6 +46,14 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController,
     }
     private fun row(value: JSONObject) = value.getJSONObject(if (value.getBoolean("candidate")) "candidateRecord" else "record")
     private fun target(value: JSONObject) = JSONObject().put("id", row(value).getString("id"))
+    private val projectSpace = Regex("project:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
+    private fun handwrittenConvention(row: JSONObject): Boolean =
+        row.opt("ownerId") == "owner" && projectSpace.matches(row.optString("spaceId")) &&
+            row.opt("source") == "主人在本项目手写的约定" && row.opt("formation") == "explicit_save" && row.opt("layer") == "procedural" &&
+            !row.optBoolean("archiveOnly") && !row.has("assertion") && !row.has("learningCandidateId") &&
+            row.optJSONArray("sourceRefs")?.length() == 0 && row.optJSONArray("sourceIds")?.length() == 0
+    private fun isConventionCorrection(original: JSONObject, command: String): Boolean =
+        command == "correctReviewed" && !original.getBoolean("candidate") && row(original).let { it.opt("active") == true && handwrittenConvention(it) }
     private fun current(value: JSONObject, done: (JSONObject?, String?) -> Unit, continuation: (JSONObject) -> Unit) {
         val request = generation; val scope = controller.webMemoryScopeTicket()
         controller.requestOwnerDomainReceipt("memoryReview", if (value.getBoolean("candidate")) "getCandidate" else "get", target(value)) { result, error ->
@@ -311,14 +320,36 @@ internal class PocketWebKnowledge(private val controller: PocketWorldController,
                     else -> { request.put("revision", revision).put("changes", args.getJSONObject("draft")); "editCandidate" }
                 }
                 current(original, done) {
+                    val conventionCorrection = isConventionCorrection(original, command)
+                    if (conventionCorrection) {
+                        val corrected = MemoryBook.normalizeRecordText(request.getString("text"))
+                        if (corrected == row(original).getString("text")) {
+                            done(JSONObject().put("operation", operation).put("projectConventionCorrection", "unchanged").put("executionAuthorized", false), null)
+                            return@current
+                        }
+                        request.put("text", corrected)
+                    }
                     val checked = if (original.getBoolean("candidate")) MemoryLearningReviewGuard.payload(command, row(original), row(original), if (operation == "edit") args.getJSONObject("draft") else request) else if (operation == "forget") MemoryLearningReviewGuard.forgetPayload(row(original), row(original)) else request
                     val body = JSONObject().put("original", original).put("command", command).put("payload", checked)
-                    done(JSONObject().put("reviewHandle", pin(reviews, body)).put("operation", operation).put("before", row(original)).put("afterText", checked.optString("text", checked.optJSONObject("changes")?.optString("text") ?: "")).put("core", checked.opt("core")).put("reason", checked.optString("reason")).put("executionAuthorized", false), null)
+                    val preview = JSONObject().put("reviewHandle", pin(reviews, body)).put("operation", operation).put("before", row(original)).put("afterText", checked.optString("text", checked.optJSONObject("changes")?.optString("text") ?: "")).put("core", checked.opt("core")).put("reason", checked.optString("reason")).put("executionAuthorized", false)
+                    if (conventionCorrection) preview.put("projectConventionCorrection", "reviewed")
+                    done(preview, null)
                 }
             }
             "knowledge.confirm" -> {
                 fields(args, "reviewHandle"); val review = selected(reviews, text(args, "reviewHandle"), true); val original = review.getJSONObject("original")
                 current(original, done) { call("memoryReview", review.getString("command"), review.getJSONObject("payload"), done) { result ->
+                    if (isConventionCorrection(original, review.getString("command"))) {
+                        val before = row(original); val saved = result.getJSONObject("record"); val revision = MemoryLearningReviewGuard.revision(saved)
+                        check(result.opt("executionAuthorized") == false && handwrittenConvention(saved) &&
+                            saved.opt("spaceId") == before.opt("spaceId") && saved.opt("id") == before.opt("id") &&
+                            revision == Math.addExact(MemoryLearningReviewGuard.revision(before), 1L) &&
+                            saved.opt("text") == review.getJSONObject("payload").getString("text")) {
+                            "未核对到原项目约定的新版本，请重新读取，不要重复提交"
+                        }
+                        return@call JSONObject().put("projectConventionCorrection", "saved").put("spaceId", saved.getString("spaceId"))
+                            .put("recordId", saved.getString("id")).put("revision", revision).put("executionAuthorized", false)
+                    }
                     if (review.getString("command") == "reviewCandidateAssertion") {
                         val candidate = result.getJSONObject("candidate")
                         check(result.opt("formalMemorySaved") == false && result.opt("sourceProofIssued") == false && result.opt("executionAuthorized") == false && candidate.getString("id") == row(original).getString("id") && candidate.optString("status") == "pending" && MemoryLearningReviewGuard.revision(candidate) == MemoryLearningReviewGuard.revision(row(original)) + 1 && assertionReviewKeepsSources(row(original), candidate) && sameIdentityResult(review, candidate)) { "身份核对结果待确认，请重新读取原候选" }

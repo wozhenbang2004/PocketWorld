@@ -39,7 +39,7 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
   const projectLabel = projectScope ? (scopeName || '项目') + ' · ' + projectScope.slice(8, 16) : '';
   const quoteBack = useRef<(() => void) | null>(null);
   const [consolidation, setConsolidation] = useState<Data[]>([]), [operation, setOperation] = useState<Data | null>(null), [stopping, setStopping] = useState(false);
-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [acknowledged, setAcknowledged] = useState(false), [attempted, setAttempted] = useState(false);
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState<string | { unchangedCorrection: string }>(''), [acknowledged, setAcknowledged] = useState(false), [attempted, setAttempted] = useState(false);
   const workspaceRoot = useRef<HTMLDivElement | null>(null);
   useSurfaceEnter(workspaceRoot, selection ? `memory:${(selection.candidate || selection.record)?.id || selection.readHandle}` : `collection:${tab}`, { selector: selection ? ":scope > .pw-memory-reading" : ":scope > .pw-memory-collection", depth: selection ? 1 : 0 });
   const selectionPanel = useRef<HTMLElement | null>(null), collectionPanel = useRef<HTMLElement | null>(null);
@@ -114,7 +114,17 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
       else { closeRecord(); setNotice('当前记录已不在此范围中，列表已重新读取。'); }
     });
   };
-  const prepare = (operation: string, extra: Data = {}) => { if ((formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck) && ['edit', 'correct', 'accept'].includes(operation)) return; void invoke('knowledge.review', { readHandle: readHandle.current, operation, ...extra }, openReview); };
+  const prepare = (operation: string, extra: Data = {}) => {
+    if ((formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck) && ['edit', 'correct', 'accept'].includes(operation)) return;
+    const handle = readHandle.current;
+    void invoke('knowledge.review', { readHandle: handle, operation, ...extra }, value => {
+      if (operation === 'correct' && value?.operation === 'correct' && value.projectConventionCorrection === 'unchanged' && value.executionAuthorized === false && !value.reviewHandle) {
+        setNotice({ unchangedCorrection: handle }); return;
+      }
+      if (value?.projectConventionCorrection === 'reviewed') setNotice('');
+      openReview(value);
+    });
+  };
   const toggleConsolidation = (row: Data, checked: boolean) => {
     if (!currentList.current || entered.current) return;
     if (!checked) { const old = consolidation.find(item => item.record.id === row.id); if (old) { closeHandle(old.readHandle); selectedHandles.current = selectedHandles.current.filter(id => id !== old.readHandle); } setConsolidation(old => old.filter(item => item.record.id !== row.id)); return; }
@@ -127,8 +137,19 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
     const frozen = review; if (!frozen || (frozen.operation === 'assertion' && (!identityDecision || !acknowledged || busy || reviewHandle.current !== frozen.reviewHandle))) return; const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setAcknowledged(false);
     if (frozen.operation === 'consolidation') { void invoke('knowledge.consolidation.start', { reviewHandle: handle }, setOperation); return; }
     const id = frozen.before?.id, isCandidate = selection?.candidateSelected === true;
-    setAttempted(true); if (['edit', 'correct', 'accept'].includes(frozen.operation)) { try { await formDraft.markSubmitted(); } catch (failure) { setError((failure as Error).message); return; } } void invoke('knowledge.confirm', { reviewHandle: handle }, () => setNotice('操作已完成，正在读取当前状态。')).then(value => {
-      if (value && alive.current && id) { if (['edit', 'correct', 'accept', 'forget', 'archive'].includes(frozen.operation)) formDraft.discard(() => refreshSelection(id, isCandidate)); else refreshSelection(id, isCandidate); }
+    setAttempted(true); if (['edit', 'correct', 'accept'].includes(frozen.operation)) { try { await formDraft.markSubmitted(); } catch (failure) { setError((failure as Error).message); return; } }
+    let receipt = '';
+    void invoke('knowledge.confirm', { reviewHandle: handle }, value => {
+      if (frozen.operation === 'correct' && frozen.projectConventionCorrection === 'reviewed') {
+        if (value?.projectConventionCorrection !== 'saved' || value.executionAuthorized !== false || value.spaceId !== frozen.before.spaceId ||
+          value.recordId !== id || !Number.isSafeInteger(value.revision) || value.revision !== frozen.before.revision + 1) {
+          throw new Error('未核对到原项目约定的新版本，请重新读取，不要重复提交。');
+        }
+        receipt = `已保存项目约定的修订 ${value.revision}。`;
+      }
+      setNotice(receipt || '操作已完成，正在读取当前状态。');
+    }).then(value => {
+      if (value && alive.current && id) { if (['edit', 'correct', 'accept', 'forget', 'archive'].includes(frozen.operation)) formDraft.discard(() => refreshSelection(id, isCandidate, receipt)); else refreshSelection(id, isCandidate); }
     });
   };
   useEffect(() => { if (selection) formDraft.update({ text: draft, ...draftMeta }); }, [selection, draft, draftMeta, formDraft.update]);
@@ -161,7 +182,7 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
   const candidateHasEdits = candidate && record && (draft !== record.text || draftMeta.layer !== (record.layer || 'fact') || draftMeta.reason !== (record.reason || '') || draftMeta.applicability !== (record.applicability || '') || draftMeta.confidence !== String(record.confidence ?? 0.5));
   return <div ref={workspaceRoot} className="pw-memory-workspace pw-knowledge-workspace">
     <FormDraftNotice draft={formDraft} />
-    {error && error !== alreadyShownError && <p className="pw-secondary-error" role="alert">{error}</p>}{notice && <p className="pw-field-hint" role="status">{notice}</p>}
+    {error && error !== alreadyShownError && <p className="pw-secondary-error" role="alert">{error}</p>}{typeof notice === 'string' && notice && <p className="pw-field-hint" role="status">{notice}</p>}
     {snapshot && !snapshotCurrent && !busy && <p className="pw-field-hint" role="status">当前保留上次读取的内容，尚未核对最新状态。请重新读取后再操作。</p>}
     <section ref={collectionPanel} className="pw-memory-collection" aria-label="记忆管理" hidden={!!selection}>
       <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setFilter('all'); closeRecord(); }} className="pw-team-tabs pw-memory-tabs">
@@ -216,9 +237,10 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
       </section>
       {!attempted && (!candidate || record?.status === 'pending') && <>
         <Accordion variant="divided" className="pw-compact-disclosures pw-memory-edit"><AccordionItem id="memory-edit" title={candidate ? '修改候选内容' : '纠正这条记忆'}>
-        <TextAreaField label={candidate ? '候选正文' : '纠正后的正文'} value={draft} onChange={setDraft} maxLength={4000} isDisabled={busy} />
+        <TextAreaField label={candidate ? '候选正文' : '纠正后的正文'} value={draft} onChange={value => { setDraft(value); if (typeof notice !== 'string') setNotice(''); }} maxLength={4000} isDisabled={busy} />
         {candidate && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="candidate-context" title="类型、依据与适用条件"><SelectField label="记忆类型" value={draftMeta.layer} options={Object.entries(layers).map(([id, label]) => ({ id, label }))} onChange={value => setDraftMeta(old => ({ ...old, layer: value }))} isDisabled={busy} /><TextAreaField label="候选依据" value={draftMeta.reason} onChange={value => setDraftMeta(old => ({ ...old, reason: value }))} maxLength={1000} isDisabled={busy} /><TextAreaField label="适用条件" value={draftMeta.applicability} onChange={value => setDraftMeta(old => ({ ...old, applicability: value }))} maxLength={1000} isDisabled={busy} /><TextField label="可信度（0 到 1，不代表事实已核实）" value={draftMeta.confidence} onChange={value => setDraftMeta(old => ({ ...old, confidence: value }))} isDisabled={busy} /></AccordionItem></Accordion>}
-        <div className="pw-form-actions"><Button variant="secondary" disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck || !draft.trim() || (!candidate && draft === record?.text)} onClick={() => prepare(candidate ? 'edit' : 'correct', candidate ? { draft: { text: draft, ...draftMeta, confidence: Number(draftMeta.confidence) } } : { text: draft })}>核对内容修改</Button></div></AccordionItem></Accordion>
+        <div className="pw-form-actions"><Button variant="secondary" disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck || !draft.trim() || (!candidate && draft === record?.text)} onClick={() => prepare(candidate ? 'edit' : 'correct', candidate ? { draft: { text: draft, ...draftMeta, confidence: Number(draftMeta.confidence) } } : { text: draft })}>核对内容修改</Button></div>
+        {typeof notice !== 'string' && notice.unchangedCorrection === selection.readHandle && <p className="pw-field-hint" role="status">正文与已保存的项目约定相同，没有提交修改。</p>}</AccordionItem></Accordion>
         {!candidate && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="memory-maintenance" title="核心记忆与遗忘" description={record?.core ? '当前在核心记忆中；遗忘前会单独核对影响' : '按需加入核心，或核对遗忘影响'}><div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={() => prepare('core', { core: !record?.core })}>{record?.core ? '核对移出核心记忆' : '核对加入核心记忆'}</Button><Button variant="ghost" disabled={busy} onClick={() => prepare('forget')}>核对遗忘影响</Button></div></AccordionItem></Accordion>}
         {candidate && <><Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="memory-reject" title="拒绝这条候选"><TextField label="拒绝理由" value={reason} onChange={setReason} maxLength={1000} isDisabled={busy} /><Button variant="ghost" disabled={busy || !reason.trim()} onClick={() => prepare('reject', { reason })}>核对并拒绝候选</Button></AccordionItem></Accordion><Accordion variant="divided" className="pw-compact-disclosures" expandedKeys={assertionOpen ? ['assertion'] : []} onExpandedChange={keys => setAssertionOpen(keys.has('assertion'))}><AccordionItem id="assertion" title="主体、关系与时间">{assertionOpen && <MemoryAssertionFields key={selection.readHandle} readHandle={selection.readHandle} readExpiresAt={selection.readExpiresAt} candidate={record} run={run} onReview={openReview} />}</AccordionItem></Accordion></>}
       </>}
@@ -235,7 +257,7 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
       if (id) refreshSelection(id, true); else load();
     }} />}
     <SettingsDialog className="pw-memory-modal" isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={operationLabel[review?.operation] || '核对记忆修改'}><div className="pw-knowledge-review">
-      {review?.operation === 'consolidation' ? <><p>向开始时的当前模型发送以下原记忆，归纳为待审候选。原记忆保留；不会自动采用新候选。</p>{rows(review.records).map(row => <p key={row.id} className="pw-reading-copy">{row.text}</p>)}</> : <><p className="pw-muted">确认只应用到刚才读取的原版本。</p><section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p></section>{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}{review?.operation === 'assertion' && <CandidateIdentityDecision decision={identityDecision} />}</>}
+      {review?.operation === 'consolidation' ? <><p>向开始时的当前模型发送以下原记忆，归纳为待审候选。原记忆保留；不会自动采用新候选。</p>{rows(review.records).map(row => <p key={row.id} className="pw-reading-copy">{row.text}</p>)}</> : <><p className="pw-muted">{review?.projectConventionCorrection === 'reviewed' ? '将保存这条项目约定的新版本。已放入项目草稿的文字不会自动替换。' : '确认只应用到刚才读取的原版本。'}</p><section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p></section>{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}{review?.operation === 'assertion' && <CandidateIdentityDecision decision={identityDecision} />}</>}
       {review?.operation === 'forget' && <p>将遗忘原记忆，退休相关派生上下文，并阻止相同旧来源自动重新导入；原消息保留。</p>}{review?.operation === 'accept' && <p>采用候选不会证明内容已独立核实，也不会自动启用技能或取得执行权限。</p>}{review?.operation === 'archive' && <p>将移除这条终态候选的正文与拒绝理由；已接受的正式记忆和必要去重标记保留。这项清理不能恢复正文。</p>}{review?.operation === 'reconsider' && <p>只将这一条完整拒绝项重新放回待审；不会自动采用，也不会解除其他拒绝项或来源遗忘屏障。</p>}
       <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={invalidIdentity}>我已阅读内容和影响，确认这一次操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged || invalidIdentity} onClick={confirm}>{review?.operation === 'consolidation' ? '开始这次归纳' : '确认这次修改'}</Button></div>
     </div></SettingsDialog>

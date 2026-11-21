@@ -917,7 +917,7 @@ public final class MemoryBook {
         if(old!=null&&input.has("revision")&&SourceRef.integer(input,"revision",1)!=old.getLong("revision"))throw new IllegalStateException("记忆已被修改，请刷新后再保存");
         boolean core=input.has("core")?requiredBoolean(input,"core"):old!=null&&old.optBoolean("core",false);
         if(core&&(old==null||!old.optBoolean("core",false)))checkCoreCapacity(s);
-        String text=bounded(input.optString("text"),1,4000,"记忆内容");
+        String text=normalizeRecordText(input.optString("text"));
         String layer=input.optString("layer",old==null?"fact":old.optString("layer"));
         if(!Set.of("fact","preference","episodic","procedural").contains(layer))throw new IllegalArgumentException("未知记忆层级");
         String origin=input.optString("originSpaceId",s.spaceId);
@@ -1208,7 +1208,7 @@ public final class MemoryBook {
     public synchronized JSONObject correctReviewed(JSONObject scope,String id,long expectedRevision,String text,BeforeForget receipt,long now)throws Exception {
         Scope identity=learningScope(scope);JSONObject old=reviewedRecord(identity,id,expectedRevision);
         if(receipt==null)throw new IllegalArgumentException("缺少宿主修订清理回执");
-        String corrected=bounded(text,1,4000,"记忆内容");
+        String corrected=normalizeRecordText(text);
         if(old.getString("text").equals(corrected))throw new IllegalArgumentException("纠正正文与当前记忆相同");
         Set<String> retired=new java.util.LinkedHashSet<>();retired.add(id);boolean changed;
         do{changed=false;for(JSONObject row:records.values())if(identity.matches(row)&&!retired.contains(row.getString("id"))){
@@ -2348,6 +2348,8 @@ public final class MemoryBook {
         return "episodic".equals(layer)||"procedural".equals(layer)?layer:"semantic";
     }
     private JSONObject viewRecord(JSONObject value)throws Exception{JSONObject view=copy(value).put("tier",tierOf(value)).put("consolidationBlocked",consolidationBlocked(value,new HashSet<>()));if(value.has("assertion"))view.put("evidenceVerification","requires_exact_source_read");return view;}
+    /** Pure text contract for the saved record and its exact native correction preview. */
+    public static String normalizeRecordText(String text){return bounded(text,1,4000,"记忆内容");}
     private static String bounded(String text,int min,int max,String name){validateUnicode(text);String value=text.trim();if(value.length()<min||value.length()>max)throw new IllegalArgumentException(name+"长度应为"+min+"至"+max);return value;}
     static void validateUnicode(String text){
         if(text==null||text.indexOf('\0')>=0)throw new IllegalArgumentException("记忆文字包含无效字符");

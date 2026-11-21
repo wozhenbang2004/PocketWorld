@@ -9,6 +9,7 @@ import dev.pocketengine.features.local.project.CheckoutTextMatches;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
 import dev.pocketengine.features.local.project.ProjectSources;
 import dev.pocketengine.features.local.project.ProjectFileBytes;
+import dev.pocketengine.features.local.project.ProjectFileSavePosition;
 import dev.pocketengine.features.local.project.ProjectTextImport;
 import dev.pocketengine.features.local.runtime.ProjectRuntime;
 import dev.pocketengine.features.local.runtime.RuntimeExecutionRef;
@@ -1546,15 +1547,45 @@ public final class LocalModule implements EngineModule {
     /** Reuses the original manual SHA-CAS writer, with the native page fenced
      * again immediately before the atomic move. Never grants live-edit rights. */
     public synchronized JSONObject saveDevelopmentFileForOwner(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,java.util.function.BooleanSupplier current)throws Exception {
+        return readBackEditorSave(intent,current).file();
+    }
+    private record EditorSaveReadback(JSONObject file,JSONObject checkout){}
+    private EditorSaveReadback readBackEditorSave(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,
+            java.util.function.BooleanSupplier current)throws Exception {
         java.util.Objects.requireNonNull(intent);java.util.Objects.requireNonNull(current);
         dev.pocketengine.features.local.project.ProjectBinaryImport.Current live=()->{if(closed||!current.getAsBoolean()||!intent.projectId.equals(checkout(intent.checkoutId).getString("projectId")))throw new SecurityException("原文件编辑窗口已变化，未写入替代目标");};
         live.check();if(!ProjectSources.sourcePath(VersionedWorkspace.path(intent.path)))throw new SecurityException("不能编辑运行缓存或Git内部文件");
         java.nio.ByteBuffer encoded=StandardCharsets.UTF_8.newEncoder().encode(java.nio.CharBuffer.wrap(intent.text));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);
         if(bytes.length>262144)throw new IllegalArgumentException("单文件保存上限256KiB");
-        JSONObject facts=ProjectSources.describe(export(intent.checkoutId)),before=localFile(intent.checkoutId,intent.path);
+        JSONObject source=export(intent.checkoutId),selected=source.getJSONObject("checkout"),facts=ProjectSources.describe(source),before=localFile(intent.checkoutId,intent.path);
         if(facts.getLong("bytes")-before.getLong("bytes")+bytes.length>ProjectSources.MAX_TOTAL_BYTES||before.optBoolean("deleted")&&facts.getInt("fileCount")>=ProjectSources.MAX_FILES)throw new IllegalArgumentException("保存后超过项目源码2000文件/16MiB范围，原文件未改写");
         manualWriteBytes(intent.checkoutId,intent.path,bytes,intent.expectedHash,true,live);
-        return read(intent.checkoutId,intent.path);
+        return new EditorSaveReadback(read(intent.checkoutId,intent.path),selected);
+    }
+
+    private static boolean originalPreparedOwnerCopy(JSONObject row,String project,String id){
+        if(!project.equals(row.opt("projectId"))||!id.equals(row.opt("id"))||
+                !(row.opt("ownerDevelopmentRequestId") instanceof String request)||!request.matches("[a-f0-9-]{36}")||
+                !id.equals(developmentCheckoutId(project,request)))return false;
+        for(String special:new String[]{"sourceImport","ownerDraftWorkCopy","teamProjectCopy","skillExecutionCopy","isolatedGit",
+                "nativeGitImportPending","collectedFromCheckoutId","collectionOperationId"})if(row.has(special))return false;
+        return true;
+    }
+
+    /** The ordinary native editor only, after its existing real save and readback.
+     * This same checkout lock also orders the optional locator writes. */
+    public synchronized JSONObject saveOrdinaryEditorFileForOwner(dev.pocketengine.features.local.project.ProjectFileDraft.SaveIntent intent,
+            java.util.function.BooleanSupplier current)throws Exception {
+        EditorSaveReadback committed=readBackEditorSave(intent,current);
+        JSONObject observed=committed.file();
+        try{
+            if(!closed&&current.getAsBoolean()&&originalPreparedOwnerCopy(committed.checkout(),intent.projectId,intent.checkoutId)&&
+                    intent.checkoutId.equals(observed.opt("checkoutId"))&&intent.path.equals(observed.opt("path"))&&
+                    intent.text.equals(observed.opt("content"))&&observed.opt("sha256") instanceof String sha&&
+                    !intent.expectedHash.equals(sha)&&ProjectSources.sha256(intent.text.getBytes(StandardCharsets.UTF_8)).equals(sha))
+                new ProjectFileSavePosition(intent.projectId,intent.checkoutId,intent.path,sha).recordForOwner(root);
+        }catch(Exception optional){/* The already observed file is saved even if its location cannot be remembered. */}
+        return observed;
     }
     /** Owner's native one-file review is the input, never a Web-supplied diff or
      * replacement body. This is the existing formal-version CAS and baseline
@@ -1596,6 +1627,10 @@ public final class LocalModule implements EngineModule {
         Files.delete(NativeCommandExecutor.within(content(id),path).toPath());return localFile(id,path);
     }
     private JSONObject changes(String id)throws Exception {
+        return checkoutChanges(id).listing();
+    }
+    private record CheckoutChanges(JSONObject listing,JSONObject checkout){}
+    private CheckoutChanges checkoutChanges(String id)throws Exception {
         JSONObject exported=export(id),checkout=exported.getJSONObject("checkout");Map<String,JSONObject> original=byPath(checkout.getJSONArray("files")),current=byPath(exported.getJSONArray("files"));
         TreeSet<String> paths=new TreeSet<>(original.keySet());paths.addAll(current.keySet());JSONArray entries=new JSONArray();int changed=0;
         for(String path:paths){JSONObject before=original.get(path),now=current.get(path);String hash=now==null?"absent":now.getString("sha256"),old=before==null?"absent":before.optString("sha256");
@@ -1604,9 +1639,33 @@ public final class LocalModule implements EngineModule {
             entries.put(new JSONObject().put("path",path).put("change",change).put("beforeHash",old).put("sha256",hash).put("bytes",now==null?0:now.getLong("bytes")).put("sourceVersion",before==null?0:before.optInt("sourceVersion")).put("binary",now!=null?now.optBoolean("binary"):before!=null&&before.optBoolean("binary")));
         }
         JSONArray baseline=new JSONArray();for(String path:new TreeSet<>(original.keySet()))baseline.put(original.get(path));
-        return new JSONObject().put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("files",entries).put("changedCount",changed).put("fileCount",current.size())
+        JSONObject listing=new JSONObject().put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("files",entries).put("changedCount",changed).put("fileCount",current.size())
                 .put("sourceDigest",ProjectSources.manifestDigest(exported.getJSONArray("files")))
                 .put("baselineIdentity",ProjectSources.digest(new JSONObject().put("checkoutId",id).put("projectId",checkout.getString("projectId")).put("files",baseline)));
+        return new CheckoutChanges(listing,checkout);
+    }
+
+    /** Explicit ordinary owner file dialog only. Reuse the actual list's hashes,
+     * never read a remembered file body or include the location in export/search. */
+    public synchronized JSONObject listOrdinaryEditorFilesForOwner(String project,String id)throws Exception {
+        if(closed)throw new IllegalStateException("本地开发模块已关闭");
+        CheckoutChanges observation=checkoutChanges(id);
+        JSONObject listing=observation.listing();
+        if(!project.equals(listing.opt("projectId"))||!id.equals(listing.opt("checkoutId")))throw new SecurityException("原副本文件清单已变化");
+        try{
+            if(!originalPreparedOwnerCopy(observation.checkout(),project,id))return listing;
+            ProjectFileSavePosition position=ProjectFileSavePosition.readForOwner(root,project,id);
+            if(position==null)return listing;
+            JSONArray actual=listing.getJSONArray("files");
+            for(int i=0;i<actual.length();i++){
+                JSONObject row=actual.getJSONObject(i);
+                if(position.path().equals(row.opt("path"))&&position.sha256().equals(row.opt("sha256"))&&
+                        Boolean.FALSE.equals(row.opt("binary"))&&row.optLong("bytes",-1)>=0&&row.optLong("bytes")<=262144){
+                    listing.put("priorSavedFile",position.view());break;
+                }
+            }
+        }catch(Exception optional){/* Keep the current file list when the optional position cannot be verified. */}
+        return listing;
     }
     private JSONObject target(String project,String path)throws Exception {
         JSONArray history=projects.handle("history",new JSONObject().put("projectId",project).put("path",path)).getJSONArray("history");

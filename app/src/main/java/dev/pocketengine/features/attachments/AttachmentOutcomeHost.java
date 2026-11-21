@@ -65,6 +65,7 @@ public final class AttachmentOutcomeHost {
                         result.remove("sourceTaskRunId");result.put("runProvenance","unrecorded");
                         JSONObject proof=captured.forFile(meta);if(proof!=null)for(String k:new String[]{"sourceTaskRunId","sourceCoordinatorEpoch","sourceRunEvidence","runProvenance"})result.put(k,proof.get(k));
                     }else result.put("runProvenance",artifactRun.isBlank()?"unrecorded":artifactRun.equals(currentRun)?"current":"earlier");
+                    if("created_document".equals(kind)&&recordedDocumentOriginal(task,meta))result.put("recordedDocumentOriginal",true);
                 }
                 results.put(result);
             }
@@ -158,9 +159,52 @@ public final class AttachmentOutcomeHost {
         try{requireReference(taskId,artifactId,expectedSha256);control.checkpoint();return prepared;}
         catch(Exception failure){try{repository.discardVerifiedView(prepared);}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure;}
     }
+    /** A positive catalogue hint only; actual opens also check the same live native producer and bytes. */
+    private static boolean recordedDocumentOriginal(JSONObject task,JSONObject file)throws Exception {
+        String action=task.optString("id"),id=file.optString("id"),sha=file.optString("sha256"),status=task.optString("status");
+        if(!action.matches("[a-f0-9-]{36}")||!id.matches("[a-f0-9-]{36}")||!sha.matches("[a-f0-9]{64}")
+                ||!action.equals(task.opt("runId"))||!action.equals(task.opt("operationId"))||task.optInt("coordinatorEpoch",-1)!=1
+                ||!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))
+                ||!task.isNull("origin")||!task.isNull("conversationId")||!task.isNull("parentTaskId")||!task.isNull("teamRunId")||!task.isNull("memberId")
+                ||task.optBoolean("contextWithdrawn")||!task.optBoolean("contextAvailable",true)||task.optBoolean("sourceCurrentReadRequired")||"source_unavailable".equals(task.opt("taskProjection"))
+                ||!"attachments".equals(task.opt("feature"))||!"createDocument".equals(task.opt("command"))
+                ||!Set.of("needs_confirmation","completed").contains(status)||!"completed".equals(task.opt("executionStatus"))
+                ||!id.equals(task.opt("externalId"))||!action.equals(task.opt("externalOperationId"))
+                ||!privateFile(file)||file.optBoolean("outputSourceRetired")||file.optLong("size",-1)<=0
+                ||file.optLong("size",-1)>AttachmentBook.MAX_FILE_BYTES)return false;
+        JSONObject evidence=task.optJSONObject("evidence"),refs=task.optJSONObject("externalRefs"),source=file.optJSONObject("source");
+        JSONObject draft=refs==null?null:refs.optJSONObject("documentCreation"),publication=source==null?null:source.optJSONObject("nativePublication");
+        if(evidence==null||draft==null||source==null||publication==null||!id.equals(evidence.opt("id"))
+                ||!action.equals(evidence.opt("operationId"))||!"completed".equals(evidence.opt("executorStatus")))return false;
+        String plan=draft.optString("planDigest"),format=draft.optString("format"),mime=file.optString("mimeType");
+        return ("pdf".equals(format)&&"application/pdf".equals(mime)
+                ||"docx".equals(format)&&"application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(mime))
+                &&"created_document".equals(source.opt("kind"))&&!source.has("groupSpaceId")&&format.equals(source.opt("documentFormat"))
+                &&plan.matches("[a-f0-9]{64}")&&plan.equals(source.opt("planDigest"))&&plan.equals(publication.opt("planDigest"))
+                &&action.equals(source.opt("taskId"))&&action.equals(source.opt("runId"))&&action.equals(source.opt("operationId"))
+                &&action.equals(publication.opt("taskId"))&&action.equals(publication.opt("runId"))&&action.equals(publication.opt("operationId"))
+                &&"document_output".equals(publication.opt("role"))&&AttachmentBook.isOriginalPublicationId(id,action,"document_output",action,action,plan);
+    }
     /** Actual original-format viewer; task/audience and canonical byte checks remain this host's. */
     public OwnerFilePreviewSource originalFile(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
-        requireReference(taskId,artifactId,expectedSha256);JSONObject metadata=privateMetadata(artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,control);
+        return originalFile(taskId,artifactId,expectedSha256,control,false);
+    }
+    /** The already-authorized original file, opened directly from its native generation record. */
+    public OwnerFilePreviewSource originalRecordedDocument(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
+        return originalFile(taskId,artifactId,expectedSha256,control,true);
+    }
+    private OwnerFilePreviewSource originalFile(String taskId,String artifactId,String expectedSha256,RunControl control,boolean recordedDocument)throws Exception {
+        requireReference(taskId,artifactId,expectedSha256);JSONObject metadata=privateMetadata(artifactId,expectedSha256);
+        if(recordedDocument){
+            if(!recordedDocumentOriginal(ownerTaskRequired(taskId),metadata))throw new SecurityException("没有核对到这次生成的固定原件");
+            String plan=metadata.getJSONObject("source").getString("planDigest");
+            // The existing Book resolver checks the exact committed slot and bytes; it does not reconcile or republish the task.
+            JSONObject read=documents.documentResultForHost(taskId,taskId,taskId,plan,control);
+            if(!Boolean.TRUE.equals(read.opt("found"))||!Boolean.TRUE.equals(read.opt("originalPublication"))
+                    ||!artifactId.equals(read.opt("id"))||!sameReference(metadata,read)
+                    ||!recordedDocumentOriginal(ownerTaskRequired(taskId),read))
+                throw new SecurityException("原生成记录已变化，未打开其他文件");
+        }else repository.book.requireUnchanged(artifactId,expectedSha256,control);
         return new OwnerFilePreviewSource("attachments",metadata,c->repository.book.verifiedBytes(artifactId,expectedSha256,c),c->{requireReference(taskId,artifactId,expectedSha256);repository.book.requireUnchanged(artifactId,expectedSha256,c);},(destination,c)->repository.book.exportOwnerArchiveBytes(artifactId,expectedSha256,destination,c));
     }
     /** Explicit system chooser with a pinned original copy; a requested share is not delivery. */

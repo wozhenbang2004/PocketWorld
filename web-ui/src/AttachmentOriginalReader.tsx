@@ -23,7 +23,7 @@ export function DocumentProjection({value}:{value:Json}) {
 
 const textEncodings=['UTF-8','UTF-16LE','UTF-16BE','GB18030','ISO-8859-1'].map(id=>({id,label:id}));
 export type DisplayedOriginalText={windowId:string;viewerId:string;identity:string;sha256:string;encoding:string;offset:number};
-type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;onTextDisplayed?:(range:DisplayedOriginalText)=>void;
+type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;findBeforeLongText?:boolean;onTextDisplayed?:(range:DisplayedOriginalText)=>void;
  recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
 type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:boolean};
 function pdfRaster(value:Json):PdfRaster|null {
@@ -41,7 +41,7 @@ export function AttachmentOriginalReader(props:OriginalReaderProps) {
  return <OriginalReader key={JSON.stringify([props.windowId,props.source.id])} {...props}/>;
 }
 
-function OriginalReader({source,windowId,showTitle=true,recovery,onTextDisplayed}:OriginalReaderProps) {
+function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed}:OriginalReaderProps) {
  const textBody=useRef<HTMLDivElement>(null);
  const [toolsVisible,setToolsVisible]=useState(false);
  const [value,setValue]=useState<Json>(obj(source.information)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[found,setFound]=useState<Json|null>(null),[zoom,setZoom]=useState(1),[turn,setTurn]=useState(0),[position,setPosition]=useState('1'),[markdown,setMarkdown]=useState(String(source.name||'').toLowerCase().endsWith('.md'));
@@ -114,6 +114,15 @@ function OriginalReader({source,windowId,showTitle=true,recovery,onTextDisplayed
  const encodingChoice=recoveryEncoding||String(actual.encoding||'UTF-8');
  const systemReaderAction=(label:string,variant:'secondary'|'ghost')=>!retired&&recovery?.onOpenInReader&&
   <Button variant={variant} leadingIcon={IconExternalLink} disabled={recovery.busy||readerBusy} onClick={recovery.onOpenInReader}>{label}</Button>;
+ // Keep the already existing disclosure above a long plain-text original, not above other files or scopes.
+ // The native decoded length also keeps this placement on the final, potentially short range.
+ const findBeforeBody=findBeforeLongText&&ready&&type==='text'&&source.sourceUnavailable===false&&
+  actual.sourceIdentity===source.identity&&actual.sha256===source.sha256&&typeof actual.content==='string'&&!!actual.content&&
+  (actual.atEnd===false&&Number.isSafeInteger(actual.nextOffset)&&actual.nextOffset>actual.offset||
+   actual.atEnd===true&&Number.isSafeInteger(actual.decodedCharacters)&&actual.decodedCharacters>=12_000);
+ const findOriginal=((type==='pdf'&&toolsVisible)||type==='text')&&ready&&<Accordion className="pw-original-find"><AccordionItem id="original-find" title="查找原文" description={query?`当前查找：${query}`:undefined}><div className="pw-file-search"><TextField label={type==='pdf'?'查找 PDF 原文层':'查找文字（区分大小写）'} value={query} onChange={text=>{setQuery(text.slice(0,256));setFound(null)}}/><Button variant="secondary" disabled={readerBusy||!query||type==='pdf'&&!actual.searchAvailable} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:type==='pdf'?1:0})}>查找</Button></div>
+ {type==='pdf'&&ready&&!actual.searchAvailable&&<p className="pw-muted">此设备不支持 PDF 原文搜索；可返回文件来源，选择本机文字识别。</p>}
+ {found&&<div className="pw-action-row">{rows(found.matches).map((hit,i)=><Button key={i} variant="ghost" disabled={readerBusy} onClick={()=>read(type==='pdf'?{page:hit.page}:{offset:hit.offset,encoding:actual.encoding})}>{type==='pdf'?`第 ${hit.page} 页`:`位置 ${Number(hit.offset)+1}`}</Button>)}{found[type==='pdf'?'nextPage':'nextOffset']!=null&&<Button variant="secondary" disabled={readerBusy} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:found[type==='pdf'?'nextPage':'nextOffset']})}>继续后续范围</Button>}{!rows(found.matches).length&&<p>当前查找范围内没有匹配文字。</p>}{found.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}</div>}</AccordionItem></Accordion>;
  return <section className="pw-original-file" aria-label={`原件：${source.name}`}>
  {showTitle&&<header><h3>{source.name}</h3><p className="pw-muted">{source.mimeType}</p></header>}
  {!retired&&readerBusy&&<p role="status">正在读取原件…</p>}
@@ -136,14 +145,13 @@ function OriginalReader({source,windowId,showTitle=true,recovery,onTextDisplayed
   <Button variant="ghost" aria-expanded={toolsVisible} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'阅读工具'}</Button>
  </div>}
  {type==='pdf'&&ready&&<div hidden={!toolsVisible} className="pw-action-row pw-original-pagination pw-material-navigation"><TextField label="页码" value={position} onChange={setPosition}/><Button variant="secondary" disabled={readerBusy||!/^\d+$/.test(position)||Number(position)<1||Number(position)>pages} onClick={()=>read({page:Number(position)})}>跳转</Button></div>}
- {ready&&type==='text'&&<div ref={textBody} className="pw-original-text">{markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text">{actual.content}</pre>}
+ {findBeforeBody&&findOriginal}
+ {ready&&type==='text'&&<div ref={textBody} className="pw-original-text" data-find-before={findBeforeBody?true:undefined}>{markdown?<MarkdownBody text={String(actual.content||'')}/>:<pre className="pw-file-text">{actual.content}</pre>}
   <div className="pw-action-row">{!!actual.offset&&<Button variant="ghost" disabled={busy} onClick={()=>read({encoding:actual.encoding,offset:0})}>从开头</Button>}
    {actual.nextOffset!=null&&<Button variant="secondary" disabled={busy} onClick={()=>read({encoding:actual.encoding,offset:actual.nextOffset})}>读取后续</Button>}
    {(!!actual.offset||actual.nextOffset!=null)&&<small>字符位置 {Number(actual.offset||0)+1}</small>}</div>
  </div>}
- {((type==='pdf'&&toolsVisible)||type==='text')&&ready&&<Accordion className="pw-original-find"><AccordionItem id="original-find" title="查找原文" description={query?`当前查找：${query}`:undefined}><div className="pw-file-search"><TextField label={type==='pdf'?'查找 PDF 原文层':'查找文字（区分大小写）'} value={query} onChange={text=>{setQuery(text.slice(0,256));setFound(null)}}/><Button variant="secondary" disabled={readerBusy||!query||type==='pdf'&&!actual.searchAvailable} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:type==='pdf'?1:0})}>查找</Button></div>
- {type==='pdf'&&ready&&!actual.searchAvailable&&<p className="pw-muted">此设备不支持 PDF 原文搜索；可返回文件来源，选择本机文字识别。</p>}
- {found&&<div className="pw-action-row">{rows(found.matches).map((hit,i)=><Button key={i} variant="ghost" disabled={readerBusy} onClick={()=>read(type==='pdf'?{page:hit.page}:{offset:hit.offset,encoding:actual.encoding})}>{type==='pdf'?`第 ${hit.page} 页`:`位置 ${Number(hit.offset)+1}`}</Button>)}{found[type==='pdf'?'nextPage':'nextOffset']!=null&&<Button variant="secondary" disabled={readerBusy} onClick={()=>void invoke('find',{query,encoding:actual.encoding,cursor:found[type==='pdf'?'nextPage':'nextOffset']})}>继续后续范围</Button>}{!rows(found.matches).length&&<p>当前查找范围内没有匹配文字。</p>}{found.pageMatchesOmitted&&<p>部分命中未显示，请缩小查找范围。</p>}</div>}</AccordionItem></Accordion>}
+ {!findBeforeBody&&findOriginal}
  {imageTools&&<div hidden={!toolsVisible} className="pw-action-row pw-original-zoom pw-material-navigation" role="group" aria-label="原件显示比例"><Button variant="ghost" disabled={zoom<=1} onClick={()=>setZoom(x=>Math.max(1,x/1.5))}>缩小</Button><Button variant="ghost" onClick={()=>{setZoom(1);setTurn(0)}}>适合页面 · {Math.round(zoom*100)}%</Button><Button variant="ghost" disabled={zoom>=8} onClick={()=>setZoom(x=>Math.min(8,x*1.5))}>放大</Button>{type==='image'&&<Button variant="ghost" onClick={()=>setTurn(x=>(x+90)%360)}>旋转查看</Button>}</div>}
  {ready&&type==='image'&&<><p className="pw-muted">原尺寸 {actual.width} × {actual.height}{actual.sampled?' · 显示时已采样，导出保留完整原图':''}</p><div className="pw-original-raster"><img src={source.url} style={{width:`${zoom*100}%`,transform:`rotate(${turn}deg)`}} alt="选定的固定原图" onError={()=>setError('原件显示已关闭或未完成，请返回后重新打开')}/></div></>}
  {/* Keep the previous decoded image mounted until the next exact raster is acknowledged; never fetch it again as a fallback. */}
