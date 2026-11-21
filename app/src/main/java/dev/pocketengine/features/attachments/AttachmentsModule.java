@@ -5,6 +5,8 @@ import android.net.Uri;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.attachments.creation.DocumentDraft;
+import dev.pocketengine.features.attachments.creation.NativeDocumentCreation;
 import dev.pocketengine.features.attachments.documents.DocumentContent;
 import dev.pocketengine.features.attachments.documents.DocumentReader;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
@@ -102,13 +104,18 @@ public final class AttachmentsModule implements EngineModule {
     }
     public JSONObject processingResultForHost(String operation,String task,String run,String digest,RunControl control)throws Exception{JSONObject found=repository.book.findNativeResult(operation,"media_output",task,run,digest,control);if(found.optBoolean("found"))ownerRecord(found);return found;}
     private dev.pocketengine.features.attachments.creation.NativeDocumentCreation documentCreation(){return new dev.pocketengine.features.attachments.creation.NativeDocumentCreation(repository.book,context.android.getCacheDir(),(id,sha,control)->{ownerRecord(repository.book.get(id));repository.book.readVerifiedMetadata(id,sha,control);});}
-    /** Original model journal or the native owner FeatureHost supplies this binding, never draft JSON. */
+    /** The standalone owner worker supplies the exact native binding, not model or Web fields. */
+    public JSONObject createOriginalOwnerDocument(DocumentDraft draft,String action,int epoch,RunControl control)throws Exception{
+        if(epoch!=1||!control.hasHostRun()||!control.matchesHostRun(action,action,epoch))throw new SecurityException("缺少原主人文档动作");
+        return documentCreation().create(draft,action,action,action,control);
+    }
+    /** Original model journal supplies this binding, never draft JSON. */
     public JSONObject createDocumentForHost(JSONObject input,RunControl control)throws Exception{
         String task=input.getString("_taskId"),run=input.getString("_runId"),operation=input.getString("_operationId");int epoch=input.getInt("_epoch");
         if(!control.hasHostRun()||!control.matchesHostRun(task,run,epoch))throw new SecurityException("文档生成缺少原宿主执行控制");
         JSONObject draft=new JSONObject(input.toString());for(String key:new String[]{"_taskId","_runId","_operationId","_epoch","_nativeDocumentPlanDigest"})draft.remove(key);
-        try{return documentCreation().create(new dev.pocketengine.features.attachments.creation.DocumentDraft(draft),operation,task,run,control);}
-        catch(dev.pocketengine.features.attachments.creation.NativeDocumentCreation.NotPublished failed){return new JSONObject(failed.receipt.toString()).put("taskId",task).put("runId",run);}
+        try{return documentCreation().create(new DocumentDraft(draft),operation,task,run,control);}
+        catch(NativeDocumentCreation.NotPublished failed){return failed.hostReceipt();}
     }
     public JSONObject editableDocumentForOwner(String parent,String sha,RunControl control)throws Exception{return documentCreation().readEditableSource(parent,sha,control);}
     /** The model adapter supplies the live authority, never a run ID from tool arguments. */

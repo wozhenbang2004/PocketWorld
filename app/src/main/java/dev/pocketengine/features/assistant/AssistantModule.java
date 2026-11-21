@@ -1372,6 +1372,78 @@ public final class AssistantModule implements EngineModule {
     public JSONArray sourceStates(JSONObject scope)throws Exception{
         MemoryBook.Scope identity=MemoryBook.Scope.from(scope);if(durable())throw new IllegalStateException("长期历史来源请使用有限sourceRef metadata门，不能全文拉sourceStates");synchronized(storage){healthy();JSONArray result=new JSONArray();if(!privateScope(identity))return result;for(int i=0;i<sources.length();i++)result.put(sourceMetadata(sources.getJSONObject(i)));return result;}
     }
+    private static final String FIRST_PHONE_ORIGINAL="firstPrivatePhoneOrigin";
+
+    /** The only effect is one native owner C and owner message; not a chat submission, model request or Work. */
+    public JSONObject saveFirstPrivatePhoneOriginal(OwnerComposerState.FirstPhoneOriginal original,
+                                                    java.util.function.BooleanSupplier window)throws Exception{
+        synchronized(admission){
+            requireFirstPhoneOriginalWindow(original,window);
+            boolean created=historyRepository.transaction(()->{
+                requireFirstPhoneOriginalWindow(original,window);
+                String conversation=original.conversationId,message=original.messageId;
+                if(historyRepository.source(message)!=null||historyRepository.exists(conversation)){
+                    checkedFirstPhoneOriginal(original);
+                    requireFirstPhoneOriginalWindow(original,window);
+                    return false;
+                }
+                long now=System.currentTimeMillis();
+                JSONObject owner=new JSONObject().put("kind","message").put("sourceId",message).put("conversationId",conversation)
+                        .put("ownerId","owner").put("spaceId","private").put("role","user").put("revision",1L)
+                        .put("deleted",false).put("updatedAt",now).put(FIRST_PHONE_ORIGINAL,firstPhoneOriginPin(original));
+                historyRepository.saveConversation(new JSONObject().put("conversationId",conversation).put("title",unicodePrefix(original.text.trim(),40))
+                        .put("createdAt",now).put("updatedAt",now));
+                historyRepository.saveSource(owner);
+                historyRepository.saveMessage(conversation,new JSONObject().put("id",message).put("role","user").put("content",original.text)
+                        .put("at",now).put("revision",1L).put("personalMemoryExcluded",true));
+                checkedFirstPhoneOriginal(original);
+                requireFirstPhoneOriginalWindow(original,window);
+                return true;
+            });
+            if(created){sourceGeneration++;synchronizationPending=true;}
+            // Returning a positive receipt requires the exact committed original, not just allocated ids.
+            reviewSavedFirstPhoneOriginal(original,window);
+            return new JSONObject().put("status","saved_local").put("conversationId",original.conversationId)
+                    .put("messageId",original.messageId).put("revision",1).put("duplicate",!created)
+                    .put("networkUsed",false).put("dispatched",false).put("modelCalled",false).put("taskCreated",false).put("executionAuthorized",false);
+        }
+    }
+    public JSONObject reviewSavedFirstPhoneOriginal(OwnerComposerState.FirstPhoneOriginal original,
+                                                    java.util.function.BooleanSupplier window)throws Exception{
+        requireFirstPhoneOriginalWindow(original,window);
+        return historyRepository.transaction(()->{
+            requireFirstPhoneOriginalWindow(original,window);
+            JSONObject source=checkedFirstPhoneOriginal(original);
+            requireFirstPhoneOriginalWindow(original,window);
+            return new JSONObject().put("kind","owner_native_original").put("generation",source.getString("generation"))
+                    .put("conversationId",original.conversationId).put("recordId",original.messageId).put("recordVersion",1L)
+                    .put("fingerprint",source.getString("bodyFingerprint"));
+        });
+    }
+    private void requireFirstPhoneOriginalWindow(OwnerComposerState.FirstPhoneOriginal original,java.util.function.BooleanSupplier window)throws Exception{
+        if(original==null||window==null||!durable()||migrationInProgress||historyTasks==null||!window.getAsBoolean())
+            throw new SecurityException("原私人手机草稿的本机保存窗口不可用");
+        original.requireCurrent();
+    }
+    private JSONObject firstPhoneOriginPin(OwnerComposerState.FirstPhoneOriginal original)throws Exception{
+        return new JSONObject().put("format","pocketworld.first-private-phone-origin.v1").put("generation",historyRepository.authority().getString("generation"))
+                .put("editorRevision",original.editorRevision()).put("phoneRevision",original.phoneRevision)
+                .put("bodyFingerprint",dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("text",original.text)));
+    }
+    private JSONObject checkedFirstPhoneOriginal(OwnerComposerState.FirstPhoneOriginal original)throws Exception{
+        JSONObject source=historyRepository.source(original.messageId);
+        JSONObject stored=source==null?null:source.optJSONObject(FIRST_PHONE_ORIGINAL);
+        if(stored==null||!dev.pocketengine.store.TaskStore.capabilityFingerprint(firstPhoneOriginPin(original))
+                .equals(dev.pocketengine.store.TaskStore.capabilityFingerprint(stored)))
+            throw new SecurityException("本编辑器已有不同或未核实的原话，未覆盖也未新建；请在私聊目录核对");
+        JSONObject handoff=historyRepository.preparePhoneHandoffSource(original.conversationId,original.messageId);
+        JSONObject row=historyRepository.message(original.conversationId,original.messageId);
+        if(row==null||row.optLong("revision")!=1||handoff.getLong("sourceMessageRevision")!=1||handoff.getLong("sourceSequence")!=1||
+                !Boolean.TRUE.equals(row.opt("personalMemoryExcluded"))||row.optBoolean("importAssignedIdentity")||!original.text.equals(row.opt("content")))
+            throw new SecurityException("原话已换版、撤回或不能核对；未打开其他私聊");
+        historyRepository.requireLatestPhoneHandoffSource(handoff);
+        return handoff;
+    }
     /** Native-only local save. No model configuration, submission ACK, task/run or network. */
     public JSONObject saveFirstPrivateHostRequest(OwnerComposerState.FirstHostAnchor original,java.util.function.BooleanSupplier window)throws Exception{
         if(original==null||window==null)throw new SecurityException("请先在原未发草稿中选择保存");

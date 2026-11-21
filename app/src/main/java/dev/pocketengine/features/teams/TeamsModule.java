@@ -165,6 +165,22 @@ public final class TeamsModule implements EngineModule {
             ended.accept(error);
         });
     }
+    public boolean canReviewOwnerIndependent(TeamOwnerFileReading original,int generation,long revision,RunControl reader)throws Exception{
+        return requireWriteHost().canReviewOwnerIndependent(coordinator,original,generation,revision,reader);
+    }
+    public TaskStoreTeamWriteHost.OwnerIndependentReview reviewOwnerIndependent(TeamOwnerFileReading original,int generation,long revision,
+            java.util.function.BooleanSupplier live)throws Exception{
+        return requireWriteHost().reviewOwnerIndependent(coordinator,original,generation,revision,context.model(),live);
+    }
+    /** Only invoked by the explicit native owner confirmation; not an EngineModule command. */
+    public void startOwnerIndependent(TaskStoreTeamWriteHost.OwnerIndependentReview review,java.util.function.Consumer<JSONObject> started,
+            java.util.function.Consumer<Exception> ended)throws Exception{
+        TaskStoreTeamWriteHost writes=requireWriteHost();context.requireExecutionEnabled();
+        coordinator.enqueueOwnerRemainder(()->{
+            Exception error=null;try{writes.startOwnerIndependent(review,context::model,context::requireExecutionEnabled,started);}catch(Exception failure){error=failure;}
+            ended.accept(error);
+        });
+    }
     public JSONObject ownerFinalWorkers(String runId,JSONObject ownerReading)throws Exception{
         if(writeHost==null)return TeamDeliveryWorkers.unavailable(runId);JSONObject workers=writeHost.finalWorkers(runId,ownerReading);
         try{JSONObject recovered=writeHost.recoveredFilesForReading(coordinator,runId,null);if(recovered!=null)workers.put("originalFileObservation",recovered);}

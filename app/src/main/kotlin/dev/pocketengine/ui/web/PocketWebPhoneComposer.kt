@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.EngineApplication
+import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -49,6 +50,13 @@ internal class PocketWebPhoneComposer(
     private var phoneIntent = false
     private var phoneExecutionMode = "background"
     private var phoneStartReceipt: JSONObject? = null
+    private data class FirstOriginalVisit(val window:PocketWebWindowTicket,val key:String,val ownerEpoch:Int,val ownerRevision:Long,
+                                          val phoneEpoch:Int,val phoneRevision:Long,val originRevision:Long,val sourceRevision:Long,val generation:Long)
+    private data class FirstOriginalOffer(val handle:String,val visit:FirstOriginalVisit,val original:OwnerComposerState.FirstPhoneOriginal)
+    private data class FirstDraftScope(val key:String,val phoneRevision:Long,val conversation:String?=null,val message:String?=null)
+    @Volatile private var savingFirstOriginal:Any?=null
+    @Volatile private var firstOriginalOffer:FirstOriginalOffer?=null
+    @Volatile private var firstDraftScope:FirstDraftScope?=null
 
     val intent: Boolean get() = phoneIntent
     val draftRevision: Long get() = phoneDraftRevision
@@ -69,7 +77,15 @@ internal class PocketWebPhoneComposer(
         original.has("requestId") -> linkedHere(linkedOwner(original))
         else -> true
     }
-    private fun textElsewhere() = phoneDraft.isNotBlank() && (heldLinkedGoal?.let{!linkedHere(it)}==true ||
+    private fun firstPhoneDraftHere(scope:FirstDraftScope):Boolean{
+        val conversation=controller.state.conversationId.orEmpty()
+        val draft=controller.composerDraft ?: return false
+        return !controller.hasChannelPhoneOrigin&&controller.webPrivateOwnerVisible()&&
+            (conversation.isEmpty()&&draft.key==scope.key&&draft.conversationId.isEmpty() ||
+                scope.conversation==conversation&&draft.conversationId==conversation)
+    }
+    private fun textElsewhere() = phoneDraft.isNotBlank() && (firstDraftScope?.let{!firstPhoneDraftHere(it)}==true ||
+        heldLinkedGoal?.let{!linkedHere(it)}==true ||
         phoneStartReceipt?.let {it.has("draftRequestId") && !receiptHere(it)}==true)
     private fun checkFirstOnly(original:JSONObject,goal:String)=(original.has("requestId") || original.has("draftRequestId")) && receiptHere(original) &&
         original.optString("status")=="accepted" && !original.optBoolean("admitted") && goal.isNotBlank() && original.optString("goal").trim()==goal.trim()
@@ -82,6 +98,72 @@ internal class PocketWebPhoneComposer(
         .put("sourceState",source).put("sourceEditTicket",sourceEditTicket).put("revision", phoneDraftRevision)
         .put("firstCheckOnly",receipt?.let{checkFirstOnly(it,phoneDraft)}==true)
         .put("epoch", presentationEpoch).put("phone", phoneIntent).put("mode", phoneExecutionMode).put("startReceipt", receipt).put("channelOrigin", controller.hasChannelPhoneOrigin)
+        .put("saveFirstOriginalReady",firstOriginalEligible())
+    }
+
+    private fun firstOriginalEligible():Boolean{
+        val draft=controller.composerDraft ?: return false
+        return phoneIntent&&phoneExecutionMode=="main_screen"&&phoneDraftRevision>0&&phoneDraft.isNotBlank()&&phoneDraft.length<=4_000&&
+            picked==null&&!pinLost&&!textElsewhere()&&heldLinkedGoal==null&&phoneStartReceipt==null&&
+            firstDraftScope?.let{it.key==draft.key&&(it.conversation==null||it.phoneRevision==phoneDraftRevision)}!=false&&
+            controller.firstPhoneOriginalEditorCurrent(draft.key,controller.composerViewEpoch,draft.revision)
+    }
+    private fun firstOriginalCurrent(visit:FirstOriginalVisit):Boolean=
+        !isClosed()&&reviewGeneration==visit.generation&&acceptsOwnerWindow(visit.window)&&firstOriginalEligible()&&phoneDraftRevision==visit.phoneRevision&&presentationEpoch==visit.phoneEpoch&&
+            controller.phoneOriginRevision==visit.originRevision&&controller.conversationSourceRevision==visit.sourceRevision&&
+            controller.firstPhoneOriginalEditorCurrent(visit.key,visit.ownerEpoch,visit.ownerRevision)
+
+    /** The body comes only from the current native phone editor; the caller supplies no text or destination. */
+    fun saveFirstOriginal(args:JSONObject,shown:()->Boolean,reply:(JSONObject?,String?)->Unit){
+        require(args.keys().asSequence().toSet()==setOf("key","epoch","revision","phoneEpoch","phoneRevision"))
+        val requested=FirstOriginalVisit(captureOwnerWindow(),requiredString(args,"key"),requiredInt(args,"epoch"),requiredLong(args,"revision"),
+            requiredInt(args,"phoneEpoch"),requiredLong(args,"phoneRevision"),controller.phoneOriginRevision,controller.conversationSourceRevision,reviewGeneration)
+        require(shown()&&firstOriginalCurrent(requested)&&savingFirstOriginal==null){"请从同一原手机草稿核对本机保存"}
+        // An earlier ordinary review must not start the blank task while this local save settles.
+        clearReviews()
+        val visit=requested.copy(generation=reviewGeneration)
+        val current={shown()&&firstOriginalCurrent(visit)}
+        val body=phoneDraft
+        val flight=Any();savingFirstOriginal=flight
+        firstOriginalOffer=null
+        if(firstDraftScope==null)firstDraftScope=FirstDraftScope(visit.key,visit.phoneRevision)
+        try{controller.saveFirstPhoneOriginal(visit.key,visit.ownerEpoch,visit.ownerRevision,body,visit.phoneRevision,current){ native,receipt,error ->
+            if(savingFirstOriginal!==flight)return@saveFirstPhoneOriginal
+            savingFirstOriginal=null
+            if(native==null||receipt==null||!current()){
+                reply(null,error?:"未核对到这个窗口的本机保存，原文字仍保留。");publishState();return@saveFirstPhoneOriginal
+            }
+            val offer=FirstOriginalOffer(UUID.randomUUID().toString(),visit,native)
+            firstOriginalOffer=offer
+            firstDraftScope=FirstDraftScope(visit.key,visit.phoneRevision,native.conversationId,native.messageId)
+            reply(receipt.put("viewSavedPhoneHandle",offer.handle),null);publishState()
+        }}catch(error:Exception){if(savingFirstOriginal===flight)savingFirstOriginal=null;throw error}
+    }
+
+    /** The existing conversation-select action calls this optional exact-owner leaf; there is no generic fallback. */
+    fun selectSavedFirstOriginal(args:JSONObject,shown:()->Boolean,select:(String)->Boolean,reply:(JSONObject?,String?)->Unit){
+        require(args.keys().asSequence().toSet()==setOf("viewSavedPhoneHandle"))
+        val offer=firstOriginalOffer?:error("刚才保存的原话窗口已离开")
+        require(offer.handle==requiredString(args,"viewSavedPhoneHandle"))
+        val unavailable="未能核对或打开刚才保存的原话。没有打开其他私聊，原输入仍保留。"
+        val current={shown()&&firstOriginalOffer===offer&&firstOriginalCurrent(offer.visit)}
+        require(current()&&savingFirstOriginal==null){unavailable}
+        val flight=Any();savingFirstOriginal=flight
+        try{controller.verifySavedFirstPhoneOriginal(offer.original,current){ locator ->
+            if(savingFirstOriginal!==flight)return@verifySavedFirstPhoneOriginal
+            savingFirstOriginal=null
+            val pin=PhoneDraftMessagePin.from(locator)
+            if(!current()||pin==null||pin.conversation!=offer.original.conversationId||pin.message!=offer.original.messageId||pin.version!=1L){
+                reply(null,unavailable);publishState();return@verifySavedFirstPhoneOriginal
+            }
+            firstOriginalOffer=null
+            if(select(pin.conversation)){
+                // Match the usual message-selected review. No fallback to whichever message arrives later.
+                picked=pin;pinLost=false;sourceEditTicket++;clearReviews()
+                reply(JSONObject().put("opened",true).put("conversationId",pin.conversation).put("messageId",pin.message).put("revision",1),null)
+            }else reply(null,unavailable)
+            publishState()
+        }}catch(error:Exception){if(savingFirstOriginal===flight)savingFirstOriginal=null;throw error}
     }
 
     fun appendVoice(text: String) {
@@ -104,7 +186,8 @@ internal class PocketWebPhoneComposer(
         if(args.has("sourceEditTicket") || picked!=null || pinLost)check(requiredLong(args,"sourceEditTicket")==sourceEditTicket &&
             requiredString(args,"draftConversation",true)==controller.state.conversationId.orEmpty()) { "手机草稿来源已切换，未采用其他窗口的迟到输入" }
         if(text.isBlank()&&(picked!=null||pinLost)){picked=null;pinLost=false;++sourceEditTicket}
-        if(text.isBlank())heldLinkedGoal=null
+        if(text.isBlank()){heldLinkedGoal=null;firstDraftScope=null}
+        firstOriginalOffer=null
         phoneDraft = text; phoneDraftRevision++; clearReviews()
     }
 
@@ -146,6 +229,10 @@ internal class PocketWebPhoneComposer(
         checkedPayload(args, setOf("goal", "mode", "epoch", "originalDraft"))
         require(controller.webPrivateOwnerVisible() && requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，请重新核对保留草稿" }
         val goal = requiredString(args, "goal"); val mode = requiredString(args, "mode")
+        require(savingFirstOriginal==null){"请等这次本机原话保存或打开完成，没有提交任务"}
+        firstDraftScope?.takeIf{it.conversation!=null&&it.phoneRevision==phoneDraftRevision}?.let{ scope ->
+            require(scope.conversation==controller.state.conversationId&&picked?.message==scope.message){"手机目标已保存在原私聊。请打开并选用那条原话，再核对手机任务。"}
+        }
         require(goal.trim().isNotEmpty() && goal.trim().length <= 4000 && mode in setOf("background", "main_screen")) { "请填写 1–4000 字的手机任务目标，并选择执行位置" }
         require(phoneDraft.trim() == goal.trim() && phoneIntent && phoneExecutionMode == mode) { "原手机草稿或执行位置已变化，请重新核对" }
         if (args.has("originalDraft")) {
@@ -246,6 +333,8 @@ internal class PocketWebPhoneComposer(
         .put("phoneDraftRevision", phoneDraftRevision).put("phoneIntent", phoneIntent).put("phoneExecutionMode", phoneExecutionMode)
         .put("phoneStartReceipt", phoneStartReceipt).put("phoneSourceFormat",1).put("privateGoalOwnerFormat",1)
         .also { out->heldLinkedGoal?.let{out.put("privateGoalOwner",JSONObject().put("composerKey",it.composer).put("conversationId",it.conversation))} }
+        .also { out->firstDraftScope?.let{out.put("firstPhoneDraftScope",JSONObject().put("format",1).put("key",it.key).put("phoneRevision",it.phoneRevision)
+            .put("conversationId",it.conversation).put("messageId",it.message))} }
         .also { out -> picked?.let { out.put("phoneDraftOriginal", it.locator()) }; if(pinLost)out.put("phoneSourceLost",true) }
 
     fun restorePresentation(saved: JSONObject?) {
@@ -256,6 +345,13 @@ internal class PocketWebPhoneComposer(
         pinLost=phoneDraft.isNotBlank() && (saved.optBoolean("phoneSourceLost") || saved.has("phoneDraftOriginal") && picked==null ||
             !saved.has("phoneSourceFormat") && !saved.has("phoneDraftOriginal"))
         phoneDraftRevision = saved.optLong("phoneDraftRevision").coerceAtLeast(0)
+        firstDraftScope=if(!saved.has("firstPhoneDraftScope"))null else {
+            saved.optJSONObject("firstPhoneDraftScope")?.takeIf{it.opt("format")==1}?.let{
+                val scope=FirstDraftScope(it.optString("key"),it.optLong("phoneRevision",-1),it.optString("conversationId").takeIf(String::isNotBlank),
+                    it.optString("messageId").takeIf(String::isNotBlank))
+                scope.takeIf{it.phoneRevision>0&&OwnerComposerState.FirstPhoneOriginal.matchesDraftScope(it.key,it.conversation,it.message)}
+            }?:FirstDraftScope("",-1)
+        }
         phoneIntent = saved.optBoolean("phoneIntent")
         phoneExecutionMode = saved.optString("phoneExecutionMode").takeIf { it in setOf("background", "main_screen") } ?: "background"
         phoneStartReceipt = saved.optJSONObject("phoneStartReceipt")?.let { JSONObject(it.toString()) }
@@ -295,7 +391,7 @@ internal class PocketWebPhoneComposer(
             receipt.optInt("draftEpoch", -1) == presentationEpoch && receipt.optInt("composerEpoch", -1) == controller.composerViewEpoch &&
             receipt.optString("composerKey") == controller.composerDraft?.key.orEmpty() &&
             receipt.optString("draftConversationId") == controller.state.conversationId.orEmpty() && phoneDraft.trim() == receipt.optString("goal").trim()) {
-            phoneDraft = "";heldLinkedGoal=null; if(picked!=null||pinLost)++sourceEditTicket;picked=null;pinLost=false;phoneDraftRevision++
+            phoneDraft = "";heldLinkedGoal=null;firstDraftScope=null;firstOriginalOffer=null; if(picked!=null||pinLost)++sourceEditTicket;picked=null;pinLost=false;phoneDraftRevision++
         }
     }
 

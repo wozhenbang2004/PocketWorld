@@ -12,7 +12,12 @@ import org.json.JSONObject;
  * existing independent OOXML reader as a structural/content check. No project code or templates. */
 public final class WordDocumentWriter {
     private WordDocumentWriter(){}
+    /** The untouched output buffer and readback travel together to the native publisher. */
+    record Verified(byte[] bytes,JSONObject check) {}
     public static byte[] write(DocumentDraft draft,RunControl control)throws Exception{
+        return writeVerified(draft,control).bytes();
+    }
+    static Verified writeVerified(DocumentDraft draft,RunControl control)throws Exception{
         control.check();StringBuilder body=new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>");
         boolean table=false;int columns=0;
         for(var block:draft.blocks){control.check();
@@ -29,7 +34,8 @@ public final class WordDocumentWriter {
             part(zip,"word/_rels/document.xml.rels",OfficePackage.relationships(OfficePackage.relationship("rIdStyles","styles","styles.xml")));
             part(zip,"word/styles.xml",styles(draft.fontPoints));
         }
-        byte[] result=bytes.toByteArray();if(result.length>2*1024*1024)throw new IllegalArgumentException("生成文档超过2MiB，未发布部分文档");check(result,draft,control);return result;
+        byte[] result=bytes.toByteArray();if(result.length>2*1024*1024)throw new IllegalArgumentException("生成文档超过2MiB，未发布部分文档");
+        return new Verified(result,check(result,draft,control));
     }
     public static JSONObject check(byte[] result,DocumentDraft draft,RunControl control)throws Exception{
         DocumentReader reader=new DocumentReader(null,null);int unit=1,chunk=0,readChars=0,actualUnits=0;java.util.Map<Integer,StringBuilder> actualText=new java.util.LinkedHashMap<>();int requests=0;int maximumRequests=(DocumentDraft.MAX_BLOCKS*DocumentDraft.MAX_COLUMNS+31)/32;

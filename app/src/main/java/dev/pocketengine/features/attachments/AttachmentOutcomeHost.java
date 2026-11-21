@@ -203,7 +203,8 @@ public final class AttachmentOutcomeHost {
                 !(origin.opt("sourceSha256") instanceof String sha)||!sha.matches("[a-f0-9]{64}")||!sha.equals(inputs.get(id))||
                 !(origin.opt("readReceiptId") instanceof String receipt)||!receipt.matches("[a-f0-9-]{36}")||
                 !"body_paragraphs_and_tables".equals(origin.opt("coverage"))||!"text".equals(origin.opt("extraction"))||
-                !DocumentContent.PARSER_VERSION.equals(origin.opt("parserVersion"))||
+                // Earlier DOCX projections can cut the same paragraph differently; their saved TXT is still readable.
+                !AttachmentDocuments.WORD_PARSER_VERSION.equals(origin.opt("parserVersion"))||
                 !origin.isNull("taskId")||!origin.isNull("runId")||!origin.isNull("operationId")||
                 !origin.isNull("groupSpaceId")||!origin.isNull("archiveEvidence"))return null;
         JSONObject range=origin.optJSONObject("readRange");

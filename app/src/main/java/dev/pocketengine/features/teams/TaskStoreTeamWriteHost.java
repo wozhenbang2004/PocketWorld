@@ -246,8 +246,10 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
         public synchronized JSONObject revoke(String expectedGrantId)throws Exception{if(!alive)throw new SecurityException("原草稿审阅窗口已关闭");pending=null;JSONObject result=tasks.revokeTeamDraftScope(window,expectedGrantId);JSONArray targets=result.getJSONArray("targets");for(int i=0;i<targets.length();i++){JSONObject target=targets.getJSONObject(i),task=tasks.get(target.getString("assignmentId"),false);if(task==null||task.getJSONObject("teamAssignment").optInt("assignmentRevision",1)!=target.getInt("assignmentRevision"))continue;RunControl actual=assignments.currentControl(task.getString("id"));if(actual!=null&&actual.matchesHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch")))actual.cancel();}changed.accept(runId);return result;}
         @Override public void close(){alive=false;window.close();}
     }
-    public TeamWorkReview.Prepared review(String run,RunControl read)throws Exception {
+    public TeamWorkReview.Prepared review(String run,RunControl read)throws Exception {return review(run,read,null);}
+    private TeamWorkReview.Prepared review(String run,RunControl read,OwnerIndependentReview owner)throws Exception {
         read.check();JSONObject scope=tasks.teamWriteScopeForOwner(run,read),context=tasks.teamIntegrationContext(run,read);JSONArray assignments=tasks.teamAssignmentsForReview(run,read);
+        if(owner!=null)owner.requireFrozenRefs(scope,context,assignments);
         if(context!=null&&integrations.containsKey(run))context.put("activeAttempt",true);
         TeamWorkReview.Prepared review=context==null?TeamWorkReview.prepare(workspace,run,scope.getString("targetProjectId"),assignments):TeamWorkReview.prepareRecovery(workspace,run,scope.getString("targetProjectId"),assignments,context);read.check();return review;
     }
@@ -403,12 +405,127 @@ public final class TaskStoreTeamWriteHost implements TeamCoordinator.BudgetHost,
     TextOutputApproval reviewOwnerTextApproval(TeamOwnerFileReading seen)throws Exception{return new TextOutputApproval(seen,false);}
     TextOutputApproval reviewFirstProjectTextApproval(TeamOwnerFileReading seen)throws Exception{return new TextOutputApproval(seen,true);}
     public JSONObject approve(String run,String expectedHash,RunControl read)throws Exception {JSONObject result=tasks.approveTeamOutputs(run,review(run,read),expectedHash,read);changed.accept(run);return result;}
+    private JSONObject ownerIndependentFacts(TeamCoordinator coordinator,TeamOwnerFileReading shown,int generation,long revision)throws Exception{
+        if(!shown.hasCompleteTextComparison())throw new SecurityException("这里只有当前完整的本机冻结文本");
+        synchronized(coordinator){
+            coordinator.requireOwnerIndependentReviewReady(shown.team(),generation,revision);
+            return tasks.ownerIndependentTeamReviewFacts(shown.team(),shown.plan(),shown.index().getJSONArray("files").length());
+        }
+    }
+    boolean canReviewOwnerIndependent(TeamCoordinator coordinator,TeamOwnerFileReading shown,int generation,long revision,RunControl reader)throws Exception{
+        try{reader.check();ownerIndependentFacts(coordinator,shown,generation,revision);reader.check();return true;}
+        catch(Exception unavailable){reader.check();return false;}
+    }
+    private static void requireOneReviewerTarget(ModelConfig selected,ModelConfig original)throws Exception{
+        requireReviewerTarget(selected,original);checkReviewerRoute(selected.routePlan,original);
+        for(var route:selected.purposePlans.values())checkReviewerRoute(route,original);
+        checkReviewerRoute(original.routePlan,original);
+        for(var route:original.purposePlans.values())checkReviewerRoute(route,original);
+    }
+    private static void checkReviewerRoute(dev.pocketengine.runtime.models.ModelRoutePlan route,ModelConfig original)throws Exception{
+        if(route==null)return;
+        if(route.candidates.size()!=1||!route.dispatches(route.candidates.get(0))||!route.candidates.get(0).exclusion().isEmpty())
+            throw new SecurityException("原模型选择不可用或含其他候选，不能从这里独审");
+        requireReviewerTarget(route.candidates.get(0).config(),original);
+    }
+    private static void requireReviewerTarget(ModelConfig selected,ModelConfig original){
+        if(selected==null||selected.usesAccount()||selected.usesBedrock()||selected.model.isBlank()||selected.apiKey.isBlank()||
+                !selected.provider.equals(original.provider)||!selected.model.equals(original.model)||!selected.baseUrl.equals(original.baseUrl)||
+                !selected.sameCredentials(original))throw new SecurityException("原协作模型连接或模型已改变，未启动独审");
+    }
+    /** Held by exactly one owner file window. Native stage/budget facts and model identity are not renderer authority. */
+    public final class OwnerIndependentReview {
+        private final TeamCoordinator coordinator;
+        private final TeamCoordinator.WorkMutationSource source;
+        private final TeamOwnerFileReading shown;
+        private final java.util.function.BooleanSupplier live;
+        private final String facts,modelFingerprint,display;
+        private final long expires=android.os.SystemClock.elapsedRealtime()+120_000;
+        private final java.util.concurrent.atomic.AtomicBoolean used=new java.util.concurrent.atomic.AtomicBoolean();
+        private boolean armed;
+        private OwnerIndependentReview(TeamCoordinator coordinator,TeamOwnerFileReading shown,int generation,long revision,
+                ModelConfig selected,java.util.function.BooleanSupplier live)throws Exception{
+            this.coordinator=coordinator;this.shown=shown;this.live=live;
+            requireLiveWindow();
+            if(!shown.hasCompleteTextComparison())throw new SecurityException("没有当前完整的本机冻结文本");
+            JSONObject index=shown.index(),proof;
+            source=coordinator.ownerIndependentReviewSource(shown.team(),generation,revision);
+            synchronized(coordinator){
+                requireOneReviewerTarget(selected,coordinator.ownerIndependentReviewModel(shown.team(),source));
+                proof=tasks.ownerIndependentTeamReviewFacts(shown.team(),shown.plan(),index.getJSONArray("files").length());
+            }
+            facts=TeamWorkFiles.canonical(proof);modelFingerprint=TeamReviewerRouteCapture.fingerprint(selected);
+            JSONArray files=new JSONArray();JSONArray rows=index.getJSONArray("files");
+            for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);files.put(new JSONObject().put("path",row.getString("path")).put("sha256",row.getString("sha256")));}
+            display=new JSONObject().put("format","pocketworld.owner-first-local-team-review.v1").put("teamRunId",shown.team())
+                    .put("planHash",shown.plan()).put("projectId",proof.getString("projectId")).put("files",files)
+                    .put("remainingModelRequests",proof.getInt("remainingModelRequests")).put("remainingToolOperations",proof.getInt("remainingToolOperations"))
+                    .put("model",selected.model).put("provider",selected.provider).put("startsReview",false).put("startsWriteback",false).toString();
+            requireLiveWindow();
+        }
+        private void requireFrozenRefs(JSONObject scope,JSONObject integration,JSONArray assignments)throws Exception{
+            requireLiveWindow();JSONObject index=shown.index();
+            if(integration!=null||!index.getString("projectId").equals(scope.opt("targetProjectId")))throw new SecurityException("原独审范围已改变，未读取其他文件");
+            JSONArray rows=index.getJSONArray("files");int next=0;
+            for(int i=0;i<assignments.length();i++){
+                JSONObject assignment=assignments.getJSONObject(i);
+                if(!"completed".equals(assignment.opt("status")))throw new SecurityException("原成员交付已变化，未读取其他文件");
+                JSONArray artifacts=assignment.getJSONArray("artifacts");
+                for(int j=0;j<artifacts.length();j++){
+                    JSONObject original=rows.optJSONObject(next++),ref=artifacts.getJSONObject(j);
+                    for(String key:new String[]{"assignmentId","memberId","artifactId","path","sha256"})
+                        if(original==null||!original.getString(key).equals(ref.opt(key)))throw new SecurityException("原冻结文件已变化，未读取其他文件");
+                }
+            }
+            if(next!=rows.length())throw new SecurityException("原冻结文件数已变化，未读取其他文件");
+        }
+        public JSONObject view()throws Exception{requireLiveWindow();return new JSONObject(display);}
+        public void requireLiveWindow(){if(!live.getAsBoolean()||android.os.SystemClock.elapsedRealtime()>=expires)throw new SecurityException("原独审窗口已关闭或过期，未启动");}
+        /** Only the original store invokes this inside admission of the deterministic original child. */
+        public void requireAdmission(TaskStore store,JSONObject current)throws Exception{
+            requireLiveWindow();
+            if(store!=tasks||!used.get()||!armed||!facts.equals(TeamWorkFiles.canonical(current)))throw new SecurityException("原独审文件计划或可用额度已变化，未启动");
+            armed=false;
+        }
+    }
+    OwnerIndependentReview reviewOwnerIndependent(TeamCoordinator coordinator,TeamOwnerFileReading shown,int generation,long revision,
+            ModelConfig model,java.util.function.BooleanSupplier live)throws Exception{
+        return new OwnerIndependentReview(coordinator,shown,generation,revision,model,live);
+    }
+    void startOwnerIndependent(OwnerIndependentReview owner,CurrentModel current,Runnable executionCheck,Consumer<JSONObject> admitted)throws Exception{
+        owner.requireLiveWindow();if(!owner.used.compareAndSet(false,true))throw new SecurityException("这次原独审已提交，请查看原结果");
+        executionCheck.run();
+        String run=owner.shown.team();
+        JSONObject original=owner.source.view();
+        JSONObject receipt=independentlyReview(run,owner.shown.plan(),original,null,owner,current,executionCheck,admitted);
+        owner.coordinator.recordIndependentReview(run,receipt);tasks.updateExternal(run,owner.coordinator.get(run));changed.accept(run);
+    }
     /** A separate original child/run/context, never a producer impersonating its own reviewer. */
     public JSONObject independentlyReview(String run,String expectedPlanHash,JSONObject nativeTeamRun,ModelConfig model)throws Exception {
+        return independentlyReview(run,expectedPlanHash,nativeTeamRun,model,null,null,null,null);
+    }
+    private JSONObject independentlyReview(String run,String expectedPlanHash,JSONObject nativeTeamRun,ModelConfig model,OwnerIndependentReview owner,
+            CurrentModel current,Runnable executionCheck,Consumer<JSONObject> admitted)throws Exception {
         if(!run.equals(nativeTeamRun.getString("id"))||!nativeTeamRun.optString("mode").equals("produce"))throw new SecurityException("独审目标不是原制作团队");RunControl control=new RunControl();synchronized(integrations){if(integrations.containsKey(run)||reviews.putIfAbsent(run,control)!=null)throw new IllegalStateException("原独审或整合仍在运行，请查看原任务");}JSONObject binding=null;boolean settled=false;java.util.concurrent.atomic.AtomicReference<AutoCloseable> liveFence=new java.util.concurrent.atomic.AtomicReference<>();
         try{
-            TeamWorkReview.Prepared actual=review(run,control);binding=tasks.startTeamReview(run,actual,expectedPlanHash,control,Math.min(24,model.maxSteps));if(binding.optBoolean("inspectOnly"))return binding;
+            // Both origins use the one mandatory native reread of the exact frozen files and workspace base.
+            if(owner!=null)owner.coordinator.ownerIndependentReviewModel(run,owner.source);
+            TeamWorkReview.Prepared actual=review(run,control,owner);
+            if(owner==null)binding=tasks.startTeamReview(run,actual,expectedPlanHash,control,Math.min(24,model.maxSteps));
+            else {
+                owner.requireLiveWindow();executionCheck.run();model=current.get();
+                synchronized(owner.coordinator){
+                    requireOneReviewerTarget(model,owner.coordinator.ownerIndependentReviewModel(run,owner.source));
+                    if(!owner.modelFingerprint.equals(TeamReviewerRouteCapture.fingerprint(model)))throw new SecurityException("原独审模型设置已变化，未启动");
+                    owner.armed=true;
+                    try{binding=tasks.startTeamReview(run,actual,expectedPlanHash,control,Math.min(24,model.maxSteps),owner);}
+                    finally{owner.armed=false;}
+                }
+            }
+            if(binding.optBoolean("inspectOnly"))return binding;
             JSONObject original=new JSONObject(binding.toString());integrationTasks.put(original.getString("taskId"),control);liveFence.set(control.retainAuthorityCheck(()->tasks.checkTeamAssignmentCurrent(original,"team_review_manifest")));
+            if(owner!=null)admitted.accept(new JSONObject().put("state","review_started").put("teamRunId",run).put("planHash",expectedPlanHash)
+                    .put("taskId",original.getString("taskId")).put("runId",original.getString("runId")).put("epoch",original.getInt("coordinatorEpoch")).put("startsWriteback",false));
             TeamReviewerRouteCapture route=TeamReviewerRouteRecord.firstLocal(nativeTeamRun.optJSONObject("productionScope"),nativeTeamRun.optJSONObject("workPlan"))
                     ?TeamReviewerRouteCapture.capture(tasks,control,original,model):null;
             TeamFrozenReview files=new TeamFrozenReview(workspace,original,control,tasks::checkTeamAssignment);int[] round={0};java.util.concurrent.atomic.AtomicReference<JSONObject> terminalEvent=new java.util.concurrent.atomic.AtomicReference<>();

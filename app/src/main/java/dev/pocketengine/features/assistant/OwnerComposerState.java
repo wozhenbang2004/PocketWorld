@@ -257,6 +257,53 @@ public final class OwnerComposerState {
         if(!isIndependentReportFollowUp(key))return;
         retiredReportFollowUp=independentReportFollowUp;independentReportFollowUp=null;storedReportFollowUp=null;addedReportFollowUp=null;
     }
+    /** An existing blank owner editor pins one explicit local phone original, not a submission. */
+    public static final class FirstPhoneOriginal {
+        private final OwnerComposerState issuer;
+        private final Draft original;
+        final String text;
+        final long phoneRevision;
+        public final String conversationId,messageId;
+        private FirstPhoneOriginal(OwnerComposerState issuer,Draft original,String text,long phoneRevision){
+            this.issuer=issuer;this.original=original;this.text=text;this.phoneRevision=phoneRevision;
+            conversationId=originalId("conversation",original.key);
+            messageId=originalId("message",original.key);
+        }
+        private static String originalId(String kind,String key){
+            return UUID.nameUUIDFromBytes(("pocketworld:private-first-phone-origin:v1:"+kind+":"+key).getBytes(StandardCharsets.UTF_8)).toString();
+        }
+        /** Saveable presentation metadata is only a privacy fence, never a saved-source proof. */
+        public static boolean matchesDraftScope(String key,String conversation,String message){
+            return key!=null&&key.matches("new:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")&&
+                    (conversation==null&&message==null||originalId("conversation",key).equals(conversation)&&originalId("message",key).equals(message));
+        }
+        long editorRevision(){return original.revision;}
+        void requireCurrent()throws Exception{
+            synchronized(issuer){
+                if(issuer.requireBlankPhoneOriginalEditor(original.key,original.revision)!=original)
+                    throw new SecurityException("原手机输入的空白编辑器已变化");
+            }
+        }
+    }
+    private Draft requireBlankPhoneOriginalEditor(String key,long revision)throws Exception{
+        Draft draft=require(key,revision);
+        if(!activeKey.equals(key)||!FirstPhoneOriginal.matchesDraftScope(key,null,null)||!draft.conversationId.isEmpty()||!draft.text.isEmpty()||
+                hasPending(key)||isIndependentReportFollowUp(key)||!"queue".equals(draft.mode)||firstMessagePaused.contains(key)||
+                oneMessageExcluded.contains(key)||firstTaskDefaultsLocked.contains(key)||!draft.voiceText.isEmpty()||
+                draft.attachments().length()!=0||draft.sourceRefs().length()!=0||draft.previewRefs().length()!=0||draft.objectRefs().length()!=0)
+            throw new SecurityException("只能保存原空白私人编辑器里的纯文字手机目标；其他草稿不变");
+        return draft;
+    }
+    public synchronized boolean canSaveFirstPhoneOriginal(String key,long revision){
+        try{requireBlankPhoneOriginalEditor(key,revision);return true;}catch(Exception unavailable){return false;}
+    }
+    public synchronized FirstPhoneOriginal reviewFirstPhoneOriginal(String key,long revision,String text,long phoneRevision)throws Exception{
+        Draft draft=requireBlankPhoneOriginalEditor(key,revision);
+        if(text==null||text.isBlank()||text.length()>4_000||text.indexOf(0)>=0||
+                !StandardCharsets.UTF_8.newEncoder().canEncode(text)||phoneRevision<1)
+            throw new SecurityException("只能把当前 1–4000 字的手机目标保存为本机原话");
+        return new FirstPhoneOriginal(this,draft,text,phoneRevision);
+    }
     /** A freshly selected editor, not a send receipt or an execution grant. */
     public static final class FirstHostAnchor {
         private final OwnerComposerState issuer;

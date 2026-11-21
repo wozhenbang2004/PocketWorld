@@ -606,7 +606,7 @@ internal class AttachmentOutcomeCoordinator(
             actual.opt("coordinatorEpoch")==1&&actual.opt("originalDocumentActionId")==it}
     }
     @JvmOverloads
-    fun queryDocument(keepLibraryVisit:(String)->Boolean={false}){
+    fun queryDocument(keepLibraryVisit:(String)->Boolean={false},samePendingLibrary:()->Boolean={false}){
         if(state.busy||state.group!=null||state.team!=null||state.deviceOriginalOnly)return
         // In a document record, check its own freshly read action, never an unrelated pending
         // save. A live editor still checks its pending save, even when editing from another file.
@@ -614,10 +614,17 @@ internal class AttachmentOutcomeCoordinator(
             else if(state.resultRun==null&&!state.choosingSource)originalDocumentAction(state.taskId,state.snapshot)
             else null)?:return
         val libraryVisit=state.globalStandaloneDraftVisit?.takeIf(keepLibraryVisit)
+        val checkPendingHere=pendingDocumentAction==action&&state.pendingDocumentTask==action&&samePendingLibrary()
         work(onSuccess={actual->
             if(actual.opt("found")==true&&isPublishedDocument(action,actual)&&actual.optJSONObject("source")?.opt("runId")==action)
                 showPublishedDocument(action,actual,"已找到原操作的实际固定文档，没有重新生成",libraryVisit?.takeIf(keepLibraryVisit))
-            else state=state.copy(notice="原文档尚无完整发布回执。可查看原任务和已保留源，不自动重复生成。")
+            else if(checkPendingHere&&samePendingLibrary()&&pendingDocumentAction==action&&state.pendingDocumentTask==action&&
+                actual.opt("found")==false&&actual.opt("publicationEntered")==false&&actual.opt("nativeNoPublication")==true&&
+                actual.opt("status")=="failed"&&actual.opt("taskId")==action&&actual.opt("runId")==action&&
+                actual.opt("operationId")==action&&actual.opt("coordinatorEpoch")==1){
+                pendingDocumentAction=null
+                state=state.copy(pendingDocumentTask=null,notice="已核对原生成：未发布新文件。本机草稿不变，没有重新生成。")
+            } else state=state.copy(notice="原文档尚无完整发布回执。可查看原任务和已保留源，不自动重复生成。")
         }){c,_->app.features.documentResultForOwner(action,c) to null}
     }
 

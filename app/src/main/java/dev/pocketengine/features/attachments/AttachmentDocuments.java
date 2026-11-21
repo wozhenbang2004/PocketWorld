@@ -16,6 +16,7 @@ import org.json.JSONObject;
 public final class AttachmentDocuments {
     public static final int MAX_RESPONSE_BYTES=48*1024;
     static final String WORD_EXCERPT="pocketworld.original-word-excerpt.v1";
+    static final String WORD_PARSER_VERSION="pocket-document-3-word";
     private final AttachmentBook book;
     private final DocumentReader reader;
     private final Map<String,Preview> previews=new LinkedHashMap<>();
@@ -147,6 +148,7 @@ public final class AttachmentDocuments {
                 .put("coverage",content.coverage).put("engineVersion",reader.engineVersion(content.format,range.extraction))
                 .put("totalUnits",content.totalUnits).put("truncated",content.truncated)
                 .put("nextUnit",content.nextUnit).put("nextChunk",content.nextChunk).put("warnings",new JSONArray(content.warnings));
+            if("docx".equals(content.format))result.put("parserVersion",WORD_PARSER_VERSION);
             JSONArray chunks=new JSONArray();result.put("chunks",chunks);
             int used=result.toString().getBytes(StandardCharsets.UTF_8).length;
             for(DocumentContent.Chunk chunk:content.chunks) {

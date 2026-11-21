@@ -5,6 +5,8 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.core.ExecutionResources;
 import dev.pocketengine.features.assistant.AssistantModule;
 import dev.pocketengine.features.attachments.AttachmentsModule;
+import dev.pocketengine.features.attachments.creation.DocumentDraft;
+import dev.pocketengine.features.attachments.creation.NativeDocumentCreation;
 import dev.pocketengine.features.local.runtime.OwnerPythonOutputText;
 import dev.pocketengine.features.local.runtime.OwnerPythonRun;
 import dev.pocketengine.features.teams.TeamCoordinator;
@@ -629,11 +631,29 @@ public final class FeatureHost implements AutoCloseable {
     public JSONObject createDocumentForOwner(JSONObject source,dev.pocketengine.core.RunControl original)throws Exception{return createDocumentForOwner(source,original,UUID.randomUUID().toString());}
     public JSONObject createDocumentForOwner(JSONObject source,dev.pocketengine.core.RunControl original,String actionId)throws Exception{
         if(tasks==null||original==null||original.hasHostRun())throw new SecurityException("主人文档动作需要独立原生调用控制");
-        var draft=new dev.pocketengine.features.attachments.creation.DocumentDraft(new JSONObject(source.toString()));EngineModule selected=module("attachments");if(!(selected instanceof dev.pocketengine.features.attachments.AttachmentsModule))throw new IllegalStateException("原附件模块不可用");
-        String id=actionId;JSONObject input=new JSONObject(source.toString()).put("_nativeDocumentPlanDigest",draft.identity);JSONObject admitted=tasks.beginOwnerDocumentForOwner(id,draft);if(admitted.optBoolean("knownOperation"))return documentResultForOwner(id,original);String run=admitted.getString("runId");int epoch=admitted.getInt("coordinatorEpoch");
+        var draft=new DocumentDraft(new JSONObject(source.toString()));
+        if(!(module("attachments") instanceof AttachmentsModule attachments))throw new IllegalStateException("原附件模块不可用");
+        String id=actionId;JSONObject admitted=tasks.beginOwnerDocumentForOwner(id,draft);if(admitted.optBoolean("knownOperation"))return documentResultForOwner(id,original);String run=admitted.getString("runId");int epoch=admitted.getInt("coordinatorEpoch");
         var worker=new dev.pocketengine.core.RunControl();worker.bindHostRun(id,run,epoch);worker.setAuthorityCheck(()->{original.check();tasks.requireExternalRun(id,run,"attachments",true);});Runnable cancel=worker::cancel;original.onCancel(cancel);emitTask(id);
-        try{original.check();tasks.status(id,"running","正在生成主人明确选择的固定文档；原可编辑源与成果分别保存");JSONObject result=((dev.pocketengine.features.attachments.AttachmentsModule)selected).createDocumentForHost(input.put("_taskId",id).put("_runId",run).put("_operationId",id).put("_epoch",epoch),worker);updateTask(id,result);sendState();return result.put("hostTaskId",id);}
-        catch(Exception unconfirmed){updateTask(id,json("status","unknown","accepted",JSONObject.NULL,"code","document_original_publication_unconfirmed","message","原文档创建未完整确认；请按原任务核对已保存源和成果，不自动重建","operationId",id));sendState();throw new IllegalStateException("文档保存状态待核，原任务："+id+"；未自动重复生成",unconfirmed);}
+        boolean noPublicationRecorded=false;
+        try{
+            original.check();tasks.status(id,"running","正在生成主人明确选择的固定文档；原可编辑源与成果分别保存");
+            JSONObject result;
+            try{result=attachments.createOriginalOwnerDocument(draft,id,epoch,worker);}
+            catch(NativeDocumentCreation.NotPublished failure){
+                result=failure.hostReceipt();
+                if(failure.matchesOriginalWordPdf(id,draft.identity,draft.format)){
+                    tasks.recordOwnerDocumentNoPublication(id,draft.identity,failure);
+                    noPublicationRecorded=true;
+                }
+            }
+            if(noPublicationRecorded)emitTask(id);else updateTask(id,result);
+            sendState();return result.put("hostTaskId",id);
+        }catch(Exception unconfirmed){
+            // A notification/ACK failure must not replace a durable terminal writer fact with unknown.
+            if(!noPublicationRecorded){updateTask(id,json("status","unknown","accepted",JSONObject.NULL,"code","document_original_publication_unconfirmed","message","原文档创建未完整确认；请按原任务核对已保存源和成果，不自动重建","operationId",id));sendState();}
+            throw new IllegalStateException("文档保存状态待核，原任务："+id+"；未自动重复生成",unconfirmed);
+        }
         finally{original.removeCancelAction(cancel);worker.cancel();}
     }
     public JSONObject documentResultForOwner(String id,dev.pocketengine.core.RunControl original)throws Exception{
@@ -644,6 +664,12 @@ public final class FeatureHost implements AutoCloseable {
         if(result.optBoolean("found")){
             result.put("status","completed").put("receiptReceived",true).put("accepted",true);
             if(!settledOwnerDocumentResult(task,id,plan,result)){updateTask(id,result);sendState();}
+        }else if(result.opt("found")==Boolean.FALSE&&result.opt("publicationEntered")==Boolean.FALSE){
+            // A missing Book slot never proves non-publication. Only the matching persisted writer result does.
+            original.checkpoint();
+            if(tasks.ownerDocumentNoPublication(id,plan))result.put("nativeNoPublication",true).put("status","failed")
+                    .put("runId",id).put("operationId",id).put("coordinatorEpoch",1);
+            original.checkpoint();
         }
         return result.put("taskId",id).put("replayAllowed",false);
     }

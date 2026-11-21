@@ -3667,6 +3667,49 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         try{voiceInputModeChanged();model.selectConversation(id);chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer();feature("assistant","get",JSONObject().put("conversationId",id))}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
+    internal fun firstPhoneOriginalEditorCurrent(key:String,epoch:Int,revision:Long):Boolean =
+        webPrivateOwnerVisible()&&!hasChannelPhoneOrigin&&conversationReader==null&&state.conversationId.isNullOrBlank()&&
+            !state.chatBusy&&!state.chatSubmitting&&!state.phoneSubmitting&&!state.listening&&!state.chatAttachmentPickerOpen&&
+            state.selectedChatAttachments.isEmpty()&&composerViewEpoch==epoch&&
+            ownerComposer?.canSaveFirstPhoneOriginal(key,revision)==true
+
+    /** No composer cutover, model/account resolution or task admission on this local save. */
+    internal fun saveFirstPhoneOriginal(key:String,epoch:Int,revision:Long,text:String,phoneRevision:Long,shown:()->Boolean,
+                                        done:(OwnerComposerState.FirstPhoneOriginal?,JSONObject?,String?)->Unit){
+        require(shown()&&firstPhoneOriginalEditorCurrent(key,epoch,revision)){"请在原新私人手机输入保存文字"}
+        val model=ownerComposer?:error("原私人编辑器尚不可用")
+        val original=model.reviewFirstPhoneOriginal(key,revision,text,phoneRevision)
+        val current=java.util.function.BooleanSupplier {
+            shown()&&ownerComposer===model&&firstPhoneOriginalEditorCurrent(key,epoch,revision)
+        }
+        val uncertain="尚未核对到本机保存；文字仍在原输入，可以核对同一次保存，没有发送。"
+        persistComposer(model) savedDraft@{ failure ->
+            if(failure!=null||!current.asBoolean){done(null,null,uncertain);return@savedDraft}
+            try{runEcosystemControlWork(Runnable{
+                val receipt=runCatching {
+                    check(current.asBoolean)
+                    val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error(uncertain)
+                    assistant.saveFirstPrivatePhoneOriginal(original,current)
+                }
+                main.post {
+                    if(!current.asBoolean)done(null,null,uncertain)
+                    else receipt.fold({ done(original,it,null) },{ done(null,null,it.message?:uncertain) })
+                }
+            })}catch(failure:Exception){done(null,null,uncertain)}
+        }
+    }
+
+    internal fun verifySavedFirstPhoneOriginal(original:OwnerComposerState.FirstPhoneOriginal,shown:()->Boolean,done:(JSONObject?)->Unit){
+        require(shown()){"原手机保存窗口已离开"}
+        runEcosystemControlWork(Runnable{
+            val proved=runCatching {
+                check(shown())
+                val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error("原私人记录未就绪")
+                assistant.reviewSavedFirstPhoneOriginal(original,java.util.function.BooleanSupplier{shown()})
+            }.getOrNull()
+            main.post{done(proved?.takeIf{shown()})}
+        })
+    }
     @Volatile private var firstHostSave:Any?=null
     /** An explicit local save, separate from both sendChat() and the device/host feature dispatchers. */
     internal fun saveFirstHostRequest(key:String,revision:Long,epoch:Int,visible:()->Boolean,done:(JSONObject?,String?)->Unit) {

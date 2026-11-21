@@ -490,7 +490,7 @@ internal class PocketWebBridge(
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
-            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.recentStarts", "phone.draft.retireUncreated", "phone.draft.edit", "phone.draft.fromMessage", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
+            "phone.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.recentStarts", "phone.draft.retireUncreated", "phone.draft.edit", "phone.draft.fromMessage", "phone.draft.saveOriginal", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
             "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
@@ -996,8 +996,10 @@ internal class PocketWebBridge(
                     }
                     return
                 }
-                // Only an explicit no-locator global entry may start a new Library visit.
-                val libraryEntry = if (action == "attachmentWorkspace.open" && args.length() == 0) freshLibraryEntry() else null
+                // Only a no-locator open starts a Library visit. An explicit query may use the same owner check,
+                // but does not start or restore a draft lease.
+                val libraryEntry = if (action == "attachmentWorkspace.open" && args.length() == 0 ||
+                    action == "attachmentWorkspace.action" && draftCommand == "queryDocument") freshLibraryEntry() else null
                 if (action == "attachmentWorkspace.open" && args.has("messageAttachment")) {
                     checkedPayload(args, setOf("messageAttachment"))
                     val file = visibleMessageAttachment(checkedMessageAttachmentSource(args.getJSONObject("messageAttachment")))
@@ -2011,7 +2013,8 @@ internal class PocketWebBridge(
                             it.opt(PocketWebTeams.CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE) == true
                     } == true
                     complete(id, result, error, "outcome_unknown", retainValue = !restoringTeamReading && !currentMemberAnswerRead &&
-                        action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget"))
+                        action !in setOf("teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget",
+                            PocketWebTeams.REVIEW_INDEPENDENT_FILES, PocketWebTeams.START_INDEPENDENT_FILES))
                     if (action != "teams.readFinalPackageFiles") publishState()
                 }
                 return
@@ -2263,6 +2266,23 @@ internal class PocketWebBridge(
                 voiceInput.clear()
                 controller.voiceInputTypeChanged(phoneComposer.intent)
                 complete(id, result, null); publishState(); return
+            }
+            if(action=="phone.draft.saveOriginal"||action=="conversation.select"&&args.has("viewSavedPhoneHandle")){
+                val document=documentId
+                val ticket=captureWindow()
+                fun shown()=!closed&&document!=null&&documentId==document&&acceptsWindow(ticket)&&section==null&&taskViewId==null&&
+                    controller.state.filePath==null&&controller.webPrivateOwnerVisible()
+                if(action=="phone.draft.saveOriginal")
+                    phoneComposer.saveFirstOriginal(args,::shown){ result,error -> complete(id,result,error,retainValue=false) }
+                else phoneComposer.selectSavedFirstOriginal(args,::shown,{ conversation ->
+                    if(!shown()) false
+                    else {
+                        reviews.clear()
+                        controller.openConversation(conversation)
+                        controller.state.conversationId==conversation
+                    }
+                }){ result,error -> complete(id,result,error,retainValue=false) }
+                return
             }
             if (action == "phone.prepare") { phoneComposer.prepare(id, args); return }
             if (action == "phone.review.settings") { complete(id, phoneComposer.openReviewedSettings(args), null); return }

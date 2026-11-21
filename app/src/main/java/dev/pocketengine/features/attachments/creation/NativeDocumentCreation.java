@@ -11,7 +11,20 @@ import org.json.JSONObject;
 public final class NativeDocumentCreation {
     public static final class NotPublished extends Exception {
         public final JSONObject receipt;
-        private NotPublished(Exception failure,JSONObject source,String operation)throws Exception{super("生成输出尚未进入发布，原可编辑源已保存："+(failure.getMessage()==null?failure.getClass().getSimpleName():failure.getMessage()),failure);receipt=new JSONObject().put("status","failed").put("accepted",false).put("receiptReceived",true).put("found",false).put("operationId",operation).put("outputNotPublished",true).put("editableSource",reference(source)).put("code","document_output_not_published").put("message",getMessage());}
+        private final String operation,task,run,plan,format;
+        private NotPublished(Exception failure,JSONObject source,DocumentDraft draft,String operation,String task,String run)throws Exception{
+            super("生成输出尚未进入发布，原可编辑源已保存："+(failure.getMessage()==null?failure.getClass().getSimpleName():failure.getMessage()),failure);
+            this.operation=operation;this.task=task;this.run=run;plan=draft.identity;format=draft.format;
+            receipt=new JSONObject().put("status","failed").put("accepted",false).put("receiptReceived",true).put("found",false)
+                    .put("operationId",operation).put("outputNotPublished",true).put("editableSource",reference(source))
+                    .put("code","document_output_not_published").put("message",getMessage());
+        }
+        /** Only the actual writer can mint this exception, before entry to document_output publication. */
+        public boolean matchesOriginalWordPdf(String id,String digest,String expectedFormat){
+            return id.equals(operation)&&id.equals(task)&&id.equals(run)&&digest.equals(plan)&&expectedFormat.equals(format)
+                    &&("docx".equals(format)||"pdf".equals(format));
+        }
+        public JSONObject hostReceipt()throws Exception{return new JSONObject(receipt.toString()).put("taskId",task).put("runId",run);}
     }
     public interface SourceRead {void check(String id,String sha,RunControl control)throws Exception;}
     private final AttachmentBook book;private final File cache;private final SourceRead original;
@@ -21,8 +34,8 @@ public final class NativeDocumentCreation {
         byte[] sourceBytes=draft.sourceBytes();JSONObject origin=new JSONObject().put("kind","document_source").put("taskId",task).put("runId",run).put("operationId",operation).put("planDigest",draft.identity).put("documentFormat",draft.format);
         JSONObject editable=book.importNativeResult(new ByteArrayInputStream(sourceBytes),draft.name+".document.json","application/json",origin,operation,"document_source",task,run,draft.identity,control);
         byte[] bytes;JSONObject check;
-        try{if(draft.format.equals("docx")){bytes=WordDocumentWriter.write(draft,control);check=WordDocumentWriter.check(bytes,draft,control);}else if(draft.format.equals("xlsx")){bytes=SpreadsheetDocumentWriter.write(draft,control);check=SpreadsheetDocumentWriter.check(bytes,draft,control);}else if(draft.format.equals("pptx")){bytes=PresentationDocumentWriter.write(draft,control);check=PresentationDocumentWriter.check(bytes,draft,control);}else{var generated=AndroidPdfDocumentWriter.write(draft,new File(cache,"document-creation-checks"),control);bytes=generated.bytes;check=generated.check;}checkParents(draft,control);control.check();}
-        catch(Exception preparationFailed){throw new NotPublished(preparationFailed,editable,operation);}
+        try{if(draft.format.equals("docx")){var generated=WordDocumentWriter.writeVerified(draft,control);control.check();bytes=generated.bytes();check=generated.check();}else if(draft.format.equals("xlsx")){bytes=SpreadsheetDocumentWriter.write(draft,control);check=SpreadsheetDocumentWriter.check(bytes,draft,control);}else if(draft.format.equals("pptx")){bytes=PresentationDocumentWriter.write(draft,control);check=PresentationDocumentWriter.check(bytes,draft,control);}else{var generated=AndroidPdfDocumentWriter.write(draft,new File(cache,"document-creation-checks"),control);bytes=generated.bytes;check=generated.check;}checkParents(draft,control);control.check();}
+        catch(Exception preparationFailed){throw new NotPublished(preparationFailed,editable,draft,operation,task,run);}
         JSONObject source=new JSONObject().put("kind","created_document").put("taskId",task).put("runId",run).put("operationId",operation).put("planDigest",draft.identity).put("documentFormat",draft.format).put("editableSource",reference(editable)).put("formatCheck",check);
         JSONObject input=draft.source();if(input.has("parentArtifactId"))source.put("parentArtifact",new JSONObject().put("id",input.getString("parentArtifactId")).put("sha256",input.getString("parentSha256")));
         JSONObject saved=book.importNativeResult(new ByteArrayInputStream(bytes),draft.fileName(),draft.mime(),source,operation,"document_output",task,run,draft.identity,control);control.check();return receipt(saved,draft,operation,task,run);

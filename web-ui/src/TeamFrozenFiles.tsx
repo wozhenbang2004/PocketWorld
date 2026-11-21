@@ -12,7 +12,9 @@ type MemberEntry = {requestId:string; documentEpoch:number; file:FrozenMemberFil
 type Approval = {teamRunId:string;planHash:string;projectId:string;files:{path:string;existing:boolean;version?:number;sha256?:string}[];approvalHandle:string;startsIntegration:false;firstProject?:boolean;parentCheckoutId?:string;sourceDigest?:string;snapshotIdentity?:string;reviewRouteCaptured?:boolean;reviewerTaskId?:string;reviewerRunId?:string;startsChecks?:false;packagesProject?:false};
 type IntegrationCapture={integrationTaskId:string;reviewId:string;planHash:string;matchingFiles:number;total:number;active:boolean;unresolved:boolean;status:string;businessVerified:false};
 type Finding={verdict:'changes_requested'|'inconclusive';findings:string;businessVerified:false;executionAuthorized:false;originalReviewer:{teamRunId:string;taskId:string;runId:string;epoch:number;role:'reviewer';planHash:string;canOpen:true}};
-type Decision={state:string;reviewId?:string;registrationKind?:string;separateIntegratorStartRequired?:boolean}&Partial<Finding>;
+type IndependentReview = {reviewHandle:string;fileHandle:string;teamRunId:string;planHash:string;projectId:string;model:string;provider:string;
+  remainingModelRequests:number;remainingToolOperations:number;files:{path:string;sha256:string}[]};
+type Decision={state:string;reviewId?:string;registrationKind?:string;separateIntegratorStartRequired?:boolean;canStartIndependentReview?:true}&Partial<Finding>;
 function blockedFinding(decision:Decision|undefined,team:string,hash:string):Finding|null{
   const r=decision?.originalReviewer;
   return decision?.state==='independent_finding'&&decision.businessVerified===false&&decision.executionAuthorized===false&&
@@ -29,6 +31,8 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
   const [shown,setShown]=useState(false),[source,setSource]=useState<Reading|null>(null),[selected,setSelected]=useState(''),[page,setPage]=useState<Page|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[memberFirst,setMemberFirst]=useState('');
   const [allLoaded,setAllLoaded]=useState(false),[approval,setApproval]=useState<Approval|null>(null),[ack,setAck]=useState(false);
+  const [independent,setIndependent]=useState<IndependentReview|null>(null);
+  const [independentState,setIndependentState]=useState<'ready'|'started'|'unknown'>('ready');
   const [completeFiles,setCompleteFiles]=useState<{fileHandle:string;ids:ReadonlySet<string>}|null>(null);
   const nextFocus=useRef<{fileHandle:string;artifactId:string;origin:Element|null}|null>(null), fileSection=useRef<HTMLElement>(null);
   const [projectView,setProjectView]=useState(false);
@@ -36,17 +40,17 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
   const generation=useRef(0),current=useRef<Reading|null>(null),pending=useRef(false),opened=useRef(false);
   const release=(handle?:string)=>{if(handle)void bridge.command('teams.closeReading',{fileHandle:handle}).catch(()=>{});};
   const close=()=>{generation.current++;pending.current=false;opened.current=false;release(current.current?.fileHandle);current.current=null;
-    setProjectView(false);setAllLoaded(false);setCompleteFiles(null);nextFocus.current=null;setApproval(null);setAck(false);setRegistered('');setUnknown(false);setBusy(false);setShown(false);setSource(null);setSelected('');setPage(null);setMemberFirst('');setError('');onOpen(false);};
+    setProjectView(false);setAllLoaded(false);setCompleteFiles(null);nextFocus.current=null;setApproval(null);setAck(false);setIndependent(null);setIndependentState('ready');setRegistered('');setUnknown(false);setBusy(false);setShown(false);setSource(null);setSelected('');setPage(null);setMemberFirst('');setError('');onOpen(false);};
   const returnToRevision=()=>{generation.current++;pending.current=false;setBusy(false);setError('');setProjectView(false);};
   const dismiss=()=>{close();if(entry&&!document.hidden)entry.returnToWork?.()};
   useEffect(()=>()=>{generation.current++;opened.current=false;pending.current=false;release(current.current?.fileHandle);current.current=null;onOpen(false);},[view,team,onOpen]);
   useEffect(()=>{if(!active&&opened.current)close();},[active]);
   useEffect(()=>{
-    if(!shown)return;const handler=()=>{if(projectView)returnToRevision();else dismiss();return true;};back.current=handler;
+    if(!shown)return;const handler=()=>{if(independent&&!pending.current)cancelIndependent();else if(projectView)returnToRevision();else dismiss();return true;};back.current=handler;
     const hide=()=>{if(document.visibilityState!=='visible')close();};
     document.addEventListener('visibilitychange',hide);
     return()=>{if(back.current===handler)back.current=null;document.removeEventListener('visibilitychange',hide);};
-  },[shown,back,projectView]);
+  },[shown,back,projectView,independent]);
   const open=async(origin?:WorkFileSource|ProjectTeamReviewOrigin, member?:FrozenMemberFile)=>{
     const fromWork=origin&&'fileReview' in origin?origin:undefined,fromProject=origin&&'selectionHash' in origin?origin:undefined;
     if(disabled||!active||opened.current||!view)return;
@@ -176,6 +180,43 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
     finally{if(seq===generation.current){pending.current=false;setBusy(false);}}
   };
 
+  const releaseIndependent=(handle?:string)=>{if(handle)void bridge.command('teams.closeReading',{reviewHandle:handle}).catch(()=>{});};
+  const cancelIndependent=()=>{releaseIndependent(independent?.reviewHandle);setIndependent(null);setError('');};
+  const readIndependent=async()=>{
+    const original=current.current;
+    if(!original||original.fullProject!==false||original.revisionComparison||original.ownerDecision?.canStartIndependentReview!==true||
+        original.ownerDecision.state!=='independent_review_required'||pending.current||!opened.current||document.hidden||!active||independentState!=='ready')return;
+    const seq=++generation.current;pending.current=true;setBusy(true);setError('');
+    try{
+      const next=await run('teams.reviewIndependentFiles',{viewHandle:view,fileHandle:original.fileHandle});
+      if(seq!==generation.current){releaseIndependent(next?.reviewHandle);return;}
+      if(next?.format!=='pocketworld.owner-first-local-team-review.v1'||next.teamRunId!==team||next.fileHandle!==original.fileHandle||
+          next.planHash!==original.planHash||next.projectId!==original.projectId||next.startsReview!==false||next.startsWriteback!==false||
+          typeof next.reviewHandle!=='string'||!next.reviewHandle||typeof next.model!=='string'||!next.model||typeof next.provider!=='string'||!next.provider||
+          !Number.isSafeInteger(next.remainingModelRequests)||next.remainingModelRequests<1||!Number.isSafeInteger(next.remainingToolOperations)||
+          next.remainingToolOperations<original.files.length+2||!Array.isArray(next.files)||next.files.length!==original.files.length||
+          next.files.some((f:{path?:string;sha256?:string},i:number)=>!f||f.path!==original.files[i].path||f.sha256!==original.files[i].sha256)){
+        releaseIndependent(next?.reviewHandle);throw new Error('原独审文件或模型待核对，未启动。');
+      }
+      setIndependent(next);
+    }catch(e){if(seq===generation.current)setError(e instanceof Error?e.message:String(e));}
+    finally{if(seq===generation.current){pending.current=false;setBusy(false);}}
+  };
+  const startIndependent=async()=>{
+    const original=current.current,confirmed=independent;
+    if(!original||!confirmed||pending.current||!opened.current||document.hidden||!active||independentState!=='ready')return;
+    const seq=++generation.current;pending.current=true;setBusy(true);setError('');
+    try{
+      const receipt=await run('teams.startIndependentFiles',{viewHandle:view,fileHandle:original.fileHandle,reviewHandle:confirmed.reviewHandle});
+      if(seq!==generation.current)return;
+      if(receipt?.state!=='review_started'||receipt.teamRunId!==team||receipt.fileHandle!==original.fileHandle||receipt.planHash!==original.planHash||
+          receipt.startsWriteback!==false||!receipt.taskId||!receipt.runId||!Number.isSafeInteger(receipt.epoch)||receipt.epoch<1)
+        throw new Error('未收到可验证的原独审启动回执。');
+      setIndependentState('started');
+    }catch(e){if(seq===generation.current){setIndependentState('unknown');setError((e instanceof Error?e.message:String(e))+' 请刷新原协作核对，不重复启动。');}}
+    finally{if(seq===generation.current){pending.current=false;setBusy(false);setIndependent(null);}}
+  };
+
   const finding=source?blockedFinding(source.ownerDecision,team,source.planHash):null;
   const files=source?.files??[];
   const orderedFiles=memberFirst?[...files.filter(file=>file.artifactId===memberFirst),...files.filter(file=>file.artifactId!==memberFirst)]:files;
@@ -185,7 +226,7 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
     !unknown&&!registered&&!allLoaded&&page?.id===selected&&page.end===page.size&&coverage&&coverage.has(selected)&&currentIndex>=0?
     [...orderedFiles.slice(currentIndex+1),...orderedFiles.slice(0,currentIndex)].find(file=>file.kind==='text'&&!file.truncated&&!coverage.has(file.artifactId)):undefined;
   return <><Button variant="secondary" size="small" disabled={disabled||!active||!view} onClick={()=>void open()}>{hasRevision?'核对上版写回与本次冻结':'查看冻结文件与原项目差异'}</Button>
-    <SettingsDialog isOpen={shown} title={approval?approval.firstProject?"核对完整项目的首版文件许可":"核对这份写回许可":source?.revisionComparison?"核对原分工修订":"原协作的冻结文件"} onClose={dismiss} className="pw-team-modal">
+    <SettingsDialog isOpen={shown} title={approval?approval.firstProject?"核对完整项目的首版文件许可":"核对这份写回许可":independent?"核对独立审查":source?.revisionComparison?"核对原分工修订":"原协作的冻结文件"} onClose={dismiss} className="pw-team-modal">
       <div className="pw-form-stack">{approval?<><p>{approval.firstProject?'你正在给下列原冻结文本登记首版许可。这份登记不可用于发起整合。':'这份许可只适用于下列原冻结文本。批准后，管家可在原授权内请求唯一整合者将它们写回原项目；本次不会启动整合或写入文件。'}</p>
         <p className="pw-field-hint">原项目：<code>{approval.projectId}</code> · 计划 {approval.planHash.slice(0,12)}</p>
         {approval.firstProject&&<><p>仅登记这版已独审的原文件。不会启动整合者、执行检查或打包，每项后续写回仍须原操作单独批准。</p>
@@ -197,13 +238,21 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
         <ul>{approval.files.map(file=><li key={file.path}>{file.existing?'修改':'新增'}：<code>{file.path}</code>{approval.firstProject&&<> · 基线 v{file.version}<details><summary>冻结文件摘要</summary><code>{file.sha256}</code></details></>}</li>)}</ul>
         <CheckboxField isSelected={ack} onChange={setAck} isDisabled={busy}>我已核对这些文件的完整差异和写回目标</CheckboxField>
         <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={cancelApproval}>返回文件，不批准</Button><Button disabled={busy||!ack} onClick={()=>void confirmApproval()}>仅批准这份写回许可</Button></div></>:
+        independent?<><p>将本次协作的原目标、分工、选件范围和验收要求，以及下列冻结文本与它们在原项目中的差异，交给 <bdi>{independent.provider} · {independent.model}</bdi> 独立审查。只记录这版审查意见，不会写回项目。</p>
+          <p className="pw-field-hint">使用原工作剩余额度：{independent.remainingModelRequests} 次模型请求、{independent.remainingToolOperations} 次工具操作。不增加额度。</p>
+          <ul>{independent.files.map(file=><li key={file.path}><bdi>{file.path}</bdi> · <code>{file.sha256.slice(0,12)}</code></li>)}</ul>
+          <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={cancelIndependent}>返回文件</Button>
+            <Button disabled={busy||!active} onClick={()=>void startIndependent()}>{busy?'正在核对原件…':'用此模型开始独审'}</Button></div></>:
         (!source?.revisionComparison||projectView)&&<p className="pw-field-hint">对比打开时的项目版本和成员交回的文件。打开或读取文件不会批准、写回或启动工作。</p>}
         {error&&<p role="alert">{error}</p>}{busy&&!source&&<p role="status">正在读取原项目与冻结成果…</p>}
         {source?.revisionWarning&&<p role="status">{source.revisionWarning}</p>}
         {source?.revisionComparison&&!approval&&<div hidden={projectView}><TeamRevisionFileComparison key={source.fileHandle} source={source.revisionComparison} view={view} handle={source.fileHandle}
           run={run} memberName={memberName} openProject={id=>{const f=source.files.find(row=>row.artifactId===id);if(!f)return;setProjectView(true);if(f.kind==='text')void read(f,0);else{setSelected(f.artifactId);setPage(null);}}}/></div>}
         {source?.revisionComparison&&projectView&&<Button size="small" variant="ghost" onClick={returnToRevision}>返回所选文件的修订对照</Button>}
-        {source&&!approval&&(!source.revisionComparison||projectView)&&<><p>{source.files.length} 份冻结文件{source.incompleteCount? ` · ${source.incompleteCount} 项分工在原审阅中仍未交齐`:''}</p>
+        {source&&!approval&&!independent&&(!source.revisionComparison||projectView)&&<><p>{source.files.length} 份冻结文件{source.incompleteCount? ` · ${source.incompleteCount} 项分工在原审阅中仍未交齐`:''}</p>
+          {independentState==='started'?<p role="status">已登记对这版文件的独立审查，尚无结论，也没有写回。返回协作后可刷新查看原结果。</p>:
+            independentState==='ready'&&source.ownerDecision?.canStartIndependentReview===true&&source.fullProject===false&&
+              bridge.getState().capabilities.commands.includes('teams.reviewIndependentFiles')&&<Button variant="secondary" disabled={busy||!active} onClick={()=>void readIndependent()}>核对并发起独立审查</Button>}
           {source.integrationCapture&&<p role="status">打开时，{source.integrationCapture.matchingFiles}/{source.integrationCapture.total} 份与原写回回执及当前项目版本一致。
             {source.integrationCapture.unresolved?'原整合仍有未确定效果，不要重复写入。':source.integrationCapture.active?'原整合者仍在处理。':source.integrationCapture.total===0?'没有可逐份对照的文件，不判定写回。':source.integrationCapture.matchingFiles<source.integrationCapture.total?'未匹配的文件不一定从未写过，请逐份核对。':'文件版本相符不等于项目包交付或业务验收。'}</p>}
           {finding&&<section aria-label="这版文件的原独审意见"><h3>{finding.verdict==='changes_requested'?'独审要求修改':'独审未能判断'}</h3>
@@ -229,7 +278,7 @@ export function TeamFrozenFiles({team, view, active, disabled, run, onOpen, back
             :(source.ownerDecision?.state==='eligible'||source.ownerDecision?.state==='eligible_project_first')&&!unknown?<><p className="pw-field-hint">{allLoaded?'所有文件的原始文本差异已加载，当前独审没有阻断项。':'完整加载每份原始差异后，才可单独核对写回许可。'}</p>
               <Button variant="secondary" disabled={!allLoaded||busy} onClick={()=>void reviewApproval()}>{source.ownerDecision?.state==='eligible_project_first'?'核对首版项目文件许可':'核对写回许可'}</Button></>
               :source.fullProject&&source.ownerDecision?.state==='read_only'&&!source.revisionComparison?<p className="pw-field-hint">这份完整项目保留待核对。只有首版、全本机作者、完整原文独审且基线未变的文本才可在此登记；没有为其他版本、二进制或删除项批准写回。</p>
-              :source.ownerDecision?.state==='independent_review_required'?<p className="pw-field-hint">没有与这版文件匹配的完整无阻断独审，此处不能批准。</p>:null}</>}
+              :source.ownerDecision?.state==='independent_review_required'&&independentState==='ready'?<p className="pw-field-hint">没有与这版文件匹配的完整无阻断独审，此处不能批准。</p>:null}</>}
       </div>
     </SettingsDialog></>;
 }

@@ -644,7 +644,16 @@ internal class PocketWebAttachments(
                     review = null; flow.createDocument(pin.draft, ::keepsDraftLibraryVisit)
                 }
                 "discardReview" -> { review = null; processingReview = null; flow.forgetProcessingReview() }
-                "queryDocument" -> flow.queryDocument(::keepsDraftLibraryVisit)
+                "queryDocument" -> flow.queryDocument(::keepsDraftLibraryVisit) {
+                    val live = flow.state
+                    draftLibraryEntry?.invoke() == true && window === current && acceptsWindow(current.ticket) &&
+                        frame.location == location(live) && ordinaryLibrary() && !flow.exportPending &&
+                        live.snapshot?.opt("taskId") == "" && live.file == null && live.originalFile == null &&
+                        live.documentDraft == null && !live.documentOpen && live.processingSource == null &&
+                        live.comparison == null && live.libraryDocumentReturn == null &&
+                        !live.fromWorkResult && !live.restoredWorkReturn && !controller.state.attachmentImporting &&
+                        live.libraryImport?.phase !in setOf("selecting", "selection_unconfirmed", "registering")
+                }
                 "openDocumentAction" -> {
                     val id=args.getString("taskId")
                     if(flow.state.file==null)flow.openDocumentAction(id)

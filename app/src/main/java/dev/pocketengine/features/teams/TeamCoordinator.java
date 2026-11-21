@@ -1397,6 +1397,25 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         }
         public void checkCurrent()throws Exception{if(run.control!=original||run.generation!=generation||run.nativeRevision!=revision||original!=null&&(original.isCancelled()!=wasCancelled||original.isPaused()!=wasPaused))throw new SecurityException("原工作计划源已变化，请重新审阅修订");}
     }
+    /** A held foreground read can prepare only the actual current (not archived) first reviewer. */
+    synchronized void requireOwnerIndependentReviewReady(String id,int generation,long revision)throws Exception{
+        Run run=runs.get(id);
+        if(run==null||run.generation!=generation||run.nativeRevision!=revision||assignmentFactory==null||assignmentFactory.hasActiveWork(id))
+            throw new SecurityException("原文件协作已变化或已有实际独审，未启动");
+        requireOwnerIndependentStage(run);
+    }
+    synchronized WorkMutationSource ownerIndependentReviewSource(String id,int generation,long revision)throws Exception{
+        requireOwnerIndependentReviewReady(id,generation,revision);return new WorkMutationSource(runs.get(id));
+    }
+    synchronized ModelConfig ownerIndependentReviewModel(String id,WorkMutationSource source)throws Exception{
+        if(runs.get(id)!=source.run)throw new SecurityException("原本机制作协作已离开");
+        source.checkCurrent();requireOwnerIndependentStage(source.run);return source.run.originalConfig;
+    }
+    private void requireOwnerIndependentStage(Run run){
+        if(closed||run.control==null||run.paused||run.control.isPaused()||run.control.isCancelled()||!run.children.isEmpty()||
+                !"produce".equals(run.json.opt("mode"))||!"awaiting_review".equals(run.json.opt("status"))||!"review".equals(run.json.opt("phase")))
+            throw new SecurityException("原本机制作协作不在当前可审查位置");
+    }
     /** Same serialized team-owner queue, not the UI controller's single read/stop/approval worker. */
     synchronized void enqueueOwnerRemainder(Runnable original){if(closed)throw new IllegalStateException("原团队宿主已关闭");coordinator.execute(original);}
     public synchronized WorkMutationSource workMutationSource(String id)throws Exception{Run run=required(id);if(closed||run.json.optJSONObject("workPlan")==null||run.json.optString("status").equals("cancelled")||!run.children.isEmpty()||assignmentFactory!=null&&assignmentFactory.hasActiveWork(id))throw new SecurityException("原工作项/独审/整合仍有实际执行，不能修改已冻结计划");return new WorkMutationSource(run);}

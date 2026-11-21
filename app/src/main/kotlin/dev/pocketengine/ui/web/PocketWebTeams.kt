@@ -40,6 +40,18 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         @Synchronized fun originalFinding(): JSONObject {
             reader.check(); check(owner.live && captured!=null); return JSONObject(checkNotNull(findingSource) { "没有与这份文件匹配的独审原件" })
         }
+        private var independent: Pair<String,TaskStoreTeamWriteHost.OwnerIndependentReview>? = null
+        @Synchronized fun offerIndependent(exact: TaskStoreTeamWriteHost.OwnerIndependentReview): String {
+            reader.check(); check(owner.live && captured != null)
+            return UUID.randomUUID().toString().also { independent = it to exact }
+        }
+        @Synchronized fun takeIndependent(handle: String): TaskStoreTeamWriteHost.OwnerIndependentReview {
+            reader.check(); check(owner.live)
+            val saved = independent?.takeIf { it.first == handle } ?: error("原独审已提交或关闭，请查看原协作")
+            independent = null
+            return saved.second
+        }
+        @Synchronized fun discardIndependent(handle: String) { if (independent?.first == handle) independent = null }
         private var approval: TaskStoreTeamWriteHost.TextOutputApproval? = null
         private var token: String? = null
         @Synchronized fun offer(exact: TaskStoreTeamWriteHost.TextOutputApproval): String {
@@ -51,7 +63,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             token = null; return requireNotNull(approval)
         }
         @Synchronized fun discard(value: String) { if (token == value) { approval?.close(); approval = null; token = null } }
-        @Synchronized override fun close() { reader.cancel(); captured = null; findingSource = null; approval?.close(); approval = null; token = null }
+        @Synchronized override fun close() { reader.cancel(); captured = null; findingSource = null; independent = null; approval?.close(); approval = null; token = null }
     }
     private var fileWindow: FileWindow? = null
     private class Reading(val kind: String, val original: String, val projectRun: Boolean) {
@@ -86,9 +98,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         const val RESTORE_PLAN_WORK = "restorePlanWork"
         const val CURRENT_FAILED_AGGREGATE_SOURCE = "currentFailedAggregateSource"
         const val CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE = "currentCompletedTemporaryAnswersSource"
+        const val REVIEW_INDEPENDENT_FILES = "teams.reviewIndependentFiles"
+        const val START_INDEPENDENT_FILES = "teams.startIndependentFiles"
         val COMMANDS = setOf("teams.openWorkFileDecision", "teams.attention", "teams.readAttention", "teams.snapshot", "teams.readRun", "teams.readDefinition", "teams.reviewDefinition", "teams.prepareDraftStart",
             "teams.reviewStart", "teams.reviewRemove", "teams.confirm", "teams.control", "teams.sendMessage",
-            "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM, "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.reviewSoleFailedHandoff", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
+            REVIEW_INDEPENDENT_FILES, START_INDEPENDENT_FILES, "teams.readFrozenOutputs", "teams.readFrozenDiff", "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM, "teams.reviewParentRevision", "teams.reviewWorkItemContinuation", "teams.reviewSoleFailedHandoff", "teams.answerAssignment", "teams.probeMember", "teams.closeReading", "teams.reviewPhoneStart", "teams.reviewMember", "teams.openResearchTask", "teams.openDeliveryWorker", "teams.readFinalPackageFiles", "teams.chooseFinalPackageTarget", "teams.saveFinalPackageTarget", "teams.discardFinalPackageTarget")
     }
 
     fun clear() {
@@ -733,6 +747,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 fields(args, "viewHandle", "reviewHandle", "phoneHandle", "fileHandle", "approvalHandle"); readings.remove(args.optString("viewHandle"))?.retire()
                 if (args.has("approvalHandle")) fileWindow?.discard(text(args,"approvalHandle"))
                 fileWindow?.takeIf { !it.owner.live || it.handle == args.optString("fileHandle") }?.let { it.close(); fileWindow = null }
+                fileWindow?.discardIndependent(args.optString("reviewHandle"))
                 reviews.remove(args.optString("reviewHandle"))?.close()
                 phonePages.remove(args.optString("phoneHandle"))?.original?.let { runCatching { it.close() } }
                 deliver(JSONObject().put("closed", true), null)
@@ -955,6 +970,9 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     val projectMark = projectSource?.let { PocketWebProjectReviewReturn.original(module,it,runId,files.reader) }
                     val result = module.readOwnerFrozenFiles(runId,files.reader); stillSame()
                     val index = result.index(); val decision = module.ownerTextDecision(result,files.reader)
+                    if (source == null && projectSource == null && !owner.projectRun && decision.opt("state") == "independent_review_required" &&
+                        module.canReviewOwnerIndependent(result, shown.getInt("generation"), shown.getLong("revision"), files.reader))
+                        decision.put("canStartIndependentReview", true)
                     if (source != null && marker != null) { requireWorkFileIndex(index,decision,marker); controller.requireWorkFileReview(source,runId) }
                     if(projectSource!=null && projectMark!=null) {
                         check(owner.projectRun);PocketWebProjectReviewReturn.index(index,decision,projectMark)
@@ -992,6 +1010,42 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 } else {
                     val part = if (basis == "written_to_frozen") captured.revisionPage(text(args,"path",240),offset) else captured.page(text(args,"artifactId"),offset)
                     deliver(part.put("fileHandle",files.handle),null)
+                }
+            }
+            REVIEW_INDEPENDENT_FILES, START_INDEPENDENT_FILES -> {
+                val starting = action == START_INDEPENDENT_FILES
+                if (starting) fields(args,"viewHandle","fileHandle","reviewHandle") else fields(args,"viewHandle","fileHandle")
+                val owner = readings[text(args,"viewHandle")]?.takeIf { it.live && it.kind == "run" && !it.projectRun }
+                    ?: error("请回到原本机制作协作")
+                val files = fileWindow?.takeIf { it.owner === owner && it.handle == text(args,"fileHandle") }
+                    ?: error("请重读原冻结文件")
+                val original = files.captured ?: error("原冻结目录已关闭")
+                val module = controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队不可用")
+                // The store sees only this detached live lease. No main callback or window navigation under SQL.
+                fun liveLease() = originalGeneration == generation && controller.webPrivateOwnerVisible() &&
+                    owner.live && !files.reader.isCancelled && files.captured === original
+                fun present() = currentWindow() && liveLease()
+                check(present()) { "原文件审阅已关闭" }
+                if (!starting) {
+                    val seen = JSONObject(owner.original)
+                    hostWork(work = {
+                        val review = module.reviewOwnerIndependent(original, seen.getInt("generation"), seen.getLong("revision")) { liveLease() }
+                        review.view().put("reviewHandle",files.offerIndependent(review)).put("fileHandle", files.handle)
+                    }, accept = { value ->
+                        check(present()) { "原文件审阅已关闭" }; deliver(value, null)
+                    })
+                } else {
+                    val approval = files.takeIndependent(text(args,"reviewHandle"))
+                    val admitted = AtomicBoolean(false)
+                    module.startOwnerIndependent(approval, { receipt ->
+                        admitted.set(true)
+                        main.post {
+                            if (present()) deliver(receipt.put("fileHandle",files.handle),null)
+                            else done(null,"已登记原独审，请回原协作查看，不重复提交")
+                        }
+                    }, { failure ->
+                        if (!admitted.get()) main.post { done(null, failure?.message ?: "未收到原独审启动回执，请刷新原协作核对") }
+                    })
                 }
             }
             "teams.reviewFrozenTextApproval", "teams.approveFrozenText", PocketWebFirstProjectOutput.REVIEW, PocketWebFirstProjectOutput.CONFIRM -> {

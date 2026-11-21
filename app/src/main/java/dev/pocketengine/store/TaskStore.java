@@ -1,6 +1,7 @@
 package dev.pocketengine.store;
 
 import dev.pocketengine.features.assistant.OwnerSourceReferences;
+import dev.pocketengine.features.attachments.creation.NativeDocumentCreation;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
@@ -7077,6 +7078,43 @@ public final class TaskStore {
         if(previous!=null){requirePrivateOwner(previous);JSONObject exact=previous.optJSONObject("externalRefs");exact=exact==null?null:exact.optJSONObject("documentCreation");if(!"attachments".equals(previous.optString("feature"))||!"createDocument".equals(previous.optString("command"))||exact==null||!draft.identity.equals(exact.optString("planDigest")))throw new SecurityException("原动作已经属于另一份实际文档计划，未重新保存");return get(id,false).put("knownOperation",true);}
         db.beginTransaction();try{JSONObject task=beginExternal("attachments","createDocument",id,dev.pocketengine.features.attachments.creation.DocumentDraft.sourceInput(draft.source()).put("_nativeDocumentPlanDigest",draft.identity));task.put("coordinatorEpoch",1);write(task);db.setTransactionSuccessful();return task.put("knownOperation",false);}finally{db.endTransaction();}
     }
+    private static final String OWNER_DOCUMENT_NO_PUBLICATION="nativeOwnerDocumentNoPublication";
+    private static String ownerDocumentNoPublicationDigest(JSONObject task,String id,String plan)throws Exception{
+        if(task==null||id==null||!id.matches("[a-f0-9-]{36}")||plan==null||!plan.matches("[a-f0-9]{64}")||
+                !id.equals(task.opt("id"))||!id.equals(task.opt("runId"))||!id.equals(task.opt("operationId"))||
+                task.optInt("coordinatorEpoch",-1)!=1||!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))||
+                task.has("origin")||task.has("conversationId")||task.has("parentTaskId")||task.optBoolean("contextWithdrawn")||
+                !task.optBoolean("contextAvailable",true)||task.optBoolean("sourceCurrentReadRequired")||
+                !Boolean.FALSE.equals(task.opt("cancelRequested"))||!"attachments".equals(task.opt("kind"))||
+                !"tool".equals(task.opt("executionMode"))||!"attachments".equals(task.opt("feature"))||!"createDocument".equals(task.opt("command")))return null;
+        JSONObject refs=task.optJSONObject("externalRefs"),creation=refs==null?null:refs.optJSONObject("documentCreation");
+        String format=creation==null?"":creation.optString("format");
+        if(creation==null||!Set.of("docx","pdf").contains(format)||!plan.equals(creation.opt("planDigest")))return null;
+        return capabilityFingerprint(new JSONObject().put("type","pocketworld.owner-document-no-publication.v1")
+                .put("taskId",id).put("runId",id).put("operationId",id).put("epoch",1).put("planDigest",plan).put("format",format));
+    }
+    /** Commit the original native failure proof in the same task update as the failed status. */
+    public synchronized void recordOwnerDocumentNoPublication(String id,String plan,NativeDocumentCreation.NotPublished failure)throws Exception{
+        db.beginTransaction();try{
+            JSONObject task=required(id);
+            String digest=ownerDocumentNoPublicationDigest(task,id,plan);
+            JSONObject evidence=task.optJSONObject("evidence");
+            if(digest==null||!"running".equals(task.opt("status"))||(evidence!=null&&evidence.has("ownerReconciliation"))||hasUnresolved(id)||
+                    !failure.matchesOriginalWordPdf(id,plan,task.getJSONObject("externalRefs").getJSONObject("documentCreation").getString("format")))
+                throw new SecurityException("原文档失败回执与当前原动作不匹配");
+            updateExternal(id,failure.hostReceipt(),false,digest);
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    /** Bounded metadata for one explicit original query. No missing-slot inference or execution. */
+    public synchronized boolean ownerDocumentNoPublication(String id,String plan)throws Exception{
+        JSONObject task=read(id);String digest=ownerDocumentNoPublicationDigest(task,id,plan);
+        if(digest==null||!"failed".equals(task.opt("status"))||!"failed".equals(task.opt("executionStatus"))||
+                !id.equals(task.opt("externalOperationId"))||!task.optString("externalId").isEmpty())return false;
+        JSONObject evidence=task.optJSONObject("evidence");
+        return evidence!=null&&"failed".equals(evidence.opt("executorStatus"))&&id.equals(evidence.opt("operationId"))&&
+                digest.equals(evidence.opt(OWNER_DOCUMENT_NO_PUBLICATION))&&!hasUnresolved(id);
+    }
     /** Cold native-owner recovery is a bounded view of the original ledger, never a
      * restored draft, grant, latest-action guess or instruction to repeat creation. */
     public synchronized JSONObject ownerDocumentActionsForOwner(String cursor,RunControl control)throws Exception {
@@ -11864,10 +11902,57 @@ public final class TaskStore {
         JSONArray expected=new JSONArray(),files=binding.getJSONObject("plan").getJSONArray("files");for(int i=0;i<files.length();i++){JSONObject ref=new JSONObject(files.getJSONObject(i).toString());ref.remove("expectedVersion");ref.remove("expectedHash");expected.put(ref);}
         if(!canonical(current).equals(canonical(expected)))throw new SecurityException("原作者成果版本已变化，旧独审不能继续或批准新版本");
     }
+    /** Metadata of the exact first ordinary selected-file plan; no frozen file content or new approval. */
+    public synchronized JSONObject ownerIndependentTeamReviewFacts(String teamRun,String hash,int count)throws Exception {
+        return ownerIndependentTeamReviewFacts(teamWriteTask(teamRun),teamRun,hash,count);
+    }
+    private JSONObject ownerIndependentTeamReviewFacts(JSONObject team,String teamRun,String hash,int count)throws Exception {
+        checkTeamIntegrationParents(team);JSONObject parent=teamWorkPlanParent(teamRun),scope=team.getJSONObject("teamWriteScope"),work=team.getJSONObject("teamWorkPlan");
+        JSONObject original=required(parent.getString("parentTaskId"));
+        rejectChannelParent(original);
+        String run=parent.getString("parentRunId"),ref=team.optString("teamParentPlanRef"),approval=team.optString("teamParentPlanHash");
+        int epoch=parent.getInt("parentEpoch");
+        if(!hash.matches("[a-f0-9]{64}")||count<1||count>32||!original.isNull("origin")||!"assistant".equals(original.opt("kind"))||
+                !original.optString("status").matches("awaiting_user|needs_confirmation")||
+                !run.equals(parent.opt("activeParentRunId"))||epoch!=parent.getInt("activeParentEpoch")||hasUnresolved(original.getString("id"))||
+                !ref.matches("[a-f0-9-]{36}")||!approval.matches("[a-f0-9]{64}")||!ref.equals(work.opt("planId"))||
+                !ref.equals(scope.opt("parentPlanRef"))||!approval.equals(scope.opt("parentPlanHash"))||
+                !"active".equals(work.opt("state"))||work.optInt("revision",-1)!=1||work.has("lastRevisionRequestId")||work.optLong("expiresAt")<=System.currentTimeMillis()||
+                scope.has("projectSelection")||team.has("teamIndependentReview")||team.has("teamOutputReview")||hasUnresolved(team.getString("id")))
+            throw new SecurityException("原私人选件计划或父工作不再允许首次独审");
+        for(String k:new String[]{"teamRunId","parentTaskId","parentRunId","parentEpoch","targetProjectId"})
+            if(!canonical(work.get(k)).equals(canonical(parent.get(k))))throw new SecurityException("原团队、项目或父执行身份已变化");
+        for(String k:new String[]{"parentTaskId","parentRunId","targetProjectId"})
+            if(!parent.getString(k).equals(scope.opt(k)))throw new SecurityException("原选件范围已改变");
+        JSONArray authors=scope.getJSONArray("assignments");
+        if(authors.length()<1||authors.length()>8)throw new SecurityException("原本机分工范围已变化");
+        for(int i=0;i<authors.length();i++)if(authors.getJSONObject(i).has("remoteSelection")||authors.getJSONObject(i).has("projectSelection"))
+            throw new SecurityException("这里只独审原本机选定文本，不跨设备或读完整项目");
+        try(Cursor row=db.rawQuery("SELECT 1 FROM team_parent_plans WHERE task_id=? AND plan_ref=? AND plan_hash=? AND state='started' AND start_run_id=? AND start_epoch=? AND child_task_id=? AND start_operation_id=?",
+                new String[]{original.getString("id"),ref,approval,run,Integer.toString(epoch),teamRun,teamRun})){
+            if(!row.moveToFirst())throw new SecurityException("缺少同一原执行已批准并启动的制作计划");}
+        String reviewer=UUID.nameUUIDFromBytes(("team-review:"+teamRun+":"+hash).getBytes(StandardCharsets.UTF_8)).toString();
+        String integrator=UUID.nameUUIDFromBytes(("team-integration:"+teamRun).getBytes(StandardCharsets.UTF_8)).toString();
+        try(Cursor prior=db.rawQuery("SELECT 1 FROM tasks WHERE task_id IN (?,?) LIMIT 1",new String[]{reviewer,integrator})){
+            if(prior.moveToFirst())throw new SecurityException("已存在原独审或整合记录，请查看原结果，不重复启动");
+        }
+        JSONObject budget=teamBudget(original);
+        int models=dev.pocketengine.features.teams.TeamParentBudget.remaining(budget,"modelRequests");
+        int tools=Math.min(parent.getInt("remainingOperations"),dev.pocketengine.features.teams.TeamParentBudget.remaining(budget,"toolOperations"));
+        if(models<1||tools<count+2)throw new IllegalStateException("原计划额度不足以独审这些文本");
+        return new JSONObject().put("teamRunId",teamRun).put("planHash",hash).put("planId",ref).put("projectId",parent.getString("targetProjectId"))
+                .put("parentTaskId",original.getString("id")).put("parentRunId",run).put("parentEpoch",epoch).put("scopeHash",capabilityFingerprint(scope))
+                .put("remainingModelRequests",models).put("remainingToolOperations",tools);
+    }
     public synchronized JSONObject startTeamReview(String teamRun,dev.pocketengine.features.teams.TeamWorkReview.Prepared nativeReview,String expectedHash,RunControl original,int allocation)throws Exception {
+        return startTeamReview(teamRun,nativeReview,expectedHash,original,allocation,null);
+    }
+    public synchronized JSONObject startTeamReview(String teamRun,dev.pocketengine.features.teams.TeamWorkReview.Prepared nativeReview,String expectedHash,RunControl original,int allocation,
+            dev.pocketengine.features.teams.TaskStoreTeamWriteHost.OwnerIndependentReview owner)throws Exception{
         db.beginTransaction();try{
             JSONObject team=teamWriteTask(teamRun),review=nativeReview.snapshot(),plan=review.getJSONObject("plan");checkTeamIntegrationParents(team);
             if(!expectedHash.equals(review.getString("planHash"))||!expectedHash.equals(capabilityFingerprint(plan))||!teamRun.equals(plan.getString("teamRunId"))||!review.optBoolean("canIntegrate"))throw new SecurityException("独审必须读取当前完整冻结计划");
+            if(owner!=null)owner.requireAdmission(this,ownerIndependentTeamReviewFacts(team,teamRun,expectedHash,plan.getJSONArray("files").length()));
             String id=UUID.nameUUIDFromBytes(("team-review:"+teamRun+":"+expectedHash).getBytes(StandardCharsets.UTF_8)).toString();JSONObject existing=read(id);
             if(existing!=null&&(!existing.getJSONObject("origin").optString("kind").equals("team_review")||!expectedHash.equals(existing.getJSONObject("teamAssignment").optString("planHash"))))throw new SecurityException("原独审编号属于不同执行来源");
             if(existing!=null&&existing.optString("status").equals("completed")){db.setTransactionSuccessful();return new JSONObject(team.getJSONObject("teamIndependentReview").toString()).put("taskId",id).put("inspectOnly",true);}
@@ -11875,6 +11960,7 @@ public final class TaskStore {
             JSONObject identity=new JSONObject().put("teamRunId",teamRun).put("assignmentId",id).put("memberId","reviewer").put("targetProjectId",plan.getString("targetProjectId")).put("files",plan.getJSONArray("files")).put("plan",plan).put("planHash",expectedHash);checkTeamReviewCurrent(identity);
             if(existing==null){JSONObject task=base(id,"独立审查原冻结成果 "+expectedHash,"assistant","capabilities").put("conversationId","").put("parentTaskId",team.getString("id")).put("status","queued").put("teamAssignment",identity).put("origin",new JSONObject().put("kind","team_review").put("teamRunId",teamRun).put("assignmentId",id).put("memberId","reviewer"));write(task);JSONArray links=team.optJSONArray("relatedTasks");if(links==null)links=new JSONArray();if(links.length()>=32)throw new IllegalStateException("原团队child任务已满");links.put(new JSONObject().put("taskId",id).put("feature","team_review").put("assignmentId",id));team.put("relatedTasks",links);write(team);}
             JSONObject attempt=startAttempt(id,"capabilities",allocation,true);original.bindHostRun(id,attempt.getString("runId"),attempt.getInt("coordinatorEpoch"));authorizeTools(id,attempt.getString("runId"),new JSONArray().put("team_review_manifest").put("team_read_review_file").put("team_submit_review"));
+            if(owner!=null)owner.requireLiveWindow();
             db.setTransactionSuccessful();return new JSONObject(identity.toString()).put("taskId",id).put("runId",attempt.getString("runId")).put("coordinatorEpoch",attempt.getInt("coordinatorEpoch")).put("stepCeiling",attempt.getInt("stepCeiling"));
         }finally{db.endTransaction();}
     }
@@ -19075,6 +19161,9 @@ public final class TaskStore {
     }
     public synchronized void updateExternal(String id,JSONObject receipt)throws Exception{db.beginTransaction();try{updateExternal(id,receipt,false);db.setTransactionSuccessful();}finally{db.endTransaction();}}
     private void updateExternal(String id,JSONObject receipt,boolean reviewedAdmission)throws Exception{
+        updateExternal(id,receipt,reviewedAdmission,null);
+    }
+    private void updateExternal(String id,JSONObject receipt,boolean reviewedAdmission,String nativeDocumentNoPublication)throws Exception{
         JSONObject t=required(id);String raw=receipt.optString("status",receipt.optBoolean("ok",true)?"response_received":"failed");
         if(t.has("ownerPrimaryDisplayRead"))throw new SecurityException("已冻结的本机读数不能由外部回执替换");
         JSONObject registered=t.optJSONObject("externalRefs"),location=registered==null?null:registered.optJSONObject("hostWorkspace");
@@ -19146,6 +19235,7 @@ public final class TaskStore {
         if(!status.matches("queued|running|paused|stopping|cancelled|failed|interrupted|awaiting_user|needs_confirmation|reconciling"))status="needs_confirmation";
         if(hasUnresolved(id)&&!("running".equals(raw)&&onlyLiveCoordinatorReads(t)))status="reconciling";
         JSONObject evidence=new JSONObject().put("executorStatus",raw).put("automaticallyVerified",false);for(String key:new String[]{"harnessSelection","harness","resumeSupported","promptTerminalConfirmed","teamContext","pendingTeamTools","teamToolReceipts","configurationRevision","capabilityRevision","executionPolicy","modeId","id","profileId","environmentId","operationId","expiresAt","exitCode","summary","message","pendingApprovals","pendingQuestions","questionReceipts","progress","promptResultIdentity","diffTruncated","threadId","turnId","protocol","outputTruncated","phase","round","generation","revision","mode","leaderId","controls","inputSteeringVerified","steeringUnknown","serviceBase","worker","model","capabilities","readOnly","readOnlyConfirmed","externalToolsDisabled","teamReadOnlyTools","protocolVerified","controlProtocolVerified","sessionIdentityConfirmed","sessionId","promptRequestId","reportedModel","interruptAcknowledged","turnStartAcknowledged","resumeJobId","sourceServiceBase","approvalReceipts","remoteEffectsVerified","eventCount","resultSubtype","permissionDenialCount","resultSnapshotId","resultSnapshotVersion","snapshotPrelaunchVerified","snapshotBaseVerifiedAt","workspaceIdentity","assignmentWorkspace","externalJobLimits","inferenceUsage","modelCallHardCapSupported","tokenHardCapSupported","costHardCapSupported","wallTimeHardCapSupported","wallTimeEnforcement","detachedDescendantIsolationVerified","assignmentWriteSandboxVerified","assignmentWorkspaceConfirmed","osReadIsolationVerified","modelOptions","modelRuntime","effort","noTools","teamTools","teamToolsOnly","codingToolsSupported","nativeSettled","nativeQueueEmptyConfirmed","resourcesHeld","commandAllowlistEnforced","processStarted","dispatchFenceFinal","notStartedConfirmed","processCleanupProof","outputLimitExceeded","inputState","recoveryProof","coldRecovery","projectHistory","sessionBranchSource","sessionBranch","nativeLocalDispatchProof","backendSelection","environmentBinding","inferenceAudience","groupInputSource","externalGroupApiMode","externalGroupApiRead","originalCancellation","cancellationDispatched","queryOnly","effectsReversed"})if(receipt.has(key))evidence.put(key,receipt.get(key));
+        if(nativeDocumentNoPublication!=null)evidence.put(OWNER_DOCUMENT_NO_PUBLICATION,nativeDocumentNoPublication);
         if("remote".equals(t.opt("feature"))&&receipt.optString("hostWorkspaceAnchor").matches("[a-f0-9]{64}")&&receipt.optString("profileBinding").matches("[a-f0-9]{64}"))
             evidence.put("hostWorkspaceAnchor",receipt.getString("hostWorkspaceAnchor")).put("profileBinding",receipt.getString("profileBinding"));
         if(t.has("remoteInputScope")&&t.has("remoteInputState")&&evidence.has("inputState"))evidence.put("inputState",new JSONObject(t.getJSONObject("remoteInputState").toString()));
