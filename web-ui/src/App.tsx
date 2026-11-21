@@ -140,6 +140,7 @@ import type {TaskResultFile} from './TaskResultFiles';
 import {PhoneTaskStatus} from './PhoneTaskStatus';
 import {PhoneInlineStopReceipt,phoneStopReceiptPresentation,useInlinePhoneStops,type ShownPhoneRun} from './PhoneInlineStopReceipts';
 import {PhoneTaskOriginalRequest} from './PhoneTaskOriginalRequest';
+import {loadedPhoneWorkReport,type DeliveredPhoneWorkReport,type PhoneWorkReportLocation} from './PhoneTaskConversationReturn';
 import {PHONE_RECORD,PhoneOriginalActionReview} from './PhoneOriginalActionReview';
 import {EarlierDraftPhoneStarts,BlankPhoneReceiptActions,type BlankFirstRun} from './BlankPhoneStarts';
 import {PhoneNotificationReturn,originalPhoneNotice,type PhoneNotice} from './PhoneNotificationReturn';
@@ -677,6 +678,8 @@ export default function App(){
   setMemoryDraftTarget(null);setSkillDraftTarget({...draft,chatWork});
  };
  const taskTransientBack=useRef<(()=>boolean)|null>(null);
+ const phoneWorkReportExit=useRef<{exited:()=>boolean;retire:()=>void}|null>(null);
+ useEffect(()=>()=>phoneWorkReportExit.current?.retire(),[]);
  const originalPhoneToolOpen=useRef<((pin:OriginalPhoneToolRecord)=>boolean)|null>(null);
  const capabilityBack=useRef<(()=>boolean)|null>(null);
  const taskPolicyBeforeLeave=useRef<PermissionLeaveGuard|null>(null);
@@ -3748,6 +3751,72 @@ export default function App(){
   const nativeView=obj(bridge.getState().view);
   return taskLayer==='overview'&&taskOpen&&!taskOpening&&!document.hidden&&openedTaskId.current===task.id&&nativeView.taskId===task.id&&nativeView.section==null;
  };
+ // Only the original Chat already beneath this Work can receive the focus. No conversation selection, history, or reread.
+ const phoneWorkReportPlace=(link:DeliveredPhoneWorkReport,live=bridge.getState())=>{
+  const {result,conversationId,messageId}=link,owner=live.state,node=scroll.current,list=chatMessageList.current;
+  if(owner.conversationId!==conversationId||owner.conversationReader||owner.loadingFirstConversationMessages||owner.queuedInputsPage||
+     owner.filePath||owner.attachmentWorkspace?.open||owner.chatAttachmentPickerOpen||!live.capabilities.commands.includes('phone.result.original')||
+     node?.dataset.conversationId!==conversationId||!list||!node.contains(list)||!loadedPhoneWorkReport(owner.messages,link))return;
+  const rows=asArray<Task>(owner.tasks).filter(row=>row.id===result.taskId),work=rows.length===1?rows[0]:undefined;
+  const run=phoneRunIdentity(work),raw=work?.raw;
+  if(!work||!isPrivateLocalPhone(work)||phoneConversationId(work)!==conversationId||run?.runId!==result.runId||run.epoch!==result.epoch||
+     raw?.contextAvailable===false||raw?.contextWithdrawn===true||raw?.sourceCurrentReadRequired===true||raw?.taskProjection==='source_unavailable')return;
+  const articles=Array.from(list.children).filter((row):row is HTMLElement=>row instanceof HTMLElement&&row.tagName==='ARTICLE'&&row.dataset.messageId===messageId);
+  if(articles.length===1)return {node,article:articles[0]};
+ };
+ const phoneWorkLocation=(task:Task):PhoneWorkReportLocation|undefined=>{
+  if(route!=='chat'||!originalTaskOverview(task)||!isPrivateLocalPhone(task)||!phoneConversationId(task)||!can('tasks.close'))return;
+  const available=(link:DeliveredPhoneWorkReport)=>!phoneWorkObscured&&!phoneViewerExpanded&&!phoneWorkReportExit.current&&
+   !workSupplementBeforeLeave.current&&!taskPolicyBeforeLeave.current&&!projectDraftBeforeLeave.current&&!preparationBeforeLeave.current&&
+   link.result.taskId===task.id&&originalTaskOverview(task)&&!!phoneWorkReportPlace(link);
+  return {available,open:(link,trigger)=>{
+   if(!available(link)||!trigger.isConnected||trigger.closest('[hidden],[inert],[aria-hidden="true"]'))return;
+   const initial=bridge.getState(),documentEpoch=bridge.getDocumentEpoch(),nav=navigationWindow.current,request=reviewRequest.current;
+   const resume=openedTaskResumeRevision.current,sourceRevision=initial.state.traceSourceRevision,nativeRequest=initial.state.requestedTaskRevision;
+   const current=(closing:boolean)=>{
+    const live=bridge.getState(),view=obj(live.view);
+    if(document.hidden||bridge.getDocumentEpoch()!==documentEpoch||navigationWindow.current!==nav||view.section!==null||view.resumeRevision!==resume||
+       live.state.traceSourceRevision!==sourceRevision||live.state.requestedTaskRevision!==nativeRequest||
+       reviewRequest.current!==request+(closing?1:0)||openedTaskId.current!==(closing?null:task.id)||
+       view.taskId!==task.id&&(!closing||view.taskId!==null))return;
+    return phoneWorkReportPlace(link,live);
+   };
+   if(!current(false))return;
+   let ack=false,exit=false,frame=0,timer=0,unsubscribe=()=>{};
+   const hide=()=>{if(document.hidden)retire()};
+   const retire=()=>{
+    if(phoneWorkReportExit.current===visit)phoneWorkReportExit.current=null;
+    document.removeEventListener('visibilitychange',hide);
+    document.removeEventListener('pointerdown',retire,true);document.removeEventListener('keydown',retire,true);
+    unsubscribe();window.clearTimeout(timer);window.cancelAnimationFrame(frame);
+   };
+   const focus=()=>{
+    if(!ack||!exit||frame||phoneWorkReportExit.current!==visit)return;
+    if(!current(true)){retire();return;}
+    if(obj(bridge.getState().view).taskId!==null)return;
+    frame=window.requestAnimationFrame(()=>{
+     const place=phoneWorkReportExit.current===visit&&current(true),active=document.activeElement;
+     if(place&&obj(bridge.getState().view).taskId===null&&!place.article.closest('[hidden],[inert],[aria-hidden="true"]')&&
+        !document.querySelector('[role="dialog"][data-state="open"]')&&
+        (active===document.body||active===document.documentElement||active===trigger||active===place.article)){
+      stopFollowing();place.node.scrollTop+=place.article.getBoundingClientRect().top-place.node.getBoundingClientRect().top;
+      place.article.focus({preventScroll:true});
+     }
+     retire();
+    });
+   };
+   const visit={retire,exited:()=>{if(!current(true)){retire();return false;}exit=true;focus();return true;}};
+   phoneWorkReportExit.current=visit;
+   timer=window.setTimeout(retire,5000);
+   document.addEventListener('visibilitychange',hide);
+   document.addEventListener('pointerdown',retire,true);document.addEventListener('keydown',retire,true);
+   void closeTask().then(closed=>{
+    if(phoneWorkReportExit.current!==visit)return;
+    if(!closed){retire();return;}
+    ack=true;unsubscribe=bridge.subscribe(focus);focus();
+   },retire);
+  }};
+ };
  const openOriginalPhoneTool=(task:Task,pin:OriginalPhoneToolRecord,trigger:HTMLButtonElement)=>{
   const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current,request=reviewRequest.current;
   const resume=openedTaskResumeRevision.current;
@@ -3976,6 +4045,7 @@ export default function App(){
     <div className="pw-action-row">{taskResultDecision(task,protectedDisabled,false,readback)}</div>
    </section>}:undefined}
    canReadPhoneTaskOriginal={overviewActive&&!phoneWorkObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('phone.result.taskOriginal')}
+   phoneWorkReportLocation={phoneWorkLocation(task)}
    canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
    onContinueBuildCopy={buildCopy&&!failureOverview?()=>void openOriginalBuildCopy(buildCopy):undefined}
    onCopy={copyWithLocalFeedback} onFollowUp={fixedDraft?undefined:followOriginal} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
@@ -5466,6 +5536,7 @@ export default function App(){
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement())closeTask(true)}else setTaskOpen(true)}} direction="right" handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
+   if(phoneWorkReportExit.current?.exited()){chatWorkReturn.current=null;event.preventDefault();return;}
    const chatOrigin=chatWorkReturn.current;chatWorkReturn.current=null;
    if(route==='chat'&&chatOrigin?.taskId===taskId&&chatOrigin.navigation===navigationWindow.current&&restoreChatWorkAt(chatOrigin)){event.preventDefault();return;}
    const visit=acknowledgedWorkVisit.current,sourceRow=visit?.chatRow;

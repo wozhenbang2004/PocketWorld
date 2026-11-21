@@ -16,7 +16,8 @@ import type { OriginalProjectDraft } from './ButlerPreparations';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import { PrepareTaskPackageProject } from './PrepareTaskPackageProject';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
-import {PhoneTaskOriginalReport} from './PhoneTaskConversationReturn';
+import {PhoneTaskOriginalReport,type PhoneWorkReportLocation} from './PhoneTaskConversationReturn';
+import {messagePhoneResult,phoneConversationId,phoneRunIdentity} from './phone-start';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
 import { HeldPhoneResultImage } from './HeldPhoneResultImage';
 import { MessageAttachment } from './MessageAttachment';
@@ -135,7 +136,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, phoneWorkReportLocation, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -158,6 +159,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   onContinueBuildCopy?: () => void;
   onFollowUp?: () => void;
   canReadPhoneTaskOriginal?: boolean;
+  phoneWorkReportLocation?: PhoneWorkReportLocation;
   resultFiles?: {
     taskId: string;
     supported: boolean;
@@ -185,7 +187,15 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     typeof record.raw?.runId==='string' && Number.isSafeInteger(record.raw?.coordinatorEpoch)
     ? {...buildOwner,runId:record.raw.runId as string,epoch:record.raw.coordinatorEpoch as number} : null;
   const packageRead = useProjectPackages(task, active, readIdentity, firstWeb?.taskId);
-  const outcome = getTaskOutcome(task, messages, Math.max(clock, Date.now()), packageRead.page ?? undefined);
+  const phoneConversation=phoneWorkReportLocation&&phoneConversationId(record), phoneRun=phoneRunIdentity(record);
+  // In this direct Chat→Work surface, a previous round's saved bubble stays in Chat,
+  // not in the current phone result as a generic same-task reply.
+  const related=phoneConversation?phoneConversation===attachmentConversation&&phoneRun&&Array.isArray(messages)&&record.raw?.contextAvailable!==false&&
+    record.raw?.contextWithdrawn!==true&&record.raw?.sourceCurrentReadRequired!==true&&record.raw?.taskProjection!=='source_unavailable'?messages.filter(row=>{
+    const result=messagePhoneResult(row);
+    return row?.sourceRevision===1&&result?.taskId===phoneRun.taskId&&result.runId===phoneRun.runId&&result.epoch===phoneRun.epoch;
+  }):[]:messages;
+  const outcome = getTaskOutcome(task, related, Math.max(clock, Date.now()), packageRead.page ?? undefined);
   const [selectedPackage, selectPackage] = useState(''), packageButton = useRef<HTMLButtonElement | null>(null);
   const packageKey = (item: typeof outcome.projectPackages[number]) => JSON.stringify([readIdentity, item.taskId, item.operationId, item.archiveSha256]);
   const inWorkReader = (item: typeof outcome.projectPackages[number]) => item.mode === 'source_project' && canReadProjectPackageFiles();
@@ -257,7 +267,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       <h3>{settlementTitle}</h3>
       {settlementDetail && settlementDetail !== settlementTitle && <p>{settlementDetail}</p>}
     </div>}
-    {active && canReadPhoneTaskOriginal && <PhoneTaskOriginalReport task={record}/>}
+    {active && canReadPhoneTaskOriginal && <PhoneTaskOriginalReport task={record} location={phoneWorkReportLocation}/>}
     {active&&<TaskPhoneFinalScreen task={record}/>}
     {active && !outcome.image && !outcome.retained?.image && !remotePhone && <HeldPhoneResultImage task={record} readIdentity={readIdentity}/>}
     {firstWeb && packageRead.firstWebWindow && <FirstNodeWebOutput key={`${readIdentity}:${owner}:${packageRead.firstWebWindow}:${status}`} ownerWindow={packageRead.firstWebWindow}
