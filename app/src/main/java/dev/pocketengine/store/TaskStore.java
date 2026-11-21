@@ -12,6 +12,7 @@ import dev.pocketengine.features.local.project.ProjectBuildPlan;
 import dev.pocketengine.features.local.project.ProjectPlanRecords;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
 import dev.pocketengine.features.local.project.ProjectExecutionExit;
+import dev.pocketengine.features.local.project.ProjectFileSavePosition;
 import dev.pocketengine.features.local.project.ProjectPackageDelivery;
 import dev.pocketengine.features.workspace.WorkspaceArtifacts;
 import dev.pocketengine.phone.MainPhoneOwnerStep;
@@ -14559,6 +14560,8 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
 
+    private static final String DIRECT_VITE_EDITOR_RESUME="ownerDirectViteEditorResume";
+    private static final String PRIVATE_DIRECT_VITE_EDITOR_RESUME="_"+DIRECT_VITE_EDITOR_RESUME;
     private enum OwnerNodeKind {
         COMPILER(OwnerDirectNodeBuild.FIELD,OwnerDirectNodeBuild.FORMAT,OwnerDirectNodeBuild.COMMAND,OwnerDirectNodeBuild.MODE,
                 "nativeOwnerDirectNodeBuild","本机 TypeScript 构建"),
@@ -14575,18 +14578,22 @@ public final class TaskStore {
         return dependencies?OwnerNodeKind.DEPENDENCIES:task.has(OwnerDirectNodeBuild.VITE_FIELD)?OwnerNodeKind.VITE:OwnerNodeKind.COMPILER;
     }
     /** Owner confirmed one exact ready build. This is not a model grant or reusable capability. */
-    public synchronized boolean beginOwnerDirectNodeBuild(OwnerDirectNodeBuild.Confirmed confirmed,LocalModule local)throws Exception{
-        JSONObject plan=confirmed.plan();
-        return beginOwnerNativeNode(confirmed.scope(),plan,confirmed.capability(),OwnerDirectNodeBuild.step(plan),
-                confirmed.vite()?OwnerNodeKind.VITE:OwnerNodeKind.COMPILER,confirmed.lock(),()->confirmed.enter(local),confirmed::requireUnenteredWindow);
+    public synchronized boolean beginOwnerDirectNodeBuild(OwnerDirectNodeBuild.Confirmed confirmed,LocalModule local,
+            LocalModule.DirectViteEditorResume capturedEditor)throws Exception{
+        JSONObject plan=confirmed.plan(),scope=confirmed.scope(),editorResume=null;
+        if(confirmed.vite()&&capturedEditor!=null)try{editorResume=capturedEditor.viewFor(confirmed);}
+        catch(Exception optional){/* No edit locator is required for the original build. */}
+        return beginOwnerNativeNode(scope,plan,confirmed.capability(),OwnerDirectNodeBuild.step(plan),
+                confirmed.vite()?OwnerNodeKind.VITE:OwnerNodeKind.COMPILER,confirmed.lock(),editorResume,
+                ()->confirmed.enter(local),confirmed::requireUnenteredWindow);
     }
     public synchronized boolean beginOwnerDirectNodeDependencies(OwnerDirectNodeDependencies.Confirmed confirmed,LocalModule local)throws Exception{
         JSONObject plan=confirmed.plan();
         return beginOwnerNativeNode(confirmed.scope(),plan,confirmed.capability(),OwnerDirectNodeDependencies.step(plan),OwnerNodeKind.DEPENDENCIES,
-                null,()->confirmed.enter(local),confirmed::requireUnenteredWindow);
+                null,null,()->confirmed.enter(local),confirmed::requireUnenteredWindow);
     }
     private boolean beginOwnerNativeNode(JSONObject scope,JSONObject plan,JSONObject capability,JSONObject step,OwnerNodeKind kind,
-            JSONObject installedLock,RunControl.AuthorityCheck enter,RunControl.AuthorityCheck window)throws Exception{
+            JSONObject installedLock,JSONObject editorResume,RunControl.AuthorityCheck enter,RunControl.AuthorityCheck window)throws Exception{
         boolean dependencies=kind==OwnerNodeKind.DEPENDENCIES;
         JSONObject exact=ProjectDevelopment.exact(plan,step);
         String id=scope.getString("requestId");
@@ -14610,7 +14617,10 @@ public final class TaskStore {
                     .put("nativeExecutionMode",kind.mode)
                     .put("coordinatorEpoch",1).put("developmentContext",context).put("status","running").put("stepCeiling",1)
                     .put("approvalState","granted").put("summary",dependencies?"已登记原依赖准备，等待原执行回执。没有调用模型。":"已登记原本机构建，等待原执行回执。没有调用模型。");
-            requireOwnerNativeNodePlan(task,id,1,plan,dependencies);write(task);
+            requireOwnerNativeNodePlan(task,id,1,plan,dependencies);
+            // This commit also consumes the original approval; an existing Work above is never backfilled.
+            if(kind==OwnerNodeKind.VITE)task.putOpt(PRIVATE_DIRECT_VITE_EDITOR_RESUME,editorResume);
+            write(task);
             long now=System.currentTimeMillis();
             JSONObject grant=new JSONObject().put("principalId","owner").put("spaceId","private").put("mode","capabilities")
                     .put("expiresAt",now+360_000L).put("stepCeiling",1).put("remainingOperations",0)
@@ -14674,6 +14684,25 @@ public final class TaskStore {
                 !scope.getString("runtimeId").equals(context.opt("runtime"))||context.has(OwnerDraftFirstBuild.FIELD)||context.has("clientMessageId"))
             throw new SecurityException("不是这项原本机工作");
         return scope;
+    }
+    /** Historical navigation marker, not a current file, offer, or reusable admission. */
+    private void projectDirectViteEditorResumeForUi(JSONObject task,JSONObject view,JSONObject captured){
+        if(captured==null||captured.length()!=9||!task.has(OwnerDirectNodeBuild.VITE_FIELD)||
+                !"detail_window".equals(view.opt("taskProjection"))||!"completed".equals(task.opt("status"))||
+                !Boolean.FALSE.equals(task.opt("cancelRequested")))return;
+        try{
+            JSONObject original=requireOwnerNativeNodeScope(task,false);
+            String id=task.getString("id"),project=original.getString("projectId"),checkout=original.getString("checkoutId");
+            if(!id.equals(captured.opt("taskId"))||!id.equals(captured.opt("runId"))||!id.equals(captured.opt("buildOperationId"))||
+                    !Integer.valueOf(1).equals(captured.opt("epoch"))||!project.equals(captured.opt("projectId"))||
+                    !checkout.equals(captured.opt("checkoutId"))||!original.getString("sourceDigest").equals(captured.opt("sourceDigest"))||
+                    !(captured.opt("path") instanceof String path)||!(captured.opt("savedHash") instanceof String sha))return;
+            var position=new ProjectFileSavePosition(project,checkout,path,sha);
+            view.put(DIRECT_VITE_EDITOR_RESUME,new JSONObject()
+                    .put("taskId",id).put("runId",id).put("epoch",1).put("buildOperationId",id)
+                    .put("projectId",project).put("checkoutId",checkout).put("sourceDigest",original.getString("sourceDigest"))
+                    .put("path",position.path()).put("savedHash",position.sha256()));
+        }catch(Exception optional){/* Limit this same viewed Work without impairing its real result. */}
     }
     private void requireOwnerDirectNodePlan(JSONObject task,String run,int epoch,JSONObject plan)throws Exception{
         requireOwnerNativeNodePlan(task,run,epoch,plan,false);
@@ -18985,6 +19014,8 @@ public final class TaskStore {
             if(!limited&&"needs_confirmation".equals(result.optString("status")))result.put("resultReviewDigest",resultReviewDigest(result));
             result.put("taskCoreBytes",row.getLong(2)).put("taskCoreReadLimited",limited);
         }
+        JSONObject editorResume=result.optJSONObject(PRIVATE_DIRECT_VITE_EDITOR_RESUME);
+        result.remove(PRIVATE_DIRECT_VITE_EDITOR_RESUME);result.remove(DIRECT_VITE_EDITOR_RESUME);
         JSONObject workView=ownerWorkForUi(result);if(workView!=result)return workView;
         // Full cores derive the same navigation-only identity as summaries before any source gate
         // hides their body. Limited cores already carry the native header's verified projection.
@@ -19032,7 +19063,10 @@ public final class TaskStore {
         // private deliveries/control header. Recomputing from this display copy invents an
         // unknown result count and hides a valid Continue when the detail includes images.
         JSONObject view=image&&!limited?copy(result,true,OwnerWorkTask.isOwnerWork(result)?result.getJSONObject("controls"):null):result;
-        if(!limited)view.put(PhoneActionRecovery.INTERRUPTED,PhoneActionRecovery.interruptedAttempt(db,id,result));
+        if(!limited){
+            view.put(PhoneActionRecovery.INTERRUPTED,PhoneActionRecovery.interruptedAttempt(db,id,result));
+            projectDirectViteEditorResumeForUi(result,view,editorResume);
+        }
         return view;
     }
     private boolean hasUnconfirmedForUi(String id){
@@ -19483,6 +19517,7 @@ public final class TaskStore {
         String issue="";if(!db.inTransaction())try{maintainScreenshot(t,System.currentTimeMillis(),image);}catch(Exception unavailable){issue="unreadable";}
         JSONObject result=new JSONObject(t.toString());if(OwnerWorkTask.isOwnerWork(t))result.put("taskId",t.getString("id")).put("runId",t.optString("runId")).put("epoch",t.optInt("coordinatorEpoch")).put("controls",checkedOwnerControls==null?ownerWorkControls(t):new JSONObject(checkedOwnerControls.toString()));if("needs_confirmation".equals(t.optString("status")))result.put("resultReviewDigest",resultReviewDigest(t));
         projectOwnerWorkPreparationHeader(t,result);result.remove("ownerWorkPreparations");result.remove("_localPhonePauseInput");
+        result.remove(PRIVATE_DIRECT_VITE_EDITOR_RESUME);result.remove(DIRECT_VITE_EDITOR_RESUME);
         projectResultImageIdentity(t,result);JSONObject evidence=result.optJSONObject("evidence");if(evidence==null)return result;
         evidence.remove("imageDataUrl");JSONObject record=evidence.optJSONObject("screenshot");
         if(record==null&&evidence.optString("imageFile").equals(t.getString("id")+".jpg")){evidence.put("screenshot",new JSONObject().put("imageId","legacy:"+t.getString("id")).put("state",issue.isEmpty()?"migration_pending":"migration_unavailable").put("encrypted",false).put("legacyRetained",true).put("expiresAt",0L));return result;}

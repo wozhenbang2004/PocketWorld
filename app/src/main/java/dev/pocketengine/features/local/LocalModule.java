@@ -1266,9 +1266,29 @@ public final class LocalModule implements EngineModule {
         if(edit&&exact.getJSONObject("payload").has("liveEditServiceExecutionId"))capability.put("liveEditServiceExecutionId",exact.getJSONObject("payload").getString("liveEditServiceExecutionId"));
         return capability;
     }
+    /** A native-only, presentation-only capture from the exact build's preflight snapshot. */
+    public static final class DirectViteEditorResume {
+        private final OwnerDirectNodeBuild.Confirmed original;
+        private final String sourceDigest;
+        private final ProjectFileSavePosition position;
+        private DirectViteEditorResume(OwnerDirectNodeBuild.Confirmed original,String sourceDigest,ProjectFileSavePosition position){
+            this.original=original;this.sourceDigest=sourceDigest;this.position=position;
+        }
+        public JSONObject viewFor(OwnerDirectNodeBuild.Confirmed selected)throws Exception{
+            if(original!=selected||!selected.vite())return null;
+            JSONObject scope=selected.scope();
+            if(!position.projectId().equals(scope.opt("projectId"))||
+                    !position.checkoutId().equals(scope.opt("checkoutId"))||!sourceDigest.equals(scope.opt("sourceDigest")))return null;
+            String task=scope.getString("requestId");
+            if(!task.equals(scope.opt("runId"))||!task.equals(scope.opt("buildOperationId"))||!Integer.valueOf(1).equals(scope.opt("epoch")))return null;
+            return new JSONObject().put("taskId",task).put("runId",task).put("epoch",1).put("buildOperationId",task)
+                    .put("projectId",position.projectId()).put("checkoutId",position.checkoutId()).put("sourceDigest",sourceDigest)
+                    .put("path",position.path()).put("savedHash",position.sha256());
+        }
+    }
     /** This preflight does not claim, install or modify. The original host keeps this same
      * module monitor through the SQL claim and existing runtime dispatch. */
-    public synchronized void requireDirectNodeBuildForOwner(OwnerDirectNodeBuild.Confirmed selected)throws Exception{
+    public synchronized DirectViteEditorResume requireDirectNodeBuildForOwner(OwnerDirectNodeBuild.Confirmed selected)throws Exception{
         selected.requireHost(this);selected.requireUnenteredWindow();
         JSONObject scope=selected.scope(),plan=selected.plan(),lock=selected.lock();
         JSONObject exact=ProjectDevelopment.exact(plan,OwnerDirectNodeBuild.step(plan));
@@ -1282,7 +1302,25 @@ public final class LocalModule implements EngineModule {
                 !projectCapabilityStillCurrent(exact,selected.capability()))
             throw new SecurityException("所选副本的源码、锁或实际工具已变化，没有构建");
         requireDraftDependencyFiles(checkout,lock);
+        DirectViteEditorResume resume=null;
+        if(selected.vite())try{
+            JSONObject metadata=snapshot.getJSONObject("checkout");
+            if(publishedBuiltinViteEditorCopy(metadata,project,checkout)){
+                ProjectFileSavePosition position=ProjectFileSavePosition.readForOwner(root,project,checkout);
+                if(position!=null){
+                    JSONArray actual=snapshot.getJSONArray("files");
+                    for(int i=0;i<actual.length();i++){
+                        JSONObject member=actual.getJSONObject(i);
+                        // This UTF-8 member's digest is already included in the validated build source.
+                        if(member.opt("content") instanceof String&&matchingSavedFile(member,position)){
+                            resume=new DirectViteEditorResume(selected,source.getString("sourceDigest"),position);break;
+                        }
+                    }
+                }
+            }
+        }catch(Exception optional){/* An unavailable edit locator never denies a valid build. */}
         selected.requireUnenteredWindow();
+        return resume;
     }
     public synchronized boolean directNodeDependencyRootAbsentForOwner(String project,String checkout)throws Exception{
         validateDirectNodeCheckout(project,checkout);
@@ -1873,6 +1911,27 @@ public final class LocalModule implements EngineModule {
                 "nativeGitImportPending","collectedFromCheckoutId","collectionOperationId"})if(row.has(special))return false;
         return true;
     }
+    /** The admitted first-party source import, never a copied or cached source marker. */
+    private boolean publishedBuiltinViteEditorCopy(JSONObject row,String project,String id)throws Exception{
+        JSONObject source=row.optJSONObject("sourceImport");
+        if(!project.equals(row.opt("projectId"))||!id.equals(row.opt("id"))||!ordinaryDirectNodeCheckout(row)||
+                row.has("ownerDevelopmentRequestId")||source==null||source.length()!=7||
+                !ProjectSourceImport.BUILTIN_VITE_STARTER.equals(source.opt("sourceKind"))||!"new_project".equals(source.opt("mode"))||
+                !Boolean.FALSE.equals(source.opt("executionAuthorityRestored"))||!OwnerDirectNodeBuild.digest(source.opt("packageSha256"))||
+                !OwnerDirectNodeBuild.digest(source.opt("manifestIdentity"))||!OwnerDirectNodeBuild.digest(source.opt("sourceEvidenceSha256"))||
+                !(source.opt("clientId") instanceof String client)||!client.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")||
+                !project.equals(importedProjectId(client))||
+                !id.equals(UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString()))return false;
+        JSONObject registered=packageWorkspace().sourceProjectRegistrationForOwner(client,source.getString("packageSha256"),row.optString("name"),true);
+        return Boolean.TRUE.equals(registered.opt("registered"))&&project.equals(registered.opt("expectedProjectId"));
+    }
+    private boolean eligibleOwnerEditorSavePosition(JSONObject row,String project,String id)throws Exception{
+        return originalPreparedOwnerCopy(row,project,id)||publishedBuiltinViteEditorCopy(row,project,id);
+    }
+    private static boolean matchingSavedFile(JSONObject member,ProjectFileSavePosition position){
+        return position.path().equals(member.opt("path"))&&position.sha256().equals(member.opt("sha256"))&&
+                member.optLong("bytes",-1)>=0&&member.optLong("bytes")<=262144;
+    }
 
     /** The ordinary native editor only, after its existing real save and readback.
      * This same checkout lock also orders the optional locator writes. */
@@ -1881,10 +1940,10 @@ public final class LocalModule implements EngineModule {
         EditorSaveReadback committed=readBackEditorSave(intent,createEmpty,current);
         JSONObject observed=committed.file();
         try{
-            if(!closed&&current.getAsBoolean()&&originalPreparedOwnerCopy(committed.checkout(),intent.projectId,intent.checkoutId)&&
+            if(!closed&&current.getAsBoolean()&&eligibleOwnerEditorSavePosition(committed.checkout(),intent.projectId,intent.checkoutId)&&
                     intent.checkoutId.equals(observed.opt("checkoutId"))&&intent.path.equals(observed.opt("path"))&&
                     intent.text.equals(observed.opt("content"))&&observed.opt("sha256") instanceof String sha&&
-                    !intent.expectedHash.equals(sha)&&ProjectSources.sha256(intent.text.getBytes(StandardCharsets.UTF_8)).equals(sha))
+                    !intent.expectedHash.equals(sha)&&ProjectSources.sha256(intent.text.getBytes(StandardCharsets.UTF_8)).equals(sha)&&current.getAsBoolean())
                 new ProjectFileSavePosition(intent.projectId,intent.checkoutId,intent.path,sha).recordForOwner(root);
         }catch(Exception optional){/* The already observed file is saved even if its location cannot be remembered. */}
         return observed;
@@ -1955,14 +2014,13 @@ public final class LocalModule implements EngineModule {
         JSONObject listing=observation.listing();
         if(!project.equals(listing.opt("projectId"))||!id.equals(listing.opt("checkoutId")))throw new SecurityException("原副本文件清单已变化");
         try{
-            if(!originalPreparedOwnerCopy(observation.checkout(),project,id))return listing;
+            if(!eligibleOwnerEditorSavePosition(observation.checkout(),project,id))return listing;
             ProjectFileSavePosition position=ProjectFileSavePosition.readForOwner(root,project,id);
             if(position==null)return listing;
             JSONArray actual=listing.getJSONArray("files");
             for(int i=0;i<actual.length();i++){
                 JSONObject row=actual.getJSONObject(i);
-                if(position.path().equals(row.opt("path"))&&position.sha256().equals(row.opt("sha256"))&&
-                        Boolean.FALSE.equals(row.opt("binary"))&&row.optLong("bytes",-1)>=0&&row.optLong("bytes")<=262144){
+                if(Boolean.FALSE.equals(row.opt("binary"))&&matchingSavedFile(row,position)){
                     listing.put("priorSavedFile",position.view());break;
                 }
             }

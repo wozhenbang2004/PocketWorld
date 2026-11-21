@@ -295,6 +295,14 @@ internal class PocketWebBridge(
             !raw.has("origin") && raw.optString("runId")==pin.run && raw.optInt("coordinatorEpoch")==pin.epoch &&
             d.optString("projectId")==pin.project && d.optString("checkoutId")==pin.checkout
     }
+    private fun canReadOriginalViteEditorResume(row: UiTask): Boolean {
+        val raw = row.raw
+        return section == null && taskViewId == row.id && controller.webPrivateOwnerVisible() &&
+            raw.opt("id") == row.id && raw.opt("spaceId") == "private" && raw.opt("actorId") == "owner" &&
+            raw.opt("nativeExecutionMode") == "OWNER_DIRECT_VITE_BUILD" && raw.isNull("origin") &&
+            raw.opt("taskProjection") == "detail_window" && raw.opt("contextAvailable") != false &&
+            raw.opt("sourceCurrentReadRequired") != true
+    }
     @Volatile private var taskViewId: String? = null
         set(value) { if (field != value) fileRemainder.clear(); field = value }
     private val fileRemainder=PocketWebTeamFileRemainder<dev.pocketengine.features.teams.TaskStoreTeamWriteHost.RemainderReview>(
@@ -596,7 +604,7 @@ internal class PocketWebBridge(
         var projection: JSONObject? = null
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
-            projection = PocketWebState.snapshot(controller, ::canReadProjectGoal)
+            projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume)
             if(section==null&&taskViewId==null) controller.adoptedFormalComparisonForWeb()?.let {
                 projection?.getJSONObject("state")?.put("adoptedFormalComparison",it)
             }

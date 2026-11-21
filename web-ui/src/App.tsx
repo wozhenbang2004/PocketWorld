@@ -75,7 +75,7 @@ import {PhoneControlWorkspace} from './PhoneControlWorkspace';
 import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
 import {ProjectLivePreview} from './ProjectLivePreview';
 import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
-import {bareManagedNodeCheck,currentManagedNodeOperation,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
+import {bareManagedNodeCheck,currentManagedNodeOperation,originalDirectViteResult,originalFirstBuildFailure,reviewedManagedNodePending,type OriginalManagedNodePending} from './project-execution';
 import {failedBuildFeedback,nodeBuildContinuationText,originalNodeBuildAfterDependencies,projectFeedbackKey,type ExecutionExit} from './project-execution-exit';
 import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWorkspace';
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
@@ -97,7 +97,7 @@ import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
@@ -349,6 +349,15 @@ function originalNodeBuildCopy(task?:Task): ProjectBuildCopy|null {
     typeof pin.sourceDigest!=='string'||!hash.test(pin.sourceDigest)||pin.sourceDigest!==scope.initialSourceDigest||
     (pin.existingCheckoutBuild!==true&&(typeof pin.workIdentity!=='string'||!hash.test(pin.workIdentity))))return null;
  return {taskId:task.id,runId:raw.runId,epoch:raw.coordinatorEpoch,projectId:pin.projectId,checkoutId:pin.checkoutId,sourceDigest:pin.sourceDigest};
+}
+function originalViteEditorCopy(task?:Task):ProjectBuildCopy|null{
+ const raw=task?.raw;
+ if(!raw?.ownerDirectViteEditorResume||raw.hasUnresolvedOperations!==false||taskNeedsReconciliation(task))return null;
+ const completed=originalDirectViteResult(task);
+ if(!completed)return null;
+ const {buildOperationId,...copy}=completed;
+ const editorResume=projectBuildEditorResume(raw.ownerDirectViteEditorResume,copy);
+ return editorResume?.buildOperationId===buildOperationId?{...copy,editorResume}:null;
 }
 function phoneViewerTask(task?:Task):PhoneViewerTask|null{
  const raw=task?.raw,identity=phoneRunIdentity(task);
@@ -1951,12 +1960,31 @@ export default function App(){
   const navigation=navigationWindow.current;
   if(await openRelatedWorkspace('projects')&&navigationWindow.current===navigation+1)run('projects.select',{id:projectId});
  };
+ const currentViteEditorVisit=(target:ProjectBuildCopy,live:ReturnType<typeof bridge.getState>)=>{
+  const desired=target.editorResume,owner=live.state,view=obj(live.view);
+  const inProject=route==='projects'&&owner.projectId===target.projectId;
+  const supports=(command:string)=>live.capabilities.commands.includes(command);
+  if(!desired||!taskOpen||taskOpening||taskLayer!=='overview'||openedTaskId.current!==target.taskId||document.hidden||
+     view.taskId!==target.taskId||view.section!==null||view.resumeRevision!==openedTaskResumeRevision.current||
+     owner.filePath||owner.conversationReader||owner.attachmentWorkspace?.open||owner.localSourceIntake?.window||
+     owner.projectPreview?.localWebWork===true||projectPreview.expanded||projectWorkReviewOpen||
+     projectWorkDrafts[target.projectId]?.operation||!inProject&&route!=='tasks'||
+     asArray<Project>(owner.projects).filter(project=>project.id===target.projectId).length!==1||
+     !canEditImportedCheckout(supports)||!supports('projects.development.inspect')||!supports('tasks.close')||
+     owner.projectId!==target.projectId&&!supports('projects.select'))return false;
+  const rows=asArray<Task>(owner.tasks).filter(row=>row.id===target.taskId);
+  const current=rows.length===1?originalViteEditorCopy(rows[0]):null;
+  return !!current?.editorResume&&!!projectBuildEditorResume(desired,current)&&
+    current.editorResume.path===desired.path&&current.editorResume.savedHash===desired.savedHash;
+ };
  const openOriginalBuildCopy=async(target:ProjectBuildCopy)=>{
   const first=bridge.getState(),nativeTask=obj(first.view),row=asArray<Task>(first.state.tasks).find(item=>item.id===target.taskId);
-  const current=originalNodeBuildCopy(row),inProject=route==='projects'&&first.state.projectId===target.projectId;
-  const fromFailure=['tasks','chat','butler'].includes(route)&&!!row&&!!originalFirstBuildFailure(row);
+  const direct=!!target.editorResume;
+  const current=direct?(currentViteEditorVisit(target,first)?target:null):originalNodeBuildCopy(row);
+  const inProject=route==='projects'&&first.state.projectId===target.projectId;
+  const fromOtherPage=direct?route==='tasks':['tasks','chat','butler'].includes(route)&&!!row&&!!originalFirstBuildFailure(row);
   if(openingBuildCopy.current||!taskOpen||taskOpening||openedTaskId.current!==target.taskId)return;
-  if(nativeTask.taskId!==target.taskId||nativeTask.section!=null||document.hidden||!inProject&&!fromFailure||first.state.filePath||projectPreview.expanded||projectWorkReviewOpen||
+  if(nativeTask.taskId!==target.taskId||nativeTask.section!=null||document.hidden||!inProject&&!fromOtherPage||first.state.filePath||projectPreview.expanded||projectWorkReviewOpen||
      !asArray<Project>(first.state.projects).some(project=>project.id===target.projectId)||!can('projects.development.read')||!can('projects.development.files.open')||
      first.state.projectId!==target.projectId&&!can('projects.select')||
      !current||current.runId!==target.runId||current.epoch!==target.epoch||current.projectId!==target.projectId||
@@ -1966,9 +1994,19 @@ export default function App(){
   const navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch(),request=reviewRequest.current;
   const origin=captureNavigationOrigin();
   if(origin.task?.id===target.taskId)origin.task={...origin.task,expected:{runId:target.runId,epoch:target.epoch}};
-  const currentWindow=()=>!document.hidden&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&
-    reviewRequest.current===request+1&&openedTaskId.current===null&&!bridge.getState().state.filePath;
-  const taskClosed=()=>!obj(bridge.getState().view).taskId&&obj(bridge.getState().view).section==null;
+  let selectingOriginal=false;
+  const currentWindow=()=>{
+   const next=bridge.getState(),view=obj(next.view);
+   return !document.hidden&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&
+    reviewRequest.current===request+1&&openedTaskId.current===null&&!next.state.filePath&&
+    (!direct||view.resumeRevision===nativeTask.resumeRevision&&!next.state.conversationReader&&!next.state.attachmentWorkspace?.open&&
+      !next.state.localSourceIntake?.window&&next.state.projectPreview?.localWebWork!==true&&
+      (next.state.projectId===first.state.projectId||selectingOriginal&&next.state.projectId===target.projectId));
+  };
+  const taskClosed=()=>{
+   const view=obj(bridge.getState().view);
+   return direct?view.taskId===null&&view.section===null:!view.taskId&&view.section==null;
+  };
   const projectSelected=()=>taskClosed()&&bridge.getState().state.projectId===target.projectId;
   const waitFor=(ready:()=>boolean)=>new Promise<boolean>(resolve=>{
    let stop=()=>{};
@@ -1977,16 +2015,20 @@ export default function App(){
    stop=bridge.subscribe(check);check();
   });
   const openPinned=()=>{
-   if(!inProject)setProjectBuildReturn(target);
+   if(!inProject||direct)setProjectBuildReturn(target);
    setProjectSections(previous=>({...previous,[target.projectId]:'work'}));
    setProjectWorkPresentations(previous=>({...previous,[target.projectId]:{open:true,mode:'default'}}));
   };
   openingBuildCopy.current=true;let opened=false;
   try{
-   if(inProject)setProjectBuildReturn(target); // Keep the old inspector from loading another copy as the drawer closes.
-   if(!await closeTask()||!await waitFor(taskClosed))return;
-   if(!projectSelected())await act('projects.select',{id:target.projectId});
-   if(!await waitFor(projectSelected)){if(currentWindow())setLocalError('原项目尚未确认，未打开任何替代副本。');return;}
+   if(inProject&&!direct)setProjectBuildReturn(target); // Preserve the old generic copy handoff while closing.
+   // Exact file return is installed only after the original Work has actually closed.
+   if(!await closeTask()||!await waitFor(taskClosed)||direct&&!currentWindow())return;
+   if(!projectSelected()){
+    selectingOriginal=true;
+    await act('projects.select',{id:target.projectId});
+   }
+   if(!await waitFor(projectSelected)||direct&&!currentWindow()){if(currentWindow())setLocalError('原项目尚未确认，未打开任何替代副本。');return;}
    if(inProject){openPinned();opened=true;}
    else opened=await navigate('projects',()=>{relatedOrigin.current=origin;openPinned()},{keepOrigin:true,taskClosed:true,stillCurrent:()=>currentWindow()&&projectSelected()});
   }catch(failure){if(currentWindow())setLocalError(failure instanceof Error?failure.message:'未能打开原副本。');}
@@ -4111,6 +4153,7 @@ export default function App(){
   const buildCopy=buildTarget&&projects.some(project=>project.id===buildTarget.projectId)&&
     (route==='projects'&&state.projectId===buildTarget.projectId||failureOverview&&['tasks','chat','butler'].includes(route)&&
       (state.projectId===buildTarget.projectId||can('projects.select')))?buildTarget:null;
+  const viteEditor=overviewActive?originalViteEditorCopy(task):null;
   const taskFiles=obj(snapshot?.view).taskId===task.id&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&task.raw?.contextAvailable!==false&&task.raw?.taskProjection!=='source_unavailable'&&task.raw?.kind!=='inference'&&can('attachmentWorkspace.open')
    ? {taskId:task.id,supported:can('tasks.resultFiles'),onOpen:(file:TaskResultFile,target:HTMLButtonElement)=>openTaskResultFile(task.id,file,target),
       onOriginalRequest: originatingRequestConversation(task) && can('conversation.select') && !state.chatSubmitting && !returningConversation ? () => void returnToTaskConversation(task) : undefined,
@@ -4134,6 +4177,7 @@ export default function App(){
    phoneWorkReportLocation={phoneWorkLocation(task)}
    canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
    onContinueBuildCopy={buildCopy&&!failureOverview?()=>void openOriginalBuildCopy(buildCopy):undefined}
+   onResumeViteBuildEditor={viteEditor&&currentViteEditorVisit(viteEditor,snapshot)?()=>void openOriginalBuildCopy(viteEditor):undefined}
    onCopy={copyWithLocalFeedback} onFollowUp={fixedDraft?undefined:followOriginal} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
    attachmentConversation={String(state.conversationId||'')} canOpenAttachment={can('attachments.open')} canLocateAttachment={can('attachmentWorkspace.open')}/>;
   const evidence=<TaskPackageProjectContext.Provider key="task-evidence" value={taskOpen&&!taskOpening&&can('projects.localSource.openPrepared')&&can('tasks.close')?(original,pin)=>{

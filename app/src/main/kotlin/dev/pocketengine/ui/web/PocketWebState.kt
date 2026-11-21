@@ -16,7 +16,8 @@ internal object PocketWebState {
         "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput",
         // The project run selection holds private file paths, range fingerprints and record revisions. It is native audit, not Web state.
         // Only the separately verified boolean is public; private reviewer-route fingerprints stay native.
-        "teamreviewerroutecapture", "revisionrecipient", "projectmemoryread", "nativeprojectconventionreceipt", "nativeprojectconventiondraftseal"
+        "teamreviewerroutecapture", "revisionrecipient", "projectmemoryread", "nativeprojectconventionreceipt", "nativeprojectconventiondraftseal",
+        "ownerdirectviteeditorresume"
     )
     private val contractFields = setOf("deliverycontract","deliverycontractdigest")
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
@@ -73,10 +74,14 @@ internal object PocketWebState {
             row.taskResult?.let { value.put("taskResult", it.toJson()) }
         }
 
-    fun task(row: UiTask, images: Boolean = false, originalProjectContract: Boolean = false): JSONObject = JSONObject()
+    fun task(row: UiTask, images: Boolean = false, originalProjectContract: Boolean = false,
+        originalViteEditorResume: Boolean = false): JSONObject = JSONObject()
         .put("id", row.id).put("goal", row.goal).put("status", row.status)
         .put("summary", row.summary).put("executionMode", row.executionMode).put("updatedAt", row.updatedAt)
         .put("raw", publicValue(row.raw, images, omitProjectContract = !originalProjectContract)).also { value ->
+            if (originalViteEditorResume) row.raw.optJSONObject("ownerDirectViteEditorResume")?.let {
+                value.getJSONObject("raw").put("ownerDirectViteEditorResume", publicValue(it))
+            }
             if (!originalProjectContract && row.raw.optJSONObject("developmentContext")?.has("deliveryContract") == true)
                 value.getJSONObject("raw").getJSONObject("developmentContext").put("deliveryContractReadState","not_loaded")
             if(dev.pocketengine.features.remote.RemotePhoneDrafts.hasLocalRows(row.raw))value.getJSONObject("raw").put("hasPhoneDraftRows",true)
@@ -98,7 +103,8 @@ internal object PocketWebState {
             raw.optLong("coordinatorEpoch") > 0 && result.optLong("epoch") == raw.optLong("coordinatorEpoch")
     }
 
-    fun snapshot(controller: PocketWorldController, contractVisible: (UiTask) -> Boolean = { false }): JSONObject {
+    fun snapshot(controller: PocketWorldController, contractVisible: (UiTask) -> Boolean = { false },
+        editorResumeVisible: (UiTask) -> Boolean = { false }): JSONObject {
         val raw = controller.state
         // An old unscoped local feature receipt is not part of the selected memory workspace.
         // Strip it before serializing, not from the owner's original native state.
@@ -113,11 +119,12 @@ internal object PocketWebState {
         val livePrivatePhones = JSONArray()
         state.tasks.forEach { row ->
             val chosen = contractVisible(row)
-            val projected = task(row, originalProjectContract = chosen)
+            val resume = editorResumeVisible(row)
+            val projected = task(row, originalProjectContract = chosen, originalViteEditorResume = resume)
             tasks.put(projected)
             controller.retainedPrivatePhoneSurface(row)?.let { livePrivatePhones.put(it) }
             if (homeWork(row)) {
-                ownerWork.put(if (chosen) task(row) else projected)
+                ownerWork.put(if (chosen || resume) task(row) else projected)
             }
         }
         val data = JSONObject()

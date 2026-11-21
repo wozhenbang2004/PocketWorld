@@ -21,12 +21,13 @@ type MarkdownVisit = Omit<SavedMarkdownFile,'content'> & { caret: EditorPosition
 type FileFind = { fileHandle: string; query: string; result?: { text: string; at: number; line: number; wrapped: boolean } };
 // A UI bookmark, not a reusable native save handle or a copy of the file.
 export type CheckoutSavedPosition = { projectId: string; checkoutId: string; path: string; savedHash: string; caret?: EditorPosition };
-export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandle: string; id: string };
+export type CheckoutBuildEditorResume = Omit<CheckoutSavedPosition,'caret'> & { sourceDigest: string };
+export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandle: string; id: string; closeEditor:()=>Promise<boolean> };
 export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
 type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
-  resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry;
+  resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry; buildResume?: CheckoutBuildEditorResume;
   onClose: (saved?: CheckoutSavedPosition) => void;
   onPrepareBuild?: (saved: CheckoutSaveForBuild) => Promise<void>; prepareBuildAfterPath?: string; prepareBuildLabel?: string;
   registerBack: (handler: (() => boolean) | null) => void };
@@ -73,7 +74,7 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onPrepareBuild, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onPrepareBuild, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume }: Props) {
   const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
@@ -100,6 +101,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const entered = useRef<object | null>(null), edits = useRef(0), editSequence = useRef(0), blockedEdit = useRef(false);
   const latest = useRef({ run, onClose, onPrepareBuild }); latest.current = { run, onClose, onPrepareBuild };
   const originalWindow = useRef(windowKey());
+  const attemptedBuildResume=useRef(false);
+  const openedBuildResume=useRef<CheckoutBuildEditorResume|null>(null);
   const recentSave = savedEdit?.filesHandle===handle.current ? savedEdit : null;
   const savedLocation=listing?.priorSavedFile;
   const priorSave=!sourceMember&&!hostFile&&!resume&&!entry&&!file&&!recentSave&&!listingStale&&(finder==='path'||finder==='directory')&&!finding&&
@@ -118,7 +121,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     file.latest?.projectId===projectId && file.latest.checkoutId===checkoutId && file.latest.path===file.path &&
     file.latest.deleted===true && file.latest.sha256==='absent' && file.latest.expectedHash==='absent' &&
     file.latest.bytes===0 && file.latest.content==='';
-  const canCheckSavedBuild = !!onPrepareBuild && (!prepareBuildAfterPath || recentSave?.path===prepareBuildAfterPath);
+  const canCheckSavedBuild = !!onPrepareBuild && (!prepareBuildAfterPath || recentSave?.path===prepareBuildAfterPath) &&
+    (!buildResume||openedBuildResume.current===buildResume&&recentSave?.path===buildResume.path);
   const keyFor = (path: string) => `${projectId}|${checkoutId}|${path}`;
   const live = (sequence: number) => alive.current && generation.current === sequence && originalWindow.current === windowKey() && !document.hidden;
   const knownMarkdown = !sourceMember && !hostFile && !adoption && !choice && orphan===null && !blockedEdit.current ?
@@ -277,6 +281,11 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const openFiles = async () => {
     let checkedEntry = entry;
+    const resumeBuild=!attemptedBuildResume.current&&!entered.current&&!edits.current&&live(generation.current)&&
+      !sourceMember&&!hostFile&&!resume&&!entry&&
+      buildResume?.projectId===projectId&&buildResume.checkoutId===checkoutId?buildResume:undefined;
+    let resumeReadId:string|undefined;
+    if(resumeBuild)attemptedBuildResume.current=true;
     const pin = sourceMember && { taskId: sourceMember.taskId, operationId: sourceMember.operationId, artifactId: sourceMember.artifactId,
       artifactSha256: sourceMember.artifactSha256, path: sourceMember.path, fileSha256: sourceMember.fileSha256 };
     const result = await invoke(hostFile ? 'openHostChange' : pin ? 'openSource' : 'open', hostFile ? { hostFile } : pin ? { sourceMember: pin } : {}, value => {
@@ -302,8 +311,23 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         else {setDirectory(null);setFinder('path');}
       }
       const {directoryPage:_,...list}=value;
+      if(resumeBuild){
+        const saved=list.priorSavedFile;
+        if(list.readOnly===true&&list.sourceDigest===resumeBuild.sourceDigest&&
+          saved?.format==='pocketworld.owner-checkout-file-save-position.v1'&&saved.projectId===projectId&&saved.checkoutId===checkoutId&&
+          saved.path===resumeBuild.path&&saved.sha256===resumeBuild.savedHash&&
+          typeof saved.readId==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(saved.readId)){
+          resumeReadId=saved.readId;
+          delete list.priorSavedFile; // The exact list token is consumed by the native read, never reused by a fallback.
+        }else setError('未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
+      }
       handle.current = value.filesHandle; setListing(list);
     });
+    if(resumeBuild&&resumeReadId&&result&&handle.current===result.filesHandle&&live(generation.current)){
+      const opened=await readFile(resumeBuild.path,{position:resumeBuild,priorSavedFileId:resumeReadId});
+      if(opened&&live(generation.current)&&currentFile.current?.fileHandle===opened.fileHandle)openedBuildResume.current=resumeBuild;
+      return;
+    }
     const target = pin || hostFile || resume || checkedEntry;
     if (result && target && handle.current === result.filesHandle && live(generation.current))
       await readFile(target.path, { position: resume, entry: checkedEntry });
@@ -352,7 +376,17 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     // source comparison is back. Failure stays here instead of hiding the edit.
     const sequence = generation.current, token = {};
     entered.current = token; setBusy(true); setCheckingSavedSource(true); setError('');
-    void prepare({ position, filesHandle: recentSave.filesHandle, id: recentSave.id })
+    const closeEditor=async()=>{
+      if(!live(sequence)||entered.current!==token||handle.current!==recentSave.filesHandle||
+        currentFile.current!==file||currentText.current!==recentSave.after)
+        throw Error('原编辑器或本次保存已变化，没有打开构建审阅。');
+      // Relinquish only this visit's handle before sending; cleanup must not
+      // repeat a close whose acknowledgement was lost.
+      handle.current='';
+      const receipt=await bridge.command(command+'close',{viewHandle,filesHandle:recentSave.filesHandle}).catch(()=>null);
+      return live(sequence)&&entered.current===token&&receipt?.closed===true&&receipt.taskStopped===false;
+    };
+    void prepare({ position, filesHandle: recentSave.filesHandle, id: recentSave.id, closeEditor })
       .catch(failure => { if (live(sequence)) setError(failureText(failure)); })
       .finally(() => { if (entered.current === token) { entered.current = null; if (alive.current) { setBusy(false); setCheckingSavedSource(false); } } });
   };

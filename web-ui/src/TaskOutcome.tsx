@@ -136,7 +136,7 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, phoneWorkReportLocation, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, onResumeViteBuildEditor, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, phoneWorkReportLocation, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -157,6 +157,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   canLocateAttachment: boolean;
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
   onContinueBuildCopy?: () => void;
+  onResumeViteBuildEditor?: () => void;
   onFollowUp?: () => void;
   canReadPhoneTaskOriginal?: boolean;
   phoneWorkReportLocation?: PhoneWorkReportLocation;
@@ -240,12 +241,15 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const revision = JSON.stringify([settlementTitle, !!resultText, !!outcome.image, !!remotePhone, screenshot?.imageId, reply?.id, files.map(file => [file.id, file.sha256]), outcome.projectPackages.map(item => [item.operationId, item.archiveSha256])]);
   useCollectionMotion(root, owner, revision, {layout: false});
   // This dedicated native Tool Work has no assistant answer, generic file
-  // collection or project/Chat handoff. The original Process stays on its tab.
+  // collection or generic project/Chat handoff. The original Process stays on its tab.
   if(directWeb)return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="原本机构建的网页成果">
     {directWebResult&&packageRead.firstWebWindow?<DirectViteWebOutput key={JSON.stringify([owner,packageRead.firstWebWindow,directWebResult.sourceDigest])}
       target={directWebResult} ownerWindow={packageRead.firstWebWindow}/>:
       active&&status==='completed'&&packageWindowOwns(record.id)&&
         <p className="pw-reading-note" role="status">尚未核对到原网页成果。可在「过程」查看这次构建的原记录。</p>}
+    {directWebResult&&onResumeViteBuildEditor&&<div className="pw-form-actions">
+      <Button variant="secondary" onClick={onResumeViteBuildEditor}>继续编辑刚才的文件</Button>
+    </div>}
   </section>;
   const hasExecutionRecord = !!(resultText || outcome.image || remotePhone || phoneStatus || outcome.partial);
   const executionResult = (hasExecutionRecord || showEmptyResult && !settlementTitle) && <div className="pw-outcome-document">

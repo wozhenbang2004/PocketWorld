@@ -357,8 +357,8 @@ public final class FeatureHost implements AutoCloseable {
         JSONObject scope=confirmed.scope();String id=scope.getString("requestId");
         synchronized(local){
             if(directNodeWorkForSource(scope,confirmed.vite())!=null)return directNodeBuildForOwner(id,false);
-            local.requireDirectNodeBuildForOwner(confirmed);
-            if(!tasks.beginOwnerDirectNodeBuild(confirmed,local))return directNodeBuildForOwner(id,false);
+            var editorResume=local.requireDirectNodeBuildForOwner(confirmed);
+            if(!tasks.beginOwnerDirectNodeBuild(confirmed,local,editorResume))return directNodeBuildForOwner(id,false);
             var initial=tasks.ownerDirectNodeOriginalForOwner(id);
             RunControl original=new RunControl();
             try{
