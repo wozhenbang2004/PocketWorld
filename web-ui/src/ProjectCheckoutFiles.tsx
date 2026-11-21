@@ -297,6 +297,21 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     editing ? '正在保留编辑文字，未写入副本' : file?.dirty ?
     file.draftDurable===true && !file.draftError ? '手机草稿已保留，未写入副本' : '草稿仍在当前会话，尚未确认写入手机' : '没有未保存修改';
   const locked = busy || editing || !!adoption, nativeText = file?.text || '';
+  const canDraftBeforeSave = !sourceMember && !hostFile && !!recentSave && !!file && showingSavedFile &&
+    !locked && !choice && !file.draftError && fileHash(recentSave.beforeHash) && recentSave.before!==recentSave.after &&
+    file.dirty===false && file.conflict===false && file.saveUnknown===false &&
+    file.projectId===projectId && file.checkoutId===checkoutId && file.filesHandle===recentSave.filesHandle &&
+    file.baseHash===recentSave.savedHash && file.baseContent===recentSave.after && file.text===recentSave.after &&
+    file.latest?.deleted===false && file.latest.projectId===projectId && file.latest.checkoutId===checkoutId &&
+    file.latest.path===recentSave.path && file.latest.content===recentSave.after && !interfaceDrafts.has(keyFor(file.path));
+  const draftBeforeSave = () => {
+    const area = editorInput.current;
+    if (!canDraftBeforeSave || !recentSave || !file || !live(generation.current) || entered.current || edits.current ||
+        activeAdoption.current || blockedEdit.current || handle.current!==recentSave.filesHandle || currentFile.current!==file ||
+        file.editSequence!==editSequence.current || interfaceDrafts.has(keyFor(file.path)) || currentText.current!==recentSave.after ||
+        !area?.isConnected || area.value!==textareaText(recentSave.after)) return;
+    edit(recentSave.before); // The current A1 baseline is unchanged; only Save can write the A0 draft.
+  };
   const canFindText=['findText','findTextNext','readTextHit'].every(a=>bridge.getState().capabilities.commands.includes(command+a));
   const sourceHit=file?.sourceHit,anchorable=!!(sourceHit&&file&&file.path===sourceHit.path&&file.latest?.expectedHash===sourceHit.sha256&&
     !file.dirty&&!file.saveUnknown&&!file.conflict&&orphan===null&&typeof file.latest?.content==='string'&&text===file.latest.content);
@@ -405,6 +420,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
             <p className="pw-field-hint">本次文件窗口只保留这一份对照，不含之后的未保存输入，也不是正式版本历史。</p>
             <InlineDiff before={recentSave.before} after={recentSave.after} versionLabel="保存前 → 已写入副本"
               beforeLabel={recentSave.beforeHash==='absent'?'保存前（路径不存在）':'保存前'} afterLabel="本次写入" readOnly />
+            {canDraftBeforeSave && <div className="pw-form-actions">
+              <Button variant="secondary" size="small" onClick={draftBeforeSave}>将保存前文字放回草稿</Button>
+              <p className="pw-field-hint">只改草稿。另点「保存到这个副本」才会写入文件。</p>
+            </div>}
           </AccordionItem>}
         </Accordion>
         {choice ? <div role="region" aria-label="处理文件冲突"><p>{choice === 'keep_mine' ? '把当前副本作为新基线，保留我的草稿文字？下一次保存才会改写文件。' : '放弃这份草稿，采用刚读取的副本内容？不会写入文件。'}</p><div className="pw-form-actions"><Button variant="secondary" disabled={locked} onClick={() => setChoice(null)}>返回</Button><Button disabled={locked} onClick={() => void invoke('resolve', { fileHandle: file.fileHandle, revision: file.revision, choice }, value => { interfaceDrafts.delete(keyFor(file.path)); setChoice(null); apply(value); })}>确认这个选择</Button></div></div> : <div className="pw-form-actions">
@@ -431,7 +450,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         </section>}
         {file.importStatus && <p role="status">{file.importReceipt?.message || file.importMessage} {file.importError || ''} {file.projectListRefreshMessage || ''}</p>}
         {!adoption && file.importStatus === 'observed' && formalLink(file.formalFile, 'import_receipt')}
-        {file.message && <p role="status">{file.message} {file.saveError || ''}</p>}
+        {file.message && <p role="status">{file.saveStatus==='observed' && recentSave?.path===file.path && !showingSavedFile && '上次保存：'}{file.message} {file.saveError || ''}</p>}
         {file.draftError && <p role="alert">{file.draftError}</p>}
         {(file.draftError || blockedEdit.current) && <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => { if (blockedEdit.current) edit(currentText.current); else void invoke('cache', { fileHandle: file.fileHandle, retry: true }, value => apply(value, false)); }}>重试保留草稿</Button></div>}
         </>}

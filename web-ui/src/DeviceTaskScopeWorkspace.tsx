@@ -145,10 +145,22 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     if (value?.pageHandle !== page.current || value?.taskId !== taskId || !value.reviewHandle) throw new Error('原设备范围审阅不完整，请重新读取。');
     reviewHandle.current = value.reviewHandle; setReview(value); setAck(false);
   };
-  const unavailable = rows(view?.selected?.routes).filter(old => !rows(view?.options).some(option => option.optionId === old.optionId));
+  // An empty first choice only saves an unusable policy. Explicitly clearing a saved scope remains available.
+  const firstDirectedScope = !!view && !!originalTarget && !directedManual && (!!directed !== !!directedWorkspace) &&
+    !!deviceChoiceCode(originalTarget.deviceId) && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(originalTarget.instanceId) && /^[a-f0-9]{64}$/.test(originalTarget.certificateFingerprint) &&
+    !!page.current && view.pageHandle === page.current && view.taskId === taskId && view.humanInputOnly === false && view.executionAuthorized === false &&
+    view.runId === '' && view.executorEpoch === 0 && view.sourceScopeRevision === 0 && !Object.hasOwn(view, 'selected') &&
+    (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key =>
+      (directedWorkspace ? view.directWorkspace : view.directPhone)?.[key] === originalTarget[key]);
+  const options = rows(view?.options), chosenRange = options.some(option => drafts[option.optionId]?.selected === true);
+  const unavailable = rows(view?.selected?.routes).filter(old => !options.some(option => option.optionId === old.optionId));
   const prepare = () => {
     if (!view || unavailable.length && !removeUnavailable) return;
-    try { const routes = scopeSelection(view, drafts); void invoke('deviceTaskScope.review', { pageHandle: page.current, routes }, acceptReview); }
+    try {
+      const routes = scopeSelection(view, drafts);
+      if (firstDirectedScope && !routes.length) return;
+      void invoke('deviceTaskScope.review', { pageHandle: page.current, routes }, acceptReview);
+    }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
   const confirm = () => {
@@ -162,7 +174,8 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     });
   };
   const ownerNames=rows(view?.ownerDisplayNames);
-  const peerIds = [...new Set(rows(view?.options).map(option => option.targetDeviceId))];
+  const peerIds = [...new Set(options.map(option => option.targetDeviceId))];
+  const noFirstRange = firstDirectedScope && !peerIds.length;
   const groupName=(id:string) => {
     const labels=new Set(rows(view?.options).filter(option=>option.targetDeviceId===id).map(option=>routeName(option,ownerNames)));
     return labels.size===1 && !labels.has('') ? [...labels][0] : deviceName(id,peers);
@@ -227,9 +240,15 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
             })}
           </Accordion></section>)}
           {rows(view.unavailableOptions).length > 0 && <Accordion><AccordionItem id="unavailable" title={`有 ${rows(view.unavailableOptions).length} 项范围暂不可用`}><p>这些范围没有替换成其他设备，也不阻止你选择已核对的设备。</p>{rows(view.unavailableOptions).map((item,index) => <p key={index}>{deviceName(item.targetDeviceId, peers)}：{item.reason === 'grant_unavailable' ? '原授权到期、撤销或无法核对' : item.reason === 'capability_read_unavailable' ? '连接或能力读取未完成，请核对对端接收服务与当前网络' : '设备身份或能力时效不匹配，需要重新读取'}</p>)}</AccordionItem></Accordion>}
-          {!peerIds.length && <p>{view.manualPhoneTarget ? '未核对到这部原手机已授权的手控屏幕。不改用别台手机；可查看原连接与两端范围。' : view.directWorkspace ? '这台原电脑没有授予可用的只读工作区。请在电脑上核对原范围，不会改用其他设备。' : view.directPhone ? '未读取到这部原手机可用的直接范围。请检查对端连接及已有授权；不会改投其他设备或继续转派。' : view.humanInputOnly ? '没有可手控的手机范围。请先连接对端，并由对端主人授权主屏或独立屏、准确应用、全屏捕获与输入，再重新读取。不会改用电脑或模型代理。' : '未读取到可选择的设备范围。请在设备页连接对端，并由对端明确授权工具或目标范围，再回来重新读取。'}</p>}
+          {!peerIds.length && <p>{view.manualPhoneTarget ? '未核对到这部原手机已授权的手控屏幕。不改用别台手机；可查看原连接与两端范围。' : view.directWorkspace ? '这次没有核对到原电脑可用的只读工作区。可核对原连接与已有范围，不会改用其他设备。' : view.directPhone ? '未读取到这部原手机可用的直接范围。请检查对端连接及已有授权；不会改投其他设备或继续转派。' : view.humanInputOnly ? '没有可手控的手机范围。请先连接对端，并由对端主人授权主屏或独立屏、准确应用、全屏捕获与输入，再重新读取。不会改用电脑或模型代理。' : '未读取到可选择的设备范围。请在设备页连接对端，并由对端明确授权工具或目标范围，再回来重新读取。'}</p>}
           {view.hasMoreOptions && <p>还有未读取的授权记录。未显示的设备不会自动加入本任务。</p>}
-          <div className="pw-form-actions"><Button disabled={busy || unavailable.length > 0 && !removeUnavailable} onClick={prepare}>核对这次范围修改</Button><Button variant="ghost" disabled={busy} onClick={read}>重新核对设备范围</Button>{onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}</div>
+          {firstDirectedScope && !noFirstRange && !chosenRange && <p>先选择一个已核对的原设备范围，再审阅。</p>}
+          <div className="pw-form-actions">
+            {!noFirstRange && <Button disabled={busy || unavailable.length > 0 && !removeUnavailable || firstDirectedScope && !chosenRange} onClick={prepare}>{firstDirectedScope ? '核对所选范围' : '核对这次范围修改'}</Button>}
+            {noFirstRange && onOpenDevices && <Button disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
+            <Button variant={noFirstRange && !onOpenDevices ? 'secondary' : 'ghost'} disabled={busy} onClick={read}>重新核对设备范围</Button>
+            {!noFirstRange && onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
+          </div>
           {rows(view.pendingProjectImports).map(item => <div key={item.operationId || item.receiveOperationId}><p>原项目包等待独立导入确认</p><Button variant="secondary" disabled={busy} onClick={() => { void invoke('deviceTaskScope.reviewImport', { pageHandle: page.current, operationId: item.receiveOperationId || item.operationId }, acceptReview); }}>核对这份原项目包</Button></div>)}
         </>}
         {review && <>
