@@ -17,7 +17,8 @@ internal object PocketWebState {
         // The project run selection holds private file paths, range fingerprints and record revisions. It is native audit, not Web state.
         // Only the separately verified boolean is public; private reviewer-route fingerprints stay native.
         "teamreviewerroutecapture", "revisionrecipient", "projectmemoryread", "nativeprojectconventionreceipt", "nativeprojectconventiondraftseal",
-        "ownerdirectviteeditorresume", "ownerpythonoutputtextpublication", "nativeoriginalmemorydraft"
+        "ownerdirectviteeditorresume", "ownerpythonoutputtextpublication", "nativeoriginalmemorydraft",
+        "nativeoriginalreplydocument", "originalgenerateddocument"
     )
     private val contractFields = setOf("deliverycontract","deliverycontractdigest")
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
@@ -104,7 +105,8 @@ internal object PocketWebState {
     }
 
     fun snapshot(controller: PocketWorldController, contractVisible: (UiTask) -> Boolean = { false },
-        editorResumeVisible: (UiTask) -> Boolean = { false }): JSONObject {
+        editorResumeVisible: (UiTask) -> Boolean = { false },
+        originalReplyDocument: (UiMessage) -> UiChatAttachment? = { null }): JSONObject {
         val raw = controller.state
         // An old unscoped local feature receipt is not part of the selected memory workspace.
         // Strip it before serializing, not from the owner's original native state.
@@ -163,6 +165,7 @@ internal object PocketWebState {
                 if (row.attachmentFilesSourceRevision == controller.messageAttachmentSourceRevision &&
                     row.attachments.any { it.mimeType == "application/pdf" })
                     visible.put("localMessagePdfSourceCurrent", true)
+                originalReplyDocument(row)?.let { visible.put("originalGeneratedDocument",attachment(it)) }
                 out.put(visible)
             } })
             .put("loadingFirstConversationMessages", controller.loadingFirstConversationMessages())

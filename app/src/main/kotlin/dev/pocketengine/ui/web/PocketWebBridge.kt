@@ -14,12 +14,14 @@ import android.view.Choreographer
 import dev.pocketengine.EngineApplication.OwnerWorkControlRejected
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.core.RuntimeDiagnostics
+import dev.pocketengine.features.attachments.OriginalReplyDocument
 import dev.pocketengine.features.devices.DirectedPhoneTarget
 import dev.pocketengine.features.devices.DirectedWorkspaceTarget
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
 import dev.pocketengine.runtime.models.ModelBinding
 import dev.pocketengine.runtime.models.ReasoningOptions
 import dev.pocketengine.store.OwnerPhoneControlScope
+import dev.pocketengine.store.OwnerWorkTask
 import dev.pocketengine.store.TaskExecutionScope
 import dev.pocketengine.store.TaskStore
 import dev.pocketengine.features.teams.TeamCoordinator
@@ -31,6 +33,7 @@ import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.accountConnectionsFailure
 import dev.pocketengine.ui.backgroundConnectionState
 import dev.pocketengine.ui.UiChatAttachment
+import dev.pocketengine.ui.UiMessage
 import dev.pocketengine.ui.UiTask
 import dev.pocketengine.ui.UiTaskResult
 import dev.pocketengine.ui.isPhoneTask
@@ -677,7 +680,9 @@ internal class PocketWebBridge(
         var projection: JSONObject? = null
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
-            projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume)
+            projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume) {
+                liveReplyDocument(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly)?.file
+            }
             if(section==null&&taskViewId==null) controller.adoptedFormalComparisonForWeb()?.let {
                 projection?.getJSONObject("state")?.put("adoptedFormalComparison",it)
             }
@@ -938,8 +943,13 @@ internal class PocketWebBridge(
                 action=="projects.development.inspect" && args.has("readOriginalDraft")){
                 projectDevelopment.dispatch(action,args){r,e->complete(id,r,e,retainValue=false)};return
             }
+            if (action=="tasks.close" && args.has("dependencyComparison")) {
+                complete(id,closeForNodeDependencyComparison(args),null,retainValue=false); publishState(); return
+            }
             if (action in PocketWebProjectDevelopment.COMMANDS) {
-                projectDevelopment.dispatch(action, args) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.reviewDraftBuild", "projects.development.localBuild.review", "projects.development.localDependencies.confirm", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
+                val previous=if (action=="projects.development.localBuild.review" && args.has("dependencyComparisonHandle"))
+                    takeNodeDependencyComparison(args) else null
+                projectDevelopment.dispatch(action, args, previous) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.reviewDraftBuild", "projects.development.localBuild.review", "projects.development.localDependencies.confirm", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
             }
             if (action in PocketWebButlerPreparations.COMMANDS) {
                 butlerPreparations.dispatch(action, args, section == null && taskViewId == null) { result, error -> complete(id, result, error, "outcome_unknown", retainValue=action !in setOf("butler.preparation.project.savedRevisions","butler.preparation.project.followup") && !(action=="butler.preparation.project.review" && args.has("ownerRevision"))); publishState() }; return
@@ -1090,6 +1100,29 @@ internal class PocketWebBridge(
                         controller.composerViewEpoch==composerEpoch&&controller.composerDraft?.key==composerKey&&
                         visibleMessageAttachmentSelection(source,ordinaryPdf=true,inOwnPdf=true)==original
                     complete(id,attachmentPages.openMessagePdf(original.file,ticket,::current),null,retainValue=false)
+                    publishState();return
+                }
+                if (action == "attachmentWorkspace.open" && args.has("replyDocument")) {
+                    checkedPayload(args,setOf("replyDocument"))
+                    val source=checkedMessageAttachmentSource(args.getJSONObject("replyDocument"))
+                    check(!source.has("taskId")&&!source.has("window")){"请从当前原答复打开文档"}
+                    val message=requiredString(source,"messageId")
+                    val revision=requiredLong(source,"sourceRevision")
+                    fun selected(allowOwn:Boolean)=controller.state.messages.singleOrNull{it.id==message&&it.sourceRevision==revision}
+                        ?.let{liveReplyDocument(it,allowOwn)}
+                    val original=selected(false)?.takeIf{
+                        it.target.conversation()==source.getString("conversationId")&&it.file.id==source.getString("id")&&it.file.sha256==source.getString("sha256")
+                    }?:error("原答复文档已变化；请回原工作核对")
+                    val originalDocument=documentId?:error("原答复页面已关闭")
+                    val ticket=PocketWebWindowTicket(commandFence.ticket(),controller.webPhoneViewerWindowTicket())
+                    val reader=controller.conversationReaderRevision
+                    val sourceRevision=controller.messageAttachmentSourceRevision
+                    val composerKey=controller.composerDraft?.key?:error("原对话已关闭")
+                    val composerEpoch=controller.composerViewEpoch
+                    fun current()=!closed&&documentId==originalDocument&&ticket.accepts(commandFence.ticket(),controller.webPhoneViewerWindowTicket())&&
+                        controller.conversationReaderRevision==reader&&controller.messageAttachmentSourceRevision==sourceRevision&&
+                        controller.composerViewEpoch==composerEpoch&&controller.composerDraft?.key==composerKey&&selected(true)==original
+                    complete(id,attachmentPages.openReplyDocument(original.file,original.target,ticket,::current),null,retainValue=false)
                     publishState();return
                 }
                 if (action == "attachmentWorkspace.open" && args.has("messageAttachment")) {
@@ -3651,6 +3684,68 @@ internal class PocketWebBridge(
             }
         }
     }
+    private data class DependencyComparison(val work:PriorNodeDependencyWork,val handle:String,
+                                            val window:PocketWebWindowTicket,val until:Long)
+    private var dependencyComparison:DependencyComparison?=null
+
+    private fun closeForNodeDependencyComparison(args:JSONObject):JSONObject {
+        checkedPayload(args,setOf("dependencyComparison"))
+        val expected=args.getJSONObject("dependencyComparison")
+        checkedPayload(expected,setOf("taskId","runId","epoch","dependencyOperationId"))
+        val task=requiredString(expected,"taskId")
+        require(task.matches(Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")) &&
+            task==requiredString(expected,"runId") && task==requiredString(expected,"dependencyOperationId") &&
+            requiredInt(expected,"epoch")==1 && section==null && taskReturnSection==null && taskViewId==task &&
+            documentId!=null && !closed && controller.webPrivateOwnerVisible() && controller.state.filePath==null) {
+            "请从原项目打开这次依赖准备"
+        }
+        val raw=controller.state.tasks.singleOrNull { it.id==task }?.raw ?: error("原依赖准备已离开")
+        val scope=raw.getJSONObject("ownerDirectNodeDependencies")
+        val context=raw.getJSONObject("developmentContext")
+        val project=scope.getString("projectId"); val checkout=scope.getString("checkoutId")
+        val operations=raw.getJSONArray("operations")
+        val original=(0 until operations.length()).map(operations::getJSONObject).singleOrNull {
+            it.opt("tool")=="project_execute" && it.opt("operationId")==task && it.opt("runId")==task
+        } ?: error("未核对到这次原依赖准备的操作")
+        val receipt=original.getJSONObject("receipt")
+        val exit=receipt.getJSONObject("executionReceipt")
+        check(raw.opt("id")==task && raw.opt("runId")==task && raw.opt("coordinatorEpoch")==1 &&
+            raw.opt("command")=="project.nodeDependencies.owner" && raw.opt("nativeExecutionMode")=="OWNER_DIRECT_NODE_DEPENDENCIES" &&
+            raw.opt("actorId")=="owner" && raw.opt("spaceId")=="private" && raw.opt("kind")=="tool" &&
+            raw.opt("status")=="completed" && raw.opt("cancelRequested")==false && raw.opt("hasUnresolvedOperations")==false &&
+            raw.opt("taskProjection")=="detail_window" && raw.opt("taskCoreReadLimited")==false &&
+            raw.opt("auditBodyIncluded")==true && raw.opt("contextAvailable")!=false && raw.opt("contextWithdrawn")!=true &&
+            raw.opt("sourceCurrentReadRequired")!=true &&
+            scope.opt("format")==dev.pocketengine.features.local.project.OwnerDirectNodeDependencies.FORMAT &&
+            scope.opt("requestId")==task && scope.opt("runId")==task &&
+            scope.opt("epoch")==1 && scope.opt("dependencyOperationId")==task && project==controller.state.projectId &&
+            project==context.opt("projectId") && checkout==context.opt("checkoutId") && checkout.isNotBlank() &&
+            original.opt("state")=="receipt" && receipt.opt("code")=="project_process_receipt" &&
+            receipt.opt("status")=="completed" && receipt.opt("executionStatus")=="completed" && receipt.opt("accepted")==true &&
+            exit.opt("exitCode")==0 && exit.opt("receiptReceived")==true &&
+            exit.opt("resourcesReleased")==true && exit.opt("processGroupAbsent")==true) {
+            "未核对到这次原副本的成功准备，没有读取其他记录"
+        }
+        restoreTaskWorkspace()
+        val handoff=DependencyComparison(PriorNodeDependencyWork(task,project,checkout),
+            java.util.UUID.randomUUID().toString(),captureWindow(),SystemClock.elapsedRealtime()+120_000L)
+        dependencyComparison=handoff
+        return JSONObject().put("closed",true).put("dependencyComparisonHandle",handoff.handle)
+            .put("taskId",task).put("projectId",project).put("checkoutId",checkout)
+    }
+
+    private fun takeNodeDependencyComparison(args:JSONObject):PriorNodeDependencyWork {
+        val held=dependencyComparison
+        require(held!=null && held.handle==requiredString(args,"dependencyComparisonHandle") &&
+            SystemClock.elapsedRealtime()<held.until && acceptsWindow(held.window) && section==null && taskViewId==null &&
+            documentId!=null && !closed && controller.webPrivateOwnerVisible() && controller.state.filePath==null &&
+            held.work.project==controller.state.projectId && held.work.checkout==requiredString(args,"checkoutId")) {
+            "原依赖准备或副本已变化，未换用其他记录"
+        }
+        dependencyComparison=null
+        return held.work
+    }
+
     private fun restoreTaskWorkspace() {
         val original = taskReturnSection; taskReturnSection = null
         leaveTask(); reviews.clear()
@@ -3730,6 +3825,44 @@ internal class PocketWebBridge(
         }
         return VisibleMessageAttachment(file,original)
     }
+    private data class LiveReplyDocument(val file:UiChatAttachment,val target:OriginalReplyDocument.Target)
+    /** Only the already displayed ordinary private native reply and sole original submission.
+     * This projection does not fetch Work/Audit history or verify files in the background. */
+    private fun liveReplyDocument(row:UiMessage,inOwnReader:Boolean=false):LiveReplyDocument? {
+        val reply=row.replyContext?:return null
+        val file=reply.originalGeneratedDocument?:return null
+        val nativeReply=reply.replyId?:return null
+        val inputId=reply.replyToMessageIds.singleOrNull()?:return null
+        val source=PhoneDraftMessagePin.from(row.ownerOriginalLocator)?:return null
+        val state=controller.state
+        val composer=controller.composerDraft
+        val workspace=controller.attachmentOutcomes.state
+        if(section!=null||taskViewId!=null||!controller.webPrivateOwnerVisible()||controller.conversationReader!=null||
+            controller.queuedInputsPage!=null||state.filePath!=null||state.chatAttachmentPickerOpen||
+            phoneComposer.intent||controller.hasChannelPhoneOrigin||workspace.open&&!(inOwnReader&&workspace.messageReplyDocumentOnly)||
+            composer?.key!="conversation:${source.conversation}"||composer?.conversationId!=source.conversation||
+            row.role!="assistant"||row.phoneResult!=null||row.taskResult!=null||row.originalHostFinal!=null||
+            state.conversationId!=source.conversation||row.id!=source.message||row.sourceRevision!=1L||source.version!=row.sourceRevision||
+            row.taskId!=reply.taskId||reply.deliveryId!=null||file.size<=0||
+            file.mimeType !in setOf("application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document"))return null
+        val input=state.messages.singleOrNull{it.id==inputId&&it.role=="user"}?:return null
+        val accepted=input.submission?:return null
+        if(accepted.opt("status")!="consumed"||accepted.opt("queueState")!="materialized"||
+            accepted.opt("replyMessageId")!=source.message||accepted.opt("taskId")!=reply.taskId||
+            accepted.opt("runId")!=reply.runId||accepted.opt("consumedRunId")!=reply.runId||
+            OriginalReplyDocument.integer(accepted.opt("epoch"))!=reply.epoch.toLong()||
+            OriginalReplyDocument.integer(accepted.opt("consumedEpoch"))!=reply.epoch.toLong()||
+            OriginalReplyDocument.integer(accepted.opt("ownerMessageRevision"))!=input.sourceRevision)return null
+        val task=state.tasks.singleOrNull{it.id==reply.taskId}?:return null
+        val audit=task.raw
+        if(task.status !in setOf("completed","needs_confirmation")||!OwnerWorkTask.isButlerSource(audit)||
+            !inOwnReader&&(audit.opt("taskProjection")!="detail_window"||audit.opt("taskCoreReadLimited")!=false)||
+            audit.opt("conversationId")!=source.conversation||audit.opt("runId")!=reply.runId||
+            OriginalReplyDocument.integer(audit.opt("coordinatorEpoch"))!=reply.epoch.toLong()||
+            audit.optBoolean("cancelRequested")||audit.opt("hasUnresolvedOperations")!=false)return null
+        return LiveReplyDocument(file,OriginalReplyDocument.Target(source.conversation,source.generation,source.message,source.version,
+            source.fingerprint,nativeReply,inputId,reply.taskId,reply.runId,reply.epoch,file.id,file.sha256))
+    }
     private fun visibleChatTaskResult(args: JSONObject): UiTaskResult? {
         val history = args.has("resultReaderWindow")
         require(history == args.has("resultSourceRevision")) { "原历史窗口和原消息版本须一起核对" }
@@ -3795,7 +3928,7 @@ internal class PocketWebBridge(
     }
 
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
-    private fun leaveTask() { controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
+    private fun leaveTask() { controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();dependencyComparison=null;projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() {
         openedRetainedDraftCopy = null
         if(section=="remote")connectionPages.hostGoalOrigins.closeSaved(); localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null

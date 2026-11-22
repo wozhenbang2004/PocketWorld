@@ -26,14 +26,16 @@ public final class OwnerNodeDependencyCheckout {
     private static final int MAX_RECORD=1024*1024;
     private static final LinkOption NOFOLLOW=LinkOption.NOFOLLOW_LINKS;
     private final LocalModule issuer;
+    private final dev.pocketengine.store.TaskStore.OwnerDirectNodeLockComparison previous;
     private final String project,original,source,lock,reviewedLock,checkout,name;
     private final int files,bytes;
     private final long expires=System.nanoTime()+120_000_000_000L;
     private final long expiresAt=System.currentTimeMillis()+120_000L;
     private boolean taken;
 
-    OwnerNodeDependencyCheckout(LocalModule issuer,JSONObject exactSource,JSONObject exactLock)throws Exception {
-        this.issuer=issuer;
+    OwnerNodeDependencyCheckout(LocalModule issuer,JSONObject exactSource,JSONObject exactLock,
+                                dev.pocketengine.store.TaskStore.OwnerDirectNodeLockComparison previous)throws Exception {
+        this.issuer=issuer;this.previous=previous;
         project=ProjectBuildPlan.identity(exactSource.getString("projectId"));
         original=ProjectBuildPlan.identity(exactSource.getString("checkoutId"));
         source=exactSource.getString("sourceDigest");lock=exactLock.getString("lockSha256");reviewedLock=exactLock.toString();
@@ -79,6 +81,7 @@ public final class OwnerNodeDependencyCheckout {
     String project(){return project;}
     String original(){return original;}
     String source(){return source;}
+    dev.pocketengine.store.TaskStore.OwnerDirectNodeLockComparison previous(){return previous;}
     public long expiresAt(){return expiresAt;}
     JSONObject lock()throws Exception{return new JSONObject(reviewedLock);}
     synchronized void take(LocalModule local){
@@ -91,8 +94,9 @@ public final class OwnerNodeDependencyCheckout {
                 .put("name",name).put("fileCount",files).put("bytes",bytes);
     }
     private JSONObject status(String state)throws Exception {
-        return pin().put("state",state).put("executionAuthorized",false).put("switchedCheckout",false)
+        JSONObject result=pin().put("state",state).put("executionAuthorized",false).put("switchedCheckout",false)
                 .put("originalCheckoutUnchanged",true).put("replayAllowed",false);
+        return previous==null?result:result.put("reason","current_lock_unverified").put("previousLockSha256",previous.previousLockSha256());
     }
 
     /** Read only, even after a lost confirmation. A surviving partial directory blocks this exact creation. */

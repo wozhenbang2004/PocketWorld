@@ -18,6 +18,7 @@ import java.util.UUID
 
 /** Created only from a successful explicit native open of this retained copy. */
 internal class RetainedDraftOriginalRead(val current: () -> Boolean, val read: (() -> Boolean) -> JSONObject)
+internal data class PriorNodeDependencyWork(val task: String, val project: String, val checkout: String)
 
 internal fun retainedOriginalComparison(fixed: JSONObject, project: String, checkout: String): JSONObject =
     JSONObject().put("format", "pocketworld.retained-copy-original-draft.v1").put("projectId", project)
@@ -301,8 +302,8 @@ internal class PocketWebProjectDevelopment(
         }
         return observed
     }
-    fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
-        require(action in COMMANDS)
+    fun dispatch(action: String, args: JSONObject, comparison: PriorNodeDependencyWork? = null, done: (JSONObject?, String?) -> Unit) {
+        require(action in COMMANDS && (comparison == null || action == LOCAL_BUILD_REVIEW))
         if (action == "projects.development.close") {
             fields(args, "viewHandle")
             if (page?.handle == args.optString("viewHandle")) clear()
@@ -467,7 +468,10 @@ internal class PocketWebProjectDevelopment(
                 val direct=action==LOCAL_BUILD_REVIEW
                 clearDirectReview()
                 val previewDigest=if(args.has("previewOnly")||direct){
-                    if(direct)fields(args,"viewHandle","checkoutId","retainedDraft","expectedSourceDigest")
+                    if(direct) {
+                        fields(args,"viewHandle","checkoutId","retainedDraft","expectedSourceDigest","dependencyComparisonHandle")
+                        require((comparison!=null)==args.has("dependencyComparisonHandle")) { "原依赖准备核对已关闭或使用" }
+                    }
                     else {
                         fields(args,"viewHandle","checkoutId","retainedDraft","previewOnly","expectedSourceDigest")
                         require(args.opt("previewOnly")==true) { "只读构建方案须明确选择" }
@@ -479,7 +483,8 @@ internal class PocketWebProjectDevelopment(
                     null
                 }
                 val checkout=text(args,"checkoutId")
-                if(direct)check(files.closedForOriginalDraftRead() && shownCheckout(original,checkout,allowSole=true) && controller.state.filePath==null) {
+                if(direct)check(files.closedForOriginalDraftRead() && shownCheckout(original,checkout,allowSole=true) && controller.state.filePath==null &&
+                    (comparison==null || comparison.project==original.project && comparison.checkout==checkout)) {
                     "请返回原项目，选择已保存的同一私人副本"
                 }
                 val shown=args.getJSONObject("retainedDraft")
@@ -498,7 +503,8 @@ internal class PocketWebProjectDevelopment(
                 if(previewDigest==null)review=null
                 working(original,done){
                     val host=controller.projectDevelopmentForWeb()
-                    val directPlan=if(direct)host.reviewDirectNodeBuildForOwner(original.project,checkout) else null
+                    val directPlan=if(!direct) null else if(comparison==null) host.reviewDirectNodeBuildForOwner(original.project,checkout)
+                        else host.reviewDirectNodeBuildForOwner(original.project,checkout,comparison.task)
                     val preparation=directPlan?.preview()?:host.reviewNodeBuildForOwner(original.project,checkout)
                     val pin=preparation.getJSONObject("pin")
                     val actual=source(original,checkout);val selectedModel=if(previewDigest==null)model() else null
@@ -559,8 +565,12 @@ internal class PocketWebProjectDevelopment(
                                     }
                                     localReview.dependencyCopy()?.let { candidate ->
                                         val view=candidate.view()
-                                        check(out.opt("directBuildKind")=="vite" && !out.has("directDependencyWork") &&
-                                            !out.has("directViteBuildWork") && !out.has("directDependencies") && localReview.viteOffer()==null &&
+                                        val lockComparison=candidate.historicalLock() && view.opt("reason")=="current_lock_unverified"
+                                        check(out.opt("directBuildKind")=="vite" && !out.has("directDependencyWork") && !out.has("directDependencies") &&
+                                            (if (lockComparison) comparison!=null && out.opt("dependencyState")=="current_packages_checked" &&
+                                                (localReview.viteOffer()!=null || out.optJSONObject("directViteBuildWork")?.opt("status")=="completed")
+                                             else !candidate.historicalLock() && !view.has("reason") && !out.has("directViteBuildWork") &&
+                                                localReview.viteOffer()==null) &&
                                             view.opt("projectId")==original.project && view.opt("checkoutId")==checkout &&
                                             view.opt("sourceDigest")==sourceDigest) { "新依赖副本不属于当前保存的源码" }
                                         candidate.review()?.let { offered ->

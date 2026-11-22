@@ -1363,19 +1363,24 @@ public final class LocalModule implements EngineModule {
         OwnerDraftNodeDependencies.workspace(active);
         return Files.notExists(active.resolve("node_modules",false).toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
     }
-    /** Only the original native review of a supported Vite source with positively mismatching existing packages. */
-    public record DependencyCheckoutOffer(JSONObject view,OwnerNodeDependencyCheckout review){}
+    /** The exact native source review. History can suggest a separate copy, never deny a build. */
+    public record DependencyCheckoutOffer(JSONObject view,OwnerNodeDependencyCheckout review,boolean historicalLock){}
     public synchronized DependencyCheckoutOffer reviewDependencyCheckoutForOwner(JSONObject source,JSONObject lock)throws Exception{
+        return reviewDependencyCheckoutForOwner(source,lock,null);
+    }
+    public synchronized DependencyCheckoutOffer reviewDependencyCheckoutForOwner(JSONObject source,JSONObject lock,
+            TaskStore.OwnerDirectNodeLockComparison previous)throws Exception{
         String checkout=source.getString("checkoutId"),project=source.getString("projectId");
-        if(!dependencyCheckoutBlocked(project,checkout,lock))return null;
+        if(!dependencyCheckoutEligible(project,checkout,source.getString("sourceDigest"),lock,previous,false))return null;
         JSONArray files=source.getJSONArray("files");
         for(int i=0;i<files.length();i++)if(ProjectPackageArchive.excluded(
                 files.getJSONObject(i).getString("path"),false,false)!=null)return null;
-        OwnerNodeDependencyCheckout review=new OwnerNodeDependencyCheckout(this,source,lock);
+        OwnerNodeDependencyCheckout review=new OwnerNodeDependencyCheckout(this,source,lock,previous);
         JSONObject observed=review.observe(root);
-        return new DependencyCheckoutOffer(observed,"review".equals(observed.opt("state"))?review:null);
+        return new DependencyCheckoutOffer(observed,"review".equals(observed.opt("state"))?review:null,previous!=null);
     }
-    private boolean dependencyCheckoutBlocked(String project,String id,JSONObject lock)throws Exception{
+    private boolean dependencyCheckoutEligible(String project,String id,String source,JSONObject lock,
+            TaskStore.OwnerDirectNodeLockComparison previous,boolean recheckHistory)throws Exception{
         validateDirectNodeCheckout(project,id);
         JSONObject original=checkout(id),origin=original.optJSONObject("sourceImport");
         if(original.has("sourceImport")&&(origin==null||!"new_project".equals(origin.opt("mode"))||!Boolean.FALSE.equals(origin.opt("executionAuthorityRestored"))||
@@ -1386,7 +1391,14 @@ public final class LocalModule implements EngineModule {
         var path=workspace.resolve("node_modules",false).toPath();
         try{
             var existing=Files.readAttributes(path,java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
-            return existing.isDirectory()&&existing.fileKey()!=null&&!OwnerDraftNodeDependencies.ready(workspace,lock);
+            if(!existing.isDirectory()||existing.fileKey()==null)return false;
+            boolean keyPackages=OwnerDraftNodeDependencies.ready(workspace,lock);
+            if(previous==null)return !keyPackages;
+            if(!keyPackages)return false;
+            JSONObject runtime=projectRuntimeForHost(ManagedProjectRuntime.RUNTIME_ID);
+            String identity=runtime.getString("identity");
+            return Boolean.TRUE.equals(runtime.opt("canExecute"))&&(recheckHistory?
+                    previous.current(project,id,source,identity,lock):previous.matches(project,id,source,identity,lock));
         }catch(java.nio.file.NoSuchFileException missing){return false;}
     }
     /** Independent private source publication only; A, old dependencies and all task/command paths stay untouched. */
@@ -1400,14 +1412,15 @@ public final class LocalModule implements EngineModule {
         String project=review.project(),checkout=review.original(),source=review.source();
         requireAvailableDraftProjectForOwner(project);
         var lock=review.lock();
-        if(!dependencyCheckoutBlocked(project,checkout,lock))throw new SecurityException("原副本的依赖状态已变化，请重新核对这版源码");
+        if(!dependencyCheckoutEligible(project,checkout,source,lock,review.previous(),true))
+            throw new SecurityException("原副本的依赖状态已变化，请重新核对这版源码");
         JSONObject previous=review.observe(root);
         if(!"review".equals(previous.opt("state")))return previous;
         var frozen=capturePackage(new JSONObject().put("checkoutId",checkout).put("expectedSourceDigest",source)
                 .put("mode","source_project").put("includeGeneratedRoots",false),false);
         return review.publish(root,frozen,current,()->{
             if(!source.equals(ProjectSources.describe(export(checkout)).opt("sourceDigest"))||
-                    !dependencyCheckoutBlocked(project,checkout,lock))
+                    !dependencyCheckoutEligible(project,checkout,source,lock,review.previous(),true))
                 throw new SecurityException("原副本的源码或依赖状态已变化，不登记新副本");
         });
     }

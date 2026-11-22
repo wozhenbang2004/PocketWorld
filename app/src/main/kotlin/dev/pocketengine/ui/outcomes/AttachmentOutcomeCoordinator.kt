@@ -225,8 +225,11 @@ internal data class AttachmentOutcomeState(
     val wordExcerpt:AttachmentWordExcerpt?=null,val wordSaveAttempted:Boolean=false,
     val wordSourceVisit:AttachmentWordSourceVisit?=null, // One explicit origin lookup; never restored from Bundle.
     val focusedStandaloneDraft:Boolean=false, // In-session exact draft editor, not an attachment catalogue.
-    val messagePdfOnly:Boolean=false // Exact live private message, never a Library visit.
-)
+    val messagePdfOnly:Boolean=false, // Exact live private user attachment, never a Library visit.
+    val messageReplyDocumentOnly:Boolean=false
+){
+    val liveMessageOriginalOnly get()=messagePdfOnly||messageReplyDocumentOnly
+}
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
 internal class AttachmentOutcomeCoordinator(
@@ -362,19 +365,30 @@ internal class AttachmentOutcomeCoordinator(
             JSONObject().put("kind","only_this_device_file").put("taskId",selected.task) to row
         }
     }
-    /** A live message proves one private native Book reference, not an attachment inventory. */
     fun openMessagePdf(file:dev.pocketengine.ui.UiChatAttachment,current:()->Boolean){
+        check(file.mimeType=="application/pdf")
+        openMessageOriginal(file,false,current){control->app.attachmentOutcomes.originalFile(null,file.id,file.sha256,control)}
+    }
+    fun openReplyDocument(file:dev.pocketengine.ui.UiChatAttachment,
+        target:dev.pocketengine.features.attachments.OriginalReplyDocument.Target,current:()->Boolean){
+        openMessageOriginal(file,true,current){control->app.attachmentOutcomes.originalReplyDocument(target,control)}
+    }
+    /** A live message proves one private native Book reference, not an attachment inventory. */
+    private fun openMessageOriginal(file:dev.pocketengine.ui.UiChatAttachment,generated:Boolean,current:()->Boolean,
+        read:(RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource){
         check(!state.open&&!exportPending&&current())
-        check(file.mimeType=="application/pdf"&&file.size in 1L..AttachmentBook.MAX_FILE_BYTES)
+        check(file.size in 1L..AttachmentBook.MAX_FILE_BYTES)
         cancel();restoreFile=null;restoredDocumentDraft=null
-        state=AttachmentOutcomeState(open=true,messagePdfOnly=true,originalReturn=AttachmentOriginalReturn.ENTRY)
+        state=AttachmentOutcomeState(open=true,messagePdfOnly=!generated,messageReplyDocumentOnly=generated,originalReturn=AttachmentOriginalReturn.ENTRY)
         var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
-        work(completionFailure="未能核对这份原消息 PDF。请返回原消息，不会打开其他文件或应用。",onSuccess={
+        val unavailable=if(generated)"未能核对这条原答复的文档。原工作仍可查看，没有打开其他文件。" else
+            "未能核对这份原消息 PDF。请返回原消息，不会打开其他文件或应用。"
+        work(completionFailure=unavailable,onSuccess={
             if(current())state=state.copy(originalFile=checkNotNull(original))else close()
         }){control,_->
             control.setAuthorityCheck{check(current()){"原消息附件窗口已变化"}}
             control.check()
-            val source=app.attachmentOutcomes.originalFile(null,file.id,file.sha256,control)
+            val source=read(control)
             val meta=source.metadata()
             check(meta.opt("id")==file.id&&meta.opt("principalId")=="owner"&&meta.opt("spaceId")=="private"&&
                 !meta.optBoolean("outputSourceRetired")&&source.sha256==file.sha256&&source.mimeType==file.mimeType&&
@@ -399,10 +413,10 @@ internal class AttachmentOutcomeCoordinator(
     fun close(){if(export!=null)exportAbandoned=true;cancel();restoreFile=null;restoredDocumentDraft=null;releaseWindow();state=AttachmentOutcomeState()}
     fun detach(){closed=true;close()}
     fun cancel(){val pendingFile=state.open&&state.busy&&restoreFile!=null;generation++;wait?.cancel();wait=null;observation?.cancel();observation=null;state=state.copy(busy=false,observing=false,error=if(pendingFile)"已停止读取这份原文件；目标版本仍保留，可以重新读取。"else state.error)}
-    fun foreground(visible:Boolean){resumed=visible;if(!visible){if(state.deviceOriginalOnly||state.focusedStandaloneDraft||state.messagePdfOnly)close()else cancel();return};if(exportResult!=null)finishExport()else if(state.open&&state.snapshot==null&&!state.busy)refresh()}
+    fun foreground(visible:Boolean){resumed=visible;if(!visible){if(state.deviceOriginalOnly||state.focusedStandaloneDraft||state.liveMessageOriginalOnly)close()else cancel();return};if(exportResult!=null)finishExport()else if(state.open&&state.snapshot==null&&!state.busy)refresh()}
     @JvmOverloads
     fun refresh(afterRefresh:((Boolean)->Unit)?=null){
-        if(state.deviceOriginalOnly||state.focusedStandaloneDraft||state.messagePdfOnly){afterRefresh?.invoke(false);return} // no general inventory in a focused view
+        if(state.deviceOriginalOnly||state.focusedStandaloneDraft||state.liveMessageOriginalOnly){afterRefresh?.invoke(false);return} // no general inventory in a focused view
         if(state.team!=null){readTeamFile();afterRefresh?.invoke(false);return}
         val task=state.taskId;val group=state.group;val pin=restoreFile?:state.file;val savedDraft=restoredDocumentDraft
         val showOriginal=restoreFile?.optBoolean("showOriginal")==true
@@ -773,7 +787,7 @@ internal class AttachmentOutcomeCoordinator(
     }
 
     fun privateLibrary()=state.open&&state.taskId==null&&state.group==null&&state.team==null&&!state.deviceOriginalOnly&&
-        state.resultRun==null&&!state.choosingSource&&!state.messagePdfOnly
+        state.resultRun==null&&!state.choosingSource&&!state.liveMessageOriginalOnly
     private fun currentLibraryImport(original:OwnerAttachmentImport.Target?):AttachmentLibraryImport?=
         state.libraryImport?.takeIf{privateLibrary()&&original!=null&&original.taskId==null&&original.projectId==null&&it.requestId==original.requestId}
     fun importSource(trackLibrary:Boolean){
@@ -1379,7 +1393,7 @@ internal class AttachmentOutcomeCoordinator(
         if(privateLibrary())state.libraryImport?.let{bundle.putString("attachmentLibraryImport",it.toJson().toString())}
         bundle.remove("attachmentOutcomeVerifiedCopies")
         if(verifiedCopies.isNotEmpty())bundle.putStringArrayList("attachmentOutcomeVerifiedCopies",ArrayList(verifiedCopies.values.map{it.toJson().toString()}))
-        pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null||state.focusedStandaloneDraft||state.messagePdfOnly)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator(savedNavigation=true).toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
+        pendingProcessingAction?.let{bundle.putString("attachmentPendingProcessingTask",it)};pendingDocumentAction?.let{bundle.putString("attachmentPendingDocumentTask",it)};if(state.deviceOriginalOnly||state.resultRun?.report!=null||state.focusedStandaloneDraft||state.liveMessageOriginalOnly)bundle.remove("attachmentOutcomeLocator")else if(state.open)bundle.putString("attachmentOutcomeLocator",locator(savedNavigation=true).toString());bundle.remove("attachmentOutcomeExport");bundle.remove("attachmentOutcomeExportResult");bundle.remove("attachmentOutcomeExportAbandoned");export?.let{bundle.putString("attachmentOutcomeExport",it.toString());bundle.putBoolean("attachmentOutcomeExportAbandoned",exportAbandoned);};bundle.remove("attachmentDocumentDraft");(state.documentDraft?:restoredDocumentDraft)?.let{draft->runCatching{DocumentDraft(draft);draft.toString().takeIf{it.toByteArray(Charsets.UTF_8).size<=StructuredOfficeDraft.MAX_SOURCE_BYTES}?.let{bundle.putString("attachmentDocumentDraft",it)}}}}
     fun restore(bundle:Bundle?){
         restoreVerifiedCopies(bundle)
         bundle?.getString("attachmentPendingProcessingTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingProcessingAction=it;state=state.copy(pendingProcessingTask=it)};bundle?.getString("attachmentPendingDocumentTask")?.takeIf{it.matches(Regex("[a-f0-9-]{36}"))}?.let{pendingDocumentAction=it;state=state.copy(pendingDocumentTask=it)};try{bundle?.getString("attachmentOutcomeExport")?.let{val pin=JSONObject(it);val requestId=pin.optString("exportRequestId")

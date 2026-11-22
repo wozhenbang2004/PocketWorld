@@ -158,15 +158,19 @@ public final class ProjectOwnerWorkflows {
     }
     /** Pin one actual private source tree; a normal checkout does not acquire draft provenance. */
     public JSONObject reviewNodeBuildForOwner(String project,String checkout)throws Exception {
-        return reviewNodeBuild(project,checkout,false).preview();
+        return reviewNodeBuild(project,checkout,false,null).preview();
     }
     public record DirectNodeBuildReview(JSONObject preview,OwnerDirectNodeBuild.Review offer,
             OwnerDirectNodeDependencies.Review dependencyOffer,JSONObject dependencyWork,
             OwnerDirectNodeBuild.Review viteOffer,JSONObject viteWork,LocalModule.DependencyCheckoutOffer dependencyCopy){}
     public DirectNodeBuildReview reviewDirectNodeBuildForOwner(String project,String checkout)throws Exception {
-        return reviewNodeBuild(project,checkout,true);
+        return reviewNodeBuild(project,checkout,true,null);
     }
-    private DirectNodeBuildReview reviewNodeBuild(String project,String checkout,boolean offerDirect)throws Exception {
+    /** The old ID is captured by the original visible owner Work before its native window closes. */
+    public DirectNodeBuildReview reviewDirectNodeBuildForOwner(String project,String checkout,String originalDependencies)throws Exception {
+        return reviewNodeBuild(project,checkout,true,originalDependencies);
+    }
+    private DirectNodeBuildReview reviewNodeBuild(String project,String checkout,boolean offerDirect,String originalDependencies)throws Exception {
         requireOrdinaryFileOwner(project,checkout);JSONObject mark=local.projectCheckoutForHost(checkout).optJSONObject(OwnerDraftWorkCopy.FIELD);
         OwnerDraftWorkCopy.Seed seed=null;JSONObject copy=null;
         if(mark!=null){
@@ -182,7 +186,7 @@ public final class ProjectOwnerWorkflows {
             !ProjectSources.canonical(mark).equals(ProjectSources.canonical(actual.optJSONObject(OwnerDraftWorkCopy.FIELD))))
             throw new SecurityException("原工作副本已变化，请重新读取");
         if(seed==null)OwnerDraftFirstBuild.requireExistingConfiguration(snapshot);
-        String digest=ProjectSources.describe(snapshot).getString("sourceDigest");
+        JSONObject source=ProjectSources.describe(snapshot);String digest=source.getString("sourceDigest");
         JSONObject plan=ProjectBuildPlan.create(local,new JSONObject().put("checkoutId",checkout).put("runtimeId","managed_process_v1")
             .put("intent","build").put("ecosystem","node").put("expectedSourceDigest",digest));
         JSONObject pin=seed==null?OwnerDraftFirstBuild.existingPin(project,checkout,plan):OwnerDraftFirstBuild.pin(seed,copy,plan);
@@ -215,7 +219,16 @@ public final class ProjectOwnerWorkflows {
         if(supported&&viteWork==null&&dependencyWork==null&&"needs_lock_review".equals(result.opt("dependencyState"))){
             if(local.directNodeDependencyRootAbsentForOwner(project,checkout))
                 dependencyOffer=OwnerDirectNodeDependencies.offer(local,ProjectBuildPlan.lockedNodeDependencies(snapshot,plan.getString("runtimeIdentity"),deps));
-            else if(directVite)dependencyCopy=local.reviewDependencyCheckoutForOwner(ProjectSources.describe(snapshot),deps);
+            else if(directVite)dependencyCopy=local.reviewDependencyCheckoutForOwner(source,deps);
+        }else if(originalDependencies!=null&&ready&&directVite&&dependencyWork==null){
+            try{
+                String identity=plan.getString("runtimeIdentity");
+                if(viteOffer!=null||viteWork!=null&&"completed".equals(viteWork.opt("status"))&&
+                        tasks.completedDirectViteForLockComparison(project,checkout,digest,identity)){
+                    var previous=tasks.ownerDirectNodeLockComparison(originalDependencies,project,checkout,digest,identity,deps);
+                    if(previous!=null)dependencyCopy=local.reviewDependencyCheckoutForOwner(source,deps,previous);
+                }
+            }catch(Exception unavailable){/* Optional historical evidence cannot change A's own build or result. */}
         }
         return new DirectNodeBuildReview(result,offer,dependencyOffer,dependencyWork,viteOffer,viteWork,dependencyCopy);
     }

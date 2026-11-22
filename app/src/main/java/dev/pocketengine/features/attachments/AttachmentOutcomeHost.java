@@ -352,6 +352,27 @@ public final class AttachmentOutcomeHost {
     public OwnerFilePreviewSource originalRecordedDocument(String taskId,String artifactId,String expectedSha256,RunControl control)throws Exception {
         return originalFile(taskId,artifactId,expectedSha256,control,true);
     }
+    /** Deliberate read from an actual native Chat reply. No full task/Book inventory,
+     * reconciliation, source editor, alternate file, or external delivery. */
+    public OwnerFilePreviewSource originalReplyDocument(OriginalReplyDocument.Target target,RunControl control)throws Exception{
+        control.checkpoint();
+        OriginalReplyDocument pin=tasks.originalReplyDocumentForOwner(target);
+        if(pin==null)throw new SecurityException("原答复未核对到同一份固定文档");
+        // The pinned ordinary role above and exact Book metadata below stand in for
+        // the generic attachment owner hook (which loads a full producing task).
+        JSONObject origin=repository.book.findNativeResult(pin.operationId(),"document_output",target.task(),target.run(),pin.planDigest(),control);
+        if(!Boolean.TRUE.equals(origin.opt("found"))||!Boolean.TRUE.equals(origin.opt("originalPublication"))
+                ||!pin.matchesBook(origin,target.task(),target.run())
+                ||!pin.equals(tasks.originalReplyDocumentForOwner(target)))
+            throw new SecurityException("原答复文档已变化，未打开其他文件");
+        control.checkpoint();
+        for(String key:new String[]{"found","publicationEntered","originalPublication"})origin.remove(key);
+        return new OwnerFilePreviewSource("attachments",origin,
+                c->repository.book.verifiedBytes(pin.id(),pin.sha256(),c),
+                c->{if(!pin.matchesBook(repository.book.get(pin.id()),target.task(),target.run()))
+                    throw new SecurityException("原答复固定文档已不可用");},
+                (destination,c)->{throw new SecurityException("请在原工作内选择其他文件操作");});
+    }
     private OwnerFilePreviewSource originalFile(String taskId,String artifactId,String expectedSha256,RunControl control,boolean recordedDocument)throws Exception {
         requireReference(taskId,artifactId,expectedSha256);JSONObject metadata=privateMetadata(artifactId,expectedSha256);
         if(recordedDocument){

@@ -402,13 +402,18 @@ internal class PocketWebAttachments(
         flow.openReceivedOriginal(file,current);changed()
     }
     /** Only the original live message may hold this read-only viewer window. */
-    fun openMessagePdf(file:dev.pocketengine.ui.UiChatAttachment,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject {
+    fun openMessagePdf(file:dev.pocketengine.ui.UiChatAttachment,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject =
+        openMessageOriginal(ticket,current){flow.openMessagePdf(file,it)}
+    fun openReplyDocument(file:dev.pocketengine.ui.UiChatAttachment,
+        target:dev.pocketengine.features.attachments.OriginalReplyDocument.Target,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject =
+        openMessageOriginal(ticket,current){flow.openReplyDocument(file,target,it)}
+    private fun openMessageOriginal(ticket:PocketWebWindowTicket,current:()->Boolean,start:(()->Boolean)->Unit):JSONObject {
         check(!flow.state.open&&!flow.exportPending&&controller.webPrivateOwnerVisible()&&current())
         clear()
         val active=Window(UUID.randomUUID().toString(),ticket){ candidate -> candidate==ticket&&current() }.also { window=it }
         fun bound()=window===active&&active.accepts(active.ticket)
         scopedResultCurrent=::bound
-        try { flow.openMessagePdf(file,::bound) } catch (failure:Exception) { clear();throw failure }
+        try { start(::bound) } catch (failure:Exception) { clear();throw failure }
         return JSONObject().put("opened",true).put("reading",true).put("readOnly",true).put("windowId",active.id)
     }
 
@@ -425,7 +430,7 @@ internal class PocketWebAttachments(
     }
     fun snapshot(draftPresentation: Boolean = false): JSONObject {
         if(flow.state.deviceOriginalOnly && deviceTaskCurrent?.invoke()!=true ||
-            flow.state.messagePdfOnly&&scopedResultCurrent==null || scopedResultCurrent?.invoke()==false)clear()
+            flow.state.liveMessageOriginalOnly&&scopedResultCurrent==null || scopedResultCurrent?.invoke()==false)clear()
         flow.state.pdfPageText?.let { page ->
             if(!libraryPdfSurface(flow.state,allowPageText=true) ||
                 viewer.displayedPdfPage(flow.state.file)!=page)flow.backFromDocument()
@@ -475,7 +480,7 @@ internal class PocketWebAttachments(
         val wordOrigin=state.wordSourceVisit?.takeIf{it.source===source&&wordLibrarySurface(state)}?.origin
         viewer.bind(source, state.comparison, current.ticket, rememberPdf,wordOrigin) { ticket ->
             current.accepts(ticket) && (!state.deviceOriginalOnly || deviceTaskCurrent?.invoke()==true) &&
-                (if (state.messagePdfOnly) window === current else scoped?.invoke()!=false)
+                (if (state.liveMessageOriginalOnly) window === current else scoped?.invoke()!=false)
         }
         val displayedPdfPage = if (libraryPdf && !state.busy && !flow.exportPending &&
             state.snapshot?.optJSONObject("documentCapabilities")?.opt("pdfText")==true)
@@ -531,8 +536,8 @@ internal class PocketWebAttachments(
         val shownWord=state.wordExcerpt?.takeIf{draftPresentation}
         val exposeDocument=(state.pdfPageText==null||shownPdfPageText!=null)&&(state.wordExcerpt==null||shownWord!=null)
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
-            .put("historyResultOnly", scoped != null && !report && !state.messagePdfOnly).put("reportResultOnly", report)
-            .put("messagePdfOnly",state.messagePdfOnly)
+            .put("historyResultOnly", scoped != null && !report && !state.liveMessageOriginalOnly).put("reportResultOnly", report)
+            .put("messagePdfOnly",state.messagePdfOnly).put("messageReplyDocumentOnly",state.messageReplyDocumentOnly)
             .put("standaloneDraftLibrary", mayUseDraftLibrary())
             .put("focusedStandaloneDraft", state.focusedStandaloneDraft)
             .put("canRetainLinkedDocumentDraft", linkedEditorSource() != null)
@@ -549,7 +554,7 @@ internal class PocketWebAttachments(
             .put("libraryDocumentActionId", if(ordinaryLibrary)flow.libraryDocumentActionId() else null)
             .put("libraryPdfResume", libraryPdfResume?.view())
             .put("returnToLibraryDocument", ownedCopy && flow.canReturnToLibraryDocument())
-            .put("canReferenceHistoryOriginal", !selectedCompiler && !selectedPythonText && scoped != null && !report && !state.messagePdfOnly && privateOriginal)
+            .put("canReferenceHistoryOriginal", !selectedCompiler && !selectedPythonText && scoped != null && !report && !state.liveMessageOriginalOnly && privateOriginal)
             .put("canSaveOriginal", !selectedPythonText && scoped == null && privateOriginal)
             .put("canShareWorkPdf", sharePdf != null)
             .put("canOpenInReader", !selectedCompiler && !selectedPythonText && scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
@@ -597,13 +602,13 @@ internal class PocketWebAttachments(
                 check(deviceTaskCurrent?.invoke()==true && controller.webPrivateOwnerVisible()){"原文件所属的工作窗口已变化"}
                 check(action=="attachmentWorkspace.viewer" || action=="attachmentWorkspace.action" && args.optString("command") in setOf("back","close","cancel","continueTask")){"从此入口只查看这一个原文件，请先回原工作"}
             }
-            if(flow.state.messagePdfOnly)check(scopedResultCurrent!=null){"原消息 PDF 窗口已关闭"}
+            if(flow.state.liveMessageOriginalOnly)check(scopedResultCurrent!=null){"原消息阅读窗口已关闭"}
             scopedResultCurrent?.let { current ->
                 check(current()) { "原成果阅读窗口已变化，请重新打开这次成果" }
                 val command = args.optString("command")
-                val reads=if(flow.state.messagePdfOnly)setOf("back","close","cancel")else SCOPED_RESULT_READS
+                val reads=if(flow.state.liveMessageOriginalOnly)setOf("back","close","cancel")else SCOPED_RESULT_READS
                 check(action == "attachmentWorkspace.viewer" || action == "attachmentWorkspace.action" &&
-                    (command in reads || !flow.state.messagePdfOnly && command == REPORT_WORK_NAVIGATION && canNavigateFromReport(flow.state))) {
+                    (command in reads || !flow.state.liveMessageOriginalOnly && command == REPORT_WORK_NAVIGATION && canNavigateFromReport(flow.state))) {
                     "这里仅可查看本次原件，不会修改原工作"
                 }
             }
@@ -706,7 +711,7 @@ internal class PocketWebAttachments(
                 } else {
                     review = null; processingReview = null; viewer.clear()
                     when {
-                        flow.state.deviceOriginalOnly||flow.state.messagePdfOnly -> {clear();if(flow.state.open)flow.close()}
+                        flow.state.deviceOriginalOnly||flow.state.liveMessageOriginalOnly -> {clear();if(flow.state.open)flow.close()}
                         flow.state.comparison != null -> flow.closeComparison()
                         flow.state.processingSource != null -> flow.closeProcessing()
                         flow.state.documentDraft != null -> flow.closeDocumentDraft()
@@ -718,7 +723,7 @@ internal class PocketWebAttachments(
                     }
                 }
                 "refresh" -> flow.refresh()
-                "cancel" -> if(flow.state.messagePdfOnly)clear()else flow.cancel()
+                "cancel" -> if(flow.state.liveMessageOriginalOnly)clear()else flow.cancel()
                 "selectFile" -> flow.selectFile(selected())
                 "attach" -> flow.attach(selected())
                 "chooseSource" -> flow.chooseSource()
@@ -1236,7 +1241,7 @@ internal class PocketWebAttachments(
         retireDraftLibrary(keepDraftPresentation)
         if(flow.state.pdfPageText!=null||flow.state.wordExcerpt!=null)flow.backFromDocument()
         flow.discardWordExcerptSource()
-        val scoped = flow.state.deviceOriginalOnly || flow.state.messagePdfOnly || scopedResultCurrent != null
+        val scoped = flow.state.deviceOriginalOnly || flow.state.liveMessageOriginalOnly || scopedResultCurrent != null
         deviceTaskCurrent=null; scopedResultCurrent=null
         if((scoped || focusedDraft) && flow.state.open)flow.close()
         flow.discardLibraryDocumentReturn()

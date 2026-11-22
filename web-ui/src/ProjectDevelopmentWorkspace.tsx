@@ -36,7 +36,7 @@ export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; or
 type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:string};
 export type ProjectTerminalSavedFileReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 export type CheckoutPythonSetupReturn = {position:CheckoutSavedPosition; take:()=>boolean};
-export type ProjectDependencyBuildReturn = {original:DirectNodeDependencyPin; current:()=>boolean; take:()=>boolean};
+export type ProjectDependencyBuildReturn = {original:DirectNodeDependencyPin; comparisonHandle?:string; current:()=>boolean; take:()=>boolean};
 export type ProjectViteToolsPosition = {projectId:string;checkoutId:string;sourceDigest:string};
 export type ProjectViteToolsReturn = {position:ProjectViteToolsPosition;runtimeIdentity:string; current:()=>boolean; take:()=>boolean};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
@@ -186,6 +186,10 @@ function checkedDependencyCopy(value:Data|undefined,projectId:string,checkoutId:
       value.executionAuthorized!==false||value.switchedCheckout!==false||value.originalCheckoutUnchanged!==true||value.replayAllowed!==false)
     return null;
   const extra=value.state==='review'?['reviewHandle','expiresAt']:value.state==='published'?['createdAt']:[];
+  if(Object.hasOwn(value,'reason')||Object.hasOwn(value,'previousLockSha256')){
+    if(value.reason!=='current_lock_unverified'||!sourceHash(value.previousLockSha256)||value.previousLockSha256===value.lockSha256)return null;
+    extra.push('reason','previousLockSha256');
+  }
   if(Object.keys(value).some(key=>!dependencyCopyPin.includes(key)&&!extra.includes(key)&&
       !['format','state','executionAuthorized','switchedCheckout','originalCheckoutUnchanged','replayAllowed'].includes(key)))return null;
   if(value.state==='review')return copyIdentity(value.reviewHandle)&&Number.isSafeInteger(value.expiresAt)&&value.expiresAt>Date.now()?value:null;
@@ -237,9 +241,13 @@ function checkedBuildPreview(value:Data,projectId:string,checkoutId:string,sourc
         work.requestId===(offer||prior)?.requestId||work.planDigest===(offer||prior)?.planDigest))
       throw Error('没有核对到这份副本的原依赖准备记录。');
   }
-  if(Object.hasOwn(value,'dependencyCopy')&&(!vite||value.dependencyState!=='needs_lock_review'||offer||prior||
-      value.directDependencies||value.directDependencyWork||!checkedDependencyCopy(value.dependencyCopy,projectId,checkoutId,sourceDigest,lock?.lockSha256)))
-    throw Error('没有核对到这版锁和原副本的新依赖副本位置。');
+  if(Object.hasOwn(value,'dependencyCopy')){
+    const copy=checkedDependencyCopy(value.dependencyCopy,projectId,checkoutId,sourceDigest,lock?.lockSha256);
+    if(!vite||!copy||value.directDependencies||value.directDependencyWork||
+        (copy.reason==='current_lock_unverified'?(!offer&&prior?.status!=='completed')||value.dependencyState!=='current_packages_checked':
+          !!offer||!!prior||value.dependencyState!=='needs_lock_review'))
+      throw Error('没有核对到这版锁和原副本的新依赖副本位置。');
+  }
   return value;
 }
 
@@ -250,8 +258,10 @@ function NodeBuildLock({plan,preview=false}:{plan:Data;preview?:boolean}) {
   const lock=plan.lockedDependencies;
   if(!lock)return preview?<p>这份方案没有单独的锁定依赖准备步骤。</p>:null;
   const offer=preview&&plan.directDependencies, prior=preview&&plan.directDependencyWork&&!directOffer(plan)&&!directOriginal(plan);
+  const historical=preview&&plan.dependencyCopy?.reason==='current_lock_unverified';
   const lockCount=<>{lock.lockPath} 共 {lock.packages} 个锁条目（含其他平台）。</>;
-  return <>{!prior&&!(preview&&plan.dependencyCopy)&&<p>{offer?'本机还缺所需包。确认后按锁从 npm 官方注册表下载，不读取用户包管理配置或执行安装脚本。':
+  return <>{historical&&<p>所选准备记录核对的是旧版锁，不是当前已保存的锁。原副本仍保留；也可以另建副本，按这版锁准备。</p>}
+    {!prior&&!(preview&&plan.dependencyCopy)&&<p>{offer?'本机还缺所需包。确认后按锁从 npm 官方注册表下载，不读取用户包管理配置或执行安装脚本。':
     preview&&noDirectDependencyStep(plan)?lockCount:<>
     {plan.dependencyState==='current_packages_checked'?'已核对这份相同副本中实际存在的关键包，不需要重复准备。构建是否成功仍以本次实际结果为准。':
     preview?'本机还缺所需包，后续要先单独核对依赖准备。':'本机还缺所需包。下一步只审阅原锁与下载，不会开始构建。'}
@@ -981,7 +991,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const previewVite=preview?.directBuildKind==='vite', buildOffer=directOffer(preview), buildWork=directOriginal(preview);
   const dependencyOffer=preview?.directDependencies, dependencyWork=preview?.directDependencyWork;
   const dependencyCopy=preview?.dependencyCopy;
-  const dependencyNext=!!(dependencyCopy||dependencyOffer||dependencyWork&&!buildOffer&&!buildWork);
+  const historicalLockCopy=dependencyCopy?.reason==='current_lock_unverified';
+  const dependencyNext=!!(dependencyCopy&&!historicalLockCopy||dependencyOffer||dependencyWork&&!buildOffer&&!buildWork);
   const buildModelReview=localViteReview&&view?.model?.configured===true&&!dependencyNext&&!buildOffer&&!buildWork&&can('projects.development.reviewDraftBuild');
   const buildModelConnect=view?.model?.configured===false&&!dependencyNext&&!buildWork&&can('projects.development.draft');
   const webTools = selectedCopy && !differentBuildCopy ? checkoutFirstWebTools(source,projectId,checkout) : null;
@@ -1176,9 +1187,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     /^[a-f0-9]{64}$/.test(source.sourceDigest) ? buildOrigin : null;
   const versionChanged = comparedBuild && comparedBuild.sourceDigest!==source?.sourceDigest;
   const readBuildPreview=(viewHandle:string,window:string,shown:DevelopmentDraft,expectedSourceDigest:string,direct:boolean,
-    requireVite:'exact'|'offer'|false,stillCurrent?:()=>boolean,verify?: (value:Data)=>void)=>
+    requireVite:'exact'|'offer'|false,stillCurrent?:()=>boolean,verify?: (value:Data)=>void,dependencyComparisonHandle?:string)=>
     invoke(direct?reviewDirectBuild:'projects.development.reviewDraftBuild',
-      {viewHandle,checkoutId:shown.checkoutId,retainedDraft:displayedSavedDraft(shown),expectedSourceDigest,...(direct?{}:{previewOnly:true})}, value=>{
+      {viewHandle,checkoutId:shown.checkoutId,retainedDraft:displayedSavedDraft(shown),expectedSourceDigest,
+        ...(direct?(dependencyComparisonHandle?{dependencyComparisonHandle}:{}):{previewOnly:true})}, value=>{
       if(handle.current!==viewHandle||!sameDraft(draft.current,shown)||stillCurrent?.()===false)throw Error('原副本或草稿已变化，未展示构建方案。');
       const checked=checkedBuildPreview(value,projectId,shown.checkoutId,expectedSourceDigest);
       if(requireVite&&checked.directBuildKind!=='vite'&&(requireVite==='exact'||directOffer(checked)||directOriginal(checked)||checked.directDependencies||checked.directDependencyWork))
@@ -1189,7 +1201,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   useEffect(()=>{
     const arrival=dependencyBuildReturn||viteToolsReturn;
     const dependency=dependencyBuildReturn?.original, vite=dependency?undefined:viteToolsReturn;
-    const original=dependency||vite?.position;
+    const comparison=dependencyBuildReturn?.comparisonHandle, original=dependency||vite?.position;
     if(!arrival||!original||!active||!arrival.current()||busy||entered.current)return;
     const focus=()=>requestAnimationFrame(()=>{
       const anchor=buildReturnAnchor.current;
@@ -1207,10 +1219,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     }
     // Both returns wait for the existing fresh Work inspection, not a second one.
     if(!source){if(error)reject(error);return;}
-    if(source.projectId!==projectId||source.checkoutId!==original.checkoutId||source.sourceDigest!==original.sourceDigest||
-       source.existingNodeBuild!==true||!nativeDirectBuild){
+    if(source.projectId!==projectId||source.checkoutId!==original.checkoutId||!sourceHash(source.sourceDigest)||
+       !comparison&&source.sourceDigest!==original.sourceDigest||source.existingNodeBuild!==true||!nativeDirectBuild){
       reject(vite?'原网页源码已变化或暂不可核对，没有打开其他版本的构建。':
-        '原依赖准备对应的源码已变化或暂不可核对，没有打开其他版本的构建。');return;
+        '原依赖准备对应的源码已变化或暂不可核对，没有打开其他版本。');return;
+    }
+    if(comparison&&(!dependency||source.sourceDigest===dependency.sourceDigest||!localViteReview||view.runtime?.identity!==dependency.runtimeIdentity)){
+      reject('这份准备记录与当前副本的锁暂不能对照。原副本未切换、未运行。');return;
     }
     if(vite&&(!localViteReview||view.runtime?.identity!==vite.runtimeIdentity||view.runtime?.canExecute!==true||
        nodeTools?.manager!=='npm'||nodeTools.runtimeReady!==true||nodeTools.missing.length)){
@@ -1218,10 +1233,16 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     }
     const shown={...draft.current},viewHandle=handle.current,window=ownerWindow(),sequence=generation.current;
     if(!arrival.take())return;
-    void readBuildPreview(viewHandle,window,shown,original.sourceDigest,true,vite?'exact':false,
+    void readBuildPreview(viewHandle,window,shown,source.sourceDigest,true,vite||comparison?'exact':false,
       ()=>arrival.current()&&alive.current&&latest.current.active&&generation.current===sequence&&ownerWindow()===window&&
         !activeReview.current&&!previewOpen.current,checked=>{
         const prepared=checked.directDependencyWork,build=directOffer(checked)||directOriginal(checked);
+        if(comparison){
+          if(!dependency||checked.dependencyCopy?.reason!=='current_lock_unverified'||
+             checked.dependencyCopy.previousLockSha256!==dependency.lockSha256||build?.runtimeIdentity!==dependency.runtimeIdentity)
+            throw Error('没有核对到所选的旧准备记录与这版锁的对照。没有另建副本或运行。');
+          return;
+        }
         if(vite){
           const next=build||checked.directDependencies||prepared;
           if(next?.runtimeIdentity!==vite.runtimeIdentity)
@@ -1235,7 +1256,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
            prepared.managerVersion!==dependency.managerVersion||prepared.packages!==dependency.packages||
            build?.runtimeIdentity!==dependency.runtimeIdentity||build.lockSha256!==dependency.lockSha256)
           throw Error('尚未核对到这次准备对应的工具、锁定依赖与构建。没有重新下载或运行。');
-      }).then(value=>{if(!value)focus();});
+      },comparison).then(value=>{if(!value)focus();});
   },[dependencyBuildReturn,viteToolsReturn,active,busy,view,error,projectId,checkout,returnTarget,buildReturn,importedEditor,
     localFilesIntent,pythonSetupReturn,filesOpen,review,preview,sourceConflict,pending,copyUnconfirmed,source,nativeDirectBuild,localViteReview]);
   const previewNodeBuild=()=>{
@@ -1315,6 +1336,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       if(!stillShowing())return; // Explicitly returning to the checkout never reopens the modal on a late ACK.
       const actual=checkedDependencyCopy(value,projectId,checkout,sourceVersion,shown.lockSha256);
       if(!actual||actual.state==='review'||!dependencyCopyPin.every(key=>actual[key]===shown[key])||
+          actual.reason!==shown.reason||actual.previousLockSha256!==shown.previousLockSha256||
           handle.current!==original.viewHandle||draft.current.checkoutId!==checkout)
         throw Error('未核对到这次的新副本登记。');
       if(actual.state==='published')showPublishedDependencyCopy(actual);
@@ -1624,18 +1646,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           version={originalDifference.afterSha256.slice(0,8)} beforeLabel={originalDifference.beforeFromOwnerRevision?'本轮选中的已存稿':'本轮起点'}/>
       </div>
     </SettingsDialog>}
-    <SettingsDialog isOpen={!!review||!!preview} title={preview?dependencyCopy?'另建依赖副本':dependencyNext?'核对这版的锁定依赖':previewVite?'构建与预览网页':'本机构建方案':review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={preview?closeBuildPreview:dismiss} closeLabel={preview||review?.draftBuild===true?'返回项目副本':'返回修改目标'}>{preview?<div className="pw-local-review">
+    <SettingsDialog isOpen={!!review||!!preview} title={preview?dependencyCopy&&!historicalLockCopy?'另建依赖副本':dependencyNext?'核对这版的锁定依赖':previewVite?'构建与预览网页':'本机构建方案':review?.draftBuild===true?review.dependencyState==='needs_lock_review'?'核对这版的依赖准备':review.existingCopy?'核对本机 Node 构建':review.editedCopy?'核对当前编辑版的构建':'核对这份改稿的本机构建':'开始这个项目任务？'} onClose={preview?closeBuildPreview:dismiss} closeLabel={preview||review?.draftBuild===true?'返回项目副本':'返回修改目标'}>{preview?<div className="pw-local-review">
       <p className="pw-field-hint">{name} · 副本 <code>{preview.checkoutId.slice(0,8)}</code> · 已保存版本 <code>{preview.sourceDigest.slice(0,10)}</code></p>
       {!dependencyNext&&<strong>{preview.manager} run build</strong>}
       <NodeBuildLock plan={preview} preview/>
       {!dependencyNext&&<NodeBuildScripts plan={preview}/>}
       <p>这次只核对已保存源码，没有下载或运行。{preview.preservedProjectDraft&&'你已写的目标留在草稿。'}</p>
-      {dependencyCopy?<>
-        <strong>{dependencyCopy.name} · <code>{dependencyCopy.newCheckoutId.slice(0,8)}</code></strong>
-        {dependencyCopy.state==='review'?<p>原副本里的依赖不匹配这版锁。可另建同一项目内的新副本，只复制这版已保存的 {dependencyCopy.fileCount} 个源文件，不带入旧依赖、Git 历史或构建输出。原副本保留；这里只建副本，不下载依赖或开始构建。</p>:
-          dependencyCopy.state==='published'?<p role="status">已核对新副本，仍选中原副本。选择新副本后，再核对它当前的源码和依赖。{unfinishedInput&&'当前交办原样保留，没有切换。'}</p>:
-          <p role="status">{busy?'正在核对新副本的登记。':'新副本登记尚未确认，没有切换或重试，不会覆盖可能已写入的文件。请返回后重新核对这一版的原方案。'}</p>}
-      </>:dependencyOffer?<p>只为这个缺少依赖目录的副本准备锁定依赖。不调用模型、不开始构建。</p>:
+      {(!dependencyCopy||historicalLockCopy)&&(dependencyOffer?<p>只为这个缺少依赖目录的副本准备锁定依赖。不调用模型、不开始构建。</p>:
         buildOffer?previewVite?<p>只在这部手机构建这版网页，不调用模型或安装依赖。构建可能联网并写入副本，只运行可信项目。确认后进入原工作的「概览」。本次网页可预览时，点「预览本次构建」即可查看，不用先保存。想保留时再保存网页包；网页不会自动打开或发布。</p>:
           <p>将只在这部手机构建这份已准备依赖的 TypeScript 副本，不调用模型或安装依赖。构建可写入副本，只运行可信项目。在原工作的「过程 → 工具调用」核对 <bdi>{buildOffer.outputPath}</bdi>，有实际输出才能另行保存。</p>:
         buildWork?<p>{previewVite?'这版已有一笔网页构建。':'这版已有一笔本机构建。'}打开原工作核对，不会再运行。</p>:
@@ -1643,14 +1660,20 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         noDirectDependencyStep(preview)?<p>还没核对到这份副本所需的包，当前不能在这里确认准备依赖或构建。
           {buildModelReview?' 如需使用模型，可先审阅交办内容，再另行确认。':
             !terminalFromPreview&&buildModelConnect&&can('projects.development.reviewDraftBuild')?' 如需模型协助，可先连接默认模型；连接不会开始构建。':''}</p>:
-        <p>{previewVite?'这版还没有可确认的本机网页构建。没有开始构建或预览。':'这版还没有可直接确认的本机构建。交办其他构建才需要模型，命令仍须另行批准。'}</p>}
+        <p>{previewVite?'这版还没有可确认的本机网页构建。没有开始构建或预览。':'这版还没有可直接确认的本机构建。交办其他构建才需要模型，命令仍须另行批准。'}</p>)}
+      {dependencyCopy&&<>
+        <strong>{dependencyCopy.name} · <code>{dependencyCopy.newCheckoutId.slice(0,8)}</code></strong>
+        {dependencyCopy.state==='review'?<p>{!historicalLockCopy&&'原副本里的依赖不匹配这版锁。'}可另建同一项目内的新副本，只复制这版已保存的 {dependencyCopy.fileCount} 个源文件，不带入旧依赖、Git 历史或构建输出。原副本保留；这里只建副本，不下载依赖或开始构建。</p>:
+          dependencyCopy.state==='published'?<p role="status">已核对新副本，仍选中原副本。选择新副本后，再核对它当前的源码和依赖。{unfinishedInput&&'当前交办原样保留，没有切换。'}</p>:
+          <p role="status">{busy?'正在核对新副本的登记。':'新副本登记尚未确认，没有切换或重试，不会覆盖可能已写入的文件。请返回后重新核对这一版的原方案。'}</p>}
+      </>}
       {terminalFromPreview&&!dependencyNext&&!buildOffer&&!buildWork&&<p>你也可以核对同一副本的手动终端。打开终端不会代你准备依赖或执行构建。</p>}
       <div className="pw-form-actions">
         <Button variant="secondary" onClick={closeBuildPreview}>返回副本</Button>
-        {dependencyCopy?.state==='review'&&can(confirmDependencyCopy)&&<Button disabled={disabled} onClick={createDependencyCopy}>确认另建副本</Button>}
-        {dependencyCopy?.state==='published'&&!unfinishedInput&&can('projects.development.draft')&&<Button disabled={disabled} onClick={selectDependencyCopy}>选择新副本</Button>}
         {dependencyOffer&&nativeDirectDependencies&&<Button disabled={disabled||!can('tasks.open')} onClick={confirmOwnerDependencies}>确认准备锁定依赖</Button>}
         {buildOffer&&nativeDirectBuild&&<Button disabled={disabled||!can('tasks.open')} onClick={confirmOwnerNodeBuild}>{previewVite?'确认构建网页':'确认在这部手机构建'}</Button>}
+        {dependencyCopy?.state==='review'&&can(confirmDependencyCopy)&&<Button variant={historicalLockCopy?'secondary':undefined} disabled={disabled} onClick={createDependencyCopy}>确认另建副本</Button>}
+        {dependencyCopy?.state==='published'&&!unfinishedInput&&can('projects.development.draft')&&<Button variant={historicalLockCopy?'secondary':undefined} disabled={disabled} onClick={selectDependencyCopy}>选择新副本</Button>}
         {buildWork&&<Button disabled={disabled||!can('tasks.open')||!can('projects.development.inspect')}
           onClick={()=>{if(canActOnDirectPreview())openDirectWork(buildWork,previewVite?'vite':'compiler');}}>{previewVite?'打开原网页构建':'打开原本机构建'}</Button>}
         {dependencyWork&&can('tasks.open')&&<Button variant={dependencyNext?undefined:'ghost'} disabled={disabled} onClick={openDependencyWork}>打开原依赖准备</Button>}

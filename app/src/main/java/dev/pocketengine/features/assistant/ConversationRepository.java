@@ -5,6 +5,7 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.os.CancellationSignal;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.features.attachments.OriginalReplyDocument;
 import dev.pocketengine.features.memory.ConversationHistory;
 import dev.pocketengine.features.memory.SourceRef;
 import dev.pocketengine.features.memory.TaskMemoryTrace;
@@ -28,6 +29,8 @@ public final class ConversationRepository {
     static final String ORIGINAL_REMINDER_RECORDED="originalReminderRecorded";
     private static final String ORIGINAL_MEMORY_DRAFT="nativeOriginalMemoryDraft";
     static final String ORIGINAL_MEMORY_DRAFT_RECORDED="originalMemoryDraftRecorded";
+    private static final String ORIGINAL_REPLY_DOCUMENT="nativeOriginalReplyDocument";
+    private static final String ORIGINAL_REPLY_DOCUMENT_VIEW="originalGeneratedDocument";
     static void requireReplyContent(String text){
         if(text==null||text.isBlank())throw new IllegalArgumentException("模型没有返回文字答复");
         if(!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new IllegalArgumentException("答复含不完整Unicode字符，未替换后保存");
@@ -199,6 +202,47 @@ public final class ConversationRepository {
                 &&!row.optBoolean("nativeProvenanceImported")&&!row.optBoolean("memoryContextRetired")&&row.optLong("memorySourceRetiredThrough")<revision
                 &&"assistant".equals(row.optString("role"))&&"owner".equals(row.optString("ownerId"))&&"private".equals(row.optString("spaceId"))
                 &&row.optJSONObject("nativeContext")!=null;
+    }
+    /** A body-free exact pair in the original task/reply SQL transaction, not a
+     * search, synthetic attachment, or lookup of the latest document in a run. */
+    public OriginalReplyDocument originalReplyDocument(OriginalReplyDocument.Target target)throws Exception{
+        if(!Thread.holdsLock(monitor)||!db.inTransaction())throw new SecurityException("请在原答复来源事务内核对");
+        if(target.revision()!=1)return null;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(a.source_json AS BLOB))<=65536 THEN a.source_json END,"
+                +"CASE WHEN length(CAST(u.source_json AS BLOB))<=65536 THEN u.source_json END,u.revision"
+                +" FROM meta g JOIN assistant_sources a ON a.generation=g.value"
+                +" JOIN assistant_conversations c ON c.generation=a.generation AND c.conversation_id=a.conversation_id AND c.deleted=0"
+                +" JOIN assistant_messages m ON m.generation=a.generation AND m.conversation_id=a.conversation_id AND m.source_id=a.source_id AND m.revision=a.revision"
+                +" JOIN assistant_sources u ON u.generation=a.generation AND u.conversation_id=a.conversation_id AND u.source_id=?"
+                +" JOIN assistant_messages um ON um.generation=u.generation AND um.conversation_id=u.conversation_id AND um.source_id=u.source_id AND um.revision=u.revision"
+                +" WHERE g.key='assistant_history_generation' AND g.value=? AND a.conversation_id=? AND a.source_id=?"
+                +" AND a.role='assistant' AND a.revision=1 AND a.native_reply_id=? AND m.body_sha=? AND m.body IS NOT NULL"
+                +" AND a.deleted=0 AND a.context_retired=0 AND a.retired_through<a.revision"
+                +" AND u.role='user' AND u.deleted=0 AND u.context_retired=0 AND u.retired_through<u.revision AND um.body IS NOT NULL AND um.sequence<m.sequence LIMIT 1",
+                new String[]{target.ownerInput(),target.generation(),target.conversation(),target.message(),target.reply(),target.fingerprint()})){
+            if(!row.moveToFirst()||row.isNull(0)||row.isNull(1))return null;
+            JSONObject assistant=new JSONObject(row.getString(0)),input=new JSONObject(row.getString(1));
+            JSONObject link=assistant.optJSONObject(ORIGINAL_REPLY_DOCUMENT),context=assistant.optJSONObject("nativeContext");
+            JSONObject accepted=input.optJSONObject("submission");long revision=row.getLong(2);
+            if(!originalSavedAssistantSource(assistant,target.revision())||!target.message().equals(assistant.opt("sourceId"))||
+                    !sameSavedAssistantReply(assistant,target.conversation(),target.task(),target.run(),target.epoch(),target.reply())
+                    ||context==null||!target.generation().equals(context.opt("generation"))||!target.fingerprint().equals(context.opt("bodyFingerprint"))
+                    ||OriginalReplyDocument.integer(context.opt("sourceRevision"))!=target.revision()
+                    ||!target.task().equals(context.opt("taskId"))||!target.run().equals(context.opt("runId"))
+                    ||target.epoch()!=OriginalReplyDocument.integer(context.opt("epoch"))
+                    ||link==null||link.length()!=3||!target.ownerInput().equals(link.opt("input"))
+                    ||revision!=OriginalReplyDocument.integer(link.opt("inputRevision"))
+                    ||!"owner".equals(input.opt("ownerId"))||!"private".equals(input.opt("spaceId"))||input.optBoolean("nativeProvenanceImported")
+                    ||!target.ownerInput().equals(input.opt("sourceId"))||!target.conversation().equals(input.opt("conversationId"))
+                    ||accepted==null||!"consumed".equals(accepted.opt("status"))||!"materialized".equals(accepted.opt("queueState"))
+                    ||!target.ownerInput().equals(accepted.opt("messageId"))||!target.conversation().equals(accepted.opt("conversationId"))
+                    ||!target.message().equals(accepted.opt("replyMessageId"))||!target.task().equals(accepted.opt("taskId"))
+                    ||!target.run().equals(accepted.opt("runId"))||!target.run().equals(accepted.opt("consumedRunId"))
+                    ||target.epoch()!=OriginalReplyDocument.integer(accepted.opt("epoch"))
+                    ||target.epoch()!=OriginalReplyDocument.integer(accepted.opt("consumedEpoch"))
+                    ||revision!=OriginalReplyDocument.integer(accepted.opt("ownerMessageRevision")))return null;
+            return OriginalReplyDocument.fromPin(link.optJSONObject("file"));
+        }
     }
     private static boolean sameSavedAssistantReply(JSONObject row,String conversation,String task,String run,int epoch,String reply){
         return !reply.isEmpty()&&conversation.equals(row.optString("conversationId"))&&task.equals(row.optString("nativeTaskId"))
@@ -834,6 +878,7 @@ public final class ConversationRepository {
         JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");meta.remove("ownerOriginalLocator");long sequence=importedSequence;
         meta.remove(ORIGINAL_REMINDER_RECORDED); // Derived from the private source row, never from message JSON.
         meta.remove(ORIGINAL_MEMORY_DRAFT);meta.remove(ORIGINAL_MEMORY_DRAFT_RECORDED);
+        meta.remove(ORIGINAL_REPLY_DOCUMENT);meta.remove(ORIGINAL_REPLY_DOCUMENT_VIEW);
         boolean existing=false;
         try(Cursor row=db.rawQuery("SELECT sequence,meta_json FROM assistant_messages WHERE generation=? AND source_id=? LIMIT 1",new String[]{gen,id})){if(row.moveToFirst()){existing=true;sequence=row.getLong(0);if(new JSONObject(row.getString(1)).optBoolean("personalMemoryExcluded"))meta.put("personalMemoryExcluded",true);}}
         if(!existing&&importedSequence<0&&"user".equals(message.getString("role"))&&gen.equals(activeGeneration())){
@@ -898,6 +943,14 @@ public final class ConversationRepository {
                 &&originalMemoryDraftPin(state)!=null)message.put(ORIGINAL_MEMORY_DRAFT_RECORDED,true);
         else message.remove(ORIGINAL_MEMORY_DRAFT_RECORDED);
         message.remove(ORIGINAL_MEMORY_DRAFT);
+        message.remove(ORIGINAL_REPLY_DOCUMENT);message.remove(ORIGINAL_REPLY_DOCUMENT_VIEW);
+        if(originalReply&&row.getLong(2)==1&&!message.optBoolean("importAssignedIdentity")&&!message.has("nativeDeliveryKind")){
+            JSONObject link=state.optJSONObject(ORIGINAL_REPLY_DOCUMENT);
+            JSONArray inputs=message.optJSONArray("replyToMessageIds");
+            OriginalReplyDocument fixed=link==null?null:OriginalReplyDocument.fromPin(link.optJSONObject("file"));
+            if(fixed!=null&&inputs!=null&&inputs.length()==1&&Objects.equals(inputs.opt(0),link.opt("input")))
+                message.put(ORIGINAL_REPLY_DOCUMENT_VIEW,fixed.view());
+        }
         if(message.has("projectConventionRecorded")){
             JSONObject proof=state.optJSONObject("nativeProjectConventionReceipt");String reply=state.optString("nativeReplyId");
             boolean original=Boolean.TRUE.equals(message.opt("projectConventionRecorded"))&&proof!=null
@@ -1022,6 +1075,10 @@ public final class ConversationRepository {
         if(reminderOperation!=null)state.put(ORIGINAL_REMINDER_OPERATION,reminderOperation);
         JSONObject originalMemoryDraft=selected.originalMemoryDraft();
         if(originalMemoryDraft!=null)state.put(ORIGINAL_MEMORY_DRAFT,originalMemoryDraft);
+        OriginalReplyDocument fixed=selected.originalDocument();
+        if(fixed!=null&&inputs.length()==1&&replyTo.length()==1)
+            state.put(ORIGINAL_REPLY_DOCUMENT,new JSONObject().put("input",replyTo.getString(0))
+                    .put("inputRevision",inputs.getJSONObject(0).getLong("ownerMessageRevision")).put("file",fixed.pin()));
         if(selected.completed.publicAnswerSources&&text.equals(selected.completed.text))state.put(PENDING_PUBLIC_ANSWER,CompactionPlan.fingerprint(text));
         JSONObject quote=selected.completed.projectConvention();
         if(quote!=null&&selected.taskId.equals(quote.optString("taskId"))&&selected.runId.equals(quote.optString("runId"))&&selected.epoch==quote.optInt("epoch")&&selected.completed.id.equals(quote.optString("replyId"))&&
@@ -1476,7 +1533,7 @@ public final class ConversationRepository {
     /** Staging is invisible and lives only in this original DB. Bodies/versions/times are not invented. */
     public JSONObject stageLegacy(String stage,JSONObject legacy,Callable<Void> beforeBatch)throws Exception{
         if(active())throw new IllegalStateException("已有DB原文权威，不能重导旧副本");JSONArray convs=legacy.getJSONArray("conversations"),sources=legacy.getJSONArray("sourceStates");if(integer(legacy,"version",1)!=2)throw new IllegalArgumentException("旧原文需已知原生version2来源，未补造旧修订");
-        Set<String> ids=new HashSet<>();for(int start=0;start<sources.length();start+=100){final int a=start,b=Math.min(start+100,sources.length());stageTransaction(()->{beforeBatch.call();for(int i=a;i<b;i++){JSONObject source=new JSONObject(sources.getJSONObject(i).toString());source.remove("nativeContext");source.remove("nativeProjectConventionReceipt");if("assistant".equals(source.optString("role")))source.put("nativeProvenanceImported",true);if(!ids.add(source.getString("sourceId")))throw new IllegalArgumentException("旧来源编号重复");saveSource(stage,source);}return null;});}
+        Set<String> ids=new HashSet<>();for(int start=0;start<sources.length();start+=100){final int a=start,b=Math.min(start+100,sources.length());stageTransaction(()->{beforeBatch.call();for(int i=a;i<b;i++){JSONObject source=new JSONObject(sources.getJSONObject(i).toString());source.remove("nativeContext");source.remove("nativeProjectConventionReceipt");source.remove(ORIGINAL_REPLY_DOCUMENT);if("assistant".equals(source.optString("role")))source.put("nativeProvenanceImported",true);if(!ids.add(source.getString("sourceId")))throw new IllegalArgumentException("旧来源编号重复");saveSource(stage,source);}return null;});}
         int count=0;Set<String> conversationIds=new HashSet<>(),messageIds=new HashSet<>();for(int i=0;i<convs.length();i++){JSONObject conversation=convs.getJSONObject(i);if(!conversationIds.add(conversation.getString("conversationId")))throw new IllegalArgumentException("旧会话编号重复");final JSONObject current=conversation;stageTransaction(()->{beforeBatch.call();saveConversation(stage,current);return null;});JSONArray messages=conversation.getJSONArray("messages");for(int start=0;start<messages.length();start+=40){final int a=start,b=Math.min(start+40,messages.length());stageTransaction(()->{beforeBatch.call();for(int j=a;j<b;j++){JSONObject message=new JSONObject(messages.getJSONObject(j).toString());message.remove("nativeContext");message.remove("nativeAssistantSource");if(!messageIds.add(message.getString("id")))throw new IllegalArgumentException("旧消息编号重复");saveMessage(stage,current.getString("conversationId"),message,j+1);}return null;});}count+=messages.length();}
         try(Cursor missing=db.rawQuery("SELECT 1 FROM assistant_sources s LEFT JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id LEFT JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE s.generation=? AND s.deleted=0 AND (m.source_id IS NULL OR c.conversation_id IS NULL OR m.conversation_id<>s.conversation_id OR m.revision<>s.revision) LIMIT 1",new String[]{stage})){if(missing.moveToFirst())throw new IllegalArgumentException("旧活动来源缺真实原文/容器，未激活不完整副本");}
         // Tombstones whose old container was already trimmed/deleted still keep their true source

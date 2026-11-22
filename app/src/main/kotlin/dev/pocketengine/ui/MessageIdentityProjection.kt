@@ -11,6 +11,7 @@ internal data class UiReplyContext private constructor(
     val publicAnswerSourcesRecorded: Boolean,
     val originalReminderRecorded: Boolean,
     val originalMemoryDraftRecorded: Boolean,
+    val originalGeneratedDocument: UiChatAttachment?,
 ) {
     fun toJson(): JSONObject = JSONObject().put("taskId", taskId).put("runId", runId).put("epoch", epoch)
         .put("replyId", replyId ?: JSONObject.NULL).put("deliveryId", deliveryId ?: JSONObject.NULL)
@@ -38,7 +39,10 @@ internal data class UiReplyContext private constructor(
             }
             return UiReplyContext(task, run, epoch, reply, delivery, ids.toList(), message.opt("publicAnswerSourcesRecorded") == true,
                 message.opt("originalReminderRecorded") == true && reply != null && delivery == null && ids.size == 1,
-                message.opt("originalMemoryDraftRecorded") == true && reply != null && delivery == null && ids.size == 1)
+                message.opt("originalMemoryDraftRecorded") == true && reply != null && delivery == null && ids.size == 1,
+                message.optJSONObject("originalGeneratedDocument")?.takeIf {
+                    reply != null && delivery == null && ids.size == 1
+                }?.let(ChatInputRules::attachment))
         }
     }
 }
