@@ -230,6 +230,23 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
                 .put("title",title).put("goal",goal.isBlank()?title:goal).put("stepTitle",stepTitle)
                 .put("stepNumber",index+1).put("stepCount",steps.length()).put("referenceOnly",true).put("executionAuthorized",false);
     }
+    /** Explicit historical owner read. Do not use the plan progress/refresh resolver
+     * or hold either Book or TaskStore across the single original artifact read. */
+    public JSONObject readOriginalPlanStepFile(AutomationModule module,dev.pocketengine.features.workspace.WorkspaceModule workspace,
+                                                PlanArtifactVerifier.OriginalFile held,java.util.function.BooleanSupplier current)throws Exception{
+        requireOriginalPlanStepFile(module,held,current);
+        String text=workspace.originalPlanFileTextForHost(held,current);
+        requireOriginalPlanStepFile(module,held,current);
+        return new JSONObject().put("format","pocketworld.original-plan-step-file.v1").put("planId",held.planId())
+                .put("stepId",held.stepId()).put("evidenceId",held.evidenceId()).put("sourceVersion",held.sourceVersion())
+                .put("text",text).put("referenceOnly",true).put("executionAuthorized",false);
+    }
+    private void requireOriginalPlanStepFile(AutomationModule module,PlanArtifactVerifier.OriginalFile held,
+                                             java.util.function.BooleanSupplier current)throws Exception{
+        if(!current.getAsBoolean()||Thread.currentThread().isInterrupted())throw new SecurityException("原核验文件窗口已关闭");
+        if(!module.originalStepFileCurrent(held,current)||!current.getAsBoolean()||
+                !tasks.originalPlanFileCurrent(held)||!current.getAsBoolean())throw new SecurityException("原核验文件暂不可确认");
+    }
     private JSONObject handle(AutomationModule module,String command,JSONObject payload,boolean nativeOwner)throws Exception{
         if(!handles(command))throw new IllegalArgumentException("不是承诺或计划宿主命令");
         JSONObject input=new JSONObject(payload.toString()).put("scope",scope());

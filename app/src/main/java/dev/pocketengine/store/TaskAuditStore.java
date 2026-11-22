@@ -122,6 +122,15 @@ public final class TaskAuditStore {
         long number=((Number)found).longValue();if(number<minimum||number>maximum)throw new SecurityException("原审批版本或期限超出范围");return number;
     }
 
+    /** One current Task row, no event/checkpoint or skipped value materialization. */
+    static JSONObject originalPlanFileIdentity(SQLiteDatabase db,String task)throws Exception{
+        if(!db.inTransaction())throw new IllegalStateException("原核验文件缺少同一工作快照");
+        try(Cursor row=db.rawQuery("SELECT length(CAST(document AS BLOB)) FROM tasks WHERE task_id=? AND audit_format=1",new String[]{task})){
+            if(!row.moveToFirst()||row.getLong(0)<2||row.getLong(0)>MAX_CORE_BYTES)return null;
+        }
+        return OriginalPlanFileFields.taskIdentity(new SqlDocumentReader(db,task));
+    }
+
     private static JsonReader approvalReader(SQLiteDatabase db,String task,RunControl control,long deadline){
         // The canonical duplicate is encoded as a JSON string in the source document,
         // so its escapes may take twice the selected item's disclosure budget.

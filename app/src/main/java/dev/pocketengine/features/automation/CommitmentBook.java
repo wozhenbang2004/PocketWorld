@@ -1,5 +1,6 @@
 package dev.pocketengine.features.automation;
 
+import dev.pocketengine.store.OriginalPlanFileFields;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -27,6 +28,7 @@ import org.json.JSONObject;
 public final class CommitmentBook {
     private static final ConcurrentHashMap<String,Object> LOCKS=new ConcurrentHashMap<>();
     private static final long MAX_TIME=253402300799999L;
+    static final int MAX_STORED_BYTES=8_000_000;
     private final File file;
     private final Object lock;
     private final EvidenceResolver evidenceResolver;
@@ -232,6 +234,13 @@ public final class CommitmentBook {
     public JSONObject getPlan(JSONObject scope,String id,long now)throws Exception {
         JSONObject identity=scope(scope);validNow(now);
         synchronized(lock){JSONObject state=read();return planView(state,identity,findPlan(state,identity,id),now);}
+    }
+    /** Same authoritative file and lock; no plan view, full JSON document or task resolver on this path. */
+    boolean originalStepFileCurrent(PlanArtifactVerifier.OriginalFile held,java.util.function.BooleanSupplier current)throws Exception{
+        synchronized(lock){
+            JSONObject selected=OriginalPlanFileFields.selectedBookStep(file,MAX_STORED_BYTES,held,current);
+            return selected!=null&&held.equals(PlanArtifactVerifier.originalBookFile(held.planId(),held.stepId(),selected))&&current.getAsBoolean();
+        }
     }
     public JSONArray listPlans(JSONObject scope,long now)throws Exception {
         JSONObject identity=scope(scope);validNow(now);
@@ -1126,7 +1135,7 @@ public final class CommitmentBook {
     }
     private JSONObject read()throws Exception {
         if(!file.exists())return new JSONObject().put("version",1).put("commitments",new JSONArray());
-        if(!file.isFile()||file.length()>8_000_000)throw new IllegalStateException("承诺文件无效或过大，未覆盖原数据");
+        if(!file.isFile()||file.length()>MAX_STORED_BYTES)throw new IllegalStateException("承诺文件无效或过大，未覆盖原数据");
         JSONObject state=new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));
         if((state.optInt("version",-1)!=1&&state.optInt("version",-1)!=2)||state.optJSONArray("commitments")==null)throw new IllegalStateException("不支持的承诺文件格式，未覆盖原数据");
         return state;
@@ -1134,7 +1143,7 @@ public final class CommitmentBook {
     private void write(JSONObject state)throws Exception {
         File parent=file.getParentFile();if(parent!=null&&!parent.isDirectory()&&!parent.mkdirs())throw new IllegalStateException("无法建立承诺目录");
         byte[] bytes=state.toString().getBytes(StandardCharsets.UTF_8);
-        if(bytes.length>8_000_000)throw new IllegalStateException("承诺文件已达到容量上限");
+        if(bytes.length>MAX_STORED_BYTES)throw new IllegalStateException("承诺文件已达到容量上限");
         File temporary=new File(file.getPath()+".new");
         try(FileOutputStream output=new FileOutputStream(temporary)){output.write(bytes);output.getFD().sync();}
         try{Files.move(temporary.toPath(),file.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}

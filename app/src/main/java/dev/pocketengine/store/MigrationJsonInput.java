@@ -12,20 +12,25 @@ import java.io.Writer;
 import java.math.BigDecimal;
 import java.util.ArrayDeque;
 
-/** Migration-only structural cursor. Long quoted values are decoded and encoded in bounded
- * pieces by the platform JSON APIs; neither a whole body string nor a whole event is retained.
- * This is not a runtime JSON reader and does not relax runtime evidence limits. */
+/** Original structural cursor. Migration copies long quoted values in bounded pieces.
+ * The separate scoped projection mode can skip unselected values without decoding them into
+ * strings; normal migration and native evidence limits do not change. */
 final class MigrationJsonInput implements AutoCloseable {
     private static final int SCALAR_LIMIT = 1048576, PIECE = 4096;
     private enum Position { ROOT, FINISHED, FIRST_KEY, KEY, VALUE, NEXT_KEY, FIRST_ITEM, ITEM, NEXT_ITEM }
     private final BufferedReader input;
+    private final int literalLimit;
     private final ArrayDeque<Position> positions = new ArrayDeque<>();
     private int ahead = -2;
     private boolean firstRead = true;
     private JsonToken token;
     private String literal;
 
-    MigrationJsonInput(Reader source) { input = new BufferedReader(source, PIECE); positions.push(Position.ROOT); }
+    MigrationJsonInput(Reader source) { this(source,SCALAR_LIMIT); }
+    MigrationJsonInput(Reader source,int literalLimit) {
+        if(literalLimit<5||literalLimit>SCALAR_LIMIT)throw new IllegalArgumentException("原JSON字面量范围无效");
+        input=new BufferedReader(source,PIECE);this.literalLimit=literalLimit;positions.push(Position.ROOT);
+    }
     private IOException invalid() { return new IOException("旧任务JSON不可读；保留原事务与正文"); }
     private int look() throws IOException { if (ahead == -2) ahead = input.read(); return ahead; }
     private int take() throws IOException { int result = look(); ahead = -2; return result; }
@@ -65,7 +70,7 @@ final class MigrationJsonInput implements AutoCloseable {
         StringBuilder value = new StringBuilder();
         while (look() != -1 && look() != ',' && look() != ']' && look() != '}' &&
                 look() != ' ' && look() != '\t' && look() != '\r' && look() != '\n') {
-            if (value.length() == SCALAR_LIMIT) throw invalid(); value.append((char) take());
+            if (value.length() == literalLimit) throw invalid(); value.append((char) take());
         }
         literal = value.toString();
         try (JsonReader scalar = new JsonReader(new StringReader("[" + literal + "]"))) {
@@ -83,12 +88,17 @@ final class MigrationJsonInput implements AutoCloseable {
     void endObject() throws IOException { if (peek() != JsonToken.END_OBJECT) throw invalid(); take(); positions.pop(); token = null; }
     void beginArray() throws IOException { if (peek() != JsonToken.BEGIN_ARRAY) throw invalid(); take(); consumed(); positions.push(Position.FIRST_ITEM); }
     void endArray() throws IOException { if (peek() != JsonToken.END_ARRAY) throw invalid(); take(); positions.pop(); token = null; }
-    String nextName() throws IOException {
-        if (peek() != JsonToken.NAME) throw invalid();
-        LimitedText text = new LimitedText(SCALAR_LIMIT); quoted(text, false, SCALAR_LIMIT);
-        if (text.overflow) throw invalid(); space(); if (take() != ':') throw invalid(); replace(Position.VALUE); token = null;
-        return text.toString();
+    String nextName() throws IOException { return readName(SCALAR_LIMIT,SCALAR_LIMIT); }
+    String boundedName(int limit) throws IOException {
+        if(limit<1||limit>SCALAR_LIMIT/6)throw invalid();
+        return readName(limit,6*limit+1);
     }
+    private String readName(int limit,int rawLimit) throws IOException {
+        if (peek() != JsonToken.NAME) throw invalid();
+        LimitedText text = new LimitedText(limit); quoted(text, false, rawLimit);
+        if (text.overflow) throw invalid();nameConsumed();return text.toString();
+    }
+    private void nameConsumed() throws IOException { space(); if (take() != ':') throw invalid(); replace(Position.VALUE); token = null; }
     /** A null return means an oversized optional metadata string, not an absent token.
      * It is still fully parsed before advancing, so invalid trailing input cannot be skipped. */
     String boundedString(int limit) throws IOException {
@@ -164,6 +174,39 @@ final class MigrationJsonInput implements AutoCloseable {
         }
     }
     void skipValue() throws IOException { copyValue(new Writer() { public void write(char[] c,int o,int n) {} public void flush() {} public void close() {} }, null, 0); }
+    /** Skip an unselected value without the Android JsonReader StringBuilder, copy/encoding,
+     * or materializing the names of its nested members. The caller bounds the source bytes. */
+    void skipUnselectedValue() throws IOException { skipUnselected(0); }
+    private void skipUnselected(int depth) throws IOException {
+        if(depth>64)throw invalid();
+        switch(peek()){
+            case BEGIN_OBJECT -> {
+                beginObject();
+                while(hasNext()){
+                    if(peek()!=JsonToken.NAME)throw invalid();
+                    skipQuoted();nameConsumed();skipUnselected(depth+1);
+                }
+                endObject();
+            }
+            case BEGIN_ARRAY -> {beginArray();while(hasNext())skipUnselected(depth+1);endArray();}
+            case STRING -> {skipQuoted();consumed();}
+            case NUMBER,BOOLEAN,NULL -> consumed();
+            default -> throw invalid();
+        }
+    }
+    private void skipQuoted()throws IOException{
+        if(take()!='"')throw invalid();
+        for(;;){
+            int ch=take();
+            if(ch<0x20)throw invalid();
+            if(ch=='"')return;
+            if(ch!='\\')continue;
+            int escape=take();
+            if(escape=='u'){
+                for(int i=0;i<4;i++){int hex=take();if(!(hex>='0'&&hex<='9'||hex>='a'&&hex<='f'||hex>='A'&&hex<='F'))throw invalid();}
+            }else if(escape!='"'&&escape!='\\'&&escape!='/'&&escape!='b'&&escape!='f'&&escape!='n'&&escape!='r'&&escape!='t')throw invalid();
+        }
+    }
     @Override public void close() throws IOException { input.close(); }
     private static final class LimitedText extends Writer {
         private final int limit; private final StringBuilder text = new StringBuilder(); boolean overflow;

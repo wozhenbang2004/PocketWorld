@@ -1,5 +1,6 @@
 package dev.pocketengine.features.workspace;
 
+import dev.pocketengine.features.automation.PlanArtifactVerifier;
 import dev.pocketengine.features.local.project.OriginalNodeWebOutput;
 import dev.pocketengine.features.local.project.OwnerDirectNodeBuild;
 
@@ -51,10 +52,32 @@ public final class WorkspaceArtifacts {
     public synchronized long exportFile(ArtifactRef selected,java.io.OutputStream target)throws Exception{byte[] bytes=bytes(selected);target.write(bytes);bytes(selected);return bytes.length;}
     private void requireIssued(ArtifactRef value){if(value==null||value.issuer!=this)throw new SecurityException("成果引用不是这个原目录签发的对象");}
     private static boolean validId(String value){return value!=null&&value.matches("[a-f0-9-]{36}");}
-    private JSONObject checkedFile(String id,String sha)throws Exception {
-        if(!validId(id)||sha==null||!sha.matches("absent|[a-f0-9]{64}"))throw new IllegalArgumentException("请选择原固定文件成果或删除修订及精确SHA");JSONObject listed=null;JSONArray all=catalog();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).optString("id")))listed=all.getJSONObject(i);
+    private JSONObject checkedFile(String id,String sha)throws Exception{return checkedFile(id,sha,null);}
+    private JSONObject checkedFile(String id,String sha,PlanArtifactVerifier.OriginalFile plan)throws Exception {
+        if(!validId(id)||sha==null||!sha.matches("absent|[a-f0-9]{64}"))throw new IllegalArgumentException("请选择原固定文件成果或删除修订及精确SHA");
+        if(plan!=null&&(Files.isSymbolicLink(root.toPath())||Files.isSymbolicLink(catalog.toPath())))throw new SecurityException("原核验文件目录已变化");
+        JSONObject listed=null;JSONArray all=catalog();
+        if(plan!=null&&all.length()>200)throw new SecurityException("原文件目录超出核对范围");
+        for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).optString("id"))){
+            if(plan!=null&&listed!=null)throw new SecurityException("原文件登记不唯一");listed=all.getJSONObject(i);
+        }
         if(listed==null||!java.util.Set.of("text_file","binary_file","file_tombstone").contains(listed.optString("kind"))||!sha.equals(listed.optString("sha256"))||"retired".equals(listed.optString("availability")))throw new SecurityException("原固定文件成果已不可用或版本不同");
-        File record=new File(root,id+".json");if(Files.isSymbolicLink(record.toPath())||!record.isFile())throw new SecurityException("原固定成果记录不可用");JSONObject actual=JsonFiles.read(record);if(!id.equals(actual.optString("id"))||!dev.pocketengine.features.local.project.ProjectSources.canonical(listed).equals(dev.pocketengine.features.local.project.ProjectSources.canonical(metadata(actual)))||!sha.equals("file_tombstone".equals(actual.optString("kind"))?"absent":hashBytes(fileBytes(actual))))throw new SecurityException("原固定成果字节或登记已变化，未读取其他版本");if("file_tombstone".equals(actual.optString("kind"))&&(!actual.optBoolean("tombstone")||actual.optInt("sourceVersion")<1||actual.optLong("sizeBytes",-1)!=0||actual.has("content")||actual.has("contentBase64")||!validId(actual.optString("sourceRevisionId"))))throw new SecurityException("原删除成果不是没有正文的实际修订");if(!"file_tombstone".equals(actual.optString("kind"))&&sha.equals("absent"))throw new SecurityException("文件字节不能使用删除摘要");return actual;
+        // Check scoped immutable metadata before opening the exact record. Up to
+        // 6 bytes per JSON-escaped UTF-16 code unit, plus this small record's metadata.
+        if(plan!=null&&!plan.matchesFrozenArtifact(listed))throw new SecurityException("原核验文件与已确认步骤不同");
+        File record=new File(root,id+".json");if(Files.isSymbolicLink(record.toPath())||!record.isFile()||
+                plan!=null&&record.length()>6L*PlanArtifactVerifier.ORIGINAL_TEXT_LIMIT+16*1024)throw new SecurityException("原固定成果记录不可用");
+        JSONObject actual=JsonFiles.read(record);if(!id.equals(actual.optString("id"))||!dev.pocketengine.features.local.project.ProjectSources.canonical(listed).equals(dev.pocketengine.features.local.project.ProjectSources.canonical(metadata(actual)))||!sha.equals("file_tombstone".equals(actual.optString("kind"))?"absent":hashBytes(fileBytes(actual))))throw new SecurityException("原固定成果字节或登记已变化，未读取其他版本");if("file_tombstone".equals(actual.optString("kind"))&&(!actual.optBoolean("tombstone")||actual.optInt("sourceVersion")<1||actual.optLong("sizeBytes",-1)!=0||actual.has("content")||actual.has("contentBase64")||!validId(actual.optString("sourceRevisionId"))))throw new SecurityException("原删除成果不是没有正文的实际修订");if(!"file_tombstone".equals(actual.optString("kind"))&&sha.equals("absent"))throw new SecurityException("文件字节不能使用删除摘要");return actual;
+    }
+    /** An already verified private Plan receipt may read this one original frozen text only. */
+    synchronized String originalPlanFileText(PlanArtifactVerifier.OriginalFile plan)throws Exception{
+        JSONObject actual=checkedFile(plan.artifactId(),plan.sha256(),plan);
+        Object value=actual.opt("content");
+        if(!(value instanceof String text)||actual.has("encoding")||actual.has("contentBase64")||
+                text.length()<1||text.length()>PlanArtifactVerifier.ORIGINAL_TEXT_LIMIT||actual.optInt("characters")!=text.length()||
+                !StandardCharsets.UTF_8.newEncoder().canEncode(text)||text.getBytes(StandardCharsets.UTF_8).length!=plan.sizeBytes())
+            throw new SecurityException("原核验文件无法完整作为文字查看");
+        return text;
     }
     private static byte[] fileBytes(JSONObject actual)throws Exception{byte[] bytes;if("base64".equals(actual.optString("encoding"))){String value=actual.getString("contentBase64");if(value.length()>((VersionedWorkspace.MAX_FILE_BYTES+2)/3)*4)throw new SecurityException("原文件成果超限");bytes=java.util.Base64.getDecoder().decode(value);if(!java.util.Base64.getEncoder().encodeToString(bytes).equals(value))throw new SecurityException("原成果字节编码无效");}else bytes=actual.getString("content").getBytes(StandardCharsets.UTF_8);if(bytes.length>VersionedWorkspace.MAX_FILE_BYTES||actual.has("sizeBytes")&&bytes.length!=actual.getLong("sizeBytes"))throw new SecurityException("原成果字节大小不符");return bytes;}
     private static String hashBytes(byte[] bytes)throws Exception{return hex(MessageDigest.getInstance("SHA-256").digest(bytes));}

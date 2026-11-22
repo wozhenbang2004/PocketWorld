@@ -2268,6 +2268,29 @@ internal class PocketWebBridge(
                     })
                     return
                 }
+                if (action == "plans.readOriginalStepFile") {
+                    requireSection("commitments")
+                    val document = requireNotNull(documentId)
+                    val window = captureWindow()
+                    val foreground = controller.displayedPhoneWindowVersion()
+                    val generation = domainGeneration
+                    fun beforeFile() = !closed && documentId == document && domainGeneration == generation &&
+                        commandFence.accepts(window.bridge) && taskViewId == null && controller.displayedPhoneWindowAlive(foreground)
+                    fun visible(): Boolean {
+                        val state = controller.state
+                        return beforeFile() && acceptsWindow(window) && section == "commitments" && taskReturnSection == null &&
+                            controller.webPrivateOwnerVisible() && state.filePath == null && controller.conversationReader == null &&
+                            controller.queuedInputsPage == null && !state.chatAttachmentPickerOpen && !controller.attachmentOutcomes.state.open
+                    }
+                    check(visible()) { "请回到原私人持续目标查看核验文件" }
+                    planPages.readOriginalStepFile(args, ::beforeFile) { result, error ->
+                        if (documentId == document) {
+                            if (visible()) complete(id, result?.let { PocketWebState.publicValue(it) as JSONObject }, error, retainValue = false)
+                            else complete(id, null, "原目标窗口已变化；没有显示旧文件。", retainValue = false)
+                        }
+                    }
+                    return
+                }
                 val originalReminderRead = action == "plans.reviewSchedule" && args.has("messageId")
                 val originalReminderConfirm = action == "plans.confirm" && args.has("originalChatReminder")
                 if (originalReminderRead || originalReminderConfirm) {

@@ -1,6 +1,7 @@
 package dev.pocketengine.store;
 
 import dev.pocketengine.features.assistant.OwnerSourceReferences;
+import dev.pocketengine.features.automation.PlanArtifactVerifier;
 import dev.pocketengine.features.attachments.OriginalReplyDocument;
 import dev.pocketengine.features.attachments.creation.NativeDocumentCreation;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
@@ -6392,6 +6393,70 @@ public final class TaskStore {
             db.setTransactionSuccessful();return new JSONObject().put("kind","task_result").put("id",id);
         }finally{db.endTransaction();}
     }
+    /** Recheck the same Book-selected immutable file against one original Task/Run/Operation. */
+    public synchronized boolean originalPlanFileCurrent(PlanArtifactVerifier.OriginalFile expected)throws Exception{
+        if(closed||expected==null)return false;
+        boolean owns=!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
+        try{
+            String id=expected.taskId(),run=expected.runId(),step=expected.stepId(),plan=expected.planId();
+            JSONObject task=TaskAuditStore.originalPlanFileIdentity(db,id);
+            if(task==null||!id.equals(task.opt("id"))||!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))||
+                    !"assistant".equals(task.opt("kind"))||!"capabilities".equals(task.opt("executionMode"))||
+                    !"completed".equals(task.opt("status"))||!Boolean.FALSE.equals(task.opt("cancelRequested"))||
+                    !run.equals(task.opt("runId"))||!planFileInteger(task,"coordinatorEpoch",expected.epoch())||
+                    !"".equals(task.opt("conversationId"))||!task.isNull("parentTaskId")||
+                    task.has("contextAvailable")&&!Boolean.TRUE.equals(task.opt("contextAvailable"))||
+                    task.has("contextWithdrawn")&&!Boolean.FALSE.equals(task.opt("contextWithdrawn"))||
+                    task.has("sourceCurrentReadRequired")&&!Boolean.FALSE.equals(task.opt("sourceCurrentReadRequired")))return false;
+            JSONObject origin=task.optJSONObject("origin"),scope=task.optJSONObject("automationScope");
+            if(origin==null||scope==null||!"automation".equals(origin.opt("kind"))||origin.has("nativeOrigin")||
+                    !plan.equals(origin.opt("planId"))||!plan.equals(origin.opt("ruleId"))||!step.equals(origin.opt("commitmentId"))||
+                    !expected.occurrenceId().equals(origin.opt("occurrenceId"))||!planFileInteger(origin,"ruleRevision",expected.ruleRevision())||
+                    !plan.equals(task.opt("automationRuleId"))||!planFileInteger(task,"automationRevision",expected.ruleRevision())||
+                    !plan.equals(scope.opt("planId"))||!step.equals(scope.opt("commitmentId"))||!Boolean.TRUE.equals(scope.opt("allowPrivateArtifactFreeze"))||
+                    scope.has("remoteWait")||scope.has("businessWait")||
+                    scope.optJSONObject("verification")==null||
+                    !expected.standardDigest().equals(capabilityFingerprint(scope.getJSONObject("verification"))))return false;
+            JSONArray refs=task.optJSONArray("automationResultRefs"),bindings=task.optJSONArray("commitmentBindings");
+            if(refs==null||bindings==null||refs.length()>50||bindings.length()>50)return false;
+            int matching=0,bound=0;
+            for(int i=0;i<refs.length();i++)if(expected.evidenceId().equals(refs.opt(i)))matching++;
+            for(int i=0;i<bindings.length();i++){
+                JSONObject binding=bindings.optJSONObject(i);
+                if(binding!=null&&step.equals(binding.opt("commitmentId"))){
+                    if(!planFileInteger(binding,"commitmentRevision",expected.commitmentRevision()))return false;
+                    bound++;
+                }
+            }
+            if(matching!=1||bound!=1||hasUnresolvedOperations(id,null))return false;
+            try(Cursor stopped=db.rawQuery("SELECT 1 FROM phone_stop_batches WHERE parent_id=? AND state='unknown' LIMIT 1",new String[]{id})){
+                if(stopped.moveToFirst())return false;
+            }
+            try(Cursor settled=db.rawQuery("SELECT 1 FROM runs WHERE run_id=? AND task_id=? AND epoch=? AND status='completed'",new String[]{run,id,Integer.toString(expected.epoch())})){
+                if(!settled.moveToFirst())return false;
+            }
+            JSONObject proof;
+            try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(value AS BLOB))<=8192 THEN value END FROM meta WHERE key=?",new String[]{"commitment.evidence."+expected.evidenceId()})){
+                if(!row.moveToFirst()||row.isNull(0))return false;
+                JSONObject evidence=new JSONObject(row.getString(0));proof=evidence.optJSONObject("verification");
+                if(!expected.evidenceId().equals(evidence.opt("id"))||!"native_workspace_artifact_standard".equals(evidence.opt("source"))||
+                        !"task_result".equals(evidence.opt("kind"))||!"completed".equals(evidence.opt("outcome"))||
+                        !"owner".equals(evidence.opt("ownerId"))||!"private".equals(evidence.opt("spaceId"))||
+                        !id.equals(evidence.opt("taskId"))||!step.equals(evidence.opt("commitmentId"))||
+                        !planFileInteger(evidence,"commitmentRevision",expected.commitmentRevision())||
+                        !planFileInteger(evidence,"recordedAt",expected.recordedAt())||!expected.matchesVerification(proof))return false;
+            }
+            JSONObject binding=new JSONObject().put("commitmentId",step).put("commitmentRevision",expected.commitmentRevision());
+            if(!expected.evidenceId().equals("automation-"+capabilityFingerprint(new JSONObject().put("binding",binding).put("proof",proof))))return false;
+            // The original method reads only the one operation PK and caps its receipt bytes.
+            requireCompletionArtifact(task,proof);
+            if(owns)db.setTransactionSuccessful();return true;
+        }finally{if(owns)db.endTransaction();}
+    }
+    private static boolean planFileInteger(JSONObject value,String key,long expected){
+        Object actual=value.opt(key);return (actual instanceof Integer||actual instanceof Long)&&((Number)actual).longValue()==expected;
+    }
+
     /** Native original-store carrier. JSON metadata cannot restore this object or grant an audience. */
     public final class CompletionFact {
         public final String factId,completionFingerprint,taskId,runId;

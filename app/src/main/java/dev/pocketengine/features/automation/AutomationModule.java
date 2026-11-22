@@ -283,6 +283,10 @@ public final class AutomationModule implements EngineModule {
     public JSONObject readyPlanTasks(JSONObject scope,String planId,int limit)throws Exception {return commitments.readyPlanTasks(scope,planId,System.currentTimeMillis(),limit);}
     public JSONObject inspectPlanTask(JSONObject scope,String planId,String stepId)throws Exception{return commitments.inspectPlanTask(scope,planId,stepId,System.currentTimeMillis());}
     public JSONObject planProgress(JSONObject scope,String planId)throws Exception{return commitments.planProgress(scope,planId,System.currentTimeMillis());}
+    /** Owner-only host observation for a native held Plan witness; not a feature command. */
+    public boolean originalStepFileCurrent(PlanArtifactVerifier.OriginalFile held,java.util.function.BooleanSupplier current)throws Exception{
+        return commitments.originalStepFileCurrent(held,current);
+    }
     public JSONObject evaluatePlanChange(JSONObject scope,String planId)throws Exception{return commitments.evaluatePlanChange(scope,planId,System.currentTimeMillis());}
     public JSONObject claimPlanChange(JSONObject scope,String planId,String candidateKey,long leaseMillis)throws Exception {
         JSONObject result=commitments.claimPlanChange(scope,planId,candidateKey,leaseMillis,System.currentTimeMillis());if(result.optBoolean("claimed"))reschedule(context.android);return result;

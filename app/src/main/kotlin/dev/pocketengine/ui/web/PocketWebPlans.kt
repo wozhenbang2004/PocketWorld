@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.features.automation.AutomationSchedule
 import dev.pocketengine.features.automation.DeviceScheduleOrigin
+import dev.pocketengine.features.automation.PlanArtifactVerifier
 import dev.pocketengine.features.automation.PlanBusinessWait
 import dev.pocketengine.features.automation.PlanRemoteWait
 import dev.pocketengine.ui.ExecutionDependencyDraft
@@ -27,6 +28,9 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
     private var snapshot = JSONObject()
     private val readings = linkedMapOf<String, Pair<String, Long>>()
     private val reviews = linkedMapOf<String, Review>()
+    private data class OriginalFileView(val handle: String, val expires: Long, val file: PlanArtifactVerifier.OriginalFile)
+    @Volatile private var originalFileView: OriginalFileView? = null
+    @Volatile private var originalFileFlight: Any? = null
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var reminderSelection = 0L
     private data class OriginalReminder(
@@ -36,9 +40,9 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
     private var originalReminder: OriginalReminder? = null
     companion object {
         val COMMANDS = setOf("plans.snapshot", "plans.read", "plans.reviewCreate", "plans.reviewStep", "plans.reviewAction",
-            "plans.reviewApproval", "plans.reviewSchedule", "plans.confirm", "plans.inspect", "plans.discard")
+            "plans.reviewApproval", "plans.reviewSchedule", "plans.confirm", "plans.inspect", "plans.discard", "plans.readOriginalStepFile")
     }
-    fun clear() { generation++; snapshot = JSONObject(); readings.clear(); reviews.clear(); clearOriginalReminder() }
+    fun clear() { generation++; snapshot = JSONObject(); readings.clear(); reviews.clear(); originalFileView = null; originalFileFlight = null; clearOriginalReminder() }
     fun clearOriginalReminder() { reminderSelection++; originalReminder = null }
     private fun fields(input: JSONObject, vararg allowed: String) { require(input.keys().asSequence().all { it in allowed }) { "计划操作包含不适用的字段" } }
     private fun text(input: JSONObject, key: String, max: Int = 128, empty: Boolean = false): String {
@@ -133,8 +137,41 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
     private fun view(plan: JSONObject): JSONObject {
         readings.entries.removeAll { it.value.second <= SystemClock.elapsedRealtime() }
         while (readings.size >= 16) readings.remove(readings.keys.first())
-        val handle = UUID.randomUUID().toString(); readings[handle] = plan.toString() to SystemClock.elapsedRealtime() + 120_000
-        return JSONObject().put("viewHandle", handle).put("plan", public(plan))
+        val handle = UUID.randomUUID().toString(); val expires = SystemClock.elapsedRealtime() + 120_000
+        readings[handle] = plan.toString() to expires
+        val step = plan.optJSONObject("progress")?.optJSONObject("lastResult")?.optString("stepId").orEmpty()
+        // The native Book/Work view is already present. No extra read or body at discovery.
+        val original = runCatching { PlanArtifactVerifier.heldOriginalFile(plan, step) }.getOrNull()
+        originalFileFlight = null; originalFileView = original?.let { OriginalFileView(handle, expires, it) }
+        return JSONObject().put("viewHandle", handle).put("plan", public(plan)).also { output ->
+            original?.let { output.put("originalStepFile", JSONObject().put("stepId", it.stepId())
+                .put("evidenceId", it.evidenceId()).put("sourceVersion", it.sourceVersion())) }
+        }
+    }
+    /** Only the current native Plan view may opt into its one actually presented finished file. */
+    fun readOriginalStepFile(args: JSONObject, ownerCurrent: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        fields(args, "viewHandle", "stepId")
+        val handle = text(args, "viewHandle"); val step = text(args, "stepId")
+        val held = originalFileView ?: error("请重新核对这个原目标")
+        check(handle == held.handle && step == held.file.stepId() && originalFileFlight == null &&
+            SystemClock.elapsedRealtime() < held.expires && ownerCurrent()) { "请重新核对这个原目标" }
+        val election = Any(); originalFileFlight = election
+        fun current() = originalFileView === held && originalFileFlight === election &&
+            SystemClock.elapsedRealtime() < held.expires && ownerCurrent()
+        try {
+            controller.runPluginCatalogWork(Runnable {
+                val file = runCatching { controller.nativeButlerHost().readOriginalPlanStepFile(held.file, ::current) }.getOrNull()
+                main.post {
+                    val ready = current()
+                    if (originalFileFlight === election) originalFileFlight = null
+                    if (!ready || file == null) done(null, "暂未核对到当时的原文件。核验记录仍保留，没有改读其他版本。")
+                    else done(file, null)
+                }
+            })
+        } catch (failure: RuntimeException) {
+            if (originalFileFlight === election) originalFileFlight = null
+            throw failure
+        }
     }
     private fun review(command: String, input: JSONObject, plan: JSONObject? = null): JSONObject {
         reviews.entries.removeAll { it.value.expires <= SystemClock.elapsedRealtime() }; check(reviews.size < 8) { "请先关闭已有计划审阅" }
@@ -220,7 +257,10 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
             }
             "plans.discard" -> {
                 fields(args, "viewHandle", "reviewHandle")
-                if (args.length() == 0) { clear(); done(JSONObject().put("closed", true), null); return } else { readings.remove(args.optString("viewHandle")); reviews.remove(args.optString("reviewHandle")) }
+                if (args.length() == 0) { clear(); done(JSONObject().put("closed", true), null); return }
+                val handle = args.optString("viewHandle")
+                if (originalFileView?.handle == handle) { originalFileView = null; originalFileFlight = null }
+                readings.remove(handle); reviews.remove(args.optString("reviewHandle"))
                 deliver(JSONObject().put("closed", true), null)
             }
             "plans.reviewCreate" -> {

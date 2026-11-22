@@ -99,6 +99,13 @@ public final class WorkspaceModule implements EngineModule {
     public WorkspaceArtifactContinuation continueArtifactForHost(String id,String sha)throws Exception{return new WorkspaceArtifactContinuation(workspace,artifacts,id,sha);}
     public byte[] fileArtifactBytesForHost(WorkspaceArtifacts.ArtifactRef selected)throws Exception{return artifacts.bytes(selected);}
     public long exportFileArtifactForHost(WorkspaceArtifacts.ArtifactRef selected,java.io.OutputStream destination)throws Exception{return artifacts.exportFile(selected,destination);}
+    public String originalPlanFileTextForHost(dev.pocketengine.features.automation.PlanArtifactVerifier.OriginalFile plan,
+                                              java.util.function.BooleanSupplier current)throws Exception{
+        if(nativeClosed||!current.getAsBoolean())throw new SecurityException("原核验文件窗口已关闭");
+        String content=artifacts.originalPlanFileText(plan);
+        if(nativeClosed||!current.getAsBoolean())throw new SecurityException("原核验文件窗口已关闭");
+        return content;
+    }
     public JSONObject ownerProjectArchiveForHost(String project,dev.pocketengine.core.RunControl control)throws Exception{return workspace.ownerProjectArchive(project,control);}
     public JSONObject restoreOwnerProjectArchiveForHost(JSONObject archive,String nativeImportId,String sectionDigest,dev.pocketengine.core.RunControl control)throws Exception{return workspace.restoreOwnerProjectArchive(archive,nativeImportId,sectionDigest,control);}
     public JSONObject queryOwnerProjectArchiveForHost(JSONObject archive,String nativeImportId,String sectionDigest)throws Exception{return workspace.queryOwnerProjectArchive(archive,nativeImportId,sectionDigest);}

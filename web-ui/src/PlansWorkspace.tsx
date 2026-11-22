@@ -112,7 +112,32 @@ function originalPlanWorkShown(visit: PlanWorkVisit, live: ReturnType<typeof bri
     origin.commitmentId === work.stepId && origin.occurrenceId === work.occurrenceId;
 }
 
-function PlanProgress({ plan, run, supported, currentAction, renewalReason }: { plan: Data; run: Props['run']; supported: Props['supported']; currentAction?: ReactNode; renewalReason?: string }) {
+type PlanFileTarget = { planId: string; stepId: string; evidenceId: string; sourceVersion: number; viewHandle: string };
+type PlanFileVisit = {
+  target: PlanFileTarget; reading: Data; document: number; resume: number;
+  trigger: HTMLButtonElement; scroller: HTMLElement | null; scrollTop: number;
+};
+type PlanFilePresentation = { visit: PlanFileVisit; status: 'reading' | 'unavailable' | 'ready'; text?: string };
+const originalStepFileAction = 'plans.readOriginalStepFile';
+function planFileTarget(reading: Data | null): PlanFileTarget | undefined {
+  const plan = reading?.plan, file = reading?.originalStepFile, handle = reading?.viewHandle;
+  if (!plan || !planWorkId(plan.id) || !planWorkId(handle) || !planWorkId(file?.stepId) ||
+      typeof file?.evidenceId !== 'string' || !/^automation-[a-f0-9]{64}$/.test(file.evidenceId) ||
+      !Number.isSafeInteger(file.sourceVersion) || file.sourceVersion < 1) return;
+  const last = planProgressView(plan)?.lastResult;
+  if (last?.stepId !== file.stepId || last.resultVerified !== true || last.resultBasis?.kind !== 'native_workspace_artifact_standard') return;
+  return { planId: plan.id, stepId: file.stepId, evidenceId: file.evidenceId, sourceVersion: file.sourceVersion, viewHandle: handle };
+}
+function planFileWindow(resume: number, epoch: number) {
+  const view = bridge.getState().view as Data | undefined;
+  return !document.hidden && bridge.getDocumentEpoch() === epoch &&
+    view?.section === 'commitments' && view.taskId === null && view.resumeRevision === resume;
+}
+
+function PlanProgress({ plan, run, supported, currentAction, renewalReason, fileControl, fileResult, onWork }: {
+  plan: Data; run: Props['run']; supported: Props['supported']; currentAction?: ReactNode; renewalReason?: string;
+  fileControl?: ReactNode; fileResult?: ReactNode; onWork?: () => void;
+}) {
   const observed = planProgressView(plan); if (!observed) return null;
   const current = observed.currentStep, last = observed.lastResult, notification = observed.notification || {};
   const reason = renewalReason || planProgressReason(plan);
@@ -130,7 +155,9 @@ function PlanProgress({ plan, run, supported, currentAction, renewalReason }: { 
       {last.summary && <p className="pw-user-text">{last.summary}{last.summaryTruncated ? '…' : ''}</p>}
       {last.resultBasis?.kind === 'native_workspace_artifact_standard' && <p className="pw-field-hint">按原约定核验了文件身份、可读性、首行和大小；内容质量仍需验收。</p>}
       {last.resultBasis?.kind === 'owner_confirmation' && <p className="pw-field-hint">完成依据来自本轮主人的结果确认。</p>}
-      {last.taskId && <Button variant="secondary" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: last.taskId }); }}>查看这份结果与原工作</Button>}
+      {fileControl ? <><div className="pw-followup-primary-actions">{fileControl}
+        {last.taskId && <Button variant="secondary" disabled={!supported('tasks.open')} onClick={() => { onWork?.(); void run('tasks.open', { id: last.taskId }); }}>查看原工作</Button>}
+      </div>{fileResult}</> : last.taskId && <Button variant="secondary" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: last.taskId }); }}>查看这份结果与原工作</Button>}
     </div>}
     <p className="pw-field-hint">核对于 {time(observed.observedAt)}{observed.readState === 'partial' ? ' · 部分原工作未读取成功，没有推定它们已完成。' : ' · 后续状态以刷新后的原记录为准。'}</p>
     <p className="pw-field-hint">{notices[notification.state] || '提醒状态待核对'}。只提醒目标结束或确实需要你处理的变化。</p>
@@ -194,17 +221,30 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   const mutationPending = useRef(false);
   const taskWindow = useRef({ open: state.webWorkspaceTaskOpen, resume: state.webWorkspaceResumeRevision });
   const planWorkVisit = useRef<PlanWorkVisit | null>(null);
+  const fileVisit = useRef<PlanFileVisit | null>(null), fileTrigger = useRef<HTMLButtonElement>(null);
+  const [file, showFile] = useState<PlanFilePresentation | null>(null);
   const nativeTaskId = (bridge.getState().view as Data | undefined)?.taskId;
   const collectionPanel = useRef<HTMLDivElement>(null), detailHeading = useRef<HTMLHeadingElement>(null);
   const listPosition = useRef(0), openedId = useRef(''), presentedId = useRef('');
   const alive = useRef(true), scope = useRef(new OwnerWorkspaceRequest()), selected = useRef<Data | null>(null), reviewed = useRef<Data | null>(null);
   selected.current = reading; reviewed.current = review;
+  const closePlanFile = (restore = false) => {
+    const visit = fileVisit.current;
+    if (!visit) return false;
+    fileVisit.current = null; showFile(null);
+    if (restore && selected.current === visit.reading && planFileWindow(visit.resume, visit.document) &&
+        fileTrigger.current === visit.trigger && visit.trigger.isConnected) {
+      visit.trigger.focus({ preventScroll: true });
+      if (visit.scroller?.isConnected) visit.scroller.scrollTop = visit.scrollTop;
+    }
+    return true;
+  };
   const release = (value: Data | null, key: string) => { if (value?.[key]) void run('plans.discard', { [key]: value[key] }).catch(() => {}); };
   const closeReview = () => { release(reviewed.current, 'reviewHandle'); setReview(null); setAck(false); };
   const invoke = async (action: string, input: Data = {}, accept?: (value: Data) => void, mutation = false) => {
     if (!alive.current || document.visibilityState !== 'visible' || state.webWorkspaceTaskOpen) return;
     const ticket = scope.current.begin(); if (ticket === null) return;
-    setBusy(true); setError(''); mutationPending.current = mutation;
+    closePlanFile(); setBusy(true); setError(''); mutationPending.current = mutation;
     try {
       if (!supported(action)) throw new Error('当前宿主尚未接通这项计划操作。');
       const value = await run(action, input);
@@ -232,7 +272,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   }); };
   const refresh = () => readSnapshot();
   const read = (id: string) => { if (!selected.current) { listPosition.current = collectionPanel.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; openedId.current = id; } closeReview(); void invoke('plans.read', { id }, acceptReading); };
-  const returnToList = () => { if (busy) return; openedId.current = selected.current?.plan?.id || openedId.current; release(selected.current, 'viewHandle'); setReading(null); };
+  const returnToList = () => { if (busy) return; closePlanFile(); openedId.current = selected.current?.plan?.id || openedId.current; release(selected.current, 'viewHandle'); setReading(null); };
   useEffect(() => {
     const id = state.requestedExecutionPlanId, key = id + ':' + String(state.requestedExecutionPlanRevision || 0);
     if (!id || !snapshot.plans || busy || editor || settings || review || openedNotification.current === key || state.webWorkspaceTaskOpen) return;
@@ -240,8 +280,8 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     else setNotice('通知对应的原目标暂不在当前清单，请刷新后核对；未打开其它目标。');
   }, [state.requestedExecutionPlanId, state.requestedExecutionPlanRevision, snapshot.plans, busy, editor, settings, review, state.webWorkspaceTaskOpen]);
   const prepare = (action: string, input: Data) => { if (uncertain) return; void invoke(action, input, value => { if (!value?.reviewHandle || !value.command) throw new Error('未取得原目标审阅。'); closeReview(); setReview(value); setAck(false); }); };
-  const hide = (active: boolean) => { if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old ? { ...old, viewHandle: '', returnWindow: undefined } : null); setEditor(old => old ? { ...old, viewHandle: '' } : null); setSettings(old => old ? { ...old, viewHandle: '' } : null); void run('plans.discard').catch(() => {}); };
-  useEffect(() => { alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh(); return () => { alive.current = false; planWorkVisit.current = null; scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false); }; }, []);
+  const hide = (active: boolean) => { closePlanFile(); if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old ? { ...old, viewHandle: '', returnWindow: undefined } : null); setEditor(old => old ? { ...old, viewHandle: '' } : null); setSettings(old => old ? { ...old, viewHandle: '' } : null); void run('plans.discard').catch(() => {}); };
+  useEffect(() => { alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh(); return () => { alive.current = false; planWorkVisit.current = null; fileVisit.current = null; scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false); }; }, []);
   useEffect(() => { onEditingChange(busy || !!editor || !!settings || !!review); }, [busy, editor, settings, review]);
   useEffect(() => { const changed = () => { planWorkVisit.current = null; const active = document.visibilityState === 'visible'; hide(active); if (active) refresh(); }; const hidden = () => { planWorkVisit.current = null; hide(false); }; document.addEventListener('visibilitychange', changed); window.addEventListener('pagehide', hidden); return () => { document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); }; });
   useEffect(() => {
@@ -261,7 +301,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     hide(active);
     if (active) readSnapshot(returned);
   }, [nativeTaskId, state.webWorkspaceTaskOpen, state.webWorkspaceResumeRevision, state.requestedTaskRevision, state.tasks]);
-  useEffect(() => { registerTransientBack(() => { if (busy) return true; if (review) { closeReview(); return true; } if (settings) { setSettings(null); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (reading) { returnToList(); return true; } return false; }); return () => registerTransientBack(null); }, [busy, review, settings, editor, reading, registerTransientBack]);
+  useEffect(() => { registerTransientBack(() => { if (closePlanFile(true)) return true; if (busy) return true; if (review) { closeReview(); return true; } if (settings) { setSettings(null); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (reading) { returnToList(); return true; } return false; }); return () => registerTransientBack(null); }, [busy, review, settings, editor, reading, registerTransientBack]);
   useLayoutEffect(() => {
     const id = reading?.plan?.id || '', scroller = collectionPanel.current?.closest('.pw-secondary-scroll');
     if (id) {
@@ -313,6 +353,35 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   const promotedWork = plan && supported('tasks.open') ? currentPlanWork(plan) : undefined;
   const planDocument = bridge.getDocumentEpoch();
   const readOnlyProgress = !!reading?.returnWindow && planReturnCurrent(reading.returnWindow);
+  const fileTarget = !editor && !settings && !review && supported(originalStepFileAction) ? planFileTarget(reading) : undefined;
+  const visibleFile = fileTarget && file && file.visit.reading === reading && fileVisit.current === file.visit &&
+    planFileWindow(file.visit.resume, file.visit.document) ? file : undefined;
+  useEffect(() => { if (file && !visibleFile) closePlanFile(); }, [file, visibleFile]);
+  const togglePlanFile = async () => {
+    if (visibleFile && closePlanFile(true)) return;
+    const native = bridge.getState(), resume = (native.view as Data | undefined)?.resumeRevision;
+    const trigger = fileTrigger.current;
+    if (!fileTarget || !reading || selected.current !== reading || !alive.current || busy || fileVisit.current ||
+        !Number.isSafeInteger(resume) || !planFileWindow(resume, planDocument) ||
+        !trigger?.isConnected || !native.capabilities.commands.includes(originalStepFileAction)) return;
+    const scroller = trigger.closest<HTMLElement>('.pw-secondary-scroll');
+    const visit: PlanFileVisit = { target: fileTarget, reading, resume, document: planDocument, trigger, scroller, scrollTop: scroller?.scrollTop || 0 };
+    fileVisit.current = visit; showFile({ visit, status: 'reading' });
+    const still = () => alive.current && fileVisit.current === visit && selected.current === reading &&
+      fileTrigger.current === trigger && trigger.isConnected && planFileWindow(resume, planDocument);
+    try {
+      const value = await bridge.command(originalStepFileAction, { viewHandle: fileTarget.viewHandle, stepId: fileTarget.stepId });
+      if (!still()) { if (fileVisit.current === visit) closePlanFile(); return; }
+      if (value?.format !== 'pocketworld.original-plan-step-file.v1' || value.planId !== fileTarget.planId ||
+          value.stepId !== fileTarget.stepId || value.evidenceId !== fileTarget.evidenceId || value.sourceVersion !== fileTarget.sourceVersion ||
+          value.referenceOnly !== true || value.executionAuthorized !== false || typeof value.text !== 'string' ||
+          value.text.length < 1 || value.text.length > 65536) throw new Error('原核验文件未得到确认');
+      showFile({ visit, status: 'ready', text: value.text });
+    } catch {
+      if (still()) showFile({ visit, status: 'unavailable' });
+      else if (fileVisit.current === visit) closePlanFile();
+    }
+  };
   const openPromotedWork = async () => {
     const live = bridge.getState(), view = live.view as Data | undefined, request = live.state.requestedTaskRevision;
     if (!promotedWork || !plan || !Number.isSafeInteger(plan.revision) ||
@@ -335,6 +404,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   const openSettings = (target?: PlanRenewalTarget) => {
     if (!plan || !validRead || target && (target !== renewal || !target.paused || busy || uncertain || selected.current !== reading ||
         document.visibilityState !== 'visible' || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen)) return;
+    closePlanFile();
     const p = plan.execution?.policy || {};
     setSettings({ viewHandle: reading?.viewHandle, planId: plan.id, revision: plan.revision, renewal: target,
       mode: plan.execution?.mode || 'manual', maxTaskAdmissions: String(plan.execution?.maxTaskAdmissions || Math.max(1, rows(plan.steps).length)),
@@ -390,7 +460,17 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
       {plan.execution && <dl className="pw-followup-facts"><div><dt>剩余可启动次数</dt><dd>{Number.isSafeInteger(plan.execution.admissions) && Number.isSafeInteger(plan.execution.maxTaskAdmissions) ? Math.max(0, plan.execution.maxTaskAdmissions - plan.execution.admissions) : '尚未读取'} 次 · 已使用 {count(plan.execution.admissions)}/{count(plan.execution.maxTaskAdmissions)}，修改不会重置</dd></div><div><dt>本次授权到期</dt><dd>{expiry(plan.execution.policy)}</dd></div></dl>}
       {plan.originalTasksUnsettled && <p className="pw-followup-context">仍有工作正在结束或等待核对；暂停结果尚未确认。</p>}
       {(Array.isArray(plan.requirements?.blockers) ? plan.requirements.blockers : []).map((reason: any, index: number) => <p className="pw-followup-context" key={index}>{String(reason)}</p>)}
-      {planProgressView(plan) ? <PlanProgress plan={plan} run={run} supported={supported} renewalReason={renewalReason} currentAction={promotedWork &&
+      {planProgressView(plan) ? <PlanProgress plan={plan} run={run} supported={supported} renewalReason={renewalReason}
+        fileControl={fileTarget && <Button ref={fileTrigger} variant="secondary" aria-expanded={!!visibleFile} disabled={busy}
+          onClick={() => void togglePlanFile()}>{visibleFile ? '收起核验文件' : '查看核验文件'}</Button>}
+        fileResult={visibleFile && <article className="pw-source-record" aria-label="当时核验的文件">
+          {visibleFile.status === 'reading' ? <p role="status">正在核对当时保存的文件…</p> : visibleFile.status === 'unavailable' ?
+            <p role="status">暂不能查看当时的原文件。核验记录仍保留，可返回目标列表后重新打开核对。</p> : <>
+              <header><h3>当时核验的文件</h3><span>原版本 {visibleFile.visit.target.sourceVersion}</span></header>
+              <p>{visibleFile.text}</p>
+            </>}
+        </article>}
+        onWork={closePlanFile} currentAction={promotedWork &&
         <Button variant={promotedWork.active ? 'secondary' : undefined} disabled={busy || (!validRead && !readOnlyProgress) || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen}
           onClick={() => void openPromotedWork()}>{promotedWork.active ? '查看这一步的工作' : '打开原工作'}</Button>} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
       {!validRead && <div className="pw-followup-attention"><p>{readOnlyProgress ? '已核对这个目标当前的进展。调整目标前需重新核对原版本。' : '详情已保留，操作前需要重新读取原版本。'}</p><Button variant="secondary" disabled={busy} onClick={() => read(plan.id)}>重新核对这个目标</Button></div>}

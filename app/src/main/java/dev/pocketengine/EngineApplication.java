@@ -2456,6 +2456,15 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(host==null||!current.getAsBoolean())throw new SecurityException("原目标读取窗口已关闭");
         return host.readOriginalPlanStepContext(automationModule(),original,()->automationPlans==host&&current.getAsBoolean());
     }
+    public JSONObject readOriginalPlanStepFile(dev.pocketengine.features.automation.PlanArtifactVerifier.OriginalFile held,
+                                               java.util.function.BooleanSupplier current)throws Exception{
+        var host=automationPlans;var original=features;
+        if(host==null||original==null||held==null||!current.getAsBoolean()||
+                !(original.module("workspace") instanceof dev.pocketengine.features.workspace.WorkspaceModule workspace))
+            throw new SecurityException("原核验文件窗口已关闭");
+        return host.readOriginalPlanStepFile(automationModule(),workspace,held,
+                ()->automationPlans==host&&features==original&&current.getAsBoolean());
+    }
     private static boolean automationPlanTask(JSONObject task){JSONObject origin=task==null?null:task.optJSONObject("origin");return origin!=null&&origin.optString("kind").equals("automation")&&!origin.optString("planId").isEmpty();}
     private JSONObject reviewedAutomationRequest(JSONObject task)throws Exception{
         JSONObject origin=task.getJSONObject("origin"),request=automationModule().planTaskRequest(json("ownerId","owner","spaceId","private"),origin.getString("planId"),origin.getString("commitmentId"),origin.getString("occurrenceId"));
