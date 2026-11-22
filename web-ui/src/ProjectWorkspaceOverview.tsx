@@ -89,10 +89,8 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
     <ol className="pw-project-work-list pw-depth-tasks">{attention.map(renderTask)}</ol>
   </section>;
   const running = active.length > 0 && <section key="work-running" className="pw-project-work-group" aria-label="进行中的项目工作"><h3>进行中</h3><ol className="pw-project-work-list pw-depth-tasks">{active.map(renderTask)}</ol></section>;
-  const start = (startContent || onOpenPairedDevices) && <section key="work-start" className="pw-project-new-work" aria-label="开始或继续项目工作">
+  const start = startContent && <section key="work-start" className="pw-project-new-work" aria-label="开始或继续项目工作">
     {startContent}
-    {onOpenPairedDevices && <Button variant="secondary" size="small" leadingIcon={IconDevices} title="只打开设备目录，不带入项目文件"
-      data-workspace-entry="project-paired-device" onClick={event => onOpenPairedDevices(event.currentTarget)}>使用已配对设备</Button>}
   </section>;
   // Same keyed launcher under the same provider in either order. Reordering the
   // directory never starts a second native file, setup or review window.
@@ -123,8 +121,13 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
         </div>}
         {directoryAvailable && <WorkDirectoryControls directory={directory} />}
         {work.length > 0 && !canOpenTask && <p className="pw-project-work-unavailable" role="status">当前宿主暂不支持打开任务记录。</p>}
-        <Button className="pw-project-terminal-link" variant="ghost" size="small" leadingIcon={IconTerminal} trailingIcon={IconChevronRight}
-          data-workspace-entry="project-terminal" onClick={onOpenTerminal}>项目终端</Button>
+        <div className="pw-action-row">
+          <Button className="pw-project-terminal-link" variant="ghost" size="small" leadingIcon={IconTerminal} trailingIcon={IconChevronRight}
+            data-workspace-entry="project-terminal" onClick={onOpenTerminal}>项目终端</Button>
+          {onOpenPairedDevices && <Button className="mt-4 min-h-11" variant="ghost" size="small" leadingIcon={IconDevices} trailingIcon={IconChevronRight}
+            title="只打开设备目录，不带入项目文件" data-workspace-entry="project-paired-device"
+            onClick={event => onOpenPairedDevices(event.currentTarget)}>查看已配对设备</Button>}
+        </div>
       </div>
 
     </div>

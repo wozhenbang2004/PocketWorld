@@ -2267,9 +2267,12 @@ public final class LocalModule implements EngineModule {
         return position.path().equals(member.opt("path"))&&position.sha256().equals(member.opt("sha256"))&&
                 member.optLong("bytes",-1)>=0&&member.optLong("bytes")<=262144;
     }
-    private static boolean savedStaticPhoneFolder(JSONObject row,EditorSaveOrigin origin){
+    /** Only an original phone selection materialized into the same registered private checkout.
+     * The preview always uses that checkout, never the selected folder URI or archive. */
+    private static boolean savedStaticPhoneImport(JSONObject row,EditorSaveOrigin origin){
         JSONObject imported=row.optJSONObject("sourceImport");
-        return origin==EditorSaveOrigin.IMPORTED_VERSIONED&&imported!=null&&"saf_tree".equals(imported.opt("sourceKind"));
+        return origin==EditorSaveOrigin.IMPORTED_VERSIONED&&imported!=null&&
+                ("saf_tree".equals(imported.opt("sourceKind"))||"external_zip".equals(imported.opt("sourceKind")));
     }
     /** Only a fresh native read or verified save from the open root HTML editor, never a restored draft alone. */
     public static boolean savedStaticEditorEntry(dev.pocketengine.features.local.project.ProjectFileDraft file)throws Exception{
@@ -2289,8 +2292,8 @@ public final class LocalModule implements EngineModule {
         if(closed||!current.getAsBoolean()||!savedStaticEditorEntry(entry))
             throw new SecurityException("请从原副本打开并保存 index.html 后再预览");
         JSONObject selected=checkout(entry.checkoutId);
-        if(!savedStaticPhoneFolder(selected,editorSaveOrigin(selected,entry.projectId,entry.checkoutId)))
-            throw new SecurityException("只预览这个项目已登记的手机文件夹副本");
+        if(!savedStaticPhoneImport(selected,editorSaveOrigin(selected,entry.projectId,entry.checkoutId)))
+            throw new SecurityException("只预览这个项目已登记的手机导入副本");
         requireIdle(entry.checkoutId);requireCheckoutWritable(entry.checkoutId);
         ProjectPreviewBundle.Verified bundle=null;
         ProjectPreviewBundle.SavedStaticMissingAssets missing=null;
@@ -2299,7 +2302,7 @@ public final class LocalModule implements EngineModule {
                     entry.baseHash,assets,()->!closed&&current.getAsBoolean());
         }catch(ProjectPreviewBundle.SavedStaticMissingAssets absent){missing=absent;}
         requireCheckoutWritable(entry.checkoutId);
-        if(!current.getAsBoolean()||!savedStaticPhoneFolder(selected,editorSaveOrigin(selected,entry.projectId,entry.checkoutId)))
+        if(!current.getAsBoolean()||!savedStaticPhoneImport(selected,editorSaveOrigin(selected,entry.projectId,entry.checkoutId)))
             throw new SecurityException("原文件窗口或项目登记已变化，未打开其他页面");
         if(missing!=null)throw missing;
         return bundle;
@@ -2405,7 +2408,7 @@ public final class LocalModule implements EngineModule {
         try{
             EditorSaveOrigin origin=editorSaveOrigin(observation.checkout(),project,id);
             if(origin==null)return listing;
-            if(savedStaticPhoneFolder(observation.checkout(),origin))listing.put("ownerSavedStaticPage",true);
+            if(savedStaticPhoneImport(observation.checkout(),origin))listing.put("ownerSavedStaticPage",true);
             ProjectFileSavePosition position=readEditorSavePosition(origin,project,id,listing);
             if(position==null)return listing;
             JSONArray actual=listing.getJSONArray("files");

@@ -97,10 +97,14 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
     !!shown.conversationId&&shown.conversationId===live.conversationId&&hasNotification&&hasSlot&&screen?.state==='ready';
   const issue=!hasNotification?notification:screen?.state!=='ready'?screen:undefined;
   const retry=!!conditions&&(expired||!canSubmit||screen?.state!=='ready');
-  // This is a stock Settings remedy on the original linked draft, not proof that a particular permission is off.
+  // This is a stock Settings remedy on an exact original draft, not proof that a particular permission is off.
   const original=live?.originalDraft;
+  const linkedDraft=!!shown.conversationId&&shown.conversationId===live?.conversationId&&!!original?.composer&&original.conversation===shown.conversationId;
+  const firstDraft=!shown.conversationId&&!live?.conversationId&&typeof live?.draftRequestId==='string'&&
+    /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(live.draftRequestId)&&
+    original?.conversation===''&&typeof original.composer==='string'&&original.composer.startsWith('new:')&&original.composer.length>4;
   const mainSettingsFirst=!!handle&&canSubmit&&!inspection&&shown.mode==='main_screen'&&live?.mode==='main_screen'&&
-    !!shown.conversationId&&shown.conversationId===live.conversationId&&!!original?.composer&&original.conversation===shown.conversationId&&
+    (linkedDraft||firstDraft)&&
     screen?.state==='blocked'&&screen.settings==='accessibility'&&!!onSettings&&!!onCheck&&!!onStart;
   const submit=live&&onStart&&!unknown&&canSubmit&&!expired?()=>{
     if(!current())return;
@@ -123,7 +127,9 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
     {error&&<p role="alert" className="pw-error">{error}</p>}
   </div>;
   const decision=pending?{title:'正在等待回执',detail:'暂不能确认这一步的结果，请勿重复提交。'}:
-    mainSettingsFirst&&!expired?{title:'先准备手机主屏',detail:'原目标保留。查看设置后请回来重新核对，不会自动提交。仍可先提交让模型处理；若之后需要用屏但主屏仍不可用，任务可能停住。'}:
+    mainSettingsFirst&&!expired?{title:'先准备手机主屏',detail:firstDraft?
+      '原目标保留。查看设置后回来重新核对，不会自动提交。也可先让模型处理，这会开始任务；若之后需要读屏而主屏仍不可用，任务可能停住。':
+      '原目标保留。查看设置后请回来重新核对，不会自动提交。仍可先提交让模型处理；若之后需要用屏但主屏仍不可用，任务可能停住。'}:
     privateDecision(conditions,expired,planned,inspection,canInspect);
   const target=issue?.state==='blocked'&&!expired?issue.settings:undefined;
   const system=target==='notifications'||planned&&target==='accessibility'?target:undefined;
@@ -148,7 +154,7 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
         }}>{place==='background_setup'?'查看独立屏准备':'回原草稿选择执行位置'}</Button>}
         {onCheck&&<Button variant={!system&&!place&&(expired||!canSubmit)?'primary':'ghost'} disabled={!live||pending}
           onClick={()=>{if(handle&&!pending&&!document.hidden){invalidate(handle);onCheck(handle)}}}>重新核对</Button>}
-        {mainSettingsFirst&&submit&&<Button variant="secondary" disabled={pending} onClick={submit}>仍提交，需用屏时再核对</Button>}
+        {mainSettingsFirst&&submit&&<Button variant="secondary" disabled={pending} onClick={submit}>{firstDraft?'先让模型处理':'仍提交，需用屏时再核对'}</Button>}
       </div>}
       {taskChannel&&onSettings&&<p className="pw-field-hint">若只打开应用通知设置，请在其中选择「手机任务」。返回后重新核对原目标。</p>}
       {place&&onPlace&&<p className="pw-field-hint">{place==='background_setup'?'在准备页选「后台独立屏 → 连接与检查」。回来后再核对原目标，不会自动连接或提交。':'主屏会占用手中的屏幕。只有你在原草稿选择后才会更换位置；仍需重新核对。'}</p>}

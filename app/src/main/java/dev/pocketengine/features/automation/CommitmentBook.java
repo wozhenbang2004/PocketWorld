@@ -28,6 +28,7 @@ import org.json.JSONObject;
 public final class CommitmentBook {
     private static final ConcurrentHashMap<String,Object> LOCKS=new ConcurrentHashMap<>();
     private static final long MAX_TIME=253402300799999L;
+    private static final String PLAN_WORK_ATTENTION="awaiting_user|waiting_user|needs_confirmation|reconciling|interrupted|waiting_approval|awaiting_approval";
     static final int MAX_STORED_BYTES=8_000_000;
     private final File file;
     private final Object lock;
@@ -561,7 +562,7 @@ public final class CommitmentBook {
     }
     private JSONObject planProgress(JSONObject state,JSONObject identity,JSONObject plan,long now)throws Exception {
         JSONObject view=planView(state,identity,plan,now),execution=plan.optJSONObject("execution");JSONArray steps=planSteps(state,identity,plan),facts=new JSONArray();
-        JSONObject current=null,last=null,attention=null,lastStep=null;boolean available=true,allClosed=true;int verified=0;long lastAt=-1;
+        JSONObject current=null,last=null,attention=null,lastStep=null;boolean available=true,allClosed=true;int verified=0,attentionCount=0;long lastAt=-1;
         for(int i=0;i<steps.length();i++){
             if(Thread.currentThread().isInterrupted())throw new InterruptedException("原计划进展读取已停止");
             JSONObject step=steps.getJSONObject(i),intent=step.optJSONObject("taskAdmission");boolean bound=intent!=null||!step.optString("taskId").isEmpty();
@@ -579,8 +580,12 @@ public final class CommitmentBook {
             if(completed)verified++;
             if(closed&&step.optLong("updatedAt")>=lastAt){last=entry;lastAt=step.optLong("updatedAt");}
             if(!settled&&current==null)current=entry;
-            if(matched&&status.matches("awaiting_user|waiting_user|needs_confirmation|unverified_result|reconciling|interrupted|waiting_approval|awaiting_approval")&&attention==null)attention=entry;
-            if(matched&&terminal(step)&&!settled&&closed&&attention==null){entry.put("status","result_changed");attention=entry;}
+            boolean needsAttention=matched&&(status.matches(PLAN_WORK_ATTENTION)||"unverified_result".equals(status));
+            boolean resultChanged=matched&&terminal(step)&&!settled&&closed;
+            if(needsAttention||resultChanged){
+                attentionCount++;
+                if(attention==null){if(!needsAttention)entry.put("status","result_changed");attention=entry;}
+            }
             // Only identity, original outcome proof and semantic state enter deduplication.
             facts.put(new JSONObject().put("stepId",step.getString("id")).put("occurrenceId",intent==null?"":intent.getString("occurrenceId"))
                     .put("taskId",entry.getString("taskId")).put("runId",matched?actual.optString("runId"):"").put("epoch",matched?actual.optLong("coordinatorEpoch"):0)
@@ -609,6 +614,21 @@ public final class CommitmentBook {
             else if(ended)change.put("approvalSequence",execution.getLong("approvalSequence")).put("facts",facts);
             else change.put("approvalSequence",execution.getLong("approvalSequence")).put("blockedStepId",anchor.getString("stepId"));
             result.put("changeKey",PlanExecutionPolicy.changeKey(change)).put("anchorStepId",anchor.getString("stepId"));
+        }
+        // Notice ordering stays unchanged. The one-click reader is offered only
+        // for a uniquely observed real bound Work, not the first unfinished step.
+        if("attention".equals(notice)&&attentionCount==1&&attention!=null&&execution!=null&&
+                "active".equals(control)&&execution.optBoolean("started")&&reason.matches(PLAN_WORK_ATTENTION)&&
+                reason.equals(attention.getString("status"))&&"current".equals(attention.getString("readState"))&&
+                !attention.getBoolean("resultVerified")&&!attention.getBoolean("terminalVerified")){
+            int index=attention.getInt("index");JSONObject step=steps.getJSONObject(index),intent=step.optJSONObject("taskAdmission");
+            if(intent!=null&&"bound".equals(intent.optString("state"))&&plan.getString("id").equals(intent.optString("ruleId"))&&
+                    !attention.optString("taskId").isEmpty()&&attention.getString("taskId").equals(step.optString("taskId"))&&
+                    !attention.optString("runId").isEmpty()&&attention.optLong("epoch")>0){
+                result.put("attentionStep",new JSONObject().put("index",index).put("stepId",attention.getString("stepId"))
+                        .put("taskId",attention.getString("taskId")).put("runId",attention.getString("runId")).put("epoch",attention.getLong("epoch"))
+                        .put("occurrenceId",intent.getString("occurrenceId")).put("status",reason));
+            }
         }
         JSONObject notification=new JSONObject().put("requested",execution!=null&&execution.optBoolean("notifyChanges")).put("followUpEnabled",policy(state,identity).getBoolean("enabled")).put("state",result.has("changeKey")?"pending":"no_change");
         JSONArray receipts=array(state,"followUpReceipts");for(int i=receipts.length()-1;i>=0;i--){JSONObject receipt=receipts.getJSONObject(i);

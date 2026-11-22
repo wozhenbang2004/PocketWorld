@@ -107,7 +107,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         val file = opened(original, args)
         check(original.sourcePath == null && original.savedStaticPageEligible && !busy &&
             original.adoption == null && original.python == null && selectedCheckout(original.checkout)) {
-            "只在原手机文件夹副本的已保存编辑器打开页面"
+            "只在原手机导入副本的已保存编辑器打开页面"
         }
         val sequence = number(args,"editSequence")
         val held = synchronized(store) {

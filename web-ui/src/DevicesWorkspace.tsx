@@ -35,6 +35,7 @@ import './devices-reading.css';
 import './device-workspace-overview.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
+export type DeviceWorkspaceReading = DeviceReadingSlot & { homeWindowsFile?: boolean };
 type OriginalPhoneAddress = { focus: SentPhoneGoalFocus; work: string; until: number; window: string; deviceRevision: number };
 type AddressRepair = { place: DeviceReadingPlace; epoch: number; originalPhone?: OriginalPhoneAddress };
 type PresentedReceivedGoal = ReceivedPhoneGoalReturn & {
@@ -134,6 +135,7 @@ const missingPhoneEndpoint = (peer: Data | undefined) => peer?.revoked === false
   peer.actions?.connect?.available === false && peer.actions.connect.code === 'missing_saved_endpoint' &&
   peer.connection?.state === 'OFFLINE' && peer.connection.reconnectClientRunning === false;
 const peerPlatform = (peer: Data) => peer.windowsDesktop ? 'Windows' : peer.platform || '';
+const windowsDevice = (peer: Data) => !!peer.windowsDesktop || /windows/i.test(peer.platform || '');
 /** The Windows chooser's signed “仅目录和文本” scope, not inferred from platform or missing desktop metadata. */
 function recordedWorkspaceOnlyGrant(peer: Data, local: Data, now: number) {
   const grants = peer.receivedGrantScopes;
@@ -146,6 +148,12 @@ function recordedWorkspaceOnlyGrant(peer: Data, local: Data, now: number) {
     Array.isArray(scope.resources) && scope.resources.length === 1 && exact(scope.allowedOrigins, [local.deviceId]) &&
     scope.allowDelegation === false && scope.maxDelegationDepth === 0 && scope.modelBudget === 0 && !('forwardingScope' in scope) &&
     (!('historyRead' in scope) || exact(scope.historyRead?.methods, ['operation.get']));
+}
+function recordedWindowsReadCandidate(peer: Data, local: Data, snapshot: Data | null, now: number) {
+  return windowsDevice(peer) && Number.isSafeInteger(peer.authorizationEpoch) && peer.authorizationEpoch > 0 &&
+    snapshot?.hasMoreOutgoingGrants === false && peer.hasMoreReceivedGrantScopes === false &&
+    peer.capabilitySnapshot?.metadata?.grantReceiptsTruncated !== true && !desktopScopes(peer, now, local.deviceId).length &&
+    recordedWorkspaceOnlyGrant(peer, local, now);
 }
 type LastWindowsRead = { windowKey: string; receivedAt: number; metadata: Data };
 const originalHistoryKey = (review: Data) => JSON.stringify([review.viewHandle, review.view?.taskId, review.view?.operationId,
@@ -257,9 +265,11 @@ function GrantSelection({ review, busy, confirm }: { review: Data; busy: boolean
   </>;
 }
 
-export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus, onReturnToPartnerTask, onOpenLocalBackgroundSetup, reading }: { reading?: DeviceReadingSlot; onOpenLocalBackgroundSetup?: () => void; sourceFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
+export function DevicesWorkspace({ state, data, supported, run, registerTransientBack, openModels, modelReturn, sourceFocus, onReturnToPartnerTask, onOpenLocalBackgroundSetup, reading }: { reading?: DeviceWorkspaceReading; onOpenLocalBackgroundSetup?: () => void; sourceFocus?: SentPhoneGoalFocus; onReturnToPartnerTask?: () => void; modelReturn?: ReceivedPhoneGoalReturn; state: Data; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; openModels?: (origin?: ReceivedPhoneGoalReturn) => void }) {
   const pinnedConnection=sourceFocus?.purpose==='partner_connection';
-  const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown }>();
+  const [allDevices, setAllDevices] = useState(false);
+  const homeWindowsFile = !sourceFocus && !modelReturn && reading?.homeWindowsFile === true && !allDevices;
+  const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown; window: string }>();
   const peerPlace = useRef(!sourceFocus && !modelReturn ? reading?.selected : undefined);
   const addressRepair = useRef<AddressRepair | undefined>(undefined);
   const placeRead = useRef(!peerPlace.current);
@@ -347,7 +357,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending()) return;
     setLocalRead(undefined); // A failed reread must not mark the previous directory as current.
     void invoke('devices.snapshot', {}, (_value, actual) => {
-      if (actual) { placeRead.current = true; setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision }); }
+      if (actual) { placeRead.current = true; setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision, window: waitingGoalWindow() }); }
     });
   };
   const closeReview = () => {
@@ -409,6 +419,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   }, [snapshot?.lanDiscovery?.active, snapshot?.lanDiscovery?.stopPending]);
   // Keep list/detail reading position without changing native request or Back ownership.
   useLayoutEffect(() => {
+    if (homeWindowsFile) return;
     const view = desktopOpen ? 'desktop' : peerId ? 'detail' : 'list';
     if (view === previousReadingView.current) return;
     const previous = previousReadingView.current, scroll = readingRoot.current?.closest<HTMLElement>('.pw-secondary-scroll');
@@ -420,16 +431,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         .find(button => button.dataset.peerEntry === lastPeer.current);
       (trigger || readingRoot.current?.querySelector<HTMLElement>('[data-this-phone-heading]'))?.focus({ preventScroll: true });
     }
-  }, [peerId, desktopOpen]);
+  }, [peerId, desktopOpen, homeWindowsFile]);
   const peers = rows(snapshot?.peers).filter(row => typeof row.deviceId === 'string' && row.deviceId.trim());
   const local = snapshot?.local || {}, actions = snapshot?.actions || {};
   const candidatePeer = peerId ? peers.find(row => row.deviceId === peerId) : undefined;
   const peer = candidatePeer && (!peerPlace.current || placeRead.current && sameDeviceReadingPlace(peerPlace.current, local, candidatePeer)) ? candidatePeer : undefined;
   useLayoutEffect(() => {
-    if (!peer || !focusReturnedPeer.current || document.hidden) return;
+    if (homeWindowsFile || !peer || !focusReturnedPeer.current || document.hidden) return;
     focusReturnedPeer.current = false;
     readingRoot.current?.querySelector<HTMLElement>('.pw-device-heading h2')?.focus({ preventScroll: true });
-  }, [peer]);
+  }, [peer, homeWindowsFile]);
   const PeerIcon = peer ? platformIcon(peer) : IconDevices;
   const pairingEntry = form === 'add' || form === 'invite';
   // Only this short-lived choice ID crosses the system picker. The URI, photo
@@ -615,7 +626,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     return [captured + PHONE_ACTION_WINDOW_MS, item?.phoneActionScope?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline, grant?.expiresAt];
   });
   const addressDeadline = addressRepair.current?.originalPhone;
-  const nextExpiry = Math.min(...[validUntil, addressDeadline?.until,
+  const homeWindowsExpiries = homeWindowsFile ? peers.filter(windowsDevice).flatMap(row =>
+    [row.capabilitySnapshot?.validUntil, ...rows(row.receivedGrantScopes).map(scope => scope.expiresAt)]) : [];
+  const nextExpiry = Math.min(...[validUntil, ...homeWindowsExpiries, addressDeadline?.until,
     addressDeadline && review?.kind === 'connection' ? review.view.expiresAt : undefined, ...actionExpiries, ...tasks.map(task=>unreadSource(task) ? undefined : (peerId ? manualPreparationForPeer(task) : deviceOriginalManualPhonePreparation(task))?.deadlineAt), ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
@@ -629,7 +642,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const phoneWork = recordedPhoneWork(peer,local,now);
   const phonePeer = /android|phone/i.test(peer?.platform || '') || phoneCapabilities.some(item => ['phone.tools.main','phone.tools.background'].includes(item.id));
   const phoneAccess = peer && phonePeer && !retired(peer) ? phoneSurfaceStatus(peer, now) : null;
-  const windowsPeer = !!peer && (!!peer.windowsDesktop || /windows/i.test(peer.platform || ''));
+  const windowsPeer = !!peer && windowsDevice(peer);
   const viewingScopes = peer ? desktopScopes(peer, now, local.deviceId) : [];
   const hasViewingScope = viewingScopes.some(scope => scope.available);
   const desktopPeer = !!peer && (windowsPeer || viewingScopes.length > 0
@@ -646,9 +659,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const recordedWindowsReadOnly = (at: number) => !sourceFocus && !!peer && windowsPeer && !identityOnlyHere &&
     state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen && localReadCurrent &&
     !!peerPlace.current && peerId === selectedPeer.current && sameDeviceReadingPlace(peerPlace.current, local, peer) &&
-    Number.isSafeInteger(peer.authorizationEpoch) && peer.authorizationEpoch > 0 &&
-    snapshot?.hasMoreOutgoingGrants === false && peer.hasMoreReceivedGrantScopes === false &&
-    disclosure?.metadata?.grantReceiptsTruncated !== true && !viewingScopes.length && recordedWorkspaceOnlyGrant(peer, local, at);
+    recordedWindowsReadCandidate(peer, local, snapshot, at);
   const windowsReadOnlyHere = recordedWindowsReadOnly(now);
   const openDirectedPhone = (destination:'work'|'manual') => {
     if (!peer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
@@ -675,10 +686,35 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const prepareRecordedWindowsRead = () => {
     const current = bridge.getState(), view = current.view as Data | undefined;
     if (busy || document.hidden || view?.section !== 'devices' || view.taskId) return;
-    if (current.state.deviceWorkspaceRevision !== localRead?.revision || !recordedWindowsReadOnly(Date.now())) {
+    if (current.state.deviceWorkspaceRevision !== localRead?.revision || !recordedWindowsReadOnly(Date.now()) ||
+        homeWindowsFile && (waitingGoalWindow() !== localRead?.window || !peer || !homeWindowsChoices.includes(peer))) {
       setError('原电脑或授权记录已变化。请重读本机记录，没有保存目标或联系电脑。'); return;
     }
     prepareWindowsWorkspace(true);
+  };
+  const homeWindowsWindow = homeWindowsFile ? waitingGoalWindow() : '';
+  const homeWindowsCurrent = !!homeWindowsWindow && localReadCurrent && localRead?.window === homeWindowsWindow;
+  const seenWindows = homeWindowsCurrent ? peers.filter(row => !retired(row) && windowsDevice(row)) : [];
+  const homeWindowsChoices = seenWindows.filter(row => peers.filter(item => item.deviceId === row.deviceId).length === 1 &&
+    recordedWindowsReadCandidate(row, local, snapshot, now));
+  const homeWindowsPartial = snapshot?.hasMorePeers !== false || snapshot?.hasMoreOutgoingGrants !== false ||
+    seenWindows.some(row => row.hasMoreReceivedGrantScopes !== false || row.capabilitySnapshot?.metadata?.grantReceiptsTruncated === true);
+  const chooseHomeWindows = (row: Data) => {
+    const live = bridge.getState();
+    if (busy || !homeWindowsCurrent || waitingGoalWindow() !== homeWindowsWindow ||
+        live.state.deviceWorkspaceRevision !== localRead?.revision || !homeWindowsChoices.includes(row) ||
+        !recordedWindowsReadCandidate(row, local, snapshot, Date.now())) return;
+    const selected = peerPlace.current;
+    if (selectedPeer.current === row.deviceId && (!selected || !sameDeviceReadingPlace(selected, local, row))) {
+      selectPeer(''); setError('这台原电脑的配对身份已变化，请重新选择。'); return;
+    }
+    selectPeer(row.deviceId);
+  };
+  const openAllDevices = () => {
+    if (!homeWindowsFile || busy || preparingDeviceWork) return;
+    selectPeer(''); setError('');
+    if (reading) reading.homeWindowsFile = false;
+    setAllDevices(true);
   };
   const openDesktopPreparation = () => { rememberReadingPosition('detail'); setError(''); setNotice(''); setDesktopOpen(true); };
   // See the next available step without making old work a prerequisite for new work.
@@ -1432,7 +1468,32 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const showLocalTools = localExpanded || localOngoing;
 
   return <>
-    <section ref={readingRoot} className="pw-settings-section pw-devices-reading pw-depth-collaboration" data-device-view={desktopOpen ? 'desktop' : peerId ? 'detail' : 'list'}>
+    <section ref={readingRoot} className="pw-settings-section pw-devices-reading pw-depth-collaboration" data-device-view={homeWindowsFile ? 'list' : desktopOpen ? 'desktop' : peerId ? 'detail' : 'list'}>
+      {homeWindowsFile ? <section className="pw-device-section" aria-label="选择已授权的电脑">
+        <WorkspaceSectionHeading title="选择已授权的电脑" description="这里只看本机保存的目录与文本授权，不联系电脑。"
+          actions={<Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="重读本机记录" disabled={busy} onClick={refresh} />} />
+        {error && <p className="pw-device-feedback" role="alert">{error}</p>}
+        {!homeWindowsCurrent ? <p role="status">{busy ? '正在读取本机配对记录…' : '尚未核对到当前的本机配对记录，可以重读。'}</p>
+          : homeWindowsChoices.length ? <>
+            <div className="pw-device-directory"><div className="pw-device-list">{homeWindowsChoices.map(row => <Button
+              key={row.deviceId} data-peer-entry={row.deviceId} aria-pressed={peer === row} variant={peer === row ? 'secondary' : 'ghost'} className="pw-device-row"
+              leadingIcon={IconMonitor} disabled={busy} onClick={() => chooseHomeWindows(row)}>
+              <span className="pw-device-row-copy"><span className="pw-device-row-name" dir="auto">{row.ownerLocalName || name(row)}</span>
+                <small>{deviceChoiceCode(row.deviceId) && '编号 ' + deviceChoiceCode(row.deviceId) + ' · '}{Number.isSafeInteger(row.connection?.observedAt) && row.connection.observedAt > 0 && row.connection.observedAt <= now
+                  ? '上次检查：' + deviceConnectionLabel(row) + ' · ' + time(row.connection.observedAt) : '尚未核对连接'}</small>
+                {homeWindowsChoices.some(other => other !== row && deviceChoiceCode(other.deviceId) === deviceChoiceCode(row.deviceId)) &&
+                  <small>完整编号 <bdi>{row.deviceId}</bdi></small>}
+                {Number.isSafeInteger(row.capabilitySnapshot?.validUntil) && row.capabilitySnapshot.validUntil <= now && <small>上次能力记录已过期，开始前再核对。</small>}
+              </span>
+            </Button>)}</div></div>
+            <p className="pw-device-footnote">选择不会检查连接。准备好后，仍需核对文件与原范围再开始。</p>
+            {peer && homeWindowsChoices.includes(peer) && windowsReadOnlyHere && <Button disabled={busy} onClick={prepareRecordedWindowsRead}>准备只读任务</Button>}
+          </> : <p role="status">{homeWindowsPartial ? '本次本机记录不完整，暂不能核对可选电脑。'
+            : seenWindows.length ? '未核对到有效的目录与文本授权。配对本身不等于文件授权。'
+            : '本次本机记录里没有可选的已配对 Windows 电脑。'}</p>}
+        {homeWindowsCurrent && homeWindowsChoices.length > 0 && homeWindowsPartial && <p className="pw-device-footnote">本次只读到部分记录。</p>}
+        <div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={openAllDevices}>查看所有设备</Button></div>
+      </section> : <>
       {!sourceFocus && (desktopOpen || peerId) && <header className="pw-device-heading">
         <div className="pw-device-heading-copy">
           {peerId && !desktopOpen && <Button variant="ghost" className="pw-device-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={() => { selectPeer(''); setForm(''); setRaw(''); }}>所有设备</Button>}
@@ -1826,6 +1887,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           {(snapshot.hasMorePeers || snapshot.hasMorePendingPairings || snapshot.taskLinks?.hasMore) && <p className="pw-device-footnote">本次只读取了部分设备或关联记录，未列出不代表没有。</p>}
           {snapshot.hasMoreTaskActions && <p className="pw-device-footnote">本次只核对了前 40 项工作的可用操作，其余请打开原工作查看。</p>}
         </AccordionItem></Accordion>}
+      </>}
       </>}
     </section>
     <SettingsDialog isOpen={!!receiptRow} title="原工作的本机回执" closeLabel="返回核对过的工作" onClose={()=>setClosedReceipt(null)}>
