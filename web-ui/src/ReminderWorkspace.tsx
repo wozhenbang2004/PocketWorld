@@ -28,6 +28,54 @@ type ReminderNotice = { id: string; ruleId: string; revision: number; occurrence
 type NoticeSchedule = { visit: ReminderNoticeVisit; pin: ReminderNotice; fromRule: string } & (
   { kind: 'reading'; previousRead: unknown; requestId?: string } | { kind: 'opened' } | { kind: 'unavailable'; message: string }
 );
+type ReminderReplyOccurrence = { id: string; revision: number; at: number };
+type ReminderReplyRule = { ruleId: string; ruleRevision: number; occurrence?: ReminderReplyOccurrence };
+type ReminderReplyAck = { window: number; conversationId: string; requestMessageId: string; requestRevision: number; replyMessageId: string; replyRevision: number };
+type ReminderReplyVisit = {
+  rule: ReminderReplyRule; origin: { conversationId: string; taskId: string; runId: string; epoch: number };
+  notice?: NoticeSchedule; document: number; resume: number; trigger: HTMLButtonElement; scroll: HTMLElement | null; scrollTop: number;
+  ack?: ReminderReplyAck; published?: boolean; retired?: boolean; closeSent?: boolean;
+};
+const replyId = (value: unknown): value is string => typeof value === 'string' && !!value && value.trim() === value && value.length <= 240;
+const replyRevision = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+function replyRule(rule: Data | null): rule is Data {
+  return rule?.kind === 'reminder' && rule.schedule?.type === 'once' && replyId(rule.id) && replyRevision(rule.revision) &&
+    rule.sourceInvalidated !== true && rule.sourceCheckPending !== true && !!rule.nativeOrigin && localReminderSource(rule.nativeOrigin);
+}
+function sameReplyRule(mark: Data | undefined, rule: ReminderReplyRule) {
+  if (!mark || mark.ruleId !== rule.ruleId || mark.ruleRevision !== rule.ruleRevision) return false;
+  const occurrence = rule.occurrence;
+  return occurrence ? mark.occurrence?.id === occurrence.id && mark.occurrence?.revision === occurrence.revision &&
+    mark.occurrence?.at === occurrence.at : mark.occurrence === undefined;
+}
+function reminderReplyAck(value: Data, visit: ReminderReplyVisit): ReminderReplyAck | undefined {
+  const mark = value?.reminderSource;
+  if (value?.readOnly !== true || value.executionAuthorized !== false || !replyRevision(value.window) ||
+      value.conversationId !== visit.origin.conversationId || !sameReplyRule(mark, visit.rule) ||
+      !replyId(mark.requestMessageId) || !replyId(mark.replyMessageId) || mark.requestMessageId === mark.replyMessageId ||
+      !replyRevision(mark.requestRevision) || !replyRevision(mark.replyRevision)) return undefined;
+  return { window: value.window, conversationId: value.conversationId, requestMessageId: mark.requestMessageId,
+    requestRevision: mark.requestRevision, replyMessageId: mark.replyMessageId, replyRevision: mark.replyRevision };
+}
+function reminderReplyText(page: Data | null | undefined, visit: ReminderReplyVisit) {
+  const ack = visit.ack, mark = page?.reminderSource;
+  if (!ack || page?.window !== ack.window || page.conversation !== ack.conversationId || !sameReplyRule(mark, visit.rule) ||
+      mark.requestMessageId !== ack.requestMessageId || mark.requestRevision !== ack.requestRevision ||
+      mark.replyMessageId !== ack.replyMessageId || mark.replyRevision !== ack.replyRevision ||
+      page.loading !== false || page.limited !== false || page.error !== null || page.hasMore !== false || page.cursor !== '' ||
+      !Array.isArray(page.messages) || page.messages.length !== 2) return undefined;
+  const [request, reply] = page.messages;
+  return request?.id === ack.requestMessageId && request.role === 'user' && request.sourceRevision === ack.requestRevision &&
+    reply?.id === ack.replyMessageId && reply.role === 'assistant' && reply.sourceRevision === ack.replyRevision &&
+    typeof request.content === 'string' && !!request.content.trim() && typeof reply.content === 'string' && !!reply.content.trim()
+    ? { request: request.content as string, reply: reply.content as string } : undefined;
+}
+function closeReminderReply(visit: ReminderReplyVisit) {
+  const ack = visit.ack;
+  if (!ack || visit.closeSent || bridge.getDocumentEpoch() !== visit.document) return;
+  visit.closeSent = true;
+  void bridge.command('conversation.reader.close', { window: ack.window, conversationId: ack.conversationId }).catch(() => {});
+}
 const sameOccurrence = (receipt: Data, pin: ReminderNotice) => receipt.kind === 'reminder' && receipt.id === pin.id &&
   receipt.ruleId === pin.ruleId && receipt.revision === pin.revision && receipt.occurrenceAt === pin.occurrenceAt;
 const localReminderSource = (source: Data | undefined) => source === undefined ||
@@ -66,6 +114,10 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const [selectedId, setSelectedId] = useState('');
   const [noticeSchedule, setNoticeSchedule] = useState<NoticeSchedule>();
   const scheduleFlight = useRef<NoticeSchedule | undefined>(undefined), scheduleBackFocus = useRef<ReminderNoticeVisit | undefined>(undefined);
+  const replyFlight = useRef<ReminderReplyVisit | undefined>(undefined);
+  const replyReturn = useRef<ReminderReplyVisit | undefined>(undefined);
+  const [replyView, setReplyView] = useState<{ visit: ReminderReplyVisit; failed?: true }>();
+  const [replyOpening, setReplyOpening] = useState(false);
   const keepSchedule = (next?: NoticeSchedule) => { scheduleFlight.current = next; setNoticeSchedule(next); };
   const [occurrenceBusy, setOccurrenceBusy] = useState(false), [occurrenceFeedback, setOccurrenceFeedback] = useState<OccurrenceFeedback | null>(null);
   const occurrenceLock = useRef(false), occurrenceReturn = useRef<{ location: string; id: string; ruleId: string; selected: string; entered: boolean } | null>(null);
@@ -217,6 +269,106 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     region.scrollIntoView({ block: 'nearest' }); region.focus({ preventScroll: true });
   }, [openedNotice?.connectionRevision, noticeReady, visit]);
   const scheduleOpened = scheduleHere?.kind === 'opened' && selectedId === scheduleHere.pin.ruleId;
+  const sameReplyVisit = (original: ReminderReplyVisit, live = bridge.getState()) => {
+    const scope = live.view as Data | undefined;
+    if (document.hidden || bridge.getDocumentEpoch() !== original.document || live.host?.ready !== true ||
+        scope?.section !== 'automation' || scope.taskId !== null || scope.resumeRevision !== original.resume ||
+        !root.current?.contains(original.trigger)) return false;
+    const matching = array(live.state.features?.automation?.rules).filter(rule => rule.id === original.rule.ruleId);
+    const rule = matching[0], origin = rule?.nativeOrigin, expected = original.origin;
+    if (matching.length !== 1 || !replyRule(rule) || rule.revision !== original.rule.ruleRevision ||
+        origin.conversationId !== expected.conversationId || origin.taskId !== expected.taskId ||
+        origin.runId !== expected.runId || origin.epoch !== expected.epoch) return false;
+    if (!original.notice) return true;
+    const notice = original.notice;
+    const receipts = array(live.state.moduleResults?.['automation.receipts']?.receipts).filter(row => row.id === notice.pin.id);
+    return scheduleFlight.current === notice && currentReminderVisit(notice.visit) && receipts.length === 1 &&
+      sameOccurrence(receipts[0], notice.pin) && sameReminderSource(receipts[0], rule);
+  };
+  const retireReply = (original: ReminderReplyVisit, restoreFocus = false) => {
+    if (replyFlight.current !== original) return;
+    if (restoreFocus) replyReturn.current = original;
+    replyFlight.current = undefined; original.retired = true; setReplyView(undefined);
+    closeReminderReply(original);
+  };
+  const canReadReply = replyRule(selectedRule) && supported('conversation.reader.open') && supported('conversation.reader.close');
+  const openReply = async (trigger: HTMLButtonElement) => {
+    const live = bridge.getState(), scope = live.view as Data | undefined;
+    if (!canReadReply || !replyRule(selectedRule) || replyFlight.current || replyOpening || pending || editor || review ||
+        reading || readingError || live.state.conversationReader !== null ||
+        !scope || !Number.isSafeInteger(scope.resumeRevision) || scope.resumeRevision < 0) return;
+    const notice = scheduleOpened ? scheduleHere : undefined;
+    if (notice && (!exactNotice || !sameOccurrence(exactNotice.receipt, notice.pin) || !sameReminderSource(exactNotice.receipt, selectedRule))) return;
+    const pin = notice?.pin, nativeOrigin = selectedRule.nativeOrigin, scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll') ?? null;
+    const original: ReminderReplyVisit = {
+      rule: { ruleId: selectedRule.id, ruleRevision: selectedRule.revision, ...(pin ? { occurrence: { id: pin.id, revision: pin.revision, at: pin.occurrenceAt } } : {}) },
+      origin: { conversationId: nativeOrigin.conversationId, taskId: nativeOrigin.taskId, runId: nativeOrigin.runId, epoch: nativeOrigin.epoch },
+      notice, document: bridge.getDocumentEpoch(), resume: scope.resumeRevision, trigger, scroll, scrollTop: scroll?.scrollTop || 0,
+    };
+    if (!sameReplyVisit(original, live)) return;
+    replyReturn.current = undefined;
+    replyFlight.current = original; setReplyOpening(true); setReplyView({ visit: original });
+    try {
+      const result = await bridge.command('conversation.reader.open', { originalReminder: original.rule });
+      original.ack = reminderReplyAck(result, original);
+      if (original.retired || replyFlight.current !== original) { closeReminderReply(original); return; }
+      if (!sameReplyVisit(original)) { retireReply(original); return; }
+      setReplyView(original.ack ? { visit: original } : { visit: original, failed: true });
+    } catch {
+      if (replyFlight.current === original) setReplyView({ visit: original, failed: true });
+    } finally { if (mounted.current) setReplyOpening(false); }
+  };
+  const replyHere = replyView && replyFlight.current === replyView.visit && !pending && !editor && !review &&
+    selectedId === replyView.visit.rule.ruleId && sameReplyVisit(replyView.visit) ? replyView : undefined;
+  const originalText = replyHere && !replyHere.failed && state.conversationReader === bridge.getState().state.conversationReader
+    ? reminderReplyText(state.conversationReader, replyHere.visit) : undefined;
+  useLayoutEffect(() => {
+    const original = replyView?.visit;
+    if (!original || replyFlight.current !== original) return;
+    if (!replyHere || original.published && !originalText) retireReply(original);
+    else if (originalText) original.published = true;
+  }, [replyView, replyHere, originalText]);
+  useLayoutEffect(() => {
+    const original = replyReturn.current;
+    if (!original || replyFlight.current) return;
+    if (!sameReplyVisit(original)) { replyReturn.current = undefined; return; }
+    const { trigger, scroll, scrollTop } = original;
+    // The original button enables again after the native close projection.
+    if (trigger.disabled) return;
+    const frame = requestAnimationFrame(() => {
+      if (replyReturn.current !== original || replyFlight.current || !sameReplyVisit(original) || trigger.disabled || trigger.closest('[hidden],[inert]')) return;
+      replyReturn.current = undefined;
+      if (scroll?.contains(trigger)) scroll.scrollTop = scrollTop;
+      trigger.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [replyView, replyOpening, state.conversationReader, selectedId, pending, reading, readingError]);
+  useEffect(() => {
+    const original = replyHere?.visit;
+    if (!replyHere || !original?.ack || replyHere.failed || originalText) return;
+    const timer = window.setTimeout(() => {
+      if (replyFlight.current === original && !original.published && sameReplyVisit(original)) {
+        closeReminderReply(original); setReplyView({ visit: original, failed: true });
+      }
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [replyHere, originalText]);
+  useLayoutEffect(() => {
+    const retire = () => { replyReturn.current = undefined; const original = replyFlight.current; if (original) retireReply(original); };
+    const hidden = () => { if (document.hidden) retire(); };
+    const off = bridge.subscribeDocumentEpoch(() => {
+      // Host presentation updates can repeat the same document token.
+      const epoch = bridge.getDocumentEpoch(), returning = replyReturn.current, opened = replyFlight.current;
+      if (returning && returning.document !== epoch) replyReturn.current = undefined;
+      if (opened && opened.document !== epoch) retireReply(opened);
+    });
+    document.addEventListener('visibilitychange', hidden); window.addEventListener('pagehide', retire);
+    return () => {
+      off(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', retire);
+      const original = replyFlight.current;
+      if (original) { replyFlight.current = undefined; original.retired = true; closeReminderReply(original); }
+    };
+  }, []);
   const returnFromRule = () => {
     if (scheduleOpened && scheduleFlight.current === scheduleHere && currentReminderVisit(scheduleHere.visit)) {
       scheduleBackFocus.current = scheduleHere.visit; setSelectedId(scheduleHere.fromRule);
@@ -224,9 +376,14 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     keepSchedule();
   };
   useEffect(() => {
-    registerTransientBack(occurrenceBusy ? () => true : review ? () => { generation.current++; setReview(null); return true; } : editor ? () => { formDraft.guard(close); return true; } :
+    const back = occurrenceBusy ? () => true : review ? () => { generation.current++; setReview(null); return true; } : editor ? () => { formDraft.guard(close); return true; } :
       scheduleHere?.kind === 'reading' ? () => { keepSchedule(); return true; } :
-      scheduleOpened || selectedRule ? () => { returnFromRule(); return true; } : null);
+      scheduleOpened || selectedRule ? () => { returnFromRule(); return true; } : null;
+    registerTransientBack(() => {
+      const original = replyFlight.current;
+      if (original) { retireReply(original, true); return true; }
+      return back?.() === true;
+    });
     return () => registerTransientBack(null);
   }, [occurrenceBusy, Boolean(review), Boolean(editor), selectedId, selectedRule?.id, scheduleHere, scheduleOpened, registerTransientBack]);
   useLayoutEffect(() => {
@@ -417,6 +574,8 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
         return <article key={rule.id} className="pw-reminder-record"><header className="pw-knowledge-object-state"><span>{rule.enabled ? '已启用' : availability.exhausted ? '安排已结束' : '已暂停'}</span><span>{types.find(type => type.id === rule.schedule?.type)?.label || '原时间安排'}{rule.schedule?.zone ? ' · ' + rule.schedule.zone : ''}</span></header>
           <p className="pw-knowledge-next-time">{availability.exhausted ? '这次安排已到期或已有发生记录；原结果仍以回执为准。' : rule.nextAt > 0 ? '计划时间：' + date(rule.scheduledAt || rule.nextAt) : '已暂停或安排已结束'}</p>
           {availability.sourceCurrent && (rule.kind === 'phone_goal' ? <section className="pw-knowledge-section"><h3>到时提醒你开始</h3><p className="pw-user-text">{rule.goal || '原记录未提供任务目标，请核对后操作。'}</p><p className="pw-field-hint">只提醒查看目标，仍需你明确开始手机任务。</p></section> : rule.kind === 'reminder' && <p className="pw-field-hint">到时只发送本机通知，不会启动手机任务。</p>)}
+          {canReadReply && <div className="pw-form-actions"><Button variant="secondary" disabled={pending || reading || readingError || replyOpening || !!state.conversationReader}
+            onClick={event => { void openReply(event.currentTarget); }}>查看安排时的原话与回复</Button></div>}
           {receiptsBusy || receiptsError || !receiptsReady ? <p role="status" className="pw-field-hint">{receiptsBusy ? '正在核对最近一次发生记录…' : '最近一次发生记录尚未核对，请刷新。'}</p>
             : latest ? latest === exactNotice ? null : receiptRow(latest, 'latest') : <p className="pw-field-hint">还没有读到这条提醒的发生记录。</p>}
 
@@ -448,6 +607,15 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
       {!receiptsBusy && !receiptsError && historyRows.length > receiptLimit && <Button variant="secondary" onClick={() => setReceiptLimit(value => value + 10)}>显示更早记录</Button>}
     </section>
     </AccordionItem></Accordion>}
+    {/* This private text must not survive SettingsDialog's animated exit. */}
+    {replyHere && <SettingsDialog isOpen title="提醒的原对话" closeLabel="返回提醒安排" onClose={() => retireReply(replyHere.visit, true)}>
+      <div className="pw-knowledge-dialog pw-knowledge-review">
+        {originalText ? <><section className="pw-knowledge-section"><h3>原话</h3><p className="pw-reading-copy" dir="auto">{originalText.request}</p></section>
+          <section className="pw-knowledge-section"><h3>当时的回复</h3><p className="pw-reading-copy" dir="auto">{originalText.reply}</p></section></>
+          : <p role="status">{replyHere.failed ? '暂未核对到这条提醒的原话与回复。没有打开其他对话。' : '正在核对这条提醒的原话与回复…'}</p>}
+        <div className="pw-form-actions"><Button variant="secondary" onClick={() => retireReply(replyHere.visit, true)}>返回提醒安排</Button></div>
+      </div>
+    </SettingsDialog>}
     <SettingsDialog isOpen={Boolean(editor || review)} title={review ? review.command === 'save' ? '核对提醒计划' : review.command === 'delete' ? '删除这个提醒？' : review.enabled ? '启用这个提醒？' : '暂停这个提醒？' : editor?.intent === 'edit' ? '编辑提醒' : editor?.intent === 'reschedule' ? '重新安排提醒' : '新建提醒'} onClose={() => { if (review) { generation.current++; setReview(null); } else formDraft.guard(close); }}><div className={'pw-knowledge-dialog' + (review ? '' : ' pw-knowledge-edit-dialog')}>
       {review ? <>
         <p>{review.rule?.title}</p><p className="pw-field-hint">{review.intent === 'reschedule' ? '来源规则版本：' + editor?.original?.revision + '，将新建独立提醒。' : review.rule?.revision ? '原规则版本：' + review.rule.revision : '将新建独立提醒。'}</p>{review.rule?.kind === 'phone_goal' && <p className="pw-receipt-copy">手机任务目标：{review.rule.goal}</p>}

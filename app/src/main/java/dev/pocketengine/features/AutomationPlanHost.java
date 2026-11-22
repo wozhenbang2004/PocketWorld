@@ -5,6 +5,7 @@ import dev.pocketengine.features.automation.AutomationBook;
 import dev.pocketengine.features.automation.AutomationModule;
 import dev.pocketengine.features.automation.PlanArtifactVerifier;
 import dev.pocketengine.features.automation.PlanExecutionPolicy;
+import dev.pocketengine.store.OriginalReminderSourceFields;
 import dev.pocketengine.store.TaskStore;
 import java.util.Set;
 import org.json.JSONArray;
@@ -74,6 +75,30 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
                 if(!current.getAsBoolean()||!expected.equals(tasks.originalReminderForReply(reply)))throw new SecurityException("原私人提醒身份已变化，未保存");
                 return bookAction.call();
             }),current);
+    }
+    /** One deliberate Automation read only; the original source authority, not the renderer, locates the pair. */
+    public JSONObject readOriginalReminderConversationSource(AutomationModule module,JSONObject origin,String rule,int revision,
+            OriginalReminderSourceFields.Occurrence occurrence,RunControl read,java.util.function.BooleanSupplier current)throws Exception{
+        if(!current.getAsBoolean()||read==null||read.hasHostRun()||revision<1||origin.length()!=6||
+                !"owner".equals(origin.opt("ownerId"))||!"private".equals(origin.opt("spaceId")))
+            throw new SecurityException("请在原私人提醒查看来源");
+        return withProposalSource(origin,()->{
+            if(!current.getAsBoolean())throw new SecurityException("原提醒窗口已变化");
+            read.checkpoint();
+            var selected=tasks.originalReminderSourceForOwner(origin,rule);
+            if(selected==null||!module.originalConversationReminderSourceCurrent(origin,selected.proposal().operation(),rule,
+                    selected.proposal().digest(),revision,occurrence,current))
+                throw new SecurityException("未核对到这条提醒的原对话，没有打开其他消息");
+            var reply=selected.reply();
+            JSONObject page=tasks.originalReminderSourcePage(selected,read),marker=new JSONObject()
+                    .put("ruleId",rule).put("ruleRevision",revision)
+                    .put("requestMessageId",selected.ownerInput().sourceId).put("requestRevision",selected.ownerInput().revision)
+                    .put("replyMessageId",reply.messageId()).put("replyRevision",reply.sourceRevision());
+            if(occurrence!=null)marker.put("occurrence",new JSONObject().put("id",occurrence.id()).put("revision",occurrence.revision()).put("at",occurrence.at()));
+            read.checkpoint();
+            if(!current.getAsBoolean())throw new SecurityException("原提醒窗口已变化，未返回旧正文");
+            return page.put("reminderSource",marker);
+        });
     }
     /** The model can only write an inert draft under its original prepared operation. */
     public JSONObject proposeScheduleForTask(AutomationModule module,String task,String run,int epoch,String operation,JSONObject draft,RunControl original)throws Exception {

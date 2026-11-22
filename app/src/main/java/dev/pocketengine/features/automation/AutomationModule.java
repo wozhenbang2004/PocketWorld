@@ -190,6 +190,10 @@ public final class AutomationModule implements EngineModule {
     public JSONObject readOriginalConversationReminder(JSONObject origin,String operation,String id,String digest)throws Exception{
         return book.readOriginalConversationReminder(origin,operation,id,digest);
     }
+    public boolean originalConversationReminderSourceCurrent(JSONObject origin,String operation,String id,String digest,int revision,
+            dev.pocketengine.store.OriginalReminderSourceFields.Occurrence occurrence,java.util.function.BooleanSupplier current)throws Exception{
+        return book.originalConversationReminderSourceCurrent(origin,operation,id,digest,revision,occurrence,current);
+    }
     public JSONObject approveOriginalConversationReminder(JSONObject origin,String operation,String id,String digest,OriginalProposalSource source,
                                                          java.util.function.BooleanSupplier current)throws Exception{
         JSONObject saved=source.call(()->book.approveOriginalConversationReminder(origin,operation,id,digest,System.currentTimeMillis(),current));

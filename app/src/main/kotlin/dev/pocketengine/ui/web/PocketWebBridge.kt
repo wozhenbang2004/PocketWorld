@@ -558,6 +558,7 @@ internal class PocketWebBridge(
         closed = true
         retireReplyPicker()
         controller.closeOwnerWorkRequestHistory()
+        controller.closeOriginalReminderHistory()
         controller.forgetHeldPhoneImage()
         started = false
         cancelStatePublication()
@@ -655,6 +656,7 @@ internal class PocketWebBridge(
         savedLocalReturn = null
         openedRetainedDraftCopy = null
         controller.closeOwnerWorkRequestHistory()
+        controller.closeOriginalReminderHistory()
         controller.forgetHeldPhoneImage()
         cancelStatePublication()
         projectGoal=null; pythonOutput.clear(); commandFence.invalidate()
@@ -716,6 +718,7 @@ internal class PocketWebBridge(
 
     private fun publishStateNow(force: Boolean = false) {
         if (closed || !started) return
+        controller.retireInvalidOriginalReminderHistory()
         var projection: JSONObject? = null
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
@@ -1585,6 +1588,44 @@ internal class PocketWebBridge(
                 }
                 return
             }
+            if (action == "conversation.reader.open" && args.has("originalReminder")) {
+                require(args.keys().asSequence().toSet() == setOf("originalReminder"))
+                val input = args.getJSONObject("originalReminder")
+                val fromNotice = input.has("occurrence")
+                require(input.keys().asSequence().toSet() ==
+                    if (fromNotice) setOf("ruleId", "ruleRevision", "occurrence") else setOf("ruleId", "ruleRevision"))
+                fun uuid(value: JSONObject, field: String): String = requiredString(value, field).also {
+                    require(it.length == 36 && runCatching { UUID.fromString(it).toString() == it }.getOrDefault(false))
+                }
+                val rule = uuid(input, "ruleId")
+                val revision = requiredInt(input, "ruleRevision").also { require(it > 0) }
+                val occurrence = if (!fromNotice) null else input.getJSONObject("occurrence").let {
+                    require(it.keys().asSequence().toSet() == setOf("id", "revision", "at"))
+                    dev.pocketengine.store.OriginalReminderSourceFields.Occurrence(uuid(it, "id"),
+                        requiredInt(it, "revision").also { rev -> require(rev in 1..revision) },
+                        requiredLong(it, "at").also { at -> require(at in 1L..253402300799999L) })
+                }
+                val document = requireNotNull(documentId); val fence = commandFence.ticket()
+                val owner = controller.displayedPhoneWindowVersion()
+                val composer = controller.composerViewEpochForScopedRead
+                val selected = automation.originalReminderSource(rule, revision, occurrence)
+                    ?: error("这条提醒尚未核对到原私人对话")
+                fun current() = !closed && documentId == document && commandFence.accepts(fence) &&
+                    controller.displayedPhoneWindowAlive(owner) && controller.composerViewEpochForScopedRead == composer &&
+                    controller.webPrivateOwnerVisible() && section == "automation" && taskViewId == null && taskReturnSection == null &&
+                    !phoneComposer.intent && !controller.hasChannelPhoneOrigin && controller.state.filePath == null &&
+                    controller.queuedInputsPage == null && !controller.state.chatAttachmentPickerOpen && !controller.attachmentOutcomes.state.open
+                fun sameSelection() = automation.originalReminderSource(rule, revision, occurrence) == selected
+                check(current() && controller.conversationReader == null) { "请在这条原提醒查看原对话" }
+                controller.openOriginalReminderHistory(selected, ::current, ::sameSelection) { value, error ->
+                    if (documentId == document) {
+                        if (current()) complete(id, value, error, retainValue = false, replayHint = "请在这条原提醒重新核对来源")
+                        else complete(id, null, "原提醒窗口已变化，没有显示旧消息。", retainValue = false)
+                        publishState()
+                    }
+                }
+                return
+            }
             if (action == "conversation.reader.open" && args.has("resume")) {
                 require(args.keys().asSequence().toSet()==setOf("conversationId","resume")&&requiredBoolean(args,"resume"))
                 val conversation=requiredString(args,"conversationId")
@@ -2384,6 +2425,7 @@ internal class PocketWebBridge(
                     val currentTeamSourceRead = action == "teams.readRun" && error == null && result?.optJSONObject("reading")?.let {
                         it.opt(PocketWebTeams.CURRENT_FAILED_AGGREGATE_SOURCE) == true ||
                             it.opt(PocketWebTeams.CURRENT_COMPLETED_TEMPORARY_ANSWERS_SOURCE) == true ||
+                            it.optJSONObject("ownerWorkLink")?.opt("temporaryAnswersForReview") == true ||
                             it.opt(PocketWebTeams.CURRENT_FIRST_LOCAL_FROZEN_REVIEW_SOURCE) == true
                     } == true
                     val originalReviewerFindingsRead = action == "teams.reviewFrozenTextApproval" && error == null &&
@@ -2597,7 +2639,8 @@ internal class PocketWebBridge(
                     require(keySet == history + "messageId" && section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请从原私人历史回答打开出处" }
                     val page = controller.conversationReader ?: error("原历史阅读窗口已关闭")
                     val revision = requiredLong(args, "readerSourceRevision")
-                    require(page.window == requiredLong(args, "readerWindow") && page.conversation == requiredString(args, "readerConversationId") && revision > 0) { "原历史回答已变化" }
+                    require(page.reminderSource == null && page.window == requiredLong(args, "readerWindow") &&
+                        page.conversation == requiredString(args, "readerConversationId") && revision > 0) { "原历史回答已变化" }
                     val stamp = captureWindow()
                     sourceReader.openHistory(page, requiredString(args, "messageId"), revision,
                         { !closed && taskViewId == null && section == null && acceptsWindow(stamp) }) { result, error -> complete(id, result, error, retainValue = false) }
@@ -3154,6 +3197,7 @@ internal class PocketWebBridge(
                     retireReplyPicker()
                     controller.projectPackages.retireDirectViteExport()
                     controller.projectFileImports.retireSuppliedLock()
+                    controller.closeOriginalReminderHistory()
                     documentId = nextDocument; background.clear(); remoteInbox.clear(); phoneViewer.clear(); phoneComposer.documentChanged(); taskHistory.clear(); controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.invalidateDraftReturn(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
                     controller.voiceInputTypeChanged(phoneComposer.intent)
                 }
@@ -3266,7 +3310,12 @@ internal class PocketWebBridge(
             }
             "conversation.reader.close" -> {
                 val page=requireConversationReader(args,closing=true)
-                if(stageDetachedHistoryPosition(page,args))
+                if (page.reminderSource != null) {
+                    require(args.keys().asSequence().toSet() == setOf("window", "conversationId") &&
+                        section == "automation" && taskViewId == null && controller.webPrivateOwnerVisible()) { "原提醒阅读窗口已关闭" }
+                    controller.closeOriginalReminderHistory()
+                }
+                else if(stageDetachedHistoryPosition(page,args))
                     controller.closeOrdinaryDetachedHistory(controller.conversationReader?:page){publishState()}
                 else controller.closeConversationReader()
             }
@@ -4435,6 +4484,7 @@ internal class PocketWebBridge(
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();dependencyComparison=null;projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() {
+        controller.closeOriginalReminderHistory()
         openedRetainedDraftCopy = null
         controller.projectFileImports.retireSuppliedLock()
         if(section=="remote")connectionPages.hostGoalOrigins.closeSaved(); localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null

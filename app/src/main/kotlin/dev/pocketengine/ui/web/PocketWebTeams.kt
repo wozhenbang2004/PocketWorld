@@ -14,7 +14,9 @@ import dev.pocketengine.features.teams.TeamEvidenceDiscussion
 import dev.pocketengine.features.teams.TeamAttention
 import dev.pocketengine.features.teams.TeamDraftDefinition
 import dev.pocketengine.features.teams.TeamCoordinator
+import dev.pocketengine.features.teams.TeamWorkFiles
 import dev.pocketengine.features.teams.TeamsModule
+import dev.pocketengine.store.TaskStore
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.objects
 import dev.pocketengine.ui.reviewedTeamCollaborationAction
@@ -79,6 +81,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         }
         @Synchronized fun retire() { live = false; packageRead.cancel(); finalPackage=null; finalPackageKey=null; itemPage?.close(); itemPage = null }
     }
+    private data class OwnerRunRead(val run: JSONObject, val observations: JSONArray?, val current: Boolean,
+                                    val memberReview: TaskStore.OwnerWorkTeamReportOrigin?)
     private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null,
         val workItem: PocketWebTeamWorkReturn? = null, val failedHandoff:PocketWebTeamFailedHandoff?=null, val ownerReading: Reading? = null, val proposal: TaskStoreTeamWriteHost.WorkPlanPage.ParentProposalReview? = null,
         val stoppedMember: TeamCoordinator.OwnerStoppedMemberReview? = null) {
@@ -343,6 +347,32 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
             value.opt("researchExecutionFormat") == TeamCoordinator.RESEARCH_FORMAT &&
             TeamCoordinator.ordinaryLocalReportRoster(value.optJSONArray("members"))
 
+    // The existing answer-route observations independently checked the actual
+    // completed child checkpoint and model receipt. Match both exact original
+    // members; absence, excerpts or history alone do not nominate this detail.
+    private fun originalTemporaryReviewMembers(run: JSONObject, observations: JSONArray?): Boolean {
+        if (!originalTemporaryClassic(run) || run.opt("id") != run.opt("operationId") ||
+            run.opt("status") != "completed" || run.opt("phase") != "completed" ||
+            run.opt("summaryProducer") != "host_model" || run.optInt("rounds", -1) != 1 ||
+            run.has("workPlan") || run.has("productionScope") || TeamAttention.forRun(run).length() != 0) return false
+        val members = run.optJSONArray("members").objects()
+        val routes = observations.objects()
+        if (members.size != 2 || routes.size != 2 || members.map { it.optString("id") }.toSet().size != 2) return false
+        return members.all { member ->
+            val stage = member.optJSONArray("roundStates").objects().singleOrNull() ?: return@all false
+            val receipt = stage.optJSONObject("researchTask") ?: return@all false
+            val output = receipt.optJSONObject("outputReference") ?: return@all false
+            val route = routes.singleOrNull { it.opt("memberId") == member.opt("id") } ?: return@all false
+            member.opt("status") == "completed" && !member.optBoolean("exited") && !member.optBoolean("paused") &&
+                stage.optInt("round") == 1 && stage.opt("status") == "completed" && receipt.opt("status") == "completed" &&
+                route.opt("format") == "pocketworld.team-research-reply-execution.v1" && route.opt("readOnly") == true &&
+                route.opt("teamRunId") == run.opt("id") && route.optInt("round") == 1 &&
+                route.opt("taskId") == stage.opt("researchTaskId") && route.opt("taskId") == output.opt("taskId") &&
+                route.opt("runId") == output.opt("runId") && route.optInt("epoch") == output.optInt("coordinatorEpoch", -1) &&
+                route.opt("answerSha256") == output.opt("sha256")
+        }
+    }
+
     // The current native read owns the record. This is only a pointer to the existing Results tab.
     private fun firstLocalFrozenReview(source: JSONObject): Boolean {
         if (source.opt("mode") != "produce" || source.opt("status") != "awaiting_review" || source.opt("phase") != "review") return false
@@ -366,7 +396,8 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
         }
     }
 
-    private fun view(kind: String, value: JSONObject, answerRoutes: JSONArray? = null, currentSource: Boolean = false): JSONObject {
+    private fun view(kind: String, value: JSONObject, answerRoutes: JSONArray? = null, currentSource: Boolean = false,
+                     memberReview: TaskStore.OwnerWorkTeamReportOrigin? = null): JSONObject {
         while (readings.size >= 24) readings.remove(readings.keys.first())?.retire()
         val handle = UUID.randomUUID().toString()
         // Reading/editing is bound to the visible native window, not a timer.
@@ -391,7 +422,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 value.optString("summaryProducer") == "host_model" && !value.optBoolean("summaryStale")
             val resultGeneration = if (checkSavedResult) value.optInt("generation", -1) else -1
             val resultRevision = if (checkSavedResult) value.optLong("revision", -1L) else -1L
-            controller.nativeTokenBudgetHost().tasks.ownerWorkLinkForTeam(value.getString("id"), resultGeneration, resultRevision)?.let { link ->
+            controller.nativeTokenBudgetHost().tasks.ownerWorkLinkForTeam(value.getString("id"), resultGeneration, resultRevision, memberReview)?.let { link ->
                 result.put("ownerWorkLink", PocketWebState.publicValue(link))
                 // The original host may have left the recent task window.
                 result.put("taskId", link.getString("teamTaskId"))
@@ -520,7 +551,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 }
             }
         }
-        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, catalogRun: JSONObject? = null, accept: (JSONObject?, JSONArray?, String?, Boolean) -> Unit) {
+        fun readOwnerRun(id: String, proposalOrigin: JSONObject? = null, catalogRun: JSONObject? = null, accept: (OwnerRunRead?, String?) -> Unit) {
             controller.runTeamPhoneWork {
                 val result = runCatching {
                     check(currentWindow()) { "原团队阅读窗口已关闭" }
@@ -539,16 +570,28 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         reader.setAuthorityCheck { check(currentWindow()) { "原团队阅读窗口已关闭" } }
                         controller.nativeTokenBudgetHost().tasks.ownerTeamResearchAnswerRoutes(retained,reader).takeIf { it.length() > 0 }
                     }.getOrNull()
-                    Triple(retained, observations, source?.currentSource() == true)
+                    val currentSource = source?.currentSource() == true
+                    val memberReview = if (action == "teams.readRun" && proposalOrigin == null && currentSource) runCatching {
+                        check(currentWindow())
+                        if (!originalTemporaryReviewMembers(retained, observations)) null else {
+                            val summary = retained.getString("summary")
+                            val bytes = summary.toByteArray(Charsets.UTF_8).size
+                            if (bytes > TeamCoordinator.OWNER_WORK_REPORT_MAX_BYTES) null else
+                                controller.nativeTokenBudgetHost().tasks.ownerWorkTemporaryAnswerReview(id, retained.getString("teamId"),
+                                    retained.getInt("generation"), retained.getLong("revision"), TeamWorkFiles.hash(summary), bytes)
+                        }
+                    }.getOrNull() else null
+                    OwnerRunRead(retained, observations, currentSource, memberReview)
                 }
                 main.post {
                     if (!currentWindow()) done(null, "原团队阅读窗口已关闭，请回原记录核对")
-                    else result.fold({ accept(it.first,it.second,null,it.third) }, { accept(null,null,it.message ?: "原团队暂不可读",false) })
+                    else result.fold({ accept(it,null) }, { accept(null,it.message ?: "原团队暂不可读") })
                 }
             }
         }
         fun feature(command: String, input: JSONObject, messageId: String? = null, attention: JSONObject? = null, proposalOrigin: JSONObject? = null) {
-            fun received(result: JSONObject?, error: String?, observations: JSONArray? = null, currentSource: Boolean = false) {
+            fun received(result: JSONObject?, error: String?, observations: JSONArray? = null, currentSource: Boolean = false,
+                         memberReview: TaskStore.OwnerWorkTeamReportOrigin? = null) {
                 if (!currentWindow()) { done(null, "原团队窗口已关闭；请回原运行核对结果，没有自动重发"); return }
                 if (error != null || result == null) deliver(null, error ?: "原团队操作没有返回回执")
                 else if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) try {
@@ -562,7 +605,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     if (command == "answerAssignment") receipt.put("runId", input.getString("runId")).put("memberId", input.getString("memberId"))
                     if (command in setOf("get", "pause", "resume", "feedback", "continueMessages", "cancel", "sendMessage", "configureMember")) {
                         check(result.optString("id") == input.getString("runId")) { "原团队运行身份不匹配" }
-                        val reading = view("run", result, observations, currentSource)
+                        val reading = view("run", result, observations, currentSource, memberReview)
                         if (action == "teams.readRun" && currentSource && firstLocalFrozenReview(result) &&
                             reading.optJSONArray("attention")?.length() == 0 && reading.optJSONArray("revisionOffers")?.length() == 0)
                             reading.put(CURRENT_FIRST_LOCAL_FROZEN_REVIEW_SOURCE, true)
@@ -584,9 +627,9 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                         if (command == "save") receipt.put("reading", view("definition", result))
                     }
                     if (command == "answerAssignment") {
-                        readOwnerRun(input.getString("runId")) { current, observed, readError, _ ->
+                        readOwnerRun(input.getString("runId")) { read, readError ->
                             if (originalGeneration == generation && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()) {
-                                if (readError == null && current != null && current.optString("id") == input.getString("runId")) receipt.put("reading", view("run", current, observed))
+                                if (readError == null && read != null && read.run.optString("id") == input.getString("runId")) receipt.put("reading", view("run", read.run, read.observations))
                                 else receipt.put("readRequired", true)
                                 deliverReceipt(receipt)
                             } else done(null, "原回答窗口已关闭；回答结果保留，请回原问题核对，没有自动重发")
@@ -596,8 +639,9 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                     deliverReceipt(receipt)
                 } catch (failure: Exception) { deliver(null, failure.message ?: "原团队回执待核对") }
             }
-            if (command == "get") readOwnerRun(input.getString("runId"), proposalOrigin) { result, observations, error, currentSource ->
-                received(result, error, observations, currentSource && attention == null && proposalOrigin == null)
+            if (command == "get") readOwnerRun(input.getString("runId"), proposalOrigin) { read, error ->
+                val currentSource = read?.current == true && attention == null && proposalOrigin == null
+                received(read?.run, error, read?.observations, currentSource, if (currentSource) read?.memberReview else null)
             }
             else controller.requestWebFeatureReceipt("teams", command, input, ::currentWindow) { result, error -> received(result,error) }
         }
@@ -732,11 +776,11 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                                 val visible = catalog.getJSONArray("runs")
                                 val at = (0 until visible.length()).singleOrNull { visible.optJSONObject(it)?.opt("id") == restoreRun }
                                 if (hot == null || at == null) deliver(reply, null)
-                                else readOwnerRun(restoreRun, catalogRun = hot) { original, observations, failure, _ ->
-                                    if (original == null || failure != null) deliver(reply, null)
+                                else readOwnerRun(restoreRun, catalogRun = hot) { read, failure ->
+                                    if (read == null || failure != null) deliver(reply, null)
                                     else try {
                                         // Keep the existing SQL/link checks and send the full run only in the detail.
-                                        val reading = view("run", original, observations)
+                                        val reading = view("run", read.run, read.observations)
                                         visible.remove(at)
                                         finishReceipt(reply.put("reading", reading))
                                     } catch (invalid: Exception) { deliver(null, invalid.message ?: "原团队暂不可读") }

@@ -2267,9 +2267,16 @@ public final class LocalModule implements EngineModule {
         return position.path().equals(member.opt("path"))&&position.sha256().equals(member.opt("sha256"))&&
                 member.optLong("bytes",-1)>=0&&member.optLong("bytes")<=262144;
     }
-    /** Only an original phone selection materialized into the same registered private checkout.
-     * The preview always uses that checkout, never the selected folder URI or archive. */
-    private static boolean savedStaticPhoneImport(JSONObject row,EditorSaveOrigin origin){
+    /** Only a native blank owner preparation or an original phone import. The preview
+     * uses the registered private checkout, never a picker URI, archive or formal file. */
+    private static boolean savedStaticOwnerCheckout(JSONObject row,EditorSaveOrigin origin){
+        if(origin==EditorSaveOrigin.PREPARED){
+            // Check the native preparation baseline, not the editable tree. A separate
+            // formal adoption can add baseline rows; ordinary private saves do not.
+            return row.length()==6&&row.opt("name") instanceof String&&
+                    row.opt("createdAt") instanceof Number createdAt&&createdAt.longValue()>0&&
+                    row.opt("files") instanceof JSONArray baseline&&baseline.length()==0;
+        }
         JSONObject imported=row.optJSONObject("sourceImport");
         return origin==EditorSaveOrigin.IMPORTED_VERSIONED&&imported!=null&&
                 ("saf_tree".equals(imported.opt("sourceKind"))||"external_zip".equals(imported.opt("sourceKind")));
@@ -2285,15 +2292,16 @@ public final class LocalModule implements EngineModule {
                 file.baseContent.equals(latest.opt("content"));
     }
     /** The ordinary owner editor supplies its observed entry and exact selected asset paths.
-     * Only the already-published phone copy participates; no source inventory, writes or task registration. */
+     * Only the already-published private copy participates; no source inventory, writes or task registration. */
     public synchronized ProjectPreviewBundle.Verified readSavedStaticPageForOwner(
             dev.pocketengine.features.local.project.ProjectFileDraft entry,java.util.List<String> assets,
             java.util.function.BooleanSupplier current)throws Exception{
         if(closed||!current.getAsBoolean()||!savedStaticEditorEntry(entry))
             throw new SecurityException("请从原副本打开并保存 index.html 后再预览");
         JSONObject selected=checkout(entry.checkoutId);
-        if(!savedStaticPhoneImport(selected,editorSaveOrigin(selected,entry.projectId,entry.checkoutId)))
-            throw new SecurityException("只预览这个项目已登记的手机导入副本");
+        EditorSaveOrigin origin=editorSaveOrigin(selected,entry.projectId,entry.checkoutId);
+        if(!savedStaticOwnerCheckout(selected,origin))
+            throw new SecurityException("原项目的私人副本不符合已保存网页预览条件");
         requireIdle(entry.checkoutId);requireCheckoutWritable(entry.checkoutId);
         ProjectPreviewBundle.Verified bundle=null;
         ProjectPreviewBundle.SavedStaticMissingAssets missing=null;
@@ -2302,7 +2310,10 @@ public final class LocalModule implements EngineModule {
                     entry.baseHash,assets,()->!closed&&current.getAsBoolean());
         }catch(ProjectPreviewBundle.SavedStaticMissingAssets absent){missing=absent;}
         requireCheckoutWritable(entry.checkoutId);
-        if(!current.getAsBoolean()||!savedStaticPhoneImport(selected,editorSaveOrigin(selected,entry.projectId,entry.checkoutId)))
+        boolean ownerCurrent=current.getAsBoolean();
+        JSONObject observed=ownerCurrent&&origin==EditorSaveOrigin.PREPARED?checkout(entry.checkoutId):selected;
+        if(!ownerCurrent||editorSaveOrigin(observed,entry.projectId,entry.checkoutId)!=origin||
+                !savedStaticOwnerCheckout(observed,origin)||!current.getAsBoolean())
             throw new SecurityException("原文件窗口或项目登记已变化，未打开其他页面");
         if(missing!=null)throw missing;
         return bundle;
@@ -2408,7 +2419,7 @@ public final class LocalModule implements EngineModule {
         try{
             EditorSaveOrigin origin=editorSaveOrigin(observation.checkout(),project,id);
             if(origin==null)return listing;
-            if(savedStaticPhoneImport(observation.checkout(),origin))listing.put("ownerSavedStaticPage",true);
+            if(savedStaticOwnerCheckout(observation.checkout(),origin))listing.put("ownerSavedStaticPage",true);
             ProjectFileSavePosition position=readEditorSavePosition(origin,project,id,listing);
             if(position==null)return listing;
             JSONArray actual=listing.getJSONArray("files");

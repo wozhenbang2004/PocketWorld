@@ -3351,7 +3351,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun speak(text: String) { if (voiceInput.active()||voiceInput.leaseHeld()||realtimeOwnsAudio()) state = state.copy(error = "语音正在使用音频，请先结束后再朗读") else activity.media.speak(text) }
     fun stopSpeaking() { activity.media.stopSpeaking() }
     fun realtimeForeground(visible: Boolean) {
-        if (!visible) closeNativeEvaluation()
+        if (!visible) { closeNativeEvaluation(); closeOriginalReminderHistory() }
         if (voiceForeground != visible) { webWindowEpoch++; phoneViewerWindowEpoch++ }
         voiceForeground=visible;if(!visible)voiceInputModeChanged()
         if(visible&&webPrivateOwnerVisible())ownerComposer?.let{model->model.pending().filter{it.primaryDisplayOnly&&it.draftKey==model.activeKey()}.forEach{queryChatSubmission(it.clientId)}}
@@ -3684,7 +3684,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal val conversationReaderRevision get() = conversationReadSequence
     // The one-row request view is not a regular conversation reader authority.
     // Only the existing exact-window close action can consume that reader handle.
-    fun canReadConversationWindow(page:ConversationReadPage)=!closed&&page.workRequestAnchor==null&&page.searchAnchor==null&&
+    fun canReadConversationWindow(page:ConversationReadPage)=!closed&&page.workRequestAnchor==null&&page.searchAnchor==null&&page.reminderSource==null&&
         privateWorkspaceView()&&conversationReader?.window==page.window&&conversationReader?.conversation==page.conversation
 
     /** Only the ordinary earlier-page action may use a contextual search window. It is not a resolver for other history operations. */
@@ -3705,10 +3705,68 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }==true
     internal fun conversationReaderForWeb():ConversationReadPage? {
         val page=conversationReader?:return null
+        page.reminderSource?.let { pin -> return page.takeIf { originalReminderHistoryCurrent(pin) } }
         val pin=page.workRequestAnchor?:return page
         if(pin.sourceRevision!=conversationSourceRevision||!workRequestWindowCurrent(pin.task,pin.run,pin.epoch))
             return page.copy(messages=emptyList(),rowBytes=emptyMap(),bytes=0,notice=null,error="原工作或原请求已变化。请返回当前工作重新核对。")
         return if(page.notice!=null&&!workRequestTeamMismatch(pin.task))page.copy(notice=null) else page
+    }
+    private var openingOriginalReminderHistory: dev.pocketengine.core.RunControl? = null
+    private fun originalReminderHistoryCurrent(anchor: OriginalReminderHistoryAnchor) =
+        webPrivateOwnerVisible() && anchor.sourceRevision == conversationSourceRevision && anchor.current()
+    internal fun closeOriginalReminderHistory() {
+        openingOriginalReminderHistory?.cancel(); openingOriginalReminderHistory = null
+        if (conversationReader?.reminderSource != null) closeConversationReader()
+    }
+    internal fun retireInvalidOriginalReminderHistory() {
+        val anchor = conversationReader?.reminderSource ?: return
+        if (!originalReminderHistoryCurrent(anchor)) closeOriginalReminderHistory()
+    }
+    internal fun openOriginalReminderHistory(selection: dev.pocketengine.ui.web.PocketWebAutomation.ReminderSourceSelection,
+            current: () -> Boolean, selectionCurrent: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val atRequest = conversationReadSequence
+        val source = conversationSourceRevision
+        val control = dev.pocketengine.core.RunControl()
+        fun original() = !control.isCancelled && current() && webPrivateOwnerVisible() &&
+            source == conversationSourceRevision && conversationReader == null && conversationReadSequence == atRequest
+        check(openingOriginalReminderHistory == null && original() && selectionCurrent()) { "请在原私人提醒查看原对话" }
+        openingOriginalReminderHistory = control
+        try { io.execute {
+            val result = runCatching { app.readOriginalReminderConversationSource(selection.origin(), selection.rule,
+                selection.revision, selection.occurrence, control) { original() } }
+            main.post {
+                val owns = openingOriginalReminderHistory === control
+                if (owns) openingOriginalReminderHistory = null
+                if (!owns || !original() || !selectionCurrent()) { done(null, "原提醒窗口或来源已变化，未显示旧消息。"); return@post }
+                result.fold({ native ->
+                    val opened = runCatching {
+                        val marker = native.getJSONObject("reminderSource")
+                        val occurrence = selection.occurrence
+                        val shown = marker.optJSONObject("occurrence")
+                        require(marker.opt("ruleId") == selection.rule && marker.opt("ruleRevision") == selection.revision &&
+                            (if (occurrence == null) !marker.has("occurrence") else shown != null &&
+                                shown.opt("id") == occurrence.id() && shown.opt("revision") == occurrence.revision() &&
+                                    shown.optLong("at", -1L) == occurrence.at()))
+                        val reply = marker.getString("replyMessageId"); val request = marker.getString("requestMessageId")
+                        val replyRevision = marker.getLong("replyRevision"); val requestRevision = marker.getLong("requestRevision")
+                        val anchor = OriginalReminderHistoryAnchor(marker, source) { current() && selectionCurrent() }
+                        val page = ConversationReadPage(Math.addExact(atRequest, 1L), selection.conversation, "提醒来自这次原对话", null,
+                            anchor = reply, reminderSource = anchor).accept(native, false)
+                        require(page.initialized && !page.limited && !page.loading && page.error == null && !page.hasMore && page.cursor.isEmpty() &&
+                            page.messages.size == 2 && request != reply && requestRevision > 0 && replyRevision > 0 &&
+                            page.messages[0].let { it.role == "user" && it.id == request && it.sourceRevision == requestRevision } &&
+                            page.messages[1].let { it.role == "assistant" && it.id == reply && it.sourceRevision == replyRevision } &&
+                            original()) { "没有核对到这条提醒的原请求和回复" }
+                        conversationReadSequence = page.window; conversationReader = page
+                        JSONObject().put("window", page.window).put("conversationId", page.conversation)
+                            .put("readOnly", true).put("executionAuthorized", false).put("reminderSource", JSONObject(marker.toString()))
+                    }
+                    opened.fold({ done(it, null) }, { failure -> done(null, message(failure)) })
+                }, { _ -> done(null, "未核对到这条提醒的原对话，没有打开其他消息。") })
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) {
+            openingOriginalReminderHistory = null; done(null, "原提醒读取暂不可用，请在这条提醒重新核对。")
+        }
     }
     internal fun closeOwnerWorkRequestHistory() {
         openingOwnerWorkRequest?.cancel(); openingOwnerWorkRequest=null
@@ -3926,7 +3984,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private fun ordinaryDetachedHistoryPage(page:ConversationReadPage):Boolean =
         page.detachedHistoryEpoch==chatViewEpoch&&page.conversation==state.conversationId&&
         composerDraft?.key=="conversation:${page.conversation}"&&composerDraft?.conversationId==page.conversation&&
-        page.reportAnchor==null&&page.workRequestAnchor==null&&page.searchAnchor==null&&page.readingKey==null&&
+        page.reportAnchor==null&&page.workRequestAnchor==null&&page.searchAnchor==null&&page.reminderSource==null&&page.readingKey==null&&
         state.filePath==null&&webTaskViewId==null&&queuedInputsPage==null&&!state.chatAttachmentPickerOpen&&
         !attachmentOutcomes.state.open&&!hasChannelPhoneOrigin&&privateWorkspaceView()&&
         conversationReader?.window==page.window
@@ -3958,7 +4016,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         ownerComposerStore.checkpointDetachedHistory(model,place).whenComplete { _,_ -> main.post { if(!closed)changed() } }
     }
     fun closeConversationReader(){conversationReader=null;++conversationReadSequence}
-    fun switchFromConversationReader(window:Long){val page=conversationReader?:return;if(page.window!=window||state.chatSubmitting)return;closeConversationReader();if(page.conversation!=state.conversationId)openConversation(page.conversation)}
+    fun switchFromConversationReader(window:Long){val page=conversationReader?:return;if(page.window!=window||page.reminderSource!=null||state.chatSubmitting)return;closeConversationReader();if(page.conversation!=state.conversationId)openConversation(page.conversation)}
     fun newConversation() {
         compatibilityChat=null
         if(state.chatSubmitting)return

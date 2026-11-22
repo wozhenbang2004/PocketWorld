@@ -2,6 +2,7 @@ package dev.pocketengine.features.automation;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import dev.pocketengine.store.OriginalReminderSourceFields;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -192,13 +193,37 @@ public final class AutomationBook {
             if(pendingOriginalReminder(proposal,rule))return new JSONObject().put("status","pending").put("proposal",proposal);
             if("pending".equals(proposal.opt("status"))&&Boolean.TRUE.equals(proposal.opt("ruleCreationEntered"))
                     &&"unknown".equals(proposal.opt("ruleCreationState")))return new JSONObject().put("status","unknown");
-            if(!"approved".equals(proposal.opt("status"))||!Boolean.TRUE.equals(proposal.opt("ruleCreationEntered"))
-                    ||!"observed_original_rule".equals(proposal.opt("ruleCreationState"))||!id.equals(proposal.opt("ruleId"))
-                    ||rule==null||!"reminder".equals(rule.opt("kind"))||rule.optBoolean("sourceInvalidated")||rule.optBoolean("sourceCheckPending")
-                    ||rule.optJSONObject("nativeOrigin")==null||!canonicalObject(origin).equals(canonicalObject(rule.getJSONObject("nativeOrigin")))
-                    ||!(rule.opt("revision") instanceof Integer)||rule.getInt("revision")<1)return unavailable;
+            if(!confirmedOriginalReminder(proposal,rule,origin,id))return unavailable;
             return new JSONObject().put("status","saved").put("ruleId",id).put("ruleRevision",rule.getInt("revision"));
         }
+    }
+    boolean originalConversationReminderSourceCurrent(JSONObject origin,String operation,String id,String digest,int revision,
+            OriginalReminderSourceFields.Occurrence occurrence,java.util.function.BooleanSupplier current)throws Exception{
+        synchronized(lock){
+            var rows=OriginalReminderSourceFields.read(file,8_000_000,id,occurrence,current);
+            if(rows==null)return false;
+            JSONObject proposal=reviewOriginalReminderRow(rows.proposal(),origin,operation,digest),rule=rows.rule();
+            if(proposal==null||!confirmedOriginalReminder(proposal,rule,origin,id)
+                    ||rule.getInt("revision")!=revision||!"once".equals(rule.getJSONObject("schedule").opt("type"))
+                    ||!"once".equals(proposal.getJSONObject("draft").getJSONObject("schedule").opt("type")))return false;
+            if(occurrence==null)return current.getAsBoolean();
+            JSONObject receipt=rows.receipt();
+            return id.equals(receipt.opt("ruleId"))&&"reminder".equals(receipt.opt("kind"))&&
+                    sameInteger(receipt.opt("revision"),occurrence.revision())&&occurrence.revision()<=revision&&
+                    sameInteger(receipt.opt("occurrenceAt"),occurrence.at())&&
+                    (id+":"+occurrence.revision()+":"+occurrence.at()).equals(receipt.opt("instanceKey"))&&
+                    receipt.optString("status").matches("notified|dispatching|delivery_unknown")&&
+                    !receipt.optBoolean("sourceInvalidated")&&!receipt.optBoolean("sourceCheckPending")&&
+                    receipt.optJSONObject("nativeOrigin")!=null&&canonicalObject(origin).equals(canonicalObject(receipt.getJSONObject("nativeOrigin")))&&
+                    current.getAsBoolean();
+        }
+    }
+    private static boolean confirmedOriginalReminder(JSONObject proposal,JSONObject rule,JSONObject origin,String id)throws Exception{
+        return "approved".equals(proposal.opt("status"))&&Boolean.TRUE.equals(proposal.opt("ruleCreationEntered"))
+                &&"observed_original_rule".equals(proposal.opt("ruleCreationState"))&&id.equals(proposal.opt("ruleId"))
+                &&rule!=null&&"reminder".equals(rule.opt("kind"))&&!rule.optBoolean("sourceInvalidated")&&!rule.optBoolean("sourceCheckPending")
+                &&rule.optJSONObject("nativeOrigin")!=null&&canonicalObject(origin).equals(canonicalObject(rule.getJSONObject("nativeOrigin")))
+                &&rule.opt("revision") instanceof Integer&&rule.getInt("revision")>0;
     }
     JSONObject approveOriginalConversationReminder(JSONObject origin,String operation,String id,String digest,long now,
                                                    java.util.function.BooleanSupplier current)throws Exception{
@@ -217,7 +242,9 @@ public final class AutomationBook {
         return selected;
     }
     private static JSONObject originalConversationReminder(JSONObject state,JSONObject origin,String operation,String id,String digest)throws Exception{
-        JSONObject proposal=originalReminderRow(state.optJSONArray("proposals"),id);
+        return reviewOriginalReminderRow(originalReminderRow(state.optJSONArray("proposals"),id),origin,operation,digest);
+    }
+    private static JSONObject reviewOriginalReminderRow(JSONObject proposal,JSONObject origin,String operation,String digest)throws Exception{
         if(proposal==null||!digest.equals(proposal.opt("digest"))||!Boolean.FALSE.equals(proposal.opt("executionAuthorized"))
                 ||!(origin.getString("taskId")+":"+operation).equals(proposal.opt("identity"))
                 ||proposal.optBoolean("sourceInvalidated")||proposal.optBoolean("sourceCheckPending")

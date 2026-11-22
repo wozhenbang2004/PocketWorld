@@ -2663,6 +2663,11 @@ public final class EngineApplication extends Application implements dev.pocketen
             TaskStore.OriginalReminderReply reply,java.util.function.BooleanSupplier current)throws Exception{
         return automationPlans.readOriginalConversationReminder(automationModule(),reply,current);
     }
+    public JSONObject readOriginalReminderConversationSource(JSONObject origin,String rule,int revision,
+            dev.pocketengine.store.OriginalReminderSourceFields.Occurrence occurrence,RunControl read,
+            java.util.function.BooleanSupplier current)throws Exception{
+        return automationPlans.readOriginalReminderConversationSource(automationModule(),origin,rule,revision,occurrence,read,current);
+    }
     public JSONObject approveOriginalConversationReminder(TaskStore.OriginalReminderReply reply,TaskStore.OriginalReminderProposal selected,
                                                            java.util.function.BooleanSupplier current)throws Exception{
         return automationPlans.approveOriginalConversationReminder(automationModule(),reply,selected,current);

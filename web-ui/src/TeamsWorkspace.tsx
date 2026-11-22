@@ -1175,6 +1175,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const canOpenMemberResult = bridge.getState().capabilities.commands.includes('teams.openResearchTask');
   const classicOwner = canOpenMemberResult && openReading && globalThis.crypto?.subtle ? classicAnswerOwner(reading,true) : '';
   const deliveries = teamResearchDeliveries(current, messages, 'current', !!classicOwner);
+  const awaitingMemberAnswerReview = !!classicOwner && reading?.ownerWorkLink?.temporaryAnswersForReview===true &&
+    deliveries.some(row=>row.answer?.plainText===true);
   const archivedDeliveries = teamResearchDeliveries(current, messages, 'archived');
   const ordinaryAnswers = current?.mode === 'collaborate' && !hasWorkPlan && !current.productionScope &&
     current.researchExecutionFormat === 'pocketworld.team-research-agent.v1';
@@ -1421,7 +1423,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const original=currentReading.current;
     if(!openReading||!item.answer||!canRead||materialBusy||document.hidden||!ownsNativeWindow()||
       original?.kind!=='run'||original.run?.id!==item.team||original.viewHandle!==reading?.viewHandle)return;
-    const show=(same:TeamResearchDelivery, generation:number)=>{
+    const show=(same:TeamResearchDelivery, generation:number, awaitingReview=false)=>{
       if(!same.answer)return;
       if (runSection === 'result') {
         rememberSourcesOpened(item.team);
@@ -1430,7 +1432,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         }):null);
       }
       else setResultSource(saved=>saved?.runId===item.team&&saved.member?.deliveryKey===same.key?saved:null);
-      openReading({kind:'message',title:same.name+' · '+same.answer.label,text:same.answer.text,returnFocus:trigger,
+      openReading({kind:'message',title:same.name+' · '+same.answer.label+(awaitingReview?'（原工作尚未确认）':''),text:same.answer.text,returnFocus:trigger,
         ...(same.answer.plainText?{plainText:true as const}:{})});
     };
     const originalAnswer=item.answer;
@@ -1465,7 +1467,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         }
         acceptReading(next);
         if(!checked||!same){setNotice('这份完整答复未能核对。可从原研究任务查看记录。');return;}
-        show(same,next.run.generation);
+        show(same,next.run.generation,next.ownerWorkLink?.temporaryAnswersForReview===true);
       }catch(failure){
         if(stillCurrent())setError(failure instanceof Error?failure.message:'原答复暂时无法核对。');
       }finally{
@@ -1967,6 +1969,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
                   consume:id=>setMemberFileEntry(value=>value?.requestId===id?null:value)}:undefined}
                 run={run} active={workspaceActive && runSection === 'result'} disabled={!canRead || materialBusy} onOpen={setReadingFiles} back={frozenFilesBack} memberName={name}/> : undefined} sources={deliveries.length>0 ? <TeamResearchDeliveries records={deliveries} disabled={!canRead||materialBusy} rawAvailable={canOpenMemberResult}
             open={openMemberDelivery} openAnswer={openReading?openMemberAnswer:undefined}
+            awaitingWorkReview={awaitingMemberAnswerReview}
             groupByMember={ordinaryAnswers ? name : undefined}
             locate={resultPhaseLink ? {deliveryKey:resultPhaseLink,open:()=>selectRunTab('progress')} : undefined}
             expanded={shownMemberSources[current.id] ?? (!!partialResult || ordinaryAnswers && !publishedOrdinaryResult && deliveries.length <= 3)}

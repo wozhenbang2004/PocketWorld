@@ -48,7 +48,10 @@ export function classicAnswerOwner(reading:Row|null,allowCompletedTemporary=fals
     Number.isSafeInteger(run.generation)&&run.generation>=0&&positive(run.revision);
   const completedTemporary=allowCompletedTemporary&&reading?.currentCompletedTemporaryAnswersSource===true&&
     run?.definitionKind==='one_time'&&run.status==='completed'&&run.phase==='completed'&&link?.savedResultForDraft===true;
-  if(reading?.kind!=='run'||!reading.viewHandle||!id(run?.id)||!id(run.teamId)||run.mode!=='collaborate'||(!completedTemporary&&run.definitionKind!=null)||
+  const reviewingTemporary=allowCompletedTemporary&&link?.temporaryAnswersForReview===true&&link.savedResultForDraft!==true&&
+    run?.definitionKind==='one_time'&&run.status==='completed'&&run.phase==='completed'&&run.operationId===run.id&&run.summaryStale===false&&
+    Number.isSafeInteger(run.generation)&&run.generation>=0&&positive(run.revision)&&roster.length===2;
+  if(reading?.kind!=='run'||!reading.viewHandle||!id(run?.id)||!id(run.teamId)||run.mode!=='collaborate'||(!completedTemporary&&!reviewingTemporary&&run.definitionKind!=null)||
     (run.discussionFormat??'classic')!=='classic'||run.discussion||run.workPlan||run.productionScope||run.nativeWorkProfileModels||
     run.researchExecutionFormat!=='pocketworld.team-research-agent.v1'||run.archived===true||
     (!failedAggregate&&!['running','paused','completed','partial'].includes(run.status))||
@@ -56,7 +59,8 @@ export function classicAnswerOwner(reading:Row|null,allowCompletedTemporary=fals
     link?.readOnly!==true||link.currentRun!==true||link.stopping!==false||link.teamRunId!==run.id||!id(link.teamTaskId)||
     reading.taskId!==link.teamTaskId||!id(link.taskId)||!id(link.runId)||!positive(link.epoch)||!id(link.conversationId))return '';
   return JSON.stringify([run.id,run.teamId,link.teamTaskId,link.taskId,link.runId,link.epoch,link.conversationId,
-    ...(failedAggregate?['failed']:[]),...(completedTemporary?['one_time']:[])]);
+    ...(failedAggregate?['failed']:[]),...(completedTemporary?['one_time']:[]),
+    ...(reviewingTemporary?['one_time_review',run.generation,run.revision]:[])]);
 }
 const classicAnswerBytes=65536;
 
@@ -133,9 +137,9 @@ export function teamResearchDeliveries(run:Row|null,messages:unknown,edition:'cu
   return results;
 }
 
-export function TeamResearchDeliveries({records,disabled,rawAvailable,open,openAnswer,expanded,onExpanded,archived=false,groupByMember,locate}:{records:TeamResearchDelivery[];disabled:boolean;rawAvailable:boolean;
+export function TeamResearchDeliveries({records,disabled,rawAvailable,open,openAnswer,expanded,onExpanded,archived=false,awaitingWorkReview=false,groupByMember,locate}:{records:TeamResearchDelivery[];disabled:boolean;rawAvailable:boolean;
   open:(source:TeamResearchDelivery)=>void;openAnswer?:(source:TeamResearchDelivery,trigger:HTMLButtonElement)=>void;expanded:boolean;onExpanded:(v:boolean)=>void;archived?:boolean;
-  groupByMember?:(id:string)=>string;locate?:{deliveryKey:string;open:()=>void}}){
+  awaitingWorkReview?:boolean;groupByMember?:(id:string)=>string;locate?:{deliveryKey:string;open:()=>void}}){
   if(!records.length)return null;
   const group=archived?'archived-member-originals':'member-originals';
   const grouped=groupByMember&&!archived?new Map<string,TeamResearchDelivery[]>():null;
@@ -160,9 +164,10 @@ export function TeamResearchDeliveries({records,disabled,rawAvailable,open,openA
   };
   return <Accordion className="pw-team-disclosures" variant="divided" expandedKeys={new Set(expanded?[group]:[])}
     onExpandedChange={keys=>onExpanded(Array.from(keys).includes(group))}>
-    <AccordionItem id={group} title={archived?'修订前已交回的答复':grouped?'已保存的成员答复':'成员交付的原件'}
+    <AccordionItem id={group} title={archived?'修订前已交回的答复':awaitingWorkReview?'成员原答复':grouped?'已保存的成员答复':'成员交付的原件'}
       description={`${new Set(records.map(s=>s.memberId)).size} 名成员 · ${records.length} 份${grouped?'阶段答复':'研究产出'}`}>
       {archived&&<p className="pw-field-hint">这些是修改要求前已交回的版本，不算本次新稿。点选可查看答复的原任务，不会让成员重做。</p>}
+      {awaitingWorkReview&&<p className="pw-field-hint">原工作尚未确认。成员原答复供核对，不代表验收通过。</p>}
       <div className="pw-team-delivery-list">{grouped?Array.from(grouped,([id,member])=>{
         const author=member[0].name, sameName=member.every(source=>source.name===author);
         return <section className="pw-team-delivery-member" key={id}>

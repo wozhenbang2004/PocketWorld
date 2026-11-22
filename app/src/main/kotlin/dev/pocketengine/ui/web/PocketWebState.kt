@@ -274,14 +274,19 @@ internal object PocketWebState {
         data.put("conversationReader", controller.conversationReaderForWeb()?.let { page -> JSONObject()
             .put("window", page.window).put("conversation", page.conversation).put("title", page.title)
             .put("messages", JSONArray().also { out -> page.messages.forEach { row ->
-                val view = message(row)
-                if (page.searchAnchor == null && !page.loading && page.error == null && !page.limited) page.quoteTrail.ranges(row.id)?.let { view.put("registeredQuotes", it) }
-                out.put(view)
+                if (page.reminderSource != null) out.put(JSONObject().put("id", row.id).put("sourceRevision", row.sourceRevision)
+                    .put("role", row.role).put("content", row.content))
+                else {
+                    val view = message(row)
+                    if (page.searchAnchor == null && !page.loading && page.error == null && !page.limited) page.quoteTrail.ranges(row.id)?.let { view.put("registeredQuotes", it) }
+                    out.put(view)
+                }
             } })
             .put("cursor", page.cursor).put("hasMore", page.hasMore).put("loading", page.loading)
             .put("error", page.error ?: JSONObject.NULL).put("notice", page.notice ?: JSONObject.NULL)
             .put("limited", page.limited).put("index", page.index).put("offset", page.offset).put("anchor", page.anchor)
             .put("originalReportMessageId",page.reportAnchor?.message ?: JSONObject.NULL)
+            .also { out -> page.reminderSource?.let { out.put("reminderSource", JSONObject(it.marker.toString())) } }
             .also { out -> if(page.detachedHistoryEpoch!=null)out.put("detachedHistory",true)
                 page.detachedHistoryResumeRevision?.let { out.put("detachedHistoryResumeRevision",it) } }
             .also { out -> page.searchAnchor?.let { search -> out.put("searchAnchor",JSONObject()

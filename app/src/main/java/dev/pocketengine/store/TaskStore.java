@@ -666,6 +666,8 @@ public final class TaskStore {
     }
     public record OriginalReminderProposal(String id,String digest,String operation,String generation){}
     private record OriginalReminderOperation(String id,String digest,String operation){}
+    public record OriginalReminderSource(OriginalReminderReply reply,OriginalReminderProposal proposal,
+                                         dev.pocketengine.features.memory.SourceRef ownerInput){}
     /** Recheck only this saved reply and native receipt in the original SQLite snapshot.
      * Neither a task/body read, operation arguments, nor Book IO under this monitor. */
     public synchronized OriginalReplyDocument originalReplyDocumentForOwner(OriginalReplyDocument.Target target)throws Exception {
@@ -788,10 +790,7 @@ public final class TaskStore {
     public synchronized OriginalReminderProposal originalReminderForReply(OriginalReminderReply reply)throws Exception{
         if(!db.inTransaction()||conversationRepository==null)throw new SecurityException("请在原私人对话核对提醒");
         JSONObject task=required(reply.taskId());
-        if(!OwnerWorkTask.isButlerSource(task)||!reply.conversationId().equals(task.opt("conversationId"))
-                ||!reply.runId().equals(task.opt("runId"))||reply.epoch()!=task.optInt("coordinatorEpoch")
-                ||task.optBoolean("cancelRequested")||!task.optString("status").matches("completed|needs_confirmation")
-                ||hasUnresolved(reply.taskId()))return null;
+        if(!originalReminderProducer(task,reply.taskId(),reply.conversationId(),reply.runId(),reply.epoch()))return null;
         OriginalReminderOperation operation=originalReminderOperation(reply.taskId(),reply.runId(),reply.epoch(),reply.conversationId());
         if(operation==null)return null;
         JSONArray refs=scheduleProposalUserRefs(task,reply.taskId(),reply.runId(),reply.epoch(),reply.conversationId());
@@ -801,6 +800,34 @@ public final class TaskStore {
         String generation=conversationRepository.originalReminderReplyGeneration(reply.conversationId(),reply.messageId(),
                 reply.sourceRevision(),reply.taskId(),reply.runId(),reply.epoch(),reply.replyId(),input);
         return generation==null?null:new OriginalReminderProposal(operation.id(),operation.digest(),operation.operation(),generation);
+    }
+    private boolean originalReminderProducer(JSONObject task,String id,String conversation,String run,int epoch)throws Exception{
+        return OwnerWorkTask.isButlerSource(task)&&conversation.equals(task.opt("conversationId"))&&
+                run.equals(task.opt("runId"))&&epoch==task.optInt("coordinatorEpoch")&&!task.optBoolean("cancelRequested")&&
+                task.optString("status").matches("completed|needs_confirmation")&&!hasUnresolved(id);
+    }
+    /** Reverse the immutable same-run consumed-input link, not a recent-conversation lookup. */
+    public synchronized OriginalReminderSource originalReminderSourceForOwner(JSONObject origin,String rule)throws Exception{
+        if(!db.inTransaction()||conversationRepository==null)throw new SecurityException("请在原私人提醒核对来源");
+        String id=origin.getString("taskId"),run=origin.getString("runId"),conversation=origin.getString("conversationId");int epoch=origin.getInt("epoch");
+        JSONObject task=required(id);
+        if(!originalReminderProducer(task,id,conversation,run,epoch))return null;
+        OriginalReminderOperation operation=originalReminderOperation(id,run,epoch,conversation);
+        if(operation==null||!rule.equals(operation.id()))return null;
+        JSONArray inputs=scheduleProposalUserRefs(task,id,run,epoch,conversation);
+        if(inputs.length()!=1)return null;
+        var input=dev.pocketengine.features.memory.SourceRef.fromJson(inputs.getJSONObject(0));
+        var pair=conversationRepository.originalReminderReplyFromInput(conversation,id,run,epoch,operation.operation(),input);
+        if(pair==null)return null;
+        var reply=new OriginalReminderReply(conversation,pair.messageId(),pair.revision(),id,run,epoch,pair.replyId(),input.sourceId);
+        return new OriginalReminderSource(reply,new OriginalReminderProposal(rule,operation.digest(),operation.operation(),pair.generation()),input);
+    }
+    public synchronized JSONObject originalReminderSourcePage(OriginalReminderSource selected,RunControl control)throws Exception{
+        if(!db.inTransaction()||conversationRepository==null)throw new SecurityException("请在原私人提醒核对来源");
+        var reply=selected.reply();
+        return conversationRepository.windowAtOriginalReminderSource(reply.conversationId(),
+                new dev.pocketengine.features.memory.SourceRef("message",reply.messageId(),reply.sourceRevision(),"owner","private"),
+                selected.ownerInput(),selected.proposal().generation(),control);
     }
     /** The same bounded actual operation receipt for a saved reply hint and a later explicit review. */
     private OriginalReminderOperation originalReminderOperation(String taskId,String runId,int epoch,String conversationId)throws Exception{
@@ -3406,6 +3433,9 @@ public final class TaskStore {
         return ownerWorkLinkForTeam(teamRunId,-1,-1);
     }
     public synchronized JSONObject ownerWorkLinkForTeam(String teamRunId,int resultGeneration,long resultRevision)throws Exception {
+        return ownerWorkLinkForTeam(teamRunId,resultGeneration,resultRevision,null);
+    }
+    public synchronized JSONObject ownerWorkLinkForTeam(String teamRunId,int resultGeneration,long resultRevision,OwnerWorkTeamReportOrigin memberReview)throws Exception {
         if(teamRunId==null||teamRunId.isEmpty()||teamRunId.length()>240)return null;
         String id=externalTask("teams",teamRunId);if(id==null)id=operationTask("teams",teamRunId);if(id==null)return null;
         JSONObject team=read(id);if(team==null)return null;requirePrivateOwner(team);
@@ -3427,8 +3457,17 @@ public final class TaskStore {
                 &&resultGeneration==mirror.optInt("generation",-1)&&resultRevision==mirror.optLong("revision",-1)){
             try{
                 if(ownerWorkSavedTeamResultForDraft(work,team,run,epoch))link.put("savedResultForDraft",true);
+                // Rebind the worker's optional read evidence to this exact current Work.
+                // This is not a saved-result reference or a proof for confirming the result.
+                if(memberReview!=null&&memberReview.issuer==this&&memberReview.temporaryDefinition
+                        &&ordinaryTeamResultWork(work)&&memberReview.id.equals(work.opt("id"))
+                        &&memberReview.run.equals(run)&&memberReview.epoch==epoch
+                        &&memberReview.conversation.equals(work.opt("conversationId"))
+                        &&memberReview.digest.equals(resultReviewDigest(work))&&memberReview.team.equals(teamRunId)
+                        &&memberReview.generation==resultGeneration&&memberReview.revision==resultRevision)
+                    link.put("temporaryAnswersForReview",true);
             }catch(Exception unavailable){
-                // An unavailable follow-up source must not retire the original Team reading.
+                // Unavailable optional result evidence must not retire the original Team reading.
                 if(Thread.currentThread().isInterrupted()||unavailable instanceof InterruptedException)throw unavailable;
             }
         }
@@ -3551,6 +3590,21 @@ public final class TaskStore {
             if(work==null)throw new SecurityException("原工作没有完整核对信息");
             OwnerWorkTeamReportOrigin selected=ownerWorkTeamReportOrigin(work,run,epoch,digest,teamRun,generation,revision);
             db.setTransactionSuccessful();return selected;
+        }finally{db.endTransaction();}
+    }
+    /** Only the existing current Team read supplies these identifiers. The full
+     * original review proof is checked on its worker, but no approval is made. */
+    public synchronized OwnerWorkTeamReportOrigin ownerWorkTemporaryAnswerReview(String teamRun,String definition,int generation,long revision,String sha256,int bytes)throws Exception{
+        if(!TeamResearchReplyExecution.uuid(teamRun)||!TeamResearchReplyExecution.uuid(definition)
+                ||generation<0||revision<1||bytes<1||bytes>dev.pocketengine.features.teams.TeamCoordinator.OWNER_WORK_REPORT_MAX_BYTES)return null;
+        db.beginTransactionNonExclusive();try{
+            JSONObject team=boundedHostWorkCore(teamRun,false);
+            JSONObject work=team==null?null:boundedHostWorkCore(team.optString("parentTaskId"),false);
+            if(work==null||!ordinaryTeamResultWork(work)||!ownerWorkReportSettledTask(work))return null;
+            OwnerWorkTeamReportOrigin exact=ownerWorkTeamReportOrigin(work,work.getString("runId"),work.getInt("coordinatorEpoch"),
+                    resultReviewDigest(work),teamRun,generation,revision);
+            db.setTransactionSuccessful();
+            return exact.temporaryDefinition&&exact.definition.equals(definition)&&exact.bytes==bytes&&exact.sha256.equals(sha256)?exact:null;
         }finally{db.endTransaction();}
     }
     public synchronized void requireOwnerWorkTeamReportOrigin(OwnerWorkTeamReportOrigin expected)throws Exception{

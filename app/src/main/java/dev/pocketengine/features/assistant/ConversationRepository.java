@@ -215,6 +215,41 @@ public final class ConversationRepository {
             return generation;
         }
     }
+    public record OriginalReminderSavedReply(String generation,String messageId,long revision,String replyId){}
+    /** Reverse the existing canonical consumption receipt; neither SQL query selects a body. */
+    public OriginalReminderSavedReply originalReminderReplyFromInput(String conversation,String task,String run,int epoch,
+            String operation,SourceRef input)throws Exception{
+        if(!Thread.holdsLock(monitor)||!db.inTransaction()||!"message".equals(input.kind)||!"owner".equals(input.ownerId)||
+                !"private".equals(input.spaceId))throw new SecurityException("原提醒须在原来源事务内核对");
+        String generation=activeGeneration(),message;
+        try(Cursor user=db.rawQuery("SELECT CASE WHEN length(CAST(source_json AS BLOB))<=65536 THEN source_json END "
+                +"FROM assistant_sources WHERE generation=? AND conversation_id=? AND source_id=? AND revision=? "
+                +"AND role='user' AND deleted=0 AND context_retired=0 AND retired_through<revision LIMIT 1",
+                new String[]{generation,conversation,input.sourceId,Long.toString(input.revision)})){
+            if(!user.moveToFirst()||user.isNull(0))return null;
+            JSONObject source=new JSONObject(user.getString(0)),received=source.optJSONObject("submission");
+            if(source.optBoolean("nativeProvenanceImported")||!"owner".equals(source.opt("ownerId"))||!"private".equals(source.opt("spaceId"))||
+                    received==null||!"consumed".equals(received.opt("status"))||!"materialized".equals(received.opt("queueState"))||
+                    !task.equals(received.opt("taskId"))||!run.equals(received.opt("consumedRunId"))||!Integer.valueOf(epoch).equals(received.opt("consumedEpoch"))||
+                    !input.sourceId.equals(received.opt("messageId"))||!conversation.equals(received.opt("conversationId")))return null;
+            message=received.optString("replyMessageId");
+        }
+        if(!message.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")||message.equals(input.sourceId))return null;
+        String nativeReply;long revision;
+        try(Cursor answer=db.rawQuery("SELECT revision,native_reply_id,CASE WHEN length(CAST(source_json AS BLOB))<=65536 THEN source_json END "
+                +"FROM assistant_sources WHERE generation=? AND conversation_id=? AND source_id=? AND role='assistant' "
+                +"AND deleted=0 AND context_retired=0 AND retired_through<revision AND native_reply_id IS NOT NULL LIMIT 1",
+                new String[]{generation,conversation,message})){
+            if(!answer.moveToFirst()||answer.isNull(2))return null;
+            revision=answer.getLong(0);nativeReply=answer.getString(1);JSONObject source=new JSONObject(answer.getString(2));
+            if(!originalSavedAssistantSource(source,revision)||!operation.equals(source.opt(ORIGINAL_REMINDER_OPERATION))||
+                    nativeReply.isBlank()||!nativeReply.equals(source.opt("nativeReplyId"))||
+                    !task.equals(source.opt("nativeTaskId"))||!run.equals(source.opt("nativeRunId"))||
+                    !Integer.valueOf(epoch).equals(source.opt("nativeEpoch"))||!message.equals(source.opt("sourceId")))return null;
+        }
+        return generation.equals(originalReminderReplyGeneration(conversation,message,revision,task,run,epoch,nativeReply,input))
+                ?new OriginalReminderSavedReply(generation,message,revision,nativeReply):null;
+    }
     private static boolean originalSavedAssistantSource(JSONObject row,long revision){
         return row!=null&&revision>0&&revision==row.optLong("revision")&&!row.optBoolean("deleted")
                 &&!row.optBoolean("nativeProvenanceImported")&&!row.optBoolean("memoryContextRetired")&&row.optLong("memorySourceRetiredThrough")<revision
@@ -1299,6 +1334,35 @@ public final class ConversationRepository {
                     .put("messagePage",new JSONObject().put("hasMore",false).put("nextCursor",""))
                     .put("requestMessageId",ref.sourceId).put("requestRevision",ref.revision).putOpt("originalSelectedTeamName",selectedName);
         }finally{deadline.cancel(false);control.removeCancelAction(cancel);}
+    }
+    /** Exactly the originally consumed user row and its native saved reply, not a history page around them. */
+    public JSONObject windowAtOriginalReminderSource(String conversation,SourceRef reply,SourceRef input,String generation,RunControl control)throws Exception{
+        if(!Thread.holdsLock(monitor)||!db.inTransaction()||control==null||control.hasHostRun()||!activeGeneration().equals(generation))
+            throw new SecurityException("原提醒须在原私人对话来源事务内核对");
+        CancellationSignal signal=new CancellationSignal();Runnable cancel=signal::cancel;control.onCancel(cancel);
+        var deadline=DEADLINES.schedule(signal::cancel,500,java.util.concurrent.TimeUnit.MILLISECONDS);
+        try{
+            JSONObject request=originalReminderHistoryRow(conversation,generation,input,"user",signal,control);
+            JSONObject answer=originalReminderHistoryRow(conversation,generation,reply,"assistant",signal,control);
+            control.checkpoint();
+            return new JSONObject().put("conversationId",conversation).put("title","提醒来自这次原对话")
+                    .put("messages",new JSONArray().put(request).put(answer))
+                    .put("messagePage",new JSONObject().put("hasMore",false).put("nextCursor",""));
+        }finally{deadline.cancel(false);control.removeCancelAction(cancel);}
+    }
+    private JSONObject originalReminderHistoryRow(String conversation,String generation,SourceRef ref,String role,
+            CancellationSignal signal,RunControl control)throws Exception{
+        control.checkpoint();
+        JSONObject source=nativeMessageSource(ref);
+        String fingerprint=source.getString("bodyFingerprint");
+        if(!conversation.equals(source.opt("sourceConversationId"))||!generation.equals(source.opt("generation"))||
+                !fingerprint.matches("sha256:[a-f0-9]{64}")||historyPosition(conversation,ref,fingerprint,signal)<1)
+            throw new SourceUnavailable("原提醒对话来源已变化，未显示其他内容");
+        JSONObject row=historyMessage(conversation,ref.sourceId,signal,65536,control);
+        if(row==null||!role.equals(row.opt("role"))||!ref.sourceId.equals(row.opt("id"))||ref.revision!=row.getLong("revision")||
+                !fingerprint.equals("sha256:"+shaBytes(row.getString("content").getBytes(StandardCharsets.UTF_8))))
+            throw new SourceUnavailable("原提醒对话原文未核对，未显示其他内容");
+        return new JSONObject().put("id",ref.sourceId).put("revision",ref.revision).put("role",role).put("content",row.getString("content"));
     }
     private static String originalSelectedTeamName(String raw,SourceRef ref,String selectedTeam){
         try{

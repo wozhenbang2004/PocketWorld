@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import dev.pocketengine.store.OriginalReminderSourceFields
 import dev.pocketengine.ui.PocketWorldController
 import org.json.JSONObject
 
@@ -18,6 +19,53 @@ internal class PocketWebAutomation(private val controller: PocketWorldController
     }
 
     fun clear() = reviews.clear()
+
+    internal data class ReminderSourceSelection(val rule: String, val revision: Int, val conversation: String,
+        val task: String, val run: String, val epoch: Int, val occurrence: OriginalReminderSourceFields.Occurrence?,
+        val noticeConnection: Int?) {
+        fun origin(): JSONObject = JSONObject().put("ownerId", "owner").put("spaceId", "private")
+            .put("conversationId", conversation).put("taskId", task).put("runId", run).put("epoch", epoch)
+    }
+
+    /** A Web identity can only select a currently available native row; Book/SQL prove it on the worker. */
+    fun originalReminderSource(ruleId: String, revision: Int,
+            occurrence: OriginalReminderSourceFields.Occurrence?): ReminderSourceSelection? {
+        val state = controller.state
+        if (state.moduleBusy.any { it in setOf("automation.list", "automation.save", "automation.setEnabled", "automation.delete") } ||
+            state.moduleErrors["automation.list"] != null) return null
+        val rows = state.feature("automation").optJSONArray("rules") ?: return null
+        val rule = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }.singleOrNull { it.opt("id") == ruleId } ?: return null
+        val origin = rule.optJSONObject("nativeOrigin") ?: return null
+        if (rule.opt("revision") != revision || rule.opt("kind") != "reminder" || rule.optJSONObject("schedule")?.opt("type") != "once" ||
+            rule.optBoolean("sourceInvalidated") || rule.optBoolean("sourceCheckPending") || origin.length() != 6 ||
+            origin.opt("ownerId") != "owner" || origin.opt("spaceId") != "private") return null
+        val conversation = (origin.opt("conversationId") as? String)?.takeIf { it.isNotBlank() && it.length <= 160 } ?: return null
+        val task = (origin.opt("taskId") as? String)?.takeIf(::canonicalUuid) ?: return null
+        val run = (origin.opt("runId") as? String)?.takeIf(::canonicalUuid) ?: return null
+        val epoch = (origin.opt("epoch") as? Int)?.takeIf { it > 0 } ?: return null
+        val connection = if (occurrence != null) {
+            val notice = state.requestedReminderNotice ?: return null
+            if (state.requestedConnectionSection != "automation" || state.requestedConnectionRevision != notice.connectionRevision ||
+                notice.ruleId != ruleId || notice.id != occurrence.id() || notice.revision != occurrence.revision() ||
+                notice.occurrenceAt != occurrence.at() || occurrence.revision() > revision ||
+                "automation.receipts" in state.moduleBusy || state.moduleErrors["automation.receipts"] != null) return null
+            val receipts = state.moduleResults["automation.receipts"]?.optJSONArray("receipts") ?: return null
+            val receipt = (0 until receipts.length()).mapNotNull { receipts.optJSONObject(it) }.singleOrNull { it.opt("id") == occurrence.id() } ?: return null
+            val receiptOrigin = receipt.optJSONObject("nativeOrigin") ?: return null
+            if (receipt.opt("ruleId") != ruleId || receipt.opt("kind") != "reminder" || receipt.opt("revision") != occurrence.revision() ||
+                receipt.optLong("occurrenceAt", -1L) != occurrence.at() ||
+                receipt.opt("instanceKey") != listOf(ruleId, occurrence.revision(), occurrence.at()).joinToString(":") ||
+                receipt.optString("status") !in setOf("notified", "dispatching", "delivery_unknown") ||
+                receipt.optBoolean("sourceInvalidated") || receipt.optBoolean("sourceCheckPending") ||
+                receiptOrigin.length() != origin.length() || origin.keys().asSequence().any { receiptOrigin.opt(it) != origin.opt(it) }) return null
+            notice.connectionRevision
+        } else null
+        return ReminderSourceSelection(ruleId, revision, conversation, task, run, epoch, occurrence, connection)
+    }
+
+    private fun canonicalUuid(id: String): Boolean =
+        id.length == 36 && runCatching { java.util.UUID.fromString(id).toString() == id }.getOrDefault(false)
+
 
     fun dispatch(action: String, args: JSONObject): JSONObject? {
         when (action) {
