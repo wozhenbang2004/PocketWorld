@@ -64,8 +64,8 @@
 .pw-butler-work-next { display: flex; flex: none; align-self: center; align-items: center; gap: 2px; color: var(--pw-copy); font: 400 12px/20px var(--pw-font); }
 .pw-butler-work .pw-butler-work-row:disabled { opacity: 1; cursor: default; }
 .pw-butler-work .pw-butler-work-row:disabled .pw-butler-work-next { display: none; }
-.pw-butler-work .pw-butler-all-work { min-width: 44px; min-height: 44px; height: auto; max-width: 100%; padding: 9px 4px; gap: 4px; border: 0; border-radius: 10px; color: var(--pw-copy); background: transparent; box-shadow: none; font: 400 12px/20px var(--pw-font); white-space: normal; text-align: start; }
-.pw-butler-work .pw-butler-all-work > span { min-width: 0; flex-shrink: 1; padding: 0; }
+:is(.pw-butler-work, .pw-butler-first-use-utilities) .pw-butler-all-work { min-width: 44px; min-height: 44px; height: auto; max-width: 100%; padding: 9px 4px; gap: 4px; border: 0; border-radius: 10px; color: var(--pw-copy); background: transparent; box-shadow: none; font: 400 12px/20px var(--pw-font); white-space: normal; text-align: start; }
+:is(.pw-butler-work, .pw-butler-first-use-utilities) .pw-butler-all-work > span { min-width: 0; flex-shrink: 1; padding: 0; }
 .pw-butler-work-note { max-width: 42em; margin: 14px 0 0; color: var(--pw-copy); font: 400 13px/22px var(--pw-font); }
 .pw-butler-reading { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--pw-copy); font: 400 13px/22px var(--pw-font); }
 .pw-butler-reading > [role="progressbar"] { flex: none; width: 16px; height: 16px; }
@@ -120,3 +120,12 @@
 @media (hover: hover) and (pointer: fine) {
   .pw-butler-next-steps[data-quiet-setup] > :is([data-workspace-entry="connect-model"], .pw-start-model):hover:not(:disabled) { background: var(--pw-hover); }
 }
+
+/* Empty private Home: keep independent local choices beneath the draft. */
+.pw-butler-first-use-utilities { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: start; gap: 0 16px; min-width: 0; }
+.pw-butler-first-use-local { flex: 1 1 10rem; min-width: 0; }
+.pw-butler-first-use-local button[slot="trigger"] { min-height: 44px; padding-block: 8px; color: var(--pw-copy); }
+.pw-butler-first-use-local button[slot="trigger"] > span > span { color: inherit; font: 400 13px/21px var(--pw-font); }
+.pw-butler-first-use-actions { display: flex; flex-direction: column; align-items: start; gap: 2px; padding-inline-start: 8px; }
+.pw-butler-first-use-actions > .pw-butler-try { background: transparent; }
+.pw-butler-first-use-utilities > .pw-butler-all-work { font-size: 13px; }

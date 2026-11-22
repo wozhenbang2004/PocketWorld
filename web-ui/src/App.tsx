@@ -67,7 +67,7 @@ import {ConversationQueuedInputs} from './ConversationQueuedInputs';
 import {ConversationHistoryWindow,type ConversationHistoryTaskOrigin,type HistoryResultOrigin} from './ConversationHistoryWindow';
 import {MessageAttachment,type MessageAttachmentSource} from './MessageAttachment';
 import {ChatNavigationMenu} from './ChatNavigationMenu';
-import {ConversationDeliveredFiles,type DeliveredFileSource,type DeliveredReplyDocumentSource,type DeliveredWorkFileSource} from './ConversationDeliveredFiles';
+import {ConversationDeliveredFiles,replyDocumentFileLabel,type DeliveredFileSource,type DeliveredReplyDocumentFile,type DeliveredReplyDocumentSource,type DeliveredWorkFileSource} from './ConversationDeliveredFiles';
 import {useNavigationGlass} from './useNavigationGlass';
 import {NavigationChrome} from './NavigationChrome';
 import {WorkObjectMenu} from './WorkObjectMenu';
@@ -190,7 +190,7 @@ type Task={id:string;goal:string;status:string;summary?:string;executionMode?:st
 type OriginalReminderSource={conversationId:string;messageId:string;sourceRevision:number;taskId:string;runId:string;epoch:number;replyId:string};
 type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:number;navigation:number;resume:number;returnFocus?:HTMLButtonElement|null};
 type OriginalMemoryDraftVisit={source:OriginalMemoryDraftReply&{conversationId:string;replyId:string};documentEpoch:number;navigation:number;resume:number;trigger:HTMLButtonElement};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;originalGeneratedDocuments?:unknown;originalGeneratedDocumentsCheck?:unknown;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
@@ -220,28 +220,46 @@ type PausedChatPhoneOrigin={phone:ShownPhoneRun;pause:DisplayedPhonePause;conver
 type PausedChatPhoneWork={source:PausedChatPhoneOrigin;window:TaskReviewWindow;focused:boolean};
 type DeliveredFileVisit={conversation:string;document:number;navigation:number;resume:number;taskRequest:number;trigger:HTMLButtonElement;sources:DeliveredFileSource[]};
 type PreferredChatFile={visit:DeliveredFileVisit;source:DeliveredWorkFileSource;file:Pick<TaskResultFile,'id'|'sha256'>;current:()=>boolean;windowId?:string};
-type PreferredReplyDocument={visit:DeliveredFileVisit;reply:DeliveredReplyDocumentSource;windowId?:string};
+type PreferredReplyDocument={visit:DeliveredFileVisit;reply:DeliveredReplyDocumentSource;file:DeliveredReplyDocumentFile;windowId?:string};
 type PreferredDeliveredFile=PreferredChatFile|PreferredReplyDocument;
 
+function originalReplyDocumentFiles(message:Message|undefined):DeliveredReplyDocumentFile[] {
+ if(message?.role!=='assistant'||message.sourceRevision!==1||!message.id)return [];
+ const {originalGeneratedDocument:ready,originalGeneratedDocumentCheck:check,
+  originalGeneratedDocuments:readyPair,originalGeneratedDocumentsCheck:checkPair}=message;
+ if([ready,check,readyPair,checkPair].filter(value=>value!=null).length!==1)return [];
+ const pair=readyPair!=null||checkPair!=null,checkFirst=check!=null||checkPair!=null;
+ const rows=pair?(readyPair??checkPair):[ready??check];
+ if(!Array.isArray(rows)||rows.length!==(pair?2:1))return [];
+ const files:DeliveredReplyDocumentFile[]=[];
+ for(const row of rows){
+  const file=obj(row),pin=exactFileTarget(file);
+  if(!pin)return [];
+  const identity={id:pin.fileId,sha256:pin.sha256};
+  if(checkFirst&&!pair){files.push({...identity,checkFirst:true});continue;}
+  const mimeType=file.mimeType;
+  if(mimeType!=='application/pdf'&&mimeType!=='application/vnd.openxmlformats-officedocument.wordprocessingml.document')return [];
+  if(checkFirst){files.push({...identity,checkFirst:true,mimeType});continue;}
+  if(typeof file.name!=='string'||!file.name||!Number.isSafeInteger(file.size)||file.size<1)return [];
+  files.push({...identity,checkFirst:false,mimeType,name:file.name,size:file.size});
+ }
+ if(pair&&(files[0].id===files[1].id||files[0].sha256===files[1].sha256||files[0].mimeType===files[1].mimeType))return [];
+ return files;
+}
 function deliveredReplyDocument(message:Message):DeliveredReplyDocumentSource|undefined {
  const {id,at}=message;
- if(message.role!=='assistant'||message.sourceRevision!==1||!id||typeof at!=='number'||!Number.isSafeInteger(at)||at<=0||at>8.64e15)return;
- const checkFirst=message.originalGeneratedDocument==null;
- const file=obj(message.originalGeneratedDocument??message.originalGeneratedDocumentCheck),pin=exactFileTarget(file);
- if(!pin)return;
- const identity={id:pin.fileId,sha256:pin.sha256};
- const header={kind:'replyDocument' as const,messageId:id,revision:1 as const,at};
- if(checkFirst)return {...header,file:{...identity,checkFirst:true}};
- if(typeof file.name!=='string'||!file.name||!Number.isSafeInteger(file.size)||file.size<1||
-    !['application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.mimeType))return;
- return {...header,file:{...identity,checkFirst:false,name:file.name,mimeType:file.mimeType,size:file.size}};
+ if(!id||typeof at!=='number'||!Number.isSafeInteger(at)||at<=0||at>8.64e15)return;
+ const files=originalReplyDocumentFiles(message);
+ if(files.length)return {kind:'replyDocument',messageId:id,revision:1,at,files};
 }
 function currentDeliveredReplyDocument(rows:unknown,source:DeliveredReplyDocumentSource){
  const matches=asArray<Message>(rows).filter(row=>row.id===source.messageId);
  const message=matches.length===1?matches[0]:undefined;
- const current=message&&deliveredReplyDocument(message),file=source.file;
- if(!current||current.file.id!==file.id||current.file.sha256!==file.sha256||current.at!==source.at)return;
- if(!file.checkFirst&&(current.file.checkFirst||current.file.name!==file.name||current.file.mimeType!==file.mimeType||current.file.size!==file.size))return;
+ const current=message&&deliveredReplyDocument(message);
+ if(!current||current.at!==source.at||current.files.length!==source.files.length)return;
+ if(!source.files.every(file=>current.files.some(original=>original.id===file.id&&original.sha256===file.sha256&&
+    (!file.mimeType||original.mimeType===file.mimeType)&&
+    (file.checkFirst||!original.checkFirst&&original.name===file.name&&original.size===file.size))))return;
  return message;
 }
 const deliveredSourceMessage=(rows:unknown,source:DeliveredFileSource)=>source.kind==='work'?
@@ -3889,8 +3907,8 @@ export default function App(){
   const matches=asArray<Message>(owner.messages).filter(row=>row.id===source.messageId);
   const message=matches.length===1?matches[0]:undefined;
   if(kind==='replyDocument'){
-   const fixed=obj(message?.originalGeneratedDocument??message?.originalGeneratedDocumentCheck);
-   return message?.role==='assistant'&&message.sourceRevision===source.sourceRevision&&fixed.id===source.id&&fixed.sha256===source.sha256;
+   return message?.sourceRevision===source.sourceRevision&&
+    originalReplyDocumentFiles(message).some(file=>file.id===source.id&&file.sha256===source.sha256);
   }
   if(message?.role!=='user'||message.sourceRevision!==source.sourceRevision)return false;
   const selected=asArray<Json>(message.attachments).filter(file=>file.id===source.id),file=selected[0];
@@ -3912,11 +3930,12 @@ export default function App(){
      !node||node.dataset.conversationId!==source.conversationId||!trigger.isConnected||
      (shelf?kind!=='replyDocument'||!deliveredFilesCurrent(shelf.visit)||!shelf.visit.sources.includes(shelf.reply)||
       shelf.visit.conversation!==source.conversationId||shelf.reply.messageId!==source.messageId||shelf.reply.revision!==source.sourceRevision||
-      shelf.reply.file.id!==source.id||shelf.reply.file.sha256!==source.sha256||
+      !shelf.reply.files.includes(shelf.file)||shelf.file.id!==source.id||shelf.file.sha256!==source.sha256||
       !trigger.closest('.pw-settings-dialog-content')||!currentDeliveredReplyDocument(native.state.messages,shelf.reply)||
       openingChatResult.current||resultFileReturnFocus.current:!anchored))
    throw new Error(kind==='replyDocument'?'请从原答复查看这份文档。':kind==='messagePdf'?'请从原消息查看这份 PDF。':'请从这条答复核对原问题的附件。');
-  const returnTrigger=shelf?article?.querySelector<HTMLButtonElement>('[data-original-reply-document]')||trigger:trigger;
+  const returnTrigger=shelf?Array.from(article?.querySelectorAll<HTMLButtonElement>('[data-original-reply-document]')||[]).find(button=>
+   button.dataset.originalReplyDocument===source.id&&button.dataset.originalReplyDocumentSha===source.sha256)||trigger:trigger;
   const anchor=anchored&&article?{document:input.document,conversation:source.conversationId,message:anchorMessage,revision:anchorRevision,
    top:node.scrollTop,offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,trigger:returnTrigger,replyRun:answerInput?.work}:undefined;
   openingMessageOriginal.current=true;stopFollowing();
@@ -7724,7 +7743,7 @@ export default function App(){
   if(owner.conversationId!==visit.conversation||owner.conversationReader)return '';
   const rows=asArray<Message>(owner.messages),reply=deliveredSourceMessage(rows,source);
   if(!reply)return '';
-  if(source.kind==='replyDocument'&&source.file.checkFirst)return '原答复';
+  if(source.kind==='replyDocument'&&source.files.every(file=>file.checkFirst))return '原答复';
   const linked=messageReplyContext(reply)?.replyToMessageIds;
   const named=linked?.length===1?rows.filter(row=>row.id===linked[0]):[];
   const request=named.length===1&&named[0].role==='user'&&named[0].quoteAvailable===true&&
@@ -7761,7 +7780,7 @@ export default function App(){
   const frame=obj(attachment),listing=obj(frame.snapshot),selected=obj(frame.file);
   if('reply' in pin)return frame.open===true&&frame.ready===true&&frame.messageReplyDocumentOnly===true&&frame.messagePdfOnly===false&&
    !frame.taskId&&typeof frame.windowId==='string'&&!!frame.windowId&&(!pin.windowId||pin.windowId===frame.windowId)&&
-   (frame.file==null||selected.id===pin.reply.file.id&&selected.sha256===pin.reply.file.sha256);
+   (frame.file==null||selected.id===pin.file.id&&selected.sha256===pin.file.sha256);
   const task=pin.source.result;
   return frame.open===true&&frame.ready===true&&frame.resultFilesOnly===true&&frame.fromWorkResult===false&&
    frame.historyResultOnly===false&&frame.reportResultOnly===false&&frame.group===false&&frame.team===false&&frame.deviceOriginalOnly===false&&
@@ -7906,11 +7925,9 @@ export default function App(){
       (m.role==='assistant'||m.role==='user'&&['accepted','consumed'].includes(m.submission?.status||''))&&
       ['messageQuote.document.open','messageQuote.document.retain','messageQuote.document.check','messageQuote.close'].every(action=>can(action));
     const savedAttachmentChoices=messageAttachmentDraft||mayOpenChatMessagePdf?savedOwnerAttachmentChoices(m):[];
-    const checkGeneratedDocument=m.originalGeneratedDocument==null&&m.originalGeneratedDocumentCheck!=null;
-    const generatedDocument=obj(m.originalGeneratedDocument??m.originalGeneratedDocumentCheck),generatedSource=mayOpenChatMessageOriginal&&m.role==='assistant'&&m.sourceRevision===1&&m.id&&
-      typeof generatedDocument.id==='string'&&!!generatedDocument.id&&typeof generatedDocument.sha256==='string'&&
-      /^[a-f0-9]{64}$/.test(generatedDocument.sha256)&&(checkGeneratedDocument||typeof generatedDocument.name==='string'&&!!generatedDocument.name)?
-        {conversationId:String(state.conversationId||''),messageId:m.id,sourceRevision:m.sourceRevision,id:generatedDocument.id,sha256:generatedDocument.sha256}:null;
+    const generatedDocuments=mayOpenChatMessageOriginal?originalReplyDocumentFiles(m):[];
+    const generatedReply=generatedDocuments.length&&m.id&&m.sourceRevision===1?
+     {conversationId:String(state.conversationId||''),messageId:m.id,sourceRevision:m.sourceRevision}:null;
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
       receiptsInMenu={!!savedTrace&&Number.isSafeInteger(m.sourceRevision)&&!!m.content.trim()&&can('tasks.open')&&can('history.read')}
@@ -7930,15 +7947,17 @@ export default function App(){
       enabled={!taskOpen&&!state.conversationReader&&can('attachments.open')} canLocate={can('attachmentWorkspace.open')}
       onLocalPdf={mayOpenChatMessagePdf&&m.localMessagePdfSourceCurrent===true&&file.mimeType==='application/pdf'&&Number.isSafeInteger(file.size)&&file.size>0&&
        savedAttachmentChoices.some(choice=>choice.fileId===file.id&&choice.sha256===file.sha256)?openChatMessageOriginal:undefined}/>)}</div>}
-     {generatedSource&&<div className="pw-message-files"><Button variant="secondary" size="small" leadingIcon={IconFile} data-original-reply-document=""
-       aria-label={checkGeneratedDocument?'核对原答复文档':`在本机查看 ${generatedDocument.name}`} title={checkGeneratedDocument?undefined:generatedDocument.name}
+     {generatedReply&&<div className="pw-message-files">{generatedDocuments.map(file=><Button key={file.id} variant="secondary" size="small"
+       leadingIcon={IconFile} data-original-reply-document={file.id} data-original-reply-document-sha={file.sha256}
+       aria-label={file.checkFirst?replyDocumentFileLabel(file):`在本机查看 ${file.name}`} title={file.checkFirst?undefined:file.name}
        onClick={event=>{
+        if(openingMessageOriginal.current)return;
         const target=event.currentTarget,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
-        void openChatMessageOriginal(generatedSource,target,'replyDocument').catch(error=>{
+        void openChatMessageOriginal({...generatedReply,id:file.id,sha256:file.sha256},target,'replyDocument').catch(error=>{
          if(!document.hidden&&target.isConnected&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation)
           setLocalError(error instanceof Error?error.message:String(error));
         });
-       }}>{checkGeneratedDocument?'核对原答复文档':generatedDocument.name}</Button></div>}
+       }}>{replyDocumentFileLabel(file)}</Button>)}</div>}
      {originalMessageWork&&<Button variant="ghost" size="small" className="pw-message-work-action" leadingIcon={IconClock} trailingIcon={IconChevronRight}
        disabled={taskOpen||taskOpening||chatWorkReading||!!preparationTarget}
        aria-label={`查看这件工作：${originalMessageWork.task.goal}`} title={originalMessageWork.task.goal}
@@ -8570,7 +8589,7 @@ export default function App(){
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
   </NavigationChrome>:workspaceNotices}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={firstDraftConnect?null:modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')}
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={firstDraftConnect?null:modelSetupAction} firstDraftConnect={firstDraftConnect} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')}
    onOpenSchedule={can('connections.enter')&&can('connections.leave')&&can('automation.list')&&can('plans.snapshot')?trigger=>{
     if(!document.hidden)void openRelatedWorkspace('automation',{...captureWorkspaceOrigin(),focus:trigger,focusKey:trigger.dataset.workspaceEntry});
    }:undefined}
@@ -8596,7 +8615,7 @@ export default function App(){
    }:undefined} onOpen={(item,target)=>item.kind==='work'?openChatResult(item.source.messageId,item.source.result,target,undefined,
     {visit:deliveredFileVisit,source:item.source,file:item.file,current:()=>deliveredFilesCurrent(deliveredFileVisit)}):
     openChatMessageOriginal({conversationId:deliveredFileVisit.conversation,messageId:item.source.messageId,sourceRevision:item.source.revision,
-     id:item.file.id,sha256:item.file.sha256},target,'replyDocument',{visit:deliveredFileVisit,reply:item.source})}/>}
+     id:item.file.id,sha256:item.file.sha256},target,'replyDocument',{visit:deliveredFileVisit,reply:item.source,file:item.file})}/>}
   {shownOriginalReminder&&<OriginalChatReminderReview key={shownOriginalReminder.source.messageId+':'+shownOriginalReminder.source.sourceRevision}
     source={shownOriginalReminder.source} isCurrent={()=>originalReminderChatCurrent(shownOriginalReminder)}
     onClose={()=>closeOriginalReminder(shownOriginalReminder)} onOpenSavedRule={pin=>openSavedOriginalReminder(shownOriginalReminder,pin)}

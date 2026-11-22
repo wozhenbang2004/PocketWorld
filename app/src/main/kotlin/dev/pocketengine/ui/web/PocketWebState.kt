@@ -109,7 +109,7 @@ internal object PocketWebState {
 
     fun snapshot(controller: PocketWorldController, contractVisible: (UiTask) -> Boolean = { false },
         editorResumeVisible: (UiTask) -> Boolean = { false },
-        originalReplyDocument: (UiMessage) -> ReplyDocument? = { null }): JSONObject {
+        originalReplyDocuments: (UiMessage) -> List<ReplyDocument> = { emptyList() }): JSONObject {
         val raw = controller.state
         // An old unscoped local feature receipt is not part of the selected memory workspace.
         // Strip it before serializing, not from the owner's original native state.
@@ -172,9 +172,20 @@ internal object PocketWebState {
                             AttachmentMessageInput.WORD_OR_TEXT.supports(it.mimeType,it.name)
                         }==true) visible.put("localMessageInputDocumentSourceCurrent", true)
                 }
-                originalReplyDocument(row)?.let {
-                    if(it.checkFirst) visible.put("originalGeneratedDocumentCheck",JSONObject().put("id",it.file.id).put("sha256",it.file.sha256))
-                    else visible.put("originalGeneratedDocument",attachment(it.file))
+                val originals=originalReplyDocuments(row)
+                if(originals.size==1){
+                    val original=originals.single()
+                    if(original.checkFirst) visible.put("originalGeneratedDocumentCheck",JSONObject().put("id",original.file.id).put("sha256",original.file.sha256))
+                    else visible.put("originalGeneratedDocument",attachment(original.file))
+                }else if(originals.size==2&&originals[0].checkFirst==originals[1].checkFirst){
+                    val checkFirst=originals[0].checkFirst
+                    val files=JSONArray()
+                    originals.forEach { original ->
+                        val file=original.file
+                        files.put(if(checkFirst) JSONObject().put("id",file.id).put("sha256",file.sha256).put("mimeType",file.mimeType)
+                            else attachment(file))
+                    }
+                    visible.put(if(checkFirst) "originalGeneratedDocumentsCheck" else "originalGeneratedDocuments",files)
                 }
                 out.put(visible)
             } })

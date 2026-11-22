@@ -720,9 +720,8 @@ internal class PocketWebBridge(
             controller.modelSelectionRevision
             val exactPicker=currentReplyPicker()
             projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume) {
-                liveReplyDocument(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly,allowSummary=true)?.let { original ->
-                    PocketWebState.ReplyDocument(original.file,original.checkFirst)
-                }
+                liveReplyDocuments(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly,allowSummary=true).orEmpty()
+                    .map{original->PocketWebState.ReplyDocument(original.file,original.checkFirst)}
             }
             exactPicker?.let {
                 projection?.getJSONObject("state")?.put("originalReplyAttachmentPicker",
@@ -1175,11 +1174,12 @@ internal class PocketWebBridge(
                     check(!source.has("taskId")&&!source.has("window")){"请从当前原答复打开文档"}
                     val message=requiredString(source,"messageId")
                     val revision=requiredLong(source,"sourceRevision")
+                    val fileId=requiredString(source,"id");val sha=requiredString(source,"sha256")
+                    val conversation=requiredString(source,"conversationId")
                     fun selected(allowOwn:Boolean,allowSummary:Boolean)=controller.state.messages.singleOrNull{it.id==message&&it.sourceRevision==revision}
-                        ?.let{liveReplyDocument(it,inOwnReader=allowOwn,allowSummary=allowSummary)}
-                    val original=selected(false,true)?.takeIf{
-                        it.target.conversation()==source.getString("conversationId")&&it.file.id==source.getString("id")&&it.file.sha256==source.getString("sha256")
-                    }?:error("原答复文档已变化；请回原工作核对")
+                        ?.let{liveReplyDocuments(it,inOwnReader=allowOwn,allowSummary=allowSummary)}
+                        ?.singleOrNull{it.target.conversation()==conversation&&it.file.id==fileId&&it.file.sha256==sha}
+                    val original=selected(false,true)?:error("原答复文档已变化；请回原工作核对")
                     val originalDocument=documentId?:error("原答复页面已关闭")
                     val ticket=PocketWebWindowTicket(commandFence.ticket(),controller.webPhoneViewerWindowTicket())
                     val reader=controller.conversationReaderRevision
@@ -4058,8 +4058,8 @@ internal class PocketWebBridge(
         val history=controller.conversationReaderRevision;val sourceRevision=controller.messageAttachmentSourceRevision
         fun pinned(picking:Boolean,allowSummary:Boolean)=controller.state.messages
             .singleOrNull{it.id==target.message()&&it.sourceRevision==target.revision()}
-            ?.let{liveReplyDocument(it,inOwnReader=!picking,inOwnPicker=picking,allowSummary=allowSummary)}
-            ?.takeIf{it.target==target&&it.file==file}
+            ?.let{liveReplyDocuments(it,inOwnReader=!picking,inOwnPicker=picking,allowSummary=allowSummary)}
+            ?.singleOrNull{it.target==target&&it.file==file}
         // Only a real verified mounted reader can hand this exact source to the picker.
         val allowSummary=pinned(false,true)?.checkFirst?:error("原答复文档已变化，未打开附件选择")
         fun sameDraft(picking:Boolean):Boolean {
@@ -4118,9 +4118,11 @@ internal class PocketWebBridge(
     }
     /** Only the already displayed ordinary private native reply and sole original submission.
      * This projection does not fetch Work/Audit history or verify files in the background. */
-    private fun liveReplyDocument(row:UiMessage,inOwnReader:Boolean=false,inOwnPicker:Boolean=false,allowSummary:Boolean=false):LiveReplyDocument? {
+    private fun liveReplyDocuments(row:UiMessage,inOwnReader:Boolean=false,inOwnPicker:Boolean=false,allowSummary:Boolean=false):List<LiveReplyDocument>? {
         val reply=row.replyContext?:return null
-        val file=reply.originalGeneratedDocument?:return null
+        val files=reply.originalGeneratedDocuments
+        if(files.isEmpty()||files.size>2||files.any{file->file.size<=0||
+                file.mimeType !in setOf("application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document")})return null
         val nativeReply=reply.replyId?:return null
         val inputId=reply.replyToMessageIds.singleOrNull()?:return null
         val source=PhoneDraftMessagePin.from(row.ownerOriginalLocator)?:return null
@@ -4133,8 +4135,7 @@ internal class PocketWebBridge(
             composer?.key!="conversation:${source.conversation}"||composer?.conversationId!=source.conversation||
             row.role!="assistant"||row.phoneResult!=null||row.taskResult!=null||row.originalHostFinal!=null||
             state.conversationId!=source.conversation||row.id!=source.message||row.sourceRevision!=1L||source.version!=row.sourceRevision||
-            row.taskId!=reply.taskId||reply.deliveryId!=null||file.size<=0||
-            file.mimeType !in setOf("application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document"))return null
+            row.taskId!=reply.taskId||reply.deliveryId!=null)return null
         val input=state.messages.singleOrNull{it.id==inputId&&it.role=="user"}?:return null
         val accepted=input.submission?:return null
         if(accepted.opt("status")!="consumed"||accepted.opt("queueState")!="materialized"||
@@ -4158,8 +4159,8 @@ internal class PocketWebBridge(
             (!audit.has("cancelRequested")||audit.opt("cancelRequested")==false)&&
             (!audit.has("hasUnresolvedOperations")||unresolved==false)
         if(!loadedProof&&!checkableSummary)return null
-        return LiveReplyDocument(file,OriginalReplyDocument.Target(source.conversation,source.generation,source.message,source.version,
-            source.fingerprint,nativeReply,inputId,reply.taskId,reply.runId,reply.epoch,file.id,file.sha256),!loadedProof)
+        return files.map{file->LiveReplyDocument(file,OriginalReplyDocument.Target(source.conversation,source.generation,source.message,source.version,
+            source.fingerprint,nativeReply,inputId,reply.taskId,reply.runId,reply.epoch,file.id,file.sha256),!loadedProof)}
     }
     private fun visibleChatTaskResult(args: JSONObject): UiTaskResult? {
         val history = args.has("resultReaderWindow")

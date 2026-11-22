@@ -31,6 +31,7 @@ public final class ConversationRepository {
     static final String ORIGINAL_MEMORY_DRAFT_RECORDED="originalMemoryDraftRecorded";
     private static final String ORIGINAL_REPLY_DOCUMENT="nativeOriginalReplyDocument";
     private static final String ORIGINAL_REPLY_DOCUMENT_VIEW="originalGeneratedDocument";
+    private static final String ORIGINAL_REPLY_DOCUMENT_PAIR="originalGeneratedDocuments";
     static void requireReplyContent(String text){
         if(text==null||text.isBlank())throw new IllegalArgumentException("模型没有返回文字答复");
         if(!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new IllegalArgumentException("答复含不完整Unicode字符，未替换后保存");
@@ -241,7 +242,9 @@ public final class ConversationRepository {
                     ||target.epoch()!=OriginalReplyDocument.integer(accepted.opt("epoch"))
                     ||target.epoch()!=OriginalReplyDocument.integer(accepted.opt("consumedEpoch"))
                     ||revision!=OriginalReplyDocument.integer(accepted.opt("ownerMessageRevision")))return null;
-            return OriginalReplyDocument.fromPin(link.optJSONObject("file"));
+            for(OriginalReplyDocument file:OriginalReplyDocument.linkedPins(link))
+                if(target.file().equals(file.id())&&target.sha().equals(file.sha256()))return file;
+            return null;
         }
     }
     private static boolean sameSavedAssistantReply(JSONObject row,String conversation,String task,String run,int epoch,String reply){
@@ -878,7 +881,7 @@ public final class ConversationRepository {
         JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");meta.remove("ownerOriginalLocator");long sequence=importedSequence;
         meta.remove(ORIGINAL_REMINDER_RECORDED); // Derived from the private source row, never from message JSON.
         meta.remove(ORIGINAL_MEMORY_DRAFT);meta.remove(ORIGINAL_MEMORY_DRAFT_RECORDED);
-        meta.remove(ORIGINAL_REPLY_DOCUMENT);meta.remove(ORIGINAL_REPLY_DOCUMENT_VIEW);
+        meta.remove(ORIGINAL_REPLY_DOCUMENT);meta.remove(ORIGINAL_REPLY_DOCUMENT_VIEW);meta.remove(ORIGINAL_REPLY_DOCUMENT_PAIR);
         boolean existing=false;
         try(Cursor row=db.rawQuery("SELECT sequence,meta_json FROM assistant_messages WHERE generation=? AND source_id=? LIMIT 1",new String[]{gen,id})){if(row.moveToFirst()){existing=true;sequence=row.getLong(0);if(new JSONObject(row.getString(1)).optBoolean("personalMemoryExcluded"))meta.put("personalMemoryExcluded",true);}}
         if(!existing&&importedSequence<0&&"user".equals(message.getString("role"))&&gen.equals(activeGeneration())){
@@ -943,13 +946,16 @@ public final class ConversationRepository {
                 &&originalMemoryDraftPin(state)!=null)message.put(ORIGINAL_MEMORY_DRAFT_RECORDED,true);
         else message.remove(ORIGINAL_MEMORY_DRAFT_RECORDED);
         message.remove(ORIGINAL_MEMORY_DRAFT);
-        message.remove(ORIGINAL_REPLY_DOCUMENT);message.remove(ORIGINAL_REPLY_DOCUMENT_VIEW);
+        message.remove(ORIGINAL_REPLY_DOCUMENT);message.remove(ORIGINAL_REPLY_DOCUMENT_VIEW);message.remove(ORIGINAL_REPLY_DOCUMENT_PAIR);
         if(originalReply&&row.getLong(2)==1&&!message.optBoolean("importAssignedIdentity")&&!message.has("nativeDeliveryKind")){
             JSONObject link=state.optJSONObject(ORIGINAL_REPLY_DOCUMENT);
             JSONArray inputs=message.optJSONArray("replyToMessageIds");
-            OriginalReplyDocument fixed=link==null?null:OriginalReplyDocument.fromPin(link.optJSONObject("file"));
-            if(fixed!=null&&inputs!=null&&inputs.length()==1&&Objects.equals(inputs.opt(0),link.opt("input")))
-                message.put(ORIGINAL_REPLY_DOCUMENT_VIEW,fixed.view());
+            if(link!=null&&inputs!=null&&inputs.length()==1&&Objects.equals(inputs.opt(0),link.opt("input"))){
+                List<OriginalReplyDocument> files=OriginalReplyDocument.linkedPins(link);
+                if(files.size()==1)message.put(ORIGINAL_REPLY_DOCUMENT_VIEW,files.get(0).view());
+                else if(files.size()==2)message.put(ORIGINAL_REPLY_DOCUMENT_PAIR,
+                        new JSONArray().put(files.get(0).view()).put(files.get(1).view()));
+            }
         }
         if(message.has("projectConventionRecorded")){
             JSONObject proof=state.optJSONObject("nativeProjectConventionReceipt");String reply=state.optString("nativeReplyId");
@@ -1075,10 +1081,14 @@ public final class ConversationRepository {
         if(reminderOperation!=null)state.put(ORIGINAL_REMINDER_OPERATION,reminderOperation);
         JSONObject originalMemoryDraft=selected.originalMemoryDraft();
         if(originalMemoryDraft!=null)state.put(ORIGINAL_MEMORY_DRAFT,originalMemoryDraft);
-        OriginalReplyDocument fixed=selected.originalDocument();
-        if(fixed!=null&&inputs.length()==1&&replyTo.length()==1)
-            state.put(ORIGINAL_REPLY_DOCUMENT,new JSONObject().put("input",replyTo.getString(0))
-                    .put("inputRevision",inputs.getJSONObject(0).getLong("ownerMessageRevision")).put("file",fixed.pin()));
+        List<OriginalReplyDocument> documents=selected.originalDocuments();
+        if(!documents.isEmpty()&&inputs.length()==1&&replyTo.length()==1){
+            JSONObject link=new JSONObject().put("input",replyTo.getString(0))
+                    .put("inputRevision",inputs.getJSONObject(0).getLong("ownerMessageRevision"));
+            if(documents.size()==1)link.put("file",documents.get(0).pin());
+            else link.put("files",new JSONArray().put(documents.get(0).pin()).put(documents.get(1).pin()));
+            state.put(ORIGINAL_REPLY_DOCUMENT,link);
+        }
         if(selected.completed.publicAnswerSources&&text.equals(selected.completed.text))state.put(PENDING_PUBLIC_ANSWER,CompactionPlan.fingerprint(text));
         JSONObject quote=selected.completed.projectConvention();
         if(quote!=null&&selected.taskId.equals(quote.optString("taskId"))&&selected.runId.equals(quote.optString("runId"))&&selected.epoch==quote.optInt("epoch")&&selected.completed.id.equals(quote.optString("replyId"))&&

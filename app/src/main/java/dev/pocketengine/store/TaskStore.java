@@ -58,6 +58,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.Objects;
 import java.util.Set;
@@ -13647,14 +13649,14 @@ public final class TaskStore {
         private final TaskStore issuer;
         private final String inputs,originalReminderOperation;
         private final JSONObject originalMemoryDraft;
-        private final OriginalReplyDocument originalDocument;
+        private final List<OriginalReplyDocument> originalDocuments;
         private boolean active=true;
         public final String taskId,conversationId,runId;
         public final int epoch;
         public final dev.pocketengine.runtime.AgentRunner.OwnerReply completed;
-        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation,JSONObject originalMemoryDraft,OriginalReplyDocument originalDocument)throws Exception{
+        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation,JSONObject originalMemoryDraft,List<OriginalReplyDocument> originalDocuments)throws Exception{
             this.issuer=issuer;taskId=task.getString("id");conversationId=task.getString("conversationId");runId=task.getString("runId");epoch=task.getInt("coordinatorEpoch");this.completed=completed;this.inputs=inputs.toString();this.originalReminderOperation=originalReminderOperation;
-            this.originalMemoryDraft=originalMemoryDraft;this.originalDocument=originalDocument;
+            this.originalMemoryDraft=originalMemoryDraft;this.originalDocuments=List.copyOf(originalDocuments);
         }
         public void requireMutationScope(TaskStore original){
             if(!active||issuer!=original||!Thread.holdsLock(original)||!original.db.inTransaction())throw new SecurityException("采用回执不在原任务的同一消息事务内");
@@ -13662,7 +13664,7 @@ public final class TaskStore {
         public JSONArray inputs()throws Exception{requireMutationScope(issuer);return new JSONArray(inputs);}
         public String originalReminderOperation(){requireMutationScope(issuer);return originalReminderOperation;}
         public JSONObject originalMemoryDraft(){requireMutationScope(issuer);return originalMemoryDraft;}
-        public OriginalReplyDocument originalDocument(){requireMutationScope(issuer);return originalDocument;}
+        public List<OriginalReplyDocument> originalDocuments(){requireMutationScope(issuer);return originalDocuments;}
     }
     /** Records already-checkpointed model facts, including an explicit same-task resume.
      * Does not open activeChat, mint an input/grant, dispatch, retry, or refund an inference. */
@@ -13680,16 +13682,20 @@ public final class TaskStore {
             JSONArray messages=checkpoint(run).optJSONArray("messages"),rows=task.optJSONArray("ownerInputs"),selectedRows=new JSONArray();
             java.util.Map<String,JSONObject> included=new java.util.HashMap<>();JSONObject lastAssistant=null;
             String documentInput=!original.isCancelled()&&rows!=null&&rows.length()==1?originalReplyDocumentInput(task,rows.optJSONObject(0)):null;
-            boolean documentAfterInput=false,multipleDocuments=false;OriginalReplyDocument documentInAnswer=null;
+            boolean documentAfterInput=false,documentsBeyondScope=false;
+            List<OriginalReplyDocument> documentsInAnswer=new ArrayList<>(2);
             for(int i=0;messages!=null&&i<messages.length();i++){
                 JSONObject message=messages.getJSONObject(i);String id=message.optString("ownerMessageId");if(!id.isEmpty()&&included.put(id,message)!=null)throw new SecurityException("检查点重复了主人消息身份");
                 if("assistant".equals(message.optString("role")))lastAssistant=message;
                 if(documentInput!=null&&documentInput.equals(id))documentAfterInput=true;
-                if(documentAfterInput&&!multipleDocuments){
-                    // Reuse this existing native checkpoint pass. A preceding approval_required
-                    // is a different, actually undispatched operation, not a created document.
+                if(documentAfterInput&&!documentsBeyondScope){
+                    // The same bounded checkpoint, not a search of other operations.
+                    // Approval-required is not an original created document.
                     OriginalReplyDocument candidate=checkpointReplyDocument(message);
-                    if(candidate!=null){multipleDocuments=documentInAnswer!=null;documentInAnswer=candidate;}
+                    if(candidate!=null){
+                        if(documentsInAnswer.size()==2)documentsBeyondScope=true;
+                        else documentsInAnswer.add(candidate);
+                    }
                 }
             }
             if(lastAssistant==null||!completed.text.equals(lastAssistant.optString("content")))throw new SecurityException("答复没有同一原生检查点的实际正文证明");
@@ -13717,15 +13723,20 @@ public final class TaskStore {
                         reminderOperation=recorded.operation();
                 }
             }catch(Exception unavailable){/* A presentation hint cannot block saving the original answer. */}
-            OriginalReplyDocument originalDocument=null;
-            if(!multipleDocuments&&documentInAnswer!=null&&selectedRows.length()==1&&!original.isCancelled())try{
-                // A tool string is not evidence. Join only the exact SQL receipt of this
-                // committed operation; never use latest/similar document or arguments.
-                if(documentInAnswer.publication(completed.taskId,run)&&!hasUnresolvedOperations(completed.taskId,null)
-                        &&documentInAnswer.equals(originalReplyDocumentReceipt(completed.taskId,run,documentInAnswer.operationId())))
-                    originalDocument=documentInAnswer;
+            List<OriginalReplyDocument> originalDocuments=new ArrayList<>(2);
+            if(!documentsBeyondScope&&!documentsInAnswer.isEmpty()&&selectedRows.length()==1&&!original.isCancelled())try{
+                if(!hasUnresolvedOperations(completed.taskId,null))for(OriginalReplyDocument candidate:documentsInAnswer){
+                    // Each file independently needs its exact committed SQL receipt. A
+                    // second unproved hint cannot erase an independently proven original.
+                    try{
+                        if(candidate.publication(completed.taskId,run)
+                                &&candidate.equals(originalReplyDocumentReceipt(completed.taskId,run,candidate.operationId())))
+                            originalDocuments.add(candidate);
+                    }catch(Exception unavailable){/* Not a known original. */}
+                }
+                if(originalDocuments.size()==2&&!OriginalReplyDocument.exactPair(originalDocuments))originalDocuments.clear();
             }catch(Exception unavailable){/* Optional handoff cannot interfere with saving the original answer. */}
-            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation,originalMemoryDraft,originalDocument);JSONObject result;
+            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation,originalMemoryDraft,originalDocuments);JSONObject result;
             try{result=mutation.apply(selected);}finally{selected.active=false;}
             if(task.has("ownerWorkPreparation")){
                 JSONObject saved=result==null?null:result.optJSONObject("message");if(saved==null||!completed.taskId.equals(saved.optString("taskId"))||!run.equals(saved.optString("nativeRunId"))||epoch!=saved.optInt("nativeEpoch")

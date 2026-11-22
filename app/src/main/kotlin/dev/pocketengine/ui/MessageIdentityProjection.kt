@@ -11,7 +11,7 @@ internal data class UiReplyContext private constructor(
     val publicAnswerSourcesRecorded: Boolean,
     val originalReminderRecorded: Boolean,
     val originalMemoryDraftRecorded: Boolean,
-    val originalGeneratedDocument: UiChatAttachment?,
+    val originalGeneratedDocuments: List<UiChatAttachment>,
 ) {
     fun toJson(): JSONObject = JSONObject().put("taskId", taskId).put("runId", runId).put("epoch", epoch)
         .put("replyId", replyId ?: JSONObject.NULL).put("deliveryId", deliveryId ?: JSONObject.NULL)
@@ -40,9 +40,20 @@ internal data class UiReplyContext private constructor(
             return UiReplyContext(task, run, epoch, reply, delivery, ids.toList(), message.opt("publicAnswerSourcesRecorded") == true,
                 message.opt("originalReminderRecorded") == true && reply != null && delivery == null && ids.size == 1,
                 message.opt("originalMemoryDraftRecorded") == true && reply != null && delivery == null && ids.size == 1,
-                message.optJSONObject("originalGeneratedDocument")?.takeIf {
-                    reply != null && delivery == null && ids.size == 1
-                }?.let(ChatInputRules::attachment))
+                if (reply != null && delivery == null && ids.size == 1) documents(message) else emptyList())
+        }
+
+        private fun documents(message:JSONObject):List<UiChatAttachment> {
+            if(!message.has("originalGeneratedDocuments"))
+                return listOfNotNull(message.optJSONObject("originalGeneratedDocument")?.let(ChatInputRules::attachment))
+            val rows=message.optJSONArray("originalGeneratedDocuments") ?: return emptyList()
+            if(message.has("originalGeneratedDocument")||rows.length()!=2)return emptyList()
+            val first=rows.optJSONObject(0)?.let(ChatInputRules::attachment) ?: return emptyList()
+            val second=rows.optJSONObject(1)?.let(ChatInputRules::attachment) ?: return emptyList()
+            if(first.id==second.id||first.sha256==second.sha256||
+                setOf(first.mimeType,second.mimeType)!=setOf("application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                return emptyList()
+            return listOf(first,second)
         }
     }
 }

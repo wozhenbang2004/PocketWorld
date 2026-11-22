@@ -3,10 +3,12 @@ package dev.pocketengine.features.attachments;
 import dev.pocketengine.core.ToolOutcome;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import dev.pocketengine.features.local.runtime.OwnerPythonOutputText;
+import java.util.List;
 import java.util.Locale;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** The one fixed Word/PDF receipt attached to an actually saved private assistant reply.
+/** A fixed Word/PDF receipt attached to the actually saved private assistant reply.
  * A pin describes bytes; it is not permission to read them or run the originating tool. */
 public record OriginalReplyDocument(String operationId,String planDigest,String id,String sha256,
                                     String name,String mimeType,long size) {
@@ -28,6 +30,29 @@ public record OriginalReplyDocument(String operationId,String planDigest,String 
 
     public static OriginalReplyDocument fromPin(JSONObject pin) {
         return pin!=null&&pin.length()==7?checked(pin.opt("operationId"),pin.opt("planDigest"),pin):null;
+    }
+
+    public static boolean exactPair(List<OriginalReplyDocument> files) {
+        if(files.size()!=2)return false;
+        OriginalReplyDocument a=files.get(0),b=files.get(1);
+        return a!=null&&b!=null&&(PDF.equals(a.mimeType)&&WORD.equals(b.mimeType)||WORD.equals(a.mimeType)&&PDF.equals(b.mimeType))
+                &&!a.operationId.equals(b.operationId)&&!a.id.equals(b.id)&&!a.sha256.equals(b.sha256);
+    }
+
+    /** The existing body-free link has either its legacy file or exactly one Word and one PDF. */
+    public static List<OriginalReplyDocument> linkedPins(JSONObject link) {
+        if(link==null||link.length()!=3||!(link.opt("input") instanceof String input)||!uuid(input)
+                ||integer(link.opt("inputRevision"))<1)return List.of();
+        if(link.has("file")) {
+            OriginalReplyDocument single=fromPin(link.optJSONObject("file"));
+            return single==null?List.of():List.of(single);
+        }
+        JSONArray pins=link.optJSONArray("files");
+        if(pins==null||pins.length()!=2)return List.of();
+        OriginalReplyDocument a=fromPin(pins.optJSONObject(0)),b=fromPin(pins.optJSONObject(1));
+        if(a==null||b==null)return List.of();
+        List<OriginalReplyDocument> files=List.of(a,b);
+        return exactPair(files)?files:List.of();
     }
 
     private static OriginalReplyDocument checked(Object op,Object plan,JSONObject data) {

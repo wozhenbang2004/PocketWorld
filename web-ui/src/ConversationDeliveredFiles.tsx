@@ -7,15 +7,19 @@ import type {TaskResult} from './conversation-work';
 import {usableResultFile,type TaskResultFile} from './TaskResultFiles';
 
 export type DeliveredWorkFileSource={kind:'work';messageId:string;revision:number;result:TaskResult};
+export type DeliveredReplyDocumentFile={id:string;sha256:string}&
+ ({checkFirst:true;mimeType?:string}|{checkFirst:false;name:string;mimeType:string;size:number});
 export type DeliveredReplyDocumentSource={kind:'replyDocument';messageId:string;revision:1;at:number;
- file:{id:string;sha256:string}&({checkFirst:true}|{checkFirst:false;name:string;mimeType:string;size:number})};
+ files:readonly DeliveredReplyDocumentFile[]};
 export type DeliveredFileSource=DeliveredWorkFileSource|DeliveredReplyDocumentSource;
 type Item={kind:'work';source:DeliveredWorkFileSource;file:TaskResultFile}|
- {kind:'replyDocument';source:DeliveredReplyDocumentSource;file:DeliveredReplyDocumentSource['file']};
+ {kind:'replyDocument';source:DeliveredReplyDocumentSource;file:DeliveredReplyDocumentFile};
 type Batch={index:number};
 const batchSize=4;
 const itemKey=({source,file}:Item)=>JSON.stringify([source.messageId,source.revision,file.id,file.sha256]);
 const time=(value:number)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(value);
+export const replyDocumentFileLabel=(file:DeliveredReplyDocumentFile)=>!file.checkFirst?file.name:
+ file.mimeType==='application/pdf'?'核对原答复 PDF':file.mimeType?'核对原答复 Word':'核对原答复文档';
 
 /** Only after an explicit visit/check: batch the already-visible original replies.
  * No history body, global inventory or guessed output name is requested here. */
@@ -43,9 +47,9 @@ export function ConversationDeliveredFiles({conversation,sources,covered,isCurre
     if(!current())return;
     if(!scope.current.isSourceCurrent(source)){partial=true;continue}
     if(source.kind==='replyDocument'){
-     // A rendered native reply already carries this one fixed file identity.
-     // A cold hint is for an explicit check only, not an available-file claim.
-     items.push({kind:'replyDocument',source,file:source.file});
+     // This same native reply carries its own bounded fixed file identities.
+     // Cold hints only offer an explicit check, not an available-file claim.
+     for(const file of source.files)items.push({kind:'replyDocument',source,file});
      continue;
     }
     try{
@@ -118,7 +122,7 @@ export function ConversationDeliveredFiles({conversation,sources,covered,isCurre
     </header>
     {files.map(item=>{
      const {file}=item,key=itemKey(item);
-     const name='name' in file?file.name:'核对原答复文档';
+     const name=item.kind==='replyDocument'?replyDocumentFileLabel(item.file):item.file.name;
      const meta='name' in file?[attachmentFileFormat(file.mimeType,file.name).label,fileBytes(file.size)].join(' · '):'尚未核对原件';
      return <Button key={key} ref={element=>{if(element)rows.current.set(key,element);else rows.current.delete(key)}} variant="ghost" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
       disabled={!!opening} onClick={event=>void open(item,event.currentTarget)}>

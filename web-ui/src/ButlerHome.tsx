@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Button } from './forms-library';
+import { Accordion, AccordionItem, Button } from './forms-library';
 import {bridge} from './bridge';
 import {reportedHomeWork,sameHomeReport,verifyHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
 import { IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconError, IconFileText, IconFolder, IconInfo, IconPauseCircle, IconPhone } from './icons';
@@ -28,6 +28,7 @@ export type ButlerHomeProps = {
   onImportProject?: () => void;
   stagingLocal?: boolean;
   modelSetup: ReactNode;
+  firstDraftConnect?: boolean;
   firstHostSave?: { hint: string; disabled: boolean; busy: boolean; save: () => void };
   composer: ReactNode;
   preparations?: (visible: ButlerHomeTask[]) => ReactNode;
@@ -89,14 +90,14 @@ function partialFailureReport(task: ButlerHomeTask, view = workCollectionPresent
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onImportProject, stagingLocal=false, modelSetup, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onOpenSchedule, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onImportProject, stagingLocal=false, modelSetup, firstDraftConnect=false, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onOpenSchedule, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
   const savedScroll = useRef(Number.isFinite(initialScrollTop) ? Math.max(0, initialScrollTop) : 0);
   const restored = useRef(false), homeScroll = useRef(onScrollTop);
   homeScroll.current = onScrollTop;
-  const workHeading = useId(), decisionList = useId(), returnedList = useId(), checkingList = useId(), nextNote = useId();
+  const workHeading = useId(), decisionList = useId(), returnedList = useId(), checkingList = useId(), nextNote = useId(), localNote = useId();
   const [allResults,setAllResults]=useState(false),[unavailableReport,setUnavailableReport]=useState<ReturnType<typeof reportedHomeWork>>(null);
   const [showDecisions,setShowDecisions]=useState(false),[checkingExpanded,setCheckingExpanded]=useState<boolean>();
   const [opening,setOpening]=useState<{id:string;intent:'row'|'report'}|null>(null),[notice,setNotice]=useState('');
@@ -301,20 +302,36 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   // The editor never moves. An optional capability is not the next step ahead
   // of work the owner already has, except for an action on the current draft.
   const workFirst = !firstHostSave && !stagingLocal && (work.length > 0 || hasPhone);
+  const firstUse = firstDraftConnect && empty;
   const showLocal = stagingLocal || empty && !!onTryLocal;
   const showSetup = ready && !modelReady && !localDisplayDraft && !stagingLocal;
   const showFiles = ready && active && !localDisplayDraft && !stagingLocal && !!onReadLocalFiles;
   const showProjectImport = empty && active && !localDisplayDraft && !stagingLocal && !firstHostSave && !!onImportProject;
-  const nextHint=showLocal?(stagingLocal?'正在填入问题…':'只填入问题，按发送才读取。不用模型。'):
+  const localHint=showLocal?(stagingLocal?'正在填入问题…':'只填入问题，按发送才读取。不用模型。'):'';
+  const nextHint=(!firstUse&&localHint)||
     firstHostSave?.hint||(showSetup&&!workFirst?'可以先写好草稿，连接后再发送。':'');
-  const nextSteps=(showLocal||showSetup&&!!(modelSetup||firstHostSave)||showProjectImport||showFiles||!!nextHint)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
-    {showLocal&&<Button className="pw-butler-try" variant="ghost" leadingIcon={IconPhone} trailingIcon={IconChevronRight} disabled={stagingLocal} aria-describedby={nextNote} onClick={onTryLocal}>查这台手机的屏幕信息</Button>}
-    {showProjectImport&&<Button variant="ghost" leadingIcon={IconFolder} onClick={onImportProject}>导入本机工程</Button>}
+  const localExample=showLocal&&<Button className="pw-butler-try" variant="ghost" leadingIcon={IconPhone} trailingIcon={IconChevronRight} disabled={stagingLocal} aria-describedby={firstUse?localNote:nextNote} onClick={onTryLocal}>查这台手机的屏幕信息</Button>;
+  const localImport=showProjectImport&&<Button variant="ghost" leadingIcon={IconFolder} onClick={onImportProject}>导入本机工程</Button>;
+  const localFiles=showFiles&&<Button variant="ghost" size="small" leadingIcon={IconFileText} onClick={onReadLocalFiles}>本机文件与草稿</Button>;
+  const localTools = showLocal || showProjectImport || showFiles;
+  const scheduleAction=scheduleEntry&&<Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight}
+    data-workspace-entry="home-schedule" disabled={!active} onClick={event=>scheduleEntry(event.currentTarget)}>提醒与目标</Button>;
+  const nextSteps=(localTools||showSetup&&!!(modelSetup||firstHostSave)||!!nextHint||firstUse&&!!scheduleAction)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
+    {!firstUse&&localExample}
+    {!firstUse&&localImport}
     {showSetup&&modelSetup}
     {showSetup&&firstHostSave&&<Button variant="ghost" size="small" disabled={firstHostSave.disabled} aria-busy={firstHostSave.busy||undefined}
       aria-describedby={nextNote} onClick={firstHostSave.save}>{firstHostSave.busy?'正在保存原话…':'仅保存到本机'}</Button>}
-    {showFiles&&<Button variant="ghost" size="small" leadingIcon={IconFileText} onClick={onReadLocalFiles}>本机文件与草稿</Button>}
+    {!firstUse&&localFiles}
     {nextHint&&<p id={nextNote} role={stagingLocal?'status':undefined}>{nextHint}</p>}
+    {firstUse&&(localTools||scheduleAction)&&<div className="pw-butler-first-use-utilities">
+      {localTools&&<Accordion className="pw-butler-first-use-local"><AccordionItem headingLevel={2} title="先用本机功能">
+        <div className="pw-butler-first-use-actions">
+          {localExample}{localHint&&<p id={localNote}>{localHint}</p>}{localImport}{localFiles}
+        </div>
+      </AccordionItem></Accordion>}
+      {scheduleAction}
+    </div>}
   </div>;
 
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>
@@ -325,12 +342,11 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
           {composer}
         </section>
         {!workFirst&&nextSteps}
-        {(!ready || hasWorkOverview || scheduleEntry) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
+        {(!ready || hasWorkOverview || !firstUse && scheduleEntry) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
           onBlurCapture={event => { const node = event.target as HTMLElement; if (event.relatedTarget instanceof Node ? !event.currentTarget.contains(event.relatedTarget) : node.isConnected && !node.closest('[inert],[hidden]') && !node.matches(':disabled')) focused.current = null; }}>
           <header className="pw-butler-work-heading"><h2 id={workHeading}>我的工作</h2>
-            {scheduleEntry && <Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight}
-              data-workspace-entry="home-schedule" disabled={!active} onClick={event=>scheduleEntry(event.currentTarget)}>提醒与目标</Button>}
+            {scheduleAction}
             {ready && hasWorkOverview && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('all')}>全部工作</Button>}
           </header>
           {!ready ? <p className="pw-butler-reading" role="status"><ProgressCircle isIndeterminate size="sm" aria-label="正在恢复工作记录" /><span>正在恢复工作记录…</span></p> : <>
