@@ -9,6 +9,7 @@ import { savedPythonPath, type OriginalPythonRun } from './owner-python-run';
 import type {DirectNodeDependencyPin} from './project-execution';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutPythonToolsDeparture, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
+import type { ProjectViteResultTarget } from './FirstNodeWebOutput';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
 import { ProjectDraftChanges } from './ProjectDraftChanges';
 import './local-workspace.css';
@@ -39,6 +40,9 @@ export type CheckoutPythonSetupReturn = {position:CheckoutSavedPosition; take:()
 export type ProjectDependencyBuildReturn = {original:DirectNodeDependencyPin; comparisonHandle?:string; current:()=>boolean; take:()=>boolean};
 export type ProjectViteToolsPosition = {projectId:string;checkoutId:string;sourceDigest:string};
 export type ProjectViteToolsReturn = {position:ProjectViteToolsPosition;runtimeIdentity:string; current:()=>boolean; take:()=>boolean};
+export type ProjectViteResultLookup = {
+  projectId:string;current:()=>boolean;finish:(result?:ProjectViteResultTarget)=>void;
+};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
@@ -47,6 +51,7 @@ type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   pythonSetupReturn?:CheckoutPythonSetupReturn;
   dependencyBuildReturn?:ProjectDependencyBuildReturn;
   viteToolsReturn?:ProjectViteToolsReturn;
+  viteResultLookup?:ProjectViteResultLookup;
   onPreparePythonTools?: (position: CheckoutSavedPosition) => void;
   retainedOriginalVisit?:Data;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
@@ -377,7 +382,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, dependencyBuildReturn, viteToolsReturn, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, dependencyBuildReturn, viteToolsReturn, viteResultLookup, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),deliverySummary=useRef<HTMLSpanElement>(null);
@@ -412,6 +417,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const registerFilesBack = useCallback((handler: (() => boolean) | null) => { filesBack.current = handler; }, []);
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
   const keptNativePick=useRef(false);const [sourceConflict,setSourceConflict]=useState(false);
+  const attemptedViteResult=useRef<ProjectViteResultLookup|null>(null);
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
   const latest = useRef({ run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools });
   latest.current = { run, can, active, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools }; activeReview.current = review;
@@ -454,20 +460,25 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if (scopedBuildReceipt(receipt) && receipt.status !== 'unknown') { sourceAttempt.current = ''; setSource(null); }
     if (receipt.status === 'accepted' && (submission?.status !== 'accepted' || submission.taskId !== receipt.taskId)) onTaskRegistered();
   };
-  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void, reject = (failure: unknown) => setError(failureText(failure))) => {
+  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void,
+    reject = (failure: unknown) => setError(failureText(failure)), previewOwner?:()=>boolean) => {
     const ownsProject = () => bridge.getState().state.projectId === projectId && !bridge.getState().state.filePath;
-    if (!latest.current.active || entered.current || document.hidden || !ownsProject() || !latest.current.can(action)) return;
+    if (!latest.current.active || entered.current || document.hidden || !ownsProject() || !latest.current.can(action) || previewOwner&&!previewOwner()) return;
     const token = {}, window = ownerWindow(), sequence = generation.current;
     entered.current = token; setBusy(true); setError('');
-    const current = () => alive.current && latest.current.active && entered.current === token && generation.current === sequence && ownerWindow() === window && ownsProject() && !document.hidden;
+    const current = () => alive.current && latest.current.active && entered.current === token && generation.current === sequence &&
+      ownerWindow() === window && ownsProject() && !document.hidden && (!previewOwner || previewOwner());
     try {
       // Keep scoped native feedback on its original page; a late failure cannot speak for another visit.
-      const scoped=action===confirmDirectDependencies||action===confirmDependencyCopy||suppliedLockActions.includes(action)||
+      const scoped=previewOwner||action===confirmDirectDependencies||action===confirmDependencyCopy||suppliedLockActions.includes(action)||
         action==='projects.development.inspect'&&args.readOriginalDraft===true;
       const runHere=scoped?bridge.command:latest.current.run;
       const value = await runHere(action, args);
       if (current()) { accept?.(value); return value as Data; }
-      if (action === 'projects.development.read' && value?.viewHandle) void latest.current.run('projects.development.close', { viewHandle: value.viewHandle }).catch(() => {});
+      if (action === 'projects.development.read' && value?.viewHandle) {
+        const closeHere=previewOwner?bridge.command:latest.current.run;
+        void closeHere('projects.development.close', { viewHandle: value.viewHandle }).catch(() => {});
+      }
     }
     catch (failure) { if (current()) reject(failure); }
     finally { if (entered.current === token) { entered.current = null; if (alive.current) setBusy(false); } }
@@ -479,6 +490,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const openLocalFiles=readableNow&&request&&request!==attemptedLocalFiles.current&&request.projectId===projectId&&request.current()?request:null;
     if(openLocalFiles)attemptedLocalFiles.current=openLocalFiles;
     const pinned=returnTarget&&returned.current!==returnTarget.handle?returnTarget:null;
+    const previewOwner=viteResultLookup?.projectId===projectId&&viteResultLookup.current()?viteResultLookup.current:undefined;
     const reading=invoke('projects.development.read', {projectId,...(pinned?{draftReturnHandle:pinned.handle}:{})}, value => {
     if (value.projectId !== projectId || typeof value.viewHandle !== 'string') throw new Error('没有取得这个原项目的页面，请重新读取。');
     if(pinned){
@@ -546,7 +558,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
        incoming.checkoutId===''&&incoming.goal===''&&deliveryFields.every(key=>incoming[key]==='')&&
        !incoming.submission&&!incoming.copyRequestId&&!incoming.copyStatus&&latest.current.can('projects.development.prepare'))
       firstFilesPreparation.current={intent:openLocalFiles,viewHandle:value.viewHandle};
-    });
+    },undefined,previewOwner);
     return openLocalFiles?reading.finally(()=>latest.current.onLocalFilesIntentHandled?.(openLocalFiles)):reading;
   };
   const readRef = useRef(read); readRef.current = read;
@@ -659,7 +671,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const differentBuildCopy=buildCheckout&&checkout!==buildCheckout&&available.find(row=>row.projectId===projectId&&row.checkoutId===buildCheckout);
   useEffect(() => { if (active && readable && !handle.current) void readRef.current(); }, [active, readable]);
   useEffect(() => {
-    if (!active || !view || !checkout || busy || review || filesOpen || buildReturn || importedEditor || differentBuildCopy || unresolved(submission)) return;
+    if (!active || !view || !checkout || busy || review || filesOpen || buildReturn || importedEditor || differentBuildCopy || unresolved(submission) || viteResultLookup) return;
     const viewHandle=view.viewHandle, key = `${viewHandle}|${projectId}|${checkout}`;
     if (sourceAttempt.current === key) return;
     sourceAttempt.current = key; setSource(null);
@@ -676,7 +688,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         return {...current,checkouts:checkouts.map(row=>row===match[0]?{...row,retainedOriginalLinked:true}:row)};
       });
     });
-  }, [active, view, checkout, busy, review, filesOpen, buildReturn, importedEditor, differentBuildCopy, submission, projectId]);
+  }, [active, view, checkout, busy, review, filesOpen, buildReturn, importedEditor, differentBuildCopy, submission, projectId, viteResultLookup]);
   useEffect(() => {
     setExpired(false); if (!review) return;
     const remaining = Number(review.expiresAt) - Date.now();
@@ -1014,6 +1026,46 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const buildLookupUnavailable = source?.existingNodeBuild === true ?
     source.existingNodeBuildUnavailable === true || source.existingNodeBuildTask && !versionBuild :
     source?.editedDraftCopy === true && (source.editedDraftBuildUnavailable === true || source.editedDraftBuild && !versionBuild);
+  useEffect(()=>{
+    const asked=viteResultLookup;
+    if(!asked||attemptedViteResult.current===asked||asked.projectId!==projectId||!asked.current()||
+       !active||busy||entered.current)return;
+    if(!view){if(error)asked.finish();return;}
+    const done=(message:string)=>{if(asked.current()){setError(message);asked.finish();}};
+    attemptedViteResult.current=asked;
+    const viewHandle=handle.current,window=ownerWindow(),sequence=generation.current;
+    const selected=view.draft?.checkoutId||((available.length===1&&available[0]?.checkoutId)||'');
+    if(!viewHandle||view.viewHandle!==viewHandle||view.projectId!==projectId||view.draft?.projectId!==projectId||
+       view.draftRecoveryRequired!==false||view.commandsAuthorized!==false||view.executionAuthorized!==false||
+       filesOpen||buildReturn||importedEditor||
+       differentBuildCopy||pending||sourceConflict||review||preview||!can('projects.development.inspect')){
+      done('请先完成原项目的选择或审阅。没有打开其他网页。');return;
+    }
+    if(!copyIdentity(selected)||selected!==checkout||draft.current.checkoutId!==checkout||selectedCopy?.draftWorkingCopy!==false||
+       available.filter(row=>row.projectId===projectId&&row.checkoutId===selected).length!==1){
+      done('请先选择要核对的私人副本。没有打开其他副本的网页。');return;
+    }
+    const current=()=>asked.current()&&generation.current===sequence&&handle.current===viewHandle&&ownerWindow()===window&&
+      draft.current.checkoutId===selected;
+    // A failed explicit check must not start an ordinary background retry or reuse its old projection.
+    sourceAttempt.current=`${viewHandle}|${projectId}|${selected}`;setSource(null);
+    void invoke('projects.development.inspect',{viewHandle,checkoutId:selected},fresh=>{
+      if(!current())return;
+      if(fresh.projectId!==projectId||fresh.checkoutId!==selected||!sourceHash(fresh.sourceDigest)){
+        done('未核对到原副本的当前源码，没有采用其他网页。');return;
+      }
+      setSource(fresh);
+      const original=directNodeWork(fresh.directViteBuildWork,projectId,selected,fresh.sourceDigest,'vite');
+      if(fresh.directBuildKind!=='vite'||original?.status!=='completed'){
+        done(original?.status&&original.status!=='completed'?
+          '当前源码的本机网页构建没有确认完成。可以查看原构建；没有打开旧网页。':
+          '当前已保存源码没有可核对的本机网页成果。可在这里查看构建条件；没有打开旧网页。');return;
+      }
+      asked.finish({taskId:original.requestId,runId:original.runId,epoch:original.epoch,buildOperationId:original.buildOperationId,
+        projectId,checkoutId:selected,sourceDigest:fresh.sourceDigest});
+    },()=>{if(current())done('未能核对这份副本的源码和原构建，没有打开其他网页。');},current);
+  },[viteResultLookup,projectId,active,busy,view,error,checkout,selectedCopy,available,filesOpen,buildReturn,importedEditor,
+    differentBuildCopy,pending,sourceConflict,review,preview,can]);
   const buildStepVisible = !filesOpen && !pending && !sourceConflict && !buildCopyMissing && !view?.draftRecoveryRequired;
   const observedLockPath = source?.existingNodeBuild===true ? source.existingNodeBuildMissingLock :
     selectedCopy?.draftWorkingCopy===true && !versionBuild && !buildLookupUnavailable ? source?.draftCopyNodeBuildMissingLock : undefined;

@@ -28,6 +28,8 @@ export type PhoneViewerProps = {
   onResume?: (identity: PhoneViewerIdentity) => void | Promise<unknown>;
   onStop?: (identity: PhoneViewerIdentity) => void | Promise<unknown>;
   onOpenTask?: (identity: PhoneViewerIdentity) => void;
+  /** The Work owns the already-rendered answer; a returned function lands after the sheet closes. */
+  onOpenResult?: (identity: PhoneViewerIdentity, trigger: HTMLButtonElement) => (() => boolean) | undefined;
   onOpenSetup?: (identity: PhoneViewerIdentity) => void;
   tasks?: readonly PhoneViewerTask[];
   onSelectTask?: (task: PhoneViewerTask) => void;
@@ -274,21 +276,21 @@ const stopStatus: Record<PhoneStopControlPhase, string> = {
   not_submitted: '本次停止未提交。若原任务通知仍在，也可从那里停手。',
   unconfirmed: '未取得这次停止的回执。请在原任务的「过程」核对；没有自动重发。',
 };
-type Controls = { busy: boolean; error: string; stopFeedback?: PhoneStopControlPhase; pause?: () => void; resume?: () => void; stop?: () => void; openTask?: () => void; openSetup?: () => void };
+type Controls = { busy: boolean; error: string; stopFeedback?: PhoneStopControlPhase; pause?: () => void; resume?: () => void; stop?: () => void; openTask?: () => void; openSetup?: () => void; openResult?: (trigger: HTMLButtonElement) => void };
 type StopVisit = { window: string };
 function PhoneControls({ task, feed, controls }: { task: PhoneViewerTask; feed: Feed; controls: Controls }) {
   const root = useRef<HTMLDivElement>(null);
   const execution = !terminal(task) && feed.phase !== 'ended' ? task.status === 'running' && controls.pause
     ? { action: controls.pause, label: '暂停执行', Icon: IconPause } : task.status === 'paused' && controls.resume
     ? { action: controls.resume, label: '继续执行', Icon: IconPlay } : null : null;
-  useCollectionMotion(root, phoneViewerKey(task), JSON.stringify([task.status, feed.phase, !!execution, !!controls.stop, !!controls.openTask, !!controls.openSetup]), { active: feed.visible });
+  useCollectionMotion(root, phoneViewerKey(task), JSON.stringify([task.status, feed.phase, !!execution, !!controls.stop, !!controls.openTask, !!controls.openSetup, !!controls.openResult]), { active: feed.visible });
   return <>
     <div ref={root} className="pw-phone-viewer-controls">
       {execution && <button type="button" data-motion-key="execution" className={`pw-phone-viewer-button${task.status === 'paused' ? ' pw-phone-viewer-button-primary' : ''}`} disabled={controls.busy || !feed.visible} onClick={execution.action}>{controls.busy ? <IconLoading size={16} className="pw-phone-viewer-spinner" aria-hidden="true" /> : <execution.Icon size={16} aria-hidden="true" />}{execution.label}</button>}
       {!terminal(task) && task.status !== 'stopping' && controls.stop && <button type="button" data-motion-key="stop" className="pw-phone-viewer-button" disabled={controls.busy || !feed.visible} onClick={controls.stop}
         data-phone-stop-task-id={task.taskId} data-phone-stop-run-id={task.runId} data-phone-stop-epoch={task.epoch}><IconStop size={16} aria-hidden="true" />停止任务</button>}
       {task.preparation === 'blocked' && controls.openSetup && <button type="button" data-motion-key="setup" className="pw-phone-viewer-button pw-phone-viewer-button-primary" disabled={controls.busy} onClick={controls.openSetup}><IconSettings size={16} aria-hidden="true" />检查连接</button>}
-      {controls.openTask && <button type="button" data-motion-key="task" className="pw-phone-viewer-button" disabled={controls.busy} onClick={controls.openTask}><IconArrowUpRight size={16} aria-hidden="true" />{task.status === 'waiting' ? '处理待办' : task.status === 'error' ? '查看失败原因' : '查看任务'}</button>}
+      {controls.openResult ? <button type="button" data-motion-key="task" className="pw-phone-viewer-button pw-phone-viewer-button-primary" disabled={controls.busy} onClick={event=>controls.openResult?.(event.currentTarget)}><IconArrowUpRight size={16} aria-hidden="true" />查看本轮回执</button> : controls.openTask && <button type="button" data-motion-key="task" className="pw-phone-viewer-button" disabled={controls.busy} onClick={controls.openTask}><IconArrowUpRight size={16} aria-hidden="true" />{task.status === 'waiting' ? '处理待办' : task.status === 'error' ? '查看失败原因' : '查看任务'}</button>}
       {task.preparation !== 'blocked' && !terminal(task) && feed.phase !== 'ended' && (feed.phase === 'error' || feed.phase === 'hidden' && feed.visible) && <button type="button" data-motion-key="retry" className="pw-phone-viewer-button" disabled={!feed.visible} onClick={feed.retry}><IconRefresh size={16} aria-hidden="true" />重新读取</button>}
     </div>
     {controls.stopFeedback ? <MotionFeedback identity={controls.stopFeedback} initial={false} className="pw-phone-viewer-error" role="status">{stopStatus[controls.stopFeedback]}</MotionFeedback> :
@@ -313,7 +315,7 @@ function useCompactSheet() {
 }
 
 /** OpenMuse Sheet geometry, with existing Vaul/Radix focus, escape and touch behavior. */
-export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedChange, tasks, onSelectTask, returnFocus }: Pick<PhoneViewerProps, 'task' | 'tasks' | 'onSelectTask'> & { feed: Feed; controls: Controls; expanded: boolean; onExpandedChange: (value: boolean) => void; returnFocus: RefObject<HTMLElement | null> }) {
+export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedChange, tasks, onSelectTask, returnFocus, onResultExit }: Pick<PhoneViewerProps, 'task' | 'tasks' | 'onSelectTask'> & { feed: Feed; controls: Controls; expanded: boolean; onExpandedChange: (value: boolean) => void; returnFocus: RefObject<HTMLElement | null>; onResultExit?: (event: Event) => boolean }) {
   const compact = useCompactSheet(), descriptionId = useId();
   const Title = compact ? Drawer.Title : Dialog.Title, Description = compact ? Drawer.Description : Dialog.Description;
   const contents = <>
@@ -321,27 +323,28 @@ export function PhoneViewerSheet({ task, feed, controls, expanded, onExpandedCha
     <header className="pw-phone-viewer-sheet-header"><div><Title className="pw-phone-viewer-sheet-title">手机独立屏</Title><Description id={descriptionId} className="pw-phone-viewer-description">{task.title || '查看这次手机任务的执行画面'}</Description></div><button type="button" className="pw-phone-viewer-close" aria-label="收起独立屏" onClick={() => onExpandedChange(false)}><IconClose size={20} aria-hidden="true" /></button></header>
     <div className="pw-phone-viewer-sheet-body">
       <TaskSelector task={task} tasks={tasks} onSelectTask={onSelectTask} />
-      <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><IconMonitor size={24} aria-hidden="true" /></span><MotionFeedback identity={JSON.stringify([phoneViewerKey(task), task.status, task.preparation, feed.phase, feed.visible])} initial={false}><strong role="status">{statusLabel(task, feed)}</strong><p>{task.preparation === 'blocked' ? '请先处理手机准备条件，任务尚未继续。' : task.status === 'error' ? '这次任务未完成，请查看原因后处理。' : terminal(task) || feed.phase === 'ended' ? '画面仅保留于本次查看中，任务结果请以原记录为准。' : '画面来自这次任务的后台独立屏。'}</p></MotionFeedback></div>
+      <div className="pw-phone-viewer-sheet-status"><span className="pw-phone-viewer-icon"><IconMonitor size={24} aria-hidden="true" /></span><MotionFeedback identity={JSON.stringify([phoneViewerKey(task), task.status, task.preparation, feed.phase, feed.visible])} initial={false}><strong role="status">{statusLabel(task, feed)}</strong><p>{controls.openResult ? '本轮回执已在原工作中，画面不代表目标已达成。' : task.preparation === 'blocked' ? '请先处理手机准备条件，任务尚未继续。' : task.status === 'error' ? '这次任务未完成，请查看原因后处理。' : terminal(task) || feed.phase === 'ended' ? '画面仅保留于本次查看中，任务结果请以原记录为准。' : '画面来自这次任务的后台独立屏。'}</p></MotionFeedback></div>
       <div className="pw-phone-viewer-sheet-control-rail"><PhoneControls task={task} feed={feed} controls={controls} /></div>
       <PhoneFrame task={task} feed={feed} large />
       {!controls.stopFeedback && !terminal(task) && feed.phase !== 'ended' && <p className="pw-phone-viewer-note">{task.status === 'waiting' ? '请回到任务处理待办，查看画面不会继续执行。' : task.status === 'paused' ? '任务保持暂停，点击继续执行才会恢复。' : task.status === 'stopping' ? '正在停止任务，保留最后收到的画面。' : '收起画面后，任务仍会在后台继续执行。'}</p>}
     </div>
   </>;
-  const restoreFocus = (event: Event) => { if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus(); } };
+  const restoreFocus = (event: Event) => { if (onResultExit?.(event)) return; if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus(); } };
   return compact ? <Drawer.Root open={expanded} onOpenChange={onExpandedChange} shouldScaleBackground={false} handleOnly autoFocus><Drawer.Portal><Drawer.Overlay className="pw-phone-viewer-overlay" /><Drawer.Content className="pw-phone-viewer-sheet pw-phone-viewer-sheet-compact" aria-describedby={descriptionId} onCloseAutoFocus={restoreFocus}>{contents}</Drawer.Content></Drawer.Portal></Drawer.Root>
     : <Dialog.Root open={expanded} onOpenChange={onExpandedChange}><Dialog.Portal><Dialog.Overlay className="pw-phone-viewer-overlay" /><Dialog.Content className="pw-phone-viewer-sheet" aria-describedby={descriptionId} onCloseAutoFocus={restoreFocus}>{contents}</Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-export function PhoneViewer({ task, expanded: controlledExpanded, onExpandedChange, card = true, entry = true, nativeVisible = true, onPause, onResume, onStop, onOpenTask, onOpenSetup, tasks, onSelectTask }: PhoneViewerProps) {
+export function PhoneViewer({ task, expanded: controlledExpanded, onExpandedChange, card = true, entry = true, nativeVisible = true, onPause, onResume, onStop, onOpenTask, onOpenResult, onOpenSetup, tasks, onSelectTask }: PhoneViewerProps) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const expanded = controlledExpanded ?? localExpanded;
   const changeExpanded = (value: boolean) => { if (controlledExpanded === undefined) setLocalExpanded(value); onExpandedChange?.(value); };
   const cardElement = useRef<HTMLDivElement>(null), returnFocus = useRef<HTMLElement | null>(null);
   const cardVisible = useInView(cardElement, card);
   const feed = usePhoneViewerFeed(task, expanded || card && cardVisible, nativeVisible);
-  const key = phoneViewerKey(task), current = useRef({ key, documentEpoch: bridge.getDocumentEpoch(), mounted: true });
+  const key = phoneViewerKey(task), current = useRef({ key, expanded, mounted: true });
+  const resultExit = useRef<{ key:string; document:number; trigger:HTMLButtonElement; land:()=>boolean }|null>(null);
   const { taskId, runId, epoch } = task;
-  current.current.key = key; current.current.documentEpoch = bridge.getDocumentEpoch();
+  current.current.key = key; current.current.expanded = expanded;
   const [action, setAction] = useState<{ key: string; busy: boolean; error: string }>({ key, busy: false, error: '' });
   const actionInFlight = useRef<{ key: string; documentEpoch: number } | null>(null);
   const shownStop = useRef<StopVisit | null>(null);
@@ -394,10 +397,28 @@ export function PhoneViewer({ task, expanded: controlledExpanded, onExpandedChan
   const feedback = nativeVisible && stopFeedback && stopFeedback.visit === shownStop.current &&
     privateStopWindow(task) === stopFeedback.visit.window ? stopFeedback.phase : undefined;
   const controls: Controls = { busy: action.key === key && action.busy, error: action.key === key ? action.error : '', pause: onPause ? () => void act(onPause) : undefined, resume: onResume ? () => void act(onResume) : undefined, stop: onStop ? () => void act(onStop, true) : undefined, openTask: onOpenTask ? () => { changeExpanded(false); onOpenTask(identityOf(task)); } : undefined, openSetup: onOpenSetup ? () => { changeExpanded(false); onOpenSetup(identityOf(task)); } : undefined };
-  const open = () => { if (document.activeElement instanceof HTMLElement) returnFocus.current = document.activeElement; changeExpanded(true); };
+  const openResult = onOpenResult && expanded && nativeVisible ? (trigger:HTMLButtonElement) => {
+    if (resultExit.current || actionInFlight.current?.key === key || !current.current.mounted || !current.current.expanded) return;
+    const documentEpoch=bridge.getDocumentEpoch(),land=onOpenResult(identityOf(task),trigger);
+    if(!land)return;
+    resultExit.current={key,document:documentEpoch,trigger,land};changeExpanded(false);
+  } : undefined;
+  const afterResultExit = (event:Event) => {
+    const pending=resultExit.current;
+    if(!pending)return false;
+    resultExit.current=null;event.preventDefault();
+    requestAnimationFrame(()=>{
+      const old=returnFocus.current,active=document.activeElement;
+      if(document.hidden||!current.current.mounted||current.current.expanded||current.current.key!==pending.key||
+         bridge.getDocumentEpoch()!==pending.document||active!==document.body&&active!==document.documentElement&&active!==old&&active!==pending.trigger)return;
+      if(!pending.land()&&old?.isConnected&&!old.closest('[hidden],[inert],[aria-hidden="true"]'))old.focus();
+    });
+    return true;
+  };
+  const open = () => { resultExit.current=null; if (document.activeElement instanceof HTMLElement) returnFocus.current = document.activeElement; changeExpanded(true); };
   return <div className="pw-phone-viewer" data-phone-viewer-task={task.taskId} data-phone-viewer-run={task.runId} data-phone-viewer-epoch={task.epoch}>
     {entry && <PhoneComputerEntry task={task} feed={feed} expanded={expanded} onOpen={open} available={!!feed.frame || !terminal(task) && task.preparation !== 'blocked'} />}
     {card && <div ref={cardElement}><PhoneViewerCard task={task} feed={feed} controls={expanded ? controls : {...controls, stopFeedback: feedback}} onExpand={open} tasks={tasks} onSelectTask={onSelectTask} /></div>}
-    <PhoneViewerSheet task={task} feed={feed} controls={expanded ? {...controls, stopFeedback: feedback} : controls} expanded={expanded} onExpandedChange={changeExpanded} tasks={tasks} onSelectTask={onSelectTask} returnFocus={returnFocus} />
+    <PhoneViewerSheet task={task} feed={feed} controls={expanded ? {...controls, stopFeedback: feedback, openResult} : controls} expanded={expanded} onExpandedChange={changeExpanded} tasks={tasks} onSelectTask={onSelectTask} returnFocus={returnFocus} onResultExit={afterResultExit} />
   </div>;
 }

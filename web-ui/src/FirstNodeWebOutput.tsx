@@ -26,7 +26,13 @@ const id = /^[A-Za-z0-9_-]{1,80}$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type SavedTarget = PackagePreviewTarget & {savedBuildWeb: NonNullable<PackagePreviewTarget['savedBuildWeb']>};
 type SaveIdentity = {buildOperationId: string; operationId: string; sourceDigest: string; archiveSha256: string};
-type DirectVite = NonNullable<ReturnType<typeof originalDirectViteResult>>;
+export type ProjectViteResultTarget = NonNullable<ReturnType<typeof originalDirectViteResult>>;
+export type ProjectVitePreviewArrival = { take: (target:ProjectViteResultTarget)=>boolean };
+type DirectVite = ProjectViteResultTarget;
+export function sameProjectViteResult(a:ProjectViteResultTarget,b:ProjectViteResultTarget) {
+  return a.taskId===b.taskId&&a.runId===b.runId&&a.epoch===b.epoch&&a.buildOperationId===b.buildOperationId&&
+    a.projectId===b.projectId&&a.checkoutId===b.checkoutId&&a.sourceDigest===b.sourceDigest;
+}
 const localOpen='projects.firstWebOutput.open', previewBuild='projects.firstWebOutput.previewBuild', localClose='projects.preview.close';
 const exportLocalWeb='projects.firstWebOutput.export';
 const supports=(action:string)=>bridge.getState().capabilities.commands.includes(action);
@@ -66,7 +72,7 @@ function localWorkView(value:unknown,visit:LocalWebVisit) {
 
 /** The existing native viewport, in an adopted dialog above this same Work.
  * Never selects a project/conversation or changes the Work behind the reader. */
-export function DirectViteWebOutput({target,ownerWindow}:{target:DirectVite;ownerWindow:string}) {
+export function DirectViteWebOutput({target,ownerWindow,previewArrival}:{target:DirectVite;ownerWindow:string;previewArrival?:ProjectVitePreviewArrival}) {
   const [opened,setOpened]=useState<ProjectPreviewState|null>(null), [dialog,setDialog]=useState(false);
   const [busy,setBusy]=useState(false), [error,setError]=useState('');
   const visit=useRef<LocalWebVisit|null>(null);
@@ -151,7 +157,8 @@ export function DirectViteWebOutput({target,ownerWindow}:{target:DirectVite;owne
   return <>
     <FirstNodeWebOutput target={target} ownerWindow={ownerWindow} directVite={target}
       open={!busy&&canOpenLocal(localOpen)?open:undefined} onSaved={()=>{}}
-      onPreviewBuild={canOpenLocal(previewBuild)?()=>show({kind:'build',target}):undefined} previewBusy={busy||dialog}/>
+      onPreviewBuild={canOpenLocal(previewBuild)?()=>show({kind:'build',target}):undefined} previewBusy={busy||dialog}
+      previewArrival={previewArrival}/>
     {!dialog&&error&&<p className="pw-error" role="alert">{error}</p>}
     <SettingsDialog isOpen={dialog} title={temporary?'本次构建预览':'固定网页'} closeLabel="返回原工作" onClose={dismiss}>
       <section className="pw-preview-pane pw-original-local-web" aria-label={temporary?'本次构建的临时网页预览':'原工作保存的固定网页'} aria-busy={busy||!opened?.ready&&!opened?.error}>
@@ -219,9 +226,9 @@ function DirectViteArchiveExport({original,ownerWindow,saved,archiveBytes,blocke
 }
 
 /** Same original result page; native persisted archive and the existing package preview stay authoritative. */
-export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, beforeGoalAcceptance, buildWebGap, canEditBuildCopy, listedOpenKey,directVite,onPreviewBuild,previewBusy}: {
+export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideIneligible, checkBuildAfterFailure, beforeGoalAcceptance, buildWebGap, canEditBuildCopy, listedOpenKey,directVite,onPreviewBuild,previewBusy,previewArrival}: {
   target: BuildPosition; ownerWindow: string; hideIneligible?: boolean; checkBuildAfterFailure?: boolean; beforeGoalAcceptance?: boolean;
-  directVite?: DirectVite; onPreviewBuild?: ()=>void; previewBusy?: boolean;
+  directVite?: DirectVite; onPreviewBuild?: ()=>void; previewBusy?: boolean; previewArrival?:ProjectVitePreviewArrival;
   buildWebGap?: OriginalBuildWebGap; canEditBuildCopy?: boolean; listedOpenKey?: string;
   open?: (p: PackagePreviewTarget)=>void; onSaved: (operationId: string, sha256: string) => void}) {
   const [fact, setFact] = useState<Fact|null>(null);
@@ -329,10 +336,18 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     }
     setListedOpenReady(exactListedOpen);
   },[exactListedOpen]);
-  if(!visible)return null;
-  const openListed=!!exactListedOpen&&listedOpenReady===exactListedOpen;
   const previewReady=directVite&&fact?.eligible===true&&fact.state==='ready'&&fact.sourceDigest===directVite.sourceDigest&&
     fact.buildOperationId===directVite.buildOperationId&&!saveUnconfirmed&&!failure?onPreviewBuild:undefined;
+  useEffect(()=>{
+    // Continue only the source-scoped Preview click, after the original Work's
+    // own native output read. A failure or unresolved save consumes the intent.
+    if(!previewArrival||!directVite||!visible||!available()||busy||previewBusy||flight.current||
+       !previewArrival.take(directVite))return;
+    if(previewReady)previewReady();
+    else if(savedTarget&&open&&!failure&&!saveUnconfirmed)open(savedTarget);
+  },[previewArrival,directVite,visible,busy,previewBusy,failure,fact,previewReady,savedTarget,open]);
+  if(!visible)return null;
+  const openListed=!!exactListedOpen&&listedOpenReady===exactListedOpen;
   const reviewButton=<Button size="small" variant="secondary" disabled={!!busy||previewBusy} onClick={()=>void call(review)}>
     {busy===review?'正在核对原网页…':'核对网页包'}</Button>;
   return <section ref={panel} className="pw-outcome-deliverables" aria-label="原构建网页" aria-busy={!!busy}>

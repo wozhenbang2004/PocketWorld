@@ -10,13 +10,14 @@ import { OwnerWorkReport } from './OwnerWorkReport';
 import { bridge } from './bridge';
 import { projectPackageTaskIdentity, type PackagePreviewTarget } from './project-preview';
 import { TaskResultFiles, type TaskResultFile } from './TaskResultFiles';
-import { DirectViteWebOutput, FirstNodeWebOutput, firstNodeWebOwnerWindow, savedBuildWebOpenKey } from './FirstNodeWebOutput';
+import { DirectViteWebOutput, FirstNodeWebOutput, firstNodeWebOwnerWindow, savedBuildWebOpenKey, type ProjectVitePreviewArrival } from './FirstNodeWebOutput';
 import { ProjectDraftDifference, type FixedDraftDecisionSlot } from './ProjectDraftDifference';
 import type { OriginalProjectDraft } from './ButlerPreparations';
 import { ProjectPackageFiles, canReadProjectPackageFiles } from './ProjectPackageFiles';
 import { PrepareTaskPackageProject } from './PrepareTaskPackageProject';
 import {TaskPhoneFinalScreen} from './PhoneFinalScreenReceipt';
 import {PhoneTaskOriginalReport,type PhoneWorkReportLocation} from './PhoneTaskConversationReturn';
+import {isPrivateLocalPhone} from './PhonePauseInstruction';
 import {messagePhoneResult,phoneConversationId,phoneRunIdentity} from './phone-start';
 import { RetainedPhoneImage } from './RetainedPhoneImage';
 import { HeldPhoneResultImage } from './HeldPhoneResultImage';
@@ -135,8 +136,27 @@ function useProjectPackages(task: unknown, active: boolean, identity: string, fi
     busy, error, read, firstWebWindow, refreshAfterFirstWebSave };
 }
 
+/** Presentation identity for the actual final answer already retained by this private phone Work. */
+export function originalBackgroundPhoneOutcome(task: Record<string, any> | undefined):string {
+  if(!task||!isPrivateLocalPhone(task)||task.executionMode!=='background'||!['needs_confirmation','completed'].includes(task.status))return '';
+  const raw=task.raw,run=phoneRunIdentity(task),conversation=phoneConversationId(task);
+  const answer=raw?.evidence?.nativeFinalAnswer,finalPage=answer?.phoneFinalPage;
+  if(!run||!conversation||raw.executionMode!=='background'||raw.status!==task.status||raw.cancelRequested!==false||
+     raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||raw.auditBodyIncluded!==true||raw.metadataLimited===true||
+     raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||raw.hasUnresolvedOperations!==false||
+     raw.teamRunId!=null||raw.teamAssignment!=null||raw.memberId!=null||
+     answer?.format!=='pocketworld.runner-final-answer.v1'||answer.taskId!==run.taskId||answer.runId!==run.runId||answer.coordinatorEpoch!==run.epoch||
+     answer.inputBoundaryEmpty!==true||!Number.isSafeInteger(answer.messageIndex)||answer.messageIndex<0||
+     !Number.isSafeInteger(answer.historyLength)||answer.historyLength<=answer.messageIndex||
+     typeof answer.answerFingerprint!=='string'||!/^[a-f0-9]{64}$/.test(answer.answerFingerprint)||
+     finalPage?.format!=='pocketworld.phone-final-page.v1'||finalPage.taskId!==run.taskId||finalPage.runId!==run.runId||finalPage.epoch!==run.epoch||
+     finalPage.businessResultVerified!==false||finalPage.containsScreenContent!==false||
+     typeof raw.evidence.modelSummary!=='string'||!raw.evidence.modelSummary.trim())return '';
+  return JSON.stringify([run.taskId,run.runId,run.epoch,conversation,task.status,answer.answerFingerprint,answer.messageIndex,answer.historyLength]);
+}
+
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, onResumeViteBuildEditor, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, phoneWorkReportLocation, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, onResumeViteBuildEditor, previewArrival, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, phoneWorkReportLocation, revealedPhoneOutcome, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -158,9 +178,11 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   onOpenProjectPackage?: (target: PackagePreviewTarget) => void;
   onContinueBuildCopy?: () => void;
   onResumeViteBuildEditor?: () => void;
+  previewArrival?:ProjectVitePreviewArrival;
   onFollowUp?: () => void;
   canReadPhoneTaskOriginal?: boolean;
   phoneWorkReportLocation?: PhoneWorkReportLocation;
+  revealedPhoneOutcome?: string;
   resultFiles?: {
     taskId: string;
     supported: boolean;
@@ -245,7 +267,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const repairViteEditor=active&&status==='failed'&&!!onResumeViteBuildEditor;
   if(directWeb)return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label={repairViteEditor?'原本机网页构建':'原本机构建的网页成果'}>
     {directWebResult&&packageRead.firstWebWindow?<DirectViteWebOutput key={JSON.stringify([owner,packageRead.firstWebWindow,directWebResult.sourceDigest])}
-      target={directWebResult} ownerWindow={packageRead.firstWebWindow}/>:
+      target={directWebResult} ownerWindow={packageRead.firstWebWindow} previewArrival={previewArrival}/>:
       active&&status==='completed'&&packageWindowOwns(record.id)&&
         <p className="pw-reading-note" role="status">尚未核对到原网页成果。可在「过程」查看这次构建的原记录。</p>}
     {(directWebResult||repairViteEditor)&&onResumeViteBuildEditor&&<div className="pw-form-actions">
@@ -255,8 +277,10 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     </div>}
   </section>;
   const hasExecutionRecord = !!(resultText || outcome.image || remotePhone || phoneStatus || outcome.partial);
+  const phoneOutcome=active&&revealedPhoneOutcome&&revealedPhoneOutcome===originalBackgroundPhoneOutcome(record)&&
+    outcome.evidenceRunBound===true&&!!resultText&&resultText===record.raw?.evidence?.modelSummary?revealedPhoneOutcome:undefined;
   const executionResult = (hasExecutionRecord || showEmptyResult && !settlementTitle) && <div className="pw-outcome-document">
-      <header className="pw-outcome-heading"><h3>{hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
+      <header className="pw-outcome-heading"><h3 data-original-phone-outcome={phoneOutcome} tabIndex={phoneOutcome?-1:undefined}>{phoneOutcome?'本轮手机回执':hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
       {originalBuildAnswer && <p className="pw-reading-note">构建和网页归档以本机回执为准。</p>}
       {resultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={progress ? undefined : () => onCopy(resultText)} onCopyCode={onCopy}/></div>
         : !settlementTitle && <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
@@ -328,7 +352,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     </div>}
     {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
     {report && <OwnerWorkReport key={JSON.stringify(report)} target={report} active={active} supported={canReadReport} identity={readIdentity} onCopy={onCopy} />}
-    {executionResult && (report || deferExecutionDetails ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始记录"><AccordionItem id="execution-result" title="查看执行原始记录">{executionResult}</AccordionItem></Accordion> : executionResult)}
+    {executionResult && (!phoneOutcome&&(report || deferExecutionDetails) ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始记录"><AccordionItem id="execution-result" title="查看执行原始记录">{executionResult}</AccordionItem></Accordion> : executionResult)}
 
     {/* These files belong to the linked message, not necessarily to the current run. */}
     {files.length > 0 && <section className="pw-outcome-deliverables" aria-label="关联答复中的附件">

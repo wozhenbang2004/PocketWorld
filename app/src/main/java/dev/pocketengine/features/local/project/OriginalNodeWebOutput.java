@@ -40,7 +40,7 @@ public final class OriginalNodeWebOutput {
     private static final Pattern VITE_ENTRY=Pattern.compile(
         "<script\\s+type=\"module\"(?:\\s+crossorigin(?:=\"\")?)?\\s+src=\"((?:/|\\./)assets/[A-Za-z0-9._-]+\\.m?js)\"\\s*>\\s*</script>");
     private static final Pattern VITE_ASSET=Pattern.compile("\\b(?:src|href)\\s*=\\s*\"((?:/|\\./)(?:assets/)?[A-Za-z0-9._-]+)\"");
-    private static final String REACT_CONFIG="vite.config.js", REACT_ENTRY="src/main.jsx";
+    static final String REACT_CONFIG="vite.config.js", REACT_ENTRY="src/main.jsx";
     private static final Set<String> REACT_PACKAGES=Set.of("vite","@vitejs/plugin-react","react","react-dom");
     private static final String REACT_TS_CONFIG="vite.config.ts",REACT_TS_ENTRY="src/main.tsx",REACT_TS_BUILD="tsc -b && vite build",
         REACT_TS_VERSION="6.0.3";
@@ -243,13 +243,13 @@ public final class OriginalNodeWebOutput {
         }
         if(!vite)return null;
         JSONArray rows=snapshot.getJSONArray("files");Set<String> paths=new java.util.HashSet<>();
-        boolean react=false,customReactTransform=pkg.has("babel");
+        boolean react=false,customReactTransform=false;
         for(int i=0;i<rows.length();i++){
             String path=rows.getJSONObject(i).getString("path");
             paths.add(path);
             String leaf=path.substring(path.lastIndexOf('/')+1).toLowerCase(java.util.Locale.ROOT);
             if(leaf.startsWith(".env")||leaf.startsWith(".postcssrc")||leaf.startsWith("postcss.config."))return null;
-            customReactTransform|=leaf.equals(".babelrc")||leaf.startsWith(".babelrc.")||leaf.startsWith("babel.config.");
+            customReactTransform|=customReactViteTransform(leaf);
             if(typescript&&(leaf.equals("jsconfig.json")||leaf.startsWith("tsconfig")&&leaf.endsWith(".json"))&&
                 !REACT_TS_PROJECT.containsKey(path))return null;
             if(leaf.startsWith("vite.config.")){
@@ -271,24 +271,36 @@ public final class OriginalNodeWebOutput {
         }
         return new DirectViteInspection(requireViteSource(files,true),null);
     }
+    static boolean customReactViteTransform(String leaf){
+        return leaf.equals(".babelrc")||leaf.startsWith(".babelrc.")||leaf.startsWith("babel.config.");
+    }
+
+    /** Just the already-supported JS source shape. The selected lock must still pass the full build-source check. */
+    static boolean defaultReactViteJsWithoutLock(JSONObject pkg,String config,String jsx,String html)throws Exception{
+        return defaultReactViteSource(pkg,config,jsx,html,REACT_ENTRY)&&
+            OwnerDraftNodeDependencies.declaresOriginalNpmProfile(pkg,REACT_PACKAGES);
+    }
+
     private static boolean defaultReactVite(JSONObject pkg,Map<String,String> files,boolean typescript)throws Exception{
         String target=typescript?REACT_TS_ENTRY:REACT_ENTRY;
-        String config=files.get(typescript?REACT_TS_CONFIG:REACT_CONFIG),jsx=files.get(target),html=files.get("index.html");
-        if(!"module".equals(pkg.opt("type"))||config==null||config.length()>1024||!DEFAULT_REACT_CONFIG.matcher(config).matches()||
-            jsx==null||jsx.isBlank()||html.getBytes(StandardCharsets.UTF_8).length>ViteOutputMount.MAX_ENTRY_BYTES)return false;
+        if(!defaultReactViteSource(pkg,files.get(typescript?REACT_TS_CONFIG:REACT_CONFIG),files.get(target),files.get("index.html"),target))return false;
         if(typescript)for(var item:REACT_TS_PROJECT.entrySet()){
             String body=files.get(item.getKey());
             if(body==null||body.length()>2048||!item.getValue().equals(ProjectSources.sha256(body.replace("\r\n","\n").getBytes(StandardCharsets.UTF_8))))return false;
         }
+        return OwnerDraftNodeDependencies.matchesOriginalNpmProfile(pkg,files.get("package-lock.json"),
+            typescript?REACT_TS_PACKAGES:REACT_PACKAGES);
+    }
+
+    private static boolean defaultReactViteSource(JSONObject pkg,String config,String jsx,String html,String target){
+        if(pkg.has("babel")||!"module".equals(pkg.opt("type"))||config==null||config.length()>1024||!DEFAULT_REACT_CONFIG.matcher(config).matches()||
+            jsx==null||jsx.isBlank()||html==null||html.getBytes(StandardCharsets.UTF_8).length>ViteOutputMount.MAX_ENTRY_BYTES)return false;
         var document=org.jsoup.Jsoup.parse(html);
         var scripts=document.select("script");
         if(scripts.size()!=1||!document.select("base").isEmpty())return false;
-        var entry=scripts.get(0);
-        String lock=files.get("package-lock.json"),src=entry.attr("src");
-        if(entry.parent()!=document.body()||entry.attributes().size()!=2||!"module".equals(entry.attr("type"))||
-            !(target.equals(src)||("/"+target).equals(src)||("./"+target).equals(src))||!entry.data().isBlank()||
-            !OwnerDraftNodeDependencies.matchesOriginalNpmProfile(pkg,lock,typescript?REACT_TS_PACKAGES:REACT_PACKAGES))return false;
-        return true;
+        var entry=scripts.get(0);String src=entry.attr("src");
+        return entry.parent()==document.body()&&entry.attributes().size()==2&&"module".equals(entry.attr("type"))&&
+            (target.equals(src)||("/"+target).equals(src)||("./"+target).equals(src))&&entry.data().isBlank();
     }
     private static void requirePreparedReactTypeScript(RuntimeWorkspace root)throws Exception{
         var noFollow=LinkOption.NOFOLLOW_LINKS;

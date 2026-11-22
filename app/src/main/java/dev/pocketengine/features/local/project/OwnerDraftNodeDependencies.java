@@ -67,7 +67,9 @@ public final class OwnerDraftNodeDependencies {
             .put("lockPath",lockPath).put("lockSha256",hash(body)).put("manifestSha256",hash(manifest))
             .put("packages",count).put("direct",direct).put("platformPackage",platformPackage);
     }
-    private record DependencyDeclarations(TreeSet<String> required,int count){}
+    private record DependencyDeclarations(TreeSet<String> required,int count){
+        boolean matches(Set<String> profile){return count<=128&&required.containsAll(profile);}
+    }
     private static DependencyDeclarations declarations(JSONObject pkg)throws Exception{
         TreeSet<String> required=new TreeSet<>();int count=0;
         for(String kind:DEPENDENCIES){
@@ -103,11 +105,15 @@ public final class OwnerDraftNodeDependencies {
         }
         return names;
     }
+    static boolean declaresOriginalNpmProfile(JSONObject manifest,Set<String> profile)throws Exception{
+        return declarations(manifest).matches(profile);
+    }
+
     /** Runtime-independent prerequisite for the React source profile. No install, repair, or installed-package claim. */
     static boolean matchesOriginalNpmProfile(JSONObject manifest,String body,Set<String> profile)throws Exception{
         if(body==null||bytes(body)>524288)return false;
         var declared=declarations(manifest);
-        if(declared.count()>128||!declared.required().containsAll(profile))return false;
+        if(!declared.matches(profile))return false;
         JSONObject lock=McpJson.parse(body),packages=lock.getJSONObject("packages"),root=packages.getJSONObject("");
         if(!new java.math.BigDecimal(3).equals(lock.opt("lockfileVersion")))return false;
         for(String key:Set.of("name","version"))if(!(manifest.opt(key) instanceof String value)||value.isBlank()||

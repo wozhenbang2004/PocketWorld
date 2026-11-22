@@ -100,11 +100,12 @@ import {ComposerPreviewReferences} from './ComposerPreviewReferences';
 import {ProjectLocalSourceIntake,type PhoneImportFiles} from './ProjectLocalSourceIntake';
 import {ProjectGitIntake,type PublicGitDraft} from './ProjectGitIntake';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
+import {sameProjectViteResult,type ProjectVitePreviewArrival,type ProjectViteResultTarget} from './FirstNodeWebOutput';
 import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
@@ -117,7 +118,7 @@ import {useProjectRevision} from './useProjectRevision';
 import {packageOperationTarget,type PackagePreviewChoices,type PackagePreviewTarget} from './project-preview';
 import {TaskPackageProjectContext} from './PrepareTaskPackageProject';
 import {useProjectPackageHandoff} from './useProjectPackageHandoff';
-import {TaskOutcome} from './TaskOutcome';
+import {TaskOutcome,originalBackgroundPhoneOutcome} from './TaskOutcome';
 import {OwnerWorkFacts,WorkGoal} from './OwnerWorkFacts';
 import {OwnerWorkTeamReportReview,linkedTeamReportChoice,sameTeamReportChoice,teamReportDecisionSaved,teamReportParent,teamReportRead,
  type TeamReportChoice,type TeamReportParent,type TeamReportRead} from './OwnerWorkTeamReportReview';
@@ -177,7 +178,7 @@ import {ConversationModelPickerProvider,ConversationModelPickerControls,Conversa
 import {workspaceNavigationKey} from './workspace-directory';
 import {ownerQuestionReceipt, type OwnerQuestionView} from './owner-task-question';
 import {phoneStartReceipt,phoneStartFailure,phoneRunIdentity,messagePhoneResult,phoneConversationId,type PhoneStartReceipt,type PhoneResult} from './phone-start';
-import {InlineOriginalPhoneViewer,PhoneViewer,type PhoneViewerTask} from './phone-viewer';
+import {InlineOriginalPhoneViewer,PhoneViewer,type PhoneViewerIdentity,type PhoneViewerTask} from './phone-viewer';
 import './app.css';
 import './nav-settings-manga.css';
 import './task-surface.css';
@@ -263,7 +264,8 @@ type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTa
 type FileAttachmentPickerLaunch={requestId:string;cancelled:boolean;settled:boolean;reopening?:boolean};
 type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'|'sourceMessage'|'ordinaryNewDraftVisit'>&{resume:number;launch:FileAttachmentPickerLaunch};
 type ReopenedAttachmentPicker=OrdinaryAttachmentPickerScope&{requestId:string};
-type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
+type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number};vitePreview?:ProjectVitePreviewArrival};
+type ProjectVitePreviewOpen={result:ProjectViteResultTarget;owner:()=>boolean};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
 type ChatSearchContext={hit:WorkSearchItem;requestId:string;request:number;document:number;navigation:number;resume:number;
@@ -710,7 +712,13 @@ export default function App(){
  const [pythonSetupReturn,setPythonSetupReturn]=useState<CheckoutPythonSetupReturn>();
  const [viteToolsReturn,setViteToolsReturn]=useState<ProjectViteToolsReturn>();
  const [localWorkspaceDraft,setLocalWorkspaceDraft]=useState<LocalWorkspaceDraft|undefined>();
- const [projectSections,setProjectSections]=useState<Record<string,'work'|'files'>>({});
+ const [projectSections,setProjectSections]=useState<Record<string,'work'|'files'|'preview'>>({});
+ const [viteResultLookup,setViteResultLookup]=useState<ProjectViteResultLookup|null>(null);
+ const viteResultLookupNow=useRef<ProjectViteResultLookup|null>(null);
+ const retireViteResultLookup=useCallback((expected?:ProjectViteResultLookup)=>{
+  if(expected&&viteResultLookupNow.current!==expected)return;
+  viteResultLookupNow.current=null;setViteResultLookup(null);
+ },[]);
  const [projectWorkDrafts,setProjectWorkDrafts]=useState<Record<string,ProjectWorkDraft>>({});
  const [projectDraftReturn,setProjectDraftReturn]=useState<ProjectDraftReturn|null>(null);
  const [projectBuildReturn,setProjectBuildReturn]=useState<ProjectBuildCopy|null>(null),openingBuildCopy=useRef(false);
@@ -830,6 +838,7 @@ export default function App(){
  const [taskLayer,setTaskLayer]=useState<TaskLayer>('overview'),[projectPickerOpen,setProjectPickerOpen]=useState(false),[fileDisplayOpen,setFileDisplayOpen]=useState(false);
  const [taskFiltersOpen,setTaskFiltersOpen]=useState(false),[endedScopeOrigin,setEndedScopeOrigin]=useState<{filter:WorkCollectionFilter;query:string}|null>(null);
  const [phoneViewerExpanded,setPhoneViewerExpanded]=useState(false);
+ const [revealedPhoneOutcome,setRevealedPhoneOutcome]=useState('');
  const [inlinePhoneVisit,setInlinePhoneVisit]=useState<string|null>(null);
  const inlinePhoneSelection=useRef<string|null>(null);
  const chooseInlinePhoneVisit=useCallback((key:string|null)=>{
@@ -876,6 +885,20 @@ export default function App(){
  const projectWorkView=projectWorkViews[String(state.projectId||'')]||{query:'',filter:'all' as const,expanded:false,selected:''};
  const updateProjectWorkView=(patch:Partial<ProjectWorkCollectionView>)=>setProjectWorkViews(previous=>({...previous,[String(state.projectId||'')]:{...(previous[String(state.projectId||'')]||{query:'',filter:'all',expanded:false,selected:''}),...patch}}));
  const projectSection=projectSections[String(state.projectId||'')]||'work';
+ useEffect(()=>{
+  const original=viteResultLookup;
+  if(!original)return;
+  const check=()=>{if(!original.current())retireViteResultLookup(original);};
+  const presentation=projectWorkPresentations[original.projectId];
+  if(route!=='projects'||projectSection!=='work'||state.projectId!==original.projectId||state.filePath||taskOpen||
+     presentation?.open!==true||presentation.mode!=='default'){
+   retireViteResultLookup(original);return;
+  }
+  const off=bridge.subscribe(check),offDoc=bridge.subscribeDocumentEpoch(check);
+  document.addEventListener('visibilitychange',check);
+  check();
+  return()=>{off();offDoc();document.removeEventListener('visibilitychange',check);};
+ },[viteResultLookup,route,projectSection,state.projectId,state.filePath,taskOpen,projectWorkPresentations,retireViteResultLookup]);
  useEffect(()=>{
   const returning=terminalSavedFileArrival.current;
   if(returning&&(route!=='projects'||projectSection!=='work'||state.projectId!==returning.position.projectId||state.filePath||taskOpen))
@@ -1355,7 +1378,14 @@ export default function App(){
   else{phoneWindow.current++;phoneText.set(next);setPhoneReview(null);if(can('phone.draft.edit'))run('phone.draft.edit',{text:next,epoch:phoneDraft.epoch,...(Number.isSafeInteger(phoneDraft.sourceEditTicket)?{sourceEditTicket:phoneDraft.sourceEditTicket,draftConversation:String(state.conversationId||'')}:{})});}
  },[intent,chatDraft,phoneText,can,run,draftKey,draftEpoch,draftSwitchPending,personalDocumentEpoch,phoneDraft.epoch,phoneDraft.sourceEditTicket,state.conversationId]);
  const rememberTaskPosition=useCallback(()=>{const node=taskScroll.current;if(taskId&&node?.isConnected)taskReading.current.set(`${taskId}:${taskLayer}`,node.scrollTop)},[taskId,taskLayer]);
- const showTaskLayer=useCallback((next:TaskLayer)=>{const commit=()=>{rememberTaskPosition();setTaskLayer(next)};if(!guardTaskLeave(commit))commit()},[rememberTaskPosition]);
+ const showTaskLayer=useCallback((next:TaskLayer)=>{
+  const origin=projectTaskReturn.current;
+  const commit=()=>{
+   if(next!=='overview'&&origin?.taskId===taskId&&projectTaskReturn.current===origin)delete origin.vitePreview;
+   rememberTaskPosition();setTaskLayer(next);
+  };
+  if(!guardTaskLeave(commit))commit();
+ },[rememberTaskPosition,taskId]);
  const releasePhoneNotice=useCallback(()=>{const pin=phoneNoticeRef.current;if(!pin)return;phoneNoticeRef.current=null;setPhoneNoticePin(null);setPhoneNoticePanel(null);
   if(can('phone.notice.close'))void bridge.command('phone.notice.close',{noticeHandle:pin.token}).catch(()=>{});
  },[can]);
@@ -5044,18 +5074,35 @@ export default function App(){
   const outcome=taskScroll.current?.querySelector<HTMLElement>('.pw-task-outcome');
   if(outcome){origin.focusOutcome=false;outcome.tabIndex=-1;outcome.focus({preventScroll:true});outcome.scrollIntoView({block:'start',behavior:'instant'})}
  },[taskOpen,taskOpening,taskId,taskLayer,selectedTask?.id,snapshot?.view?.taskId]);
- const openProjectWork=(id:string,entry:ProjectWorkEntry='overview',query='',checkoutId?:string,expected?:{runId:string;epoch:number},focusShelf?:()=>boolean)=>{
+ const openProjectWork=(id:string,entry:ProjectWorkEntry='overview',query='',checkoutId?:string,expected?:{runId:string;epoch:number},focusShelf?:()=>boolean,preview?:ProjectVitePreviewOpen)=>{
   const projectId=String(state.projectId||'');
   if(!projectId||bridge.getState().state.projectId!==projectId||bridge.getState().state.filePath)return;
+  if(preview&&(!preview.owner()||preview.result.projectId!==projectId||preview.result.checkoutId!==checkoutId||
+    preview.result.taskId!==id||preview.result.runId!==expected?.runId||preview.result.epoch!==expected?.epoch))return;
   const origin:ProjectTaskReturn={projectId,checkoutId,query,taskId:id,entry,focusOutcome:entry==='outcomes',expected,focusShelf};
   projectTaskReturn.current=origin;
   const navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch(),request=++searchOpenRequest.current;
   const current=()=>searchOpenRequest.current===request&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&
-   !document.hidden&&bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath;
+   !document.hidden&&bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath&&(!preview||preview.owner());
+  let acknowledged:TaskReviewWindow|null=null;
+  if(preview){
+   const arrival:ProjectVitePreviewArrival={take:result=>{
+    const native=obj(bridge.getState().view);
+    if(origin.vitePreview!==arrival||!acknowledged||acknowledgedWorkVisit.current!==acknowledged||reviewRequest.current!==acknowledged.request||
+       !current()||projectTaskReturn.current!==origin||openedTaskId.current!==id||native.taskId!==id||native.section!==null||
+       native.resumeRevision!==acknowledged.resumeRevision||!sameProjectViteResult(preview.result,result))return false;
+    delete origin.vitePreview;return true;
+   }};
+   origin.vitePreview=arrival;
+  }
   openTask(id,entry==='outcomes'?'overview':entry,false,undefined,query,expected,current,undefined,expected?()=>{
-   if(!current()||projectTaskReturn.current!==origin)return;
+   if(projectTaskReturn.current!==origin)return;
+   if(!current()){if(preview)projectTaskReturn.current=null;return;}
    if(focusShelf){origin.focusOutcome=false;origin.returning=true;}else projectTaskReturn.current=null;
    setLocalError(focusShelf?'暂时打不开原工作，尚未核实这份固定网页现在能否读取。没有打开其他轮次。':'原工作或轮次暂不可读取，没有打开其他工作。');
+  }:undefined,preview?()=>{
+   const receipt=acknowledgedWorkVisit.current;
+   if(receipt?.taskId===id&&receipt.documentEpoch===epoch&&receipt.request===reviewRequest.current&&current())acknowledged=receipt;
   }:undefined);
  };
  const openProjectReceipt=(id:string,checkoutId?:string,expected?:{runId:string;epoch:number})=>openProjectWork(id,'overview','',checkoutId,expected);
@@ -5472,7 +5519,9 @@ export default function App(){
   });
   return()=>window.cancelAnimationFrame(frame);
  },[snapshot,taskOpen,taskOpening,taskLayer,route,phoneViewerObscured,phoneViewerExpanded,currentPausedChatPhone]);
- const phoneViewerFor=(task:Task)=>{
+ const phoneOutcomeVisitKey=(proof:string,native=bridge.getState())=>JSON.stringify([proof,bridge.getDocumentEpoch(),
+  navigationWindow.current,reviewRequest.current,obj(native.view).resumeRevision,native.state.requestedTaskRevision]);
+ const phoneViewerFor=(task:Task,answer:string)=>{
   const target=phoneViewerTask(task);if(!target||!can('phone.viewer.open')||!can('phone.viewer.frame')||!can('phone.viewer.close'))return null;
   const local=isPrivateLocalPhone(task),live=privatePhoneSurface(task,state.livePrivatePhones);
   const entry=phoneActivityPick.current?.preview;
@@ -5486,10 +5535,39 @@ export default function App(){
    .map(phoneViewerTask).filter((item):item is PhoneViewerTask=>item!==null):[];
   const preparationSession=obj(task.raw?.evidence?.phoneSession);
   const canCheckConnection=target.preparation==='blocked'&&preparationSession.taskId===target.taskId&&preparationSession.runId===target.runId&&preparationSession.coordinatorEpoch===target.epoch&&preparationSession.state==='not_initialized'&&preparationSession.physicalDisplayHeld===false&&task.raw?.evidence?.message===target.detail;
+  // An explicit viewer result exit only reveals the already loaded same-run reply in this Work.
+  const openResult=phoneViewerExpanded&&!phoneViewerObscured&&answer&&originalTaskOverview(task)?
+   (identity:PhoneViewerIdentity,trigger:HTMLButtonElement)=>{
+    const initial=bridge.getState(),key=phoneOutcomeVisitKey(answer,initial),body=taskScroll.current;
+    const current=()=>{
+     const actual=bridge.getState(),view=obj(actual.view),owner=actual.state;
+     if(document.hidden||openedTaskId.current!==identity.taskId||view.taskId!==identity.taskId||view.section!==null||
+        !Number.isSafeInteger(view.resumeRevision)||view.resumeRevision!==openedTaskResumeRevision.current||
+        key!==phoneOutcomeVisitKey(answer,actual)||body!==taskScroll.current||
+        body?.closest<HTMLElement>('.pw-task-drawer')?.dataset.taskLayer!=='overview'||
+        owner.conversationReader||owner.filePath||owner.queuedInputsPage||owner.attachmentWorkspace?.open||owner.chatAttachmentPickerOpen)return false;
+     const rows=asArray<Task>(owner.tasks).filter(row=>row.id===identity.taskId);
+     return rows.length===1&&originalBackgroundPhoneOutcome(rows[0])===answer;
+    };
+    if(identity.taskId!==target.taskId||identity.runId!==target.runId||identity.epoch!==target.epoch||
+       !body||!trigger.isConnected||trigger.disabled||!trigger.closest('.pw-phone-viewer-sheet')||
+       trigger.closest('[hidden],[inert],[aria-hidden="true"]')||!trigger.getClientRects().length||!current())return;
+    setRevealedPhoneOutcome(key);
+    return ()=>{
+     if(!current())return false;
+     const rows=Array.from(body.querySelectorAll<HTMLElement>('[data-original-phone-outcome]'))
+       .filter(row=>row.dataset.originalPhoneOutcome===answer&&!row.closest('[hidden],[inert],[aria-hidden="true"]')&&row.getClientRects().length);
+     if(rows.length!==1)return false;
+     const heading=rows[0];
+     body.scrollTop+=heading.getBoundingClientRect().top-body.getBoundingClientRect().top;
+     heading.focus({preventScroll:true});return true;
+    };
+   }:undefined;
   return <ConversationModelPickerVisibility>{pickerVisible=><PhoneViewer key={`${task.id}:${target.runId}:${target.epoch}`} task={target} expanded={phoneViewerExpanded} onExpandedChange={setPhoneViewerExpanded} nativeVisible={!pickerVisible&&!phoneViewerObscured&&taskOpen&&taskLayer==='overview'}
    tasks={relatedViewers} onSelectTask={can('tasks.open')?selected=>openTask(selected.taskId,'overview',false,undefined,undefined,selected):undefined}
    onPause={phoneControllable&&(!local||!live?.paused)&&task.status==='running'&&can('phone.pause')?identity=>exactPhoneControl('phone.pause',identity,local):undefined} onResume={phoneControllable&&(!local||live?.displayedPause)&&task.status==='paused'&&!conversationInlineAttention(task)&&can('phone.resume')?identity=>exactPhoneControl('phone.resume',identity,local,live?.displayedPause):undefined}
    onStop={phoneControllable&&!terminal(task)&&task.status!=='interrupted'&&task.status!=='stopping'&&can('phone.stop')?identity=>exactPhoneControl('phone.stop',identity,local):undefined}
+   onOpenResult={pickerVisible?undefined:openResult}
    onOpenSetup={canCheckConnection&&can('setup.read')?()=>{setPhoneViewerExpanded(false);void openSetup('phone')}:undefined}
    onOpenTask={can('tasks.open')?identity=>{setPhoneViewerExpanded(false);if(taskOpen&&openedTaskId.current===identity.taskId){showTaskLayer(task.status==='failed'?'process':'overview');if(attention(task)&&can('tasks.review')&&!reviewPending)loadTaskReview(identity.taskId)}else openTask(identity.taskId,task.status==='failed'?'process':attention(task)&&can('tasks.review')?'review':'overview')}:undefined}/>}</ConversationModelPickerVisibility>;
  };
@@ -5938,7 +6016,10 @@ export default function App(){
     <p dir="auto">{progress.detail||(progress.source==='task'?progress.title:progress.stateLabel)}</p>
    </BlurCrossfade>
   </section>;
-  const originalEvidence=<TaskOutcome key="task-evidence" registerProjectDraftBeforeLeave={registerProjectDraftBeforeLeave} projectDraftSourceRetired={task.raw?.contextAvailable===false||task.raw?.contextWithdrawn===true||task.raw?.sourceCurrentReadRequired===true||task.raw?.taskProjection==='source_unavailable'} task={review&&!reviewStale?review.task:task} messages={messages} resultFiles={taskFiles}
+  const outcomeRecord=review&&!reviewStale?review.task:task;
+  const visiblePhoneOutcome=overviewActive?originalBackgroundPhoneOutcome(task):'';
+  const phoneOutcome=visiblePhoneOutcome&&originalBackgroundPhoneOutcome(outcomeRecord)===visiblePhoneOutcome?visiblePhoneOutcome:'';
+  const originalEvidence=<TaskOutcome key="task-evidence" registerProjectDraftBeforeLeave={registerProjectDraftBeforeLeave} projectDraftSourceRetired={task.raw?.contextAvailable===false||task.raw?.contextWithdrawn===true||task.raw?.sourceCurrentReadRequired===true||task.raw?.taskProjection==='source_unavailable'} task={outcomeRecord} messages={messages} resultFiles={taskFiles}
    active={overviewActive} focusedOriginalDraft={focusedOriginalDraft?.taskId===task.id?focusedOriginalDraft:undefined} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
    draftGoalDecision={draftAcceptanceSaved?settledOriginalDraft:durableDraftDecision} lateDependencyObserved={lateDependencyObserved} reviewedDependencyHoldKey={legacyBuildHold?heldBuildKey:undefined}
    draftReview={inlineDraftDecision?{original:inlineDraftDecision,render:readback=><section className="pw-form-flow" aria-label="验收本轮原改稿">
@@ -5947,9 +6028,11 @@ export default function App(){
    </section>}:undefined}
    canReadPhoneTaskOriginal={overviewActive&&!phoneWorkObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('phone.result.taskOriginal')}
    phoneWorkReportLocation={phoneWorkLocation(task)}
+   revealedPhoneOutcome={phoneOutcome&&revealedPhoneOutcome===phoneOutcomeVisitKey(phoneOutcome)?phoneOutcome:undefined}
    canReadReport={can('ownerWork.report.read')} readIdentity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}:${navigationRevision}`}
    onContinueBuildCopy={buildCopy&&!failureOverview?()=>void openOriginalBuildCopy(buildCopy):undefined}
    onResumeViteBuildEditor={viteEditor&&currentViteEditorVisit(viteEditor,snapshot)?()=>void openOriginalBuildCopy(viteEditor):undefined}
+   previewArrival={overviewActive&&projectTaskReturn.current?.taskId===task.id?projectTaskReturn.current.vitePreview:undefined}
    onCopy={copyWithLocalFeedback} onFollowUp={fixedDraft||reportHistory?undefined:followOriginal} onOpenProjectPackage={!packageOpening&&!taskOpening&&can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&can('tasks.close')?openTaskPackage:undefined}
    attachmentConversation={String(state.conversationId||'')} canOpenAttachment={can('attachments.open')} canLocateAttachment={can('attachmentWorkspace.open')}/>;
   const evidence=<TaskPackageProjectContext.Provider key="task-evidence" value={taskOpen&&!taskOpening&&can('projects.localSource.openPrepared')&&can('tasks.close')?(original,pin)=>{
@@ -6075,7 +6158,7 @@ export default function App(){
      </>}
      {taskOpen && openedTaskId.current===task.id && !taskOpening && isPrivateLocalPhone(task) && can('phone.pauseNote.read') && can('phone.pauseNote.continue') &&
        <PhonePauseInstruction key={'phone-pause-note:'+task.id} task={task} livePause={!!pausedSurface?.paused&&!pausedSurface.stopRequested&&pausedSurface.surfaceState!=='other_surface'&&pausedSurface.surfaceState!=='handoff_unconfirmed'} interrupted={phoneInterrupted} visible={taskLayer==='overview' && !phoneViewerObscured && !phoneViewerExpanded && obj(snapshot?.view).taskId===task.id} plainMainResume={resumeMainPhoneFromWork(task)} run={act}/>}
-     {taskOpen&&phoneViewerFor(task)}
+     {taskOpen&&phoneViewerFor(task,phoneOutcome)}
      {taskOpen&&task.raw?.feature==='remote'&&can('remoteTask.open')&&<RemoteTaskWorkspace key={task.id} taskId={task.id} raw={obj(task.raw)} receipt={task.hostReceipt} savedFiles={asArray<Json>(task.raw?.remoteSnapshotAttachments)} openProject={can('remoteTask.stageSavedSources')&&can('projects.localSource.openPrepared')?pin=>{void navigate('projects',()=>run('projects.localSource.openPrepared',pin));}:undefined}/>}
      {overviewActive&&task.raw?.mayReadProjectTeamFirstReviews===true&&can('tasks.projectTeamReviews')&&can('tasks.projectTeamReview.original')&&can('teams.readFrozenOutputs')&&can('teams.readRun')&&
        <ProjectTeamFirstReviews key={task.id+':'+task.raw.runId+':'+task.raw.coordinatorEpoch} id={task.id} run={task.raw.runId} epoch={task.raw.coordinatorEpoch}
@@ -7681,9 +7764,42 @@ export default function App(){
   scope={filter as WorkCollectionFilter} query={taskQuery} selectScope={selectWorkScope} clearQuery={()=>setTaskQuery('')} drillEnded={drillEndedWork}
   start={()=>{void navigate('butler')}} history={()=>{void openRelatedWorkspace('history')}} open={openDirectoryWork}
   registerReturn={registerWorkReturn} extra={can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}/>;
- const showProjectSection=(section:'work'|'files')=>{
+ const showProjectSection=(section:'work'|'files'|'preview')=>{
   if(section==='work'&&projectPreview.expanded&&projectPreview.fromSavedWebShelf){projectPreview.returnToSavedWebShelf();return}
+  if(viteResultLookupNow.current)retireViteResultLookup();
   projectPreview.hide();setProjectSections(previous=>({...previous,[String(state.projectId||'')]:section}))
+ };
+ const canReadCurrentWeb=['projects.development.read','projects.development.inspect','tasks.open','projects.firstWebOutput.read',
+  'projects.firstWebOutput.review','projects.firstWebOutput.save','projects.firstWebOutput.previewBuild','projects.firstWebOutput.open',
+  'projects.preview.viewport','projects.preview.close'].every(can);
+ const openCurrentProjectWeb=()=>{
+  const projectId=currentProject?.id,doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current,initial=bridge.getState();
+  const view=obj(initial.view),resume=view.resumeRevision,taskRequest=reviewRequest.current;
+  if(!projectId||route!=='projects'||projectSection!=='preview'||!canReadCurrentWeb||viteResultLookupNow.current)return;
+  if(previewBlocked||taskOpening||projectPreview.expanded||!Number.isSafeInteger(resume)||view.taskId!==null||
+     projectDraftReturn||projectBuildReturn||projectImportedEditor||projectLocalFilesIntent||pythonSetupReturn||dependencyBuildReturn||
+     viteToolsReturn||projectWorkDrafts[projectId]?.operation){
+   setLocalError('请先完成原项目的选择或审阅。没有打开其他网页。');return;
+  }
+  const owner=()=>{
+   const live=bridge.getState(),window=obj(live.view),state=live.state;
+   return !document.hidden&&doc===bridge.getDocumentEpoch()&&navigation===navigationWindow.current&&window.resumeRevision===resume&&
+    window.section===null&&state.projectId===projectId&&!state.filePath&&!state.conversationReader&&
+    !state.attachmentWorkspace?.open&&!state.localSourceIntake?.window&&!state.projectGitImport?.window;
+  };
+  if(!owner()){setLocalError('原项目窗口已变化，没有读取其他项目。');return;}
+  const original:ProjectViteResultLookup={projectId,
+   current:()=>viteResultLookupNow.current===original&&owner()&&reviewRequest.current===taskRequest&&obj(bridge.getState().view).taskId===null,
+   finish:result=>{
+    if(!original.current())return;
+    retireViteResultLookup(original);
+    if(result?.projectId===projectId)openProjectWork(result.taskId,'outcomes','',result.checkoutId,
+      {runId:result.runId,epoch:result.epoch},undefined,{result,owner});
+   }};
+  setLocalError('');
+  viteResultLookupNow.current=original;setViteResultLookup(original);
+  setProjectSections(previous=>({...previous,[projectId]:'work'}));
+  setProjectWorkPresentations(previous=>({...previous,[projectId]:{open:true,mode:'default'}}));
  };
  const dismissProjectDraftReturn=(id:string)=>{setProjectDraftReturn(null);setProjectWorkPresentations(previous=>({...previous,[id]:{open:false,mode:'default'}}));};
  const openStagedProjectDraft=(target:ProjectDraftReturn)=>{
@@ -7896,8 +8012,8 @@ export default function App(){
  const projectsPage=<motion.main layoutScroll ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded){if(state.projectId&&projectSection==='work')projectDirectory.rememberScroll(event.currentTarget.scrollTop);else projectListTop.current.set(projectPositionKey,event.currentTarget.scrollTop)}}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
   {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} copyRevision={value=>{void copyText(value).catch(()=>{})}} adoption={fileAdoption} continueAdopted={continueAdopted} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
-    <Tabs selectedKey={projectPreview.expanded?'preview':projectSection} onSelectionChange={key=>{if(key==='preview')projectPreview.open();else showProjectSection(key==='files'?'files':'work')}} className="pw-project-tabs">
-      <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
+    <Tabs selectedKey={projectPreview.expanded?'preview':projectSection} onSelectionChange={key=>showProjectSection(key==='preview'?'preview':key==='files'?'files':'work')} className="pw-project-tabs">
+      <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!canReadCurrentWeb&&!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onOpenPairedDevices={canUsePairedDevice?visitPairedDevices:undefined} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
@@ -7934,6 +8050,7 @@ export default function App(){
             pythonSetupReturn={pythonSetupReturn?.position.projectId===currentProject.id?pythonSetupReturn:undefined}
             dependencyBuildReturn={dependencyBuildReturn?.original.projectId===currentProject.id?dependencyBuildReturn:undefined}
             viteToolsReturn={viteToolsReturn?.position.projectId===currentProject.id?viteToolsReturn:undefined}
+            viteResultLookup={viteResultLookup?.projectId===currentProject.id?viteResultLookup:undefined}
             onPreparePythonTools={openPythonTools}
             buildReturn={projectBuildReturn?.projectId===currentProject.id?projectBuildReturn:undefined} onBuildReturnHandled={handledBuildReturn} onDismissReturn={()=>dismissProjectDraftReturn(currentProject.id)} projectId={currentProject.id} name={currentProject.name} active={active} run={act} can={can} registerBack={registerProjectDevelopmentBack} onInteractionBusyChange={onBusy} onOpenTask={openProjectReceipt} onOpenHostOriginal={id=>openTask(id)}
             onOpenPackageOriginal={({taskId,runId,epoch})=>{
@@ -7966,7 +8083,16 @@ export default function App(){
         />:undefined}/>
       </TabPanel>
       <TabPanel id="files">{can('projects.keptDrafts.list')&&<ProjectKeptDraftIndex key={currentProject.id} project={currentProject.id}/>} {projectFiles}</TabPanel>
-      <TabPanel id="preview" className="pw-project-preview-panel" style={{translate:'none',opacity:1,transition:'none'}}>{desktopNavigation?<div className="pw-project-connected-workspace" data-preview-open="true"><motion.section layoutScroll className="pw-project-files-pane" aria-label="正式项目文件"><header className="pw-project-connected-header"><h2>正式项目文件</h2></header>{projectFiles}</motion.section><section className="pw-project-preview-panel" aria-label="项目预览"><ProjectPreviewPane control={projectPreview} composer={composer}/></section></div>:<ProjectPreviewPane control={projectPreview} composer={composer}/>}</TabPanel>
+      <TabPanel id="preview" className="pw-project-preview-panel" style={{translate:'none',opacity:1,transition:'none'}}>
+        {!projectPreview.expanded?<section className="pw-preview-entry" aria-label="选择项目预览来源">
+          <h3>项目预览</h3>
+          {canReadCurrentWeb&&<><p className="pw-reading-note">只核对当前私人副本已保存的源码与对应的本机网页成果。不会自动构建或保存。</p>
+            <Button disabled={previewBlocked||taskOpening} onClick={openCurrentProjectWeb}>预览当前副本的网页</Button></>}
+          {can('projects.preview')&&<div className="pw-form-actions">
+            <Button variant="secondary" disabled={previewBlocked} onClick={projectPreview.open}>查看已登记的任务预览</Button>
+            <p className="pw-field-hint">任务预览未必来自当前源码或这份本机副本。</p>
+          </div>}
+        </section>:desktopNavigation?<div className="pw-project-connected-workspace" data-preview-open="true"><motion.section layoutScroll className="pw-project-files-pane" aria-label="正式项目文件"><header className="pw-project-connected-header"><h2>正式项目文件</h2></header>{projectFiles}</motion.section><section className="pw-project-preview-panel" aria-label="项目预览"><ProjectPreviewPane control={projectPreview} composer={composer}/></section></div>:<ProjectPreviewPane control={projectPreview} composer={composer}/>}</TabPanel>
     </Tabs>
 
   </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2><div className="pw-project-library-actions">{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>run('projects.localSource.open')}>{localProjectSourceLabel}</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>{canCreateLocalStarter?'新建空白项目':'新项目'}</Button>}</div></header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/>

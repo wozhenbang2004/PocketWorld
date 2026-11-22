@@ -37,14 +37,22 @@ public final class OwnerSuppliedViteLock {
             origin.length()!=RECEIPT.size()||!RECEIPT.stream().allMatch(origin::has)||
             !PHONE.contains(origin.optString("sourceKind")))return false;
         var rows=snapshot.getJSONArray("files");
-        String html=null,body=null;Set<String> paths=new HashSet<>();
+        String html=null,body=null,reactConfig=null,reactEntry=null;Set<String> paths=new HashSet<>();
+        boolean customReactTransform=false;
         for(int i=0;i<rows.length();i++){
             JSONObject row=rows.getJSONObject(i);
             String path=row.getString("path"),leaf=path.substring(path.lastIndexOf('/')+1).toLowerCase(Locale.ROOT);
             paths.add(path);
             if(leaf.equals(PATH)||leaf.equals("yarn.lock")||leaf.equals("bun.lock")||leaf.equals("bun.lockb")||
                 leaf.equals("pnpm-lock.yaml")||leaf.startsWith(".env")||leaf.startsWith(".postcssrc")||
-                leaf.startsWith("postcss.config.")||leaf.startsWith("vite.config."))return false;
+                leaf.startsWith("postcss.config."))return false;
+            if(leaf.startsWith("vite.config.")){
+                if(!OriginalNodeWebOutput.REACT_CONFIG.equals(path)||row.optBoolean("binary")||!(row.opt("content") instanceof String config))return false;
+                reactConfig=config;
+            }
+            customReactTransform|=OriginalNodeWebOutput.customReactViteTransform(leaf);
+            if(OriginalNodeWebOutput.REACT_ENTRY.equals(path)&&!row.optBoolean("binary")&&row.opt("content") instanceof String entry)
+                reactEntry=entry;
             if("index.html".equals(path)&&row.opt("content") instanceof String contents)html=contents;
             if("package.json".equals(path)&&row.opt("content") instanceof String contents)body=contents;
         }
@@ -61,7 +69,8 @@ public final class OwnerSuppliedViteLock {
             vite|=declared!=null&&declared.opt("vite") instanceof String version&&!version.isBlank();
         }
         return vite&&pkg.opt("name") instanceof String name&&!name.isBlank()&&
-            pkg.opt("version") instanceof String version&&!version.isBlank();
+            pkg.opt("version") instanceof String version&&!version.isBlank()&&
+            (reactConfig==null||!customReactTransform&&OriginalNodeWebOutput.defaultReactViteJsWithoutLock(pkg,reactConfig,reactEntry,html));
     }
 
     private static String originalManifest(JSONObject snapshot)throws Exception{
