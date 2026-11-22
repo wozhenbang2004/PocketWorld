@@ -2,6 +2,7 @@ package dev.pocketengine.media;
 
 import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.store.OwnerWorkTask;
 import dev.pocketengine.store.TaskStore;
 import java.util.HashSet;
 import java.util.Set;
@@ -77,7 +78,8 @@ public final class MediaTaskCapabilities implements CapabilityPort {
         if(!revision.equals(media.snapshot().getString("configurationRevision")))throw new SecurityException("媒体服务已变化，请在原任务重新核对");
         JSONObject source=tasks.ownerMediaOperationSource(task,operation);
         if(!source.getString("runId").equals(run)||source.getInt("epoch")!=epoch||!source.getString("tool").equals(name)||!source.getString("argumentsHash").equals(TaskStore.capabilityFingerprint(args))||!source.getString("state").equals("prepared"))throw new SecurityException("媒体必须使用原AgentRunner已准备的准确操作");
-        JSONArray operations=tasks.get(task,false).getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject other=operations.getJSONObject(i);if(other.optString("state").matches("prepared|unknown")&&(!operation.equals(other.optString("operationId"))||!other.optString("state").equals("prepared")))throw new SecurityException("原任务还有未决操作，不能派发另一个媒体效果");}
+        JSONObject originalTask=tasks.get(task,false);
+        JSONArray operations=originalTask.getJSONArray("operations");for(int i=0;i<operations.length();i++){JSONObject other=operations.getJSONObject(i);if(other.optString("state").matches("prepared|unknown")&&(!operation.equals(other.optString("operationId"))||!other.optString("state").equals("prepared")))throw new SecurityException("原任务还有未决操作，不能派发另一个媒体效果");}
         JSONObject capability=new JSONObject().put("kind","media").put("tool",name).put("configurationRevision",revision);
         if(args.optBoolean("observeUntilComplete"))capability.put("originalJobReadContinuation",new JSONObject().put("onlyConfirmedJob",true).put("maxReads",60).put("maxDurationMillis",300000).put("osBackgroundGuaranteed",false));
         if(name.equals("media_edit_image")){requireInputs(args,control);capability.put("inputArtifacts",media.imageEditInputReferencesForOwner(args,control)).put("uploadsOriginalBytes",true).put("overwritesOriginal",false);}
@@ -92,7 +94,14 @@ public final class MediaTaskCapabilities implements CapabilityPort {
             try{return media.handleForHost("editImage",payload,reading);}finally{control.removeCancelAction(cancel);reading.cancel();}
         }
         // MediaJobs durably records dispatch before its one POST and preserves uncertain effects.
-        return media.handleForHost(name.equals("media_generate_video")?"generateVideo":image?"generateImage":"synthesizeSpeech",payload,control);
+        JSONObject receipt=media.handleForHost(name.equals("media_generate_video")?"generateVideo":image?"generateImage":"synthesizeSpeech",payload,control);
+        if(!image&&OwnerWorkTask.isButlerSource(originalTask)&&!originalTask.has("ownerWorkTakeover")
+                &&!originalTask.has("ownerWorkPreparation")&&!originalTask.has("conversationPhoneHandoff")&&!originalTask.has("evaluation")
+                &&MediaModule.confirmedSpeechBookSave(receipt,task,run,operation,revision))
+            // Settle only this native tool's file save. The raw response status and business
+            // verification remain unchanged; Runner still owns the remaining turn and delivery.
+            return new JSONObject(receipt.toString()).put("ok",true).put("terminal",true).put("automaticReplayAllowed",false);
+        return receipt;
     }
     @Override public JSONObject prepareTurn(String query,int round,int steps,RunControl control)throws Exception {current(control);JSONObject result=existing.prepareTurn(query,round,steps,control);if(result==null)result=new JSONObject();JSONArray prepared=result.optJSONArray("tools");if(prepared==null)prepared=existing.tools();prepared=new JSONArray(prepared.toString());for(int i=0;i<definitions.length();i++)prepared.put(new JSONObject(definitions.getJSONObject(i).toString()));return result.put("tools",prepared);}
     @Override public void admitCapabilities(dev.pocketengine.core.CapabilitySnapshot snapshot,RunControl control)throws Exception{current(control);existing.admitCapabilities(snapshot,control);}

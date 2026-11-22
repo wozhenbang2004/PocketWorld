@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { Accordion, AccordionItem, Button, SelectField } from './forms-library';
 import { bridge } from './bridge';
+import type { ProjectViteSavedArchive } from './FirstNodeWebOutput';
 import { packagePreviewChoices, projectPackageTaskIdentity, type PackagePreviewChoices } from './project-preview';
 
 const READ='projects.savedBuildWeb.read';
@@ -48,8 +49,9 @@ function page(value:unknown,project:string,selected:string,cursor:string):Shelf 
 }
 
 /** Exact local receipts only. Opening one listed row re-enters B4; visiting the shelf reads no webpage body. */
-export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: {
+export function ProjectSavedBuildWeb({project,active,canPreview,openWork,openArchive,show}: {
   project:string;active:boolean;canPreview:boolean;openWork?:(work:SavedWebWork,restoreShelf:()=>boolean)=>void;
+  openArchive?:(archive:ProjectViteSavedArchive,sameRow:()=>boolean,restoreShelf:()=>boolean)=>void;
   show:(choices:PackagePreviewChoices,stillCurrent:()=>boolean,visit:SavedWebShelfVisit)=>boolean;
 }) {
   const [expanded,expand]=useState(false),[shelf,setShelf]=useState<Shelf|null>(null),[copy,setCopy]=useState('');
@@ -154,6 +156,13 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
     const sameShelf=()=>original()&&expandedRef.current&&current.current.copy===work.checkoutId&&containsOriginal();
     if(sameShelf())openWork?.(work,shelfFocus(trigger,sameShelf));
   };
+  const openShelfArchive=(picked:Version,trigger:HTMLButtonElement)=>{
+    const original=owner();
+    const sameRow=()=>expandedRef.current&&current.current.copy===picked.checkoutId&&
+      current.current.selection===selection&&current.current.shelf?.items.includes(picked)===true;
+    if(!current.current.active||request.current||picked.directLocalWork!==true||!matches(picked)||!sameRow()||!original())return;
+    openArchive?.(picked,sameRow,shelfFocus(trigger,()=>original()&&sameRow()));
+  };
   const open=(picked:Version,trigger:HTMLButtonElement)=>{
     if(picked.directLocalWork===true||!canPreview||!matches(picked)||picked.checkoutId!==shelf?.checkoutId||!shelf.items.includes(picked))return;
     const originalShelf=owner();
@@ -213,10 +222,12 @@ export function ProjectSavedBuildWeb({project,active,canPreview,openWork,show}: 
           <strong>{version}</strong> <time dateTime={savedAt.toISOString()}>{when}</time>
           {selection&&(v.epoch!==selection.epoch||v.runId!==selection.runId)&&<p className="pw-field-hint">{v.epoch<selection.epoch?'较早轮次保存的网页':'另一轮保存的网页'}，不是进入时所选轮次的结果。</p>}
           <p className="pw-field-hint">{v.directLocalWork===true?'本机构建 · ':null}源码 {v.sourceDigest.slice(0,10)} · 固定包 {v.archiveSha256.slice(0,10)}</p>
-          <div className="pw-form-actions">{v.directLocalWork===true?
-            openWork&&<Button variant="secondary" size="small" aria-label={`查看原工作，${version}，${when}`}
+          <div className="pw-form-actions">{v.directLocalWork===true?<>
+            {openArchive&&<Button variant="secondary" size="small" aria-label={`${action}，${version}，${when}`}
+              disabled={!!busy||!active} onClick={event=>openShelfArchive(v,event.currentTarget)}>{action}</Button>}
+            {openWork&&<Button variant={openArchive?'ghost':'secondary'} size="small" aria-label={`查看原工作，${version}，${when}`}
               disabled={versionBusy||!active} onClick={event=>openShelfWork(v,event.currentTarget,
-                ()=>current.current.selection===selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>:<>
+                ()=>current.current.selection===selection&&current.current.shelf?.items.includes(v)===true)}>查看原工作</Button>}</>:<>
               <Button variant="secondary" size="small" aria-label={`${action}，${version}，${when}`}
                 disabled={!canPreview||versionBusy||!active} onClick={event=>open(v,event.currentTarget)}>{action}</Button>
               {!selection&&openWork&&<Button variant="ghost" size="small" disabled={versionBusy||!active} onClick={event=>openShelfWork(v,event.currentTarget,

@@ -27,7 +27,13 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type SavedTarget = PackagePreviewTarget & {savedBuildWeb: NonNullable<PackagePreviewTarget['savedBuildWeb']>};
 type SaveIdentity = {buildOperationId: string; operationId: string; sourceDigest: string; archiveSha256: string};
 export type ProjectViteResultTarget = NonNullable<ReturnType<typeof originalDirectViteResult>>;
-export type ProjectVitePreviewArrival = { take: (target:ProjectViteResultTarget)=>boolean };
+export type ProjectViteSavedArchive = Omit<ProjectViteResultTarget,'buildOperationId'> & {
+  operationId:string; artifactId:string; archiveSha256:string; archiveBytes:number;
+};
+export type ProjectVitePreviewArrival = {
+  take: (target:ProjectViteResultTarget)=>boolean;
+  saved?: {archive:ProjectViteSavedArchive; returnToShelf:()=>void};
+};
 type DirectVite = ProjectViteResultTarget;
 export function sameProjectViteResult(a:ProjectViteResultTarget,b:ProjectViteResultTarget) {
   return a.taskId===b.taskId&&a.runId===b.runId&&a.epoch===b.epoch&&a.buildOperationId===b.buildOperationId&&
@@ -61,7 +67,7 @@ function currentDirectVite(target:DirectVite,ownerWindow:string) {
 }
 
 type LocalWebSource = {kind:'saved';target:SavedTarget}|{kind:'build';target:DirectVite};
-type LocalWebVisit = {source:LocalWebSource; ack?:ProjectPreviewState; published:boolean; dismissed:boolean; closing:boolean};
+type LocalWebVisit = {source:LocalWebSource; ack?:ProjectPreviewState; published:boolean; dismissed:boolean; closing:boolean; returnToShelf?:()=>void};
 
 function localWorkView(value:unknown,visit:LocalWebVisit) {
   const {source,ack}=visit;
@@ -108,6 +114,7 @@ export function DirectViteWebOutput({target,ownerWindow,previewArrival}:{target:
       if(!accepts(original))return;
       if(value?.closed!==true||value.sessionId!==sessionId)throw Error('无法核对原预览是否关闭。');
       finish(original);
+      original.returnToShelf?.();
     }).catch(()=>{
       if(!accepts(original))return;
       original.closing=false;
@@ -119,10 +126,10 @@ export function DirectViteWebOutput({target,ownerWindow,previewArrival}:{target:
   };
   const dismiss=()=>{if(visit.current)close(visit.current);};
   useLayoutEffect(()=>dialog?registerOverlayBack(dismiss):undefined,[dialog,ownerWindow]);
-  const show=(source:LocalWebSource)=>{
+  const show=(source:LocalWebSource,returnToShelf?:()=>void)=>{
     const action=source.kind==='build'?previewBuild:localOpen;
     if(visit.current||!current()||!canOpenLocal(action))return;
-    const original:LocalWebVisit={source,published:false,dismissed:false,closing:false};
+    const original:LocalWebVisit={source,published:false,dismissed:false,closing:false,returnToShelf};
     const args=source.kind==='build'?{taskId:source.target.taskId,runId:source.target.runId,epoch:source.target.epoch,buildOperationId:source.target.buildOperationId}:
       {taskId:source.target.taskId,operationId:source.target.operationId,entryPath:'dist/index.html'};
     visit.current=original;setOpened(null);setDialog(true);setBusy(true);setError('');
@@ -146,11 +153,11 @@ export function DirectViteWebOutput({target,ownerWindow,previewArrival}:{target:
       finish(original);
     });
   };
-  const open=(value:PackagePreviewTarget)=>{
+  const open=(value:PackagePreviewTarget,returnToShelf?:()=>void)=>{
     const saved=value.savedBuildWeb;
     if(!saved||value.taskId!==target.taskId||saved.runId!==target.runId||saved.epoch!==target.epoch||saved.projectId!==target.projectId||
       saved.checkoutId!==target.checkoutId||saved.sourceDigest!==target.sourceDigest||saved.buildOperationId!==target.buildOperationId)return;
-    show({kind:'saved',target:{...value,savedBuildWeb:saved}});
+    show({kind:'saved',target:{...value,savedBuildWeb:saved}},returnToShelf);
   };
   const shown=visit.current?.source,temporary=shown?.kind==='build';
   const viewport=useProjectPreviewViewport(dialog,opened?.sessionId||'',busy||!current(),supports,ownerWindow,'.pw-settings-dialog-content');
@@ -160,7 +167,7 @@ export function DirectViteWebOutput({target,ownerWindow,previewArrival}:{target:
       onPreviewBuild={canOpenLocal(previewBuild)?()=>show({kind:'build',target}):undefined} previewBusy={busy||dialog}
       previewArrival={previewArrival}/>
     {!dialog&&error&&<p className="pw-error" role="alert">{error}</p>}
-    <SettingsDialog isOpen={dialog} title={temporary?'本次构建预览':'固定网页'} closeLabel="返回原工作" onClose={dismiss}>
+    <SettingsDialog isOpen={dialog} title={temporary?'本次构建预览':'固定网页'} closeLabel={visit.current?.returnToShelf?'返回网页版本列表':'返回原工作'} onClose={dismiss}>
       <section className="pw-preview-pane pw-original-local-web" aria-label={temporary?'本次构建的临时网页预览':'原工作保存的固定网页'} aria-busy={busy||!opened?.ready&&!opened?.error}>
         <p className="pw-reading-note">{temporary?'本机临时查看，尚未固定保存。返回原工作后可另行核对保存。':'查看这次工作已保存的版本，不重新构建或切换对话。'}</p>
         <div ref={viewport} className="pw-preview-viewport" aria-label="原生隔离预览画面" data-preview-session={opened?.sessionId}>
@@ -230,7 +237,7 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
   target: BuildPosition; ownerWindow: string; hideIneligible?: boolean; checkBuildAfterFailure?: boolean; beforeGoalAcceptance?: boolean;
   directVite?: DirectVite; onPreviewBuild?: ()=>void; previewBusy?: boolean; previewArrival?:ProjectVitePreviewArrival;
   buildWebGap?: OriginalBuildWebGap; canEditBuildCopy?: boolean; listedOpenKey?: string;
-  open?: (p: PackagePreviewTarget)=>void; onSaved: (operationId: string, sha256: string) => void}) {
+  open?: (p: PackagePreviewTarget,returnToShelf?:()=>void)=>void; onSaved: (operationId: string, sha256: string) => void}) {
   const [fact, setFact] = useState<Fact|null>(null);
   const [busy, setBusy] = useState('');
   const [failure, setFailure] = useState('');
@@ -339,10 +346,20 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
   const previewReady=directVite&&fact?.eligible===true&&fact.state==='ready'&&fact.sourceDigest===directVite.sourceDigest&&
     fact.buildOperationId===directVite.buildOperationId&&!saveUnconfirmed&&!failure?onPreviewBuild:undefined;
   useEffect(()=>{
-    // Continue only the source-scoped Preview click, after the original Work's
+    // Continue only the explicit project Preview or archive click, after the original Work's
     // own native output read. A failure or unresolved save consumes the intent.
     if(!previewArrival||!directVite||!visible||!available()||busy||previewBusy||flight.current||
        !previewArrival.take(directVite))return;
+    if(previewArrival.saved){
+      // The selected shelf archive and the Work's confirmed saved version must
+      // agree. A merely ready build is not a replacement for these saved bytes.
+      const {archive,returnToShelf}=previewArrival.saved;
+      if(savedTarget&&open&&!failure&&!saveUnconfirmed&&savedTarget.operationId===archive.operationId&&
+         savedTarget.savedBuildWeb.artifactId===archive.artifactId&&savedTarget.savedBuildWeb.artifactSha256===archive.archiveSha256&&
+         fact?.archiveBytes===archive.archiveBytes)open(savedTarget,returnToShelf);
+      else setFailure('未核对到所选的已保存网页，没有打开其他版本。');
+      return;
+    }
     if(previewReady)previewReady();
     else if(savedTarget&&open&&!failure&&!saveUnconfirmed)open(savedTarget);
   },[previewArrival,directVite,visible,busy,previewBusy,failure,fact,previewReady,savedTarget,open]);

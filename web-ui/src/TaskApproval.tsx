@@ -199,6 +199,10 @@ export function TaskApproval({approval,reviewTask,executionScope={},disabled,onD
  const oneTimeStart=rosterStart==='one_time';
  const plannedTeam=rosterStart?originalModelTeamStart(capability,args,oneTimeStart):null;
  const frozenTeam=object(capability.teamDefinition),frozenMembers=list(frozenTeam.members).map(object);
+ const initialLimits=object(view.initialSavedTeamLimits);
+ const showInitialLimits=plannedTeam?.savedClassic&&view.canApprove===true&&(initialLimits.rounds===1||initialLimits.rounds===2)&&
+   Number.isSafeInteger(initialLimits.modelRequests)&&initialLimits.modelRequests>0&&
+   Number.isSafeInteger(initialLimits.toolOperations)&&initialLimits.toolOperations>0;
  const deliverables=plannedTeam&&view.canApprove===true&&(plannedTeam.savedClassic||oneTimeStart&&frozenTeam.mode==='collaborate')
    ?firstTeamWorkDeliverables(reviewTask,approval):null;
  const affectedPhoneIds=Array.isArray(view.savedTeamPhoneScopeMemberIds)?view.savedTeamPhoneScopeMemberIds:[];
@@ -265,6 +269,14 @@ export function TaskApproval({approval,reviewTask,executionScope={},disabled,onD
   {plannedTeam&&<section className="pw-decision-section" aria-label="这次申请的成员与分工">
    <h5>这次由谁负责 · {plannedTeam.members.length} 名成员</h5>
    <p className="pw-decision-meta">{view.canApprove===true&&!disabled?'已读到原分工，等待你作决定。':'原分工可查看，目前不能提交决定。'}计划模型不代表成员已接单或已执行。</p>
+   {showInitialLimits&&<>
+    <dl className="pw-decision-facts pw-decision-budget-detail" aria-label="本次协作轮数与初始累计上限">
+     <div><dt>计划轮数</dt><dd>{initialLimits.rounds} 轮</dd></div>
+     <div><dt>模型请求上限</dt><dd>{initialLimits.modelRequests} 次</dd></div>
+     <div><dt>工具操作上限</dt><dd>{initialLimits.toolOperations} 次</dd></div>
+    </dl>
+    <p className="pw-decision-meta">这是方案的初始累计上限，含原工作的协调调用。原授权剩余较少时，实际可用量也更少。这里不估算费用。</p>
+   </>}
    <TeamStartRoster roster={plannedTeam}/>
    <p className="pw-decision-boundary">{plannedTeam.oneTime?'只批准这次模型分工。不保存为编组，不授予文件写入或设备操作。':'只批准这次分工，不修改已保存的编组。'}</p>
   </section>}

@@ -14,6 +14,7 @@ import dev.pocketengine.ui.executionPlanDefinition
 import dev.pocketengine.ui.executionStepPatch
 import dev.pocketengine.ui.objects
 import dev.pocketengine.store.TaskStore
+import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
@@ -146,11 +147,12 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
         require(input.has("date") || listOf("time", "zone", "laterOverlap").none { input.has(it) }) { "请填写完整开始日期与时间" }
         return if (input.has("date")) PocketWebFormTime.instant(input, now) else null
     }
+    private fun calendarView(at: Long, zone: ZoneId): JSONObject {
+        val local = Instant.ofEpochMilli(at).atZone(zone)
+        return JSONObject().put("local", local.toLocalDateTime().toString()).put("zone", local.zone.id).put("offset", local.offset.id)
+    }
     private fun withCalendar(review: JSONObject, input: JSONObject, at: Long?): JSONObject {
-        if (at != null) {
-            val local = Instant.ofEpochMilli(at).atZone(ZoneId.of(input.getString("zone")))
-            review.put("calendar", JSONObject().put("local", local.toLocalDateTime().toString()).put("zone", local.zone.id).put("offset", local.offset.id))
-        }
+        if (at != null) review.put("calendar", calendarView(at, ZoneId.of(input.getString("zone"))))
         return review
     }
     private fun ordinaryReminderPreview(checked: JSONObject): JSONObject? {
@@ -224,11 +226,39 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
             "plans.reviewCreate" -> {
                 fields(args, "goal", "delayMinutes", "steps", "date", "time", "zone", "laterOverlap")
                 check(snapshot.has("plans")) { "请先读取原计划工作区" }
-                val rows = args.getJSONArray("steps"); require(rows.length() in 1..50 && rows.objects().size == rows.length())
+                val rows = args.getJSONArray("steps"); val inputSteps = rows.objects()
+                require(rows.length() in 1..50 && inputSteps.size == rows.length())
                 val now = System.currentTimeMillis(); val at = calendarDueAt(args, now)
                 val delay = if (at == null) integer(args, "delayMinutes", 0, 525600).toString() else "0"
-                val plan = executionPlanDefinition(text(args, "goal", 4000), rows.objects().map { draft(it) }, delay, now, at)
-                deliver(withCalendar(review("create", JSONObject().put("plan", plan), plan), args, at), null)
+                val calendars = inputSteps.mapIndexed { index, row ->
+                    if (!row.has("earliestCalendar")) null else {
+                        require(index > 0) { "第 1 步使用目标的最早时间" }
+                        val calendar = row.getJSONObject("earliestCalendar")
+                        fields(calendar, "date", "time", "zone", "laterOverlap")
+                        PocketWebFormTime.instant(calendar, now) to ZoneId.of(calendar.getString("zone"))
+                    }
+                }
+                val stepDrafts = inputSteps.map { row -> draft(JSONObject(row.toString()).also { it.remove("earliestCalendar") }) }
+                val hasLaterTime = calendars.any { it != null }
+                val plan = executionPlanDefinition(text(args, "goal", 4000), stepDrafts, delay, now, at, if (hasLaterTime) calendars.map { it?.first } else null)
+                val response = withCalendar(review("create", JSONObject().put("plan", plan), plan), args, at)
+                if (hasLaterTime) {
+                    val timing = JSONArray()
+                    var zone = if (at == null) ZoneId.systemDefault() else ZoneId.of(args.getString("zone"))
+                    plan.getJSONArray("steps").objects().forEachIndexed { index, step ->
+                        calendars[index]?.second?.let { zone = it }
+                        val due = step.getLong("dueAt")
+                        val timeView = calendarView(due, zone).put("step", index).put("at", due)
+                            .put("source", if (index == 0) "goal" else if (calendars[index] != null) "step" else "previous")
+                        if (calendars[index] != null) {
+                            val chosen = inputSteps[index].getJSONObject("earliestCalendar")
+                            timeView.put("requestedZone", chosen.getString("zone")).put("laterOverlap", chosen.getBoolean("laterOverlap"))
+                        }
+                        timing.put(timeView)
+                    }
+                    response.put("stepCalendarReview", timing)
+                }
+                deliver(response, null)
             }
             "plans.reviewStep" -> {
                 fields(args, "viewHandle", "stepId", "draft", "delayMinutes", "timingEdited", "date", "time", "zone", "laterOverlap")

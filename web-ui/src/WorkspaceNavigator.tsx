@@ -23,10 +23,16 @@ type Props = {
 };
 
 const first = ['butler', 'tasks', 'artifacts', 'remoteInbox', 'projects', 'devices'];
-const directoryGroups: { name: string; keys: readonly string[] }[] = [
-  { name: '跟进与协作', keys: ['automation', 'teams'] },
+const followUpGroup = { name: '跟进与协作', keys: ['automation', 'teams'] };
+const auxiliaryGroups = [
   { name: '我的资料', keys: ['memory', 'media'] },
   { name: '工具与设置', keys: ['capabilities', 'model-settings', 'setup', 'developer-logs'] },
+];
+const directoryGroups = [followUpGroup, ...auxiliaryGroups];
+const workspaceGroups = [
+  { name: '日常工作', keys: ['tasks', 'projects', 'artifacts', 'devices', 'butler'] },
+  { ...followUpGroup, keys: ['remoteInbox', ...followUpGroup.keys] },
+  ...auxiliaryGroups,
 ];
 const terms: Record<string, string> = {
   butler: '办事 交办 聊天 管家', tasks: '恢复 任务 待办 跟进 中断 工作', artifacts: '文件 交付 下载 成果', projects: '项目 工程 编程',
@@ -49,18 +55,26 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
   profileName, avatar, canProfile, openUnread}: Props) {
   const face: Face = searchOpen ? 'records' : directoryOpen ? 'directory' : 'home';
   const mini = compact && face === 'home';
+  const chatFirst = !!conversationFirst && !desktop && recent.length > 0;
+  const homePosition = chatFirst ? 'conversationHomeY' : 'homeY';
   const scroll = useRef<HTMLDivElement>(null), directoryButton = useRef<HTMLButtonElement>(null), back = useRef<HTMLButtonElement>(null);
   const priorFace = useRef<Face>(face);
   const recentRest = useId();
-  const [query, setQuery] = useState(memory.query || ''), [showPinned, setShowPinned] = useState(!!memory.showPinned);
+  const [directoryQuery, setDirectoryQuery] = useState(memory.query || ''), [workspaceQuery, setWorkspaceQuery] = useState('');
+  const query = chatFirst ? workspaceQuery : directoryQuery;
+  const [showPinned, setShowPinned] = useState(!!memory.showPinned);
   const [showOngoing, setShowOngoing] = useState(!!memory.showOngoing);
   const [showRecent, setShowRecent] = useState(!!memory.showRecent);
   const [badAvatar, setBadAvatar] = useState<string>();
   const index = useMemo(() => new Map(items.map(i => [i.key, i])), [items]);
   const home = first.flatMap(key => { const item = index.get(key); return item ? [{ ...withoutUnreadBadge(item), label: names[key] || item.label, group: '日常工作' }] : []; });
-  const directory: WorkNavItem[] = [], used = new Set([...first, 'settings']);
-  for (const group of directoryGroups) for (const key of group.keys) {
-    used.add(key); const item = index.get(key); if (item) directory.push({ ...item, group: group.name });
+  const directory: WorkNavItem[] = [], used = new Set(chatFirst ? ['settings'] : [...first, 'settings']);
+  for (const group of chatFirst ? workspaceGroups : directoryGroups) for (const key of group.keys) {
+    used.add(key);
+    const item = index.get(key);
+    if (item) directory.push(chatFirst
+      ? { ...withoutUnreadBadge(item), label: names[key] || item.label, group: group.name }
+      : { ...item, group: group.name });
   }
   // New product routes must not silently vanish from the drawer.
   for (const item of items) if (!used.has(item.key)) directory.push({ ...item, group: item.group || '其他功能' });
@@ -76,15 +90,22 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
   const ongoing = recent.filter(activity).sort((a, b) => (activity(b)?.priority || 0) - (activity(a)?.priority || 0));
   const other = recent.filter(c => !activity(c));
   const pinned = other.filter(c => Number(c.pinOrder) > 0), unpinned = other.filter(c => !(Number(c.pinOrder) > 0));
-  const chatFirst = !!conversationFirst && !desktop && recent.length > 0;
-  const homePosition = chatFirst ? 'conversationHomeY' : 'homeY';
-  const remember = () => { if (scroll.current && face !== 'records') memory[face === 'home' ? homePosition : 'directoryY'] = scroll.current.scrollTop; };
+  const remember = () => {
+    if (!scroll.current) return;
+    if (face === 'home') memory[homePosition] = scroll.current.scrollTop;
+    else if (face === 'directory' && !chatFirst) memory.directoryY = scroll.current.scrollTop;
+  };
   const enter = (to: 'records' | 'directory') => {
-    remember(); if (to === 'directory') setDirectoryOpen(true); else openSearch();
+    remember();
+    if (to === 'directory') {
+      if (chatFirst) setWorkspaceQuery('');
+      setDirectoryOpen(true);
+    } else openSearch();
   };
   useLayoutEffect(() => {
     const before = priorFace.current; priorFace.current = face;
-    if (scroll.current) scroll.current.scrollTop = face === 'records' ? 0 : memory[face === 'home' ? homePosition : 'directoryY'] || 0;
+    if (scroll.current) scroll.current.scrollTop = face === 'home' ? memory[homePosition] || 0
+      : face === 'directory' && !chatFirst ? memory.directoryY || 0 : 0;
     if (before === face) return;
     if (face === 'home') {
       // The original node may have unmounted with the previous drawer face.
@@ -92,9 +113,10 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
       source?.focus({ preventScroll: true });
     } else if (face === 'directory') back.current?.focus({ preventScroll: true });
     // WorkSearch owns its own focus and input method while open.
-  }, [face, homePosition, memory]);
+  }, [face, homePosition, chatFirst, memory]);
   const changeQuery = (value: string) => {
-    setQuery(value); memory.query = value; memory.directoryY = 0;
+    if (chatFirst) setWorkspaceQuery(value);
+    else { setDirectoryQuery(value); memory.query = value; memory.directoryY = 0; }
     if (scroll.current) scroll.current.scrollTop = 0;
   };
   const choose = (key: string) => { remember(); navigate(key); };
@@ -108,7 +130,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
       {organizeConversation && <IconButton icon={IconMore} aria-label={'整理对话：' + title} onClick={() => organizeConversation(c.id)}/>}
     </div>;
   })}</div>;
-  const title = face === 'records' ? '搜索记录' : face === 'directory' ? '全部功能' : 'PocketWorld';
+  const title = face === 'records' ? '搜索记录' : face === 'directory' ? (chatFirst ? '工作区' : '全部功能') : 'PocketWorld';
   const profile = profileName || '我的';
   const workRoutes = <Fragment key="work-routes">
     <WorkSidebar items={home} selected={selected} onNavigate={choose} label="主要工作区" compact={mini} hideGroupLabels/>
@@ -149,6 +171,8 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
     <header className={'pw-drawer-header pw-owner-nav-header' + (face !== 'home' ? ' pw-search-header' : '')} data-nav-face={face}>
       {face !== 'home' && <IconButton ref={back} icon={IconArrowLeft} aria-label="返回导航首页" onClick={face === 'records' ? closeSearch : () => setDirectoryOpen(false)}/>}
       {desktop ? <h2>{title}</h2> : <Drawer.Title>{title}</Drawer.Title>}
+      {chatFirst && face === 'home' && <Button ref={directoryButton} variant="ghost" size="small" className="pw-owner-workspaces"
+        leadingIcon={IconGrid} onClick={() => enter('directory')}>工作区</Button>}
       {desktop && face === 'home' && <IconButton icon={mini ? IconSidebarOpen : IconSidebarClose} aria-label={mini ? '展开导航' : '收起导航'} aria-expanded={!mini} onClick={onToggleCompact}/>}
       {!desktop && <><Drawer.Description className="pw-sr-only" id="pw-work-description">交办事情、找到原工作与成果，或前往其他功能。</Drawer.Description>
         <Drawer.Close asChild><IconButton icon={IconClose} aria-label="关闭导航"/></Drawer.Close></>}
@@ -166,7 +190,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
             aria-label="搜索工作、对话、成果与项目" title="搜索记录" onClick={() => enter('records')}>搜索记录</Button>
           {newConversation && <IconButton icon={IconNewChat} aria-label="新对话" title="新对话" disabled={newPending} onClick={() => { remember(); newConversation(); }}/>}
         </div>
-        {chatFirst ? [resumeFollowUp, conversations, workRoutes] : [workRoutes, resumeFollowUp, conversations]}
+        {chatFirst ? [resumeFollowUp, conversations] : [workRoutes, resumeFollowUp, conversations]}
       </>}
     </div>
     {face === 'home' && <footer className="pw-navigation-footer pw-owner-nav-footer" data-mini={mini || undefined}><div className="pw-navigation-account">

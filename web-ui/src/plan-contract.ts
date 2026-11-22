@@ -2,7 +2,7 @@ import { calendarTimeAt, validCalendarTime, type CalendarTime } from './calendar
 type Data = Record<string, any>;
 export type PlanTimingDraft = CalendarTime & { scheduleMode: 'now' | 'calendar' | 'legacy'; delay: string; timingEdited: boolean };
 export const planTimingDraft = (at?: number): PlanTimingDraft => ({ ...calendarTimeAt(at || Date.now() + 3600000), scheduleMode: at ? 'calendar' : 'now', delay: '0', timingEdited: false });
-export type PlanStepDraft = { goal: string; executor: string; projectId: string; path: string; heading: string; minimumBytes: string; dependencies: Array<{ step: number; outcome: string }>; remoteWaitIndex: string; businessWaitIndex: string };
+export type PlanStepDraft = { goal: string; executor: string; projectId: string; path: string; heading: string; minimumBytes: string; dependencies: Array<{ step: number; outcome: string }>; remoteWaitIndex: string; businessWaitIndex: string; earliestCalendar?: CalendarTime };
 export const newPlanStep = (dependencies: PlanStepDraft['dependencies'] = []): PlanStepDraft => ({ goal: '', executor: 'phone', projectId: '', path: '', heading: '', minimumBytes: '16', dependencies, remoteWaitIndex: '-1', businessWaitIndex: '-1' });
 function integer(value: string, min: number, max: number, label: string): number { const n = Number(value); if (value.trim() === '' || !Number.isSafeInteger(n) || n < min || n > max) throw new Error(label); return n; }
 export function planStepInput(draft: PlanStepDraft, index: number, sources: Data = {}): Data {
@@ -18,7 +18,7 @@ export function planStepInput(draft: PlanStepDraft, index: number, sources: Data
     if (!original || typeof original !== 'object') throw new Error('原前置来源已不可核对，没有换成其它任务。');
     return structuredClone(original);
   };
-  const { remoteWaitIndex, businessWaitIndex, ...input } = draft;
+  const { remoteWaitIndex, businessWaitIndex, earliestCalendar: _earliestCalendar, ...input } = draft;
   return { ...input, minimumBytes: integer(draft.minimumBytes, 1, 1000000, '文件最小大小应为 1–1000000 字节。'), remoteWait: reference(remoteWaitIndex, 'remoteWaitCandidates'), businessWait: reference(businessWaitIndex, 'businessWaitCandidates'), dependencies: draft.dependencies.map(ref => ({ ...ref })) };
 }
 export function planTimingInput(timing: PlanTimingDraft): Data {
@@ -30,7 +30,13 @@ export function planTimingInput(timing: PlanTimingDraft): Data {
 export function planCreateInput(goal: string, timing: PlanTimingDraft | string, steps: PlanStepDraft[], sources: Data = {}): Data {
   if (!goal.trim() || goal.length > 4000 || steps.length < 1 || steps.length > 50) throw new Error('填写完整目标，并保留 1–50 个步骤。');
   if (steps.some(step => step.remoteWaitIndex === '-2' || step.businessWaitIndex === '-2')) throw new Error('新目标必须明确选择现有来源。');
-  return { goal, ...(typeof timing === 'string' ? { delayMinutes: integer(timing, 0, 525600, '开始时间应为 0–525600 分钟之后。') } : planTimingInput(timing)), steps: steps.map((step, index) => planStepInput(step, index, sources)) };
+  return { goal, ...(typeof timing === 'string' ? { delayMinutes: integer(timing, 0, 525600, '开始时间应为 0–525600 分钟之后。') } : planTimingInput(timing)), steps: steps.map((step, index) => {
+    const input = planStepInput(step, index, sources), calendar = step.earliestCalendar;
+    if (calendar === undefined) return input;
+    if (!index || !calendar || typeof calendar.date !== 'string' || typeof calendar.time !== 'string' || typeof calendar.zone !== 'string' ||
+        typeof calendar.laterOverlap !== 'boolean' || !validCalendarTime(calendar)) throw new Error(`请核对第 ${index + 1} 步的日期、时间与时区。`);
+    return { ...input, earliestCalendar: { date: calendar.date, time: calendar.time, zone: calendar.zone, laterOverlap: calendar.laterOverlap } };
+  }) };
 }
 export function planStepDraft(plan: Data, step: Data, snapshot: Data): PlanStepDraft {
   const rows: Data[] = plan.steps || [], index = rows.findIndex(row => row.id === step.id);
@@ -50,6 +56,35 @@ export function planStepDraft(plan: Data, step: Data, snapshot: Data): PlanStepD
 export function planMutationReceipt(value: Data, command: string): Data {
   if (value?.confirmed !== true || value.command !== command || value.result?.command !== command || !Array.isArray(value.snapshot?.plans)) throw new Error('尚未取得这次计划操作的完整原生回执，请核对原目标。');
   return value;
+}
+type ReviewedStepTime = { step: number; at: number; local: string; zone: string; offset: string; source: 'goal' | 'step' | 'previous' };
+/** The preview must describe the instants in the frozen native create input, not dates parsed in Web. */
+export function planStepCalendarReview(review: Data | null, draft: PlanStepDraft[]): ReviewedStepTime[] | null {
+  const plan = review?.plan, saved = review?.input?.plan, dates = review?.stepCalendarReview;
+  if (review?.command !== 'create' || !Array.isArray(dates) || dates.length !== draft.length || !dates.length || dates.length > 50 ||
+      !Array.isArray(plan?.steps) || !Array.isArray(saved?.steps) || plan.steps.length !== dates.length || saved.steps.length !== dates.length) return null;
+  for (let index = 0; index < dates.length; index++) {
+    const row = dates[index], calendar = draft[index]?.earliestCalendar;
+    const source = index === 0 ? 'goal' : calendar ? 'step' : 'previous';
+    if (row?.step !== index || row.source !== source || !Number.isSafeInteger(row.at) || row.at <= 0 || row.at !== plan.steps[index]?.dueAt || row.at !== saved.steps[index]?.dueAt ||
+        typeof row.local !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(row.local) ||
+        typeof row.zone !== 'string' || !row.zone || row.zone.length > 80 || typeof row.offset !== 'string' || !/^(?:Z|[+-]\d{2}:\d{2}(?::\d{2})?)$/.test(row.offset)) return null;
+    if (source === 'step' && calendar && (row.requestedZone !== calendar.zone || row.laterOverlap !== calendar.laterOverlap ||
+        row.local !== calendar.date + 'T' + calendar.time)) return null;
+    if (index > 0 && (row.at < dates[index - 1].at || source === 'previous' && (row.at !== dates[index - 1].at || row.zone !== dates[index - 1].zone))) return null;
+  }
+  return dates as ReviewedStepTime[];
+}
+export function planStepCalendarSaved(receipt: Data, timeline: ReviewedStepTime[]): boolean {
+  const saved = receipt.result?.plan, shown = receipt.reading?.plan;
+  if (!saved?.id || saved.id !== shown?.id || saved.revision !== 1 || shown.revision !== saved.revision ||
+      saved.ownerId !== 'owner' || saved.spaceId !== 'private' || saved.execution != null || saved.executionAuthorized !== false ||
+      !Array.isArray(saved.steps) || !Array.isArray(shown.steps) || saved.steps.length !== timeline.length || shown.steps.length !== timeline.length) return false;
+  return timeline.every(({ step, at }) => {
+    const stored = saved.steps[step], displayed = shown.steps[step];
+    return typeof stored?.id === 'string' && !!stored.id && stored.planId === saved.id && stored.planIndex === step && stored.dueAt === at &&
+      stored.id === displayed?.id && displayed.dueAt === at;
+  });
 }
 const sameReminderSchedule = (a: Data | undefined, b: Data | undefined) => !!a && !!b &&
   Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(key => Object.hasOwn(b, key) && JSON.stringify(a[key]) === JSON.stringify(b[key]));

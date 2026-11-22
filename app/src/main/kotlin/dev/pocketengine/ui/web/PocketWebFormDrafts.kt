@@ -31,7 +31,8 @@ internal class PocketWebFormDrafts(context: Context) {
             "device" to setOf("kind", "screenMode", "deviceId", "targetDeviceId", "profileId", "environmentId"),
             "production" to setOf("sourceMode", "sourceTaskId", "snapshotId", "packageId", "packageSha", "packageManifest", "wallSeconds", "outputBytes", "contributionBytes"),
             "quota" to setOf("dailyTasks", "memberDailyTasks", "dailyTokens", "maxTokensPerTask", "maxConcurrent", "dailyMedia", "memberDailyMedia", "maxMediaBytes"),
-            "steps" to setOf("goal", "executor", "projectId", "path", "heading", "minimumBytes", "dependencies"),
+            "steps" to setOf("goal", "executor", "projectId", "path", "heading", "minimumBytes", "dependencies", "earliestCalendar"),
+            "earliestCalendar" to setOf("date", "time", "zone", "laterOverlap"),
             "dependencies" to setOf("step", "outcome"),
             "compatibility" to setOf("enabled", "tokenField", "streamUsage", "toolWireShape", "schemaSubset", "maxTools", "maxRequestBytes", "cacheMode", "cacheSupport")
         )
@@ -124,7 +125,10 @@ internal class PocketWebFormDrafts(context: Context) {
     private fun validate(value: JSONObject, allowed: Set<String>, depth: Int) {
         require(depth <= 5 && value.keys().asSequence().all { it in allowed }) { "草稿包含权限、凭据或不支持的字段" }
         value.keys().asSequence().forEach { key ->
-            when (val item = value.get(key)) {
+            val item = value.get(key)
+            if (key == "earliestCalendar") require(item is JSONObject && item.length() == 4 && item.opt("laterOverlap") is Boolean &&
+                listOf("date", "time", "zone").all { item.opt(it) is String }) { "原步骤时间草稿不完整" }
+            when (item) {
                 is JSONObject -> validate(item, children[key] ?: error("草稿字段结构无效"), depth + 1)
                 is JSONArray -> {
                     require(item.length() <= 100) { "草稿列表过长" }

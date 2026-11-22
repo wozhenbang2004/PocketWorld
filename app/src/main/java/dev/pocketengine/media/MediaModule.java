@@ -258,6 +258,49 @@ public final class MediaModule implements EngineModule {
     private static String publicationDigest(JSONObject source)throws Exception{JSONObject semantic=new JSONObject(source.toString());semantic.remove("formatCheck");return MediaJobJournal.hash(semantic);}
     private static String outputRole(JSONObject source)throws Exception{return "provider_output_"+MediaJobJournal.hash(source.getString("artifactKey")).substring(0,16);}
     private static boolean nativePublication(JSONObject source){return source.optString("operationId").matches("[a-f0-9-]{36}")&&source.optString("taskId").matches("[a-f0-9-]{36}")&&source.optString("runId").matches("[a-f0-9-]{36}");}
+
+    /** Only the positive Book publication returned by this synchronous speech submission.
+     * No catalogue fallback, readback, provider call, or new playback/business proof. */
+    static boolean confirmedSpeechBookSave(JSONObject receipt,String task,String run,String operation,String revision) {
+        if(receipt==null||!"speech".equals(receipt.opt("kind"))||!"openai_compatible".equals(receipt.opt("provider"))
+                ||!"response_received".equals(receipt.opt("status"))||!"response_received".equals(receipt.opt("providerState"))
+                ||!"saved".equals(receipt.opt("resultStatus"))||!task.equals(receipt.opt("taskId"))||!run.equals(receipt.opt("runId"))
+                ||!operation.equals(receipt.opt("operationId"))||!operation.equals(receipt.opt("id"))
+                ||!revision.equals(receipt.opt("configurationRevision"))||!Boolean.TRUE.equals(receipt.opt("dispatched"))
+                ||!Boolean.TRUE.equals(receipt.opt("liveHostControl"))||!Boolean.TRUE.equals(receipt.opt("hostRunBound"))
+                ||receipt.has("knownOperation")||receipt.has("localWaitCancelled")||receipt.has("resultDescriptorConfirmed")
+                ||receipt.has("ok")||receipt.has("accepted")||receipt.has("terminal")
+                ||dev.pocketengine.core.ToolOutcome.hasUncertaintyEvidence(receipt))return false;
+        JSONArray files=receipt.optJSONArray("attachments");
+        if(files==null||files.length()!=1)return false;
+        JSONObject file=files.optJSONObject(0),alias=receipt.optJSONObject("attachment");
+        if(file==null||alias==null||!Boolean.TRUE.equals(file.opt("found"))||!Boolean.TRUE.equals(file.opt("originalPublication"))
+                ||!"owner".equals(file.opt("principalId"))||!"private".equals(file.opt("spaceId"))||file.has("groupSource")
+                ||file.optBoolean("outputSourceRetired")||!"audio/wav".equals(file.opt("mimeType"))
+                ||!("generated-"+operation+".wav").equals(file.opt("name")))return false;
+        Object length=file.opt("size"),id=file.opt("id"),sha=file.opt("sha256");
+        if(!(length instanceof Integer||length instanceof Long)||((Number)length).longValue()<44
+                ||((Number)length).longValue()>MediaTransport.MAX_MEDIA_BYTES||!(id instanceof String fileId)
+                ||!(sha instanceof String sha256)||!sha256.matches("[a-f0-9]{64}"))return false;
+        JSONObject source=file.optJSONObject("source"),publication=source==null?null:source.optJSONObject("nativePublication");
+        if(publication==null||!"generated_media".equals(source.opt("kind"))||source.has("groupSpaceId")
+                ||!"openai_compatible".equals(source.opt("provider"))||!"response".equals(source.opt("artifactKey"))
+                ||source.has("parentArtifact")||source.has("inputArtifacts")
+                ||!task.equals(source.opt("taskId"))||!run.equals(source.opt("runId"))||!operation.equals(source.opt("operationId"))
+                ||!revision.equals(source.opt("configurationRevision"))||!sha256.equals(source.opt("providerResponseSha256"))
+                ||!task.equals(publication.opt("taskId"))||!run.equals(publication.opt("runId"))
+                ||!operation.equals(publication.opt("operationId")))return false;
+        try{
+            // Speech is the original response bytes, not a separate URL/decoded payload.
+            // Re-use the exact producer's role/digest; the native marker itself is not input to the digest.
+            JSONObject origin=new JSONObject(source.toString());origin.remove("nativePublication");
+            String role=outputRole(origin),digest=publicationDigest(origin);
+            return role.equals(publication.opt("role"))&&digest.equals(publication.opt("planDigest"))
+                    &&AttachmentBook.isOriginalPublicationId(fileId,operation,role,task,run,digest)
+                    &&MediaJobJournal.hash(file).equals(MediaJobJournal.hash(alias));
+        }catch(Exception unproved){return false;}
+    }
+
     private JSONObject importArtifact(MediaTransport.Payload payload, JSONObject source, RunControl control) throws Exception {
         control.check();
         if (payload.mimeType.startsWith("image/")) {

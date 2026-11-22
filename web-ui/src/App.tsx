@@ -99,7 +99,7 @@ import {ComposerPreviewReferences} from './ComposerPreviewReferences';
 import {ProjectLocalSourceIntake,type PhoneImportFiles} from './ProjectLocalSourceIntake';
 import {ProjectGitIntake,type PublicGitDraft} from './ProjectGitIntake';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
-import {sameProjectViteResult,type ProjectVitePreviewArrival,type ProjectViteResultTarget} from './FirstNodeWebOutput';
+import {sameProjectViteResult,type ProjectVitePreviewArrival,type ProjectViteResultTarget,type ProjectViteSavedArchive} from './FirstNodeWebOutput';
 import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
@@ -267,7 +267,7 @@ type FileAttachmentPickerLaunch={requestId:string;cancelled:boolean;settled:bool
 type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'|'sourceMessage'|'ordinaryNewDraftVisit'>&{resume:number;launch:FileAttachmentPickerLaunch};
 type ReopenedAttachmentPicker=OrdinaryAttachmentPickerScope&{requestId:string};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number};vitePreview?:ProjectVitePreviewArrival};
-type ProjectVitePreviewOpen={result:ProjectViteResultTarget;owner:()=>boolean};
+type ProjectVitePreviewOpen=({result:ProjectViteResultTarget}|{archive:ProjectViteSavedArchive})&{owner:()=>boolean};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
 type ChatSearchContext={hit:WorkSearchItem;requestId:string;request:number;document:number;navigation:number;resume:number;
@@ -910,6 +910,7 @@ export default function App(){
  useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
  const projectTaskReturn=useRef<ProjectTaskReturn|null>(null);
+ const closeShelfWork=useRef<(origin:ProjectTaskReturn)=>void>(()=>{});
  const projectGitToolReturn=useRef<PublicGitDraft|null>(null);
  const homeReport=useRef<VerifiedHomeReport|null>(null);
  const homeWorkReturn=useRef<{taskId:string;report?:VerifiedHomeReport;focus:()=>boolean;returning?:true}|null>(null);
@@ -1515,6 +1516,10 @@ export default function App(){
   const project=projectTaskReturn.current;
   if(restoreButlerWork&&route==='projects'&&project?.focusShelf&&project.taskId===taskId)project.returning=true;
   releasePhoneNotice();homeReport.current=null;taskHistoryOrigin.current=null;taskReconciliationOrigin.current=null;rememberTaskPosition();invalidateContinuation();reviewWindow.current=null;reviewRequest.current++;openedTaskId.current=null;setTaskOpening(false);const closed=reportClose||comparison?Promise.resolve(true):can('tasks.close')?act('tasks.close').then(()=>true,()=>false):Promise.resolve(false);setTaskOpen(false);setFocusedOriginalDraft(null);setTaskLayer('overview');setWorkSupplementTarget(null);setReview(null);setReviewPending(false);setReviewSubmitted(false);setReviewReceipt('');closeQuestionAnswer();return closed;};if(guardTaskLeave(reportClose||comparison?()=>{}:()=>{void commit()}))return Promise.resolve(false);return commit();},[can,act,guardTaskLeave,rememberTaskPosition,invalidateContinuation,releasePhoneNotice,route,taskId,taskLayer,closeQuestionAnswer]);
+ closeShelfWork.current=origin=>{
+  if(route==='projects'&&projectSection==='work'&&taskOpen&&!taskOpening&&taskLayer==='overview'&&
+     taskId===origin.taskId&&projectTaskReturn.current===origin)void closeTask(true);
+ };
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
  const navigate=useCallback((requested:string,afterNavigate?:()=>void,options?:{keepOrigin?:boolean;taskClosed?:boolean;stillCurrent?:()=>boolean}):Promise<boolean>=>{
   if(options?.stillCurrent){if(!options.stillCurrent())return Promise.resolve(false)}else searchOpenRequest.current++;
@@ -2420,6 +2425,7 @@ export default function App(){
     !!expected&&(expected.runId!==noticeOrigin.runId||expected.epoch!==noticeOrigin.epoch));
   if(noticeOrigin&&!dropNotice&&!expected){expected={runId:noticeOrigin.runId,epoch:noticeOrigin.epoch};nativeWindowAlreadyOpen=false}
   const projectSource=route==='projects'&&projectTaskReturn.current?.taskId===id?projectTaskReturn.current:null;
+  const fromSavedProjectWeb=!!projectSource?.vitePreview?.saved;
   if(projectSource&&!nativeWindowAlreadyOpen)searchQuery??=projectSource.query||'';
   if(projectSource?.sourcePackageRun)expected=projectSource.sourcePackageRun;
   else if(projectSource?.expected){
@@ -2467,13 +2473,14 @@ export default function App(){
     Number(obj(bridge.getState().view).resumeRevision||0)!==window.resumeRevision||document.hidden);
    if(!current())return false;
    const args={id,requestNavigation:false,...origin,...(searchQuery===undefined?{}:{searchQuery}),...(projectSource&&!projectSource.sourcePackageRun?{expectedProjectId:projectSource.projectId,...(projectSource.checkoutId?{expectedCheckoutId:projectSource.checkoutId}:{})}:{}),...(expected?{expectedRunId:expected.runId,expectedEpoch:expected.epoch}:{})};
-   const opened=await (fromOwnerRequest||questionOrigin||reportSource?bridge.command<Json>('tasks.open',args):act('tasks.open',args,id));
+   const opened=await (fromOwnerRequest||questionOrigin||reportSource||fromSavedProjectWeb?
+    bridge.command<Json>('tasks.open',args):act('tasks.open',args,id));
    acknowledged=opened?.taskId===id&&opened.readOnly===true&&opened.executionAuthorized===false;
    if(questionOrigin)return acknowledged&&!!await awaitPickerProjection(current,()=>{
     const live=bridge.getState();
     return currentChatWorkVisit(questionOrigin,'work',live)?sameChatWorkRun(questionOrigin,live):undefined;
    });
-   if(reportSource)return acknowledged;
+   if(reportSource||fromSavedProjectWeb)return acknowledged;
    if(!ownerRequestSource)return true;
    return acknowledged&&!!await awaitPickerProjection(current,()=>currentOriginalRequestWork(ownerRequestSource,bridge.getState()));
   };
@@ -5261,22 +5268,30 @@ export default function App(){
  const openProjectWork=(id:string,entry:ProjectWorkEntry='overview',query='',checkoutId?:string,expected?:{runId:string;epoch:number},focusShelf?:()=>boolean,preview?:ProjectVitePreviewOpen)=>{
   const projectId=String(state.projectId||'');
   if(!projectId||bridge.getState().state.projectId!==projectId||bridge.getState().state.filePath)return;
-  if(preview&&(!preview.owner()||preview.result.projectId!==projectId||preview.result.checkoutId!==checkoutId||
-    preview.result.taskId!==id||preview.result.runId!==expected?.runId||preview.result.epoch!==expected?.epoch))return;
+  const archive=preview&&'archive' in preview?preview.archive:undefined;
+  const result=preview&&('result' in preview?preview.result:{...preview.archive,buildOperationId:preview.archive.taskId});
+  if(preview&&(!result||!preview.owner()||result.projectId!==projectId||result.checkoutId!==checkoutId||
+    result.taskId!==id||result.runId!==expected?.runId||result.epoch!==expected?.epoch||archive&&!focusShelf))return;
   const origin:ProjectTaskReturn={projectId,checkoutId,query,taskId:id,entry,focusOutcome:entry==='outcomes',expected,focusShelf};
   projectTaskReturn.current=origin;
   const navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch(),request=++searchOpenRequest.current;
   const current=()=>searchOpenRequest.current===request&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&
    !document.hidden&&bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath&&(!preview||preview.owner());
   let acknowledged:TaskReviewWindow|null=null;
-  if(preview){
-   const arrival:ProjectVitePreviewArrival={take:result=>{
+  if(preview&&result){
+   const sameWork=()=>{
     const native=obj(bridge.getState().view);
-    if(origin.vitePreview!==arrival||!acknowledged||acknowledgedWorkVisit.current!==acknowledged||reviewRequest.current!==acknowledged.request||
-       !current()||projectTaskReturn.current!==origin||openedTaskId.current!==id||native.taskId!==id||native.section!==null||
-       native.resumeRevision!==acknowledged.resumeRevision||!sameProjectViteResult(preview.result,result))return false;
-    delete origin.vitePreview;return true;
-   }};
+    return !!acknowledged&&acknowledgedWorkVisit.current===acknowledged&&reviewRequest.current===acknowledged.request&&
+      current()&&projectTaskReturn.current===origin&&openedTaskId.current===id&&native.taskId===id&&native.section===null&&
+      native.resumeRevision===acknowledged.resumeRevision;
+   };
+   const arrival:ProjectVitePreviewArrival={
+    take:actual=>{
+     if(origin.vitePreview!==arrival||!sameWork()||!sameProjectViteResult(result,actual))return false;
+     delete origin.vitePreview;return true;
+    },
+    saved:archive?{archive,returnToShelf:()=>{if(sameWork())closeShelfWork.current(origin)}}:undefined,
+   };
    origin.vitePreview=arrival;
   }
   openTask(id,entry==='outcomes'?'overview':entry,false,undefined,query,expected,current,undefined,expected?()=>{
@@ -8051,6 +8066,21 @@ export default function App(){
  const canReadCurrentWeb=['projects.development.read','projects.development.inspect','tasks.open','projects.firstWebOutput.read',
   'projects.firstWebOutput.review','projects.firstWebOutput.save','projects.firstWebOutput.previewBuild','projects.firstWebOutput.open',
   'projects.preview.viewport','projects.preview.close'].every(can);
+ const canOpenSavedLocalWeb=['tasks.open','tasks.close','projects.firstWebOutput.read','projects.firstWebOutput.review',
+  'projects.firstWebOutput.save','projects.firstWebOutput.open','projects.preview.viewport','projects.preview.close'].every(can);
+ const openSavedLocalWeb=(archive:ProjectViteSavedArchive,sameRow:()=>boolean,restoreShelf:()=>boolean)=>{
+  const initial=obj(bridge.getState().view),resume=initial.resumeRevision;
+  if(route!=='projects'||projectSection!=='work'||previewBlocked||taskOpening||!canOpenSavedLocalWeb||
+     !Number.isSafeInteger(resume)||initial.taskId!==null)return;
+  const owner=()=>{
+   const live=bridge.getState(),view=obj(live.view),state=live.state;
+   return sameRow()&&view.section===null&&view.resumeRevision===resume&&(view.taskId===null||view.taskId===archive.taskId)&&
+    state.projectId===archive.projectId&&!state.filePath&&!state.conversationReader&&!state.attachmentWorkspace?.open;
+  };
+  if(!owner())return;
+  if(projectScroll.current)projectDirectory.rememberScroll(projectScroll.current.scrollTop);
+  openProjectWork(archive.taskId,'outcomes','',archive.checkoutId,{runId:archive.runId,epoch:archive.epoch},restoreShelf,{archive,owner});
+ };
  const openCurrentProjectWeb=()=>{
   const projectId=currentProject?.id,doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current,initial=bridge.getState();
   const view=obj(initial.view),resume=view.resumeRevision,taskRequest=reviewRequest.current;
@@ -8313,6 +8343,7 @@ export default function App(){
         savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
           canPreview={can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&!packageOpening}
+          openArchive={canOpenSavedLocalWeb?openSavedLocalWeb:undefined}
           openWork={can('tasks.open')?({taskId,checkoutId,runId,epoch},restoreShelf)=>{
            if(projectScroll.current&&!projectPreview.expanded)projectDirectory.rememberScroll(projectScroll.current.scrollTop);
            openProjectWork(taskId,'outcomes','',checkoutId,{runId,epoch},restoreShelf);

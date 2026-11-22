@@ -73,13 +73,18 @@ internal fun executionStepPatch(plan: JSONObject, original: JSONObject, draft: E
 }
 
 /** A native editor drafts a definition; saving it cannot approve, start, or prove a result. */
-internal fun executionPlanDefinition(goal: String, steps: List<ExecutionStepDraft>, minutes: String, now: Long, dueAt: Long? = null): JSONObject {
+internal fun executionPlanDefinition(goal: String, steps: List<ExecutionStepDraft>, minutes: String, now: Long, dueAt: Long? = null, laterStepTimes: List<Long?>? = null): JSONObject {
     require(goal.trim().isNotEmpty() && goal.trim().length <= 4000) { "请填写 1–4000 字的完整目标" }
     require(steps.size in 1..50) { "目标需要 1–50 个步骤" }
     val delay = minutes.toLongOrNull(); require(delay != null && delay in 0..525600) { "开始时间应为 0–525600 分钟之后" }
     if (dueAt != null) require(dueAt >= now && dueAt <= Math.addExact(now, 366L * 86_400_000)) { "请选择未来一年内的开始时间" }
-    val due = dueAt ?: Math.addExact(now, delay * 60_000); val rows = JSONArray()
+    require(laterStepTimes == null || laterStepTimes.size == steps.size && laterStepTimes.first() == null) { "第 1 步使用目标的最早时间" }
+    var due = dueAt ?: Math.addExact(now, delay * 60_000); val rows = JSONArray()
     steps.forEachIndexed { index, draft ->
+        laterStepTimes?.get(index)?.let { next ->
+            require(next > now && next <= Math.addExact(now, 366L * 86_400_000) && next >= due) { "第 ${index + 1} 步的最早时间不能早于上一步，且须在未来一年内" }
+            due = next
+        }
         rows.put(executionStepDefinition(draft, index, due))
     }
     return JSONObject().put("kind", "explicit_user").put("title", goal.trim().lineSequence().first().take(200)).put("goal", goal.trim()).put("steps", rows)

@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import dev.pocketengine.features.teams.TeamCoordinator
 import dev.pocketengine.store.OwnerWorkTask
 import dev.pocketengine.ui.McpLocalProgramApprovalText
 import dev.pocketengine.ui.PocketWorldController
@@ -32,10 +33,8 @@ internal object PocketWebApprovals {
                 else controller.readTeamParentPlanApproval(task.id, id)
             } else null
             val row=project(approval, original?.getOrNull(), original?.exceptionOrNull()?.message, task)
-            if (approval.opt("tool") == "teams_start" && controller.webPrivateOwnerVisible()) savedTeamPhoneScopeMembers(task, approval)?.let {
-                // Existing review handles exclude this ID from positive decisions; refusal is still available.
-                row.getJSONObject("webReview").put("canApprove", false).put("savedTeamPhoneScopeMemberIds", it)
-            }
+            if (approval.opt("tool") == "teams_start" && controller.webPrivateOwnerVisible())
+                projectSavedTeamStart(task, approval, row.getJSONObject("webReview"))
             if(approval.optString("tool")=="team_integrate_file")runCatching {
                 check(controller.webPrivateOwnerVisible())
                 val window=controller.webWindowTicket();val run=task.raw.getString("runId");val epoch=task.raw.getInt("coordinatorEpoch")
@@ -81,52 +80,70 @@ internal object PocketWebApprovals {
         return JSONObject(approval.toString()).put("webReview", view)
     }
 
-    /** The saved Work start does not carry the per-member native approval used by startPhones.
-     * Use only the roster frozen on this pending approval, never the directory or device readiness. */
-    private fun savedTeamPhoneScopeMembers(task: UiTask, approval: JSONObject): JSONArray? {
+    /** Read only the roster frozen on this pending approval, never the directory or current settings. */
+    private fun projectSavedTeamStart(task: UiTask, approval: JSONObject, review: JSONObject) {
         val raw = task.raw
-        val run = raw.opt("runId") as? String ?: return null
-        val approvalId = approval.opt("id") as? String ?: return null
+        val run = raw.opt("runId") as? String ?: return
+        val approvalId = approval.opt("id") as? String ?: return
         // contextAvailable on these two native projections already verifies the private Work and its original source.
         if (!OwnerWorkTask.isOwnerWork(raw) || raw.opt("id") != task.id || raw.opt("contextAvailable") != true ||
             raw.opt("contextWithdrawn") == true || raw.opt("sourceCurrentReadRequired") == true ||
             run.isBlank() || (exactLong(raw, "coordinatorEpoch") ?: 0L) < 1L || !raw.isNull("origin") || !raw.isNull("parentTaskId") ||
             listOf("developmentContext", "teamAssignment", "workProfileRef", "workProfileIntent").any { !raw.isNull(it) } ||
             approvalId.isBlank() || approval.opt("runId") != run || approval.opt("state") != "pending" ||
-            !approval.isNull("researchStartOperationId") || !approval.isNull("policyDecision")) return null
+            !approval.isNull("researchStartOperationId") || !approval.isNull("policyDecision")) return
         when (raw.opt("taskProjection")) {
-            "detail_window" -> if (raw.opt("taskCoreReadLimited") != false) return null
+            "detail_window" -> if (raw.opt("taskCoreReadLimited") != false) return
             "approval_only" -> {
-                val read = raw.optJSONObject("capabilityApprovalRead") ?: return null
+                val read = raw.optJSONObject("capabilityApprovalRead") ?: return
                 if (read.opt("format") != "pocketworld.capability-approval-read.v1" ||
-                    read.opt("approvalComplete") != true || read.opt("approvalId") != approvalId) return null
+                    read.opt("approvalComplete") != true || read.opt("approvalId") != approvalId) return
             }
-            else -> return null
+            else -> return
         }
-        val args = approval.optJSONObject("arguments") ?: return null
-        val capability = approval.optJSONObject("capability") ?: return null
-        val definition = capability.optJSONObject("teamDefinition") ?: return null
-        val teamId = args.opt("teamId") as? String ?: return null
-        val goal = args.opt("goal") as? String ?: return null
+        val args = approval.optJSONObject("arguments") ?: return
+        val capability = approval.optJSONObject("capability") ?: return
+        val definition = capability.optJSONObject("teamDefinition") ?: return
+        val teamId = args.opt("teamId") as? String ?: return
+        val goal = args.opt("goal") as? String ?: return
         if (capability.opt("feature") != "teams" || capability.opt("command") != "start" || capability.length() != 3 ||
             args.keys().asSequence().any { it !in setOf("teamId", "goal", "rounds", "mode") } ||
             goal.isBlank() || goal.length > 8000 || teamId.isBlank() || definition.opt("id") != teamId ||
             definition.opt("mode") != "collaborate" || definition.opt("discussionFormat") != "classic" ||
-            definition.has("definitionKind") || definition.has("nativeWorkProfileModels")) return null
+            definition.has("definitionKind") || definition.has("nativeWorkProfileModels")) return
 
-        val members = definition.optJSONArray("members") ?: return null
-        val leader = definition.opt("leaderId") as? String ?: return null
-        if (members.length() !in 1..4) return null
+        val members = definition.optJSONArray("members") ?: return
+        val leader = definition.opt("leaderId") as? String ?: return
+        if (members.length() !in 1..4) return
         val ids = mutableSetOf<String>()
         val affected = JSONArray()
+        var ordinaryLocal = true
         for (i in 0 until members.length()) {
-            val member = members.optJSONObject(i) ?: return null
-            val id = member.opt("id") as? String ?: return null
-            val name = member.opt("name") as? String ?: return null
-            if (id.isBlank() || !ids.add(id) || name.isBlank() || name.length > 48) return null
+            val member = members.optJSONObject(i) ?: return
+            val id = member.opt("id") as? String ?: return
+            val name = member.opt("name") as? String ?: return
+            if (id.isBlank() || !ids.add(id) || name.isBlank() || name.length > 48) return
             if (member.opt("runner") == "phone_agent") affected.put(id)
+            ordinaryLocal = ordinaryLocal && member.opt("runner") == "model" && member.opt("device") == "phone" &&
+                !member.has("writeFiles") && !member.has("remoteProduction")
         }
-        return affected.takeIf { it.length() > 0 && leader in ids }
+        if (leader !in ids) return
+        if (affected.length() > 0) {
+            // This saved start lacks the separate per-member scope from startPhones. Refusal stays available.
+            review.put("canApprove", false).put("savedTeamPhoneScopeMemberIds", affected)
+            return
+        }
+        // Project only an initial plan in a complete first Work. No reading or estimating a live grant.
+        if (!ordinaryLocal || raw.opt("taskProjection") != "detail_window" || exactLong(raw, "coordinatorEpoch") != 1L ||
+            raw.opt("kind") != "assistant" || raw.opt("executionMode") != "capabilities" || raw.opt("cancelRequested") == true ||
+            !raw.isNull("ownerPhoneControl") || !raw.isNull("ownerDeviceWork") || !raw.isNull("teamReservationPool") ||
+            raw.opt("ownerWorkTeamsUnavailable") == true || raw.optJSONArray("ownerWorkTeams")?.length() != 0 ||
+            args.has("mode") && args.opt("mode") != "collaborate") return
+        val rounds = (if (args.has("rounds")) exactLong(args, "rounds") else 1L) ?: return // Saved starts default to one round.
+        if (rounds != 1L && rounds != 2L) return
+        val budget = TeamCoordinator.initialBudget(members.length(), rounds.toInt())
+        review.put("initialSavedTeamLimits", JSONObject().put("rounds", rounds)
+            .put("modelRequests", budget.getInt("callLimit")).put("toolOperations", budget.getInt("toolCallLimit")))
     }
 
     /** Positive decisions preserve the same explicit scope checks as the existing native UI. */
