@@ -21,12 +21,25 @@ import './conversation-history-window.css';
 type Json=Record<string,any>;
 type Position={index:number;offset:number;anchor:string;revision?:number};
 type DetachedPlace={scope:string;messageId:string;sourceRevision:number;offset:number};
+type LoadedFileIndex={identity:string;top:number};
 const readerScope=(page:Json|null|undefined)=>page?JSON.stringify([bridge.getDocumentEpoch(),page.window,page.conversation]):'';
 const exactRow=(page:Json|null|undefined,id:string,revision?:number):Json|null=>{
  const matches=Array.isArray(page?.messages)?page.messages.filter((row:Json)=>row.id===id):[];
  return matches.length===1&&(revision===undefined||matches[0].sourceRevision===revision)?matches[0]:null;
 };
 const readyPage=(page:Json|null|undefined):page is Json=>!!page&&!page.loading&&!page.error&&!page.limited;
+const loadedFileResult=(row:Json|null)=>{
+ const result=messageTaskResult(row);
+ return row?.role==='assistant'&&typeof row.id==='string'&&!!row.id&&Number.isSafeInteger(row.sourceRevision)&&
+  row.sourceRevision>0&&!row.phoneResult&&!row.originalHostFinal&&!row.hostGoalTaskId&&
+  result?.kind==='owner_work'&&result.status==='completed'&&result.noticeKind===null?result:null;
+};
+const loadedFileReplyLabel=(row:Json,result:TaskResult)=>{
+ const stamp=new Date(result.endedAt);
+ const date=Number.isFinite(stamp.getTime())?stamp.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'已完成的回复';
+ const text=typeof row.content==='string'?Array.from(row.content.slice(0,180).trim().replace(/\s+/gu,' ')):[];
+ return [date,text.length>42?text.slice(0,42).join('').trimEnd()+'…':text.join('')].filter(Boolean).join(' · ');
+};
 type HistorySource={target:HistoricalAnswerSource;trigger:HTMLButtonElement;top:number;generation:number};
 const sourceGeneration=()=>Number(bridge.getState().state.traceSourceRevision||0);
 const hasPublicSources=(row:Json)=>row.role==='assistant'&&typeof row.id==='string'&&!!row.id&&row.retainedSources===true&&
@@ -126,11 +139,56 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
  useEffect(()=>{const retire=()=>{if(document.hidden){detachedPlace.current=null;setQuoteVisit(null);setQuoteNote('');setFirstQuote(null);setHistorySource(null);setHistoryMemory(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
 
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
- const [resultNotice,setResultNotice]=useState<{window:number;messageId:string;revision:number;error?:string}|null>(null);
+ const [resultNotice,setResultNotice]=useState<{window:number;messageId:string;revision:number;error?:string;index?:LoadedFileIndex}|null>(null);
+ const [fileIndex,setFileIndex]=useState<LoadedFileIndex|null>(null);
+ const indexScroll=useRef<LoadedFileIndex|null>(null);
  const returnToInput=useRef<(ConversationHistoryTaskOrigin&{taskId:string;revision:number})|null>(null);
  const rows:Json[]=Array.isArray(shown.messages)?requestOnly?(page&&page.window===shown.window&&!page.error&&shown.messages.length===1&&
   shown.messages[0]?.role==='user'&&shown.messages[0].id===shown.workRequest.messageId&&shown.messages[0].sourceRevision===shown.workRequest.revision?shown.messages:[]):shown.messages:[];
  const workRequestNotice=requestOnly&&readyPage(page)&&rows.length===1&&typeof page?.notice==='string'?page.notice:null;
+ const fileIndexIdentity=()=>{
+  const native=bridge.getState(),owner=native.state,view=native.view as Json|undefined;
+  const current=live.current,reader=owner.conversationReader,composer=native.composer,phone=native.phoneDraft as Json|undefined;
+  if(document.hidden||!onOpenResultFiles||!activeDraft||!readyPage(current)||!readyPage(reader)||
+   current.workRequest||current.searchAnchor||current.originalReportMessageId!==null||
+   reader.workRequest||reader.searchAnchor||reader.originalReportMessageId!==null||readerScope(reader)!==scope||
+   readerScope(current)!==scope||!Number.isSafeInteger(reader.window)||reader.window<1||
+   reader.conversation!==owner.conversationId||reader.conversation!==activeDraft.conversation||
+   view?.section!==null||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision)||
+   !Number.isSafeInteger(owner.traceSourceRevision)||!native.capabilities.commands.includes('tasks.resultFiles')||
+   !native.capabilities.commands.includes('attachmentWorkspace.open')||
+   owner.filePath!==null||owner.queuedInputsPage!==null||owner.chatAttachmentPickerOpen!==false||
+   phone?.phone!==false||phone.channelOrigin!==false||composer?.ready!==true||
+   composer.key!=='conversation:'+reader.conversation||composer.key!==activeDraft.key||composer.epoch!==activeDraft.epoch)return '';
+  return JSON.stringify([scope,view.resumeRevision,owner.traceSourceRevision,composer.key,composer.epoch]);
+ };
+ const indexIdentity=fileIndexIdentity(), shownFileIndex=fileIndex?.identity===indexIdentity?fileIndex:null;
+ const indexedReplies=indexIdentity?rows.flatMap(message=>{
+  const result=loadedFileResult(message);
+  return result?[{message,result}]:[];
+ }).reverse():[];
+ const closeFileIndex=()=>{
+  const index=indexScroll.current;
+  setFileIndex(null);
+  if(!index)return;
+  requestAnimationFrame(()=>{
+   if(indexScroll.current!==index)return;
+   const node=scroll.current;
+   if(node&&fileIndexIdentity()===index.identity){
+    node.scrollTop=index.top;programScroll.current={scope,top:node.scrollTop};
+   }
+   indexScroll.current=null;
+  });
+ };
+ useEffect(()=>{
+  if(!fileIndex||shownFileIndex)return;
+  indexScroll.current=null;setFileIndex(null);
+ },[fileIndex,shownFileIndex]);
+ useEffect(()=>{
+  const retire=()=>{if(document.hidden){indexScroll.current=null;setFileIndex(null)}};
+  document.addEventListener('visibilitychange',retire);
+  return ()=>document.removeEventListener('visibilitychange',retire);
+ },[]);
  const marker=rows.map(row=>`${row.id}:${row.sourceRevision||0}`).join('|');
  const loadingInput=(id:string)=>pending&&inputNotice?.window===shown.window&&inputNotice?.messageId===id&&!inputNotice?.error;
  const shownRow=(messageId:string,revision?:number)=>{
@@ -159,7 +217,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   const row=exactRow(actual,place.messageId,place.sourceRevision);
   if(row)return {index:actual.messages.indexOf(row),messageId:place.messageId,sourceRevision:place.sourceRevision,offset:place.offset};
  };
- const restoreReaderRow=(original:Json,message:Json,trigger:HTMLButtonElement,box:HTMLElement)=>{
+ const restoreReaderRow=(original:Json,message:Json,trigger:HTMLButtonElement,box:HTMLElement,indexCurrent?:()=>boolean)=>{
   const ticket=readerScope(original),id=String(message.id),revision=Number(message.sourceRevision);
   const base=box.getBoundingClientRect().top,inset=trigger.getBoundingClientRect().top-base;
   const rowInset=(trigger.closest<HTMLElement>('[data-reader-id]')?.getBoundingClientRect().top??base)-base;
@@ -172,7 +230,9 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
     setQuoteNote('当前窗口还没有读到刚才那条原消息，未跳到其他位置。');
     return false;
    }
-   const focus=row.contains(trigger)&&!trigger.disabled?trigger:row;
+   if(indexCurrent&&(!indexCurrent()||!node.contains(trigger)||trigger.disabled||!trigger.getClientRects().length||
+    trigger.closest('[hidden],[inert],[aria-hidden="true"]')))return false;
+   const focus=indexCurrent||row.contains(trigger)&&!trigger.disabled?trigger:row;
    node.scrollTop+=focus.getBoundingClientRect().top-node.getBoundingClientRect().top-(focus===trigger?inset:rowInset);
    programScroll.current={scope:ticket,top:node.scrollTop};focus.focus({preventScroll:true});
    return true;
@@ -212,6 +272,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   catch{/* The original place can still be used locally, never substitute a different row. */}
  };
  const saveReading=()=>{
+  if(indexScroll.current)return;
   const prior=programScroll.current;programScroll.current=null;
   if(sending.current||prior?.scope===scope&&Math.abs((scroll.current?.scrollTop??0)-prior.top)<1)return;
   remember(true);if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>void persist(),180);
@@ -331,24 +392,33 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   const report=Array.from(scroll.current.querySelectorAll<HTMLElement>('[data-reader-id]')).find(row=>row.dataset.readerId===message);
   report?.focus({preventScroll:true});return !!report;
  };
- const openHistoryResultFiles=async(message:Json,result:TaskResult,trigger:HTMLButtonElement)=>{
+ const openHistoryResultFiles=async(message:Json,result:TaskResult,trigger:HTMLButtonElement,index?:LoadedFileIndex)=>{
   const original=live.current;
   if(!original||sending.current||!onOpenResultFiles)return;
+  const indexCurrent=index?()=>{
+   const native=bridge.getState();
+   const exact=loadedFileResult(exactRow(native.state.conversationReader,message.id,message.sourceRevision));
+   return indexScroll.current===index&&fileIndexIdentity()===index.identity&&exact?.taskId===result.taskId&&
+    exact.runId===result.runId&&exact.epoch===result.epoch&&exact.deliveryId===result.deliveryId;
+  }:undefined;
   const current=()=>{
    const next=live.current;
-   return !document.hidden&&readyPage(next)&&readerScope(next)===scope&&!!exactRow(next,message.id,message.sourceRevision);
+   return !document.hidden&&readyPage(next)&&readerScope(next)===scope&&!!exactRow(next,message.id,message.sourceRevision)&&
+    (!indexCurrent||indexCurrent());
   };
   if(!current())return;
   const node=scroll.current;
   if(!node?.contains(trigger))return;
-  const restore=restoreReaderRow(original,message,trigger,node);
-  const notice={window:original.window,messageId:message.id,revision:message.sourceRevision};
-  sending.current=true;setPending(true);setResultNotice(notice);remember();void persist();
+  if(index&&bridge.getState().state.attachmentWorkspace?.open!==false)return;
+  const restore=restoreReaderRow(original,message,trigger,node,indexCurrent);
+  const notice={window:original.window,messageId:message.id,revision:message.sourceRevision,index};
+  sending.current=true;setPending(true);setResultNotice(notice);
+  if(!index){remember();void persist()}
   try{await onOpenResultFiles(message.id,result,trigger,{window:original.window,conversationId:original.conversation,sourceRevision:message.sourceRevision,restore})}
   catch(failure){if(current())setResultNotice({...notice,error:failure instanceof Error?failure.message:'本次原文件暂不可读取。'})}
   finally{sending.current=false;setPending(false);setResultNotice(value=>value===notice?null:value)}
  };
- const back=()=>{if(!live.current)return false;if(shownMemory){if(!memoryBack.current?.())setHistoryMemory(null);return true}if(shownSource){setHistorySource(null);return true}if(reuse||firstQuote){setReuse(null);setFirstQuote(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!sending.current){closingFromReader.current=scope;void invoke('conversation.reader.close')}return true};
+ const back=()=>{if(!live.current)return false;if(shownMemory){if(!memoryBack.current?.())setHistoryMemory(null);return true}if(shownSource){setHistorySource(null);return true}if(reuse||firstQuote){setReuse(null);setFirstQuote(null);return true}if(phoneOriginal){setPhoneOriginal(null);return true}if(returnFromQuote())return true;if(!sending.current){if(shownFileIndex){closeFileIndex();return true}closingFromReader.current=scope;void invoke('conversation.reader.close')}return true};
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
@@ -391,12 +461,38 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    {page&&positionNote?.scope===scope&&<div className="pw-action-row"><p className="pw-muted" role="status">{positionNote.text}</p>
     {!!rows.length&&<Button variant="ghost" size="small" disabled={pending||shown.loading} onClick={()=>{setMissingPlace(false);remember(true);void persist()}}>从这里继续阅读</Button>}</div>}
    {page&&quoteNote&&<p className="pw-muted" role="status">{quoteNote}</p>}
+   {indexedReplies.length>0&&<Accordion variant="divided" className="pw-reading-disclosures" expandedKeys={shownFileIndex?['loaded-file-replies']:[]}
+    onExpandedChange={keys=>{
+     if(sending.current||bridge.getState().state.attachmentWorkspace?.open!==false)return;
+     if(!keys.has('loaded-file-replies')){closeFileIndex();return}
+     if(indexIdentity!==fileIndexIdentity())return;
+     const index={identity:indexIdentity,top:scroll.current?.scrollTop||0};
+     if(timer.current){clearTimeout(timer.current);timer.current=null}
+     indexScroll.current=index;setFileIndex(index);
+    }}>
+    <AccordionItem id="loaded-file-replies" title="已加载回复的文件" icon={IconFolder}>
+     {shownFileIndex&&<>
+      <p className="pw-muted">这里只列已加载的完成回复。选择一条，再核对它是否有已保存的文件。</p>
+      <div className="pw-outcome-files">{indexedReplies.map(({message,result})=>{
+       const notice=resultNotice?.index===shownFileIndex&&resultNotice.messageId===message.id&&resultNotice.revision===message.sourceRevision?resultNotice:null;
+       return <div key={message.id}>
+        <Button variant="ghost" className="pw-outcome-file" aria-busy={!!notice&&!notice.error||undefined}
+         disabled={pending} onClick={event=>void openHistoryResultFiles(message,result,event.currentTarget,shownFileIndex)}>
+         <span className="pw-outcome-file-copy"><span dir="auto">{loadedFileReplyLabel(message,result)}</span>
+          <small>{notice&&!notice.error?'正在核对本次文件…':'查看这条回复的文件'}</small></span>
+        </Button>
+        {notice?.error&&<p className="pw-input-work-error" role="status">{notice.error}</p>}
+       </div>;
+      })}</div>
+     </>}
+    </AccordionItem>
+   </Accordion>}
    {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
    {rows.map((message,index)=>{const phone=message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
     const result=messageTaskResult(message),fileResult=!searchOnly&&onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
     const canSelectQuote=canQuoteNew&&!pending&&!!newQuoteTarget(message);
-    const readingFiles=resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
+    const readingFiles=!resultNotice?.index&&resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
     return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} data-reader-revision={message.sourceRevision} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
     {shown.originalReportMessageId===message.id&&<p className="pw-field-hint">这件工作的原汇报</p>}
     {phone&&message.id?<PhoneMessageReturn result={phone} conversation={shown.conversation} reader={shown.window} messageId={message.id} revision={message.sourceRevision}

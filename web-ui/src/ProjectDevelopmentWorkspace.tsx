@@ -41,9 +41,9 @@ export type CheckoutPythonSetupReturn = {position:CheckoutSavedPosition; take:()
 export type ProjectDependencyBuildReturn = {original:DirectNodeDependencyPin; comparisonHandle?:string; current:()=>boolean; take:()=>boolean};
 export type ProjectViteToolsPosition = {projectId:string;checkoutId:string;sourceDigest:string};
 export type ProjectViteToolsReturn = {position:ProjectViteToolsPosition;runtimeIdentity:string; current:()=>boolean; take:()=>boolean};
-export type ProjectViteResultLookup = {
-  projectId:string;current:()=>boolean;finish:(result?:ProjectViteResultTarget)=>void;
-};
+type ProjectStoredWebResultLookup = {kind:'built';projectId:string;current:()=>boolean;finish:(result?:ProjectViteResultTarget)=>void};
+type ProjectStaticFilesVisit = {kind:'phone-source';projectId:string;source:ProjectImportedEditor;current:()=>boolean;finish:(reason?:string)=>void};
+export type ProjectViteResultLookup = ProjectStoredWebResultLookup | ProjectStaticFilesVisit;
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
@@ -326,6 +326,13 @@ export const sameImportedEditor = (target:ProjectImportedEditor, observed:Projec
   !!observed&&target.projectId===observed.projectId&&target.checkoutId===observed.checkoutId&&
   target.importIdentity===observed.importIdentity&&target.sourceKind===observed.sourceKind&&
   target.exactPhoneSource===observed.exactPhoneSource&&target.exactStarterSource===observed.exactStarterSource&&target.window===observed.window;
+/** Registration, not evidence that a file or its saved bytes are still there. */
+export function originalSavedStaticFolder(projectId:string):ProjectImportedEditor|null {
+  const original=originalImportedEditor(projectId);
+  if(original?.sourceKind!=='saf_tree'||original.exactPhoneSource!==true)return null;
+  const copies=rows(bridge.getState().state.features?.local?.checkouts).filter(row=>row?.projectId===projectId);
+  return copies.length===1&&copies[0].id===original.checkoutId?original:null;
+}
 export const canEditImportedCheckout = (can:(action:string)=>boolean) =>
   ['projects.development.read','projects.development.files.open','projects.development.files.read',
     'projects.development.files.edit','projects.development.files.save'].every(can);
@@ -401,7 +408,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const activeRetainedVisit=useRef<RetainedOriginalVisit|null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
   const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;buildResume?:CheckoutBuildEditorResume;pythonResume?:OriginalPythonRun;
-    pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor;reopenedFiles?:true}|null>(null);
+    pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor;reopenedFiles?:true;staticFilesVisit?:ProjectStaticFilesVisit}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   // A UI correlation so a new mount cannot adopt a system picker choice. This never grants a file read or write.
   const [lockVisit,setLockVisit]=useState<string|null>(null);
@@ -419,10 +426,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const registerFilesBack = useCallback((handler: (() => boolean) | null) => { filesBack.current = handler; }, []);
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
   const keptNativePick=useRef(false);const [sourceConflict,setSourceConflict]=useState(false);
-  const attemptedViteResult=useRef<ProjectViteResultLookup|null>(null);
+  const attemptedViteResult=useRef<ProjectStoredWebResultLookup|null>(null);
+  const attemptedStaticFiles=useRef<ProjectStaticFilesVisit|null>(null);
+  const staticFilesPage=useRef('');
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
-  const latest = useRef({ run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools });
-  latest.current = { run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools }; activeReview.current = review;
+  const latest = useRef({ run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools, viteResultLookup });
+  latest.current = { run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools, viteResultLookup }; activeReview.current = review;
   const runReopenedFiles=useCallback((action:string,args:Data={})=>
     action==='projects.development.files.open'?bridge.command(action,args):run(action,args),[run]);
   const attemptedLocalFiles = useRef<ProjectLocalFilesIntent|null>(null);
@@ -489,17 +498,27 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   };
   const read = () => {
     const readableNow = latest.current.active && !entered.current && !document.hidden && latest.current.can('projects.development.read');
-    if (readableNow) { readAttempt.current = ownerWindow(); firstFilesPreparation.current = null; }
+    const previewVisit=latest.current.viteResultLookup;
+    const staticVisit=previewVisit?.kind==='phone-source'?previewVisit:null;
     const request=latest.current.localFilesIntent;
+    const pinned=returnTarget&&returned.current!==returnTarget.handle?returnTarget:null;
+    if(staticVisit){
+      if(!readableNow||attemptedStaticFiles.current===staticVisit||staticVisit.projectId!==projectId||!staticVisit.current())return Promise.resolve(undefined);
+      if(pinned||request||buildReturn||importedEditor||fileCheckout||activeReview.current||previewOpen.current){
+        staticVisit.finish('请先关闭原项目的文件或审阅。没有打开其他文件。');return Promise.resolve(undefined);
+      }
+      attemptedStaticFiles.current=staticVisit;
+    }
+    if (readableNow) { readAttempt.current = ownerWindow(); firstFilesPreparation.current = null; }
     const openLocalFiles=readableNow&&request&&request!==attemptedLocalFiles.current&&request.projectId===projectId&&request.current()?request:null;
     if(openLocalFiles)attemptedLocalFiles.current=openLocalFiles;
-    const pinned=returnTarget&&returned.current!==returnTarget.handle?returnTarget:null;
     const starter=importedEditor?.openDirectory&&importedEditor.exactStarterSource===true?importedEditor:null;
-    const scopedOwner=viteResultLookup?.projectId===projectId&&viteResultLookup.current()?viteResultLookup.current:
+    const scopedOwner=previewVisit?.projectId===projectId&&previewVisit.current()?previewVisit.current:
       openLocalFiles?.originalCopy?()=>latest.current.localFilesIntent===openLocalFiles&&openLocalFiles.current():
       starter?()=>latest.current.importedEditor===starter&&sameImportedEditor(starter,originalImportedEditor(projectId)):undefined;
     const reading=invoke('projects.development.read', {projectId,...(pinned?{draftReturnHandle:pinned.handle}:{})}, value => {
-    if (value.projectId !== projectId || typeof value.viewHandle !== 'string') throw new Error('没有取得这个原项目的页面，请重新读取。');
+    if (value.projectId !== projectId || typeof value.viewHandle !== 'string' || staticVisit&&!copyIdentity(value.viewHandle))
+      throw new Error('没有取得这个原项目的页面，请重新读取。');
     if(pinned){
       if(value.openedDraftReturn!==pinned.handle||value.draft?.projectId!==pinned.projectId||value.draft?.checkoutId!==pinned.checkoutId||
           value.draft?.ownerPickedConvention?.checkoutId!==pinned.checkoutId||!Number.isSafeInteger(value.draft?.ownerPickedConvention?.revision)){
@@ -507,7 +526,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       }
       returned.current=pinned.handle;focusReturned.current=true;setDeliveryOpen(true);
     }
-    handle.current = value.viewHandle; setView(value); sourceAttempt.current = ''; setSource(null); closeBuildPreview(); closeRetainedOriginal();
+    handle.current = value.viewHandle; if(staticVisit)staticFilesPage.current=value.viewHandle;
+    setView(value); sourceAttempt.current = ''; setSource(null); closeBuildPreview(); closeRetainedOriginal();
     const incoming = value.draft || {}, here = draft.current;
     if(value.draftRecoveryRequired!==true)setCopyResult(previous =>
       incoming.copyRequestId && (previous?.unconfirmed===true || previous?.requestId===incoming.copyRequestId) ? previous : null);
@@ -530,6 +550,21 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     }
     setSubmission(value.draft?.submission || null);
     if (value.draft?.submission) clearSubmittedDraft(value.draft.submission);
+    if(staticVisit){
+      const target=staticVisit.source, available=rows(value.checkouts), copy=available[0];
+      if(!staticVisit.current())return;
+      if(latest.current.localFilesIntent||latest.current.importedEditor||activeReview.current||previewOpen.current||
+        value.executionAuthorized!==false||value.commandsAuthorized!==false||value.draftRecoveryRequired!==false||
+        incoming.projectId!==projectId||incoming.checkoutId!==target.checkoutId||draft.current.checkoutId!==target.checkoutId||
+        unresolved(incoming.submission)||(incoming.copyRequestId&&incoming.copyStatus!=='ready')||
+        available.length!==1||copy?.projectId!==projectId||copy.checkoutId!==target.checkoutId||
+        copy.draftWorkingCopy!==false||copy.taskPackageSource!==false||copy.hostSource!==false||
+        !canEditImportedCheckout(latest.current.can)||!sameImportedEditor(target,originalSavedStaticFolder(projectId))){
+        staticVisit.finish('未核对到原先选中的手机文件夹副本。请先在工作区确认副本，没有打开其他文件。');return;
+      }
+      // Only the stock directory opens. No entry path, stale save handle, or source inspection.
+      setHostEditor(null);setFileWindow({checkoutId:target.checkoutId,staticFilesVisit:staticVisit});return;
+    }
     const returnedFile=latest.current.terminalSavedFile;
     if(returnedFile?.position.projectId===projectId&&returnedFile.take()){
       const position=returnedFile.position;
@@ -568,7 +603,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
        incoming.checkoutId===''&&incoming.goal===''&&deliveryFields.every(key=>incoming[key]==='')&&
        !incoming.submission&&!incoming.copyRequestId&&!incoming.copyStatus&&latest.current.can('projects.development.prepare'))
       firstFilesPreparation.current={intent:openLocalFiles,viewHandle:value.viewHandle};
-    },undefined,scopedOwner);
+    },staticVisit?failure=>staticVisit.finish(failureText(failure)):undefined,scopedOwner);
     return openLocalFiles?reading.finally(()=>latest.current.onLocalFilesIntentHandled?.(openLocalFiles)):reading;
   };
   const readRef = useRef(read); readRef.current = read;
@@ -617,7 +652,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if (original && handle.current) void latest.current.run('projects.development.dismiss', { viewHandle: handle.current, reviewHandle: original.reviewHandle }).catch(() => {});
   };
   useEffect(() => {
-    registerBack(() => { if (!latest.current.active) return false; if (visibleHostDiff.current) { closeHostDiff(); return true; } if (filesBack.current?.()) return true; if (entered.current) return true; if (activeReview.current) { dismiss(); return true; } if(previewOpen.current){closeBuildPreview();return true;} if(retainedOriginalOpen.current){closeRetainedOriginal();return true;} return false; });
+    registerBack(() => { if (!latest.current.active) return false; if (visibleHostDiff.current) { closeHostDiff(); return true; } if (filesBack.current?.()) return true;
+      const lookup=latest.current.viteResultLookup;if(lookup?.kind==='phone-source'){lookup.finish();return true;}
+      if (entered.current) return true; if (activeReview.current) { dismiss(); return true; } if(previewOpen.current){closeBuildPreview();return true;} if(retainedOriginalOpen.current){closeRetainedOriginal();return true;} return false; });
     return () => registerBack(null);
   }, [registerBack]);
   useEffect(() => {
@@ -626,7 +663,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       generation.current++; entered.current = null; buildAfterSave.current=null; sourceRecoveryReturn.current=null; firstFilesPreparation.current=null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null; previewOpen.current=false; retainedOriginalOpen.current=false; activeRetainedVisit.current=null;
       if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setBuildPreview(null); setRetainedRead(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); }
-      if (original) void latest.current.run('projects.development.close', { viewHandle: original }).catch(() => {});
+      const closeHere=original===staticFilesPage.current?bridge.command:latest.current.run;
+      staticFilesPage.current='';
+      if (original) void closeHere('projects.development.close', { viewHandle: original }).catch(() => {});
     };
     // Switching the start method retires its window, never its plain draft or
     // the identity of a submitted operation. Returning performs a fresh read.
@@ -681,6 +720,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const differentBuildCopy=buildCheckout&&checkout!==buildCheckout&&available.find(row=>row.projectId===projectId&&row.checkoutId===buildCheckout);
   useEffect(() => { if (active && readable && !handle.current) void readRef.current(); }, [active, readable]);
   useEffect(() => {
+    // For a source handoff this hold remains live until Preview has been restored,
+    // including native refusal, Android visibility changes and editor exit.
     if (!active || !view || !checkout || busy || review || filesOpen || buildReturn || importedEditor || differentBuildCopy || unresolved(submission) || viteResultLookup) return;
     const viewHandle=view.viewHandle, key = `${viewHandle}|${projectId}|${checkout}`;
     if (sourceAttempt.current === key) return;
@@ -803,6 +844,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     setImportEditChoice(sameSave&&original?.checkoutId===saved.checkoutId&&view?.viewHandle===handle.current&&original.window===ownerWindow()?
       {original,viewHandle:handle.current}:null);
     setFileWindow(null); setHostEditor(null); setHostFiles(null); sourceAttempt.current = ''; setSource(null);
+    fileWindow?.staticFilesVisit?.finish();
   };
   useEffect(()=>{
     if(!importedEditor||!active||!view||busy||entered.current||review||fileCheckout||buildReturn||handle.current!==view.viewHandle)return;
@@ -1042,7 +1084,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     source?.editedDraftCopy === true && (source.editedDraftBuildUnavailable === true || source.editedDraftBuild && !versionBuild);
   useEffect(()=>{
     const asked=viteResultLookup;
-    if(!asked||attemptedViteResult.current===asked||asked.projectId!==projectId||!asked.current()||
+    if(asked?.kind!=='built'||attemptedViteResult.current===asked||asked.projectId!==projectId||!asked.current()||
        !active||busy||entered.current)return;
     if(!view){if(error)asked.finish();return;}
     const done=(message:string)=>{if(asked.current()){setError(message);asked.finish();}};
@@ -1777,7 +1819,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     } : undefined}/>}
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={fileWindow.reopenedFiles?runReopenedFiles:run} hostFile={hostEditor || undefined}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume}
-      pythonSetupResume={fileWindow.pythonSetupResume} onClose={closeFiles}
+      pythonSetupResume={fileWindow.pythonSetupResume} originalDirectoryOpening={fileWindow.staticFilesVisit} onClose={closeFiles}
       onPreparePythonTools={pythonToolSetup?prepareSavedPythonTools:undefined}
       preparePythonToolsLabel={pythonRepair?'查看手机工具修复':undefined}
       onOpenPythonWork={!hostEditor&&can('tasks.open')?work=>{

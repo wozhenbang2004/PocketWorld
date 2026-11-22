@@ -104,9 +104,10 @@ import {ProjectFileEditor} from './ProjectFileEditor';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
+import {canOpenSavedStaticPreview} from './ProjectSavedStaticPreview';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import {ContinuedProjectBinding} from './ProjectWorkBinding';
 import {ProjectWorkStart,emptyProjectWorkDraft,type ProjectWorkDraft} from './ProjectWorkStart';
@@ -993,19 +994,22 @@ export default function App(){
  const projectWorkView=projectWorkViews[String(state.projectId||'')]||{query:'',filter:'all' as const,expanded:false,selected:''};
  const updateProjectWorkView=(patch:Partial<ProjectWorkCollectionView>)=>setProjectWorkViews(previous=>({...previous,[String(state.projectId||'')]:{...(previous[String(state.projectId||'')]||{query:'',filter:'all',expanded:false,selected:''}),...patch}}));
  const projectSection=projectSections[String(state.projectId||'')]||'work';
+ const choosingSavedStaticFile=viteResultLookup?.kind==='phone-source';
  useEffect(()=>{
   const original=viteResultLookup;
   if(!original)return;
-  const check=()=>{if(!original.current())retireViteResultLookup(original);};
+  const retire=()=>{if(original.kind==='phone-source')original.finish();else retireViteResultLookup(original);};
+  const check=()=>{if(!original.current())retire();};
   const presentation=projectWorkPresentations[original.projectId];
   if(route!=='projects'||projectSection!=='work'||state.projectId!==original.projectId||state.filePath||taskOpen||
      presentation?.open!==true||presentation.mode!=='default'){
-   retireViteResultLookup(original);return;
+   retire();return;
   }
   const off=bridge.subscribe(check),offDoc=bridge.subscribeDocumentEpoch(check);
   document.addEventListener('visibilitychange',check);
+  if(original.kind==='phone-source')window.addEventListener('pagehide',retire);
   check();
-  return()=>{off();offDoc();document.removeEventListener('visibilitychange',check);};
+  return()=>{off();offDoc();document.removeEventListener('visibilitychange',check);window.removeEventListener('pagehide',retire);};
  },[viteResultLookup,route,projectSection,state.projectId,state.filePath,taskOpen,projectWorkPresentations,retireViteResultLookup]);
  useEffect(()=>{
   const returning=terminalSavedFileArrival.current;
@@ -3513,6 +3517,12 @@ export default function App(){
     match.replyId===expected.replyId&&match.deliveryId===null&&match.replyToMessageIds.length===1;
  };
  const shownOriginalReminder=originalReminderChat&&originalReminderChatCurrent(originalReminderChat)?originalReminderChat:null;
+ // The reminder module's native observation checks its own Android notification channel.
+ // The general setup switch and an unloaded snapshot cannot establish a delivery block.
+ const reminderDelivery=obj(state.features?.automation);
+ const originalReminderNotificationsBlocked=!!shownOriginalReminder&&snapshot?.host?.ready===true&&reminderDelivery.available===true&&
+  typeof reminderDelivery.observationGeneration==='string'&&!!reminderDelivery.observationGeneration&&
+  Number.isSafeInteger(reminderDelivery.observationSequence)&&reminderDelivery.observationSequence>0&&reminderDelivery.notificationsEnabled===false;
  useEffect(()=>{if(originalReminderChat&&!shownOriginalReminder)setOriginalReminderChat(null)},[originalReminderChat,shownOriginalReminder]);
  const openProvidedMemoryAnswer=(message:Message)=>{
   if(originalMemoryProfile.current&&originalMemoryProfile.current.origin.navigation!==navigationWindow.current)originalMemoryProfile.current=null;
@@ -5604,7 +5614,7 @@ export default function App(){
   }).catch(error=>{if(reviewRequest.current!==request)return;setReviewSubmitted(false);setReview(null);if(planDecision){const message=error instanceof Error?error.message:'未确认原计划决定，请核对原任务；没有重复提交。';setReviewReceipt(message);setTaskErrors(previous=>({...previous,[originalTask]:message}))}});
  };
  const taskDirectory=useWorkDirectory({tasks,query:taskQuery,filter:filter as WorkCollectionFilter,enabled:ready&&route==='tasks'&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:taskList});
- const projectDirectory=useWorkDirectory({tasks,projectId:String(state.projectId||''),query:projectWorkView.query,filter:projectWorkView.filter,enabled:ready&&route==='projects'&&!!state.projectId&&!state.filePath&&projectSection==='work'&&!projectPreview.expanded&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:projectScroll});
+ const projectDirectory=useWorkDirectory({tasks,projectId:String(state.projectId||''),query:projectWorkView.query,filter:projectWorkView.filter,enabled:ready&&route==='projects'&&!!state.projectId&&!state.filePath&&projectSection==='work'&&!choosingSavedStaticFile&&!projectPreview.expanded&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:projectScroll});
  useLayoutEffect(()=>{
   const origin=projectTaskReturn.current;
   if(!origin?.focusOutcome||origin.taskId!==taskId||!taskOpen||taskOpening||taskLayer!=='overview'||openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId)return;
@@ -8541,7 +8551,9 @@ export default function App(){
   registerReturn={registerWorkReturn} extra={can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}/>;
  const showProjectSection=(section:'work'|'files'|'preview')=>{
   if(section==='work'&&projectPreview.expanded&&projectPreview.fromSavedWebShelf){projectPreview.returnToSavedWebShelf();return}
-  if(viteResultLookupNow.current)retireViteResultLookup();
+  const visit=viteResultLookupNow.current;
+  if(visit?.kind==='phone-source')visit.finish();
+  else if(visit)retireViteResultLookup(visit);
   projectPreview.hide();setProjectSections(previous=>({...previous,[String(state.projectId||'')]:section}))
  };
  const canReadCurrentWeb=['projects.development.read','projects.development.inspect','tasks.open','projects.firstWebOutput.read',
@@ -8578,7 +8590,7 @@ export default function App(){
     !state.attachmentWorkspace?.open&&!state.localSourceIntake?.window&&!state.projectGitImport?.window;
   };
   if(!owner()){setLocalError('原项目窗口已变化，没有读取其他项目。');return;}
-  const original:ProjectViteResultLookup={projectId,
+  const original:ProjectViteResultLookup={kind:'built',projectId,
    current:()=>viteResultLookupNow.current===original&&owner()&&reviewRequest.current===taskRequest&&obj(bridge.getState().view).taskId===null,
    finish:result=>{
     if(!original.current())return;
@@ -8590,6 +8602,50 @@ export default function App(){
   viteResultLookupNow.current=original;setViteResultLookup(original);
   setProjectSections(previous=>({...previous,[projectId]:'work'}));
   setProjectWorkPresentations(previous=>({...previous,[projectId]:{open:true,mode:'default'}}));
+ };
+ const savedStaticFolder=currentProject&&route==='projects'&&!projectPreview.expanded&&
+   canEditImportedCheckout(can)&&canOpenSavedStaticPreview()?originalSavedStaticFolder(currentProject.id):null;
+ const chooseSavedStaticFile=(source:ProjectImportedEditor)=>{
+  const projectId=currentProject?.id,initial=bridge.getState(), view=obj(initial.view);
+  const navigation=navigationWindow.current,taskRequest=reviewRequest.current;
+  const resume=view.resumeRevision,revision=initial.state.requestedProjectRevision;
+  if(!projectId||source.projectId!==projectId||route!=='projects'||projectSection!=='preview'||viteResultLookupNow.current)return;
+  if(previewBlocked||taskOpening||projectPreview.expanded||!Number.isSafeInteger(resume)||!Number.isSafeInteger(revision)||
+     projectDraftReturn||projectBuildReturn||projectImportedEditor||projectLocalFilesIntent||pythonSetupReturn||dependencyBuildReturn||
+     viteToolsReturn||projectWorkDrafts[projectId]?.operation||projectWorkDrafts[projectId]?.expanded){
+   setLocalError('请先完成原项目的选择或审阅。没有打开其他文件。');return;
+  }
+  const owner=()=>{
+   const live=bridge.getState(),place=obj(live.view),state=live.state;
+   return !document.hidden&&navigationWindow.current===navigation&&reviewRequest.current===taskRequest&&
+    live.host?.ready===true&&place.section===null&&place.taskId===null&&place.resumeRevision===resume&&
+    state.projectId===projectId&&state.requestedProjectRevision===revision&&!state.filePath&&!state.fileLoading&&!state.fileSaving&&
+    !state.conversationReader&&!state.attachmentWorkspace?.open&&!state.chatAttachmentPickerOpen&&
+    !state.localSourceIntake?.window&&!state.projectGitImport?.open&&
+    canEditImportedCheckout(action=>live.capabilities.commands.includes(action))&&canOpenSavedStaticPreview()&&
+    sameImportedEditor(source,originalSavedStaticFolder(projectId));
+  };
+  if(!owner()){setLocalError('原手机副本已变化，没有读取其他文件。');return;}
+  const before=projectWorkPresentations[projectId],temporary:ProjectWorkPresentation={open:true,mode:'default'};
+  const original:ProjectViteResultLookup={kind:'phone-source',projectId,source,
+   current:()=>viteResultLookupNow.current===original&&owner(),
+   finish:reason=>{
+    if(viteResultLookupNow.current!==original)return;
+    // Undo only this visit's presentation. Restore Preview before dropping
+    // the hold that blocks ordinary Work inspection.
+    setProjectSections(previous=>previous[projectId]==='work'?{...previous,[projectId]:'preview'}:previous);
+    setProjectWorkPresentations(previous=>{
+     if(previous[projectId]!==temporary)return previous;
+     if(before)return {...previous,[projectId]:before};
+     const restored={...previous};delete restored[projectId];return restored;
+    });
+    if(reason&&!document.hidden&&navigationWindow.current===navigation&&bridge.getState().state.projectId===projectId)setLocalError(reason);
+    retireViteResultLookup(original);
+   }};
+  setLocalError('');
+  viteResultLookupNow.current=original;setViteResultLookup(original);
+  setProjectSections(previous=>({...previous,[projectId]:'work'}));
+  setProjectWorkPresentations(previous=>({...previous,[projectId]:temporary}));
  };
  const dismissProjectDraftReturn=(id:string)=>{setProjectDraftReturn(null);setProjectWorkPresentations(previous=>({...previous,[id]:{open:false,mode:'default'}}));};
  const openStagedProjectDraft=(target:ProjectDraftReturn)=>{
@@ -8813,7 +8869,7 @@ export default function App(){
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
   {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} copyRevision={value=>{void copyText(value).catch(()=>{})}} adoption={fileAdoption} continueAdopted={continueAdopted} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
     <Tabs selectedKey={projectPreview.expanded?'preview':projectSection} onSelectionChange={key=>showProjectSection(key==='preview'?'preview':key==='files'?'files':'work')} className="pw-project-tabs">
-      <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!canReadCurrentWeb&&!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
+      <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!savedStaticFolder&&!canReadCurrentWeb&&!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onOpenPairedDevices={canUsePairedDevice?visitPairedDevices:undefined} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
@@ -8821,7 +8877,7 @@ export default function App(){
          firstLocalFilesWorkProject?{onOpen:()=>openLocalProjectFiles('work'),label:'编辑本机文件'}:
          preparedLocalFilesWork?{onOpen:()=>openLocalProjectFiles('work',preparedLocalFilesWork),label:'打开本机源码'}:undefined}
         localCopyFirst={importedSourceFirst||retainedCopyFirst}
-        savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
+        savedWebContent={!choosingSavedStaticFile&&can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
           canPreview={can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&!packageOpening}
           openArchive={canOpenSavedLocalWeb?openSavedLocalWeb:undefined}
@@ -8888,7 +8944,11 @@ export default function App(){
         {!projectPreview.expanded?<section className="pw-preview-entry" aria-label="选择项目预览来源">
           <h3>项目预览</h3>
           {canReadCurrentWeb&&<><p className="pw-reading-note">只核对当前私人副本已保存的源码与对应的本机网页成果。不会自动构建或保存。</p>
-            <Button disabled={previewBlocked||taskOpening} onClick={openCurrentProjectWeb}>预览当前副本的网页</Button></>}
+            <Button disabled={previewBlocked||taskOpening} onClick={openCurrentProjectWeb}>预览已构建网页</Button></>}
+          {savedStaticFolder&&<div className="pw-form-actions">
+            <Button variant="secondary" disabled={previewBlocked||taskOpening} onClick={()=>chooseSavedStaticFile(savedStaticFolder)}>到原手机副本选择网页</Button>
+            <p className="pw-field-hint">打开原文件列表，选择已保存的 index.html 后再核对网页资源。</p>
+          </div>}
           {can('projects.preview')&&<div className="pw-form-actions">
             <Button variant="secondary" disabled={previewBlocked} onClick={projectPreview.open}>查看已登记的任务预览</Button>
             <p className="pw-field-hint">任务预览未必来自当前源码或这份本机副本。</p>
@@ -8943,7 +9003,7 @@ export default function App(){
  const relatedWorkspaceBackLabel=ordinaryChatProjectBack&&projectPreview.expanded?'返回项目':(relatedOrigin.current?.label??'返回');
  const backFromRelatedWorkspace=()=>{
   // The new root arrow must respect the same child stack as Android Back.
-  if(ordinaryChatProjectBack&&(projectWorkBack.current?.()||projectDevelopmentBack.current?.()||projectPreview.handleBack()))return;
+  if((ordinaryChatProjectBack||choosingSavedStaticFile)&&(projectWorkBack.current?.()||projectDevelopmentBack.current?.()||projectPreview.handleBack()))return;
   returnFromSecondary();
  };
  // This is a presentation of the original native Work window, not a chat-send mode.
@@ -9049,6 +9109,7 @@ export default function App(){
      id:item.file.id,sha256:item.file.sha256},target,'replyDocument',{visit:deliveredFileVisit,reply:item.source,file:item.file})}/>}
   {shownOriginalReminder&&<OriginalChatReminderReview key={shownOriginalReminder.source.messageId+':'+shownOriginalReminder.source.sourceRevision}
     source={shownOriginalReminder.source} isCurrent={()=>originalReminderChatCurrent(shownOriginalReminder)}
+    notificationsBlocked={originalReminderNotificationsBlocked}
     onClose={()=>closeOriginalReminder(shownOriginalReminder)} onOpenSavedRule={pin=>openSavedOriginalReminder(shownOriginalReminder,pin)}
     registerBack={registerOriginalReminderBack}/>}
   {searchOriginal&&(!scopedSearchOriginal||scopedOriginalCurrent)&&<WorkSearchOriginalReader target={searchOriginal} covered={searchContextHere}

@@ -13,6 +13,7 @@ export type OriginalChatReminderRulePin = { ruleId: string; ruleRevision: number
 type Props = {
   source: OriginalChatReminderSource;
   isCurrent(): boolean;
+  notificationsBlocked?: boolean;
   onClose(): void;
   onOpenSavedRule(pin: OriginalChatReminderRulePin): boolean | Promise<boolean>;
   registerBack?: (handler: (() => boolean) | null) => void;
@@ -154,6 +155,9 @@ export function OriginalChatReminderReview(props: Props) {
 
   if (retired || !live(props)) return null;
   const retry = view.status === 'unknown' || view.status === 'unavailable' || view.status === 'read_error' || expired || openFailed;
+  const notificationHint = props.notificationsBlocked === true
+    ? <p className="pw-field-hint" role="status">最近核对时，本机提醒通知不可用。保存安排不会开启通知，请检查系统通知设置。</p>
+    : null;
   return <SettingsDialog isOpen title={view.status === 'saved' ? '这条提醒' : '核对这次提醒'} closeLabel="返回原对话" onClose={close}>
     <div className="pw-knowledge-dialog pw-knowledge-review">
       {view.status === 'reading' && <p role="status">正在核对这条回复的原提醒…</p>}
@@ -161,12 +165,14 @@ export function OriginalChatReminderReview(props: Props) {
       {view.status === 'pending' && <>
         <ReminderCalendarReview original={view.calendar} />
         {expired ? <p role="status">这次时间核对已过期，请重新读取原提醒。</p> : deadline > 0 && <>
+          {notificationHint}
           <CheckboxField isSelected={checked} onChange={setChecked}>我已核对提醒内容、时间与时区</CheckboxField>
           <div className="pw-form-actions"><PressButton compact disabled={!checked} onClick={confirm}>确认保存提醒</PressButton></div>
         </>}
       </>}
       {view.status === 'saved' && <>
         <p role="status">这条提醒已保存到这台手机。</p>
+        {notificationHint}
         {!openFailed && <div className="pw-form-actions"><Button variant="secondary" disabled={opening} onClick={() => openSaved(view.pin)}>{opening ? '正在定位原提醒…' : '查看这条提醒'}</Button></div>}
       </>}
       {(view.status === 'unknown' || saveUncertain) && <p role="status">原提醒的保存结果尚未核对。只重新读取这份原记录，不重复新建。</p>}

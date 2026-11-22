@@ -31,10 +31,11 @@ export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandl
 export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
 type PythonEditorSource = {path:string;sha256:string;content:string;clickKey:string;selection:{saveId:string}|{readRevision:number}};
 type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry };
+type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry; buildResume?: CheckoutBuildEditorResume; pythonResume?: OriginalPythonRun;
-  pythonSetupResume?: CheckoutSavedPosition;
+  pythonSetupResume?: CheckoutSavedPosition; originalDirectoryOpening?: OriginalDirectoryOpening;
   onClose: (saved?: CheckoutSavedPosition) => void;
   onOpenPythonWork?: (work: OriginalPythonRun) => void;
   onPreparePythonTools?: (source: CheckoutPythonToolsDeparture) => Promise<void>;
@@ -84,7 +85,7 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume, originalDirectoryOpening }: Props) {
   const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
@@ -119,6 +120,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const activeAdoption = useRef<Data | null>(null), adoptionHeading = useRef<HTMLHeadingElement>(null); activeAdoption.current = adoption;
   const alive = useRef(false), generation = useRef(0), handle = useRef(''), currentFile = useRef<Data | null>(null), currentText = useRef('');
   const entered = useRef<object | null>(null), edits = useRef(0), editSequence = useRef(0), blockedEdit = useRef(false);
+  const initialDirectoryRead = useRef<object | null>(null);
   const latest = useRef({ run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools });
   latest.current = { run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools };
   const originalWindow = useRef(windowKey());
@@ -218,15 +220,23 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     // the native owner has not acknowledged, so closed files cannot fill it up.
     if (next.editSequence === editSequence.current && interfaceDrafts.get(keyFor(next.path)) === currentText.current && next.text === currentText.current) interfaceDrafts.delete(keyFor(next.path));
   };
-  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void) => {
-    if (entered.current || edits.current || activeStaticPreview.current || document.hidden) return;
+  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void, opening?: OriginalDirectoryOpening) => {
+    if (entered.current || edits.current || activeStaticPreview.current || document.hidden || opening&&!opening.current()) return;
     const heldEditor=['read','readFound','readTextHit'].includes(action)?folderEditorNow.current:null;
     const sequence = generation.current, token = {}; entered.current = token; setBusy(true); setError('');
+    if (opening) initialDirectoryRead.current = token;
+    const current = () => live(sequence) && (!opening || opening.current());
     try {
-      const value = await latest.current.run(command + action, { viewHandle, ...(action === 'open' || action === 'openSource' || action === 'openHostChange' ? { checkoutId } : { filesHandle: handle.current }), ...args });
-      if (live(sequence) && entered.current === token) { accept?.(value); return value; }
+      // The exact source-preview list is read-only. A declined visit must not toast on the restored page.
+      const runHere = opening ? bridge.command : latest.current.run;
+      const value = await runHere(command + action, { viewHandle, ...(action === 'open' || action === 'openSource' || action === 'openHostChange' ? { checkoutId } : { filesHandle: handle.current }), ...args });
+      if (current() && entered.current === token) {
+        if (opening && (value?.readOnly!==true || typeof value.filesHandle!=='string')) throw new Error('没有核对到原手机副本的只读文件清单。');
+        accept?.(value); return value;
+      }
     } catch (failure) {
-      if(live(sequence)){
+      if(current()){
+        if(opening){opening.finish('未能确认原手机文件夹的文件清单。没有打开文件编辑页，可重新选择原手机副本。');return;}
         // The native file read can replace its single open editor before Web
         // receives (and validates) the reply. Only a definite no-send keeps A.
         const notSent=failure instanceof Error&&'code' in failure&&failure.code==='not_sent';
@@ -235,7 +245,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         setError(failureText(failure));
       }
     }
-    finally { if (entered.current === token) { entered.current = null; if (alive.current) setBusy(false); } }
+    finally {
+      if (initialDirectoryRead.current === token) initialDirectoryRead.current = null;
+      if (entered.current === token) { entered.current = null; if (alive.current && (!opening || opening.current())) setBusy(false); }
+    }
   };
   const readDirectoryPage = (value: Data, path: string) => value.readOnly===true&&value.directoryPage?
     checkoutDirectoryPage(value.directoryPage,projectId,checkoutId,value.filesHandle,path,0,value.sourceDigest):null;
@@ -324,7 +337,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       });
     });
   };
-  const openFiles = async () => {
+  const openFiles = async (initial = false) => {
     let checkedEntry = entry;
     const resumeBuild=!attemptedBuildResume.current&&!entered.current&&!edits.current&&live(generation.current)&&
       !sourceMember&&!hostFile&&!resume&&!entry&&
@@ -339,6 +352,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if(resumeSetup)attemptedPythonSetupResume.current=true;
     const pin = sourceMember && { taskId: sourceMember.taskId, operationId: sourceMember.operationId, artifactId: sourceMember.artifactId,
       artifactSha256: sourceMember.artifactSha256, path: sourceMember.path, fileSha256: sourceMember.fileSha256 };
+    const opening = initial && !pin && !hostFile && !resume && !entry && !buildResume && !pythonResume && !pythonSetupResume ? originalDirectoryOpening : undefined;
     const result = await invoke(hostFile ? 'openHostChange' : pin ? 'openSource' : 'open', hostFile ? { hostFile } : pin ? { sourceMember: pin } : {}, value => {
       if (value.projectId !== projectId || value.checkoutId !== checkoutId || !value.filesHandle) throw new Error('没有取得原私人副本文件窗口。');
       if (hostFile && (value.executionAuthorized !== false || !value.hostFile || !Object.entries(hostFile).every(([k, v]) => value.hostFile[k] === v)))
@@ -373,7 +387,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         }else setError('未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
       }
       handle.current = value.filesHandle; setListing(list);
-    });
+    }, opening);
     if(priorTarget&&resumeReadId&&result&&handle.current===result.filesHandle&&live(generation.current)){
       const opened=await readFile(priorTarget.path,{position:priorTarget,priorSavedFileId:resumeReadId});
       if(resumeBuild&&opened&&live(generation.current)&&currentFile.current?.fileHandle===opened.fileHandle)openedBuildResume.current=resumeBuild;
@@ -648,7 +662,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       .finally(()=>{if(entered.current===token){entered.current=null;if(alive.current)setBusy(false)}});
   };
   const close = (next?: 'prepare-build') => {
-    if (entered.current || edits.current) return;
+    if (entered.current || edits.current) {
+      // Both Android Back and the dialog's Close may leave its first list, never an open editor or a later operation.
+      if (!next && entered.current && entered.current===initialDirectoryRead.current && !edits.current &&
+          !handle.current && !currentFile.current && live(generation.current) && originalDirectoryOpening?.current())
+        latest.current.onClose();
+      return;
+    }
     if (pythonReviewNow.current) { dismissPythonReview(); return; }
     if (activeAdoption.current) { dismissAdoption(); return; }
     if (choice) { setChoice(null); return; }
@@ -744,12 +764,12 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   useEffect(() => {
     alive.current = true; originalWindow.current = windowKey();
     const retire = () => {
-      generation.current++; entered.current = null; pythonReviewNow.current=undefined; const old = handle.current; handle.current = '';
+      generation.current++; entered.current = null; initialDirectoryRead.current = null; pythonReviewNow.current=undefined; const old = handle.current; handle.current = '';
       if (old) void latest.current.run(command + 'close', { viewHandle, filesHandle: old }).catch(() => {});
     };
     const hidden = () => { if (document.hidden || originalWindow.current !== windowKey()) { retire(); latest.current.onClose(); } };
     const unsubscribe = bridge.subscribe(hidden); document.addEventListener('visibilitychange', hidden); window.addEventListener('pagehide', hidden);
-    void openFiles();
+    void openFiles(true);
     return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', hidden); };
   }, [projectId, checkoutId, viewHandle]);
   useEffect(() => {
@@ -821,7 +841,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const savedExcerpt=!anchorable&&sourceHit&&savedSource!==null&&savedSource.slice(sourceHit.start,sourceHit.end)===sourceHit.query?
     savedSource.slice(Math.max(savedSource.lastIndexOf('\n',sourceHit.start-1)+1,sourceHit.start-70),sourceHit.start)+sourceHit.query+
       savedSource.slice(sourceHit.end,sourceHit.end+100).split('\n',1)[0]:null;
-  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : '返回项目工作区';
+  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : originalDirectoryOpening && !listing ? '返回项目预览' : '返回项目工作区';
   const formalLink = (pin: Data | undefined, evidence: 'import_receipt' | 'equal_content') => {
     if (!file || !pin || pin.evidence !== evidence || pin.projectId !== projectId || pin.checkoutId !== checkoutId || pin.path !== file.path ||
         typeof pin.handle !== 'string' || !pin.handle || !Number.isInteger(pin.version) || pin.version < 1 || !/^[a-f0-9-]{36}$/.test(pin.revisionId) ||
