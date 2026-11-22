@@ -26,16 +26,25 @@ internal class PocketWebDeviceTaskScope(
         val scope: TaskStoreDeviceTasks.SourceScopeReview? = null,
         val project: TaskStoreDeviceTasks.ProjectImportReview? = null
     )
+    private class WorkspaceFileReview(
+        val id: String, val taskId: String, val current: () -> Boolean,
+        val native: dev.pocketengine.store.TaskStore.OwnerWindowsWorkspaceReadReview
+    )
     private val main = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
     private val lifetime = Any()
     @Volatile private var generation = 0L
     @Volatile private var page: Page? = null
     @Volatile private var review: Review? = null
+    @Volatile private var workspaceFileReview: WorkspaceFileReview? = null
 
     companion object {
+        const val REVIEW_WORKSPACE_FILE = "deviceTaskScope.reviewWorkspaceFile"
+        const val START_WORKSPACE_FILE = "deviceTaskScope.startWorkspaceFile"
+        const val DISMISS_WORKSPACE_FILE = "deviceTaskScope.dismissWorkspaceFile"
+        val WORKSPACE_FILE_COMMANDS = setOf(REVIEW_WORKSPACE_FILE, START_WORKSPACE_FILE, DISMISS_WORKSPACE_FILE)
         val COMMANDS = setOf("deviceTaskScope.prepare", "deviceTaskScope.open", "deviceTaskScope.readPhoneDispatchFact", "deviceTaskScope.close", "deviceTaskScope.review",
-            "deviceTaskScope.confirm", "deviceTaskScope.dismissReview", "deviceTaskScope.reviewImport", "deviceTaskScope.confirmImport")
+            "deviceTaskScope.confirm", "deviceTaskScope.dismissReview", "deviceTaskScope.reviewImport", "deviceTaskScope.confirmImport") + WORKSPACE_FILE_COMMANDS
         private fun fields(value: JSONObject, vararg allowed: String) = PocketWebGroupReviews.fields(value, *allowed)
         private fun text(value: JSONObject, key: String, max: Int = 240) = PocketWebGroupReviews.text(value, key, max)
         private fun integer(value: JSONObject, key: String, min: Long, max: Long) = PocketWebGroupReviews.integer(value, key, min, max)
@@ -47,7 +56,7 @@ internal class PocketWebDeviceTaskScope(
     private fun visible(task: String) = controller.webPrivateOwnerVisible() && taskVisible(task)
     private fun current(value: Page) = value.alive && page === value && visible(value.taskId) && value.owner == controller.webWindowTicket()
     fun clear() = synchronized(lifetime) {
-        generation++; review = null
+        generation++; review = null; workspaceFileReview = null
         page?.let { it.alive = false; it.native.close() }; page = null
     }
     fun foreground(value: Boolean) { if (!value) clear() }
@@ -118,6 +127,51 @@ internal class PocketWebDeviceTaskScope(
             .put("target", target.view()).put("capturedAt", System.currentTimeMillis()).put("fact", fact)
     }
     fun dispatch(action: String, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        if (action in WORKSPACE_FILE_COMMANDS) {
+            when (action) {
+                REVIEW_WORKSPACE_FILE -> {
+                    require(input.keys().asSequence().toSet() == setOf("taskId", "path"))
+                    val task = text(input, "taskId")
+                    val path = input.opt("path") as? String ?: error("请输入一份工作区相对文件路径。")
+                    require(path.length in 1..2048)
+                    val epoch = generation; val owner = controller.webWindowTicket()
+                    fun current() = epoch == generation && visible(task) && owner == controller.webWindowTicket()
+                    check(current() && !busy.get()) { "请回到这份原私人工作。" }
+                    synchronized(lifetime) { workspaceFileReview = null }
+                    work(null, task, done) {
+                        val native = controller.nativeButlerHost().reviewOwnerWindowsWorkspaceRead(task, path, ::current)
+                        val created = WorkspaceFileReview(UUID.randomUUID().toString(), task, ::current, native)
+                        val value = native.view().put("reviewHandle", created.id)
+                        synchronized(lifetime) {
+                            check(current()) { "原私人工作窗口已变化，没有读取。" }
+                            workspaceFileReview = created
+                        }
+                        value
+                    }
+                }
+                START_WORKSPACE_FILE -> {
+                    require(input.keys().asSequence().toSet() == setOf("reviewHandle"))
+                    val handle = text(input, "reviewHandle")
+                    val selected = synchronized(lifetime) {
+                        check(!busy.get()) { "请等待原文件审阅。" }
+                        val original = requireNotNull(workspaceFileReview?.takeIf { it.id == handle && it.current() }) { "原文件审阅已关闭或使用。" }
+                        workspaceFileReview = null
+                        original
+                    }
+                    work(null, selected.taskId, done) {
+                        check(selected.current()) { "原私人工作窗口已变化，没有开始。" }
+                        controller.nativeButlerHost().startOwnerWindowsWorkspaceRead(selected.native)
+                    }
+                }
+                DISMISS_WORKSPACE_FILE -> {
+                    require(input.keys().asSequence().toSet() == setOf("reviewHandle"))
+                    val handle = text(input, "reviewHandle")
+                    synchronized(lifetime) { if (workspaceFileReview?.id == handle) workspaceFileReview = null }
+                    done(JSONObject().put("closed", true), null)
+                }
+            }
+            return
+        }
         if (action == "deviceTaskScope.close") {
             fields(input, "pageHandle")
             synchronized(lifetime) { if (page?.id == text(input, "pageHandle")) clear() }

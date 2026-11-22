@@ -281,7 +281,16 @@ internal class PocketWebTaskActions(
             val selected=rows.map { it.getString("operationId") }.toSet()
             return rows+other.filterNot { val id=it.optString("operationId",it.optString("id")); id in selected || rows.isNotEmpty() && id.isEmpty() }
         }
-        fun specialOwnerTask(task: UiTask) = isOwnerPhoneControlTask(task) || setOf("ownerRuntimeSetup", "ownerLocalTerminal", "ownerDirectNodeBuild", "ownerDirectViteBuild", "ownerDirectNodeDependencies", "ownerPythonScriptRun", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
+        fun specialOwnerTask(task: UiTask) = isOwnerPhoneControlTask(task) || dev.pocketengine.features.devices.OwnerWindowsWorkspaceRead.marked(task.raw) || setOf("ownerRuntimeSetup", "ownerLocalTerminal", "ownerDirectNodeBuild", "ownerDirectViteBuild", "ownerDirectNodeDependencies", "ownerPythonScriptRun", "ownerBackupUpload", "ownerStorageCleanup", "ownerArchivePhase", "ownerGit", "ownerGitImport", "ownerGitPublication", "ownerMcpDiscovery").any(task.raw::has) || MediaOwnerUi.isTask(task.raw) || task.raw.optJSONObject("sourceLearningJob") != null || task.raw.optJSONObject("nativeEventTypeFlags")?.optBoolean("memory_owner_consolidation") == true || task.raw.optJSONArray("events").objects().any { it.optString("type") == "memory_owner_consolidation" }
+
+        private fun singleWindowsReadTask(task: UiTask): Boolean {
+            val raw=task.raw
+            return raw.opt(dev.pocketengine.features.devices.OwnerWindowsWorkspaceRead.FIELD)==true && raw.opt("id")==task.id &&
+                raw.opt("kind")=="assistant" && raw.opt("executionMode")=="capabilities" && raw.opt("actorId")=="owner" &&
+                raw.opt("spaceId")=="private" && raw.opt("conversationId")=="" && raw.isNull("origin") &&
+                raw.optString("runId").isNotBlank() && raw.optInt("coordinatorEpoch")==1 &&
+                runCatching { dev.pocketengine.features.devices.DirectedWorkspaceTarget.fromTask(raw) != null }.getOrDefault(false)
+        }
 
         fun runtimeSetupTask(task: UiTask) = task.raw.optJSONObject("ownerRuntimeSetup") != null &&
             task.raw.optString("kind") == "tool" && task.raw.optString("actorId") == "owner" &&
@@ -297,7 +306,7 @@ internal class PocketWebTaskActions(
                 scope.opt("modelDispatchAllowed")==false && scope.opt("replayAllowed")==false
         }
 
-        fun canStopDirectly(task: UiTask) = runtimeSetupTask(task) || directNodeBuildTask(task) || !specialOwnerTask(task) &&
+        fun canStopDirectly(task: UiTask) = runtimeSetupTask(task) || directNodeBuildTask(task) || singleWindowsReadTask(task) || !specialOwnerTask(task) &&
             task.raw.optString("executionRole") != "owner_work" && (isPhoneTask(task) || task.raw.optString("kind") == "assistant")
 
         private fun isGroup(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") == "group"

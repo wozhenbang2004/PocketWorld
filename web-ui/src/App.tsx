@@ -72,7 +72,7 @@ import {useNavigationGlass} from './useNavigationGlass';
 import {NavigationChrome} from './NavigationChrome';
 import {WorkObjectMenu} from './WorkObjectMenu';
 import {retainedLocalScriptOutputs,TaskCapabilityWorkspace} from './TaskCapabilityWorkspace';
-import {DeviceTaskScopeWorkspace} from './DeviceTaskScopeWorkspace';
+import {canReviewDirectWorkspaceFile, DeviceTaskScopeWorkspace, isUnstartedDirectWorkspaceWork} from './DeviceTaskScopeWorkspace';
 import type {SentPhoneGoalFocus} from './devices-workspace';
 import {PhoneControlWorkspace} from './PhoneControlWorkspace';
 import {OriginalWindowsWorkspaceOverview} from './OriginalWindowsTextRead';
@@ -6185,6 +6185,9 @@ export default function App(){
     actions.includes('tasks.resume')&&!projectContinuation(review))return null;
   return original;
  };
+ const workspaceFileOverview=(task:Task)=>taskOpen&&!taskOpening&&openedTaskId.current===task.id&&taskLayer==='overview'&&
+  !phoneViewerObscured&&!phoneViewerExpanded&&!document.hidden&&can('deviceTaskScope.open')&&
+  obj(snapshot?.view).taskId===task.id&&obj(snapshot?.view).section===null&&obj(snapshot?.view).resumeRevision===openedTaskResumeRevision.current;
  const taskReviewBody=(task:Task)=>{
   if(teamReportInOverview?.visit.parent.taskId===task.id){
    const mode=teamReportInOverview;
@@ -6584,6 +6587,9 @@ export default function App(){
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.ownerDeviceWork&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'device:'+task.id} taskId={task.id} run={act} directed={task.raw.ownerDeviceWork.directPhone} directedWorkspace={task.raw.ownerDeviceWork.directWorkspace}
        startedPhone={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&!!task.raw.runId&&Number.isSafeInteger(task.raw.coordinatorEpoch)&&task.raw.coordinatorEpoch>0}
        canReadDispatch={can('deviceTaskScope.readPhoneDispatchFact')}
+       workspaceFileActive={workspaceFileOverview(task)} workspaceFileDisabled={reviewSubmitted}
+       workspaceFileModelStart={workspaceFileOverview(task)&&review?.task?.id===task.id&&!reviewStale&&can('tasks.resume')&&actionNames.includes('tasks.resume')?
+         {disabled:protectedDisabled,start:()=>reviewedAction('tasks.resume',{confirmed:true,feedback:reviewNote})}:undefined}
        onOpenOriginal={task.raw.ownerDeviceWork.directPhone&&can('devices.readPhoneGoalArchive')?()=>{const p=task.raw!.ownerDeviceWork.directPhone;
          void openRelatedWorkspace('devices',undefined,()=>setSentPhoneFocus({taskId:task.id,deviceId:p.deviceId,instanceId:p.instanceId,certificateFingerprint:p.certificateFingerprint,navigation:navigationWindow.current}));}:undefined} onBackChange={registerDeviceScopeBack} onSaved={()=>loadTaskReview(task.id)} onOpenDevices={()=>{
          if(!taskOpen || openedTaskId.current!==task.id || document.hidden) return;
@@ -6764,11 +6770,14 @@ export default function App(){
    return <footer className="pw-task-footer" data-fixed-draft-acceptance={original?true:undefined}>{taskResultDecision(task,disabled)}</footer>;
   }
   if(taskLayer==='overview'&&actions.includes('tasks.resume')){
+   if(workspaceFileOverview(task)&&review?.task?.id===task.id&&can('tasks.resume')&&canReviewDirectWorkspaceFile(task.id,snapshot))return null;
    const note=projectFeedback[projectFeedbackKey(task)]||'';
    if(next&&note==='')return <footer className="pw-task-footer"><PressButton key="build-review-prefill" label="填写构建核对内容"
     disabled={disabled||continuationBlocks(continuations[task.id])} onClick={()=>prepareNextBuildNote(task,next)}/></footer>;
    const projectLabel=next&&note===nodeBuildContinuationText(next)?'继续核对本机构建':'在原范围内继续项目任务';
-   return <footer className="pw-task-footer"><PressButton label={project?projectLabel:task.raw?.ownerDeviceWork&&!task.raw?.runId?'开始这项设备工作':interruptedPrivatePhone(task,state.livePrivatePhones)?'在原任务另开一轮':'继续原任务'} disabled={disabled||!!project&&(continuationBlocks(continuations[task.id])||!note.trim()||note.trim().length>8000)} onClick={()=>reviewedAction('tasks.resume',{confirmed:true,feedback:reviewNote})}/></footer>;
+   const startLabel=project?projectLabel:isUnstartedDirectWorkspaceWork(task.id,snapshot)?'使用模型开始':
+    task.raw?.ownerDeviceWork&&!task.raw?.runId?'开始这项设备工作':interruptedPrivatePhone(task,state.livePrivatePhones)?'在原任务另开一轮':'继续原任务';
+   return <footer className="pw-task-footer"><PressButton label={startLabel} disabled={disabled||!!project&&(continuationBlocks(continuations[task.id])||!note.trim()||note.trim().length>8000)} onClick={()=>reviewedAction('tasks.resume',{confirmed:true,feedback:reviewNote})}/></footer>;
   }
   return null;
  };

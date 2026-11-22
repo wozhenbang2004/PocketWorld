@@ -1081,7 +1081,10 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebDeviceTaskScope.COMMANDS) {
                 if (action == "deviceTaskScope.prepare") requireSection("devices")
-                if (action == "deviceTaskScope.open") {
+                val workspaceFile = action in PocketWebDeviceTaskScope.WORKSPACE_FILE_COMMANDS
+                if (workspaceFile && action != PocketWebDeviceTaskScope.DISMISS_WORKSPACE_FILE)
+                    require(section == null && taskViewId != null && controller.webPrivateOwnerVisible()) { "请回到这份原私人电脑工作。" }
+                if (action == "deviceTaskScope.open" || action == PocketWebDeviceTaskScope.REVIEW_WORKSPACE_FILE) {
                     val selected = requireTask(requiredString(args, "taskId"))
                     require(selected.id == taskViewId && selected.raw.optString("actorId") == "owner" && selected.raw.optString("spaceId") == "private") { "请先打开这份原私人任务" }
                 }
@@ -1095,7 +1098,7 @@ internal class PocketWebBridge(
                 deviceTaskScope.dispatch(action, input) { result, error ->
                     if (action == "deviceTaskScope.prepare" && error == null && result?.optBoolean("prepared") == true)
                         openOriginalTask(id, result.getString("taskId"), true, "devices")
-                    else { complete(id, result, error, retainValue = action != "deviceTaskScope.readPhoneDispatchFact"); publishState() }
+                    else { complete(id, result, error, retainValue = !workspaceFile && action != "deviceTaskScope.readPhoneDispatchFact"); publishState() }
                 }; return
             }
             if (action in PocketWebTaskCapabilities.COMMANDS) {

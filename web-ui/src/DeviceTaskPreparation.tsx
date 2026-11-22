@@ -47,7 +47,7 @@ export function DeviceTaskPreparation({ open, run, onClose, onPendingChange, pho
     <div className="pw-collaboration-dialog">
       <p>{phone ? <>只给 <strong><bdi>{phone.label}</bdi>{deviceChoiceCode(phone.deviceId)&&` · ${deviceChoiceCode(phone.deviceId)}`}</strong> 准备这份工作。先存本机，不联系它；在原任务中单独核对可用范围，不会改用其他设备。</> : '先把目标保存在手机，不联系其他设备。回到原任务后，由你核对范围并选择设备。'}</p>
       <TextAreaField label="要完成什么" value={goal} onChange={setGoal} isDisabled={pending || unknown} placeholder={workspace ? '例如：整理这个已授权工作区中的项目结构' : '例如：在另一台手机的已授权应用中找到订单，整理状态'} />
-      <p>{workspace ? '下一步核对电脑授权的工作区，再看实际允许列目录、读小型 UTF-8 文本中的哪些操作。目标里写文件名，不会把工作区授权缩成一个文件。启动后，读取结果会交给本机选定的模型。不改文件、不运行命令、不看屏幕。' : phone ? '接下来可以核对它允许本机助手使用哪些工具，或它是否能用自己的模型接手。' : '由本机当前所选模型协调，只使用你选择的远端设备工具，不挂本机通用工具或预读私人记忆。纯电脑操作不需要安装 Codex 或 Claude。'}</p>
+      <p>{workspace ? '下一步核对电脑授权的工作区。目标里写文件名，不等于已选择文件。使用模型开始时，读取结果交给本机所选模型；原工作若提供单文件读取，可核对一个相对路径再确认，不调用模型。不改文件、不运行命令、不看屏幕。' : phone ? '接下来可以核对它允许本机助手使用哪些工具，或它是否能用自己的模型接手。' : '由本机当前所选模型协调，只使用你选择的远端设备工具，不挂本机通用工具或预读私人记忆。纯电脑操作不需要安装 Codex 或 Claude。'}</p>
       <Accordion><AccordionItem id="budget" title="本次额度与期限" description={`工具 ${tools} 次 · 模型 ${models} 次 · ${minutes} 分钟`}>
         <TextField label="工具调用总上限" value={tools} onChange={setTools} inputMode="numeric" isDisabled={pending || unknown} hint="1–400，含本机发起调用及分给对端的额度，不会自动补满。" />
         <TextField label="模型调用总上限" value={models} onChange={setModels} inputMode="numeric" isDisabled={pending || unknown} hint="1–512，包含原任务模型与工具审批推理。" />

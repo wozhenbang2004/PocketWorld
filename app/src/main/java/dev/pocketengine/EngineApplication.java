@@ -645,6 +645,49 @@ public final class EngineApplication extends Application implements dev.pocketen
     private volatile OriginalDeviceSourceRoutes originalDeviceSourceRoutes;
     public void setOriginalDeviceSourceRoutes(OriginalDeviceSourceRoutes routes){originalDeviceSourceRoutes=java.util.Objects.requireNonNull(routes);}
     public boolean hasOriginalDeviceSourceRoutes(){return originalDeviceSourceRoutes!=null;}
+    /** Owner's selected workspace and one path. Reading signed local grants does not contact Windows. */
+    public TaskStore.OwnerWindowsWorkspaceReadReview reviewOwnerWindowsWorkspaceRead(String task,String path,
+            java.util.function.BooleanSupplier window)throws Exception {
+        var owner=deviceWorkspaceOwner;
+        if(!businessReady()||owner==null||originalDeviceSourceRoutes==null)throw new SecurityException("原设备工作区尚未准备。");
+        return tasks.reviewOwnerWindowsWorkspaceRead(task,path,owner.nativeOutgoingGrants(),window);
+    }
+    /** The real unstarted Work admits one native tool, in competition with its ordinary first start. */
+    public JSONObject startOwnerWindowsWorkspaceRead(TaskStore.OwnerWindowsWorkspaceReadReview review)throws Exception {
+        synchronized(assistantAdmissions){
+            var routes=originalDeviceSourceRoutes;
+            if(!businessReady()||routes==null||deviceControlWorkers.isShutdown())throw new IllegalStateException("原设备读取队列暂不可用。");
+            var admitted=java.util.Objects.requireNonNull(review).start();String id=admitted.taskId();RunControl original=admitted.control();
+            if(capabilityControls.putIfAbsent(id,original)!=null){
+                try{admitted.finish();}finally{original.cancel();pushTask(id);}
+                throw new SecurityException("原工作控制已变化，没有派发文件读取。");
+            }
+            try{deviceControlWorkers.execute(()->{
+                CapabilityPort candidate=null;
+                try{
+                    original.check();candidate=routes.forOriginalRun(id,original);
+                    if(!(candidate instanceof dev.pocketengine.features.devices.DeviceCapabilityPort port))
+                        throw new SecurityException("没有原工作区的实际已签路由。");
+                    admitted.read(port);
+                }catch(Exception unavailable){/* No replacement route or second send. Finish from the original SQL evidence. */}
+                finally{
+                    try{admitted.finish();}catch(Exception unconfirmed){error("原文件读取回执登记尚未核对，请回原工作查看。");}
+                    finally{original.cancel();capabilityControls.remove(id,original);if(candidate!=null)try{candidate.close();}catch(Exception ignored){}pushTask(id);}
+                }
+            });}catch(java.util.concurrent.RejectedExecutionException unavailable){
+                try{admitted.finish();}finally{original.cancel();capabilityControls.remove(id,original);pushTask(id);}
+            }
+            pushTask(id);return admitted.registration();
+        }
+    }
+    private JSONObject stopOwnerWindowsWorkspaceRead(String id,String run,int epoch)throws Exception {
+        JSONObject actual=tasks.get(id,false);RunControl original=capabilityControls.get(id);
+        if(!dev.pocketengine.features.devices.OwnerWindowsWorkspaceRead.marked(actual)||!run.equals(actual.opt("runId"))||epoch!=actual.optInt("coordinatorEpoch"))
+            throw new SecurityException("原文件工作已变化，没有停止其他工作。");
+        if(original!=null&&original.matchesHostRun(id,run,epoch)){try{tasks.requestCancel(id,run);}finally{original.cancel();pushTask(id);}}
+        // Do not send operation.cancel; a stateless read already sent may still have its original receipt.
+        return tasks.get(id,false);
+    }
     /** The owner page retains the native review/session. No model route or AgentRunner is used. */
     public dev.pocketengine.features.devices.OwnerPhoneControlSession startOwnerPhoneControl(TaskStore.OwnerPhoneControlReview review)throws Exception {
         OriginalDeviceSourceRoutes routes=originalDeviceSourceRoutes;OriginalDeviceChildStops stops=originalDeviceChildStops;
@@ -3832,6 +3875,11 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         RunControl.HostRunIdentity run=control.hostRunIdentity();
         if(run==null){control.cancel();return;}
         String id=run.taskId();
+        if(dev.pocketengine.features.devices.OwnerWindowsWorkspaceRead.marked(tasks.get(id,false))){
+            if(capabilityControls.get(id)==control)stopOwnerWindowsWorkspaceRead(id,run.runId(),run.epoch());
+            else control.cancel();
+            return;
+        }
         FeatureHost.RelatedTaskCancellation related=control.isCancelled()?null:captured!=null?captured:captureOriginalRelatedStops(id,run.runId(),run.epoch());
         synchronized(tasks){
             boolean retry=pendingCapabilityStops.get(id)==control;
@@ -4428,6 +4476,8 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         if(memoryConsolidationTask(id))throw new SecurityException("记忆提炼只能回到原候选审阅，不进入通用模型续跑");
         if(features.ownsMediaTask(id))throw new SecurityException("媒体任务只可在原操作中查询、取回或定向取消，不能进入模型续跑");
         JSONObject task=tasks.get(id,false);if(task==null||!task.optString("kind").equals("assistant"))throw new IllegalArgumentException("不是可恢复的能力任务");
+        if(dev.pocketengine.features.devices.OwnerWindowsWorkspaceRead.marked(task))
+            throw new SecurityException("这次原文件只可查看留存或查询原回执，不重新读取、不调用模型。");
         if(expectedRun!=null&&(!expectedRun.equals(task.optString("runId"))||expectedEpoch!=task.optInt("coordinatorEpoch")))throw new SecurityException("原能力执行已变化，请重新核对后继续");
         if("owner_work".equals(task.optString("executionRole"))&&approval==null){
             if(expectedRun==null||voice!=null||roundContinuation!=null||developmentContinuation||feedback!=null&&!feedback.isBlank())throw new SecurityException("请通过原工作准确身份继续，补充先进入原消息邮箱");
@@ -4935,7 +4985,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 }else if(group&&groupTaskHost!=null)groupTaskHost.publishTaskState(id);else if(channelTaskHost!=null)channelTaskHost.publishTaskState(id);
                 return task;
             }
-            case "stopTask":{String id=input.getString("taskId");JSONObject originalStopTask=tasks.get(id,false);if(originalStopTask==null)throw new SecurityException("原停止任务不存在");if(originalStopTask.has("sourceLearningJob")){Object run=input.opt("runId"),epoch=input.opt("epoch");if(!(run instanceof String)||!(epoch instanceof Integer||epoch instanceof Long))throw new SecurityException("停止原学习任务须携带所读取的执行身份");return stopSourceLearningJob(id,(String)run,Math.toIntExact(((Number)epoch).longValue()));}JSONObject originalStop=originalTaskActionTarget(input,originalStopTask);String stopRun=originalStop.getString("runId");int stopEpoch=originalStop.getInt("epoch");tasks.requireOriginalExecutionStopTarget(originalStop);if(originalStopTask.has("ownerDeviceWork")&&stopRun.isEmpty()&&stopEpoch==0){JSONObject stopped=tasks.cancelUnstartedOwnerDeviceWork(input);pushTask(id);return stopped;}if(originalStopTask.has(dev.pocketengine.features.local.runtime.RuntimeSetupHost.KEY))return runtimeSetupForOwner().cancel(id,stopRun,stopEpoch);if(originalStopTask.has("ownerLocalTerminal")){JSONObject stopped=features.localTerminalForOwner(id,true);pushTask(id);return stopped;}if(originalStopTask.has(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.VITE_FIELD))throw new SecurityException("此本机网页构建没有停止入口，请回原工作核对执行");if(originalStopTask.has(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.FIELD)){JSONObject stopped=features.directNodeBuildForOwner(id,true);pushTask(id);return stopped;}if(features.ownsMcpDiscoveryTask(id)){JSONObject stopped=features.observeMcpDiscoveryForOwner(id,true);pushTask(id);return stopped;}if(features.ownsGitImportTask(id)){JSONObject stopped=features.stopGitImportForOwner(id);pushTask(id);return stopped;}if(features.ownsOwnerStorageTask(id)){JSONObject stopped=features.cancelOwnerStorageCleanupForOwner(id);pushTask(id);return stopped;}if(features.ownsOwnerArchiveTask(id)){JSONObject stopped=features.cancelOwnerArchivePhaseForOwner(id);pushTask(id);return stopped;}JSONObject ownerGit=tasks.get(id,false);if(ownerGit!=null&&ownerGit.has("ownerBackupUpload")){JSONObject stopped=features.ownerBackupWebDav(this).cancelUpload(id);pushTask(id);return stopped;}if(ownerGit!=null&&ownerGit.has("ownerGit")){JSONObject stopped=features.projectGitForOwner(id,true);pushTask(id);return stopped;}if(memoryConsolidationTask(id))return cancelMemoryConsolidation(capabilityControls.get(id));if(features.ownsMediaTask(id)){JSONObject stopped=features.cancelOriginalMediaTask(id,stopRun,stopEpoch);pushTask(id);return stopped==null?json("taskId",id,"status","no_local_wait","providerStateConfirmed",false):stopped;}JSONObject task=tasks.get(id,false);JSONObject source=task==null?null:task.optJSONObject("origin");if(teamWriteOrigin(task)){
+            case "stopTask":{String id=input.getString("taskId");JSONObject originalStopTask=tasks.get(id,false);if(originalStopTask==null)throw new SecurityException("原停止任务不存在");if(originalStopTask.has("sourceLearningJob")){Object run=input.opt("runId"),epoch=input.opt("epoch");if(!(run instanceof String)||!(epoch instanceof Integer||epoch instanceof Long))throw new SecurityException("停止原学习任务须携带所读取的执行身份");return stopSourceLearningJob(id,(String)run,Math.toIntExact(((Number)epoch).longValue()));}JSONObject originalStop=originalTaskActionTarget(input,originalStopTask);String stopRun=originalStop.getString("runId");int stopEpoch=originalStop.getInt("epoch");tasks.requireOriginalExecutionStopTarget(originalStop);if(dev.pocketengine.features.devices.OwnerWindowsWorkspaceRead.marked(originalStopTask)){tasks.requireReviewedPrivateTaskAttempt(input);return stopOwnerWindowsWorkspaceRead(id,stopRun,stopEpoch);}if(originalStopTask.has("ownerDeviceWork")&&stopRun.isEmpty()&&stopEpoch==0){JSONObject stopped=tasks.cancelUnstartedOwnerDeviceWork(input);pushTask(id);return stopped;}if(originalStopTask.has(dev.pocketengine.features.local.runtime.RuntimeSetupHost.KEY))return runtimeSetupForOwner().cancel(id,stopRun,stopEpoch);if(originalStopTask.has("ownerLocalTerminal")){JSONObject stopped=features.localTerminalForOwner(id,true);pushTask(id);return stopped;}if(originalStopTask.has(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.VITE_FIELD))throw new SecurityException("此本机网页构建没有停止入口，请回原工作核对执行");if(originalStopTask.has(dev.pocketengine.features.local.project.OwnerDirectNodeBuild.FIELD)){JSONObject stopped=features.directNodeBuildForOwner(id,true);pushTask(id);return stopped;}if(features.ownsMcpDiscoveryTask(id)){JSONObject stopped=features.observeMcpDiscoveryForOwner(id,true);pushTask(id);return stopped;}if(features.ownsGitImportTask(id)){JSONObject stopped=features.stopGitImportForOwner(id);pushTask(id);return stopped;}if(features.ownsOwnerStorageTask(id)){JSONObject stopped=features.cancelOwnerStorageCleanupForOwner(id);pushTask(id);return stopped;}if(features.ownsOwnerArchiveTask(id)){JSONObject stopped=features.cancelOwnerArchivePhaseForOwner(id);pushTask(id);return stopped;}JSONObject ownerGit=tasks.get(id,false);if(ownerGit!=null&&ownerGit.has("ownerBackupUpload")){JSONObject stopped=features.ownerBackupWebDav(this).cancelUpload(id);pushTask(id);return stopped;}if(ownerGit!=null&&ownerGit.has("ownerGit")){JSONObject stopped=features.projectGitForOwner(id,true);pushTask(id);return stopped;}if(memoryConsolidationTask(id))return cancelMemoryConsolidation(capabilityControls.get(id));if(features.ownsMediaTask(id)){JSONObject stopped=features.cancelOriginalMediaTask(id,stopRun,stopEpoch);pushTask(id);return stopped==null?json("taskId",id,"status","no_local_wait","providerStateConfirmed",false):stopped;}JSONObject task=tasks.get(id,false);JSONObject source=task==null?null:task.optJSONObject("origin");if(teamWriteOrigin(task)){
                 RunControl member;synchronized(tasks){
                     tasks.requireTeamOwnerAttempt(input);member=features.teamControl(id);
                     if(member!=null&&!member.matchesHostRun(id,stopRun,stopEpoch))throw new SecurityException("原团队分工控制已变化，未取消后继执行");

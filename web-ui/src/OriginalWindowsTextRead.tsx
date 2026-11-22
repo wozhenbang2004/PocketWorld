@@ -213,7 +213,13 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
       const folder = other && receivedOriginalWindowsDirectoryAt(task, other, page, { read, operation, bytes: received.bytes });
       if (folder?.linkedFileIndex !== undefined)
         return { kind: 'directory' as const, received: folder, linked: { original, received }, resumeRevision };
-      return { kind: 'text' as const, original, received, resumeRevision };
+      const path: unknown = read.args?.path;
+      // The dedicated completed Work accepted only one literal workspace path.
+      // The existing receipt parser already matched this operation's path to the returned file.
+      const exactPath = raw.ownerWindowsWorkspaceRead === true && raw.status === 'completed' && original.epoch === 1 && current.length === 1 &&
+        typeof path === 'string' && !/[:\\\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(path) &&
+        path.split('/').every(part => part !== '' && part !== '.' && part !== '..') ? path : undefined;
+      return { kind: 'text' as const, original, received, resumeRevision, exactPath };
     }
   }
   // Do not choose a directory from several results or put a second action beside the text result.
@@ -259,10 +265,11 @@ export function OriginalWindowsWorkspaceOverview({ taskId }: { taskId: string })
         documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null} checkOverview={sameDirectory}/>}/>;
   }
   return <ReceivedOriginalWindowsText key={key}
-    original={source.original} received={source.received} documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null} checkOverview={live => {
+    original={source.original} received={source.received} documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null} singleFilePath={source.exactPath} checkOverview={live => {
       if (live === snapshot) return true;
       const current = overviewWindowsRead(live, taskId);
-      return current?.kind === 'text' && current.resumeRevision === resumeRevision && sameReceived(current.received, source.received);
+      return current?.kind === 'text' && current.resumeRevision === resumeRevision && current.exactPath === source.exactPath &&
+        sameReceived(current.received, source.received);
     }}/>;
 }
 
@@ -316,8 +323,9 @@ function OriginalWindowsDirectory({ received, current, linked }: { received: Rec
   </section>;
 }
 
-export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback, checkOverview, choice }: {
+export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback, checkOverview, choice, singleFilePath }: {
   original: Original; received: Received; documentEpoch: number; sourceRevision: string; fallback: ReactNode;
+  singleFilePath?: string;
   checkOverview?: (live: PocketSnapshot) => boolean;
   choice?: { label: ReactNode; selected: boolean; isCurrent: () => boolean; choose: () => void };
 }) {
@@ -373,9 +381,10 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
     if (checked && stamp === sequence.current && latest.current.generation === generation && current() && (!choice || choice.isCurrent()))
       setPage(value => Math.max(0, Math.min(pageCount - 1, value + step)));
   };
+  const filePath = singleFilePath ? <bdi style={{ overflowWrap: 'anywhere' }}>{singleFilePath}</bdi> : null;
   return <section className="pw-operation-entry" aria-label="本机收到的原电脑文本">
     {checked ? <>
-      <h4>{choice?.label ?? '当时读到的文本'}</h4>
+      <h4>{choice?.label ?? (filePath ? <>当时读到的文本 · {filePath}</> : '当时读到的文本')}</h4>
       <p className="pw-muted">本机当时已收到完整文本 · 原文件 {received.bytes} 字节。不重新读取电脑。</p>
       {received.bytes === 0 ? <p>原回执已核对：当时文件为 0 字节。</p> :
         <pre className="pw-source-copy" dir="auto" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.slice(index > 0 ? ends[index - 1] : 0, ends[index])}</pre>}
@@ -386,7 +395,7 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
       </nav>}
       <Button variant="ghost" onClick={clear}>关闭原文本</Button>
     </> : <Button variant="secondary" disabled={busy || !inWindow} onClick={() => void read()}>
-      {busy ? '正在核对本机原文本…' : choice ? <>查看 {choice.label}</> : checkOverview ? '查看这次收到的原文本' : '查看本机收到的原文本'}
+      {busy ? '正在核对本机原文本…' : choice ? <>查看 {choice.label}</> : filePath ? <>查看原文本 · {filePath}</> : checkOverview ? '查看这次收到的原文本' : '查看本机收到的原文本'}
     </Button>}
   </section>;
 }
