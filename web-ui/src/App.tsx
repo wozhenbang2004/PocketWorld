@@ -1091,6 +1091,8 @@ export default function App(){
  const taskTransientBack=useRef<(()=>boolean)|null>(null);
  const receivedTextResultBack=useRef<(()=>boolean)|null>(null);
  const registerReceivedTextResultBack=useCallback((handler:(()=>boolean)|null)=>{receivedTextResultBack.current=handler},[]);
+ const windowsTextResultBack=useRef<(()=>boolean)|null>(null);
+ const registerWindowsTextResultBack=useCallback((handler:(()=>boolean)|null)=>{windowsTextResultBack.current=handler},[]);
  const phoneWorkReportExit=useRef<{exited:()=>boolean;retire:()=>void}|null>(null);
  useEffect(()=>()=>phoneWorkReportExit.current?.retire(),[]);
  const originalPhoneToolOpen=useRef<((pin:OriginalPhoneToolRecord)=>boolean)|null>(null);
@@ -2703,7 +2705,7 @@ export default function App(){
  },[route,taskId,can,closeTask,currentPausedChatPhone]);
  const backFromTask=useCallback(()=>{
   if(taskMenuOpen){setTaskMenuOpen(false);return}
-  if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||receivedTextResultBack.current?.()||taskTransientBack.current?.()||closeCurrentWorkSupplement()||leaveTeamReport())return;
+  if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||receivedTextResultBack.current?.()||taskTransientBack.current?.()||closeCurrentWorkSupplement()||leaveTeamReport()||windowsTextResultBack.current?.())return;
   if(taskLayer==='scope'){showTaskLayer('goal');return}
   const origin=taskReconciliationOrigin.current;
   if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}
@@ -6621,7 +6623,7 @@ export default function App(){
     <section className="pw-task-overview pw-task-review" aria-label="这件工作的进展、决定与成果">
      {overviewActive&&<WorkExecutionPlace task={task} projects={projects} remoteProfiles={state.features?.remote?.profiles} canReadPhoneResources={!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')}/>}
      {mainPhoneRead&&<div className="pw-action-row"><Button variant="secondary" onClick={event=>openMainPhoneRead(task,mainPhoneRead,event.currentTarget)}>查看本轮已读到的主屏记录</Button></div>}
-     {overviewActive&&task.raw?.ownerDeviceWork?.directWorkspace&&!phoneViewerObscured&&!phoneViewerExpanded&&<OriginalWindowsWorkspaceOverview taskId={task.id} managePicker={workspaceFileOverview(task)}/>}
+     {overviewActive&&task.raw?.ownerDeviceWork?.directWorkspace&&!phoneViewerObscured&&!phoneViewerExpanded&&<OriginalWindowsWorkspaceOverview taskId={task.id} managePicker={workspaceFileOverview(task)} registerBack={registerWindowsTextResultBack}/>}
      {originalPhoneTool&&<div className="pw-action-row"><Button variant="secondary" leadingIcon={IconTool} onClick={event=>openOriginalPhoneTool(task,originalPhoneTool,event.currentTarget)}>查看本轮手机操作</Button></div>}
      {overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')&&<PhoneServiceRecovery key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} readiness={state.phoneReadiness} openSettings={can('settings.openSystem')?()=>act('settings.openSystem',{section:'accessibility'},task.id):undefined} review={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {taskOpen&&!taskOpening&&openedTaskId.current===task.id&&<PhoneMainOwnerStep key={'main-owner-step:'+task.id} task={task} visible={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&obj(snapshot?.view).taskId===task.id} run={act} can={can} onProcess={()=>showTaskLayer('process')}/>}
@@ -8968,7 +8970,7 @@ export default function App(){
    standaloneDocumentAttachmentDraft={standaloneDocumentAttachmentDraft}
    onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined} replyAttachmentDraft={existingPrivateAttachmentDraft} readWorkTextVisit={readWorkTextVisit}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
-  <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(compactChatQuestion){backFromTask();return}if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!receivedTextResultBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement()&&!leaveTeamReport())closeTask(true)}else setTaskOpen(true)}} direction={compactChatQuestion?'bottom':'right'} handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} data-chat-question={compactChatQuestion||undefined} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
+  <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(compactChatQuestion){backFromTask();return}if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!receivedTextResultBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement()&&!leaveTeamReport()&&!windowsTextResultBack.current?.())closeTask(true)}else setTaskOpen(true)}} direction={compactChatQuestion?'bottom':'right'} handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} data-chat-question={compactChatQuestion||undefined} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
    ownerRequestWindowId.current=null;
    if(phoneWorkReportExit.current?.exited()){chatWorkReturn.current=null;event.preventDefault();return;}

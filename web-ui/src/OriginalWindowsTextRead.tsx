@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { bridge, type PocketSnapshot } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { taskAuditPage, type AuditPage, type TaskHeader } from './task-history';
@@ -315,9 +315,12 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string): WindowsO
   if (received) return { kind: 'directory' as const, received, resumeRevision };
 }
 
+type RegisterTextBack = (handler: (() => boolean) | null) => void;
 /** Mount only in the active Work overview. Explicitly disclose an already-received
  * result; never open Process, ask the Windows peer, or start a new audit read. */
-export function OriginalWindowsWorkspaceOverview({ taskId, managePicker = false }: { taskId: string; managePicker?: boolean }) {
+export function OriginalWindowsWorkspaceOverview({ taskId, managePicker = false, registerBack }: {
+  taskId: string; managePicker?: boolean; registerBack?: RegisterTextBack;
+}) {
   const snapshot = usePocketSnapshot();
   const documentEpoch = useSyncExternalStore(bridge.subscribeDocumentEpoch, bridge.getDocumentEpoch, bridge.getDocumentEpoch);
   const source = documentEpoch > 0 ? overviewWindowsRead(snapshot, taskId) : undefined;
@@ -352,7 +355,8 @@ export function OriginalWindowsWorkspaceOverview({ taskId, managePicker = false 
         documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null} checkOverview={sameDirectory}/>}/>;
   }
   return <ReceivedOriginalWindowsText key={key}
-    original={source.original} received={source.received} documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null} singleFilePath={source.exactPath} checkOverview={live => {
+    original={source.original} received={source.received} documentEpoch={documentEpoch} sourceRevision={sourceRevision} fallback={null}
+    singleFilePath={source.exactPath} registerBack={source.exactPath ? registerBack : undefined} checkOverview={live => {
       if (live === snapshot) return true;
       const current = overviewWindowsRead(live, taskId);
       return current?.kind === 'text' && current.resumeRevision === resumeRevision && current.exactPath === source.exactPath &&
@@ -411,19 +415,25 @@ function OriginalWindowsDirectory({ received, current, linked }: { received: Rec
   </section>;
 }
 
-export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback, checkOverview, choice, singleFilePath }: {
+export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback, checkOverview, choice, singleFilePath, registerBack }: {
   original: Original; received: Received; documentEpoch: number; sourceRevision: string; fallback: ReactNode;
-  singleFilePath?: string;
+  singleFilePath?: string; registerBack?: RegisterTextBack;
   checkOverview?: (live: PocketSnapshot) => boolean;
   choice?: { label: ReactNode; selected: boolean; isCurrent: () => boolean; choose: () => void };
 }) {
   const [check, setCheck] = useState<{ generation: number; verified: boolean } | null>(null);
   const [busy, setBusy] = useState(false), [page, setPage] = useState(0);
+  const reveal = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef<{ sequence: number; generation: number; previous: Element | null } | null>(null);
   const latest = useRef({ source: received, generation: 0 }), alive = useRef(true), sequence = useRef(0), reading = useRef(false);
   // Keep no copy of the verified text: the display stamp follows only this loaded row.
   const generation = latest.current.generation + (sameReceived(latest.current.source, received) ? 0 : 1);
   latest.current = { source: received, generation };
-  const clear = () => { sequence.current++; reading.current = false; setCheck(null); setBusy(false); setPage(0); };
+  const clear = (restore = false) => {
+    const next = ++sequence.current;
+    returnFocus.current = restore ? { sequence: next, generation, previous: document.activeElement } : null;
+    reading.current = false; setCheck(null); setBusy(false); setPage(0);
+  };
   useEffect(() => {
     alive.current = true;
     const visibility = () => { if (document.hidden) clear(); };
@@ -457,8 +467,30 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
     }
   };
   const inWindow = current();
-  if (checkOverview && !inWindow) return null;
   const checked = inWindow && (!choice || choice.selected && choice.isCurrent()) && check?.generation === generation ? check : null;
+  const close = () => clear(!!registerBack && current());
+  // This disclosure is a level of the same Work, not its own navigation or read.
+  useLayoutEffect(() => {
+    if (!registerBack || checked?.verified !== true) return;
+    registerBack(() => {
+      if (!current() || latest.current.generation !== generation) return false;
+      close();
+      return true;
+    });
+    return () => registerBack(null);
+  });
+  useLayoutEffect(() => {
+    const restore = returnFocus.current, target = reveal.current;
+    if (!restore || busy || checked) return;
+    returnFocus.current = null;
+    if (restore.sequence !== sequence.current || restore.generation !== generation || !current() ||
+      !target?.isConnected || target.disabled || target.closest('[hidden],[inert],[aria-hidden="true"]')) return;
+    const focused = document.activeElement;
+    if (focused !== restore.previous && focused !== document.body && focused !== target) return;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ block: 'nearest' });
+  });
+  if (checkOverview && !inWindow) return null;
   if (checked?.verified === false) return <><p role="status">本机收到的原文本无法核对或超过显示范围，未显示正文。</p>{fallback}</>;
   // Derive the displayed pages only while the original already-loaded receipt is
   // still current. No extra body cache, history read, peer call or file operation.
@@ -481,8 +513,8 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
         <span role="status">第 {index + 1} / {pageCount} 段</span>
         <Button variant="ghost" disabled={index === pageCount - 1} onClick={() => go(1)}>下一段</Button>
       </nav>}
-      <Button variant="ghost" onClick={clear}>关闭原文本</Button>
-    </> : <Button variant="secondary" disabled={busy || !inWindow} onClick={() => void read()}>
+      <Button variant="ghost" onClick={close}>关闭原文本</Button>
+    </> : <Button ref={registerBack ? reveal : undefined} variant="secondary" disabled={busy || !inWindow} onClick={() => void read()}>
       {busy ? '正在核对本机原文本…' : choice ? <>查看 {choice.label}</> : filePath ? <>查看原文本 · {filePath}</> : checkOverview ? '查看这次收到的原文本' : '查看本机收到的原文本'}
     </Button>}
   </section>;
