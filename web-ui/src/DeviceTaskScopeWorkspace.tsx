@@ -44,7 +44,7 @@ function workspaceReadFacts(value: Data, original?: OriginalDevice): WorkspaceRe
     actions: [agreed.has('workspace.list') && '列目录', agreed.has('workspace.read') && '读小型 UTF-8 文本'].filter(Boolean).join('、') };
 }
 
-function ScopeFacts({ value, peers, names, human = false, workspace }: { value: Data; peers: Data[]; names:Data[]; human?: boolean; workspace?: WorkspaceReadFacts }) {
+function ScopeFacts({ value, peers, names, human = false, workspace, firstBrowse = false }: { value: Data; peers: Data[]; names:Data[]; human?: boolean; workspace?: WorkspaceReadFacts; firstBrowse?: boolean }) {
   const resource = value.resourceBinding || {};
   const declarations = Array.isArray(value.toolDeclarations) ? value.toolDeclarations : Object.entries(value.toolDeclarations || {}).map(([toolName, effect]) => ({ toolName, effect }));
   const writes = declarations.filter(row => row.effect === 'write').length, external = declarations.filter(row => row.effect === 'external').length;
@@ -57,11 +57,13 @@ function ScopeFacts({ value, peers, names, human = false, workspace }: { value: 
       <div><dt>使用方式</dt><dd>{routeTitle(value, human)}</dd></div>
       <div><dt>作用范围</dt><dd>{workspace ? <>电脑工作区 <bdi style={{overflowWrap:'anywhere'}}>{workspace.id}</bdi></> : target}</dd></div>
       <div><dt>{workspace ? '允许的读取' : '操作影响'}</dt><dd>{workspace ? workspace.actions : human ? '你逐次进行全屏输入；不调用模型，不继承 AI 自动操作权限' : phoneTextOnly(value) ? '对方不使用工具；机主核对后，本机可从原工作查看最多 2,048 个字的摘要' : value.kind === 'goal' ? '对端模型在原授权工具范围内处理目标' : writes || external ? `含 ${writes} 项写入操作、${external} 项外部影响能力，执行时仍受原工具审批约束` : declarations.length && declarations.every(row => row.effect === 'read') ? '当前列出的工具仅报告读取能力' : '尚未取得完整操作影响，不能推定只读'}</dd></div>
-      {value.toolBudget !== undefined && <div><dt>累计份额</dt><dd>工具 {value.toolBudget} 次 · 模型 {value.modelBudget} 次</dd></div>}
+      {!firstBrowse && value.toolBudget !== undefined && <div><dt>累计份额</dt><dd>工具 {value.toolBudget} 次 · 模型 {value.modelBudget} 次</dd></div>}
       {value.deadline && <div><dt>截止</dt><dd>{time(value.deadline)}</dd></div>}
     </dl>
     {!human && resource.screenMode && resource.allowWholeDisplayCapture === true && <p>画面留存：从“新设备工作”建立的任务，已验证的手机观察帧会按本机“截图留存”设置加密保存为历史快照，默认 1 天；关闭留存则不会在任务中显示新图。只保留最近一张，单张不超过 4 MB，不是实时视频或点图控制。</p>}
-    <Accordion><AccordionItem id="exact-resource" title="核对准确身份与工具"><dl className="pw-facts"><div><dt>设备身份</dt><dd>{value.targetDeviceId}</dd></div><div><dt>准确资源</dt><dd>{JSON.stringify(resource)}</dd></div><div><dt>明确工具</dt><dd>{tools(value.toolDeclarations)}</dd></div></dl></AccordionItem></Accordion>
+    <Accordion><AccordionItem id="exact-resource" title={firstBrowse ? '用量与准确身份' : '核对准确身份与工具'}><dl className="pw-facts"><div><dt>设备身份</dt><dd>{value.targetDeviceId}</dd></div><div><dt>准确资源</dt><dd>{JSON.stringify(resource)}</dd></div><div><dt>明确工具</dt><dd>{tools(value.toolDeclarations)}</dd></div>
+      {firstBrowse && <div><dt>无模型浏览的用量上限</dt><dd>电脑工具最多 {value.toolBudget} 次，每次另占 1 次手机派发额度；不占用模型调用。</dd></div>}
+    </dl></AccordionItem></Accordion>
   </>;
 }
 
@@ -456,9 +458,11 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const [open, setOpen] = useState(false), [view, setView] = useState<Data | null>(null), [drafts, setDrafts] = useState<Record<string, RouteDraft>>({});
   const [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [removeUnavailable, setRemoveUnavailable] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [manualScope, setManualScope] = useState(false);
   const [workspaceFilePending, setWorkspaceFilePending] = useState(false);
   const mounted = useRef(true), working = useRef(false), generation = useRef(0), page = useRef(''), reviewHandle = useRef('');
   const pendingSave = useRef(false), initialDraft = useRef('');
+  const browseReviewSummary = useRef<HTMLParagraphElement>(null);
   const resultBack = useRef<(() => boolean) | null>(null);
   const registerResultBack = useCallback((next: (() => boolean) | null) => { resultBack.current = next; }, []);
   const [discard, setDiscard] = useState<'close' | 'reload' | 'devices' | null>(null);
@@ -484,6 +488,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     return () => { unsubscribe(); document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', pageHidden); };
   }, []);
   useEffect(() => { onBackChange?.(() => { if (!open) return resultBack.current?.() === true; if (busy) return true; if (discard) setDiscard(null); else if (review) dismissReview(); else requestExit('close'); return true; }); return () => onBackChange?.(null); }, [open, busy, review, discard, dirty, onBackChange]);
+  useLayoutEffect(() => { if (review?.firstBrowse === true) browseReviewSummary.current?.focus(); }, [review]);
   useEffect(() => {
     if (!review) return;
     const timer = window.setTimeout(() => { dismissReview(); setError('这次范围审阅已到期，请重新核对。'); }, Math.max(0, Number(review.reviewExpiresAt || Date.now() + 120_000) - Date.now()));
@@ -522,12 +527,12 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
         page.current = ''; setView(null); void run('deviceTaskScope.close', { pageHandle: value.pageHandle }).catch(() => {});
         throw new Error('读取的范围不属于准备时选定的原设备与能力，没有改用其他设备。');
       }
-      page.current = value.pageHandle; const next = Object.fromEntries(rows(value.options).map(option => [option.optionId, routeDraft(option, value)])); initialDraft.current = JSON.stringify(next); setView(value); setDrafts(next); setRemoveUnavailable(false);
+      page.current = value.pageHandle; const next = Object.fromEntries(rows(value.options).map(option => [option.optionId, routeDraft(option, value)])); initialDraft.current = JSON.stringify(next); setView(value); setDrafts(next); setRemoveUnavailable(false); setManualScope(false);
     });
   };
-  const acceptReview = (value: Data) => {
+  const acceptReview = (value: Data, firstBrowse = false) => {
     if (value?.pageHandle !== page.current || value?.taskId !== taskId || !value.reviewHandle) throw new Error('原设备范围审阅不完整，请重新读取。');
-    reviewHandle.current = value.reviewHandle; setReview(value); setAck(false);
+    reviewHandle.current = value.reviewHandle; setReview({ ...value, firstBrowse }); setAck(false);
   };
   // An empty first choice only saves an unusable policy. Explicitly clearing a saved scope remains available.
   const firstDirectedScope = !!view && !!originalTarget && !directedManual && (!!directed !== !!directedWorkspace) &&
@@ -552,7 +557,9 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     const captured = review; reviewHandle.current = ''; setReview(null); setAck(false); pendingSave.current = true;
     void invoke(captured.kind === 'import' ? 'deviceTaskScope.confirmImport' : 'deviceTaskScope.confirm', { pageHandle: page.current, reviewHandle: captured.reviewHandle, acknowledged: true }, value => {
       if (value?.saved !== true || value?.taskId !== taskId || value?.reviewHandle !== captured.reviewHandle) throw new Error('保存回执尚未匹配，请重新读取已保存范围。');
-      pendingSave.current = false; setNotice(captured.kind === 'import' ? '已保存这份原项目包的导入确认；实际导入仍由原任务执行。' : '设备范围已保存。尚未开始或重启任务；请在原任务明确开始或继续。'); setView(null); close(); onSaved?.();
+      pendingSave.current = false; setNotice(captured.kind === 'import' ? '已保存这份原项目包的导入确认；实际导入仍由原任务执行。' :
+        captured.firstBrowse ? '已保存所选工作区。请在原工作选择「浏览电脑文件」；还没有列目录或读取文件。' :
+        '设备范围已保存。尚未开始或重启任务；请在原任务明确开始或继续。'); setView(null); close(); onSaved?.();
     }).finally(() => {
       if (pendingSave.current && mounted.current) { pendingSave.current = false; setNotice('保存结果尚未确认。请重新读取已保存范围，没有自动重做。'); setView(null); }
     });
@@ -576,6 +583,66 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const workspaceFiles = directedWorkspace && !directed && !directedManual;
   const workspaceSnapshot = bridge.getState();
   const workspaceWork = workspaceFiles && workspaceFileActive ? originalWorkspaceFileWork(workspaceSnapshot, taskId) : undefined;
+  const browseChoices = (snapshot: PocketSnapshot, now = Date.now()) => {
+    if (!view || !open || !workspaceTarget || !workspaceFileActive || workspaceFileDisabled || workspaceFilePending ||
+      !firstDirectedScope || manualScope || dirty || chosenRange || error || pendingSave.current || reviewHandle.current ||
+      view.pageHandle !== page.current || view.contextMode !== 'goal_only' || view.budgetReserved !== false ||
+      !Number.isSafeInteger(view.toolsAvailable) || view.toolsAvailable < 4 ||
+      !Number.isSafeInteger(view.deadlineMaximum) || view.deadlineMaximum <= now ||
+      !workspacePickerCommands(snapshot) || !snapshot.capabilities.commands.includes('deviceTaskScope.review') ||
+      !snapshot.capabilities.commands.includes('deviceTaskScope.confirm')) return [];
+    const work = originalWorkspaceFileWork(snapshot, taskId), execution = record(work?.raw.executionScope);
+    if (!work || !workspaceFileUnstarted(work) || work.raw.deviceSourceScope != null ||
+      work.original.deviceId !== workspaceTarget.deviceId || work.original.instanceId !== workspaceTarget.instanceId ||
+      work.original.certificateFingerprint !== workspaceTarget.certificateFingerprint ||
+      !execution || !Number.isSafeInteger(view.scopeRevision) || view.scopeRevision < 1 ||
+      execution.revision !== view.scopeRevision || execution.executionPhase === 'planning' ||
+      !Number.isSafeInteger(execution.toolLimit) || !Number.isSafeInteger(execution.toolsUsed) ||
+      execution.toolLimit - execution.toolsUsed < 4) return [];
+    return options.flatMap(option => {
+      const facts = workspaceReadFacts(option, workspaceTarget), draft = drafts[option.optionId];
+      const deadline = Number(draft?.deadline);
+      return facts?.readsFile && facts.listsDirectory && option.executionAuthorized === false &&
+        typeof option.optionId === 'string' && /^option_[a-f0-9]{64}$/.test(option.optionId) &&
+        typeof option.sourceKey === 'string' && /^route_[a-f0-9]{64}$/.test(option.sourceKey) &&
+        typeof option.grantId === 'string' && !!option.grantId && Number.isSafeInteger(option.authorizationEpoch) && option.authorizationEpoch > 0 &&
+        Number.isSafeInteger(option.toolBudgetMaximum) && option.toolBudgetMaximum >= 2 && option.modelBudgetMaximum === 0 &&
+        emptyRows(option.downstreamOptions) && Number.isSafeInteger(option.deadlineMaximum) &&
+        Number.isSafeInteger(deadline) && now < deadline && deadline <= Math.min(view.deadlineMaximum, option.deadlineMaximum) &&
+        draft?.selected === false && options.filter(other => other.optionId === option.optionId ||
+          other.resourceBinding?.environmentId === facts.id).length === 1 ? [{ option, facts }] : [];
+    });
+  };
+  const quickBrowseChoices = !review ? browseChoices(workspaceSnapshot) : [];
+  const quickBrowse = quickBrowseChoices.length > 0;
+  const prepareBrowse = (option: Data) => {
+    if (!view || working.current || !mounted.current || document.visibilityState !== 'visible') return;
+    const now = Date.now(), candidate = browseChoices(bridge.getState(), now).find(row => row.option === option);
+    if (!candidate) { setError('当前工作区范围已经变化，请重新核对。'); return; }
+    const proposal = { ...drafts, [option.optionId]: { ...drafts[option.optionId], selected: true,
+      tools: '2', models: '0', localTools: '2', localModels: '0' } };
+    try {
+      // Translate the clicked row's immutable draft now. React state is only the preview/editor, not the review input.
+      const routes = scopeSelection(view, proposal, now), choice = routes[0];
+      if (routes.length !== 1 || choice.optionId !== option.optionId || choice.toolBudget !== 2 || choice.localToolShare !== 2 ||
+        choice.modelBudget !== 0 || choice.localModelShare !== 0 || !emptyRows(choice.shares) ||
+        !emptyRows(choice.files) || !emptyRows(choice.projects)) throw new Error('没有得到一个准确的工作区选择。');
+      void invoke('deviceTaskScope.review', { pageHandle: page.current, routes }, value => {
+        const route = rows(value?.routes)[0], facts = route && workspaceReadFacts(route, workspaceTarget);
+        if (value?.kind !== 'scope' || value.executionAuthorized !== false || value.budgetReserved !== false ||
+          value.contextMode !== 'goal_only' || value.goal !== view.goal || value.revision !== 1 || value.parentScopeRevision !== view.scopeRevision ||
+          !uuid(value.reviewHandle) || !Number.isSafeInteger(value.reviewExpiresAt) || value.reviewExpiresAt <= Date.now() ||
+          !Array.isArray(value.routes) || value.routes.length !== 1 || !facts?.listsDirectory || !facts.readsFile ||
+          facts.id !== candidate.facts.id || route.resourceBinding.binding !== option.resourceBinding.binding ||
+          route.optionId !== option.optionId || route.sourceKey !== option.sourceKey || route.grantId !== option.grantId ||
+          route.authorizationEpoch !== option.authorizationEpoch || !digest(route.grantFingerprint) || route.deadline !== choice.deadline ||
+          route.contextMode !== 'goal_only' || route.toolBudget !== 2 || route.localToolShare !== 2 || route.modelBudget !== 0 ||
+          route.localModelShare !== 0 || !emptyRows(route.downstreamShares) || !emptyRows(route.files) || !emptyRows(route.projects))
+          throw new Error('审阅与所选的原电脑工作区不符，未保存。请重新核对。');
+        acceptReview(value, true); setDrafts(proposal);
+      });
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+  };
   const workspaceFileReady = workspaceWork && canReviewDirectWorkspace(taskId, workspaceSnapshot);
   const workspaceFileRun = !!workspaceWork && workspaceWork.raw.ownerWindowsWorkspaceRead === true &&
     uuid(workspaceWork.raw.runId) && workspaceWork.raw.coordinatorEpoch === 1;
@@ -589,12 +656,13 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     {!open && openWindowsConnection && <Button variant="ghost" disabled={busy || workspaceFilePending} onClick={openWindowsConnection}>{devicesLabel}</Button>}
     {!startedPhone && directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看原派单与结果</Button>}
     {!open && !workspaceFileRun && <p>{directedId ? `固定目标：${deviceName(directedId, peers)}。` : ''}{openWindowsConnection ? '核对范围只使用原连接；核对连接记录只读本机。' : scopeReadNote}{showDispatch?'核对范围与读取原派单是两件事。':'不会自动连接、读取画面或派发。'}</p>}
-    {!open && !workspaceFileReady && workspaceWork && workspaceFileCommands(workspaceSnapshot) && workspaceFileUnstarted(workspaceWork) &&
+    {!open && !workspaceFileReady && workspaceWork && workspaceFileUnstarted(workspaceWork) &&
+      (workspaceFileCommands(workspaceSnapshot) || workspacePickerCommands(workspaceSnapshot)) &&
       <p className="pw-field-hint">{workspacePickerCommands(workspaceSnapshot) ?
-        '不用模型读取文件？先选择并保存原电脑的只读范围。已知路径选 1 次；先列目录再选文件需要列目录权限和 2 次。' :
+        '想不用模型浏览文件？先核对原电脑已有的只读工作区。保存范围不会读取文件。' :
         '想不经模型读取一个文本？先保存一个允许读取文件的原电脑工作区，并将对端工具份额设为 1，另留 1 次本机派发。'}</p>}
     {notice && <p role="status">{notice}</p>}
-    <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : '核对本任务设备范围' : directedId ? '核对' + scopeLabel : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>
+    <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : review.firstBrowse ? '核对要浏览的工作区' : '核对本任务设备范围' : quickBrowse ? '选择电脑工作区' : directedId ? '核对' + scopeLabel : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>
       <div className="pw-collaboration-dialog">
         {busy && <p role="status">正在读取原设备范围回执…</p>}
         {error && <p role="alert">{error}</p>}
@@ -604,6 +672,14 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
         </div></>}
         {view && !review && <>
           <h3>{view.goal}</h3>
+          {quickBrowse && <>
+            <p>{groupName(quickBrowseChoices[0].option.targetDeviceId)} · 选择一个已授权的工作区。保存范围后，回原工作再确认列目录和打开哪个文件。</p>
+            <div className="pw-form-actions" role="group" aria-label="原电脑的只读工作区">
+              {quickBrowseChoices.map(({ option, facts }) => <Button key={option.optionId} variant={quickBrowseChoices.length === 1 ? 'primary' : 'secondary'}
+                disabled={busy} onClick={() => prepareBrowse(option)}>准备浏览 · <bdi style={{overflowWrap:'anywhere'}}>{facts.id}</bdi></Button>)}
+            </div>
+          </>}
+          {!quickBrowse && <>
           <p>{view.humanInputOnly ? '只选择一个手机屏幕。需要对端主人已明确授予全屏捕获、输入及准确应用范围。你逐次操作，不调用模型，不发送材料或转派。' : '只选择这项原任务可以用的设备。工具份额来自本任务剩余预算，设备已配对不等于已授权。默认不发送文件、项目或私人记忆。'}</p>
           {options.some(option => workspaceReadFacts(option, workspaceTarget)) && <p className="pw-field-hint">{workspaceNotice}</p>}
           <dl className="pw-facts"><div><dt>当前可分配</dt><dd>工具 {view.toolsAvailable} 次 · 模型 {view.modelsAvailable} 次</dd></div><div><dt>原任务最晚截止</dt><dd>{time(view.deadlineMaximum)}</dd></div></dl>
@@ -653,12 +729,14 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
               </AccordionItem>;
             })}
           </Accordion></section>)}
+          </>}
           {rows(view.unavailableOptions).length > 0 && <Accordion><AccordionItem id="unavailable" title={`有 ${rows(view.unavailableOptions).length} 项范围暂不可用`}><p>这些范围没有替换成其他设备，也不阻止你选择已核对的设备。</p>{rows(view.unavailableOptions).map((item,index) => <p key={index}>{deviceName(item.targetDeviceId, peers)}：{item.reason === 'grant_unavailable' ? '原授权到期、撤销或无法核对' : item.reason === 'capability_read_unavailable' ? '连接或能力读取未完成，请核对对端接收服务与当前网络' : '设备身份或能力时效不匹配，需要重新读取'}</p>)}</AccordionItem></Accordion>}
           {!peerIds.length && <p>{view.manualPhoneTarget ? '未核对到这部原手机已授权的手控屏幕。不改用别台手机；可查看原连接与两端范围。' : view.directWorkspace ? '这次没有核对到原电脑可用的只读工作区。可核对原连接与已有范围，不会改用其他设备。' : view.directPhone ? '未读取到这部原手机可用的直接范围。请检查对端连接及已有授权；不会改投其他设备或继续转派。' : view.humanInputOnly ? '没有可手控的手机范围。请先连接对端，并由对端主人授权主屏或独立屏、准确应用、全屏捕获与输入，再重新读取。不会改用电脑或模型代理。' : '未读取到可选择的设备范围。请在设备页连接对端，并由对端明确授权工具或目标范围，再回来重新读取。'}</p>}
           {view.hasMoreOptions && <p>还有未读取的授权记录。未显示的设备不会自动加入本任务。</p>}
-          {firstDirectedScope && !noFirstRange && !chosenRange && <p>先选择一个已核对的原设备范围，再审阅。</p>}
+          {!quickBrowse && firstDirectedScope && !noFirstRange && !chosenRange && <p>先选择一个已核对的原设备范围，再审阅。</p>}
           <div className="pw-form-actions">
-            {!noFirstRange && <Button disabled={busy || unavailable.length > 0 && !removeUnavailable || firstDirectedScope && !chosenRange} onClick={prepare}>{firstDirectedScope ? '核对所选范围' : '核对这次范围修改'}</Button>}
+            {quickBrowse && <Button variant="ghost" disabled={busy} onClick={() => setManualScope(true)}>手动设置范围</Button>}
+            {!quickBrowse && !noFirstRange && <Button disabled={busy || unavailable.length > 0 && !removeUnavailable || firstDirectedScope && !chosenRange} onClick={prepare}>{firstDirectedScope ? '核对所选范围' : '核对这次范围修改'}</Button>}
             {noFirstRange && onOpenDevices && <Button disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
             <Button variant={noFirstRange && !onOpenDevices ? 'secondary' : 'ghost'} disabled={busy} onClick={read}>重新核对设备范围</Button>
             {!noFirstRange && onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
@@ -666,16 +744,17 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
           {rows(view.pendingProjectImports).map(item => <div key={item.operationId || item.receiveOperationId}><p>原项目包等待独立导入确认</p><Button variant="secondary" disabled={busy} onClick={() => { void invoke('deviceTaskScope.reviewImport', { pageHandle: page.current, operationId: item.receiveOperationId || item.operationId }, acceptReview); }}>核对这份原项目包</Button></div>)}
         </>}
         {review && <>
-          <h3>{review.goal || view?.goal}</h3><p>{review.kind === 'scope' ? '下面是原生解析后的准确选择。保存不发送目标、不开始任务，不为对端扩大授权。' : '确认只允许原任务导入这份已经接收的项目包；不会立即执行、覆盖已有项目或创建第二项任务。'}</p>
-          {rows(review.routes).some(route => workspaceReadFacts(route, reviewedWorkspace)) && <p className="pw-field-hint">{workspaceNotice}</p>}
-          {rows(review.routes).map(route => <div key={route.sourceKey}><ScopeFacts value={route} peers={peers} names={ownerNames} human={view?.humanInputOnly} workspace={workspaceReadFacts(route, reviewedWorkspace)} />
-            <p>上下文：仅本次目标（goal_only）；私人记忆与整份工作区不提供。</p>
+          <h3>{review.goal || view?.goal}</h3><p>{review.firstBrowse ? '保存只读范围不会读取文件、启动任务或扩大电脑授权。' : review.kind === 'scope' ? '下面是原生解析后的准确选择。保存不发送目标、不开始任务，不为对端扩大授权。' : '确认只允许原任务导入这份已经接收的项目包；不会立即执行、覆盖已有项目或创建第二项任务。'}</p>
+          {review.firstBrowse ? <p ref={browseReviewSummary} tabIndex={-1}>回到原工作后，可以选择不使用模型浏览：先确认列一次目录，再单独确认读取至多一个小文本。</p> :
+            rows(review.routes).some(route => workspaceReadFacts(route, reviewedWorkspace)) && <p className="pw-field-hint">{workspaceNotice}</p>}
+          {rows(review.routes).map(route => <div key={route.sourceKey}><ScopeFacts value={route} peers={peers} names={ownerNames} human={view?.humanInputOnly} workspace={workspaceReadFacts(route, reviewedWorkspace)} firstBrowse={review.firstBrowse} />
+            <p>{review.firstBrowse ? '不分享文件、项目或私人记忆。' : '上下文：仅本次目标（goal_only）；私人记忆与整份工作区不提供。'}</p>
             {['files','projects'].map(kind => rows(route[kind]).map(item => <p key={kind + item.id}>{kind === 'files' ? '原件' : '项目包'}：{item.name || item.id} → {item.path} · {item.size} 字节 · {item.expectedVersion === 'absent' ? '仅新建' : '覆盖已核对版本 ' + item.expectedVersion}<br />SHA-256：{item.sha256}</p>))}
             {rows(route.downstreamShares).length > 0 && <><p>对端本机：工具 {route.localToolShare} 次 · 模型 {route.localModelShare} 次</p>{rows(route.downstreamShares).map((item,index) => <p key={index}>下游 {deviceName(item.targetDeviceId, peers)} · {JSON.stringify(item.resourceBinding)} · 工具 {item.toolBudget} 次 · 模型 {item.modelBudget} 次</p>)}</>}
           </div>)}
           {review.kind === 'scope' && rows(review.routes).length === 0 && <p role="alert">本次将清空本任务的设备选择；不会取消已经发生的对端操作。</p>}
           {review.kind === 'import' && <><dl className="pw-facts"><div><dt>接收设备</dt><dd>{deviceName(review.targetDeviceId || '', peers)}</dd></div><div><dt>原项目包</dt><dd>{review.name || review.artifactId}</dd></div><div><dt>新副本路径</dt><dd>{review.path}</dd></div><div><dt>内容范围</dt><dd>{review.summary?.fileCount} 个文件 · {review.summary?.directoryCount} 个目录 · {review.summary?.bytes} 字节</dd></div></dl><p>仅导入新的副本，不覆盖现有项目，不恢复项目历史、运行环境或执行权限。确认后仍由原任务执行。</p><Accordion><AccordionItem id="import-exact" title="完整项目清单与原接收回执"><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{JSON.stringify(review, null, 2)}</pre></AccordionItem></Accordion></>}
-          <CheckboxField isSelected={ack} isDisabled={busy} onChange={setAck}>{review.kind === 'import' ? '我已核对接收设备、原项目包、准确的新副本路径与完整清单' : '我已核对接收设备、目标、准确资源、预算期限，以及上方明确选择的文件和项目路径'}</CheckboxField>
+          <CheckboxField isSelected={ack} isDisabled={busy} onChange={setAck}>{review.kind === 'import' ? '我已核对接收设备、原项目包、准确的新副本路径与完整清单' : review.firstBrowse ? '我已核对原电脑、工作区、读取范围和截止时间' : '我已核对接收设备、目标、准确资源、预算期限，以及上方明确选择的文件和项目路径'}</CheckboxField>
           <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={dismissReview}>返回修改</Button><Button disabled={busy || !ack} onClick={confirm}>确认保存一次</Button></div>
         </>}
         {!review && <Button variant="ghost" disabled={busy} onClick={() => requestExit('close')}>返回原任务</Button>}
