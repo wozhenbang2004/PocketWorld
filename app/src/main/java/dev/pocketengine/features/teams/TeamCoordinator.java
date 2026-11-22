@@ -2440,7 +2440,7 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
     synchronized String readCheckedOwnerChatTeamReport(TaskStore tasks,TaskStore.OwnerChatTeamReportOrigin origin,
                                                        java.util.function.BooleanSupplier current)throws Exception {
         if(!current.getAsBoolean())throw new SecurityException("原对话汇总阅读已关闭");
-        OriginalOwnerSummary body=readExactOwnerSynthesis(origin.teamRun(),origin.definitionId(),false,
+        OriginalOwnerSummary body=readExactOwnerSynthesis(origin.teamRun(),origin.definitionId(),origin.temporaryDefinition(),
                 origin.generation(),origin.revision(),origin.sha256(),origin.bytes());
         // Same lock order as save() -> the original TaskStore mirror. This never creates a review proof.
         tasks.requireOwnerChatTeamReportOrigin(origin);

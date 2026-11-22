@@ -151,11 +151,36 @@ function recordedWorkspaceOnlyGrant(peer: Data, local: Data, now: number) {
     scope.allowDelegation === false && scope.maxDelegationDepth === 0 && scope.modelBudget === 0 && !('forwardingScope' in scope) &&
     (!('historyRead' in scope) || exact(scope.historyRead?.methods, ['operation.get']));
 }
-function recordedWindowsReadCandidate(peer: Data, local: Data, snapshot: Data | null, now: number) {
+function completeWindowsScopeRecord(peer: Data, snapshot: Data | null) {
   return windowsDevice(peer) && Number.isSafeInteger(peer.authorizationEpoch) && peer.authorizationEpoch > 0 &&
     snapshot?.hasMoreOutgoingGrants === false && peer.hasMoreReceivedGrantScopes === false &&
-    peer.capabilitySnapshot?.metadata?.grantReceiptsTruncated !== true && !desktopScopes(peer, now, local.deviceId).length &&
+    peer.capabilitySnapshot?.metadata?.grantReceiptsTruncated !== true;
+}
+function recordedWindowsReadCandidate(peer: Data, local: Data, snapshot: Data | null, now: number) {
+  return completeWindowsScopeRecord(peer, snapshot) && !desktopScopes(peer, now, local.deviceId).length &&
     recordedWorkspaceOnlyGrant(peer, local, now);
+}
+/** One stock mixed receipt, for the Home file chooser only. The native directed
+ *  Work still admits only workspace list/read, never the other signed methods. */
+function recordedWindowsReadWithDesktop(peer: Data, local: Data, snapshot: Data | null, now: number) {
+  const grants = peer.receivedGrantScopes;
+  if (!completeWindowsScopeRecord(peer, snapshot) || !Array.isArray(grants) || grants.length !== 1 ||
+      !deviceHasRecordedWorkspaceRead(peer, local, now)) return false;
+  const scope = grants[0], methods = scope.capabilities, tools = strings(scope.toolNames);
+  const stockMethods = ['tool.invoke', 'operation.get', 'operation.cancel', 'artifact.describe', 'artifact.readChunk', 'desktop.viewer'];
+  const desktop = desktopScopes(peer, now, local.deviceId), originalDesktop = desktop[0];
+  // The workspace helper has matched a typed workspace binding. Exactly two
+  // resources and one matching desktop binding leave no second workspace to guess.
+  return Array.isArray(methods) && methods.length === stockMethods.length && stockMethods.every(method => methods.includes(method)) &&
+    tools.includes('workspace.list') && tools.includes('workspace.read') &&
+    Array.isArray(scope.resources) && scope.resources.length === 2 &&
+    Array.isArray(scope.allowedOrigins) && scope.allowedOrigins.length === 1 && scope.allowedOrigins[0] === local.deviceId &&
+    Number.isSafeInteger(scope.authorizationEpoch) && scope.authorizationEpoch > 0 &&
+    scope.allowDelegation === false && scope.maxDelegationDepth === 0 && scope.modelBudget === 0 && !('forwardingScope' in scope) &&
+    desktop.length === 1 && originalDesktop?.available === true && originalDesktop.grantId === scope.grantId && originalDesktop.grantEpoch === scope.authorizationEpoch;
+}
+function recordedHomeWindowsReadCandidate(peer: Data, local: Data, snapshot: Data | null, now: number) {
+  return recordedWindowsReadCandidate(peer, local, snapshot, now) || recordedWindowsReadWithDesktop(peer, local, snapshot, now);
 }
 type LastWindowsRead = { windowKey: string; receivedAt: number; metadata: Data };
 const originalHistoryKey = (review: Data) => JSON.stringify([review.viewHandle, review.view?.taskId, review.view?.operationId,
@@ -666,11 +691,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   // must not be hidden behind an older identity-only description.
   const identityOnlyHere = lastIdentityOnly && !rows(peer?.receivedGrantScopes).some(row => row.receivedScope === true &&
     Number.isSafeInteger(row.expiresAt) && row.expiresAt > now && strings(row.capabilities).some(method => method === 'task.submitGoal' || method === 'tool.invoke'));
-  const recordedWindowsReadOnly = (at: number) => !sourceFocus && !!peer && windowsPeer && !identityOnlyHere &&
+  const recordedWindowsRead = (at: number, forHome = false) => !sourceFocus && !!peer && windowsPeer && !identityOnlyHere &&
     state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen && localReadCurrent &&
     !!peerPlace.current && peerId === selectedPeer.current && sameDeviceReadingPlace(peerPlace.current, local, peer) &&
-    recordedWindowsReadCandidate(peer, local, snapshot, at);
-  const windowsReadOnlyHere = recordedWindowsReadOnly(now);
+    (forHome ? recordedHomeWindowsReadCandidate : recordedWindowsReadCandidate)(peer, local, snapshot, at);
+  const windowsReadOnlyHere = recordedWindowsRead(now);
   const openDirectedPhone = (destination:'work'|'manual') => {
     if (!peer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
     if (!phonePeer || desktopPeer || identityOnlyHere || !/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) ||
@@ -696,7 +721,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const prepareRecordedWindowsRead = () => {
     const current = bridge.getState(), view = current.view as Data | undefined;
     if (busy || document.hidden || view?.section !== 'devices' || view.taskId) return;
-    if (current.state.deviceWorkspaceRevision !== localRead?.revision || !recordedWindowsReadOnly(Date.now()) ||
+    if (current.state.deviceWorkspaceRevision !== localRead?.revision || !recordedWindowsRead(Date.now(), homeWindowsFile) ||
         homeWindowsFile && (waitingGoalWindow() !== localRead?.window || !peer || !homeWindowsChoices.includes(peer))) {
       setError('原电脑或授权记录已变化。请重读本机记录，没有保存目标或联系电脑。'); return;
     }
@@ -706,14 +731,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const homeWindowsCurrent = !!homeWindowsWindow && localReadCurrent && localRead?.window === homeWindowsWindow;
   const seenWindows = homeWindowsCurrent ? peers.filter(row => !retired(row) && windowsDevice(row)) : [];
   const homeWindowsChoices = seenWindows.filter(row => peers.filter(item => item.deviceId === row.deviceId).length === 1 &&
-    recordedWindowsReadCandidate(row, local, snapshot, now));
+    recordedHomeWindowsReadCandidate(row, local, snapshot, now));
   const homeWindowsPartial = snapshot?.hasMorePeers !== false || snapshot?.hasMoreOutgoingGrants !== false ||
     seenWindows.some(row => row.hasMoreReceivedGrantScopes !== false || row.capabilitySnapshot?.metadata?.grantReceiptsTruncated === true);
   const chooseHomeWindows = (row: Data) => {
     const live = bridge.getState();
     if (busy || !homeWindowsCurrent || waitingGoalWindow() !== homeWindowsWindow ||
         live.state.deviceWorkspaceRevision !== localRead?.revision || !homeWindowsChoices.includes(row) ||
-        !recordedWindowsReadCandidate(row, local, snapshot, Date.now())) return;
+        !recordedHomeWindowsReadCandidate(row, local, snapshot, Date.now())) return;
     const selected = peerPlace.current;
     if (selectedPeer.current === row.deviceId && (!selected || !sameDeviceReadingPlace(selected, local, row))) {
       selectPeer(''); setError('这台原电脑的配对身份已变化，请重新选择。'); return;
@@ -1514,9 +1539,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               </span>
             </Button>)}</div></div>
             <p className="pw-device-footnote">选择不会检查连接。准备好后，仍需核对文件与原范围再开始。</p>
-            {peer && homeWindowsChoices.includes(peer) && windowsReadOnlyHere && <Button disabled={busy} onClick={prepareRecordedWindowsRead}>准备只读任务</Button>}
+            {peer && homeWindowsChoices.includes(peer) && recordedWindowsRead(now, true) && <>
+              {recordedWindowsReadWithDesktop(peer, local, snapshot, now) && <p className="pw-device-footnote">本次只准备读取目录和小文本，不使用桌面权限。</p>}
+              <Button disabled={busy} onClick={prepareRecordedWindowsRead}>准备只读任务</Button>
+            </>}
           </> : <p role="status">{homeWindowsPartial ? '本次本机记录不完整，暂不能核对可选电脑。'
-            : seenWindows.length ? '未核对到有效的目录与文本授权。配对本身不等于文件授权。'
+            : seenWindows.length ? '本次没有可在此准备只读任务的明确工作区。可从所有设备核对原范围。'
             : '本次本机记录里没有可选的已配对 Windows 电脑。'}</p>}
         {homeWindowsCurrent && homeWindowsChoices.length > 0 && homeWindowsPartial && <p className="pw-device-footnote">本次只读到部分记录。</p>}
         <div className="pw-form-actions"><Button variant="ghost" disabled={busy} onClick={openAllDevices}>查看所有设备</Button></div>

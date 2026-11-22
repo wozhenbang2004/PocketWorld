@@ -182,7 +182,8 @@ public final class TeamsModule implements EngineModule {
         return new JSONObject().put("format","pocketworld.original-chat-team-report.v1").put("conversationId",conversation)
                 .put("messageId",message).put("sourceRevision",sourceRevision).put("taskId",delivery.taskId())
                 .put("runId",delivery.runId()).put("epoch",delivery.epoch()).put("deliveryId",delivery.deliveryId())
-                .put("sha256",origin.sha256()).put("bytes",origin.bytes()).put("body",body).put("readOnly",true).put("executionAuthorized",false);
+                .put("sha256",origin.sha256()).put("bytes",origin.bytes()).put("body",body).put("readOnly",true).put("executionAuthorized",false)
+                .putOpt("oneOffReadOnly",origin.temporaryDefinition()?Boolean.TRUE:null);
     }
     public JSONObject confirmOwnerWorkReport(dev.pocketengine.store.TaskStore tasks,TeamCoordinator.OwnerWorkReport report,boolean completed,String feedback,
                                               java.util.function.BooleanSupplier current)throws Exception{

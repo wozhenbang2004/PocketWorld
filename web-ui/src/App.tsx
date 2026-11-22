@@ -409,7 +409,7 @@ function originalStoppedMainRead(result:PhoneResult,message:Message,messages:rea
   mark.runId===result.runId&&mark.epoch===result.epoch&&mark.phase==='observed'&&read.runId===result.runId&&
   read.displayId===0&&read.structureOnly===true&&typeof read.observationId==='string'&&/^[a-f0-9-]{36}$/.test(read.observationId);
 }
-function originalPhoneTerminalGoal(live:ReturnType<typeof bridge.getState>,resultMessageId:string,shown:PhoneResult){
+function originalPhoneTerminalRun(live:ReturnType<typeof bridge.getState>,resultMessageId:string,shown:PhoneResult){
  const owner=live.state;
  const conversationId=owner.conversationId;
  if(!['cancelled','needs_confirmation'].includes(shown.status)||shown.epoch!==1||typeof conversationId!=='string'||!conversationId)return;
@@ -427,14 +427,35 @@ function originalPhoneTerminalGoal(live:ReturnType<typeof bridge.getState>,resul
   confirmation.completed===true&&Number.isSafeInteger(revision)&&revision>0&&confirmation.confirmedResultRevision===revision&&
   typeof confirmation.resultReviewDigest==='string'&&/^[a-f0-9]{64}$/.test(confirmation.resultReviewDigest);
  if(!settled)return;
+ return {conversationId,messages,raw,resultMessageId,shown};
+}
+function originalPhoneTerminalGoal(terminal:ReturnType<typeof originalPhoneTerminalRun>){
+ if(!terminal)return;
+ const {conversationId,messages,raw,resultMessageId,shown}=terminal;
  const link=obj(raw.conversationPhoneHandoff),origin=obj(link.source),message=messages.filter(row=>row.role==='user').at(-1);
  const goal=message?.content.trim();
  if(link.sourceSelection!=='owner_selected_latest'||link.executionMode!=='main_screen'||link.conversationId!==conversationId||
     !message?.id||message.quoteAvailable!==true||!Number.isSafeInteger(message.sourceRevision)||Number(message.sourceRevision)<1||
     message.id!==origin.sourceMessageId||message.sourceRevision!==origin.sourceMessageRevision||origin.conversationId!==conversationId||
     !goal||goal.length>4000||goal!==raw.goal||goal!==link.goal)return;
- return {goal,ownerConfirmed:shown.status==='needs_confirmation',shown,
-  source:{conversationId,resultMessageId,messageId:message.id,sourceRevision:Number(message.sourceRevision)}};
+ return {goal,shown,source:{conversationId,resultMessageId,messageId:message.id,sourceRevision:Number(message.sourceRevision)}};
+}
+/** A real owner decision for the same directly typed, admitted run, not a new-draft source or a changed saved result. */
+function originalTypedPhoneOwnerConfirmed(live:ReturnType<typeof bridge.getState>,terminal:ReturnType<typeof originalPhoneTerminalRun>){
+ if(terminal?.shown.status!=='needs_confirmation')return false;
+ const {conversationId,raw,shown}=terminal,start=obj(obj(live.phoneDraft).startReceipt);
+ const link=obj(raw.conversationPhoneHandoff),source=obj(link.source);
+ return raw.auditBodyIncluded===true&&raw.cancelRequested===false&&
+  link.format==='pocketworld.conversation-phone-handoff.v1'&&link.taskId===shown.taskId&&link.requestId===shown.taskId&&
+  link.conversationId===conversationId&&link.executionMode==='main_screen'&&link.goal===raw.goal&&
+  Number.isSafeInteger(link.createdAt)&&link.createdAt>0&&link.createdAt===raw.createdAt&&
+  source.format==='pocketworld.phone-handoff-source.v1'&&source.conversationId===conversationId&&
+  !Object.hasOwn(link,'sourceSelection')&&start.ownerPickedMessage===false&&start.localModelFree!==true&&
+  start.status==='accepted'&&start.admitted===true&&start.admissionState==='admitted'&&start.mode==='main_screen'&&
+  start.conversationId===conversationId&&start.draftConversationId===conversationId&&start.composerKey===`conversation:${conversationId}`&&
+  start.requestId===shown.taskId&&start.taskId===shown.taskId&&start.runId===shown.runId&&start.epoch===shown.epoch&&
+  // The admission receipt has raw input; Java String.trim() canonicalizes the handoff's edges.
+  typeof start.goal==='string'&&start.goal.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g,'')===link.goal;
 }
 function originalPhoneNewDraft(live:ReturnType<typeof bridge.getState>,original:ReturnType<typeof originalPhoneTerminalGoal>){
  if(!original)return;
@@ -1179,7 +1200,7 @@ export default function App(){
  const workControlEntered=useRef(new Set<string>());
  const [readingDocuments,setReadingDocuments]=useState<ReadingDocument[]>([]);const readingSerial=useRef(0);
  const originalChatTeamVisit=useRef<OriginalChatTeamReportVisit|null>(null);
- const [originalChatTeamRead,setOriginalChatTeamRead]=useState<{visit:OriginalChatTeamReportVisit;page?:ReadingDocument}|null>(null);
+ const [originalChatTeamRead,setOriginalChatTeamRead]=useState<{visit:OriginalChatTeamReportVisit;page?:ReadingDocument;hideCopyControls?:boolean}|null>(null);
  const closeReading=useCallback(()=>{setReadingDocuments(previous=>previous.slice(0,-1))},[]);
  useEffect(()=>{setReadingDocuments([])},[state.conversationId,route,taskId,taskOpen]);
  const messageTaskAnchors=useMemo(()=>taskMessageAnchors(messages),[messages]);
@@ -3793,11 +3814,12 @@ export default function App(){
    if(value.format!=='pocketworld.original-chat-team-report.v1'||value.conversationId!==conversationId||
       value.messageId!==messageId||value.sourceRevision!==sourceRevision||value.taskId!==source.taskId||
       value.runId!==source.runId||value.epoch!==source.epoch||value.deliveryId!==source.deliveryId||value.readOnly!==true||
+      (value.oneOffReadOnly!==undefined&&value.oneOffReadOnly!==true)||
       value.executionAuthorized!==false||typeof value.sha256!=='string'||!/^[a-f0-9]{64}$/.test(value.sha256)||
       typeof body!=='string'||!body.trim()||body.length>65_536||value.bytes>65_536||new TextEncoder().encode(body).length!==value.bytes)
     throw Error('没有取得这个版本的原团队汇总，可查看原工作。');
    rememberChatPosition();
-   setOriginalChatTeamRead({visit,page:{key:visit.key,kind:'message',title:'原团队汇总',plainText:true,text:body}});
+   setOriginalChatTeamRead({visit,hideCopyControls:value.oneOffReadOnly===true,page:{key:visit.key,kind:'message',title:'原团队汇总',plainText:true,text:body}});
   }catch(failure){
    if(current())setLocalError(failure instanceof Error?failure.message:'未读取原团队汇总，可查看原工作。');
    if(originalChatTeamVisit.current===visit)closeChatTeamReport(false);
@@ -8903,7 +8925,7 @@ export default function App(){
  const prepareFromPhoneResult=async(target:PhoneReportTarget,shown:NonNullable<ReturnType<typeof originalPhoneNewDraft>>)=>{
   const navigation=navigationWindow.current,{args,goal,editTicket}=shown;
   const current=()=>!document.hidden&&navigationWindow.current===navigation&&openedTaskId.current===null&&!draftSwitchPending()&&phoneReportInSource(target);
-  const live=bridge.getState(),original=originalPhoneTerminalGoal(live,target.messageId,target.phoneResult);
+  const live=bridge.getState(),original=originalPhoneTerminalGoal(originalPhoneTerminalRun(live,target.messageId,target.phoneResult));
   if(!current()||phoneAction.current||phoneReviewLive.current||phoneText.currentValue()!==''||chatDraft.currentValue()!==''||
      JSON.stringify(originalPhoneNewDraft(live,original))!==JSON.stringify(shown))return;
   phoneAction.current=true;setPhoneReviewPending(true);setLocalStatus('');
@@ -8970,7 +8992,10 @@ export default function App(){
       originalChatTeamReportSource(linked,m,taskResult,String(state.conversationId||'')):undefined;
     const earlierRun=returnedWork&&linked?.raw?.runId&&(linked.raw.runId!==returnedWork.runId||linked.raw.coordinatorEpoch!==returnedWork.epoch);
     const readPhone=!!m.id&&m.sourceRevision===1&&can('phone.result.original');
-    const originalPhoneTerminal=originalStopChatHere&&readPhone&&phoneResult&&m.id?originalPhoneTerminalGoal(snapshot,m.id,phoneResult):undefined;
+    const originalPhoneRun=originalStopChatHere&&readPhone&&phoneResult&&m.id?originalPhoneTerminalRun(snapshot,m.id,phoneResult):undefined;
+    const originalPhoneTerminal=originalPhoneTerminalGoal(originalPhoneRun);
+    const ownerConfirmed=originalPhoneRun?.shown.status==='needs_confirmation'&&
+      (!!originalPhoneTerminal||originalTypedPhoneOwnerConfirmed(snapshot,originalPhoneRun));
     const newPhoneDraft=originalPhoneTerminal&&intent==='main_screen'&&!phoneReview&&!phoneReviewPending&&!isListening&&!voiceReview&&
       phoneText.value===''&&chatDraft.value===''?originalPhoneNewDraft(snapshot,originalPhoneTerminal):undefined;
     const inlineResult=!earlierRun&&!phoneResult&&taskResult?.kind==='owner_work'&&taskResult.status==='completed'&&!taskResult.noticeKind&&!!m.id;
@@ -9006,7 +9031,7 @@ export default function App(){
       onRead={noteIdentity&&can('tasks.open')?(layer,trigger)=>openTurnNotes(noteIdentity,layer,savedTrace?m:undefined,trigger):undefined}/>}
      {m.originalHostFinal?<div className="pw-user-text">{m.content}</div>:m.role==='assistant'&&phoneResult&&m.id&&m.sourceRevision===1?<PhoneMessageReturn result={phoneResult} conversation={String(state.conversationId||'')} messageId={m.id} revision={Number(m.sourceRevision)} body={m.content}
        stoppedAfterFirstMainRead={originalStopChatHere&&readPhone&&originalStoppedMainRead(phoneResult,m,messages,tasks,conversation)}
-       ownerConfirmed={originalPhoneTerminal?.ownerConfirmed}
+       ownerConfirmed={ownerConfirmed}
        onPrepareNew={newPhoneDraft?target=>void prepareFromPhoneResult(target,newPhoneDraft):undefined}
        onOriginal={readPhone?setMessageOriginTarget:undefined} onRun={can('tasks.open')?openPhoneWorkFromMessage:undefined}>
        <CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>
@@ -9940,6 +9965,7 @@ export default function App(){
   registerBack={registerProvidedMemoryBack}/>}
  {sourceSelection&&<AnswerSources key={sourceSelection.messageId||sourceSelection.taskId} target={sourceSelection} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setSourceSelection(null)}/>}
  <ReadingView documents={shownChatTeamRead?.page?[shownChatTeamRead.page]:readingDocuments} originalChat={!!shownChatTeamRead?.page}
+  hideCopyControls={shownChatTeamRead?.hideCopyControls===true}
   onBack={shownChatTeamRead?.page?()=>{closeChatTeamReport()}:closeReading}/>
  </div></Drawer.Root></ConversationModelPickerProvider></ReadingContext.Provider>;
 }

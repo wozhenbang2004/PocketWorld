@@ -3707,9 +3707,15 @@ public final class TaskStore {
     private static String chatTeamReportMarker(JSONObject work,JSONObject team,JSONObject evidence,JSONObject entry)throws Exception {
         JSONObject source=frozenChatTeamSource(work,entry);
         if(source==null||!team.optString("runId").equals(source.opt("childRunId")))return null;
-        JSONObject refs=team.optJSONObject("externalRefs");String definition=refs==null?"":refs.optString("teamId");
-        if(definition.isEmpty())return null;
+        JSONObject refs=team.optJSONObject("externalRefs");
+        if(refs==null)return null;
         JSONObject start=ownerTeamReportStart(work,team.optJSONObject("teamResearchParentScope"),team.optString("runId"));
+        if(!refs.has("teamId")){
+            // The same visible delivery and complete native synthesis are required for a frozen one-off definition.
+            return ordinaryTemporaryTeamReportStart(start)&&ownerTeamReportCandidate(team,evidence,start)!=null?entry.getString("deliveryId"):null;
+        }
+        String definition=refs.optString("teamId");
+        if(definition.isEmpty())return null;
         JSONObject args=start==null?null:start.optJSONObject("arguments"),cap=start==null?null:start.optJSONObject("capability");
         JSONObject frozen=cap==null?null:cap.optJSONObject("teamDefinition");
         if(args==null||frozen==null||!definition.equals(args.opt("teamId"))||args.has("members")||args.has("planRef")||args.has("planHash")
@@ -3736,6 +3742,7 @@ public final class TaskStore {
         }
         public String teamRun(){return teamRun;}
         public String definitionId(){return summary.definitionId();}
+        public boolean temporaryDefinition(){return summary.temporary();}
         public int generation(){return summary.generation();}
         public long revision(){return summary.revision();}
         public String sha256(){return summary.sha256();}
@@ -3767,7 +3774,6 @@ public final class TaskStore {
                     delivery.deliveryId(),entry.getString("resultDigest"));
             String teamRun=child.getString("childRunId");
             OriginalOwnerTeamSummary summary=originalOwnerTeamSummary(work,run,teamRun);
-            if(summary.temporary())throw new SecurityException("这里仅查看原已保存本机团队汇总");
             OwnerChatTeamReportOrigin origin=new OwnerChatTeamReportOrigin(this,conversation,message,sourceRevision,delivery,
                     entry.getString("resultDigest"),teamRun,summary);
             db.setTransactionSuccessful();return origin;
