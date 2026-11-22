@@ -2,6 +2,7 @@ import {useEffect,useId,useLayoutEffect,useRef,useState,useSyncExternalStore} fr
 import {bridge} from './bridge';
 import {Button} from './forms-library';
 import {isPrivateLocalPhone} from './PhonePauseInstruction';
+import {PhoneTaskOriginalRequest} from './PhoneTaskOriginalRequest';
 import {cancelledPhoneSummaryNote,messagePhoneResult,phoneConversationId,phoneRunIdentity,type PhoneResult} from './phone-start';
 import {registerOverlayBack} from './overlay-back';
 import {usePhoneOriginalReadingPlace} from './phone-original-reading-place';
@@ -40,11 +41,12 @@ function original(task:Row|undefined):PhoneConversationOrigin|null{
 function sameOriginal(a:PhoneConversationOrigin|null,b:PhoneConversationOrigin){
   return a?.taskId===b.taskId&&a.runId===b.runId&&a.epoch===b.epoch&&a.conversationId===b.conversationId;
 }
-function shownOriginal(rows:unknown,taskId:string){
+const reviewableResult=(status:unknown)=>status==='needs_confirmation'||status==='completed';
+function shownOriginal(rows:unknown,taskId:string,forPrompt=false){
   const same=Array.isArray(rows)?rows.filter(row=>row?.id===taskId):[];
-  return same.length===1?original(same[0]):null;
+  return same.length===1&&(!forPrompt||reviewableResult(same[0].status))?original(same[0]):null;
 }
-function OriginalPhoneReport({target,location}:{target:PhoneConversationOrigin;location?:PhoneWorkReportLocation}){
+function OriginalPhoneReport({target,task,location}:{target:PhoneConversationOrigin;task:Row;location?:PhoneWorkReportLocation}){
   useSyncExternalStore(bridge.subscribe,bridge.getState);
   const region=useId(),trigger=useRef<HTMLButtonElement>(null),ticket=useRef<Ticket|null>(null);
   const serial=useRef(0),inFlight=useRef(false),previous=useRef<number[]>([]),wanted=useRef(0);
@@ -52,12 +54,13 @@ function OriginalPhoneReport({target,location}:{target:PhoneConversationOrigin;l
   const sentVisit=useRef<SentVisit|null>(null),returnFocus=useRef<SentVisit|null>(null);
   const sentTrigger=useRef<HTMLButtonElement>(null),sentHeading=useRef<HTMLHeadingElement>(null);
   const [sent,setSent]=useState<SentRead|null>(null);
-  function current(t:Ticket|null){
-    const s=bridge.getState(),v=s.view as {taskId?:string;section?:string;resumeRevision?:number}|undefined;
+  function current(t:Ticket|null,forPrompt=false){
+    const s=bridge.getState(),v=s.view as {taskId?:string|null;section?:string|null;resumeRevision?:number}|undefined;
     if(!t||ticket.current!==t||document.hidden||v?.section||v?.taskId!==target.taskId||
        bridge.getDocumentEpoch()!==t.doc||v.resumeRevision!==t.resume||s.state.traceSourceRevision!==t.changes||
        !s.capabilities.commands.includes(command))return false;
-    return sameOriginal(shownOriginal(s.state.tasks,target.taskId),target);
+    if(forPrompt&&(v.section!==null||s.state.conversationReader||!s.capabilities.commands.includes('phone.request.original')))return false;
+    return sameOriginal(shownOriginal(s.state.tasks,target.taskId,forPrompt),target);
   }
   const valid=current(ticket.current),reading=usePhoneOriginalReadingPlace(ticket.current,open&&valid,page?.offset,()=>current(ticket.current));
   function close(focus=false){
@@ -149,6 +152,12 @@ function OriginalPhoneReport({target,location}:{target:PhoneConversationOrigin;l
   useEffect(()=>()=>{++serial.current;ticket.current=null;inFlight.current=false;},[]);
   const showLocation=!!page&&page.total>0&&location?.available(page.link)===true;
   const shownSent=sent?.visit===sentVisit.current?sent:null;
+  const reportTicket=ticket.current;
+  // The receipt has already proved this exact original Work and publication. Reading
+  // the user's original words remains a separate, explicit native read in that Work.
+  const currentPrompt=()=>!!page&&page.total>0&&reviewableResult(page.status)&&!!reportTicket&&
+    digest(reportTicket.digest)&&reportTicket.messageId===page.link.messageId&&
+    !sentVisit.current&&!inFlight.current&&current(reportTicket,true);
   return <div>
     <Button ref={trigger} variant="ghost" className="h-auto min-h-11 max-w-full whitespace-normal"
       aria-expanded={open&&valid} aria-controls={region} onClick={()=>open?close(true):enter()}>{open&&valid?'收起原回执':`查看第 ${target.epoch} 轮原回执`}</Button>
@@ -164,6 +173,7 @@ function OriginalPhoneReport({target,location}:{target:PhoneConversationOrigin;l
       </section>:<>
       {busy&&<p role="status">正在核对已保存的原回执…</p>}{error&&<p role="alert">{error}</p>}
       {page&&<><p className="pw-field-hint">当时的记录：{labels[page.status]}。这是原轮次的文字回执，不是当前画面或目标达成的凭据。</p>
+        {currentPrompt()&&<PhoneTaskOriginalRequest task={{id:target.taskId,raw:task.raw}} active resultCurrent={currentPrompt}/>}
         {page.note&&<p className="pw-field-hint">{page.note}</p>}
         {page.total===0?<p>这轮没有留下文字总结。</p>:<p ref={reading.body} tabIndex={-1} className="pw-phone-report-text" dir="auto">{page.text}</p>}
         {page.total>page.text.length&&<p className="pw-muted">原文位置 {page.offset+1}–{page.next} / {page.total}</p>}</>}
@@ -184,5 +194,5 @@ function OriginalPhoneReport({target,location}:{target:PhoneConversationOrigin;l
 /** Read the immutable local report without looking for a bubble in a bounded conversation page. */
 export function PhoneTaskOriginalReport({task,location}:{task:Row;location?:PhoneWorkReportLocation}){
   const target=original(task);
-  return target?<OriginalPhoneReport key={JSON.stringify(target)} target={target} location={location}/>:null;
+  return target?<OriginalPhoneReport key={JSON.stringify(target)} target={target} task={task} location={location}/>:null;
 }

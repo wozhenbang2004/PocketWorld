@@ -238,6 +238,77 @@ export function planProgressView(plan: Data): Data | null {
   return value?.format === 'pocketworld.plan-progress.v1' && value.planId === plan.id && value.taskStateAuthority === 'TaskStore'
     && Number.isSafeInteger(value.observedAt) && value.observedAt > 0 && ['current', 'partial'].includes(value.readState) ? value : null;
 }
+
+export type PlanRenewalTarget = { id: string; revision: number; stepId: string; index: number; sequence: number; used: number; paused: boolean; exhausted: boolean; expired: boolean };
+const planRunChoices = ['allowPrivateArtifactFreeze', 'businessEventConsent', 'notifyChanges'];
+const planConditions = ['zoneId', 'requiresNetwork', 'requiresCharging', 'minBatteryPercent'];
+function sameRenewedPlanScope(settings: Data, execution: Data) {
+  const policy = execution.policy;
+  if (!policy || settings.mode !== execution.mode || settings.phoneMode !== execution.phoneMode ||
+      settings.modelObservationConsent !== execution.modelObservationConsent || !planRunChoices.every(key => settings[key] === execution[key]) ||
+      !planConditions.every(key => settings[key] === policy[key])) return false;
+  const quiet = settings.quietHours, original = policy.quietHours;
+  return original === null ? quiet == null : !!original && !!quiet && original.start === quiet.start && original.end === quiet.end;
+}
+
+/** This is a paused owner review of the same unfinished plan, not another start/step approval. */
+export function planRenewalTarget(plan: Data | undefined): PlanRenewalTarget | undefined {
+  if (!plan || plan.ownerId !== 'owner' || plan.spaceId !== 'private' || plan.referenceOnly !== true || plan.executionAuthorized !== false ||
+      plan.approvalValid !== true || plan.originalTasksUnsettled !== false || typeof plan.id !== 'string' || !plan.id || !Number.isSafeInteger(plan.revision) || plan.revision < 1 ||
+      !Array.isArray(plan.steps) || plan.steps.length < 2 || plan.steps.length > 50) return;
+  const execution = plan.execution, policy = execution?.policy, progress = planProgressView(plan), paused = execution?.state === 'paused';
+  if (execution?.started !== true || !Number.isSafeInteger(execution.approvalSequence) || execution.approvalSequence < 1 ||
+      !Number.isSafeInteger(execution.admissions) || execution.admissions < 1 || execution.admissions >= 1000 ||
+      !Number.isSafeInteger(execution.maxTaskAdmissions) || execution.maxTaskAdmissions < 1 || execution.maxTaskAdmissions > 1000 ||
+      !['manual', 'automatic'].includes(execution.mode) || !['background', 'main_screen'].includes(execution.phoneMode) || execution.modelObservationConsent !== true ||
+      planRunChoices.some(key => typeof execution[key] !== 'boolean') || typeof policy?.zoneId !== 'string' || !policy.zoneId ||
+      typeof policy.requiresNetwork !== 'boolean' || typeof policy.requiresCharging !== 'boolean' || !Number.isSafeInteger(policy.minBatteryPercent) ||
+      (policy.quietHours !== null && (typeof policy.quietHours?.start !== 'string' || typeof policy.quietHours?.end !== 'string')) ||
+      progress?.readState !== 'current' || progress.executionAuthorized !== false ||
+      (paused ? plan.state !== 'paused' || progress.state !== 'paused' || progress.stopReason !== 'plan_paused' : execution.state !== 'active')) return;
+  // The Book's remembered status alone can't exclude a later reopened Work.
+  if (plan.steps.some((step: Data) => !step || (step.taskId !== '' || step.taskAdmission != null) &&
+      (step.taskStateAuthority !== 'TaskStore' || !['completed', 'failed', 'cancelled'].includes(step.status) ||
+        step.taskState !== step.status || step.taskStatus !== step.status || step.taskNeedsApproval !== false))) return;
+  const current = progress.currentStep, last = progress.lastResult, next = plan.steps[current?.index], previous = plan.steps[last?.index];
+  if (current?.readState !== 'not_started' || current.status !== 'pending' || current.taskId !== '' || !Number.isSafeInteger(current.index) ||
+      !next || typeof next.id !== 'string' || !next.id || next.id !== current.stepId || next.planId !== plan.id || next.planIndex !== current.index || next.taskId !== '' ||
+      next.taskAdmission != null || next.taskStateAuthority !== 'TaskStore' || next.taskState !== 'unbound' || next.lifecycleState !== 'pending' ||
+      last?.readState !== 'current' || last.status !== 'completed' || last.resultVerified !== true || last.terminalVerified !== true || !Number.isSafeInteger(last.index) ||
+      !previous || previous.id !== last.stepId || previous.planId !== plan.id || previous.planIndex !== last.index || previous.status !== 'completed' ||
+      previous.taskId !== last.taskId || previous.taskRunId !== last.runId || previous.taskEpoch !== last.epoch ||
+      previous.taskAdmission?.state !== 'bound' || previous.taskAdmission.occurrenceId !== last.occurrenceId) return;
+  const used = execution.admissions, expiresAt = policy.expiresAt;
+  const exhausted = used >= execution.maxTaskAdmissions;
+  const expired = Number.isSafeInteger(expiresAt) && expiresAt > 0 && progress.observedAt >= expiresAt;
+  if (paused ? !exhausted && !expired : !(exhausted && progress.stopReason === 'task_admission_budget_exhausted' || expired && progress.stopReason === 'approval_expired')) return;
+  return { id: plan.id, revision: plan.revision, stepId: next.id, index: current.index, sequence: execution.approvalSequence, used, paused, exhausted, expired };
+}
+
+export function planPausedRenewalReview(review: Data | null, original: PlanRenewalTarget): boolean {
+  const held = planRenewalTarget(review?.plan), input = review?.input, settings = input?.settings;
+  return review?.command === 'approve' && held?.paused === true && original.paused &&
+    held.id === original.id && input?.id === original.id && held.revision === original.revision && input.revision === original.revision &&
+    held.stepId === original.stepId && held.index === original.index && held.used === original.used && held.sequence === original.sequence &&
+    Number.isSafeInteger(settings?.maxTaskAdmissions) && settings.maxTaskAdmissions > original.used && settings.maxTaskAdmissions <= 1000 &&
+    Number.isSafeInteger(settings.expiresAt) && settings.expiresAt > review.plan.progress.observedAt &&
+    sameRenewedPlanScope(settings, review.plan.execution);
+}
+
+export function planPausedRenewalSaved(receipt: Data, review: Data, original: PlanRenewalTarget): boolean {
+  const settings = review.input.settings, saved = receipt.result?.plan, displayed = receipt.reading?.plan;
+  const matches = (plan: Data | undefined) => {
+    const execution = plan?.execution, step = plan?.steps?.[original.index];
+    return plan?.id === original.id && plan.ownerId === 'owner' && plan.spaceId === 'private' && plan.executionAuthorized === false &&
+      Number.isSafeInteger(plan.revision) && plan.revision > original.revision && plan.state === 'paused' && plan.approvalValid === true &&
+      execution?.state === 'paused' && execution.started === true && execution.approvalSequence === original.sequence + 1 &&
+      execution.admissions === original.used && execution.maxTaskAdmissions === settings.maxTaskAdmissions && execution.policy?.expiresAt === settings.expiresAt &&
+      step?.id === original.stepId && step.planId === original.id && step.status === 'pending' && step.taskId === '' && step.taskAdmission == null &&
+      sameRenewedPlanScope(settings, execution);
+  };
+  return !!receipt.reading?.viewHandle && matches(saved) && matches(displayed) && saved?.revision === displayed?.revision;
+}
+
 export function planProgressReason(plan: Data): string {
   const progress = planProgressView(plan), reason = String(progress?.stopReason || '');
   if (!reason) return '';

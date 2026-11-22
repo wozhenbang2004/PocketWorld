@@ -11,21 +11,22 @@ type Task={id:string;raw?:Record<string,any>};
 type Ticket={doc:number;resume:number;changes:number;identity:string;review:string;message:string;revision:number};
 type Page={text:string;total:number;next:number;offset:number;picked:boolean};
 /** Read where the original work already is. Never selects a conversation or stages anything in its composer. */
-export function PhoneTaskOriginalRequest({task,active}:{task:Task;active:boolean}){
+export function PhoneTaskOriginalRequest({task,active,resultCurrent}:{task:Task;active:boolean;resultCurrent?:()=>boolean}){
   useSyncExternalStore(bridge.subscribe,bridge.getState);
   const conversation=phoneConversationId(task),run=task.raw?.runId,epoch=task.raw?.coordinatorEpoch;
   const identity=JSON.stringify([task.id,run,epoch,conversation]);
   const trigger=useRef<HTMLButtonElement>(null),hold=useRef<Ticket|null>(null),history=useRef<number[]>([]),serial=useRef(0);
   const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[page,setPage]=useState<Page|null>(null),[error,setError]=useState('');
-  const wanted=useRef(0),pending=useRef(false),activity=useRef({active,identity});activity.current={active,identity};
+  const wanted=useRef(0),pending=useRef(false),activity=useRef({active,identity,resultCurrent});activity.current={active,identity,resultCurrent};
   function current(t:Ticket|null){
     const s=bridge.getState(),v=s.view as {section?:unknown;taskId?:string;resumeRevision?:number}|undefined;
     return !!t&&hold.current===t&&activity.current.active&&activity.current.identity===t.identity&&!document.hidden
-      &&bridge.getDocumentEpoch()===t.doc&&!v?.section&&v?.taskId===task.id&&v.resumeRevision===t.resume&&s.state.traceSourceRevision===t.changes;
+      &&bridge.getDocumentEpoch()===t.doc&&!v?.section&&v?.taskId===task.id&&v.resumeRevision===t.resume&&s.state.traceSourceRevision===t.changes
+      &&(!activity.current.resultCurrent||activity.current.resultCurrent()===true);
   }
   function close(focus=false){
     ++serial.current;hold.current=null;history.current=[];pending.current=false;setOpen(false);setPage(null);setError('');setBusy(false);
-    if(focus)requestAnimationFrame(()=>{if(activity.current.active&&activity.current.identity===identity&&trigger.current?.isConnected)trigger.current.focus({preventScroll:true});});
+    if(focus)requestAnimationFrame(()=>{if(activity.current.active&&activity.current.identity===identity&&(!activity.current.resultCurrent||activity.current.resultCurrent()===true)&&trigger.current?.isConnected)trigger.current.focus({preventScroll:true});});
   }
   const valid=current(hold.current);
   const reading=usePhoneOriginalReadingPlace(hold.current,open&&valid,page?.offset,()=>current(hold.current));
@@ -58,9 +59,9 @@ export function PhoneTaskOriginalRequest({task,active}:{task:Task;active:boolean
     const remove=registerOverlayBack(()=>close(true));return()=>{document.removeEventListener('visibilitychange',hidden);remove();};},[open,identity]);
   useEffect(()=>()=>{++serial.current;hold.current=null;pending.current=false;},[]);
   return <div><Button ref={trigger} variant="ghost" leadingIcon={IconChat} disabled={!active} aria-expanded={open&&valid} onClick={()=>open?close(true):enter()}>
-    {open&&valid?'收起原交代':'查看当时关联的原话'}</Button>
+    {open&&valid?'收起原交代':resultCurrent?'对照当时的原话':'查看当时关联的原话'}</Button>
     {open&&valid&&<section aria-label="手机工作的原交代">{busy&&<p role="status">正在核对原消息…</p>}{error&&<p role="alert">{error}</p>}
-      {page&&<><p className="pw-muted">{page.picked?'你在准备这个手机目标时选定了这条消息。':'这是创建手机任务时关联的对话消息。'}上面是当时确认的任务目标。</p>
+      {page&&<><p className="pw-muted">{page.picked?'你在准备这个手机目标时选定了这条消息。':'这是创建手机任务时关联的对话消息。'}{resultCurrent?'它和下方的执行回执是两份原记录。':'上面是当时确认的任务目标。'}</p>
         {page.total===0?<p>原消息没有文字。</p>:<p ref={reading.body} tabIndex={-1} className="pw-phone-request-original" dir="auto">{page.text}</p>}
         {page.total>page.text.length&&<p className="pw-muted">原文位置 {page.offset+1}–{page.offset+page.text.length} / {page.total}</p>}
         <div className="pw-action-row">{history.current.length>1&&<Button variant="ghost" onClick={()=>hold.current&&void read(hold.current,history.current[history.current.length-2])}>上一段</Button>}

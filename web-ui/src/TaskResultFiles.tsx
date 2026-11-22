@@ -88,7 +88,7 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   onBrowse: () => void;
   onOriginalRequest?: () => void;
 }) {
-  const heading = useId();
+  const heading = useId(), otherHeading = useId();
   const [page, setPage] = useState<FilePage | null>(null);
   const [request, setRequest] = useState<{ retry: number; file?: FileCheck }>({ retry: 0 });
   const [notices, setNotices] = useState<FileNotices | undefined>(undefined);
@@ -167,6 +167,13 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
 
   if (windowEpoch < 0) return null;
   const outputs = current?.files ?? [], sources = current?.sources ?? [];
+  // A native run marker, not the name or list order, distinguishes current
+  // output. Keep the same keyed file rows in each group as the list updates.
+  const currentOutputs = outputs.filter(file => file.runProvenance === 'current');
+  const otherOutputs = outputs.filter(file => file.runProvenance !== 'current');
+  const mixedOutputs = currentOutputs.length > 0 && otherOutputs.length > 0;
+  const earlierCount = otherOutputs.filter(file => file.runProvenance === 'earlier').length;
+  const unrecordedCount = otherOutputs.length - earlierCount;
   const hasSources = !!(sources.length || current?.sourceUnavailable || current?.hasRequestAttachments);
   const notice = notices?.scope === noticeScope ? notices.pending : undefined;
   const pendingFile = notice && !hasExactCurrentFile(current?.files, notice) ? notice : undefined;
@@ -182,8 +189,11 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
       const format = attachmentFileFormat(file.mimeType,file.name).label;
       const savedTransfer = file.sourceRunEvidence === 'original_ssh_file_download' && file.runProvenance === 'current' && file.mimeType === 'application/octet-stream';
-      const provenance = savedTransfer ? '本次传输已保存到手机' : pdfExcerptLabel(file) || fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录';
-      const metadata = [format, input ? '' : provenance, fileBytes(file.size)].filter(Boolean).join(' · ');
+      const excerpt = pdfExcerptLabel(file);
+      const provenance = savedTransfer ? '本次传输已保存到手机' : excerpt || fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录';
+      const excerptRun = mixedOutputs && excerpt && !input && file.runProvenance !== 'current'
+        ? file.runProvenance === 'earlier' ? '较早轮次' : '轮次未记录' : '';
+      const metadata = [format, input ? '' : provenance, excerptRun, fileBytes(file.size)].filter(Boolean).join(' · ');
       return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
       aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}${!input && file.hasSavedSupplement === true ? '，有补充草稿' : ''}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
         <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}{!input && file.hasSavedSupplement === true && ' · 有补充草稿'}</small></span>
@@ -196,12 +206,21 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
       ? <Button variant="ghost" disabled={!active} onClick={onOriginalRequest}>回原话题找交办附件</Button>
       : <p className="pw-reading-note">交办消息含有附件，可回原话题查看。</p>)}
   </>;
-  return <section className="pw-outcome-deliverables" aria-labelledby={heading} aria-busy={busy || undefined}>
-    <div className="pw-reading-section-heading"><h4 id={heading}>{outputs.length ? '已保存的文件成果' : hasSources ? '来源文件' : '工作文件'}</h4></div>
+  return <section className="pw-outcome-deliverables" aria-label={mixedOutputs ? '已保存的文件成果' : undefined}
+    aria-labelledby={mixedOutputs ? undefined : heading} aria-busy={busy || undefined}>
+    <div className="pw-reading-section-heading"><h4 id={heading}>{mixedOutputs ? '本轮已保存的文件' : outputs.length ? '已保存的文件成果' : hasSources ? '来源文件' : '工作文件'}</h4></div>
     {busy && !fileCue && <p className="pw-reading-note" role="status">正在读取工作文件…</p>}
     {current?.error && <p className="pw-reading-note pw-error" role="alert">{current.error}</p>}
-    {outputs.length > 0 && fileList(outputs, false)}
+    {currentOutputs.length > 0 && fileList(currentOutputs, false)}
     {fileCue}
+    {otherOutputs.length > 0 && <section className="pw-work-other-files" data-secondary={mixedOutputs || undefined}
+      aria-labelledby={mixedOutputs ? otherHeading : undefined}>
+      {mixedOutputs && <div className="pw-reading-section-heading">
+        <h4 id={otherHeading}>其他已保存文件</h4>
+        <span>{[earlierCount > 0 ? `较早轮次 ${earlierCount} 份` : '', unrecordedCount > 0 ? `轮次未记录 ${unrecordedCount} 份` : ''].filter(Boolean).join(' · ')}</span>
+      </div>}
+      {fileList(otherOutputs, false)}
+    </section>}
     {hasSources && (outputs.length ? <Accordion variant="divided" className="pw-reading-disclosures"
       expandedKeys={expandedSources === taskId ? ['source-files'] : []} onExpandedChange={keys => setExpandedSources(keys.has('source-files') ? taskId : '')}>
       <AccordionItem id="source-files" title="来源文件">{sourceContent}</AccordionItem></Accordion> : sourceContent)}

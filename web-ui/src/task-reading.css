@@ -92,6 +92,24 @@
   color: var(--pw-muted);
 }
 .pw-task-reading .pw-outcome-files { gap: var(--pw-gap-related); margin: 0; }
+.pw-task-reading .pw-work-other-files[data-secondary] {
+  margin-top: var(--pw-gap-section);
+  padding-top: var(--pw-gap-content);
+  border-top: 1px solid var(--pw-edge);
+}
+.pw-task-reading .pw-work-other-files .pw-reading-section-heading h4 {
+  margin: 0;
+  color: var(--pw-copy);
+  font: 500 13px/21px var(--pw-font);
+}
+.pw-task-reading .pw-work-other-files[data-secondary] .pw-outcome-files {
+  padding: 0;
+  background: transparent;
+}
+.pw-task-reading .pw-work-other-files[data-secondary] .pw-outcome-file.button-press-motion {
+  min-height: 52px;
+  padding-block: 8px;
+}
 .pw-task-reading .pw-outcome-file.button-press-motion {
   min-height: 64px;
   height: auto;
