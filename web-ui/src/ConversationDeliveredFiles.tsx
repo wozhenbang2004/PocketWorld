@@ -6,8 +6,12 @@ import {attachmentFileFormat,fileBytes} from './attachment-workspace';
 import type {TaskResult} from './conversation-work';
 import {usableResultFile,type TaskResultFile} from './TaskResultFiles';
 
-export type DeliveredFileSource={messageId:string;revision:number;result:TaskResult};
-type Item={source:DeliveredFileSource;file:TaskResultFile};
+export type DeliveredWorkFileSource={kind:'work';messageId:string;revision:number;result:TaskResult};
+export type DeliveredReplyDocumentSource={kind:'replyDocument';messageId:string;revision:1;at:number;
+ file:{id:string;sha256:string}&({checkFirst:true}|{checkFirst:false;name:string;mimeType:string;size:number})};
+export type DeliveredFileSource=DeliveredWorkFileSource|DeliveredReplyDocumentSource;
+type Item={kind:'work';source:DeliveredWorkFileSource;file:TaskResultFile}|
+ {kind:'replyDocument';source:DeliveredReplyDocumentSource;file:DeliveredReplyDocumentSource['file']};
 type Batch={index:number};
 const batchSize=4;
 const itemKey=({source,file}:Item)=>JSON.stringify([source.messageId,source.revision,file.id,file.sha256]);
@@ -38,6 +42,12 @@ export function ConversationDeliveredFiles({conversation,sources,covered,isCurre
    for(const source of sources.slice(start,start+batchSize)){
     if(!current())return;
     if(!scope.current.isSourceCurrent(source)){partial=true;continue}
+    if(source.kind==='replyDocument'){
+     // A rendered native reply already carries this one fixed file identity.
+     // A cold hint is for an explicit check only, not an available-file claim.
+     items.push({kind:'replyDocument',source,file:source.file});
+     continue;
+    }
     try{
      const answer=await bridge.command('tasks.resultFiles',{conversationId:conversation,resultMessageId:source.messageId,taskId:source.result.taskId});
      if(!current())return;
@@ -47,7 +57,7 @@ export function ConversationDeliveredFiles({conversation,sources,covered,isCurre
      for(const file of answer.files){
       if(!usableResultFile(file)||file.runProvenance!=='current'){partial=true;continue}
       const key=file.id+':'+file.sha256;
-      if(!seen.has(key)){seen.add(key);items.push({source,file});}
+      if(!seen.has(key)){seen.add(key);items.push({kind:'work',source,file});}
      }
     }catch{partial=true;failed=true}
    }
@@ -99,7 +109,7 @@ export function ConversationDeliveredFiles({conversation,sources,covered,isCurre
   {!page&&<p role="status">正在核对这批原成果…</p>}
   {page&&!items.length&&<p role="status">{partial?'这批没有核对到可打开的原文件。':'这批没有已保存的文件成果。'}</p>}
   {Array.from(groups,([source,files])=>{
-   const label=sourceLabel(source),stamp=time(source.result.endedAt);
+   const label=sourceLabel(source),stamp=time(source.kind==='work'?source.result.endedAt:source.at);
    return <section className="pw-outcome-files" key={source.messageId}>
     <header className="flex min-w-0 items-center justify-between gap-3">
      <div className="min-w-0"><h3 className="m-0 truncate text-sm font-medium" title={label||undefined} dir="auto">{label||'原回复'}</h3><small>{stamp}</small></div>
@@ -107,10 +117,12 @@ export function ConversationDeliveredFiles({conversation,sources,covered,isCurre
       disabled={!!opening} onClick={()=>viewReply(source)}>查看原回复</Button>
     </header>
     {files.map(item=>{
-     const {file}=item,key=itemKey(item),meta=[attachmentFileFormat(file.mimeType,file.name).label,fileBytes(file.size)].join(' · ');
+     const {file}=item,key=itemKey(item);
+     const name='name' in file?file.name:'核对原答复文档';
+     const meta='name' in file?[attachmentFileFormat(file.mimeType,file.name).label,fileBytes(file.size)].join(' · '):'尚未核对原件';
      return <Button key={key} ref={element=>{if(element)rows.current.set(key,element);else rows.current.delete(key)}} variant="ghost" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
       disabled={!!opening} onClick={event=>void open(item,event.currentTarget)}>
-      <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{opening===key?'正在打开…':meta}</small></span>
+      <span className="pw-outcome-file-copy"><span dir="auto">{name}</span><small>{opening===key?'正在打开…':meta}</small></span>
      </Button>;
     })}
    </section>;

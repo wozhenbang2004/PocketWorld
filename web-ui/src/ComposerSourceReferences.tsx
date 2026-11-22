@@ -159,7 +159,7 @@ export function ComposerSourceReferences({ composer, disabled }: { composer: Dat
   const referenceRows=refs.map((ref,index)=>{
     const pin=draftQuotePin(ref), id=pin?draftQuoteKey(pin):`unverified:${index}`, report=index===reportIndex;
     return <div className="pw-composer-context-row" key={id}>
-      {report?<p className="pw-composer-context-object pw-composer-context-hint">已附原汇报（发送时核对）</p>:
+      {report?<p className="pw-composer-context-object pw-composer-context-hint">已附你选的汇报原文（发送时核对）</p>:
        pin?<Button variant="ghost" size="small" className="pw-composer-context-object pw-composer-context-read" leadingIcon={IconQuote}
         disabled={removal.busy} onClick={event=>open(pin,index,event.currentTarget)}>查看引用 {index+1} · {pin.chars} 位</Button>:
         <p className="pw-composer-context-object pw-composer-context-hint">引用 {index+1} · 原范围待核对</p>}

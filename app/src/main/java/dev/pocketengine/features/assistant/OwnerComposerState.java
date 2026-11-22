@@ -179,7 +179,7 @@ public final class OwnerComposerState {
         for(Draft draft:drafts.values())if(draft.conversationId.isEmpty()&&!isIndependentReportFollowUp(draft.key)&&!hasPending(draft.key)){activeKey=draft.key;revision=increment(revision);return draft;}
         makeRoom();activeKey="new:"+UUID.randomUUID();Draft draft=blank(activeKey,"");drafts.put(activeKey,draft);revision=increment(revision);return draft;
     }
-    /** Receives an already verified native report pin and whole range, not a Web source claim. */
+    /** Receives an already verified native report pin and range, not a Web source claim. */
     public synchronized OwnerComposerState prepareIndependentReportFollowUp(String originFingerprint,JSONObject reference)throws Exception {
         if(!digest(originFingerprint)||reference==null)throw new SecurityException("未核对到准确原汇报，没有新建草稿");
         JSONArray selection=independentReportReference(new JSONArray().put(reference));
@@ -623,8 +623,8 @@ public final class OwnerComposerState {
     synchronized void confirmLoadedReportFollowUp(){storedReportFollowUp=independentReportFollowUp;}
     private static JSONArray independentReportReference(JSONArray refs)throws Exception{
         JSONArray checked=OwnerSourceReferences.checked(refs);
-        if(checked.length()!=1||checked.getJSONObject(0).getInt("offset")!=0||!conversationId(checked.getJSONObject(0).getString("sourceConversationId")))
-            throw new SecurityException("追问只选同一完整的短汇报，未附其他原文");
+        if(checked.length()!=1||!conversationId(checked.getJSONObject(0).getString("sourceConversationId")))
+            throw new SecurityException("追问只附原汇报的一处来源，未附其他原文");
         return checked;
     }
     private static boolean digest(String value){return value!=null&&value.matches("[0-9a-f]{64}");}

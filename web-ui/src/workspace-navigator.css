@@ -16,10 +16,13 @@
 .pw-owner-all>span small{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pw-owner-nav-body .pw-owner-all>svg:last-child{margin-inline-start:auto;width:16px}
 .pw-owner-nav-body .pw-owner-recent{margin-top:18px}
+.pw-navigation-drawer.pw-material-navigation .pw-owner-recent[data-chat-first]{margin:0 0 12px}
 .pw-owner-recent h3,.pw-owner-nav-body[data-nav-face="directory"] .pw-work-sidebar nav h3{margin:0;padding:4px 12px;color:var(--pw-copy);font:500 .8125rem/1.5 var(--pw-font)}
 .pw-owner-recent-heading{display:flex;align-items:center;justify-content:space-between;min-width:0}
 .pw-owner-recent-heading>button{min-height:44px}
 .pw-owner-recent .pw-conversation-row>button{min-height:44px}
+.pw-owner-nav-body .pw-owner-recent-more{min-height:44px;margin-inline:4px;color:var(--pw-copy)}
+.pw-owner-recent-more[aria-expanded="true"]>svg:last-child{transform:rotate(180deg)}
 .pw-owner-nav-body .pw-owner-recent .pw-recent-work .pw-conversation-row>.button-press-motion[data-conversation-activity]>span{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .pw-owner-recent .pw-conversation-row>[data-conversation-activity]>span>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .pw-owner-recent .pw-conversation-row>[data-conversation-activity] small{font:500 .75rem/1.4 var(--pw-font);white-space:nowrap}

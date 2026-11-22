@@ -7,6 +7,7 @@ export type ReportTarget = { taskId: string; runId: string; epoch: number; repor
 export type ReportPin = { expectedReportRevision: number; expectedReportFingerprint: string };
 type FollowUpOffer = { handle: string; documentEpoch: number; resume: number; request: number };
 type ReportPage = { identity: string; body: string; offset: number; totalChars: number; nextOffset: number; followUp?: FollowUpOffer };
+const followUpSegmentChars = 4000; // Match the native single-reference limit (UTF-16).
 const resumeRevision = () => Number((bridge.getState().view as { resumeRevision?: number } | undefined)?.resumeRevision || 0);
 
 /** Read the saved report in its original work, using the existing Answer and
@@ -50,9 +51,11 @@ export function OwnerWorkReport({ target, active, supported, identity, onCopy, o
     const accepts = () => alive.current && enabled.current && request === generation.current
       && documentEpoch === bridge.getDocumentEpoch() && resume === resumeRevision() && !document.hidden;
     try {
-      // Only this pinned report's actual first page can offer the whole report.
-      const requestFollowUp = independentFollowUp && offset === 0 && !!expected;
-      const result = await bridge.command('ownerWork.report.read', { taskId, runId, epoch, reportMessageId, offset, maxChars: 6000, ...expected,
+      // The shown segment is the whole proposed reference; never attach
+      // more text than this verified page or silently clip its visible text.
+      const requestFollowUp = independentFollowUp && !!expected;
+      const maxChars = requestFollowUp ? followUpSegmentChars : 6000;
+      const result = await bridge.command('ownerWork.report.read', { taskId, runId, epoch, reportMessageId, offset, maxChars, ...expected,
         ...(requestFollowUp ? {independentFollowUp: true} : {}) });
       if (!accepts()) return;
       if (result?.taskId !== taskId || result.runId !== runId || result.epoch !== epoch || result.reportMessageId !== reportMessageId
@@ -64,7 +67,7 @@ export function OwnerWorkReport({ target, active, supported, identity, onCopy, o
       if (!Number.isSafeInteger(result.reportRevision) || result.reportRevision < 1 || typeof result.bodyFingerprint !== 'string'
         || !/^sha256:[a-f0-9]{64}$/.test(result.bodyFingerprint)
         || expected && (result.reportRevision !== expected.expectedReportRevision || result.bodyFingerprint !== expected.expectedReportFingerprint)
-        || typeof body !== 'string' || body.length > 6000 || range?.unit !== 'UTF-16' || range.offset !== offset || range.chars !== body.length
+        || typeof body !== 'string' || body.length > maxChars || range?.unit !== 'UTF-16' || range.offset !== offset || range.chars !== body.length
         || !Number.isSafeInteger(range.totalChars) || range.totalChars < offset + body.length
         || range.totalChars > offset && !body.length || !Number.isSafeInteger(result.nextOffset)
         || result.nextOffset !== (offset + body.length < range.totalChars ? offset + body.length : -1)) {
@@ -73,7 +76,7 @@ export function OwnerWorkReport({ target, active, supported, identity, onCopy, o
       pin.current = { expectedReportRevision: result.reportRevision, expectedReportFingerprint: result.bodyFingerprint };
       const handle = result.followUpHandle;
       const followUp = requestFollowUp && result.modelCalled === false && result.modelReferenceRegistered === false &&
-        result.nextOffset === -1 && body.length === range.totalChars && body.length > 0 && body.length <= 4000 &&
+        body.length > 0 &&
         typeof handle === 'string' && /^[A-Za-z0-9_-]{1,240}$/.test(handle) ? { handle, documentEpoch, resume, request } : undefined;
       setPage({ identity, body, offset, totalChars: range.totalChars, nextOffset: result.nextOffset, followUp });
       setOffsets(previous => { const index = previous.indexOf(offset); return index < 0 ? [...previous, offset] : previous.slice(0, index + 1); });
@@ -111,6 +114,7 @@ export function OwnerWorkReport({ target, active, supported, identity, onCopy, o
       offer.request === generation.current && offer.documentEpoch === bridge.getDocumentEpoch() && view.resumeRevision === offer.resume;
   };
   const followUp = !busy && !error && page?.followUp && currentOffer(page.followUp) ? page.followUp : undefined;
+  const changingPageBlocked = busy || followUpState === 'pending';
   const openFollowUp = async (offer: FollowUpOffer) => {
     if (!onIndependentFollowUp || followUpState || pending.current || usedRequest.current === offer.request || !currentOffer(offer)) return;
     usedRequest.current = offer.request;
@@ -133,10 +137,11 @@ export function OwnerWorkReport({ target, active, supported, identity, onCopy, o
     {active && followUpError && <p className="pw-reading-note pw-error" role="status">{followUpError}</p>}
     {active && supported && (followUp || followUpError || error || page && (offsets.length > 1 || page.nextOffset >= 0)) && <div className="pw-action-row pw-owner-report-controls">
       {followUp && <Button variant="secondary" disabled={!!followUpState} aria-busy={followUpState === 'pending' || undefined}
-        onClick={() => void openFollowUp(followUp)}>{followUpState === 'pending' ? '正在准备独立追问…' : '引用这份汇报，另写追问'}</Button>}
-      {followUpError && <Button variant="secondary" disabled={busy || !!followUpState} onClick={() => void read(0)}>重新核对这份汇报</Button>}
-      {!!page && offsets.length > 1 && <Button variant="ghost" disabled={busy} onClick={() => void read(offsets[offsets.length - 2], false, true)}>上一段</Button>}
-      {!!page && page.nextOffset >= 0 && <Button variant="secondary" disabled={busy} onClick={() => void read(page.nextOffset, false, true)}>下一段汇报</Button>}
+        aria-description={partial ? '只带上现在这一段，另开草稿，不会发送。' : undefined}
+        onClick={() => void openFollowUp(followUp)}>{followUpState === 'pending' ? '正在准备独立追问…' : partial ? '用本段追问' : '引用这份汇报，另写追问'}</Button>}
+      {followUpError && <Button variant="secondary" disabled={busy || !!followUpState} onClick={() => void read(requestedOffset.current)}>{partial ? '重新核对本段' : '重新核对这份汇报'}</Button>}
+      {!!page && offsets.length > 1 && <Button variant="ghost" disabled={changingPageBlocked} onClick={() => void read(offsets[offsets.length - 2], false, true)}>上一段</Button>}
+      {!!page && page.nextOffset >= 0 && <Button variant="secondary" disabled={changingPageBlocked} onClick={() => void read(page.nextOffset, false, true)}>下一段汇报</Button>}
       {!!error && <Button variant="secondary" disabled={busy} onClick={() => void read(requestedOffset.current)}>重新读取这一段</Button>}
       {!!error && !!pin.current && <Button variant="ghost" disabled={busy} onClick={() => void read(0, true, true)}>从开头重新读取</Button>}
     </div>}

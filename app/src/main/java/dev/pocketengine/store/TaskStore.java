@@ -3794,7 +3794,7 @@ public final class TaskStore {
             db.setTransactionSuccessful();return result;
         }finally{db.endTransaction();}
     }
-    /** An observation of the entire short original report, held only by the native owner view. */
+    /** An exact observed range of the original report, held only by the native owner view. */
     public static final class OwnerWorkReportQuote {
         private final TaskStore issuer;
         private final String task,run,message,delivery,reference,originFingerprint;
@@ -3839,7 +3839,10 @@ public final class TaskStore {
         if(pinned&&!fingerprint.matches("sha256:[a-f0-9]{64}"))throw new SecurityException("原汇报指纹无效");
         if(control==null||control.hasHostRun())throw new SecurityException("汇报原文只供当前主人页面读取");
         long pause=control.pauseRevision(),started=System.nanoTime();checkOwnerWorkReportRead(control,pause,started);
-        boolean checkQuote=quoteRequested&&offset==0;OwnerWorkReportQuote quote=null;
+        // A partial reference can only be offered from a pinned report read
+        // whose entire visible segment fits the existing single-reference limit.
+        boolean segmentQuote=quoteRequested&&pinned&&maxChars==OwnerSourceReferences.MAX_RANGE_CHARS;
+        boolean checkQuote=quoteRequested&&(offset==0||segmentQuote);OwnerWorkReportQuote quote=null;
         JSONObject result;db.beginTransactionNonExclusive();try{
             JSONObject selected=ownerWorkReportSelection(id,run,epoch,message,false,checkQuote),source=selected.getJSONObject("source"),ref=source.getJSONObject("sourceRef");
             long actualRevision=ref.getLong("revision");String actualFingerprint=source.getString("bodyFingerprint");
@@ -3858,28 +3861,32 @@ public final class TaskStore {
                 if(!message.equals(page.optString("recordId"))||!selected.getString("conversationId").equals(page.optString("conversationId"))||actualRevision!=page.getLong("recordVersion")
                         ||!"assistant".equals(page.optString("role"))||!actualFingerprint.equals(page.getJSONObject("ownerLocator").optString("fingerprint")))throw new SecurityException("原文读取没有返回这份准确汇报");
                 result.put("body",page.getString("body")).put("readRange",new JSONObject(page.getJSONObject("readRange").toString())).put("nextOffset",page.getInt("nextOffset"));
-                if(checkQuote&&selected.has("quoteDelivery"))quote=ownerWorkReportQuote(id,run,epoch,message,selected,page);
+                if(checkQuote&&selected.has("quoteDelivery"))quote=ownerWorkReportQuote(id,run,epoch,message,selected,page,offset,segmentQuote);
             }else result.put("reason",page.optString("reason","原汇报正文暂不可读取"));
             checkOwnerWorkReportRead(control,pause,started);db.setTransactionSuccessful();
         }finally{db.endTransaction();}
         checkOwnerWorkReportRead(control,pause,started);return new OwnerWorkReportRead(result,quote);
     }
-    private OwnerWorkReportQuote ownerWorkReportQuote(String id,String run,int epoch,String message,JSONObject selected,JSONObject page)throws Exception {
+    private OwnerWorkReportQuote ownerWorkReportQuote(String id,String run,int epoch,String message,JSONObject selected,JSONObject page,int offset,boolean segmentQuote)throws Exception {
         JSONObject range=page.getJSONObject("readRange");
-        String body=page.getString("body");int chars=body.length();
-        if(chars<1||chars>OwnerSourceReferences.MAX_RANGE_CHARS||range.optInt("offset",-1)!=0||
-                range.optInt("chars",-1)!=chars||range.optInt("totalChars",-1)!=chars||!"UTF-16".equals(range.opt("unit"))||
-                page.optInt("nextOffset",0)!=-1||!Boolean.FALSE.equals(page.opt("importAssignedIdentity"))||
+        String body=page.getString("body");int chars=body.length(),total=range.getInt("totalChars");long end=(long)offset+chars;
+        boolean whole=offset==0&&chars==total;
+        if(chars<1||chars>OwnerSourceReferences.MAX_RANGE_CHARS||range.getInt("offset")!=offset||
+                range.getInt("chars")!=chars||end>total||!"UTF-16".equals(range.opt("unit"))||
+                page.getInt("nextOffset")!=(end<total?end:-1)||!whole&&!segmentQuote||!Boolean.FALSE.equals(page.opt("importAssignedIdentity"))||
                 !"not_authorized_by_this_owner_read".equals(page.opt("derivedUseStatus"))||
                 !StandardCharsets.UTF_8.newEncoder().canEncode(body))return null;
         JSONObject source=selected.getJSONObject("source");
-        if(!("sha256:"+dev.pocketengine.features.local.project.ProjectSources.sha256(body.getBytes(StandardCharsets.UTF_8)))
+        // OriginalHistorySearch checks the original fingerprint and the SHA of
+        // each actual SQL block before slicing. Only a whole page also has the
+        // complete body with which to repeat the full fingerprint comparison.
+        if(whole&&!("sha256:"+dev.pocketengine.features.local.project.ProjectSources.sha256(body.getBytes(StandardCharsets.UTF_8)))
                 .equals(source.opt("bodyFingerprint")))return null;
-        JSONObject reference=ownerWorkReportQuoteReference(source,chars);
+        JSONObject reference=ownerWorkReportQuoteReference(source,offset,chars);
         return new OwnerWorkReportQuote(this,id,run,epoch,message,selected.getString("deliveryId"),reference,ownerWorkReportQuoteFingerprint(id,run,epoch,message,selected,reference));
     }
-    private static JSONObject ownerWorkReportQuoteReference(JSONObject source,int chars)throws Exception {
-        JSONObject copy=new JSONObject(source.toString()).put("offset",0).put("chars",chars).put("unit","UTF-16");
+    private static JSONObject ownerWorkReportQuoteReference(JSONObject source,int offset,int chars)throws Exception {
+        JSONObject copy=new JSONObject(source.toString()).put("offset",offset).put("chars",chars).put("unit","UTF-16");
         return OwnerSourceReferences.checked(new JSONArray().put(copy)).getJSONObject(0);
     }
     private static String ownerWorkReportQuoteFingerprint(String id,String run,int epoch,String message,
@@ -3896,7 +3903,8 @@ public final class TaskStore {
         JSONObject reference;db.beginTransactionNonExclusive();try{
             JSONObject selected=ownerWorkReportSelection(quote.task,quote.run,quote.epoch,quote.message,true,true);
             if(!selected.has("quoteDelivery"))throw new SecurityException("原工作没有可核对的同一份已交付汇报");
-            reference=ownerWorkReportQuoteReference(selected.getJSONObject("source"),quote.reference().getInt("chars"));
+            JSONObject observed=quote.reference();
+            reference=ownerWorkReportQuoteReference(selected.getJSONObject("source"),observed.getInt("offset"),observed.getInt("chars"));
             if(!quote.originFingerprint.equals(ownerWorkReportQuoteFingerprint(quote.task,quote.run,quote.epoch,quote.message,selected,reference)))
                 throw new SecurityException("原汇报或来源已变化，未引用其他版本");
             checkOwnerWorkReportRead(owner,pause,started);db.setTransactionSuccessful();

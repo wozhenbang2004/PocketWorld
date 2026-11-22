@@ -911,7 +911,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    {privateFiles&&<ContextMenuItem id="share" icon={IconShare}>系统分享…</ContextMenuItem>}
   </ContextMenu>
  </>}</ContextMenuTrigger>;
- const sourceReturnLabel=liveMessageOriginalOnly?'返回原消息':reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':
+ const sourceReturnLabel=liveMessageOriginalOnly?(replyDocumentOnly&&returnToDeliveredFiles?'返回文件成果':'返回原消息'):reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':
   focusedDraft||quotedDraftArrival?.windowId===view.windowId&&quotedDraftArrival?.current()?'返回原消息':
   view.resultFilesOnly===true&&!view.fromWorkResult&&view.taskId!==openTaskId?returnToDeliveredFiles?'返回文件成果':'返回原消息':view.taskId?'返回原工作':'返回原工作区';
  const entryBack=(mode==='original'||mode==='detail')&&view.originalReturn==='entry';
