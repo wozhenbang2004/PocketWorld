@@ -1142,20 +1142,36 @@ internal class AttachmentOutcomeCoordinator(
             JSONObject() to null
         }
     }
-    fun shareOriginalFile(){
+    fun shareOriginalFile(readerCurrent:(()->Boolean)?=null){
         if(state.busy||state.group!=null||state.team!=null)return;val file=state.file?:return;val task=state.taskId
-        var prepared:Intent?=null;val issued=java.util.concurrent.atomic.AtomicBoolean(false)
+        var prepared:Intent?=null
+        val disposition=java.util.concurrent.atomic.AtomicInteger(0) // Prepared, entered Android, or discarded.
+        fun sameFile()=state.open&&state.taskId==task&&state.file===file
+        fun discard(intent:Intent){runCatching{io.execute{runCatching{app.attachmentOutcomes.discardUnissuedView(intent)}}}}
         work(onSuccess={
             val intent=prepared?:return@work
+            if(!sameFile())return@work
+            if(readerCurrent!=null&&(!resumed||!readerCurrent())){
+                state=state.copy(error="原工作或 PDF 页面已变化，没有打开系统分享。")
+                return@work
+            }
+            if(!disposition.compareAndSet(0,1))return@work
             try{
-                issued.set(true);intent.putExtra(dev.pocketengine.features.attachments.AttachmentOutcomeHost.NATIVE_VIEW_ISSUED,true)
+                intent.putExtra(dev.pocketengine.features.attachments.AttachmentOutcomeHost.NATIVE_VIEW_ISSUED,true)
                 activity.startActivity(Intent.createChooser(intent,"分享这份固定原件"))
-                state=state.copy(notice="已请求系统分享选择器；未取得接收应用送达或读取回执。")
-            }catch(_:Exception){issued.set(false);intent.removeExtra(dev.pocketengine.features.attachments.AttachmentOutcomeHost.NATIVE_VIEW_ISSUED);runCatching{app.attachmentOutcomes.discardUnissuedView(intent)};state=state.copy(error="系统分享未启动；原件保留，没有宣称已送达。")}
+                if(sameFile())state=state.copy(notice="已请求系统分享选择器；未取得接收应用送达或读取回执。")
+            }catch(_:android.content.ActivityNotFoundException){
+                intent.removeExtra(dev.pocketengine.features.attachments.AttachmentOutcomeHost.NATIVE_VIEW_ISSUED)
+                if(disposition.compareAndSet(1,2))discard(intent)
+                if(sameFile())state=state.copy(error="系统分享选择器未启动，原件保留。")
+            }catch(_:Exception){
+                // Android may already have received the temporary URI. Leave only its existing expiry in force.
+                if(sameFile())state=state.copy(error="无法确认系统分享选择器是否打开。原件保留，没有自动重试或确认送达。")
+            }
         }){c,_->
             val intent=app.attachmentOutcomes.share(task,file.getString("id"),file.getString("sha256"),c);prepared=intent
-            c.onCancel(Runnable{if(!issued.get())runCatching{app.attachmentOutcomes.discardUnissuedView(intent)}})
-            JSONObject().put("shareSheetRequested",false) to null
+            c.onCancel(Runnable{if(disposition.compareAndSet(0,2))discard(intent)})
+            JSONObject() to null
         }
     }
     fun openExternal(reviewedWorkApk:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null){val file=state.file?:return;val group=state.group;val task=state.taskId

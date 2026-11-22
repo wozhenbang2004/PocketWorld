@@ -364,7 +364,9 @@ internal class PocketWebBridge(
     }
     private val phoneControl = PocketWebPhoneControl(controller, { id -> taskViewId == id }, { !closed && documentId != null && section == "devices" && taskViewId == null })
     private val projectRuntime = PocketWebProjectRuntime(controller)
-    private val attachmentPages = PocketWebAttachments(controller, ::captureWindow, ::acceptsWindow) { publishState() }
+    private val attachmentPages = PocketWebAttachments(controller, ::captureWindow, ::acceptsWindow, { task ->
+        !closed && documentId != null && section == null && taskReturnSection == null && taskViewId == task
+    }) { publishState() }
     private val modelDiagnostics = PocketWebModelDiagnostics(controller, ::captureWindow, ::acceptsWindow, { !closed && documentId != null && section == "models" }) { publishState() }
     private val developerLogs = PocketWebDeveloperLogs(controller, controller.webPresentationActivity(), ::captureWindow, ::acceptsWindow) { !closed && documentId != null }
     private val experience = PocketWebExperience(controller)

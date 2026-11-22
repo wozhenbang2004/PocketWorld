@@ -84,3 +84,18 @@
   .pw-work-object-surface .pw-task-header { padding-inline: 22px; min-height: 76px; }
   .pw-work-object-overlay { background: rgb(0 0 0 / 12%); }
 }
+
+/* Same Work review window, focused on one live question over its original chat. */
+.pw-task-drawer.pw-work-object-surface[data-chat-question] {
+  inset: auto 0 0;
+  margin-inline: auto;
+  width: min(100%, 560px);
+  height: auto;
+  max-height: min(78dvh, 640px);
+  border-radius: var(--pw-radius-sheet, 24px) var(--pw-radius-sheet, 24px) 0 0;
+  padding-top: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-shadow: var(--pw-shadow-sheet);
+}
+.pw-work-object-surface[data-chat-question] .pw-task-body { padding-block: 8px 16px; }
+.pw-chat-question-content { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

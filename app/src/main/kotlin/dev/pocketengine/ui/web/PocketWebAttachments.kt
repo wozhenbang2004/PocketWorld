@@ -34,6 +34,7 @@ internal class PocketWebAttachments(
     private val controller: PocketWorldController,
     private val captureWindow: () -> PocketWebWindowTicket,
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
+    private val ownsOrdinaryWork: (String) -> Boolean,
     private val changed: () -> Unit
 ) {
     companion object {
@@ -52,9 +53,10 @@ internal class PocketWebAttachments(
     }
     private val flow get() = controller.attachmentOutcomes
     private data class Window(val id: String, val ticket: PocketWebWindowTicket)
+    private data class WorkPdfShare(val work: AttachmentWorkReturn, val page: AttachmentPdfPageText)
     private data class Frame(val location: String, val files: List<JSONObject>,
         val libraryPdfResume: PocketWebOriginalFiles.LibraryPdfResume?, val displayedPdfPage: AttachmentPdfPageText?,
-        val displayedWord:AttachmentWordExcerpt?)
+        val displayedWord:AttachmentWordExcerpt?, var workPdfShare: WorkPdfShare?)
     private data class Review(val id: String, val location: String, val draft: JSONObject, val expires: Long)
     private data class ProcessingReview(val id: String, val value: NativeFileProcess.Review)
     private data class DraftLibraryVisit(val id: String, val current: () -> Boolean)
@@ -370,6 +372,30 @@ internal class PocketWebAttachments(
         scopedResultCurrent == null && controller.webPrivateOwnerVisible() && state.fromWorkResult && !state.restoredWorkReturn &&
             state.resultRun == null && !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file) &&
             ProjectApkInstallActivity.canReviewManagedWorkFile(state.originalFile, state.taskId, state.file)
+    /** Reader shortcut only after the native reader acknowledged the actual PDF page. */
+    private fun workPdfShare(state: AttachmentOutcomeState): WorkPdfShare? {
+        if (!state.open || state.busy || flow.exportPending || !state.fromWorkResult || state.restoredWorkReturn ||
+            state.originalReturn != AttachmentOriginalReturn.ENTRY || state.resultRun != null || scopedResultCurrent != null ||
+            state.deviceOriginalOnly || state.group != null || state.team != null || state.choosingSource || state.documentOpen ||
+            state.documentDraft != null || state.processingSource != null || state.comparison != null ||
+            !controller.webPrivateOwnerVisible() || controller.conversationReader != null || controller.state.chatAttachmentPickerOpen) return null
+        val file = state.file ?: return null
+        val source = state.originalFile ?: return null
+        val work = state.workReturn ?: return null
+        val snapshot = state.snapshot ?: return null
+        if (state.taskId != work.run.taskId || !ownsOrdinaryWork(work.run.taskId) ||
+            source.mimeType != "application/pdf" || file.opt("mimeType") != source.mimeType ||
+            file.opt("sourceKind") != "created_document" || file.opt("sourceTaskId") != work.run.taskId ||
+            file.opt("sourceTaskRunId") != work.run.runId || source.sha256 != work.sha256 ||
+            file.optLong("size", -1L) != source.sizeBytes || !work.matchesResult(snapshot, file)) return null
+        val task = controller.state.tasks.singleOrNull { it.id == work.run.taskId }?.raw ?: return null
+        if (task.opt("taskProjection") != "detail_window" || task.opt("taskCoreReadLimited") != false || task.optBoolean("cancelRequested") ||
+            !task.isNull("parentTaskId") || !task.isNull("teamRunId") || !task.isNull("memberId")) return null
+        val exact = if (snapshot.opt("taskStatus") == "completed") work
+            else work.forRecordedDocument(snapshot, file)?.takeIf { it.matchesVerifiedDocument(file, source) } ?: return null
+        if (!exact.matchesTask(task)) return null
+        return viewer.displayedPdfPage(file)?.let { WorkPdfShare(exact, it) }
+    }
     fun openOriginalFromDevice(file:dev.pocketengine.ui.ReceivedFileSelection,current:()->Boolean){
         check(controller.webUiCanInteract() && controller.webPrivateOwnerVisible() && current())
         clear();deviceTaskCurrent=current
@@ -454,7 +480,8 @@ internal class PocketWebAttachments(
         }
         val frameId = UUID.randomUUID().toString()
         val word=if(draftPresentation&&!state.busy)displayedWordExcerpt(state) else null
-        frames[frameId] = Frame(location(state), files, libraryPdfResume, displayedPdfPage,word)
+        val sharePdf = workPdfShare(state)
+        frames[frameId] = Frame(location(state), files, libraryPdfResume, displayedPdfPage,word,sharePdf)
         while (frames.size > 16) frames.remove(frames.keys.first())
         if (drafts.isInitialized()) drafts.value.textSource()?.let { attempted ->
             if (!retainsDraftText(attempted)) drafts.value.retireText()
@@ -510,6 +537,7 @@ internal class PocketWebAttachments(
             .put("returnToLibraryDocument", ownedCopy && flow.canReturnToLibraryDocument())
             .put("canReferenceHistoryOriginal", !selectedCompiler && !selectedPythonText && scoped != null && !report && privateOriginal)
             .put("canSaveOriginal", !selectedPythonText && scoped == null && privateOriginal)
+            .put("canShareWorkPdf", sharePdf != null)
             .put("canOpenInReader", !selectedCompiler && !selectedPythonText && scoped == null && privateOriginal && viewer.canOpenInReader(state.file))
             .put("canReviewManagedWorkApk", canReviewManagedWorkApk(state))
             .put("externalViewerResult", state.externalViewerResult)
@@ -822,7 +850,19 @@ internal class PocketWebAttachments(
                     }
                     flow.openExternal(requireNotNull(flow.state.originalFile))
                 } else flow.openExternal()
-                "share" -> flow.shareOriginalFile()
+                "share" -> {
+                    val original = flow.state.originalFile
+                    if (original == null) flow.shareOriginalFile() // Existing file-details menu.
+                    else {
+                        require(args.length() == 3) { "请在原 PDF 页面中选择分享" }
+                        val shown = frame.workPdfShare ?: error("请先在原工作中打开并显示这份 PDF")
+                        fun currentPdf() = window === current && acceptsWindow(current.ticket) &&
+                            flow.state.originalFile === original && workPdfShare(flow.state) == shown
+                        check(currentPdf()) { "原工作或 PDF 页面已变化，没有打开系统分享" }
+                        frame.workPdfShare = null // Do not dispatch the same admitted frame twice.
+                        flow.shareOriginalFile(::currentPdf)
+                    }
+                }
                 "readContinuationDraft", "editContinuationDraft" -> {
                     val original=flow.state;val task=original.taskId?:error("请回到原工作的固定成果")
                     val file=original.file?:error("请先选择原成果版本")

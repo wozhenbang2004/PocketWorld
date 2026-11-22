@@ -15,9 +15,10 @@ const time=(value:number)=>new Intl.DateTimeFormat(undefined,{month:'short',day:
 
 /** Only after an explicit visit/check: batch the already-visible original replies.
  * No history body, global inventory or guessed output name is requested here. */
-export function ConversationDeliveredFiles({conversation,sources,covered,isCurrent,isSourceCurrent,onClose,onOpen,onHistory}:{
+export function ConversationDeliveredFiles({conversation,sources,covered,isCurrent,isSourceCurrent,sourceLabel,onViewReply,onClose,onOpen,onHistory}:{
  conversation:string;sources:readonly DeliveredFileSource[];covered:boolean;isCurrent:()=>boolean;
- isSourceCurrent:(source:DeliveredFileSource)=>boolean;onClose:()=>void;onOpen:(item:Item,target:HTMLButtonElement)=>Promise<void>;
+ isSourceCurrent:(source:DeliveredFileSource)=>boolean;sourceLabel:(source:DeliveredFileSource)=>string;
+ onViewReply:(source:DeliveredFileSource)=>boolean;onClose:()=>void;onOpen:(item:Item,target:HTMLButtonElement)=>Promise<void>;
  onHistory?:()=>void;
 }){
  const [batch,setBatch]=useState<Batch>({index:0});
@@ -84,17 +85,36 @@ export function ConversationDeliveredFiles({conversation,sources,covered,isCurre
   finally{openingFile.current='';setOpening('')}
  };
  const items=page?.items.filter(item=>isSourceCurrent(item.source))??[];
+ const groups=new Map<DeliveredFileSource,Item[]>();
+ for(const item of items){
+  const group=groups.get(item.source);
+  if(group)group.push(item);else groups.set(item.source,[item]);
+ }
+ const viewReply=(source:DeliveredFileSource)=>{
+  if(openingFile.current||!page||!isCurrent())return;
+  if(!isSourceCurrent(source)||!onViewReply(source))setError('原回复已不在当前加载的对话里。');
+ };
  const partial=!!page&&(page.partial||items.length!==page.items.length);
  return <SettingsDialog isOpen={!covered} title={batch.index===0?'近期文件成果':'较早的文件成果'} closeLabel="关闭文件成果" onClose={onClose}>
   {!page&&<p role="status">正在核对这批原成果…</p>}
   {page&&!items.length&&<p role="status">{partial?'这批没有核对到可打开的原文件。':'这批没有已保存的文件成果。'}</p>}
-  {!!items.length&&<div className="pw-outcome-files">{items.map(item=>{
-   const {file,source}=item,key=itemKey(item),meta=[attachmentFileFormat(file.mimeType,file.name).label,fileBytes(file.size),time(source.result.endedAt)].join(' · ');
-   return <Button key={key} ref={element=>{if(element)rows.current.set(key,element);else rows.current.delete(key)}} variant="ghost" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
-    disabled={!!opening} onClick={event=>void open(item,event.currentTarget)}>
-    <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{opening===key?'正在打开…':meta}</small></span>
-   </Button>;
-  })}</div>}
+  {Array.from(groups,([source,files])=>{
+   const label=sourceLabel(source),stamp=time(source.result.endedAt);
+   return <section className="pw-outcome-files" key={source.messageId}>
+    <header className="flex min-w-0 items-center justify-between gap-3">
+     <div className="min-w-0"><h3 className="m-0 truncate text-sm font-medium" title={label||undefined} dir="auto">{label||'原回复'}</h3><small>{stamp}</small></div>
+     <Button variant="ghost" size="small" className="min-h-[44px] shrink-0" aria-label={`查看原回复：${label||stamp}`}
+      disabled={!!opening} onClick={()=>viewReply(source)}>查看原回复</Button>
+    </header>
+    {files.map(item=>{
+     const {file}=item,key=itemKey(item),meta=[attachmentFileFormat(file.mimeType,file.name).label,fileBytes(file.size)].join(' · ');
+     return <Button key={key} ref={element=>{if(element)rows.current.set(key,element);else rows.current.delete(key)}} variant="ghost" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
+      disabled={!!opening} onClick={event=>void open(item,event.currentTarget)}>
+      <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{opening===key?'正在打开…':meta}</small></span>
+     </Button>;
+    })}
+   </section>;
+  })}
   {partial&&<p className="pw-muted">这批只显示已核对的文件。</p>}
   {error&&<p className="pw-error" role="alert">{error}</p>}
   {page&&<div className="pw-form-actions">

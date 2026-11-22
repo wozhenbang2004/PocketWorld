@@ -831,6 +831,16 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   view.exportPending?'等待选择保存位置…':confirmed?'另存另一份…':'另存原件…';
  const saveFirst=!reviewManagedWorkApk&&preferSave&&!confirmed;
  const exportAction=!pythonOutputFile&&<Button variant={confirmed?'ghost':saveFirst?'primary':'secondary'} disabled={busy||draftBusy||view.exportPending} onClick={()=>run('export')}>{exportLabel}</Button>;
+ const shareableWorkPdf=mode==='original'&&view.canShareWorkPdf===true&&!!openTaskId&&view.taskId===openTaskId&&!onReturnToSearch;
+ const shareWorkPdf=()=>{
+  const frame=attachmentFrame(view),native=bridge.getState(),live=obj(native.state.attachmentWorkspace),owner=obj(native.view);
+  if(!shareableWorkPdf||!frame||busy||draftBusy||view.exportPending||document.hidden||owner.section!=null||
+     owner.taskId!==view.taskId||live.windowId!==frame.windowId||live.canShareWorkPdf!==true||
+     obj(live.originalFile).id!==original.id||obj(obj(live.originalFile).information).pdfRasterId!==obj(original.information).pdfRasterId)return;
+  void act('share',{},frame).catch(()=>{});
+ };
+ const sharePdfAction=(onClick:()=>void)=>shareableWorkPdf&&<Button variant="ghost" leadingIcon={IconShare}
+  disabled={busy||draftBusy||view.exportPending} onClick={onClick}>分享原件…</Button>;
  // Use the real current attach offer, not an inferred draft or an alternate result path.
  // Moving the other actions into a popover does not change their own owner/file admission.
  const compactReaderActions=mode==='original'&&view.ready===true&&attachInTopic&&canSaveOriginal&&!preferSave&&
@@ -860,6 +870,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
       onClick={()=>selectReaderAction(revealContinuation)}>{supplementLabel}</Button>}
     <Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
       onClick={()=>selectReaderAction(()=>run('export'))}>{exportLabel}</Button>
+    {sharePdfAction(()=>selectReaderAction(shareWorkPdf))}
    </div>
   </Popover>
  </PopoverTrigger>;
@@ -1328,6 +1339,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {canKeepSupplement&&!compactReaderActions&&<Button variant={preferSave||useInTopic||offerDocumentEdit?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>{supplementLabel}</Button>}
   {!canChooseAttachment&&reuseAction}
   {canSaveOriginal&&!saveFirst&&!compactReaderActions&&exportAction}
+  {!compactReaderActions&&sharePdfAction(shareWorkPdf)}
   {!confirmed&&copyFeedback(compactReaderActions)}
  </div>}
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
