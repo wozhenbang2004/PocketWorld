@@ -28,7 +28,7 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
     private var snapshot = JSONObject()
     private val readings = linkedMapOf<String, Pair<String, Long>>()
     private val reviews = linkedMapOf<String, Review>()
-    private data class OriginalFileView(val handle: String, val expires: Long, val file: PlanArtifactVerifier.OriginalFile)
+    private data class OriginalFileView(val handle: String, val expires: Long, val files: Map<String, PlanArtifactVerifier.OriginalFile>)
     @Volatile private var originalFileView: OriginalFileView? = null
     @Volatile private var originalFileFlight: Any? = null
     private val main = Handler(Looper.getMainLooper())
@@ -134,6 +134,43 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
     private fun read(handle: String): JSONObject {
         val value = readings[handle]; check(value != null && value.second > SystemClock.elapsedRealtime()) { "原目标读取已关闭或过期，请重新读取" }; return JSONObject(value.first)
     }
+    // Discovery uses only the already-read native Plan. Completed rows are settled by the fresh
+    // progress resolver; the stored observation's terminalVerified flag only covers failed/cancelled.
+    private fun earlierOriginalFiles(plan: JSONObject): List<PlanArtifactVerifier.OriginalFile> {
+        val progress = plan.optJSONObject("progress") ?: return emptyList()
+        val last = progress.optJSONObject("lastResult") ?: return emptyList()
+        val steps = plan.optJSONArray("steps") ?: return emptyList()
+        val count = steps.length()
+        val lastStep = last.opt("stepId") as? String ?: return emptyList()
+        val observedAt = progress.opt("observedAt")
+        if (count !in 2..50 || plan.opt("ownerId") != "owner" || plan.opt("spaceId") != "private" ||
+            plan.opt("referenceOnly") != true || plan.opt("executionAuthorized") != false ||
+            plan.opt("state") != "completed" || plan.opt("completedSteps") != count || plan.opt("totalSteps") != count ||
+            plan.optJSONObject("execution")?.opt("started") != true ||
+            progress.opt("format") != "pocketworld.plan-progress.v1" || progress.opt("planId") != plan.opt("id") ||
+            progress.opt("taskStateAuthority") != "TaskStore" || progress.opt("executionAuthorized") != false ||
+            progress.opt("readState") != "current" || progress.opt("state") != "completed" ||
+            progress.opt("currentStep") !== JSONObject.NULL || progress.opt("verifiedResults") != count ||
+            (observedAt !is Int && observedAt !is Long) || (observedAt as Number).toLong() <= 0L ||
+            last.opt("readState") != "current" || last.opt("status") != "completed" ||
+            last.opt("terminalVerified") != true || last.opt("resultVerified") != true) return emptyList()
+        val rows = steps.objects()
+        if (rows.size != count || rows.count { it.opt("id") == lastStep } != 1 ||
+            rows.any { it.opt("status") != "completed" }) return emptyList()
+        return rows.mapNotNull { step ->
+            val id = step.opt("id") as? String ?: return@mapNotNull null
+            if (id == lastStep || step.opt("taskStateAuthority") != "TaskStore" || step.opt("executionAuthorized") != false ||
+                step.opt("taskState") != "completed" || step.opt("taskStatus") != "completed" || step.opt("taskNeedsApproval") != false)
+                return@mapNotNull null
+            // originalFile checks the stored completion event, matched observed occurrence, original artifact and reviewed standard.
+            runCatching { PlanArtifactVerifier.originalFile(plan, id) }.getOrNull()?.takeIf {
+                step.opt("taskId") == it.taskId() && step.opt("taskRunId") == it.runId() && step.opt("taskEpoch") == it.epoch()
+            }
+        }
+    }
+    private fun originalFilePosition(file: PlanArtifactVerifier.OriginalFile) = JSONObject().put("stepId", file.stepId())
+        .put("evidenceId", file.evidenceId()).put("sourceVersion", file.sourceVersion())
+
     private fun view(plan: JSONObject): JSONObject {
         readings.entries.removeAll { it.value.second <= SystemClock.elapsedRealtime() }
         while (readings.size >= 16) readings.remove(readings.keys.first())
@@ -142,25 +179,29 @@ internal class PocketWebPlans(private val controller: PocketWorldController) {
         val step = plan.optJSONObject("progress")?.optJSONObject("lastResult")?.optString("stepId").orEmpty()
         // The native Book/Work view is already present. No extra read or body at discovery.
         val original = runCatching { PlanArtifactVerifier.heldOriginalFile(plan, step) }.getOrNull()
-        originalFileFlight = null; originalFileView = original?.let { OriginalFileView(handle, expires, it) }
+        val earlier = earlierOriginalFiles(plan)
+        val files = (listOfNotNull(original) + earlier).associateBy { it.stepId() }
+        originalFileFlight = null
+        originalFileView = files.takeIf { it.isNotEmpty() }?.let { OriginalFileView(handle, expires, it) }
         return JSONObject().put("viewHandle", handle).put("plan", public(plan)).also { output ->
-            original?.let { output.put("originalStepFile", JSONObject().put("stepId", it.stepId())
-                .put("evidenceId", it.evidenceId()).put("sourceVersion", it.sourceVersion())) }
+            original?.let { output.put("originalStepFile", originalFilePosition(it)) }
+            if (earlier.isNotEmpty()) output.put("originalStepFiles", JSONArray(earlier.map(::originalFilePosition)))
         }
     }
-    /** Only the current native Plan view may opt into its one actually presented finished file. */
+    /** Only the current native Plan view may opt into one of its actually presented finished files. */
     fun readOriginalStepFile(args: JSONObject, ownerCurrent: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         fields(args, "viewHandle", "stepId")
         val handle = text(args, "viewHandle"); val step = text(args, "stepId")
         val held = originalFileView ?: error("请重新核对这个原目标")
-        check(handle == held.handle && step == held.file.stepId() && originalFileFlight == null &&
+        check(handle == held.handle && originalFileFlight == null &&
             SystemClock.elapsedRealtime() < held.expires && ownerCurrent()) { "请重新核对这个原目标" }
+        val original = held.files[step] ?: error("当前原目标没有提供这一步的核验文件")
         val election = Any(); originalFileFlight = election
         fun current() = originalFileView === held && originalFileFlight === election &&
             SystemClock.elapsedRealtime() < held.expires && ownerCurrent()
         try {
             controller.runPluginCatalogWork(Runnable {
-                val file = runCatching { controller.nativeButlerHost().readOriginalPlanStepFile(held.file, ::current) }.getOrNull()
+                val file = runCatching { controller.nativeButlerHost().readOriginalPlanStepFile(original, ::current) }.getOrNull()
                 main.post {
                     val ready = current()
                     if (originalFileFlight === election) originalFileFlight = null

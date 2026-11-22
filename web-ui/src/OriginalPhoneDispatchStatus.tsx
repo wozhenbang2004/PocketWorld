@@ -145,8 +145,12 @@ export function OriginalPhoneDispatchStatus({ source, canRead, onOpen, registerR
     const value = view?.value;
     if (!value?.until || !view) return;
     const left = Math.min(value.until - Date.now(), value.untilMono - performance.now());
+    const original = view.visit;
     const timer = window.setTimeout(() => {
-      if (visit.current === view.visit) setResult({ visit: view.visit, message: '本次文字查看已结束，未在本机留存。' });
+      // Only a verified, confirmed text result has this timer. Drop the whole
+      // value at expiry and show only what was confirmed during this visit.
+      if (visit.current === original) setResult(current(original) ?
+        { visit: original, message: '这次读取时，原机主已确认完成。文字查看已到期。' } : undefined);
     }, Math.max(0, left));
     return () => window.clearTimeout(timer);
   }, [view]);

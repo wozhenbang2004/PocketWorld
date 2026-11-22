@@ -119,14 +119,43 @@ type PlanFileVisit = {
 };
 type PlanFilePresentation = { visit: PlanFileVisit; status: 'reading' | 'unavailable' | 'ready'; text?: string };
 const originalStepFileAction = 'plans.readOriginalStepFile';
-function planFileTarget(reading: Data | null): PlanFileTarget | undefined {
-  const plan = reading?.plan, file = reading?.originalStepFile, handle = reading?.viewHandle;
-  if (!plan || !planWorkId(plan.id) || !planWorkId(handle) || !planWorkId(file?.stepId) ||
-      typeof file?.evidenceId !== 'string' || !/^automation-[a-f0-9]{64}$/.test(file.evidenceId) ||
+function planFileTarget(reading: Data | null, file: Data | undefined): PlanFileTarget | undefined {
+  const plan = reading?.plan, handle = reading?.viewHandle;
+  if (!plan || !planWorkId(plan.id) || !planWorkId(handle) || !file || !planWorkId(file.stepId) ||
+      typeof file.evidenceId !== 'string' || !/^automation-[a-f0-9]{64}$/.test(file.evidenceId) ||
       !Number.isSafeInteger(file.sourceVersion) || file.sourceVersion < 1) return;
-  const last = planProgressView(plan)?.lastResult;
-  if (last?.stepId !== file.stepId || last.resultVerified !== true || last.resultBasis?.kind !== 'native_workspace_artifact_standard') return;
   return { planId: plan.id, stepId: file.stepId, evidenceId: file.evidenceId, sourceVersion: file.sourceVersion, viewHandle: handle };
+}
+function recentPlanFile(reading: Data | null): PlanFileTarget | undefined {
+  const target = planFileTarget(reading, reading?.originalStepFile);
+  const last = reading?.plan && planProgressView(reading.plan)?.lastResult;
+  return target && last?.stepId === target.stepId && last.resultVerified === true &&
+    last.resultBasis?.kind === 'native_workspace_artifact_standard' ? target : undefined;
+}
+function earlierPlanFiles(reading: Data | null): ReadonlyMap<string, PlanFileTarget> | undefined {
+  const plan = reading?.plan, offers = reading?.originalStepFiles;
+  const progress = plan && planProgressView(plan);
+  if (plan?.ownerId !== 'owner' || plan.spaceId !== 'private' || plan.referenceOnly !== true || plan.executionAuthorized !== false ||
+      plan.state !== 'completed' || progress?.readState !== 'current' || progress.state !== 'completed' ||
+      progress.executionAuthorized !== false || !Array.isArray(plan.steps) || plan.steps.length < 2 || plan.steps.length > 50 ||
+      progress.verifiedResults !== plan.steps.length || !Array.isArray(offers) || offers.length >= plan.steps.length) return;
+  const targets = new Map<string, PlanFileTarget>();
+  for (const offer of offers) {
+    const target = planFileTarget(reading, offer);
+    if (!target || target.stepId === progress.lastResult?.stepId || targets.has(target.stepId)) return;
+    const matches = plan.steps.filter((step: Data) => step?.id === target.stepId), step = matches[0];
+    if (matches.length !== 1 || step.planId !== target.planId || step.status !== 'completed' ||
+        step.taskStateAuthority !== 'TaskStore' || step.taskState !== 'completed' || step.taskObservation?.resultVerified !== true) return;
+    targets.set(target.stepId, target);
+  }
+  return targets;
+}
+function samePlanFile(left: PlanFileTarget | undefined, right: PlanFileTarget): boolean {
+  return !!left && left.planId === right.planId && left.stepId === right.stepId && left.viewHandle === right.viewHandle &&
+    left.evidenceId === right.evidenceId && left.sourceVersion === right.sourceVersion;
+}
+function planFileTrigger(trigger: HTMLButtonElement, target: PlanFileTarget): boolean {
+  return trigger.isConnected && trigger.dataset.planStepFile === target.stepId && !trigger.closest('[hidden],[inert]');
 }
 function planFileWindow(resume: number, epoch: number) {
   const view = bridge.getState().view as Data | undefined;
@@ -164,8 +193,9 @@ function PlanProgress({ plan, run, supported, currentAction, renewalReason, file
   </section>;
 }
 
-function PlanContents({ plan, run, supported, discloseSteps = false, renderStepActions, promotedWork, reviewedSchedule }: {
+function PlanContents({ plan, run, supported, discloseSteps = false, renderStepActions, renderStepFile, promotedWork, reviewedSchedule }: {
   plan: Data; run: Props['run']; supported: Props['supported']; discloseSteps?: boolean; renderStepActions?: (step: Data, index: number) => ReactNode;
+  renderStepFile?: (step: Data) => { action: ReactNode; result: ReactNode } | undefined;
   promotedWork?: PlanWorkTarget; reviewedSchedule?: ReturnType<typeof planStepCalendarReview>;
 }) {
   const steps = rows(plan.steps);
@@ -177,8 +207,9 @@ function PlanContents({ plan, run, supported, discloseSteps = false, renderStepA
     {step.remoteWait && <p>等待电脑上的工作 {step.remoteWait.profileId} / {step.remoteWait.environmentId} / {step.remoteWait.jobId}，只确认退出码 0。</p>}
     {step.businessWait && <p>等待原认证来源 {step.businessWait.anchor?.provider} · {step.businessWait.anchor?.conversationKind} · {step.businessWait.anchor?.conversationId} 的下一条事件。</p>}
   </>;
-  const contents = (step: Data, at: number) => <>
-    {(!discloseSteps || step.title && step.title !== step.goal) && <p className="pw-user-text">{step.goal}</p>}
+  const contents = (step: Data, at: number) => {
+    const originalFile = renderStepFile?.(step);
+    return <>{(!discloseSteps || step.title && step.title !== step.goal) && <p className="pw-user-text">{step.goal}</p>}
     <p>执行位置：{step.executor === 'workspace' ? '所选项目文件' : '手机应用'} · 最早时间：{reviewedSchedule?.[at]
       ? `${reviewedSchedule[at].local.replace('T', ' ')} · ${reviewedSchedule[at].zone} · ${reviewedSchedule[at].offset}${reviewedSchedule[at].source === 'previous' ? '（沿用上一步）' : ''}`
       : time(step.dueAt)}</p>
@@ -193,9 +224,11 @@ function PlanContents({ plan, run, supported, discloseSteps = false, renderStepA
       {step.taskAdmission.admissionBasis.businessWaitEvidence && <p>本次使用的认证事件：{step.taskAdmission.admissionBasis.businessWaitEvidence.eventId}</p>}
     </AccordionItem></Accordion>}
     {step.taskId && !step.taskAdmission?.admissionBasis && <p className="pw-field-hint">这条较早的工作未保存完整启动依据；原任务记录仍保留。</p>}
-    <div className="pw-form-actions">{step.taskId && !(promotedWork?.stepId === step.id && promotedWork?.taskId === step.taskId) && <Button variant="secondary" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: step.taskId }); }}>查看这一步的工作与成果</Button>}{renderStepActions?.(step, at)}</div>
+    <div className="pw-form-actions">{originalFile?.action}{step.taskId && !(promotedWork?.stepId === step.id && promotedWork?.taskId === step.taskId) && <Button variant="secondary" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: step.taskId }); }}>查看这一步的工作与成果</Button>}{renderStepActions?.(step, at)}</div>
+    {originalFile?.result}
     {rows(step.priorTaskRefs).length > 0 && <Accordion className="pw-followup-disclosures"><AccordionItem id="previous" title={`之前的尝试与结果 · ${step.priorTaskRefs.length} 项`}>{rows(step.priorTaskRefs).map((ref, index) => <Button key={index} variant="ghost" disabled={!supported('tasks.open')} onClick={() => { void run('tasks.open', { id: ref.taskId }); }}>第 {index + 1} 次工作</Button>)}</AccordionItem></Accordion>}
-  </>;
+    </>;
+  };
   return <div className="pw-followup-plan-contents">
     {(plan.goal || plan.title) && <p className="pw-user-text pw-followup-goal">{plan.goal || plan.title}</p>}
     {!discloseSteps && plan.execution?.policy?.expiresAt && <p>本次授权到期：{time(plan.execution.policy.expiresAt)}</p>}
@@ -221,8 +254,9 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   const mutationPending = useRef(false);
   const taskWindow = useRef({ open: state.webWorkspaceTaskOpen, resume: state.webWorkspaceResumeRevision });
   const planWorkVisit = useRef<PlanWorkVisit | null>(null);
-  const fileVisit = useRef<PlanFileVisit | null>(null), fileTrigger = useRef<HTMLButtonElement>(null);
+  const fileVisit = useRef<PlanFileVisit | null>(null), fileFlight = useRef<PlanFileVisit | null>(null);
   const [file, showFile] = useState<PlanFilePresentation | null>(null);
+  const [fileRead, setFileRead] = useState<PlanFileVisit | null>(null);
   const nativeTaskId = (bridge.getState().view as Data | undefined)?.taskId;
   const collectionPanel = useRef<HTMLDivElement>(null), detailHeading = useRef<HTMLHeadingElement>(null);
   const listPosition = useRef(0), openedId = useRef(''), presentedId = useRef('');
@@ -232,12 +266,12 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     const visit = fileVisit.current;
     if (!visit) return false;
     fileVisit.current = null; showFile(null);
-    if (restore && selected.current === visit.reading && planFileWindow(visit.resume, visit.document) &&
-        fileTrigger.current === visit.trigger && visit.trigger.isConnected) {
+    const shown = selected.current === visit.reading && planFileWindow(visit.resume, visit.document) && planFileTrigger(visit.trigger, visit.target);
+    if (restore && shown) {
       visit.trigger.focus({ preventScroll: true });
       if (visit.scroller?.isConnected) visit.scroller.scrollTop = visit.scrollTop;
     }
-    return true;
+    return !restore || shown;
   };
   const release = (value: Data | null, key: string) => { if (value?.[key]) void run('plans.discard', { [key]: value[key] }).catch(() => {}); };
   const closeReview = () => { release(reviewed.current, 'reviewHandle'); setReview(null); setAck(false); };
@@ -281,7 +315,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   }, [state.requestedExecutionPlanId, state.requestedExecutionPlanRevision, snapshot.plans, busy, editor, settings, review, state.webWorkspaceTaskOpen]);
   const prepare = (action: string, input: Data) => { if (uncertain) return; void invoke(action, input, value => { if (!value?.reviewHandle || !value.command) throw new Error('未取得原目标审阅。'); closeReview(); setReview(value); setAck(false); }); };
   const hide = (active: boolean) => { closePlanFile(); if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old ? { ...old, viewHandle: '', returnWindow: undefined } : null); setEditor(old => old ? { ...old, viewHandle: '' } : null); setSettings(old => old ? { ...old, viewHandle: '' } : null); void run('plans.discard').catch(() => {}); };
-  useEffect(() => { alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh(); return () => { alive.current = false; planWorkVisit.current = null; fileVisit.current = null; scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false); }; }, []);
+  useEffect(() => { alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh(); return () => { alive.current = false; planWorkVisit.current = null; fileVisit.current = null; fileFlight.current = null; scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false); }; }, []);
   useEffect(() => { onEditingChange(busy || !!editor || !!settings || !!review); }, [busy, editor, settings, review]);
   useEffect(() => { const changed = () => { planWorkVisit.current = null; const active = document.visibilityState === 'visible'; hide(active); if (active) refresh(); }; const hidden = () => { planWorkVisit.current = null; hide(false); }; document.addEventListener('visibilitychange', changed); window.addEventListener('pagehide', hidden); return () => { document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); }; });
   useEffect(() => {
@@ -353,34 +387,63 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   const promotedWork = plan && supported('tasks.open') ? currentPlanWork(plan) : undefined;
   const planDocument = bridge.getDocumentEpoch();
   const readOnlyProgress = !!reading?.returnWindow && planReturnCurrent(reading.returnWindow);
-  const fileTarget = !editor && !settings && !review && supported(originalStepFileAction) ? planFileTarget(reading) : undefined;
-  const visibleFile = fileTarget && file && file.visit.reading === reading && fileVisit.current === file.visit &&
-    planFileWindow(file.visit.resume, file.visit.document) ? file : undefined;
+  const canReadStepFile = !editor && !settings && !review && supported(originalStepFileAction);
+  const fileTarget = canReadStepFile ? recentPlanFile(reading) : undefined;
+  const earlierFileTargets = canReadStepFile ? earlierPlanFiles(reading) : undefined;
+  const currentFileTarget = (target: PlanFileTarget) => samePlanFile(fileTarget, target) || samePlanFile(earlierFileTargets?.get(target.stepId), target);
+  const visibleFile = file && file.visit.reading === reading && fileVisit.current === file.visit && currentFileTarget(file.visit.target) &&
+    planFileTrigger(file.visit.trigger, file.visit.target) && planFileWindow(file.visit.resume, file.visit.document) ? file : undefined;
   useEffect(() => { if (file && !visibleFile) closePlanFile(); }, [file, visibleFile]);
-  const togglePlanFile = async () => {
-    if (visibleFile && closePlanFile(true)) return;
+  const shownFile = (target: PlanFileTarget) => visibleFile && samePlanFile(visibleFile.visit.target, target) ? visibleFile : undefined;
+  const togglePlanFile = async (target: PlanFileTarget, trigger: HTMLButtonElement) => {
     const native = bridge.getState(), resume = (native.view as Data | undefined)?.resumeRevision;
-    const trigger = fileTrigger.current;
-    if (!fileTarget || !reading || selected.current !== reading || !alive.current || busy || fileVisit.current ||
+    if (!reading || selected.current !== reading || !alive.current || busy || !currentFileTarget(target) ||
         !Number.isSafeInteger(resume) || !planFileWindow(resume, planDocument) ||
-        !trigger?.isConnected || !native.capabilities.commands.includes(originalStepFileAction)) return;
+        !planFileTrigger(trigger, target) || !native.capabilities.commands.includes(originalStepFileAction)) return;
+    const opened = fileVisit.current;
+    if (opened?.reading === reading && opened.trigger === trigger && samePlanFile(opened.target, target)) { closePlanFile(true); return; }
+    // Back can remove a pending reader, but the same native window still owns that one request.
+    if (fileFlight.current?.reading === reading) return;
+    if (opened) closePlanFile();
     const scroller = trigger.closest<HTMLElement>('.pw-secondary-scroll');
-    const visit: PlanFileVisit = { target: fileTarget, reading, resume, document: planDocument, trigger, scroller, scrollTop: scroller?.scrollTop || 0 };
-    fileVisit.current = visit; showFile({ visit, status: 'reading' });
-    const still = () => alive.current && fileVisit.current === visit && selected.current === reading &&
-      fileTrigger.current === trigger && trigger.isConnected && planFileWindow(resume, planDocument);
+    const visit: PlanFileVisit = { target, reading, resume, document: planDocument, trigger, scroller, scrollTop: scroller?.scrollTop || 0 };
+    fileVisit.current = fileFlight.current = visit;
+    setFileRead(visit); showFile({ visit, status: 'reading' });
+    const still = () => alive.current && fileVisit.current === visit && fileFlight.current === visit && selected.current === reading &&
+      planFileTrigger(trigger, target) && planFileWindow(resume, planDocument);
     try {
-      const value = await bridge.command(originalStepFileAction, { viewHandle: fileTarget.viewHandle, stepId: fileTarget.stepId });
+      const value = await bridge.command(originalStepFileAction, { viewHandle: target.viewHandle, stepId: target.stepId });
       if (!still()) { if (fileVisit.current === visit) closePlanFile(); return; }
-      if (value?.format !== 'pocketworld.original-plan-step-file.v1' || value.planId !== fileTarget.planId ||
-          value.stepId !== fileTarget.stepId || value.evidenceId !== fileTarget.evidenceId || value.sourceVersion !== fileTarget.sourceVersion ||
+      if (value?.format !== 'pocketworld.original-plan-step-file.v1' || value.planId !== target.planId ||
+          value.stepId !== target.stepId || value.evidenceId !== target.evidenceId || value.sourceVersion !== target.sourceVersion ||
           value.referenceOnly !== true || value.executionAuthorized !== false || typeof value.text !== 'string' ||
           value.text.length < 1 || value.text.length > 65536) throw new Error('原核验文件未得到确认');
       showFile({ visit, status: 'ready', text: value.text });
     } catch {
       if (still()) showFile({ visit, status: 'unavailable' });
       else if (fileVisit.current === visit) closePlanFile();
+    } finally {
+      if (fileFlight.current === visit) {
+        fileFlight.current = null;
+        if (alive.current) setFileRead(null);
+      }
     }
+  };
+  const planFileButton = (target: PlanFileTarget) => {
+    const shown = shownFile(target);
+    return <Button variant="secondary" data-plan-step-file={target.stepId} aria-expanded={!!shown}
+      disabled={busy || !shown && fileRead?.reading === reading}
+      onClick={event => void togglePlanFile(target, event.currentTarget)}>{shown ? '收起核验文件' : '查看核验文件'}</Button>;
+  };
+  const planFileResult = (target: PlanFileTarget) => {
+    const shown = shownFile(target);
+    return shown && <article className="pw-source-record" aria-label="当时核验的文件">
+      {shown.status === 'reading' ? <p role="status">正在核对当时保存的文件…</p> : shown.status === 'unavailable' ?
+        <p role="status">暂不能查看当时的原文件。核验记录仍保留，可返回目标列表后重新打开核对。</p> : <>
+          <header><h3>当时核验的文件</h3><span>原版本 {target.sourceVersion}</span></header>
+          <p>{shown.text}</p>
+        </>}
+    </article>;
   };
   const openPromotedWork = async () => {
     const live = bridge.getState(), view = live.view as Data | undefined, request = live.state.requestedTaskRevision;
@@ -461,15 +524,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
       {plan.originalTasksUnsettled && <p className="pw-followup-context">仍有工作正在结束或等待核对；暂停结果尚未确认。</p>}
       {(Array.isArray(plan.requirements?.blockers) ? plan.requirements.blockers : []).map((reason: any, index: number) => <p className="pw-followup-context" key={index}>{String(reason)}</p>)}
       {planProgressView(plan) ? <PlanProgress plan={plan} run={run} supported={supported} renewalReason={renewalReason}
-        fileControl={fileTarget && <Button ref={fileTrigger} variant="secondary" aria-expanded={!!visibleFile} disabled={busy}
-          onClick={() => void togglePlanFile()}>{visibleFile ? '收起核验文件' : '查看核验文件'}</Button>}
-        fileResult={visibleFile && <article className="pw-source-record" aria-label="当时核验的文件">
-          {visibleFile.status === 'reading' ? <p role="status">正在核对当时保存的文件…</p> : visibleFile.status === 'unavailable' ?
-            <p role="status">暂不能查看当时的原文件。核验记录仍保留，可返回目标列表后重新打开核对。</p> : <>
-              <header><h3>当时核验的文件</h3><span>原版本 {visibleFile.visit.target.sourceVersion}</span></header>
-              <p>{visibleFile.text}</p>
-            </>}
-        </article>}
+        fileControl={fileTarget && planFileButton(fileTarget)} fileResult={fileTarget && planFileResult(fileTarget)}
         onWork={closePlanFile} currentAction={promotedWork &&
         <Button variant={promotedWork.active ? 'secondary' : undefined} disabled={busy || (!validRead && !readOnlyProgress) || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen}
           onClick={() => void openPromotedWork()}>{promotedWork.active ? '查看这一步的工作' : '打开原工作'}</Button>} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
@@ -483,7 +538,11 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
         {plan.execution?.started && !paused && !terminal && !renewal && <Button variant="secondary" disabled={busy || uncertain || !validRead} onClick={() => prepare('plans.reviewAction', { viewHandle: reading?.viewHandle, operation: 'refresh' })}>核对并继续此目标</Button>}
 
       </div>
-      <PlanContents key={plan.id} plan={plan} run={run} supported={supported} discloseSteps promotedWork={promotedWork} renderStepActions={(step, index) => paused && <>
+      <PlanContents key={plan.id} plan={plan} run={run} supported={supported} discloseSteps promotedWork={promotedWork}
+        renderStepFile={earlierFileTargets ? step => {
+          const target = earlierFileTargets.get(step.id);
+          return target ? { action: planFileButton(target), result: planFileResult(target) } : undefined;
+        } : undefined} renderStepActions={(step, index) => paused && <>
         {!step.taskId && !step.taskAdmission && !['completed', 'failed', 'cancelled', 'skipped'].includes(step.status) && <Button variant="secondary" disabled={busy || uncertain || !validRead} onClick={() => openStep(step, index)}>修改步骤 {index + 1}</Button>}
         {['failed', 'cancelled'].includes(step.status) && step.taskObservation?.terminalVerified === true && <Button variant="secondary" disabled={busy || uncertain || !validRead} onClick={() => prepare('plans.reviewAction', { viewHandle: reading?.viewHandle, operation: 'retry', stepId: step.id })}>重新审阅步骤 {index + 1} 的重试</Button>}
       </>} />
