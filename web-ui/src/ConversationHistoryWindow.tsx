@@ -207,7 +207,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   const index=actual.messages.indexOf(saved);
   const detached=exactDetachedPlace(actual);
   try{await act('conversation.reader.position',{window:actual.window,conversationId:actual.conversation,index,offset:place.offset,
-    ...(detached?.index===index&&detached.offset===place.offset?{detachedPosition:detached}:{})})}
+    ...(detached&&detached.index===index&&detached.offset===place.offset?{detachedPosition:detached}:{})})}
   catch{/* The original place can still be used locally, never substitute a different row. */}
  };
  const saveReading=()=>{
