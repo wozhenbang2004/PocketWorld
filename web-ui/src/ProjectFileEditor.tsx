@@ -1,7 +1,7 @@
 import { ProjectKeptFileDrafts } from './ProjectKeptDrafts';
 import {FormalHistoryComparison} from './FormalHistoryComparison';
 import { FileObservation, ProjectFormalReadOnly, RetainedFormalDraft } from './ProjectFormalReadOnly';
-import { ProjectFormalFileDelivery } from './ProjectFormalFileDelivery';
+import { ProjectFormalFileDelivery, type ReturnToAdoptedSource } from './ProjectFormalFileDelivery';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { IconArrowLeft, IconCopy, IconRefresh } from './icons';
@@ -14,7 +14,7 @@ import { MotionDisclosure, MotionFeedback, useCollectionMotion } from './library
 import './project-workspace.css';
 import './project-workspace-manga.css';
 type Data = Record<string, any>;
-type Props = { path: string; version: number; draft?: { text: string; baseline: string; version: number; dirty: boolean }; state: Data; conflict: boolean; mode: FileLayer; setMode: (value: FileLayer) => void; can: (action: string) => boolean; edit: (value: string) => void; save: () => void; readHistory: () => void; readRevision: (revision: number) => void; retry: () => void; copy: () => void; copyRevision: (text: string) => void; adoption: { pending: boolean; unknown: boolean; message: string; adopt: () => void }; continueAdopted?: ContinueAdoptedFormal; registerBack: (handler: (() => boolean) | null) => void };
+type Props = { path: string; version: number; draft?: { text: string; baseline: string; version: number; dirty: boolean }; state: Data; conflict: boolean; mode: FileLayer; setMode: (value: FileLayer) => void; can: (action: string) => boolean; edit: (value: string) => void; save: () => void; readHistory: () => void; readRevision: (revision: number) => void; retry: () => void; copy: () => void; copyRevision: (text: string) => void; adoption: { pending: boolean; unknown: boolean; message: string; adopt: () => void }; continueAdopted?: ContinueAdoptedFormal; returnToAdoptedSource?:ReturnToAdoptedSource; registerBack: (handler: (() => boolean) | null) => void };
 
 function observedEarlierText(state: Data, path: string, head: number, selected: number) {
   const source = state.revisionObservation, text = state.revisionContent;
@@ -30,7 +30,7 @@ function observedEarlierText(state: Data, path: string, head: number, selected: 
   return { project: state.projectId, revision: source.revisionId, sha: source.sha256, bytes: source.bytes, text };
 }
 
-export function ProjectFileEditor({ path, version, draft, state, conflict, mode, setMode, can, edit, save, readHistory, readRevision, retry, copy, copyRevision, adoption, continueAdopted, registerBack }: Props) {
+export function ProjectFileEditor({ path, version, draft, state, conflict, mode, setMode, can, edit, save, readHistory, readRevision, retry, copy, copyRevision, adoption, continueAdopted, returnToAdoptedSource, registerBack }: Props) {
   const [selected, setSelected] = useState<number | null>(null), [reviewing, setReviewing] = useState(false);
   const root = useRef<HTMLElement>(null), editorInput = useRef<HTMLTextAreaElement>(null);
   const adoptionTrigger = useRef<HTMLButtonElement>(null), adoptionReview = useRef<HTMLDivElement>(null), adoptionHeading = useRef<HTMLHeadingElement>(null), reviewWasOpen = useRef(false);
@@ -45,6 +45,14 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   const history = Array.isArray(state.fileHistory) ? state.fileHistory : [];
   const selectedReady = selected !== null && state.revisionNumber === selected && typeof state.revisionContent === 'string' && state.revisionObservation?.representation === 'text' && state.revisionObservation?.version === selected && !state.revisionLoading;
   const locked = !!state.fileSaving || adoption.pending;
+  const sourceReturn=returnToAdoptedSource&&mode==='edit'&&!reviewing&&!locked&&!conflict&&!adoption.unknown&&draft&&!draft.dirty?{
+    ...returnToAdoptedSource,
+    start:async (receipt:Parameters<ReturnToAdoptedSource['start']>[0])=>{
+      const area=editorInput.current;
+      if(!area?.isConnected||area.value!==draft.text.replace(/\r\n?/g,'\n'))throw Error('有未核对的编辑，没有离开正式文件。');
+      await returnToAdoptedSource.start(receipt);
+    }
+  }:undefined;
   const adoptedText = conflict && draft?.dirty === true && draft.text !== draft.baseline && draft.version > 0 && draft.version < version
     ? observedAdoptedFormalText(state, path, version)?.text : undefined;
   const continueWithDisplayedDraft = continueAdopted && adoptedText !== undefined && draft ? {
@@ -92,7 +100,7 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
       {state.fileSaving && <ProgressBar label="正在保存当前文件" isIndeterminate showValueLabel={false} size="sm"/>}
       {state.fileReady && !state.fileSaving && version>0 && can('projects.fileExport.review') && <ProjectFormalFileDelivery
       key={String(state.projectId)+':'+path+':'+version} projectId={state.projectId} projectName={state.projects?.find((row:Data)=>row.id===state.projectId)?.name||'当前项目'}
-      path={path} version={version} dirty={draft?.dirty===true}/>}
+      path={path} version={version} dirty={draft?.dirty===true} returnToSource={sourceReturn}/>}
     {conflict && <div className="pw-file-notice" role="alert">
       <p>{adoptedText !== undefined ? `已核对采纳后的正式 v${version}。基于 v${draft.version} 的草稿仍保留。` : '原文件版本已变化。当前草稿仍保留，请比较后再决定。'}</p>
       <Button variant="ghost" leadingIcon={IconCopy} onClick={copy}>复制保留的草稿</Button>

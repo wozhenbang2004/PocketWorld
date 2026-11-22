@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, SettingsDialog } from './forms-library';
 type Data = Record<string, any>;
-type Who = { projectId: string; projectName: string; path: string; version: number; dirty: boolean };
+export type VerifiedFormalDelivery = {projectId:string;path:string;version:number;revisionId:string;sha256:string;bytes:number;requestId:string};
+export type ReturnToAdoptedSource = Pick<VerifiedFormalDelivery,'revisionId'|'sha256'|'bytes'> & { start:(receipt:VerifiedFormalDelivery)=>Promise<void> };
+type Who = { projectId: string; projectName: string; path: string; version: number; dirty: boolean; returnToSource?:ReturnToAdoptedSource };
 const pending = new Set(['choosing', 'target_selected', 'writing']);
 const unresolved = new Set(['unknown', 'write_unknown', 'written_unverified']);
 const label: Record<string,string> = {
@@ -11,9 +13,10 @@ const label: Record<string,string> = {
   unknown: '上次导出没有确定结果', cancelled: '已取消选取', invalid_target: '所选文档无法核对，未写入',
   target_changed: '目标文档名称或提供方已变化，未写入', source_changed: '原版本或窗口已变化，未写入', not_started: '系统选择器未启动', not_written: '上次已停止，没有写入正文', released: '已结束上次定位'
 };
-export function ProjectFormalFileDelivery({ projectId, projectName, path, version, dirty }: Who) {
+export function ProjectFormalFileDelivery({ projectId, projectName, path, version, dirty, returnToSource }: Who) {
   const [position,setPosition]=useState<Data|null>(null),[review,setReview]=useState<Data|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const alive=useRef(false),flight=useRef<object|null>(null),scope=useRef(0),snapshot=useRef<Data|null>(null);
+  const sourceReturnNow=useRef(returnToSource);sourceReturnNow.current=returnToSource;
   const here=()=>{const state=bridge.getState().state;return alive.current&&!document.hidden&&state.projectId===projectId&&state.filePath===path&&state.fileVersion===version&&state.fileReady;};
   const apply=(value:Data)=>{
     if(value.projectId!==projectId||value.path!==path||typeof value.phase!=='string')throw new Error('这不是原项目文件的导出回执。');
@@ -23,9 +26,9 @@ export function ProjectFormalFileDelivery({ projectId, projectName, path, versio
     if(value.phase!=='none'&&(!Object.hasOwn(label,value.phase)||typeof value.requestId!=='string'))throw new Error('原导出状态暂不能核对。');
     snapshot.current=value;setPosition(value);
   };
-  const act=async(name:string,args:Data={})=>{
+  const act=async(name:string,args:Data={},accepted?:(value:Data)=>Promise<void>)=>{
     if(!here()||flight.current)return;const token={},seq=scope.current;flight.current=token;setBusy(true);setError('');
-    try{const value=await bridge.command<Data>('projects.fileExport.'+name,{projectId,path,version,...args});if(here()&&scope.current===seq&&flight.current===token)apply(value);}
+    try{const value=await bridge.command<Data>('projects.fileExport.'+name,{projectId,path,version,...args});if(here()&&scope.current===seq&&flight.current===token){apply(value);if(accepted)await accepted(value);}}
     catch(e){if(here()&&scope.current===seq)setError(e instanceof Error?e.message:'原导出结果待核对。');}
     finally{if(flight.current===token){flight.current=null;if(alive.current)setBusy(false);}}
   };
@@ -39,6 +42,14 @@ export function ProjectFormalFileDelivery({ projectId, projectName, path, versio
   useEffect(()=>{if(!position||!pending.has(position.phase))return;const timer=window.setInterval(()=>{if(here())void act('status');},1800);
     return()=>window.clearInterval(timer);},[projectId,path,version,position?.phase]);
   const phase=position?.phase||'none',locked=pending.has(phase)||unresolved.has(phase);
+  const verified=(value:Data|null,target=returnToSource):VerifiedFormalDelivery|undefined=>{
+    if(!target||dirty||review||value?.phase!=='verified'||value.sameVersion!==true||
+      value.projectId!==projectId||value.path!==path||value.version!==version||value.revisionId!==target.revisionId||
+      value.sha256!==target.sha256||value.bytes!==target.bytes||
+      typeof value.requestId!=='string'||!/^([a-f0-9]{8})(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value.requestId))return;
+    return {projectId,path,version,revisionId:value.revisionId,sha256:value.sha256,bytes:value.bytes,requestId:value.requestId};
+  };
+  const exported=verified(position);
   return <section className="pw-formal-file-delivery" aria-label="另存这一份正式版本">
     <div className="pw-form-actions"><Button variant="ghost" size="small" disabled={busy||locked||!position} onClick={()=>void act('review')}>导出已保存的正式版本</Button>
       {(phase!=='none'||!position&&error)&&<Button variant="ghost" size="small" disabled={busy} onClick={()=>void act('status')}>核对原导出回执</Button>}</div>
@@ -47,6 +58,11 @@ export function ProjectFormalFileDelivery({ projectId, projectName, path, versio
       {phase==='target_selected'&&<><p>系统文档：{position.destinationName?<bdi>{position.destinationName}</bdi>:'等待文件服务返回实际名称'} · <bdi>{position.provider}</bdi></p>
         <Button variant="secondary" disabled={busy||!position.canWrite||position.sameVersion!==true} onClick={()=>void act('write',{requestId:position.requestId})}>确认写入这一个文档</Button></>}
       {phase==='verified'&&<p className="pw-field-hint">已重新打开所选文档，实际字节数与 SHA-256 均相同。</p>}
+      {exported&&returnToSource&&<Button variant="secondary" size="small" disabled={busy} onClick={()=>void act('status',{},async value=>{
+        const target=sourceReturnNow.current,checked=target&&verified(value,target);
+        if(!target||!checked||checked.requestId!==exported.requestId)throw Error('原正式文件或导出回执已变化，没有打开原副本。');
+        await target.start(checked);
+      })}>返回原副本编辑</Button>}
       {unresolved.has(phase)&&<p className="pw-field-hint">请先在所选位置检查文件；目标可能已有全部或部分内容，不会自动重写。</p>}
       {phase==='not_written'&&<p className="pw-field-hint">系统提供方可能保留选取时创建的空文档。</p>}
       {(unresolved.has(phase)||phase==='choosing'||phase==='target_selected')&&<Button variant="ghost" size="small" disabled={busy} onClick={()=>void act('release',{requestId:position.requestId})}>结束这次定位，不重试或删除文件</Button>}

@@ -470,7 +470,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
      if(timer.current){clearTimeout(timer.current);timer.current=null}
      indexScroll.current=index;setFileIndex(index);
     }}>
-    <AccordionItem id="loaded-file-replies" title="已加载回复的文件" icon={IconFolder}>
+    <AccordionItem id="loaded-file-replies" title="按回复核对文件" icon={IconFolder}>
      {shownFileIndex&&<>
       <p className="pw-muted">这里只列已加载的完成回复。选择一条，再核对它是否有已保存的文件。</p>
       <div className="pw-outcome-files">{indexedReplies.map(({message,result})=>{

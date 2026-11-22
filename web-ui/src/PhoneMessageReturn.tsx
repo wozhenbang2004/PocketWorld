@@ -24,10 +24,10 @@ function matchingStep(r:PhoneResult){
   if(!row||!isPrivateLocalPhone(row)||identity?.taskId!==r.taskId||identity.runId!==r.runId||identity.epoch!==r.epoch)return null;
   return row.status===r.status?outcomes[r.status]:{entry:'overview' as const,next:'查看这轮后续进展'};
 }
-type Props={result:PhoneResult;conversation:string;messageId:string;revision:number;reader?:number;locked?:boolean;
+type Props={result:PhoneResult;conversation:string;messageId:string;revision:number;reader?:number;locked?:boolean;stoppedAfterFirstMainRead?:boolean;
   body:string;children:ReactNode;onOriginal?:(t:PhoneReportTarget)=>void;onRun?:(entry:Entry,t:PhoneReportTarget)=>void};
 /** A persisted message is a historical receipt. Never derive its outcome from its prose or today's task status. */
-export function PhoneMessageReturn({result:r,conversation,messageId,revision,reader=0,locked,body,children,onOriginal,onRun}:Props){
+export function PhoneMessageReturn({result:r,conversation,messageId,revision,reader=0,locked,stoppedAfterFirstMainRead,body,children,onOriginal,onRun}:Props){
   const outcome=outcomes[r.status],step=onRun&&onOriginal&&matchingStep(r);
   const [changed,setChanged]=useState('');
   // On zero native characters, this one exact fallback belongs to the delivery formatter, not the original summary.
@@ -37,6 +37,7 @@ export function PhoneMessageReturn({result:r,conversation,messageId,revision,rea
   return <section className="pw-phone-message-return" aria-label={`手机任务第 ${r.epoch} 轮的原回执`}>
     <header><small>手机任务 · 第 {r.epoch} 轮回执</small><strong>{outcome?.title||'已有轮次记录'}</strong></header>
     {cancellationNote&&<p className="pw-field-hint">{cancellationNote}</p>}
+    {reader===0&&r.status==='cancelled'&&stoppedAfterFirstMainRead&&<p className="pw-field-hint">停止前已读取当时的主屏界面。</p>}
     {placeholder?<p className="pw-phone-return-empty">{r.status==='failed'||r.status==='interrupted'?'这轮没有留下说明原因的文字。':
       '这轮没有留下文字总结。'}</p>:children}
     {(onOriginal||step)&&<div className="pw-phone-return-actions">

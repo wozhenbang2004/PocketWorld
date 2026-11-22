@@ -101,10 +101,11 @@ import {ProjectGitIntake,type PublicGitDraft} from './ProjectGitIntake';
 import {ProjectPreviewPane,useProjectPreview} from './ProjectPreviewPane';
 import {sameProjectViteResult,type ProjectVitePreviewArrival,type ProjectViteResultTarget,type ProjectViteSavedArchive} from './FirstNodeWebOutput';
 import {ProjectFileEditor} from './ProjectFileEditor';
+import type {ReturnToAdoptedSource} from './ProjectFormalFileDelivery';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalImportedEditor,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFolder,originalImportedEditor,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import {canOpenSavedStaticPreview} from './ProjectSavedStaticPreview';
@@ -354,6 +355,25 @@ const ordinaryMessageWorkChat=(live:ReturnType<typeof bridge.getState>,conversat
   phone.phone===false&&phone.channelOrigin===false&&draft?.ready===true&&draft.conversationId===conversation&&
   draft.key===`conversation:${conversation}`&&Number.isSafeInteger(epoch)&&draft.epoch===epoch;
 };
+/** A retained native first read, not an inferred action, final screen or completed goal. */
+function originalStoppedMainRead(result:PhoneResult,message:Message,messages:readonly Message[],tasks:readonly Task[],conversation:string):boolean{
+ if(result.status!=='cancelled'||result.epoch!==1||!message.id||message.sourceRevision!==1)return false;
+ const replies=messages.filter(row=>row?.id===message.id);
+ const original=replies.length===1&&replies[0].sourceRevision===1?messagePhoneResult(replies[0]):null;
+ if(!original||original.status!=='cancelled'||original.deliveryId!==result.deliveryId||original.taskId!==result.taskId||
+    original.runId!==result.runId||original.epoch!==result.epoch||original.endedAt!==result.endedAt||
+    original.summaryChars!==result.summaryChars||original.summaryTruncated!==result.summaryTruncated)return false;
+ const rows=tasks.filter(row=>row?.id===result.taskId),task=rows.length===1?rows[0]:undefined,raw=task?.raw;
+ if(!task||!raw||!isPrivateLocalPhone(task)||phoneConversationId(task)!==conversation||
+    task.status!=='cancelled'||raw.status!==task.status||raw.runId!==result.runId||raw.coordinatorEpoch!==result.epoch||
+    task.executionMode!=='main_screen'||raw.executionMode!==task.executionMode||
+    raw.taskProjection!=='detail_window'||raw.taskCoreReadLimited!==false||raw.contextAvailable===false||
+    raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||Object.hasOwn(raw,'ownerFirstMainReadOnce'))return false;
+ const mark=obj(raw.ownerFirstCurrentMain),read=obj(mark.observation);
+ return mark.format==='pocketworld.owner-first-current-main.v1'&&mark.taskId===result.taskId&&
+  mark.runId===result.runId&&mark.epoch===result.epoch&&mark.phase==='observed'&&read.runId===result.runId&&
+  read.displayId===0&&read.structureOnly===true&&typeof read.observationId==='string'&&/^[a-f0-9-]{36}$/.test(read.observationId);
+}
 function ordinaryLiveReplyWork(live:ReturnType<typeof bridge.getState>,conversation:string,original:WorkIdentity){
  const matches=asArray<Task>(live.state.tasks).filter(task=>task.id===original.taskId),task=matches[0],raw=task?.raw;
  return matches.length===1&&!!raw&&raw.id===original.taskId&&raw.actorId==='owner'&&raw.spaceId==='private'&&raw.conversationId===conversation&&
@@ -997,7 +1017,7 @@ export default function App(){
  const choosingSavedStaticFile=viteResultLookup?.kind==='phone-source';
  useEffect(()=>{
   const original=viteResultLookup;
-  if(!original)return;
+  if(!original||original.kind==='phone-source'&&original.awaitingFormalClose?.())return;
   const retire=()=>{if(original.kind==='phone-source')original.finish();else retireViteResultLookup(original);};
   const check=()=>{if(!original.current())retire();};
   const presentation=projectWorkPresentations[original.projectId];
@@ -5943,6 +5963,64 @@ export default function App(){
    return true;
   },
  }:undefined;
+ const sourceCommit=route==='projects'&&projectSection==='work'&&!previewBlocked&&!projectPreview.expanded&&!viteResultLookup&&
+   !state.fileError&&!fileAdoption.holdsDraft()&&fileDraft?.dirty===false&&fileDraft.submitted===undefined&&
+   fileDraft.version===fileIdentity.version&&fileDraft.text===state.fileBaseline&&fileDraft.baseline===state.fileBaseline&&
+   !projectDraftReturn&&!projectBuildReturn&&!projectImportedEditor&&!projectLocalFilesIntent&&!pythonSetupReturn&&!dependencyBuildReturn&&!viteToolsReturn&&
+   projectWorkPresentations[fileIdentity.projectId]?.open===true&&projectWorkPresentations[fileIdentity.projectId]?.mode==='default'&&
+   !projectWorkDrafts[fileIdentity.projectId]?.operation&&!projectWorkDrafts[fileIdentity.projectId]?.expanded&&
+   can('projects.close')&&can('projects.development.close')&&canEditImportedCheckout(can)?observedAdoptedFormalText(state,fileIdentity.path,fileIdentity.version):undefined;
+ const sourceProof=obj(state.adoptedFormalComparison);
+ const sourceFolder=sourceCommit?originalAdoptedSafFolder(fileIdentity.projectId,fileIdentity.path,sourceProof.checkoutId):null;
+ const returnToAdoptedSource:ReturnToAdoptedSource|undefined=sourceCommit&&sourceFolder&&Number.isSafeInteger(adoptedEditorResume)?{
+  revisionId:sourceProof.revisionId,sha256:sourceProof.sha256,bytes:sourceProof.bytes,
+  start:async receipt=>{
+   const {projectId,path,version}=fileIdentity,request=reviewRequest.current;
+   const revision=state.requestedProjectRevision;
+   const samePlace=()=>{
+    const live=bridge.getState(),view=obj(live.view),s=live.state;
+    return !document.hidden&&bridge.getDocumentEpoch()===adoptedEditorDocument&&navigationWindow.current===navigationRevision&&
+     reviewRequest.current===request&&live.host?.ready===true&&view.section===null&&view.taskId===null&&view.resumeRevision===adoptedEditorResume&&
+     s.projectId===projectId&&s.requestedProjectRevision===revision&&!s.conversationReader&&!s.attachmentWorkspace?.open&&
+     !s.chatAttachmentPickerOpen&&!s.localSourceIntake?.window&&!s.projectGitImport?.open&&!s.projectPreview?.localWebWork&&
+     (fileEditRevisions.current.get(currentFileKey)||0)===adoptedEditRevision&&canEditImportedCheckout(a=>live.capabilities.commands.includes(a));
+   };
+   const sameFormal=()=>{
+    const s=bridge.getState().state;
+    return !s.fileError&&!fileAdoption.holdsDraft()&&observedAdoptedFormalText(s,path,version)?.identity===sourceCommit.identity&&
+     sameImportedEditor(sourceFolder,originalAdoptedSafFolder(projectId,path,sourceFolder.checkoutId));
+   };
+   if(viteResultLookupNow.current||!Number.isSafeInteger(revision)||!samePlace()||!sameFormal()||
+      receipt.projectId!==projectId||receipt.path!==path||receipt.version!==version||receipt.revisionId!==sourceProof.revisionId||
+      receipt.sha256!==sourceProof.sha256||receipt.bytes!==sourceProof.bytes)
+    throw Error('原正式文件或手机副本已变化，没有打开其他文件。');
+   const closed=()=>{
+    const s=bridge.getState().state;
+    return !s.filePath&&s.fileReady!==true&&!s.fileLoading&&!s.fileSaving&&sameImportedEditor(sourceFolder,originalSavedStaticFolder(projectId));
+   };
+   // The owner is still in Work. Hold its normal source inspection before closing the formal file.
+   const held:ProjectWorkPresentation={open:false,mode:'default'}, shown:ProjectWorkPresentation={open:true,mode:'default'};
+   let entered=false;
+   const original:ProjectViteResultLookup={kind:'phone-source',projectId,source:sourceFolder,
+    chosenSavedFile:{projectId,checkoutId:sourceFolder.checkoutId,path,savedHash:receipt.sha256},awaitingFormalClose:()=>!entered,
+    current:()=>entered&&viteResultLookupNow.current===original&&samePlace()&&closed(),
+    finish:reason=>{
+     if(viteResultLookupNow.current!==original)return;
+     setProjectWorkPresentations(previous=>previous[projectId]===shown?{...previous,[projectId]:held}:previous);
+     if(reason&&!document.hidden&&navigationWindow.current===navigationRevision&&bridge.getState().state.projectId===projectId)setLocalError(reason);
+     retireViteResultLookup(original);
+    }};
+   viteResultLookupNow.current=original;setViteResultLookup(original);
+   setProjectWorkPresentations(previous=>({...previous,[projectId]:held}));setLocalError('');
+   try{
+    await bridge.command('projects.close',{projectId,path,version});
+    if(!await awaitPickerProjection(()=>viteResultLookupNow.current===original&&samePlace()&&(sameFormal()||closed()),()=>closed()?true:undefined)||
+       viteResultLookupNow.current!==original||!samePlace()||!closed())
+     throw Error('没有确认离开这个正式版本，未打开其他副本。');
+    entered=true;setProjectWorkPresentations(previous=>previous[projectId]===held?{...previous,[projectId]:shown}:previous);
+   }catch(failure){original.finish(failure instanceof Error?failure.message:'未核对到原手机副本。');}
+  },
+ }:undefined;
  const copyText=async(textToCopy:string,feedback:'toast'|'local'='toast')=>{try{if(!navigator.clipboard?.writeText)throw new Error('当前无法直接复制，请选择文字后复制。');await navigator.clipboard.writeText(textToCopy);if(feedback==='toast')toast('已复制');}catch(error){const message=error instanceof Error?error.message:'复制未完成，请选择文字后复制。';setLocalError(message);toast.error(message);throw error;}};
  const copyWithLocalFeedback=(textToCopy:string)=>copyText(textToCopy,'local');
 
@@ -8292,6 +8370,10 @@ export default function App(){
   anchoredPreparations.size===0;
  const chatOpening=ready&&!messages.length&&!foregroundTurn;
  const readingChatOpening=chatOpening&&state.loadingFirstConversationMessages===true;
+ const originalStopChatHere=route==='chat'&&!taskOpen&&!taskOpening&&!draftSwitching&&!document.hidden&&
+  snapshot?.view?.section===null&&snapshot?.view?.taskId===null&&phoneDraft.channelOrigin===false&&
+  !state.conversationReader&&!state.loadingFirstConversationMessages&&!state.filePath&&!state.queuedInputsPage&&!state.attachmentWorkspace?.open&&
+  !!conversation&&state.conversationId===conversation&&composer.ready===true&&composer.conversationId===conversation&&composer.key===`conversation:${conversation}`;
  const chatPage=<main className={`pw-chat-workspace${chatOpening&&!readingChatOpening?' pw-chat-empty':''}`}>
   <div ref={scroll} tabIndex={-1} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
    {desktopNavigation&&chatHistoryAvailable&&<div className="pw-action-row">
@@ -8366,6 +8448,7 @@ export default function App(){
       actionElsewhere={!!linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')||!!chatAttention&&chatAttention.id===noteIdentity?.taskId}
       onRead={noteIdentity&&can('tasks.open')?(layer,trigger)=>openTurnNotes(noteIdentity,layer,savedTrace?m:undefined,trigger):undefined}/>}
      {m.originalHostFinal?<div className="pw-user-text">{m.content}</div>:m.role==='assistant'&&phoneResult&&m.id&&m.sourceRevision===1?<PhoneMessageReturn result={phoneResult} conversation={String(state.conversationId||'')} messageId={m.id} revision={Number(m.sourceRevision)} body={m.content}
+       stoppedAfterFirstMainRead={originalStopChatHere&&readPhone&&originalStoppedMainRead(phoneResult,m,messages,tasks,conversation)}
        onOriginal={readPhone?setMessageOriginTarget:undefined} onRun={can('tasks.open')?openPhoneWorkFromMessage:undefined}>
        <CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>
      </PhoneMessageReturn>:m.role==='assistant'?<CitedAnswer continuous text={m.content} onCopyCode={copyWithLocalFeedback} sources={refs as any} onOpenSource={()=>openSource(m)}/>:m.content?<div className="pw-user-text">{m.content}</div>:null}
@@ -8867,7 +8950,7 @@ export default function App(){
  };
  const projectsPage=<motion.main layoutScroll ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded){if(state.projectId&&projectSection==='work')projectDirectory.rememberScroll(event.currentTarget.scrollTop);else projectListTop.current.set(projectPositionKey,event.currentTarget.scrollTop)}}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
-  {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} copyRevision={value=>{void copyText(value).catch(()=>{})}} adoption={fileAdoption} continueAdopted={continueAdopted} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
+  {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} copyRevision={value=>{void copyText(value).catch(()=>{})}} adoption={fileAdoption} continueAdopted={continueAdopted} returnToAdoptedSource={returnToAdoptedSource} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
     <Tabs selectedKey={projectPreview.expanded?'preview':projectSection} onSelectionChange={key=>showProjectSection(key==='preview'?'preview':key==='files'?'files':'work')} className="pw-project-tabs">
       <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!savedStaticFolder&&!canReadCurrentWeb&&!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>

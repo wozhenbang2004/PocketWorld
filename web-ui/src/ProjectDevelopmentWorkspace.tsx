@@ -42,8 +42,9 @@ export type ProjectDependencyBuildReturn = {original:DirectNodeDependencyPin; co
 export type ProjectViteToolsPosition = {projectId:string;checkoutId:string;sourceDigest:string};
 export type ProjectViteToolsReturn = {position:ProjectViteToolsPosition;runtimeIdentity:string; current:()=>boolean; take:()=>boolean};
 type ProjectStoredWebResultLookup = {kind:'built';projectId:string;current:()=>boolean;finish:(result?:ProjectViteResultTarget)=>void};
-type ProjectStaticFilesVisit = {kind:'phone-source';projectId:string;source:ProjectImportedEditor;current:()=>boolean;finish:(reason?:string)=>void};
-export type ProjectViteResultLookup = ProjectStoredWebResultLookup | ProjectStaticFilesVisit;
+type ProjectPhoneFolderVisit = {kind:'phone-source';projectId:string;source:ProjectImportedEditor;current:()=>boolean;finish:(reason?:string)=>void;
+  chosenSavedFile?:CheckoutSavedPosition; awaitingFormalClose?:()=>boolean};
+export type ProjectViteResultLookup = ProjectStoredWebResultLookup | ProjectPhoneFolderVisit;
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
@@ -286,9 +287,8 @@ function NodeBuildScripts({plan}:{plan:Data}) {
 }
 
 /** The existing native catalog and checkout registration must both identify the import. */
-export function originalImportedEditor(projectId:string):ProjectImportedEditor|null {
-  const {state,view,capabilities}=bridge.getState(), nativeView=view as Data|undefined;
-  if(document.hidden||state.projectId!==projectId||state.filePath||!nativeView||nativeView.taskId||nativeView.section!=null)return null;
+function registeredImportedEditor(projectId:string):ProjectImportedEditor|null {
+  const {state,capabilities}=bridge.getState();
   const projects=rows(state.features?.workspace?.projects).filter(row=>row?.id===projectId);
   const origin=projects.length===1?projects[0].sourceImport:null;
   if(!copyIdentity(projectId)||!copyIdentity(origin?.clientId)||!sourceHash(origin?.packageSha256)||origin.executionAuthorityRestored!==false)return null;
@@ -322,16 +322,32 @@ export function originalImportedEditor(projectId:string):ProjectImportedEditor|n
     ...(exactLocalPublication&&(sourceKind==='external_zip'||sourceKind==='saf_tree')?{exactPhoneSource:true as const}:{}),
     ...(exactLocalPublication&&starter?{exactStarterSource:true as const}:{})};
 }
+export function originalImportedEditor(projectId:string):ProjectImportedEditor|null {
+  const {state,view}=bridge.getState(), nativeView=view as Data|undefined;
+  if(document.hidden||state.projectId!==projectId||state.filePath||!nativeView||nativeView.taskId||nativeView.section!=null)return null;
+  return registeredImportedEditor(projectId);
+}
 export const sameImportedEditor = (target:ProjectImportedEditor, observed:ProjectImportedEditor|null) =>
   !!observed&&target.projectId===observed.projectId&&target.checkoutId===observed.checkoutId&&
   target.importIdentity===observed.importIdentity&&target.sourceKind===observed.sourceKind&&
   target.exactPhoneSource===observed.exactPhoneSource&&target.exactStarterSource===observed.exactStarterSource&&target.window===observed.window;
-/** Registration, not evidence that a file or its saved bytes are still there. */
-export function originalSavedStaticFolder(projectId:string):ProjectImportedEditor|null {
-  const original=originalImportedEditor(projectId);
+function soleRegisteredSafFolder(projectId:string,original:ProjectImportedEditor|null):ProjectImportedEditor|null {
   if(original?.sourceKind!=='saf_tree'||original.exactPhoneSource!==true)return null;
   const copies=rows(bridge.getState().state.features?.local?.checkouts).filter(row=>row?.projectId===projectId);
   return copies.length===1&&copies[0].id===original.checkoutId?original:null;
+}
+/** Registration, not evidence that a file or its saved bytes are still there. */
+export function originalSavedStaticFolder(projectId:string):ProjectImportedEditor|null {
+  return soleRegisteredSafFolder(projectId,originalImportedEditor(projectId));
+}
+/** A clean loaded formal commit may name its original phone folder, not open a source file. */
+export function originalAdoptedSafFolder(projectId:string,path:string,checkoutId:string):ProjectImportedEditor|null {
+  const {state,view}=bridge.getState(), position=state.adoptedFormalComparison, nativeView=view as Data|undefined;
+  if(document.hidden||state.projectId!==projectId||state.filePath!==path||nativeView?.section!==null||nativeView.taskId!==null||
+     position?.projectVersionCommitted!==true||position.evidence!=='import_receipt'||position.projectId!==projectId||
+     position.checkoutId!==checkoutId||position.path!==path)return null;
+  const source=soleRegisteredSafFolder(projectId,registeredImportedEditor(projectId));
+  return source?.checkoutId===checkoutId?source:null;
 }
 export const canEditImportedCheckout = (can:(action:string)=>boolean) =>
   ['projects.development.read','projects.development.files.open','projects.development.files.read',
@@ -408,7 +424,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const activeRetainedVisit=useRef<RetainedOriginalVisit|null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
   const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;buildResume?:CheckoutBuildEditorResume;pythonResume?:OriginalPythonRun;
-    pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor;reopenedFiles?:true;staticFilesVisit?:ProjectStaticFilesVisit}|null>(null);
+    pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor;reopenedFiles?:true;staticFilesVisit?:ProjectPhoneFolderVisit}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   // A UI correlation so a new mount cannot adopt a system picker choice. This never grants a file read or write.
   const [lockVisit,setLockVisit]=useState<string|null>(null);
@@ -427,7 +443,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const alive = useRef(false), generation = useRef(0), entered = useRef<object | null>(null), handle = useRef(''), activeReview = useRef<Data | null>(null);
   const keptNativePick=useRef(false);const [sourceConflict,setSourceConflict]=useState(false);
   const attemptedViteResult=useRef<ProjectStoredWebResultLookup|null>(null);
-  const attemptedStaticFiles=useRef<ProjectStaticFilesVisit|null>(null);
+  const attemptedStaticFiles=useRef<ProjectPhoneFolderVisit|null>(null);
   const staticFilesPage=useRef('');
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
   const latest = useRef({ run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools, viteResultLookup });
@@ -552,17 +568,22 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if (value.draft?.submission) clearSubmittedDraft(value.draft.submission);
     if(staticVisit){
       const target=staticVisit.source, available=rows(value.checkouts), copy=available[0];
+      const chosen=staticVisit.chosenSavedFile;
+      // A deliberate return from the ordinary commit already chose this one registered folder.
+      // An empty draft need not acquire a new selection; a different saved selection is never bypassed.
+      const sameChoice=incoming.checkoutId===target.checkoutId||incoming.checkoutId===''&&!incoming.ownerPickedConvention&&
+        chosen?.projectId===projectId&&chosen.checkoutId===target.checkoutId;
       if(!staticVisit.current())return;
       if(latest.current.localFilesIntent||latest.current.importedEditor||activeReview.current||previewOpen.current||
         value.executionAuthorized!==false||value.commandsAuthorized!==false||value.draftRecoveryRequired!==false||
-        incoming.projectId!==projectId||incoming.checkoutId!==target.checkoutId||draft.current.checkoutId!==target.checkoutId||
+        incoming.projectId!==projectId||!sameChoice||draft.current.checkoutId!==target.checkoutId||
         unresolved(incoming.submission)||(incoming.copyRequestId&&incoming.copyStatus!=='ready')||
         available.length!==1||copy?.projectId!==projectId||copy.checkoutId!==target.checkoutId||
         copy.draftWorkingCopy!==false||copy.taskPackageSource!==false||copy.hostSource!==false||
         !canEditImportedCheckout(latest.current.can)||!sameImportedEditor(target,originalSavedStaticFolder(projectId))){
         staticVisit.finish('未核对到原先选中的手机文件夹副本。请先在工作区确认副本，没有打开其他文件。');return;
       }
-      // Only the stock directory opens. No entry path, stale save handle, or source inspection.
+      // Open only the stock directory. A chosen file needs its matching fresh file-list token, never a stale handle.
       setHostEditor(null);setFileWindow({checkoutId:target.checkoutId,staticFilesVisit:staticVisit});return;
     }
     const returnedFile=latest.current.terminalSavedFile;

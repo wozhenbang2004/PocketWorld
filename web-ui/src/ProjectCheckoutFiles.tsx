@@ -30,8 +30,8 @@ export type CheckoutPythonToolsDeparture = {position:CheckoutSavedPosition;saved
 export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandle: string; id: string; closeEditor:()=>Promise<boolean> };
 export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
 type PythonEditorSource = {path:string;sha256:string;content:string;clickKey:string;selection:{saveId:string}|{readRevision:number}};
-type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry };
-type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void };
+type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry; adoptedSourceCurrent?:()=>boolean };
+type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void; chosenSavedFile?:CheckoutSavedPosition };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry; buildResume?: CheckoutBuildEditorResume; pythonResume?: OriginalPythonRun;
@@ -220,15 +220,16 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     // the native owner has not acknowledged, so closed files cannot fill it up.
     if (next.editSequence === editSequence.current && interfaceDrafts.get(keyFor(next.path)) === currentText.current && next.text === currentText.current) interfaceDrafts.delete(keyFor(next.path));
   };
-  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void, opening?: OriginalDirectoryOpening) => {
-    if (entered.current || edits.current || activeStaticPreview.current || document.hidden || opening&&!opening.current()) return;
+  const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void, opening?: OriginalDirectoryOpening, adoptedSourceCurrent?:()=>boolean) => {
+    const inScope=()=> (!opening||opening.current())&&(!adoptedSourceCurrent||adoptedSourceCurrent());
+    if (entered.current || edits.current || activeStaticPreview.current || document.hidden || !inScope()) return;
     const heldEditor=['read','readFound','readTextHit'].includes(action)?folderEditorNow.current:null;
     const sequence = generation.current, token = {}; entered.current = token; setBusy(true); setError('');
     if (opening) initialDirectoryRead.current = token;
-    const current = () => live(sequence) && (!opening || opening.current());
+    const current = () => live(sequence) && inScope();
     try {
       // The exact source-preview list is read-only. A declined visit must not toast on the restored page.
-      const runHere = opening ? bridge.command : latest.current.run;
+      const runHere = opening || adoptedSourceCurrent ? bridge.command : latest.current.run;
       const value = await runHere(command + action, { viewHandle, ...(action === 'open' || action === 'openSource' || action === 'openHostChange' ? { checkoutId } : { filesHandle: handle.current }), ...args });
       if (current() && entered.current === token) {
         if (opening && (value?.readOnly!==true || typeof value.filesHandle!=='string')) throw new Error('没有核对到原手机副本的只读文件清单。');
@@ -247,7 +248,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     }
     finally {
       if (initialDirectoryRead.current === token) initialDirectoryRead.current = null;
-      if (entered.current === token) { entered.current = null; if (alive.current && (!opening || opening.current())) setBusy(false); }
+      if (entered.current === token) { entered.current = null; if (alive.current && inScope()) setBusy(false); }
     }
   };
   const readDirectoryPage = (value: Data, path: string) => value.readOnly===true&&value.directoryPage?
@@ -295,7 +296,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const opened=await openMatchedFile(page.directoryHandle,hit);
     if(!opened&&live(sequence))setDirectory(previous=>previous?.page===page?{path:previous.path,page:null}:previous);
   };
-  const readFile = (path: string, { gitStatusOperation, saved, position, pythonTaskId, expectedPythonSha256, priorSavedFileId, currentOnly, entry:sourceEntry }: FileRead = {}) => {
+  const readFile = (path: string, { gitStatusOperation, saved, position, pythonTaskId, expectedPythonSha256, priorSavedFileId, currentOnly, entry:sourceEntry, adoptedSourceCurrent }: FileRead = {}) => {
     if (sourceMember || hostFile) {
       if (path !== (sourceMember || hostFile)!.path || entered.current || edits.current) return;
       setReviewed(false); currentFile.current = null; setFile(null);
@@ -320,6 +321,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         throw Error('未核对到原脚本的干净已保存版本。只显示同一副本的文件清单。');
       if (position && value.latest.expectedHash !== position.savedHash)
         throw new Error(priorSavedFileId?'此路径已不是先前确认保存的版本，没有切换到其他版本。':'此路径当前字节不再是上次保存的版本，没有切换到其他版本。');
+      if(adoptedSourceCurrent&&(value.dirty!==false||value.conflict!==false||value.saveUnknown!==false||
+        value.baseHash!==position?.savedHash||value.text!==value.latest?.content||interfaceDrafts.has(keyFor(path))))
+        throw Error('原副本可能有保留草稿。这里只显示原副本的文件清单，没有替换草稿。');
       if(sourceEntry && value.latest.expectedHash!==sourceEntry.sha256)
         throw new Error('该入口文件已变化。请返回原项目重新核对，没有打开其他文件。');
       setChoice(null); setAdoption(null); apply(value); setTreeOpen(false);
@@ -335,7 +339,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           area.scrollTop=caret.scrollTop; area.scrollLeft=caret.scrollLeft;
         } else editorHeading.current?.focus({ preventScroll: true });
       });
-    });
+    },undefined,adoptedSourceCurrent);
   };
   const openFiles = async (initial = false) => {
     let checkedEntry = entry;
@@ -346,13 +350,15 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       !sourceMember&&!hostFile&&!resume&&!entry&&!buildResume&&!pythonResume&&
       pythonSetupResume?.projectId===projectId&&pythonSetupResume.checkoutId===checkoutId&&
       savedPythonPath(pythonSetupResume.path)&&fileHash(pythonSetupResume.savedHash)?pythonSetupResume:undefined;
-    const priorTarget=resumeBuild;
     let resumeReadId:string|undefined;
     if(resumeBuild)attemptedBuildResume.current=true;
     if(resumeSetup)attemptedPythonSetupResume.current=true;
     const pin = sourceMember && { taskId: sourceMember.taskId, operationId: sourceMember.operationId, artifactId: sourceMember.artifactId,
       artifactSha256: sourceMember.artifactSha256, path: sourceMember.path, fileSha256: sourceMember.fileSha256 };
     const opening = initial && !pin && !hostFile && !resume && !entry && !buildResume && !pythonResume && !pythonSetupResume ? originalDirectoryOpening : undefined;
+    const chosen=opening?.chosenSavedFile;
+    const adopted=chosen?.projectId===projectId&&chosen.checkoutId===checkoutId&&chosen.path.length>0&&chosen.path.length<=240&&fileHash(chosen.savedHash)?chosen:undefined;
+    const priorTarget=resumeBuild||adopted;
     const result = await invoke(hostFile ? 'openHostChange' : pin ? 'openSource' : 'open', hostFile ? { hostFile } : pin ? { sourceMember: pin } : {}, value => {
       if (value.projectId !== projectId || value.checkoutId !== checkoutId || !value.filesHandle) throw new Error('没有取得原私人副本文件窗口。');
       if (hostFile && (value.executionAuthorized !== false || !value.hostFile || !Object.entries(hostFile).every(([k, v]) => value.hostFile[k] === v)))
@@ -378,18 +384,20 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       const {directoryPage:_,...list}=value;
       if(priorTarget){
         const saved=list.priorSavedFile;
-        if(list.readOnly===true&&list.sourceDigest===priorTarget.sourceDigest&&
+        if(list.readOnly===true&&(!resumeBuild||list.sourceDigest===resumeBuild.sourceDigest)&&
           saved?.format==='pocketworld.owner-checkout-file-save-position.v1'&&saved.projectId===projectId&&saved.checkoutId===checkoutId&&
           saved.path===priorTarget.path&&saved.sha256===priorTarget.savedHash&&
           typeof saved.readId==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(saved.readId)){
           resumeReadId=saved.readId;
           delete list.priorSavedFile; // The exact list token is consumed by the native read, never reused by a fallback.
-        }else setError('未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
+        }else setError(adopted?'未核对到采纳时保存的原文件。这里只显示同一副本的文件清单，未打开其他文件。':
+          '未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
       }
       handle.current = value.filesHandle; setListing(list);
     }, opening);
     if(priorTarget&&resumeReadId&&result&&handle.current===result.filesHandle&&live(generation.current)){
-      const opened=await readFile(priorTarget.path,{position:priorTarget,priorSavedFileId:resumeReadId});
+      if(adopted&&interfaceDrafts.has(keyFor(adopted.path))){setError('原副本有未确认的编辑。这里只显示同一副本的文件清单，没有替换草稿。');return;}
+      const opened=await readFile(priorTarget.path,{position:priorTarget,priorSavedFileId:resumeReadId,adoptedSourceCurrent:adopted?opening?.current:undefined});
       if(resumeBuild&&opened&&live(generation.current)&&currentFile.current?.fileHandle===opened.fileHandle)openedBuildResume.current=resumeBuild;
       return;
     }
@@ -841,7 +849,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const savedExcerpt=!anchorable&&sourceHit&&savedSource!==null&&savedSource.slice(sourceHit.start,sourceHit.end)===sourceHit.query?
     savedSource.slice(Math.max(savedSource.lastIndexOf('\n',sourceHit.start-1)+1,sourceHit.start-70),sourceHit.start)+sourceHit.query+
       savedSource.slice(sourceHit.end,sourceHit.end+100).split('\n',1)[0]:null;
-  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : originalDirectoryOpening && !listing ? '返回项目预览' : '返回项目工作区';
+  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : originalDirectoryOpening && !originalDirectoryOpening.chosenSavedFile && !listing ? '返回项目预览' : '返回项目工作区';
   const formalLink = (pin: Data | undefined, evidence: 'import_receipt' | 'equal_content') => {
     if (!file || !pin || pin.evidence !== evidence || pin.projectId !== projectId || pin.checkoutId !== checkoutId || pin.path !== file.path ||
         typeof pin.handle !== 'string' || !pin.handle || !Number.isInteger(pin.version) || pin.version < 1 || !/^[a-f0-9-]{36}$/.test(pin.revisionId) ||
