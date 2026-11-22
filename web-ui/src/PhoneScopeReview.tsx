@@ -14,7 +14,7 @@ export type PhoneReviewDisplay={
   ownerPickedMessage?:boolean;message?:string;conversationId?:string;conversationTitle?:string;modelName?:string;screenDisclosure?:string;
   conditions?:PhoneConditions;manualFirstMainAvailable?:true;firstBackgroundResultWatchAvailable?:true;readCurrentOnce?:true;
 };
-type Live={reviewHandle:string;mode:string;expiresInMs?:number;documentEpoch?:number;draftRequestId?:string;conversationId?:string;originalDraft?:{composer:string;conversation:string};ownerPickedMessage?:boolean;manualFirstMainAvailable?:true;firstBackgroundResultWatchAvailable?:true;readCurrentOnce?:true};
+type Live={reviewHandle:string;mode?:string;expiresInMs?:number;documentEpoch?:number;draftRequestId?:string;conversationId?:string;originalDraft?:{composer:string;conversation:string};ownerPickedMessage?:boolean;manualFirstMainAvailable?:true;firstBackgroundResultWatchAvailable?:true;readCurrentOnce?:true};
 
 const privatePlace = (mode:string) => mode==='background'?'后台独立屏':mode==='main_screen'?'手机主屏':undefined;
 const readinessLine = (condition:Pick<Condition,'state'|'message'>|undefined, ready:string) => {
