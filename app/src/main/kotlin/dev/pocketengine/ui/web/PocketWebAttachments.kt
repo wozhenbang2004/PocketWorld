@@ -660,6 +660,7 @@ internal class PocketWebAttachments(
                     require(resultRun.report == null || readerCurrent != null && file == null) { "请在原汇报查看本轮文件" }
                 }
                 check(readerCurrent == null || resultRun != null && !flow.state.open && readerCurrent()) { "请在原阅读窗口打开这次成果" }
+                val opened = JSONObject().put("opened", true).put("reading", true)
                 if (file != null) {
                     val sha = args.getString("sha256")
                     require(file.length <= 240 && '\u0000' !in file && sha.matches(Regex("[0-9a-f]{64}"))) { "原文件版本无效，请重新查找" }
@@ -676,8 +677,11 @@ internal class PocketWebAttachments(
                         draftLibraryEntry != null && draftLibraryEntry()) DraftLibraryVisit(UUID.randomUUID().toString(), draftLibraryEntry) else null
                     globalDraftLibrary = visit
                     flow.openTask(task, resultRun, visit?.id)
+                    // Identity of the accepted private no-locator file window, not a read grant.
+                    if (visit != null && flow.state.open && flow.state.globalStandaloneDraftVisit == visit.id && visit.current())
+                        opened.put("windowId", activeWindow().id)
                 }
-                done(JSONObject().put("opened", true).put("reading", true), null); changed(); return
+                done(opened, null); changed(); return
             }
             val current = window ?: error("文件窗口已关闭，请重新打开")
             check(args.optString("windowId") == current.id && current.accepts(current.ticket)) { "原文件窗口已变化，请重新核对" }

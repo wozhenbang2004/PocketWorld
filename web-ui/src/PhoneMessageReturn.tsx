@@ -24,10 +24,10 @@ function matchingStep(r:PhoneResult){
   if(!row||!isPrivateLocalPhone(row)||identity?.taskId!==r.taskId||identity.runId!==r.runId||identity.epoch!==r.epoch)return null;
   return row.status===r.status?outcomes[r.status]:{entry:'overview' as const,next:'查看这轮后续进展'};
 }
-type Props={result:PhoneResult;conversation:string;messageId:string;revision:number;reader?:number;locked?:boolean;stoppedAfterFirstMainRead?:boolean;
-  body:string;children:ReactNode;onOriginal?:(t:PhoneReportTarget)=>void;onRun?:(entry:Entry,t:PhoneReportTarget)=>void};
+type Props={result:PhoneResult;conversation:string;messageId:string;revision:number;reader?:number;locked?:boolean;stoppedAfterFirstMainRead?:boolean;ownerConfirmed?:boolean;
+  body:string;children:ReactNode;onOriginal?:(t:PhoneReportTarget)=>void;onRun?:(entry:Entry,t:PhoneReportTarget)=>void;onPrepareNew?:(t:PhoneReportTarget)=>void};
 /** A persisted message is a historical receipt. Never derive its outcome from its prose or today's task status. */
-export function PhoneMessageReturn({result:r,conversation,messageId,revision,reader=0,locked,stoppedAfterFirstMainRead,body,children,onOriginal,onRun}:Props){
+export function PhoneMessageReturn({result:r,conversation,messageId,revision,reader=0,locked,stoppedAfterFirstMainRead,ownerConfirmed,body,children,onOriginal,onRun,onPrepareNew}:Props){
   const outcome=outcomes[r.status],step=onRun&&onOriginal&&matchingStep(r);
   const [changed,setChanged]=useState('');
   // On zero native characters, this one exact fallback belongs to the delivery formatter, not the original summary.
@@ -35,12 +35,12 @@ export function PhoneMessageReturn({result:r,conversation,messageId,revision,rea
   const placeholder=r.summaryChars===0&&body==='本轮执行已结束，未提供文字总结；请查看原手机任务。';
   const target=(from:HTMLElement)=>phoneReportTarget(conversation,messageId,revision,r,from,reader);
   return <section className="pw-phone-message-return" aria-label={`手机任务第 ${r.epoch} 轮的原回执`}>
-    <header><small>手机任务 · 第 {r.epoch} 轮回执</small><strong>{outcome?.title||'已有轮次记录'}</strong></header>
+    <header><small>手机任务 · 第 {r.epoch} 轮回执</small><strong>{reader===0&&r.status==='needs_confirmation'&&ownerConfirmed?'你已确认这轮完成':outcome?.title||'已有轮次记录'}</strong></header>
     {cancellationNote&&<p className="pw-field-hint">{cancellationNote}</p>}
     {reader===0&&r.status==='cancelled'&&stoppedAfterFirstMainRead&&<p className="pw-field-hint">停止前已读取当时的主屏界面。</p>}
     {placeholder?<p className="pw-phone-return-empty">{r.status==='failed'||r.status==='interrupted'?'这轮没有留下说明原因的文字。':
       '这轮没有留下文字总结。'}</p>:children}
-    {(onOriginal||step)&&<div className="pw-phone-return-actions">
+    {(onOriginal||step||onPrepareNew)&&<div className="pw-phone-return-actions">
       {step&&onRun&&<Button size="small" variant="secondary" disabled={locked} onClick={event=>{
         const t=target(event.currentTarget),now=matchingStep(r);
         if(!locked&&now?.entry===step.entry&&now.next===step.next&&phoneReportInSource(t)&&bridge.getState().capabilities.commands.includes('tasks.open')){setChanged('');onRun(step.entry,t)}
@@ -49,6 +49,9 @@ export function PhoneMessageReturn({result:r,conversation,messageId,revision,rea
       {onOriginal&&<Button size="small" variant={step?'ghost':'secondary'} disabled={locked} onClick={event=>{
         const t=target(event.currentTarget);if(!locked&&phoneReportInSource(t)){setChanged('');onOriginal(t)}else setChanged(r.deliveryId);
       }}>{r.summaryTruncated?'阅读完整原文':'查看这轮原回执'}</Button>}
+      {onPrepareNew&&reader===0&&<Button size="small" variant="ghost" disabled={locked} onClick={event=>{
+        const t=target(event.currentTarget);if(!locked&&phoneReportInSource(t)){setChanged('');onPrepareNew(t)}else setChanged(r.deliveryId);
+      }}>用原目标准备新手机任务</Button>}
     </div>}
     {changed===r.deliveryId&&<small role="status">原消息或轮次已变化。请回到原回执重新核对，没有打开其他执行。</small>}
   </section>;

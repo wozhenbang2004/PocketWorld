@@ -6,6 +6,7 @@ import android.os.SystemClock
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.phone.reading.CurrentMainInspection
+import dev.pocketengine.store.PhoneActionRecovery
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -249,7 +250,7 @@ internal class PocketWebPhoneComposer(
 
     /** Owner-selected original text only. Staging never creates a task or grants phone access. */
     fun stageOriginalMessage(args: JSONObject): JSONObject {
-        checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "epoch", "revision", "keepDraft"))
+        checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "epoch", "revision", "keepDraft", "resultMessageId"))
         val keep = args.has("keepDraft") && requiredBoolean(args,"keepDraft")
         if(keep)check(draftHere() && phoneDraft.isNotBlank() && (pinLost || picked?.let { !pickedCurrent(it) }==true)) { "原草稿或当前来源已变化，未重新关联" }
         check(!isClosed() && controller.webPrivateOwnerVisible() && !controller.hasChannelPhoneOrigin) { "请回到原私人对话准备手机任务" }
@@ -271,6 +272,11 @@ internal class PocketWebPhoneComposer(
         val pin = requireNotNull(PhoneDraftMessagePin.from(message.ownerOriginalLocator)) { "这条原话没有可核对的原件" }
         check(pin.conversation == conversation && pin.message == id && pin.version == message.sourceRevision &&
             (keep || !pinLost && (picked == null || picked == pin))) { "保留的手机草稿来自另一条原话，未把相同文字当成同一条消息" }
+        val fromResult = args.has("resultMessageId")
+        if (fromResult) {
+            require(!args.has("keepDraft"))
+            requireOriginalResultForNewDraft(requiredString(args, "resultMessageId"), pin, goal)
+        }
         picked = pin;pinLost=false;++sourceEditTicket
         if(!keep)phoneDraft = goal
         phoneDraftRevision++
@@ -278,7 +284,67 @@ internal class PocketWebPhoneComposer(
         phoneStartReceipt = null;heldLinkedGoal=null // the explicitly selected original message now owns this text
         clearReviews()
         return snapshot().put("staged", true).put("taskCreated", false).put("executionStarted", false)
-            .put("message", if(keep) "草稿文字未修改，已关联你刚选的这条原话。仍须审阅后才会提交。" else "原请求已放入手机目标草稿。核对完整目标、联系人和内容，再审阅执行位置与范围；尚未启动或发送。")
+            .put("message", when {
+                fromResult -> "原目标已放入手机输入。可修改后核对新任务，尚未开始。"
+                keep -> "草稿文字未修改，已关联你刚选的这条原话。仍须审阅后才会提交。"
+                else -> "原请求已放入手机目标草稿。核对完整目标、联系人和内容，再审阅执行位置与范围；尚未启动或发送。"
+            })
+    }
+
+    /** Only already loaded owner facts participate; no retry, history read or reused grant. */
+    private fun requireOriginalResultForNewDraft(resultMessageId: String, pin: PhoneDraftMessagePin, goal: String) {
+        val ui = controller.state
+        val draft = checkNotNull(controller.composerDraft) { "原私聊输入尚未就绪" }
+        val changed = "原结果、主屏位置或空白输入已变化；没有填入新目标。"
+        check(phoneIntent && phoneExecutionMode == "main_screen" && phoneDraft.isEmpty() && picked == null && !pinLost &&
+            heldLinkedGoal == null && firstDraftScope == null && savingFirstOriginal == null && firstOriginalOffer == null &&
+            phoneReviews.isEmpty() && controller.conversationReader == null && controller.queuedInputsPage == null &&
+            ui.filePath == null && !controller.attachmentOutcomes.state.open && !ui.chatAttachmentPickerOpen &&
+            !ui.listening && ui.selectedChatAttachments.isEmpty() &&
+            listOf("active", "leaseHeld", "resourceReleaseUnknown", "reviewAvailable", "staged").none { ui.voiceInput.optBoolean(it) } &&
+            draft.key == "conversation:${pin.conversation}" && draft.conversationId == pin.conversation &&
+            draft.text.isEmpty() && draft.voiceText.isEmpty() && draft.voiceInputId.isEmpty() && !controller.composerSaving &&
+            draft.attachments().length() == 0 && draft.sourceRefs().length() == 0 && draft.previewRefs().length() == 0 &&
+            draft.objectRefs().length() == 0 && controller.composerPending.none { it.draftKey == draft.key }) { changed }
+        val reply = checkNotNull(ui.messages.singleOrNull { it.id == resultMessageId && it.role == "assistant" && it.sourceRevision == 1L }) { changed }
+        val result = checkNotNull(reply.phoneResult) { changed }
+        val start = checkNotNull(phoneStartReceipt) { changed }
+        check(reply.taskId == result.taskId && result.status in setOf("cancelled", "needs_confirmation") && result.epoch == 1 &&
+            receiptHere(start) && start.opt("status") == "accepted" && start.opt("admissionState") == "admitted" && start.opt("admitted") == true &&
+            start.opt("ownerPickedMessage") == true && start.opt("mode") == "main_screen" && start.opt("goal") == goal &&
+            start.opt("requestId") == result.taskId && start.opt("taskId") == result.taskId && start.opt("runId") == result.runId &&
+            start.optInt("epoch") == result.epoch) { changed }
+        val work = checkNotNull(ui.tasks.singleOrNull { it.id == result.taskId }) { changed }
+        val raw = work.raw
+        val link = checkNotNull(raw.optJSONObject("conversationPhoneHandoff")) { changed }
+        val source = checkNotNull(link.optJSONObject("source")) { changed }
+        // The original bubble freezes the pre-review status. Only a real current owner
+        // confirmation in this same attempt, not that pending status, permits a next draft.
+        val confirmation = raw.optJSONObject("resultConfirmation")
+        fun recordedRevision(value: Any?): Long? = when (value) {
+            is Int -> value.toLong()
+            is Long -> value
+            else -> null
+        }
+        val revision = recordedRevision(raw.opt("resultRevision"))
+        val confirmed = recordedRevision(confirmation?.opt("confirmedResultRevision"))
+        val settled = if (result.status == "cancelled") work.status == "cancelled" else
+            work.status == "completed" && raw.opt("cancelRequested") != true && confirmation != null &&
+                confirmation.opt("completed") == true && revision != null && revision > 0L && revision == confirmed &&
+                confirmation.optString("resultReviewDigest").matches(Regex("[a-f0-9]{64}"))
+        check(settled && raw.opt("status") == work.status && raw.opt("id") == result.taskId &&
+            PhoneActionRecovery.local(raw) &&
+            work.executionMode == "main_screen" && raw.opt("executionMode") == "main_screen" &&
+            raw.opt("runId") == result.runId && raw.optInt("coordinatorEpoch") == result.epoch &&
+            raw.opt("taskProjection") == "detail_window" && raw.opt("taskCoreReadLimited") == false &&
+            raw.opt("contextAvailable") != false && raw.opt("contextWithdrawn") != true && raw.opt("sourceCurrentReadRequired") != true &&
+            raw.opt("hasUnresolvedOperations") == false && raw.opt("historyHasUnconfirmedOperations") == false &&
+            !raw.has("ownerFirstMainReadOnce") && link.opt("format") == "pocketworld.conversation-phone-handoff.v1" &&
+            link.opt("taskId") == result.taskId && link.opt("requestId") == result.taskId && link.opt("executionMode") == "main_screen" &&
+            link.opt("sourceSelection") == "owner_selected_latest" && link.opt("conversationId") == pin.conversation &&
+            link.opt("goal") == goal && work.goal == goal && source.opt("conversationId") == pin.conversation &&
+            source.opt("generation") == pin.generation && source.opt("sourceMessageId") == pin.message &&
+            source.optLong("sourceMessageRevision", -1L) == pin.version && source.opt("bodyFingerprint") == pin.fingerprint) { changed }
     }
 
     fun prepare(id: String, args: JSONObject) = preparePhoneReview(id, args, null)

@@ -18,7 +18,10 @@ type StandaloneDocument={taskId:string;mimeType:string;size:number};
 export type OriginalAttachmentChoice={fileId:string;sha256:string;name:string;standaloneDocument?:StandaloneDocument};
 export type QuotedDraftArrival={windowId:string;library:string;document:number;
  current:()=>boolean;restoreFocus:(event:Event)=>void};
+type BookReplyLink={current:(shown:Json)=>boolean;restore:()=>void};
+type BookReplyExit={windowId:string;link:BookReplyLink;accepted:boolean;exited:boolean;scheduled?:true};
 type Props={
+ onOriginalBookReply?:(shown:Json)=>BookReplyLink|undefined;
  state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event,messagePdfWindow?:string)=>void;returnToDeliveredFiles?:boolean;openTaskId?:string;
  canReturnToOpenWork?:(current:Json)=>boolean;
  draftTarget?:FileDraftTarget;resultTopic?:FileResultTopic;keepResultReadingDraft?:FileDraftTarget;
@@ -268,7 +271,7 @@ function justSavedWorkPdfSource(native:ReturnType<typeof bridge.getState>,view:J
 const isLiveMessageOriginal=(view:Json)=>view.messagePdfOnly===true||view.messageInputDocumentOnly===true||view.messageReplyDocumentOnly===true;
 
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,standaloneDocumentAttachmentDraft,replyAttachmentDraft,readWorkTextVisit,quotedDraftArrival}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,standaloneDocumentAttachmentDraft,replyAttachmentDraft,readWorkTextVisit,quotedDraftArrival,onOriginalBookReply}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  const lastLiveMessageFileWindow=useRef<string|undefined>(undefined);
  if(incoming.open===true&&incoming.ready===true)
@@ -414,13 +417,26 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const alive=useRef(true),tail=useRef<Promise<unknown>>(Promise.resolve()),beforeBack=useRef<(()=>Promise<AttachmentFrame|undefined>)|null>(null),latest=useRef(view);latest.current=view;
  const exactWorkReturn=useRef(canReturnToOpenWork);exactWorkReturn.current=canReturnToOpenWork;
  const backFlight=useRef(false);
- const act=useCallback((command:string,args:Json={},after?:AttachmentFrame,showError=true)=>{
+ const bookReplyExit=useRef<BookReplyExit|null>(null);
+ useLayoutEffect(()=>{
+  const exit=bookReplyExit.current;
+  if(exit&&incoming.open===true&&incoming.windowId!==exit.windowId)bookReplyExit.current=null;
+ },[incoming.open,incoming.windowId]);
+ const finishBookReplyExit=(exit:BookReplyExit)=>{
+  if(bookReplyExit.current!==exit||!exit.accepted||!exit.exited||exit.scheduled)return;
+  exit.scheduled=true;
+  requestAnimationFrame(()=>{
+   if(bookReplyExit.current!==exit)return;
+   bookReplyExit.current=null;exit.link.restore();
+  });
+ };
+ const act=useCallback((command:string,args:Json={},after?:AttachmentFrame,showError=true,stillCurrent?:(shown:Json)=>boolean)=>{
   let payload:Json;
   try{payload=attachmentActionPayload(after??attachmentFrame(view),command,structuredClone(args))}catch(cause){if(showError)setError(cause instanceof Error?cause.message:'原文件页面已变化');return Promise.reject(cause)}
   const windowId=payload.windowId,epoch=bridge.getDocumentEpoch();setPending(x=>x+1);setError('');
   const operation=tail.current.catch(()=>{}).then(async()=>{
    const current=obj(bridge.getState().state.attachmentWorkspace);
-   if(!alive.current||!current.open||!current.ready||current.windowId!==windowId||bridge.getDocumentEpoch()!==epoch||document.visibilityState==='hidden')throw new Error('原文件窗口已变化，请重新核对');
+   if(!alive.current||!current.open||!current.ready||current.windowId!==windowId||bridge.getDocumentEpoch()!==epoch||document.visibilityState==='hidden'||stillCurrent?.(current)===false)throw new Error('原文件窗口已变化，请重新核对');
    // Return to a Work still directly underneath this exact frame as Back does, not by reopening it.
    const closeOnly=command==='continueTask'&&current.busy===false&&current.exportPending===false&&exactWorkReturn.current?.(current);
    const result=obj(await bridge.command('attachmentWorkspace.action',closeOnly?{...payload,command:'close'}:payload));
@@ -629,6 +645,33 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  useEffect(()=>{setError('');setPage('1')},[view.windowId,file.id,file.sha256]);
  const busy=pending>0||!!view.busy||!view.ready,hasFile=typeof file.id==='string';
  const compilerFile=compilerOutputRow(file),pythonOutputFile=pythonOutputRow(file),localOnlyFile=compilerFile||pythonOutputFile;
+ const ordinaryBookReplyFrame=(shown:Json)=>privateLibraryWindow(shown)&&
+  shown.messagePdfOnly===false&&shown.messageInputDocumentOnly===false&&shown.messageReplyDocumentOnly===false&&
+  shown.focusedStandaloneDraft===false&&shown.restoredWorkReturn===false&&
+  !shown.documentDraft&&!shown.documentOpen&&!shown.processingOpen&&!shown.comparison&&
+  (!shown.originalFile||obj(shown.originalFile).sourceUnavailable===false);
+ const bookReplyLink=!draftDesk&&!onReturnToSearch&&(mode==='detail'||mode==='original')&&ordinaryBookReplyFrame(view)?
+  onOriginalBookReply?.(view):undefined;
+ const returnToBookReply=()=>{
+  if(!bookReplyLink||busy||draftBusy||view.exportPending||draftFlight.current||
+     attachmentFlight.current||bookReplyExit.current||backFlight.current||beforeBack.current)return;
+  const native=obj(bridge.getState().state.attachmentWorkspace),frame=attachmentFrame(native);
+  if(!frame||!ordinaryBookReplyFrame(native)||!bookReplyLink.current(native))return;
+  const exit:BookReplyExit={windowId:frame.windowId,link:bookReplyLink,accepted:false,exited:false};
+  bookReplyExit.current=exit;backFlight.current=true;
+  void act('close',{},frame,true,shown=>bookReplyExit.current===exit&&ordinaryBookReplyFrame(shown)&&bookReplyLink.current(shown)).then(result=>{
+   if(bookReplyExit.current!==exit)return;
+   if(result.accepted!==true||obj(result.workspace).open!==false){
+    bookReplyExit.current=null;
+    if(obj(bridge.getState().state.attachmentWorkspace).windowId===exit.windowId)setError('原文件库尚未确认关闭。');
+    return;
+   }
+   exit.accepted=true;finishBookReplyExit(exit);
+  }).catch(()=>{if(bookReplyExit.current===exit)bookReplyExit.current=null;})
+   .finally(()=>{backFlight.current=false});
+ };
+ const bookReplyAction=bookReplyLink&&<Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
+   onClick={returnToBookReply}>查看原回复</Button>;
  const canStage=!localOnlyFile&&!scopedResultOnly&&!workOutput&&privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
  const focusedDraft=view.focusedStandaloneDraft===true;
  const title=focusedDraft?'本机文档草稿':draftDesk?'私人文件库 · 本机草稿':view.documentDraft?'编辑文档':pdfPageText?`第 ${pdfPageText} 页的文字`:
@@ -638,7 +681,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   view.messagePdfOnly===true?'原消息 PDF':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
   if(draftDesk){draftDeskExit.current?.(true);return}
-  if(!view.ready||draftFlight.current)return;
+  if(!view.ready||draftFlight.current||bookReplyExit.current)return;
   textReturn.current=null;
   const returnToWork=!localOnlyFile&&view.restoredWorkReturn!==true&&view.fromWorkResult===true&&!!view.taskId&&openTaskId!==view.taskId;
   if(view.busy){if(!returnToWork)run('close');return}
@@ -1240,6 +1283,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{
   if(returningToSearch.current)event.preventDefault();
   const window=lastLiveMessageFileWindow.current;lastLiveMessageFileWindow.current=undefined;onReturnFocus?.(event,window);
+  const book=bookReplyExit.current;
+  if(book&&bridge.getState().state.attachmentWorkspace?.open===false){
+   book.exited=true;finishBookReplyExit(book);
+  }
  }} onEscapeKeyDown={event=>{event.preventDefault();goBack()}} onInteractOutside={event=>{event.preventDefault()}} aria-describedby="pw-file-page-description">
  <header className="pw-drawer-header pw-file-page-header">
   {mode==='original'&&!originalHasDirectBack&&view.wordExcerptSourceOpen!==true?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>{detailsLabel}</Button>:
@@ -1287,6 +1334,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {documentParent&&<Button variant="ghost" aria-label={`查看原版本：${documentParent.parentName}`} disabled={busy||draftBusy||view.exportPending}
    onClick={()=>void openDocumentParent()}>查看原版本</Button>}
   {wordOriginAction}
+  {bookReplyAction}
   {excerptPdf&&<Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
    onClick={openExcerptSource}>{justSavedWorkPdf?'返回这份 PDF 的文件信息':'查看来源 PDF 信息'}</Button>}
   {mode==='detail'&&view.ready===true&&privateFiles&&!onReturnToSearch&&typeof view.libraryDocumentActionId==='string'&&
@@ -1362,6 +1410,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {useInTopic&&!compactReaderActions&&<Button variant={onChooseResultAttachment?'ghost':preferSave?'secondary':'primary'} className="pw-file-draft-action"
    disabled={busy||draftBusy||view.exportPending} aria-busy={draftBusy||undefined} onClick={referenceInTopic}>{topicPositionLabel}</Button>}
   {readerActions}
+  {bookReplyAction}
   {topicFeedback}
   {canReturnGeneratedDraft&&generatedDraftAction(preferSave||useInTopic?'secondary':'primary')}
   {offerDocumentEdit&&editDocument(canReturnGeneratedDraft?'ghost':preferSave||useInTopic?'secondary':'primary')}

@@ -2657,8 +2657,10 @@ internal class PocketWebBridge(
                 check(section == null && taskViewId == null) { "请回到原对话准备手机目标" }
                 val result = phoneComposer.stageOriginalMessage(args)
                 controller.dismissError()
-                voiceInput.clear()
-                controller.voiceInputTypeChanged(phoneComposer.intent)
+                if (!args.has("resultMessageId")) {
+                    voiceInput.clear()
+                    controller.voiceInputTypeChanged(phoneComposer.intent)
+                } // The verified result path keeps the already selected Main mode and input owner.
                 complete(id, result, null); publishState(); return
             }
             if(action=="phone.draft.saveOriginal"||action=="conversation.select"&&args.has("viewSavedPhoneHandle")){
